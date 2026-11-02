@@ -1271,7 +1271,7 @@ public class TeamWaveService
                 // Push — по тем же правилам, что у первого уведомления (только когда человека
                 // нет в чате); зрителей мы выше отсекли, поэтому здесь он всегда уходит
                 await _notif.SendNotificationMessageAsync(ownerId, new Protocol.NotificationMessage(
-                    Title: TeamImplementPrompts.ReminderTitle(PersonaName(authorId, ownerId)),
+                    Title: TeamImplementPrompts.ReminderTitle(PersonaName(authorId, session)),
                     Body: TeamImplementPrompts.ReminderBody(card.Title, hours),
                     Url: ChatUrl(session),
                     Kind: "claude",
@@ -1315,7 +1315,7 @@ public class TeamWaveService
         // вопросы различаются уже в списке уведомлений. Обезличенное «Команда ждёт…»
         // остаётся фолбэком, когда персоны у штаба нет.
         await _notif.SendNotificationMessageAsync(ownerId, new Protocol.NotificationMessage(
-            Title: TeamImplementPrompts.WaitingTitle(PersonaName(authorId, ownerId), escalation.Kind),
+            Title: TeamImplementPrompts.WaitingTitle(PersonaName(authorId, session), escalation.Kind),
             Body: escalation.Title,
             Url: ChatUrl(session),
             Kind: "claude",
@@ -1341,7 +1341,7 @@ public class TeamWaveService
         var authorId = session.TeamImplement?.CoordinatorPersonaId ?? session.PersonaId;
         await _notif.SendNotificationMessageAsync(ownerId, new Protocol.NotificationMessage(
             // Вопрос интервью — тот же текст, что у карточки тупика с уточнениями
-            Title: TeamImplementPrompts.WaitingTitle(PersonaName(authorId, ownerId),
+            Title: TeamImplementPrompts.WaitingTitle(PersonaName(authorId, session),
                 TeamEscalationKind.NeedsClarification),
             Body: TeamImplementPrompts.QuestionNotificationBody,
             Url: ChatUrl(session),
@@ -1355,10 +1355,14 @@ public class TeamWaveService
         ? $"/chats/{session.Id}"
         : $"/project/{session.ProjectId}/chat/{session.Id}";
 
-    // Имя персоны-автора для текста уведомления. null — персоны нет, реестр не передан или
-    // персона удалена: текст деградирует до обезличенного.
-    private string? PersonaName(string? personaId, string ownerId) =>
-        personaId is not null && _personas.Get(personaId, ownerId) is { } p ? p.Name : null;
+    // Имя персоны для текста уведомления (S2d-4g). Скоуп поиска — владелец сессии
+    // (ResolveOwnerId), а НЕ адресат уведомления: персона принадлежит владельцу проекта,
+    // а в приватном штабе адресат — автор чата; поиск по адресату терял имя координатора
+    // и заголовок деградировал до обезличенного. null — персоны нет, реестр не передан
+    // или персона удалена: текст деградирует до обезличенного.
+    private string? PersonaName(string? personaId, Session session) =>
+        personaId is not null && _sessions.ResolveOwnerId(session) is { } scopeId
+        && _personas.Get(personaId, scopeId) is { } p ? p.Name : null;
 
     private bool IsDone(string taskId) => _tasks.GetById(taskId)?.Status == TaskItemStatus.Done;
 }

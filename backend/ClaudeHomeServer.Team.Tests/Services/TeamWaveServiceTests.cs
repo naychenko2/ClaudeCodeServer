@@ -2165,7 +2165,9 @@ public class TeamWaveServiceTests : IDisposable
     // --- Приватный штаб: адресат уведомлений — только автор (S2d-4f, дефект e127cef0) ---
     // Владелец проекта не видит чужой приватный чат: эскалация, вопрос интервью и напоминание
     // должны уходить автору (user_{author}), а не владельцу (user_{owner}) — с именем и id
-    // того, кто их не увидит. Общий штаб — прежний адресат: это покрыто тестами выше.
+    // того, кто их не увидит. При этом заголовок остаётся от имени координатора: он принадлежит
+    // владельцу проекта, и в приватном штабе имя не должно пропадать (S2d-4g). Общий штаб —
+    // прежний адресат: тесты ниже.
 
     private const string PrivateAuthor = "editor-1";
 
@@ -2198,6 +2200,10 @@ public class TeamWaveServiceTests : IDisposable
         var forAuthor = NotificationsFor(PrivateAuthor);
         forAuthor.Should().ContainSingle("остановка приватного штаба — её автору");
         forAuthor[0].SessionId.Should().Be(session.Id);
+        // S2d-4g: адресат — автор, но штаб говорит от лица координатора: его имя принадлежит
+        // владельцу проекта и в приватном штабе не должно теряться (резолв по владельцу, не по адресату)
+        forAuthor[0].Title.Should().Be("Алекс: практика остановлена",
+            "имя координатора резолвится по владельцу проекта, адресат не меняется");
         NotificationsFor(UserId).Should().BeEmpty(
             "владелец проекта не получает ни имя, ни id чужого приватного чата");
     }
@@ -2209,7 +2215,10 @@ public class TeamWaveServiceTests : IDisposable
 
         await _sut.OnStabQuestionAsync(session);
 
-        NotificationsFor(PrivateAuthor).Should().ContainSingle("интервью ждёт ответа автора чата");
+        var forAuthor = NotificationsFor(PrivateAuthor);
+        forAuthor.Should().ContainSingle("интервью ждёт ответа автора чата");
+        forAuthor[0].Title.Should().Be("Алекс ждёт ответов по задаче",
+            "S2d-4g: имя координатора резолвится по владельцу проекта, адресат не меняется");
         NotificationsFor(UserId).Should().BeEmpty("владелец проекта не видит приватный штаб");
     }
 
@@ -2222,8 +2231,77 @@ public class TeamWaveServiceTests : IDisposable
 
         await _sut.CheckAwaitingEscalationsAsync();
 
-        NotificationsFor(PrivateAuthor).Should().ContainSingle("первый оклик — автору приватного штаба");
+        var forAuthor = NotificationsFor(PrivateAuthor);
+        forAuthor.Should().ContainSingle("первый оклик — автору приватного штаба");
+        forAuthor[0].Title.Should().Be("Алекс: практика всё ещё ждёт",
+            "S2d-4g: имя координатора резолвится по владельцу проекта, адресат не меняется");
         NotificationsFor(UserId).Should().BeEmpty("напоминание о чужом приватном чате владельцу не идёт");
+    }
+
+    // --- Общий штаб: адресат — владелец проекта (S2d-4g, дополнение к S2d-4f) ---
+    // Приватность — исключение, а не новое правило: у общего штаба эскалация и вопрос
+    // интервью уходят владельцу (user_{owner}), как до S2d-4f. Тесты выше это не покрывали:
+    // в них не было проверки, КТО получил уведомление.
+
+    [Fact]
+    public async Task Эскалация_ОбщийШтаб_УведомлениеВладельцу()
+    {
+        var (session, _, _) = await MakeStabAsync("public-raise");
+
+        await _sut.RaiseEscalationAsync(session, new TeamEscalation
+        {
+            Kind = TeamEscalationKind.Blocker,
+            Title = "Практика остановлена тестом",
+            Details = "Тестовая карточка",
+            Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
+        });
+
+        var forOwner = NotificationsFor(UserId);
+        forOwner.Should().ContainSingle("общий штаб — прежний адресат: владелец проекта");
+        forOwner[0].Title.Should().Be("Алекс: практика остановлена", "тот же заголовок, что до S2d-4f");
+        NotificationsFor(PrivateAuthor).Should().BeEmpty("чужой автор приватного чата тут ни при чём");
+    }
+
+    [Fact]
+    public async Task ВопросИнтервью_ОбщийШтаб_УведомлениеВладельцу()
+    {
+        var (session, _, _) = await MakeStabAsync("public-question");
+
+        await _sut.OnStabQuestionAsync(session);
+
+        var forOwner = NotificationsFor(UserId);
+        forOwner.Should().ContainSingle("вопрос интервью общего штаба — владельцу проекта");
+        forOwner[0].Title.Should().Be("Алекс ждёт ответов по задаче", "тот же заголовок, что до S2d-4f");
+        NotificationsFor(PrivateAuthor).Should().BeEmpty("чужой автор приватного чата тут ни при чём");
+    }
+
+    // Пустой PrivateToUserId — «не видит никто» (fail-closed, как SessionAccess.CanSee и
+    // ChatNotificationAudience.OwnerOf): ни автору, ни владельцу. Все три точки уведомлений
+    // штаба (эскалация, вопрос интервью, напоминание) обязаны пропустить отправку.
+    [Fact]
+    public async Task Штаб_ПустойPrivateToUserId_УведомленияНикому()
+    {
+        var (session, _, _) = await MakeStabAsync("empty-private");
+        var live = _sessions.GetById(session.Id)!;
+        live.PrivateToUserId = "";
+        // Стадия «ждёт решения»: иначе напоминание не попробовалось бы и при сломанном
+        // гарде тест остался бы зелёным — проверяем все три точки, а не две из них
+        ((ITeamRunState)_sessions).WithTeamState(session.Id, t => { t.Stage = TeamImplementStage.AwaitingDecision; return true; });
+
+        await _sut.RaiseEscalationAsync(session, new TeamEscalation
+        {
+            Kind = TeamEscalationKind.Blocker,
+            Title = "Практика остановлена тестом",
+            Details = "Тестовая карточка",
+            Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
+        });
+        await _sut.OnStabQuestionAsync(session);
+        await PublishAgedCardAsync(session.Id, TeamEscalationKind.BudgetExhausted,
+            TimeSpan.FromHours(2), "Бюджет итерации израсходован");
+        await _sut.CheckAwaitingEscalationsAsync();
+
+        Notifications().Should().BeEmpty(
+            "пустой автор приватного чата — адресата нет никому, все три точки молчат");
     }
 
     // --- Э5: непрерывный контур — новая вводная разворачивает волну с нуля ---

@@ -10,7 +10,7 @@
 import { type BadgeTone } from '../../../components/ui/Badge';
 import { Brain, FileText, GitCommit, Link2, ListChecks, MessageSquare, StickyNote } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import { parseSectionKey, type WikiError, type WikiInboxReasonCode, type WikiRetractDto, type WikiSectionDto } from 'aihome_shell/kit';
+import { parseSectionKey, type WikiError, type WikiRetractDto, type WikiSectionDto } from 'aihome_shell/kit';
 
 // Статусы страницы — их считает код, не модель (ADR-035 §3, WikiFrontmatter.StatusValues)
 export const PAGE_STATUS: Record<string, { tone: BadgeTone; text: string; title: string }> = {
@@ -235,19 +235,35 @@ export const OVERRIDE_TEXT = {
 // (ADR-038, раздел «Входящие»). Причина такой операции приходит текстом бэка; фронт узнаёт
 // случай по устойчивому началу строки (таблица ADR — зеркало строк WikiApplyPolicy) и
 // показывает короткий текст пункта дословно; нераспознанное начало — нейтральный текст,
-// сырая строка на экран не выходит. Причины операций не-человеческих целей показываются
-// как есть (их тексты — не таблица ADR).
+// сырая строка в строку списка не выходит (экран пакета показывает причину как есть).
+// Причины операций не-человеческих целей показываются как есть (их тексты — не таблица ADR).
+
+// Коды причин — чисто фронтовые: бэк причин-кодов не отдаёт вовсе (ADR-038:424
+// «Устойчивого кода нет»), в DTO приходит только текст reason. Фронт узнаёт случай по
+// устойчивому началу строки и присваивает свой код; тип живёт здесь, в единственном
+// потребителе, а не в wire-контракте (R-F6a).
+export type WikiInboxReasonCode =
+  | 'source_time_unknown'
+  | 'source_older_than_edit'
+  | 'target_time_unknown'
+  | 'source_not_newer'
+  | 'recently_reverted'
+  | 'class_disabled';
 
 // Две «Неизвестно…» причины: длинный префикс стоит первым, первый записан с двоеточием,
 // как в таблице ADR. Каждой из этих мер по отдельности достаточно, чтобы их различить; без обеих
 // вторая причина показала бы текст первой — тест-таблица ADR на этом краснеет.
-const INBOX_REASON_PREFIXES: Array<[string, WikiInboxReasonCode]> = [
+// Третья часть пары — обязательное слово в строке: префикс «класс правки» короткий
+// (имя класса в строке бэка динамическое), «выключен» есть и в строке ADR, и в строке
+// бэка (WikiApplyPolicy.cs:140); будущая строка с этим началом, но не о выключении
+// класса, в этот код не попадёт.
+const INBOX_REASON_PREFIXES: Array<[string, WikiInboxReasonCode, string?]> = [
   ['Неизвестно, когда написан источник утверждения', 'target_time_unknown'],
   ['Неизвестно, когда написан источник:', 'source_time_unknown'],
   ['Источник старше вашей правки', 'source_older_than_edit'],
   ['Источник не новее заменяемого утверждения', 'source_not_newer'],
   ['страницу откатили вручную', 'recently_reverted'],
-  ['класс правки', 'class_disabled'],
+  ['класс правки', 'class_disabled', 'выключен'],
 ];
 
 // Короткие тексты пунктов — правая колонка таблицы ADR-038, дословно.
@@ -273,8 +289,8 @@ export function isHumanTargetClass(classKey: string): boolean {
 
 export function wikiInboxReasonCode(reason: string | null | undefined): WikiInboxReasonCode | null {
   if (!reason) return null;
-  for (const [prefix, code] of INBOX_REASON_PREFIXES) {
-    if (reason.startsWith(prefix)) return code;
+  for (const [prefix, code, mustContain] of INBOX_REASON_PREFIXES) {
+    if (reason.startsWith(prefix) && (!mustContain || reason.includes(mustContain))) return code;
   }
   return null;
 }

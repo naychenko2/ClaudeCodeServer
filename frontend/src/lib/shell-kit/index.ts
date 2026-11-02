@@ -56,7 +56,7 @@ export type {
   WikiSettingsSnapshot, WikiApplyClassDto, WikiNightlySettings, WikiLastNight, WikiPutNightlyResult,
   WikiAuthorship, WikiPageInfoAuthoredDto, WikiCatalogDto, WikiSourceCardInfo, WikiPageEditableDto, WikiConflictPage, WikiFootnoteDto,
   WikiOverrideDto, WikiOverrideOp, WikiPageOverriddenDto, WikiOverrodeKind, WikiJournalEntryOverrideDto,
-  WikiAdoptMineResult, WikiInboxReasonCode,
+  WikiAdoptMineResult,
 } from '../wiki';
 
 // ─── subsystems ──────────────────────────────────────────────────────────────

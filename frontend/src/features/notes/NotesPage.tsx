@@ -9,9 +9,9 @@ import {
   parseHash, navPush, navReplace, getNav,
   Button, IslandScaffold, ConfirmDialog, PageCanvas, ICON_SIZE, Chip,
   PanelZone, notesPanels, zoneOf, NOTES_KEYS, useIsMobile, useWindowWidth, useListAutoFocus,
-  FLAGS, useFeature, useWikiOpenRequest, consumeOpenWikiPage,
+  FLAGS, useFeature, useWikiOpenRequest, consumeOpenWikiPage, requestOpenWikiPage, useWikiTree,
 } from 'aihome_shell/kit';
-import type { NavSnapshot } from 'aihome_shell/kit';
+import type { NavSnapshot, WikiSectionDto } from 'aihome_shell/kit';
 import type { HubTabValue } from 'aihome_shell/kit';
 import { NotesList } from './NotesList';
 import { NoteView } from './NoteView';
@@ -19,9 +19,12 @@ import { NotesGraph, type GraphStats } from './NotesGraph';
 import { GraphSettingsBody } from './graph/GraphSettingsBody';
 import { useGraphSettings } from './graph/graphSettings';
 import { WikiTab } from './wiki/WikiTab';
+import { WikiUnifiedTree, useEnsureWikiTree } from './wiki/WikiUnifiedTree';
 import { CollapseGroup, IconSearch, IconPlus, IconCalendarDay, SourceDot } from './shared';
 
 type Mode = 'notes' | 'graph' | 'wiki';
+
+const NO_SECTIONS: WikiSectionDto[] = [];
 
 // --- Чипы-фильтры списка: патчат операторы (tag:/status:) в строке поиска ---
 
@@ -94,9 +97,8 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // Десктопный режим «Вики»: граф на десктопе — панель (своего mode у него нет), поэтому
   // второй режим — отдельный флаг, а не третье значение mobileMode
   const [wikiOn, setWikiOn] = useState(false);
-  // Узел левой зоны, куда WikiTab порталом кладёт дерево разделов (единая раскладка, десктоп).
-  // Состояние, а не ref: WikiTab должен перерисоваться, когда узел появился
-  const [wikiTreeHost, setWikiTreeHost] = useState<HTMLElement | null>(null);
+  // Открытая в центре страница вики — для выделения строки единого дерева (ADR-038, F2)
+  const [openedWiki, setOpenedWiki] = useState<{ section: string; page: string } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   // Активные фильтры-операторы в запросе — бейдж на свёрнутой группе «Фильтры»
@@ -117,6 +119,11 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // На десктопе режим раздела определяется тем, открыта ли панель графа: она и
   // есть «вход в граф», а центр показывает то, чем сейчас управляют слева.
   const graphPanelOpen = zoneOf(zones, 'notesGraph') != null;
+  // Единое дерево «заметки + вики» (ADR-038, F2): на десктопе заменяет и список заметок, и дерево
+  // разделов вики. Дерево вики грузим сами — центральный WikiTab смонтирован не всегда
+  const unifiedLeft = wikiUnified && !isMobile && !graphPanelOpen;
+  useEnsureWikiTree(unifiedLeft);
+  const wikiTree = useWikiTree();
 
   // Вернуться к заметкам из любого режима: снять панель графа, вкладку «Вики» и мобильный
   // режим. Ссылка стабильна — функцию слушает эффект AI-хаба, и пересоздание
@@ -134,6 +141,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const selectNote = useCallback((id: string) => {
     setMobileMode('notes');
     setWikiOn(false);
+    setOpenedWiki(null);
     setSelectedId(id); setMobileView('note'); navPush({ screen: 'notes', note: id });
   }, []);
 
@@ -502,14 +510,23 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
 
   // Панели рельсы: «Заметки» (поиск, фильтры, список) и «Граф» (статистика и
   // настройки карты связей). Заголовок каждой рисует PanelShell.
-  const wikiTreeInLeft = wikiUnified && !isMobile && wikiOn && !graphPanelOpen;
   const zonePanels = {
-    notesList: wikiTreeInLeft ? (
-      // Единая раскладка, режим «Вики»: в левой зоне вместо списка заметок — дерево разделов
-      // вики (его рисует WikiTab порталом); переключатель режимов остаётся
+    notesList: unifiedLeft ? (
+      // Единая раскладка: одно дерево — заметки и страницы вики вперемешку, переключателя
+      // режимов нет; страница вики открывается в центре запросом в стор вики
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
-        {sidebarControls({ withModeSwitch: true, listMode: false })}
-        <div ref={setWikiTreeHost} data-testid="wiki-tree-host" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }} />
+        {sidebarControls({ withModeSwitch: false, listMode: true })}
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+          <WikiUnifiedTree
+            sections={wikiTree?.sections ?? NO_SECTIONS} notes={listed} query={query}
+            selectedNoteId={wikiOn ? null : selectedId} selectedPage={wikiOn ? openedWiki : null}
+            onSelectNote={selectNote}
+            onOpenPage={(section, page) => {
+              setOpenedWiki({ section, page });
+              requestOpenWikiPage({ section, path: page });
+            }}
+          />
+        </div>
       </div>
     ) : (
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
@@ -532,7 +549,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // десктопный режим вкладки
   const mode: Mode = isMobile ? mobileMode : (graphPanelOpen ? 'graph' : wikiOn ? 'wiki' : 'notes');
   const centerPane = mode === 'wiki'
-    ? <WikiTab unified={wikiUnified} treeHost={wikiTreeInLeft ? wikiTreeHost : null} />
+    ? <WikiTab unified={wikiUnified} />
     : mode === 'graph'
     ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden',
         ...(!isMobile ? { background: C.bgMain, border: `1px solid ${ISLAND.border}`, borderRadius: ISLAND.radius, boxShadow: ISLAND.shadow } : {}) }}>

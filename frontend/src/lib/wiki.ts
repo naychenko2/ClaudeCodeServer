@@ -1298,3 +1298,17 @@ export const __test = {
     return _pageGoneKey === pageCacheKey(sectionKey, pageKey);
   },
 };
+
+// ─── Авторство страницы (ADR-038 «Контракт для фронта», SV1-В; единое дерево F2) ───
+// Бэк отдаёт authorship в строке GET /api/wiki/section; до его слияния поля нет —
+// отсутствие (и любое неизвестное значение) читаем как 'ai'. Значок «заметка» сюда не
+// входит: его фронт ставит сам по источнику строки.
+
+export type WikiAuthorship = 'ai' | 'together' | 'human';
+
+export interface WikiPageInfoAuthoredDto extends WikiPageInfoDto { authorship?: WikiAuthorship }
+
+export function wikiAuthorshipOf(page: { authorship?: unknown }): WikiAuthorship {
+  const a = page.authorship;
+  return a === 'together' || a === 'human' ? a : 'ai';
+}

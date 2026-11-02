@@ -75,7 +75,7 @@ vi.mock('../../lib/wiki', async (importOriginal) => {
   return {
     ...orig,
     ensureWikiLoaded: async () => {},
-    loadWikiCatalog: async () => {},
+    loadWikiCatalog: async () => wikiMock.catalog,
     loadWikiPage: async () => wikiMock.page,
     // S7a: «Входящие» — свои, экран списка зовёт listWikiPackages; здесь он пустой:
     // тест проверяет смену подвкладки, а не список пакетов
@@ -548,25 +548,28 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     root.unmount();
   });
 
-  it('F1: unified на десктопе — дерево разделов в левой зоне, в центре только документ', async () => {
+  it('F2: unified на десктопе — одно дерево: заметки и страницы вики, переключателя режимов нет', async () => {
     setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
     const { root, container } = mountNotes();
     await settle();
-    clickNode(findNodeByAttr(container, 'aria-label', 'Вики')!);
+    const tree = findNodeByAttr(container, 'data-testid', 'wiki-unified-tree');
+    expect(tree, 'единое дерево в левой зоне').not.toBeNull();
+    expect(findNodeByAttr(container, 'aria-label', 'Вики'), 'переключателя «Заметки | Вики» нет').toBeNull();
+    // в одном дереве и заметка, и страница вики
+    const noteRow = findNodeByAttr(tree!, 'title', NOTE_TITLE);
+    const pageRow = findNodeByAttr(tree!, 'title', 'Тестовая страница вики');
+    expect(noteRow, 'строка заметки в дереве').not.toBeNull();
+    expect(pageRow, 'строка страницы вики в дереве').not.toBeNull();
+    // клик по странице вики — в центре документ вики, дерево на месте
+    clickNode(pageRow!);
     await settle();
-    const host = findNodeByAttr(container, 'data-testid', 'wiki-tree-host');
-    expect(host, 'узел левой зоны под дерево вики').not.toBeNull();
-    expect(findNodeByAttr(host!, 'data-testid', 'wiki-tree'), 'дерево в левой зоне').not.toBeNull();
-    const doc = findNodeByAttr(container, 'data-testid', 'wiki-doc')!;
-    expect(findNodeByAttr(doc, 'data-testid', 'wiki-tree'), 'в центре дерева нет').toBeNull();
-    expect(hasText(doc, 'Тестовая страница вики'), 'в центре документ').toBe(true);
-    // список заметок в левой зоне уступил место дереву
-    expect(findNodeByAttr(container, 'title', NOTE_TITLE), 'списка заметок на месте дерева нет').toBeNull();
-    // назад в «Заметки»: дерево уходит, список возвращается
-    clickNode(findNodeByAttr(container, 'aria-label', 'Заметки')!);
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-doc'), 'в центре документ вики').not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-unified-tree'), 'дерево осталось').not.toBeNull();
+    // клик по заметке — центр снова заметка
+    clickNode(findNodeByAttr(container, 'title', NOTE_TITLE)!);
     await settle();
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-tree'), 'дерева больше нет').toBeNull();
-    expect(findNodeByAttr(container, 'title', NOTE_TITLE), 'список заметок вернулся').not.toBeNull();
+    expect(findButtonByText(container, 'Править'), 'заметка открыта').not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-doc'), 'документа вики в центре больше нет').toBeNull();
     root.unmount();
   });
 

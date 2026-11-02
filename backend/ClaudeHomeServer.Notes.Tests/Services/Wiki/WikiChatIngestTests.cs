@@ -807,6 +807,63 @@ public class WikiChatIngestTests : IDisposable
             "разбор ночи — на названном месте");
     }
 
+    // ── решение Андрея 02.11: ночь не уходит в облако, кнопка — прежняя цепочка ──
+
+    [Fact]
+    public async Task Analyze_КлючНочи_ВызовБезОблака()
+    {
+        // Ночь идёт через RunLocalOrChosenAsync (без финального claude-шага); кнопка «Разобрать»
+        // (actionKey не задан) — через RunDetailedAsync, как раньше (следующий тест).
+        // Мутации: ночь на RunDetailedAsync (убрать запрет) → этот тест красный;
+        // кнопка на RunLocalOrChosenAsync (выставить запрет) → следующий тест красный.
+        AddSession("chat-night");
+        SetShortHistory("chat-night");
+        var night = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1))
+        {
+            ExpectedActionKey = LocalActionCatalog.WikiNightly,
+        };
+        var nres = await Sut(night).AnalyzeAsync(User, "chat-night", actionKey: LocalActionCatalog.WikiNightly);
+        nres.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, nres.Reason);
+        night.NoCloudKeys.Should().HaveCount(2, "оба прохода ночи — запросом без облака");
+        night.CloudKeys.Should().BeEmpty("облачная цепочка ночью не зовётся");
+    }
+
+    [Fact]
+    public async Task Analyze_КнопкаБезКлюча_ПрежняяЦепочкаСОблаком()
+    {
+        AddSession();
+        SetShortHistory();
+        var button = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var bres = await Sut(button).AnalyzeAsync(User, ChatId);
+        bres.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, bres.Reason);
+        button.CloudKeys.Should().HaveCount(2, "кнопка — прежняя цепочка с облаком");
+        button.NoCloudKeys.Should().BeEmpty("запрет облака кнопке не выставляется");
+    }
+
+    [Fact]
+    public async Task Analyze_НочьЛокальныйРаннерНедоступен_ОтказБезОблака_КурсорНеДвинут()
+    {
+        // Локаль упала посреди вызова: отказ разбора (Rejected), облако не позвано,
+        // исключения наружу нет, курсор чата не двинут.
+        AddSession("chat-night");
+        SetShortHistory("chat-night");
+        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1))
+        {
+            ExpectedActionKey = LocalActionCatalog.WikiNightly,
+            LocalThrow = new InvalidOperationException("локальная модель недоступна"),
+        };
+
+        var res = await Sut(llm).AnalyzeAsync(User, "chat-night", actionKey: LocalActionCatalog.WikiNightly);
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected);
+        res.Reason.Should().Contain("модель не ответила").And.Contain("недоступна");
+        llm.CloudKeys.Should().BeEmpty("облако при отказе локали не зовётся");
+        llm.NoCloudKeys.Should().ContainSingle("после отказа второй проход не идёт");
+        WikiChatTriageStore.Get(Root).Entries
+            .Where(e => e.SessionId == "chat-night")
+            .Should().NotContain(e => e.Cursor > 0, "курсор не двинут");
+    }
+
     [Fact]
     public async Task Гонка_ДвеЗаявкиРазнымиActionKey_ОдинПрогон()
     {
@@ -1113,6 +1170,13 @@ public class WikiChatIngestTests : IDisposable
         // идёт на потоке вызова внутри lock очереди — записи там нет, и приход второй заявки
         // решался бы гонкой за этот lock.
         public TaskCompletionSource? GateAAsync;
+        // Решение 02.11: какими входами пришли вызовы. Без облака — RunLocalOrChosenAsync,
+        // с облачной цепочкой — RunDetailedAsync/RunAsync.
+        public List<string> NoCloudKeys { get; } = [];
+        public List<string> CloudKeys { get; } = [];
+        // Локальный раннер «недоступен»: RunLocalOrChosenAsync бросает; облачные входы при этом
+        // ответили бы (Answer) — так видно, что облако не позвано.
+        public Exception? LocalThrow;
 
         private readonly Dictionary<string, Queue<string>> _answers = new();
         private readonly List<Action> _beforeNextCall = [];
@@ -1136,17 +1200,25 @@ public class WikiChatIngestTests : IDisposable
         public string DescribeRoute(string actionKey, string? fallbackModel) => "fake";
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
-            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>
-            Task.FromResult(Answer(actionKey, prompt, ct));
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            CloudKeys.Add(actionKey);
+            return Task.FromResult(Answer(actionKey, prompt, ct));
+        }
 
         public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
-            object? jsonFormat = null, CancellationToken ct = default) =>
-            Task.FromResult<string?>(Answer(actionKey, prompt, ct));
+            object? jsonFormat = null, CancellationToken ct = default)
+        {
+            NoCloudKeys.Add(actionKey);
+            if (LocalThrow is not null) throw LocalThrow;
+            return Task.FromResult<string?>(Answer(actionKey, prompt, ct));
+        }
 
         public async Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
             string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
             int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
         {
+            CloudKeys.Add(actionKey);
             var text = Answer(actionKey, prompt, ct);
             // Первый проход A стоит на асинхронном гейте: вызывающий (await CallModelAsync)
             // отдаёт управление, и к этому моменту заявка уже стоит в очереди.

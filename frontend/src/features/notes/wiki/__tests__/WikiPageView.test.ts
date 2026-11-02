@@ -32,7 +32,8 @@ import {
   mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps,
 } from '../../../../components/chat/__tests__/fakeDom';
 import { WikiPageView } from '../WikiPageView';
-import { __test as wikiStore, loadWikiPage, type WikiPageDto, type WikiPageAuthoredDto } from '../../../../lib/wiki';
+import { ReplacementDot } from '../WikiUnifiedChrome';
+import { __test as wikiStore, loadWikiPage, type WikiPageDto, type WikiPageAuthoredDto, type WikiOverrideDto, type WikiPageOverriddenDto } from '../../../../lib/wiki';
 import { FOOTNOTE_TEXT, fmtDayMonth } from '../WikiFootnotePopover';
 
 // Мок с сохранением остальных экспортов: компонент берёт эти модули через кит хоста,
@@ -646,5 +647,211 @@ describe('Страница с авторством (F3a)', () => {
     const adr = readFileSync(ADR_PATH, 'utf8');
     expect(adr).toContain(FOOTNOTE_TEXT.humanBody.replace('Ваша правка. ', ''));
     expect(adr).toContain(FOOTNOTE_TEXT.openChat);
+  });
+});
+
+// ─── Метки «ИИ заменил / оспаривает» и «Вернуть мою» (F3b) ───
+
+const PAGE_OVR = `---
+type: entity
+status: active
+updated: 2026-11-02
+---
+
+# Очередь GPU
+
+## Сводка
+- Для черновиков снимаем размер 864×480. [^s1]
+- Резину меняем в конце октября. [^s2]
+
+## История
+- Для черновиков снимаем половинный размер. [^s2]
+
+[^s1]: [[Источники/Чат]] — «размер 864×480»
+[^s2]: [[Источники/Правка]] — «половинный размер»
+`;
+const OVR_REPLACED: WikiOverrideDto = {
+  op: 'supersede', statement: 'Для черновиков снимаем размер 864×480.', previous: 'Для черновиков снимаем половинный размер.',
+  at: '2026-11-02T05:48:00Z', packageId: 'pk1',
+};
+const OVR_DISPUTED: WikiOverrideDto = {
+  op: 'conflict', statement: 'Резину меняем в начале ноября.', previous: 'Резину меняем в конце октября.',
+  at: '2026-11-02T05:31:00Z', packageId: 'pk2',
+};
+const withOvr = (overrides: WikiOverrideDto[], over: Partial<WikiPageOverriddenDto> = {}): WikiPageOverriddenDto =>
+  ({ pageKey: PAGE_KEY, content: PAGE_OVR, authorship: 'together', footnotes: FOOTNOTES, hash: 'h1', overrides, ...over });
+const tag = (c: Cont) => allNodes(c).filter(n => n.getAttribute('data-testid') === 'wiki-override-tag');
+const restoreBtn = (c: Cont) => findNodeByAttr(c, 'data-testid', 'wiki-restore-btn');
+const restorePosts = () => req.mock.calls.filter(([u]) => String(u).startsWith('/wiki/pages/restore'));
+
+describe('Метки замен и «Вернуть мою» (F3b)', () => {
+  it('без флагов меток и плашек нет, даже если сервер отдал overrides', async () => {
+    await seedPage(withOvr([OVR_REPLACED]));
+    const c = renderPage();
+    await settle();
+    expect(tag(c)).toHaveLength(0);
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-override-replaced')).toBeNull();
+  });
+
+  it('замена: плашка, метка с датой у нового утверждения, подпись у прежней строки «Истории», кнопка', async () => {
+    unifiedOn();
+    await seedPage(withOvr([OVR_REPLACED]));
+    const c = renderPage();
+    await settle();
+    expect(has(c, 'ИИ заменил вашу формулировку')).toBe(true);
+    expect(has(c, 'Прежняя — в «Истории».')).toBe(true);
+    const t = tag(c);
+    expect(t).toHaveLength(1);
+    expect(t[0].getAttribute('data-kind')).toBe('replaced');
+    expect(texts(t[0]).join('')).toBe('ИИ заменил вашу формулировку · 02.11');
+    expect(styleOf(t[0]).color).toBe('var(--c-info)');
+    const cap = findNodeByAttr(c, 'data-testid', 'wiki-history-caption');
+    expect(cap).not.toBeNull();
+    expect(texts(cap!).join('')).toContain('Ваша формулировка, заменена ИИ');
+    expect(restoreBtn(c)).not.toBeNull();
+    expect(texts(restoreBtn(c)!).join('')).toContain('Вернуть мою');
+  });
+
+  it('previous = null: плашка есть, «Вернуть мою» не предлагается', async () => {
+    unifiedOn();
+    await seedPage(withOvr([{ ...OVR_REPLACED, previous: null }]));
+    const c = renderPage();
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-override-replaced')).not.toBeNull();
+    expect(restoreBtn(c)).toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-history-caption')).toBeNull();
+  });
+
+  it('спор: плашка-предупреждение и метка «ИИ оспаривает» у утверждения человека, без «Вернуть мою»', async () => {
+    unifiedOn();
+    await seedPage(withOvr([OVR_DISPUTED]));
+    const c = renderPage();
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-override-disputed')).not.toBeNull();
+    expect(has(c, 'ИИ оспаривает ваше утверждение')).toBe(true);
+    const t = tag(c);
+    expect(t).toHaveLength(1);
+    expect(t[0].getAttribute('data-kind')).toBe('disputed');
+    expect(texts(t[0]).join('')).toBe('⚠ ИИ оспаривает');
+    expect(restoreBtn(c)).toBeNull();
+  });
+
+  it('окно 14 дней считает сервер: нет в ответе — нет метки (15-й день); есть в ответе — рисуем без своей проверки даты', async () => {
+    unifiedOn();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-11-17T09:00:00Z')); // 15-й день после замены 02.11
+      await seedPage(withOvr([]));
+      const gone = renderPage();
+      await settle();
+      expect(tag(gone)).toHaveLength(0);
+      expect(findNodeByAttr(gone, 'data-testid', 'wiki-override-replaced')).toBeNull();
+      // Те же часы, но сервер замену отдал (его окно шире нашего представления) — фронт её не прячет
+      for (const r of roots) act(() => r.unmount());
+      roots.length = 0;
+      uninstallFakeDom();
+      wikiStore.reset();
+      await seedPage(withOvr([OVR_REPLACED]));
+      const shown = renderPage();
+      await settle();
+      expect(tag(shown)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('«Вернуть мою»: POST с парой statement → current, previous → restore; страница перечитана, плашка снята, сообщение', async () => {
+    unifiedOn();
+    let restored = false;
+    await seedPage(withOvr([OVR_REPLACED]), SECTION.key, PAGE_KEY, (url, init) => {
+      if (init?.method === 'POST') { restored = true; return Promise.resolve({ status: 'applied', hash: 'h2', content: PAGE_OVR }); }
+      if (restored && url.startsWith('/wiki/page')) return Promise.resolve(withOvr([], { hash: 'h2' }));
+      return undefined;
+    });
+    const c = renderPage();
+    await settle();
+    click(restoreBtn(c), 'Вернуть мою');
+    await settle(16);
+    expect(restorePosts()).toHaveLength(1);
+    const body = JSON.parse((restorePosts()[0][1] as { body: string }).body);
+    expect(body).toEqual({
+      section: SECTION.key, page: PAGE_KEY, baseHash: 'h1',
+      current: OVR_REPLACED.statement, restore: OVR_REPLACED.previous,
+    });
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-override-replaced')).toBeNull();
+    expect(tag(c)).toHaveLength(0);
+    expect(has(c, 'Вернули вашу формулировку. 7 дней ИИ не меняет ваше на этой странице сам.')).toBe(true);
+  });
+
+  it('двойной клик «Вернуть мою» — один запрос', async () => {
+    unifiedOn();
+    let resolve!: (v: unknown) => void;
+    await seedPage(withOvr([OVR_REPLACED]), SECTION.key, PAGE_KEY, (_u, init) =>
+      (init?.method === 'POST' ? new Promise(r => { resolve = r; }) : undefined));
+    const c = renderPage();
+    await settle();
+    const p = reactProps(restoreBtn(c)!) as { onClick: (e: unknown) => void };
+    act(() => { p.onClick(undefined); p.onClick(undefined); });
+    expect(restorePosts()).toHaveLength(1);
+    await act(async () => { resolve({ status: 'applied', hash: 'h2', content: PAGE_OVR }); });
+    await settle();
+    expect(restorePosts()).toHaveLength(1);
+  });
+
+  it('409 wiki_page_changed: страница перечитана, ничего не перезаписано, плашка и кнопка остаются, текст сказан', async () => {
+    unifiedOn();
+    await seedPage(withOvr([OVR_REPLACED]), SECTION.key, PAGE_KEY, (_u, init) =>
+      (init?.method === 'POST'
+        ? Promise.reject({ status: 409, body: { code: 'wiki_page_changed', message: 'изменилась', page: { pageKey: PAGE_KEY, content: PAGE_OVR, hash: 'h9' } } })
+        : undefined));
+    const c = renderPage();
+    await settle();
+    const gets = () => pageGets().filter(([u]) => String(u).startsWith('/wiki/page?')).length;
+    const before = gets();
+    click(restoreBtn(c), 'Вернуть мою');
+    await settle(16);
+    expect(restorePosts()).toHaveLength(1);
+    expect(gets()).toBe(before + 1);
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-restore-error')).not.toBeNull();
+    expect(has(c, 'Страница изменилась, пока вы возвращали')).toBe(true);
+    expect(restoreBtn(c)).not.toBeNull();
+  });
+
+  it('400 wiki_edit_invalid: причина бэка в Notice, rejection наружу не выходит', async () => {
+    unifiedOn();
+    await seedPage(withOvr([OVR_REPLACED]), SECTION.key, PAGE_KEY, (_u, init) =>
+      (init?.method === 'POST'
+        ? Promise.reject({ status: 400, body: { code: 'wiki_edit_invalid', message: 'формулировка не человека', violations: [] } })
+        : undefined));
+    const c = renderPage();
+    await settle();
+    click(restoreBtn(c), 'Вернуть мою');
+    await settle(16);
+    expect(has(c, 'формулировка не человека')).toBe(true);
+  });
+
+  it('точка C.info на «Журнале»: есть при замене в открытой странице, гаснет после перечитки без неё', async () => {
+    unifiedOn();
+    await seedPage(withOvr([OVR_REPLACED]));
+    installFakeDom();
+    const { root, container } = mount(createElement(ReplacementDot));
+    roots.push(root);
+    await settle();
+    const dot = findNodeByAttr(container, 'data-testid', 'wiki-replacement-dot');
+    expect(dot).not.toBeNull();
+    expect(styleOf(dot!).background).toBe('var(--c-info)');
+    req.mockImplementation(() => Promise.resolve(withOvr([])));
+    await act(async () => { await loadWikiPage(SECTION.key, PAGE_KEY); });
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-replacement-dot')).toBeNull();
+  });
+
+  it('спор точку не зажигает: она про замены', async () => {
+    await seedPage(withOvr([OVR_DISPUTED]));
+    installFakeDom();
+    const { root, container } = mount(createElement(ReplacementDot));
+    roots.push(root);
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-replacement-dot')).toBeNull();
   });
 });

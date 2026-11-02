@@ -34,7 +34,7 @@ import { PillSwitch } from '../../../components/ui/PillSwitch';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { WikiPageView } from './WikiPageView';
 import { WikiSectionTree } from './WikiSectionTree';
-import { panelTabs, PanelHead, WikiDrawer, WikiPanelBody, WikiRail, WikiSidePanel } from './WikiUnifiedChrome';
+import { panelTabs, PanelHead, ReplacementDot, WikiDrawer, WikiPanelBody, WikiRail, WikiSidePanel } from './WikiUnifiedChrome';
 import { WIKI_SUBTABS, wikiSubTabIcon, WikiSubTabStub, type WikiSubTabId } from './wikiTabs';
 import { PAGE_STATUS, PAGE_TYPE, sectionPrefix, wikiErrorText } from './wikiLabels';
 
@@ -516,6 +516,7 @@ export function WikiTab({ unified = false, treeHost = null }: { unified?: boolea
               leftIcon={<FolderTree size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />} ariaExpanded={drawer === 'tree'} ariaControls={DRAWER_TREE_ID}
               onClick={() => setDrawer(d => d === 'tree' ? null : 'tree')}>{null}</Button>
             <span style={{ flex: 1 }} />
+            <span style={{ position: 'relative', display: 'inline-flex' }}>
             <Button variant="ghost" size="md" dataTestId="wiki-open-panel" ariaLabel="Входящие, журнал, здоровье, настройки"
               title="Входящие, журнал, здоровье, настройки"
               leftIcon={<PanelRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />} ariaExpanded={drawer === 'panel'} ariaControls={DRAWER_PANEL_ID}
@@ -524,6 +525,8 @@ export function WikiTab({ unified = false, treeHost = null }: { unified?: boolea
                 if (!panelTab) setPanelTab(panelTabs()[0].id);
                 setDrawer(d => d === 'panel' ? null : 'panel');
               }}>{null}</Button>
+            <ReplacementDot />
+            </span>
           </div>
           {errorBanner}
           {centerPane}

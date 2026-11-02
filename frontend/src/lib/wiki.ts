@@ -1420,3 +1420,68 @@ export async function editWikiPage(
   await loadWikiPage(sectionKey, pageKey).catch(() => undefined);
   return { status: 'applied', hash, content: typeof res.content === 'string' ? res.content : content };
 }
+
+// ─── Метки «ИИ заменил / оспаривает» и «Вернуть мою» (ADR-038 «Контракт для фронта», решение 4; F3b) ───
+// overrides[] в GET page выводит сервер из журнала за 14 дней — фронт окно не считает и
+// даты не сравнивает: нет в ответе — нет метки. previous — фактическая строка «Истории»
+// (сервер находит её сам); null — пары для «Вернуть мою» нет, кнопки не будет.
+
+export type WikiOverrideOp = 'supersede' | 'conflict';
+
+export interface WikiOverrideDto {
+  op: WikiOverrideOp;
+  // Текст утверждения ИИ без сносок
+  statement: string | null;
+  previous: string | null;
+  // Время замены, ISO 8601
+  at: string;
+  packageId: string;
+}
+
+export interface WikiPageOverriddenDto extends WikiPageEditableDto { overrides?: WikiOverrideDto[] }
+
+// Журнал: запись, где ИИ сам поменял утверждение человека (фильтр «ИИ поменял моё»)
+export type WikiOverrodeKind = 'replaced' | 'disputed';
+export interface WikiJournalEntryOverrideDto extends WikiJournalEntryDto {
+  overrodeHuman?: boolean;
+  overrodeKind?: WikiOverrodeKind | null;
+}
+
+// Отказы «Вернуть мою» читаются по тем же кодам WikiError, что у правки: 409 wiki_page_changed
+// (свежая страница в .page), 409 wiki_unified_off, 400 wiki_edit_invalid (.message — причина).
+
+// Замены и споры страницы; чужие и неизвестные op фронт не рисует
+export function wikiOverridesOf(page: { overrides?: unknown } | null | undefined): WikiOverrideDto[] {
+  const raw = page?.overrides;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((o): o is WikiOverrideDto =>
+    !!o && ((o as WikiOverrideDto).op === 'supersede' || (o as WikiOverrideDto).op === 'conflict')
+    && typeof (o as WikiOverrideDto).at === 'string' && typeof (o as WikiOverrideDto).packageId === 'string');
+}
+
+// Состояние «есть замена, которую человек не вернул»: питает точку на «Журнале». Берётся из
+// открытой страницы стора; после «Вернуть мою» страница перечитывается, замены в ответе нет — точка гаснет.
+export function wikiHasReplacement(page: { overrides?: unknown } | null | undefined): boolean {
+  return wikiOverridesOf(page).some(o => o.op === 'supersede');
+}
+
+export function useWikiReplacementDot(): boolean {
+  const snap = () => wikiHasReplacement(_page?.value as WikiPageOverriddenDto | undefined);
+  return useSyncExternalStore(subscribe, snap, snap);
+}
+
+// «Вернуть мою»: current — действующее утверждение ИИ (statement), restore — строка человека
+// из «Истории» (previous). Ответы — как у правки. Перечитки здесь нет намеренно: её делает
+// вызывающий, и только если страница ещё та же (ответ после смены страницы слот не трогает).
+export async function restoreWikiPage(
+  sectionKey: string, pageKey: string, baseHash: string | null, current: string, restore: string,
+): Promise<WikiEditResult> {
+  const res = await wikiHttp<{ status?: unknown; hash?: unknown; content?: unknown }>('/wiki/pages/restore', {
+    method: 'POST',
+    body: JSON.stringify({ section: sectionKey, page: pageKey, baseHash, current, restore }),
+  });
+  const hash = typeof res?.hash === 'string' ? res.hash : '';
+  if (res?.status === 'unchanged') return { status: 'unchanged', hash };
+  if (res?.status !== 'applied') throw new WikiError(0, null, 'неожиданный ответ возврата формулировки');
+  return { status: 'applied', hash, content: typeof res.content === 'string' ? res.content : '' };
+}

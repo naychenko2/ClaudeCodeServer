@@ -8,8 +8,9 @@ import { useEffect, useRef } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { ICON_SIZE } from '../../../components/ui/icons';
-import { C, FS, R, SHADOW, SP, Z } from 'aihome_shell/kit';
+import { C, FS, R, SHADOW, SP, Z, useWikiReplacementDot } from 'aihome_shell/kit';
 import { Button } from '../../../components/ui/Button';
+import { OVERRIDE_TEXT } from './wikiLabels';
 import { WIKI_SUBTABS, wikiSubTabIcon, WikiSubTabStub, type WikiSubTabId } from './wikiTabs';
 
 // Разделы правой панели: всё, кроме каталога («Страницы» — центр экрана)
@@ -27,13 +28,26 @@ const railStyle: CSSProperties = {
   alignItems: 'center', gap: SP.xs, paddingTop: SP.xs,
 };
 
+/** Точка C.info: на странице есть замена ваших формулировок, которую ещё не вернули (F3b).
+ *  Берётся из открытой страницы стора; после «Вернуть мою» страница перечитывается, и точка гаснет */
+export function ReplacementDot({ top = 4, right = 4 }: { top?: number; right?: number }) {
+  if (!useWikiReplacementDot()) return null;
+  return (
+    <span
+      data-testid="wiki-replacement-dot"
+      title={OVERRIDE_TEXT.dotTitle}
+      style={{ position: 'absolute', top, right, width: 7, height: 7, borderRadius: '50%', background: C.info, pointerEvents: 'none' }}
+    />
+  );
+}
+
 /** Рельса кнопок раздела: нажатие открывает панель, повторное — закрывает */
 export function WikiRail({ active, onSelect }: { active: WikiSubTabId | null; onSelect: (id: WikiSubTabId | null) => void }) {
   return (
     <div data-testid="wiki-rail" role="toolbar" aria-label="Панель вики" aria-orientation="vertical" style={railStyle}>
       {panelTabs().map(t => (
+        <span key={t.id} style={{ position: 'relative', display: 'inline-flex' }}>
         <Button
-          key={t.id}
           variant={active === t.id ? 'secondary' : 'ghost'}
           size="md"
           dataTestId={`wiki-rail-${t.id}`}
@@ -42,6 +56,8 @@ export function WikiRail({ active, onSelect }: { active: WikiSubTabId | null; on
           ariaPressed={active === t.id}
           leftIcon={wikiSubTabIcon(t)}
           onClick={() => onSelect(active === t.id ? null : t.id)} >{null}</Button>
+        {t.id === 'journal' && <ReplacementDot />}
+        </span>
       ))}
     </div>
   );

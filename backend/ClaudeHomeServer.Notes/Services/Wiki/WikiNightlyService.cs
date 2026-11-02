@@ -45,8 +45,8 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //   следующего — outcome=disabled_midway;
 // - дата прохода живёт в keeper/nightly-last.json, пишется атомарно (temp+Move) и ПОСЛЕ прохода:
 //   рестарт ночью не повторит завершённый проход; outcome=error дату не закрывает — следующий тик
-//   окна пробует снова, но уведомление об error — одно на дату: если прочитанный до прохода итог
-//   этого же дня — error, повторный проход молчит.
+//   окна пробует снова; тот же error той же даты не повторяется: если прочитанный до прохода итог
+//   этого же дня — error и итог нового прохода тоже error, уведомления нет (успех и иные исходы сообщаются).
 //
 // Утреннее уведомление (N7c): после записи итога владелец получает итог ночи человеческими
 // словами — «Ночной разбор: применено N, во „Входящих” M» и названием пути к «Журналу». Молчание
@@ -281,8 +281,8 @@ public sealed class WikiNightlyService : BackgroundService
             }
             // Уведомление — ПОСЛЕ записи итога: даже если доставка откажет, итог уже на диске
             // и в следующем тике читается настройками. Сбой отправителя остаёт в TryNotifyAsync.
-            // Об error этого дня уже сказано ранее (errorAlreadyNotified) — молчание.
-            if (!errorAlreadyNotified) await TryNotifyAsync(ownerId, result);
+            // Молчим только о повторном error той же даты; успех после error и любой иной исход — сообщаем.
+            if (!(errorAlreadyNotified && result.Outcome == OutcomeError)) await TryNotifyAsync(ownerId, result);
         }
         finally
         {

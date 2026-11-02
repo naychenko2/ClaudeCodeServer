@@ -759,6 +759,25 @@ public class WikiNightlyServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ОшибкаПотомУспехВТуЖеДату_УспехСообщается()
+    {
+        // Мутация «убрать проверку исхода из охраны» (молчать при любом исходе после error этой
+        // даты) — второй тик не шлёт уведомление об успехе, тест краснеет.
+        Configure();
+        AddChat("c1");
+        File.WriteAllText(TriageFile(), "{ битый стор"); // пересчёт отказывает → проход error
+        await Tick();
+        Last().Outcome.Should().Be(WikiNightlyService.OutcomeError);
+
+        File.Delete(TriageFile());
+        var notifier = new Notifier();
+        await Tick(Sut(notifier: notifier));
+
+        Last().Outcome.Should().Be(WikiNightlyService.OutcomeCompleted);
+        notifier.Sent.Should().HaveCount(1, "успех после error той же даты сообщается");
+    }
+
+    [Fact]
     public async Task ПрерванныйПроход_ДатуНеЗакрывает()
     {
         Configure();

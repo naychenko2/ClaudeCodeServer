@@ -24,7 +24,52 @@ public static class WikiProjections
     // полная история остаётся в log.jsonl — его строки не переписываются (решение 13).
     public const int LogLinesLimit = 200;
 
+    // Признак авторства страницы (ADR-038): считает код по сноскам, в шапке не хранится.
+    // «ИИ» — нет сносок на карточки origin: human; «вместе» — есть и такие, и другие;
+    // «человек» — только на карточки human. Страница без сносок — «ИИ» (человеческого в ней нет).
+    public const string AuthorshipAi = "ai";
+    public const string AuthorshipTogether = "together";
+    public const string AuthorshipHuman = "human";
+
     private static readonly Regex TitleRx = new(@"^# (.+)$", RegexOptions.CultureInvariant);
+
+    /// <summary>Признак авторства страницы по её сноскам. originOfCard — origin карточки по
+    /// заголовку из цели сноски (null — карточка неизвестна, считается не-human).</summary>
+    public static string PageAuthorship(WikiPage page, Func<string, string?> originOfCard)
+    {
+        var human = 0;
+        var other = 0;
+        foreach (var f in page.Footnotes)
+        {
+            if (f.Target.IsLink && originOfCard(f.Target.Text) == WikiGate.OriginHuman)
+                human++;
+            else
+                other++;
+        }
+        return human == 0 ? AuthorshipAi : other == 0 ? AuthorshipHuman : AuthorshipTogether;
+    }
+
+    /// <summary>Признак авторства каждой страницы-не-карточки состояния: путь → признак.
+    /// Карточки (type: source) — данные, строки в дереве не образуют; неразобранные страницы
+    /// пропускаются. Заголовок карточки сверяется как в гейте: без регистра и краевых пробелов.</summary>
+    public static IReadOnlyDictionary<string, string> Authorship(IReadOnlyList<WikiGate.Draft> state)
+    {
+        var parsed = new List<(string Path, WikiPage Page)>();
+        foreach (var d in state)
+            if (WikiPage.Parse(d.Content).Model is { } model)
+                parsed.Add((d.Path, model));
+        var origins = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var (_, page) in parsed)
+            if (page.Frontmatter.Type == WikiFrontmatter.TypeSource)
+                origins.TryAdd(NormTitle(page.Title), page.Frontmatter.Origin);
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (path, page) in parsed)
+            if (page.Frontmatter.Type != WikiFrontmatter.TypeSource)
+                result[path] = PageAuthorship(page, t => origins.GetValueOrDefault(NormTitle(t)));
+        return result;
+    }
+
+    private static string NormTitle(string title) => title.Trim().ToLowerInvariant();
 
     /// <summary>Перегенерировать обе проекции раздела целиком. Раздел обязан быть
     /// разбираемым ключом (тот же контракт, что у CheckPage Хранителя).</summary>

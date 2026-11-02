@@ -104,8 +104,18 @@ public sealed record WikiPackage
     /// 12г, мера 7). Ставится кодом из источника операции и её op.</summary>
     public static string ClassKey(string origin, string op) => origin + "×" + op;
 
+    // Автор пакета (ADR-038): `ai` — пакет модели (ingest, ночной разбор, MCP), `human` — правка
+    // владельца через REST под пользовательским JWT. Карточку origin: human и секцию «Заметки»
+    // создаёт/меняет только `human` (WikiGate). Пакет без поля в JSON читается как `ai`.
+    public const string AuthorAi = "ai";
+    public const string AuthorHuman = "human";
+
+    public static readonly IReadOnlyList<string> AuthorValues = [AuthorAi, AuthorHuman];
+
     public int V { get; init; } = ModelVersion;
     public required string Id { get; init; }
+    /// <summary>Автор пакета; по умолчанию `ai` — обратная совместимость со старыми файлами.</summary>
+    public string Author { get; init; } = AuthorAi;
     public required string Section { get; init; }
     public required IReadOnlyList<SourceRef> Sources { get; init; }
     public required IReadOnlyList<Operation> Operations { get; init; }
@@ -165,6 +175,8 @@ public sealed record WikiPackage
             errors.Add($"версия пакета {p.V}, ожидаемая {ModelVersion}");
         if (!IsSafeId(p.Id))
             errors.Add("id пакета не GUID");
+        if (p.Author is null || !AuthorValues.Contains(p.Author))
+            errors.Add($"автор пакета «{p.Author ?? "null"}» не из перечня {string.Join(", ", AuthorValues)}");
         // Null в поле валидного JSON (восстановленный бэкап, ручная правка, частично
         // уехавший файл) — ошибка формы, а не NRE: проверка до разбора (ревью S4a, MAJOR 2),
         // иначе один такой файл роняет «Входящие» целиком.
@@ -193,6 +205,8 @@ public sealed record WikiPackage
                 }
                 if (!WikiGate.OriginValues.Contains(s.Origin))
                     errors.Add($"origin «{s.Origin}» не из перечня");
+                else if (s.Origin == WikiGate.OriginHuman && p.Author != AuthorHuman)
+                    errors.Add("источник origin: human допустим только у пакета автора human");
                 if (string.IsNullOrWhiteSpace(s.Ref))
                     errors.Add("источник без карточки");
             }

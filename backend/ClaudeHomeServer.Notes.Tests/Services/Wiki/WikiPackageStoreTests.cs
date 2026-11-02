@@ -401,6 +401,39 @@ public class WikiPackageStoreTests : IDisposable
             .Should().Be(WikiPackageStore.CodeInvalid);
     }
 
+    // ─── B1 (ADR-038): автор пакета ──────────────────────────────────────────
+
+    [Fact]
+    public void Автор_СтарыйJsonБезAuthor_ЧитаетсяКакAi_ИНовыйПишетсяЯвно()
+    {
+        var fresh = Pkg(AppendOp());
+        WikiPackageStore.Create(_root, fresh).Ok.Should().BeTrue("каталог пакетов создаётся записью");
+        File.ReadAllText(PackageFile(fresh.Id), new UTF8Encoding(false)).Should().Contain("\"author\":\"ai\"");
+
+        var id = WikiPackageStore.NewId();
+        WriteRawFile(id, "{\"v\":1,\"id\":\"" + id + "\",\"section\":\"common\",\"status\":\"checking\",\"sources\":[{\"origin\":\"session\",\"ref\":\"chat-1\"}],\"operations\":[{\"op\":\"append\",\"page\":\"Общее/X.md\",\"text\":\"утверждение\",\"class\":\"session×append\",\"decision\":\"auto\",\"baseHashes\":{}}]}");
+        var read = WikiPackageStore.TryRead(_root, id);
+        read.State.Should().Be(WikiPackageFileState.Valid);
+        read.Package!.Author.Should().Be(WikiPackage.AuthorAi);
+    }
+
+    [Fact]
+    public void Автор_НеизвестныйИNull_ФормаОтбита()
+    {
+        WikiPackage.ShapeErrors(Pkg(AppendOp()) with { Author = "robot" }).Should().Contain(e => e.Contains("автор пакета"));
+        WikiPackage.ShapeErrors(Pkg(AppendOp()) with { Author = null! }).Should().Contain(e => e.Contains("автор пакета"));
+    }
+
+    [Fact]
+    public void Автор_ИсточникHumanУПакетаAi_ФормаОтбита_УHuman_Проходит()
+    {
+        var humanSrc = new[] { new WikiPackage.SourceRef("human", "human:1") };
+        var op = AppendOp() with { Class = "human×append" };
+        var ai = Pkg(op) with { Sources = humanSrc };
+        WikiPackage.ShapeErrors(ai).Should().Contain(e => e.Contains("origin: human допустим только у пакета автора human"));
+        WikiPackage.ShapeErrors(ai with { Author = WikiPackage.AuthorHuman }).Should().BeEmpty();
+    }
+
     // ─── 9. Повторное решение и дата создания (миноры 1 и 6, ревью S4a) ───
 
     [Fact]

@@ -134,7 +134,7 @@ public sealed class WikiIngestService
             return Task.FromResult(Rejected("владелец пустой"));
         if (request is null)
             return Task.FromResult(Rejected("заявка null"));
-        if (request.Origin is not { Length: > 0 } origin || !WikiGate.OriginValues.Contains(origin))
+        if (request.Origin is not { Length: > 0 } origin || !WikiGate.AiOriginValues.Contains(origin))
             return Task.FromResult(Rejected($"origin «{request.Origin ?? "—"}» вне закрытого перечня — заявки нет"));
         if (request.Ref is not { Length: > 0 })
             return Task.FromResult(Rejected("заявка без ссылки источника"));
@@ -368,6 +368,7 @@ public sealed class WikiIngestService
             var package = new WikiPackage
             {
                 Id = WikiPackageStore.NewId(),
+                Author = WikiPackage.AuthorAi,
                 Section = sectionKey,
                 Sources = [new WikiPackage.SourceRef(request.Origin, request.Ref)],
                 Operations = verdict.Accepted

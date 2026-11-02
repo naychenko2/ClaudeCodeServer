@@ -194,4 +194,36 @@ public class WikiProjectionsTests : IDisposable
         entries[1].Should().Contain("Проекты/p1/A.md");
         string.Join("\n", entries).Should().NotContain("мусор");
     }
+
+    // —— B1 (ADR-038): признак авторства страницы по сноскам ——
+
+    private static string Card(string title, string origin) =>
+        $"---\ntype: source\nsummary: к\norigin: {origin}\nref: x:1\nhash: h\ncaptured: 2026-11-02\nstatus: active\n---\n\n# {title}\n";
+
+    private static string PageWith(string title, params string[] cards)
+    {
+        var swodka = string.Join("\n", cards.Select((c, i) => $"- Утверждение {i + 1}.[^s{i + 1}]"));
+        var foots = string.Join("\n", cards.Select((c, i) => $"[^s{i + 1}]: [[{c}]] — «цитата номер {i + 1} длинная»"));
+        return $"---\ntype: entity\nsummary: с\nstatus: active\n---\n\n# {title}\n\n## Сводка\n{swodka}\n\n## Хронология\n\n## Противоречия\n\n## История\n\n{foots}\n";
+    }
+
+    [Fact]
+    public void Авторство_ИИВместеЧеловек_ПоСноскам_КарточкиНеСчитаются()
+    {
+        var state = new List<WikiGate.Draft>
+        {
+            new("Общее/Источники/А.md", Card("А", "session")),
+            new("Общее/Источники/Я.md", Card("Я", "human")),
+            new("Общее/Ии.md", PageWith("Ии", "А")),
+            new("Общее/Вместе.md", PageWith("Вместе", "А", "Я")),
+            new("Общее/Чел.md", PageWith("Чел", "Я")),
+            new("Общее/Пусто.md", PageWith("Пусто")),
+        };
+        var res = WikiProjections.Authorship(state);
+        res["Общее/Ии.md"].Should().Be(WikiProjections.AuthorshipAi);
+        res["Общее/Вместе.md"].Should().Be(WikiProjections.AuthorshipTogether);
+        res["Общее/Чел.md"].Should().Be(WikiProjections.AuthorshipHuman);
+        res["Общее/Пусто.md"].Should().Be(WikiProjections.AuthorshipAi);
+        res.Keys.Should().NotContain(k => k.Contains("Источники"));
+    }
 }

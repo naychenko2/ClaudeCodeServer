@@ -708,7 +708,8 @@ public sealed class WikiApplyService
         // Дословность — только для карточек этого пакета (GivenOnly, тот же смысл, что в
         // проверке плана S6b-2): принятые раньше чужие сноски не могут отвергнуть новую запись.
         // sourceTexts — из ветки выбора карточки выше: у пути решения человека он пустой.
-        var violations = WikiGate.Check(working, section, upChain, sourceTexts, WikiGate.VerbatimScope.GivenOnly);
+        var violations = WikiGate.Check(working, section, upChain, sourceTexts, WikiGate.VerbatimScope.GivenOnly,
+            package.Author, state);
         if (violations.Count > 0)
             return FailApply(root, package.Id, CodeGate, $"итоговое состояние не проходит гейт: {violations[0]}", violations);
 

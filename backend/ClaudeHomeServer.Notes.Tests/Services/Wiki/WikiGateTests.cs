@@ -562,4 +562,120 @@ public class WikiGateTests
         var own = new Dictionary<string, string> { [CardDraft.Path] = "вступление. " + Quote + " окончание" };
         WikiGate.Check(FootnoteState, P1, [], own, WikiGate.VerbatimScope.GivenOnly).Should().BeEmpty();
     }
+
+    // —— B1 (ADR-038): автор пакета, карточка origin: human, секция «Заметки» ——
+
+    private static string PageWithNotes(string notes, string footnotes = "", string swodka = "") =>
+        Page(swodka: swodka, footnotes: footnotes).Replace("## История\n", "## История\n\n## Заметки\n" + notes + "\n");
+
+    private static readonly WikiGate.Draft HumanCardDraft =
+        new(P1Dir + "Источники/Моя.md", Card("Моя", origin: "human"));
+
+    [Fact]
+    public void Гейт_карточкаHumanОтПакетаAi_отбита()
+    {
+        var violations = WikiGate.Check([HumanCardDraft], P1, [], null, WikiGate.VerbatimScope.All,
+            WikiPackage.AuthorAi, baseState: []);
+        violations.Should().Contain(e => e.Contains("origin: human") && e.Contains("автора human"));
+    }
+
+    [Fact]
+    public void Гейт_карточкаHumanПоУмолчаниюАвторAiБезБазы_отбита()
+    {
+        // Fail-closed: не названный автор — ai, базы нет — карточка считается новой.
+        Check([HumanCardDraft]).Should().Contain(e => e.Contains("origin: human"));
+    }
+
+    [Fact]
+    public void Гейт_карточкаHumanОтПакетаHuman_проходит()
+    {
+        WikiGate.Check([HumanCardDraft], P1, [], null, WikiGate.VerbatimScope.All,
+            WikiPackage.AuthorHuman, baseState: []).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Гейт_пакетAiСсылаетсяНаСуществующуюКарточкуHuman_проходит()
+    {
+        var state = new List<WikiGate.Draft>
+        {
+            HumanCardDraft,
+            D(P1Dir + "Тет.md", Page(swodka: Good, footnotes: Foot.Replace("Карточка", "Моя"))),
+        };
+        // Карточка уже была до пакета: ИИ цитирует человека, создавать нечего.
+        WikiGate.Check(state, P1, [], null, WikiGate.VerbatimScope.All, WikiPackage.AuthorAi, baseState: [HumanCardDraft])
+            .Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Гейт_пакетAiПодменилСуществующуюКарточкуHuman_отбит()
+    {
+        var changed = new WikiGate.Draft(HumanCardDraft.Path, Card("Моя", origin: "human").Replace("hash: h1", "hash: h2"));
+        WikiGate.Check([changed], P1, [], null, WikiGate.VerbatimScope.All, WikiPackage.AuthorAi, baseState: [HumanCardDraft])
+            .Should().Contain(e => e.Contains("origin: human"));
+    }
+
+    [Fact]
+    public void Гейт_заметкиОтПакетаAi_новаяСекцияОтбита()
+    {
+        var page = D(P1Dir + "Тет.md", PageWithNotes("Моя мысль."));
+        var plain = D(P1Dir + "Тет.md", Page());
+        WikiGate.Check([page], P1, [], null, WikiGate.VerbatimScope.All, WikiPackage.AuthorAi, baseState: [plain])
+            .Should().Contain(e => e.Contains("«Заметки»") && e.Contains("автора human"));
+    }
+
+    [Fact]
+    public void Гейт_заметкиОтПакетаAi_правкаИУдалениеОтбиты_БезИзмененийПроходит()
+    {
+        var before = D(P1Dir + "Тет.md", PageWithNotes("Моя мысль."));
+        var edited = D(P1Dir + "Тет.md", PageWithNotes("Подправлено ИИ."));
+        var removed = D(P1Dir + "Тет.md", Page());
+        WikiGate.Check([edited], P1, [], null, WikiGate.VerbatimScope.All, WikiPackage.AuthorAi, baseState: [before])
+            .Should().Contain(e => e.Contains("«Заметки»"));
+        WikiGate.Check([removed], P1, [], null, WikiGate.VerbatimScope.All, WikiPackage.AuthorAi, baseState: [before])
+            .Should().Contain(e => e.Contains("«Заметки»"));
+        WikiGate.Check([before], P1, [], null, WikiGate.VerbatimScope.All, WikiPackage.AuthorAi, baseState: [before])
+            .Should().BeEmpty("пакет ai не задевает существующие «Заметки» — это не изменение");
+    }
+
+    [Fact]
+    public void Гейт_заметкиОтПакетаHuman_проходят_ИбезСносок()
+    {
+        var page = D(P1Dir + "Тет.md", PageWithNotes("| a | b |\n|---|---|\n| 1 | 2 |"));
+        WikiGate.Check([page], P1, [], null, WikiGate.VerbatimScope.All, WikiPackage.AuthorHuman, baseState: [])
+            .Should().BeEmpty();
+
+        var withRef = D(P1Dir + "Тет.md", PageWithNotes("Моя мысль.[^s1]", footnotes: Foot));
+        WikiGate.Check([withRef, CardDraft], P1, [], null, WikiGate.VerbatimScope.All, WikiPackage.AuthorHuman, baseState: [])
+            .Should().Contain(e => e.Contains("нет сносок"));
+    }
+
+    [Fact]
+    public void Гейт_неизвестныйАвтор_отбит()
+    {
+        WikiGate.Check([], P1, [], null, WikiGate.VerbatimScope.All, "robot")
+            .Should().Contain(e => e.Contains("автор пакета"));
+    }
+
+    [Fact]
+    public void Страница_заметкиТолькоПоследней_ПорядокСоблюдён()
+    {
+        var ok = WikiPage.Parse(PageWithNotes("Текст."));
+        ok.Errors.Should().BeEmpty();
+        ok.Model!.Notes!.Lines.Should().Equal("Текст.");
+        WikiPage.Parse(ok.Model.Render()).Model.Should().Be(ok.Model);
+
+        // «Заметки» не на своём месте (до «История») — нарушение порядка.
+        var early = Page().Replace("## Противоречия\n", "## Заметки\nх\n\n## Противоречия\n");
+        WikiPage.Parse(early).Model.Should().BeNull();
+        // Страница без «Заметки» остаётся валидной.
+        WikiPage.Parse(Page()).Model!.Notes.Should().BeNull();
+    }
+
+    [Fact]
+    public void Origin_human_вПеречне_НоАиЗаявкаЕгоНеМожет()
+    {
+        WikiGate.OriginValues.Should().Contain(WikiGate.OriginHuman);
+        WikiGate.AiOriginValues.Should().NotContain(WikiGate.OriginHuman);
+        WikiGate.AiOriginValues.Should().HaveCount(WikiGate.OriginValues.Count - 1);
+    }
 }

@@ -80,7 +80,7 @@ public static class WikiPlanValidator
         // ── 1. Fail-closed входа: ни null, ни кривой вход не становится исключением. ──
         if (plan is null || plan.Operations is null)
             return new([], [], rejected, [.. violations, "план null или операции плана null — проверять нечего"]);
-        if (source is null || source.Origin is not { } origin || !WikiGate.OriginValues.Contains(origin))
+        if (source is null || source.Origin is not { } origin || !WikiGate.AiOriginValues.Contains(origin))
             return new([], [], IndexAll(plan, "источник не определён: origin вне закрытого перечня или источник null"),
                 [.. violations, "план без подтверждённого источника не применяется"]);
         if (string.IsNullOrEmpty(source.Text))

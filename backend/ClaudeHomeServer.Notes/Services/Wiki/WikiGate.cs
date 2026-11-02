@@ -24,9 +24,16 @@ public static class WikiGate
     public const string OriginTask = "task";
     public const string OriginDossier = "dossier";
     public const string OriginMemory = "memory";
+    // Снимок текста, написанного человеком (ADR-038): карточку создаёт только пакет автора human.
+    public const string OriginHuman = "human";
 
     public static readonly IReadOnlyList<string> OriginValues =
-        [OriginNote, OriginFile, OriginSession, OriginUrl, OriginTask, OriginDossier, OriginMemory];
+        [OriginNote, OriginFile, OriginSession, OriginUrl, OriginTask, OriginDossier, OriginMemory, OriginHuman];
+
+    /// <summary>Origin, которые вправе заявлять пакеты ai (ingest, ночной разбор, MCP): весь
+    /// перечень без human. Заявка ai с origin: human отклоняется на входе, до карточки.</summary>
+    public static readonly IReadOnlyList<string> AiOriginValues =
+        [.. OriginValues.Where(o => o != OriginHuman)];
 
     // Задача-чекбокс на странице вики запрещена формой страницы (ADR-035, решение 2).
     private static readonly Regex CheckboxRx = new(@"^\s*[-*] \[[ xX]\]", RegexOptions.CultureInvariant);
@@ -59,15 +66,23 @@ public static class WikiGate
     /// правило дословности (ADR-035, §12г мера 1). null — правило не проверяется (захват
     /// источников — S6h/S6j); задан — сноска карточки вне словаря даёт нарушение только в
     /// All, цитата без дословного вхождения в тексте своей карточки — нарушение всегда.
-    /// verbatimScope — область этого правила (см. VerbatimScope); по умолчанию All.</summary>
+    /// verbatimScope — область этого правила (см. VerbatimScope); по умолчанию All.
+    /// author — автор пакета (WikiPackage.AuthorAi по умолчанию, fail-closed). Для не-human
+    /// гейт запрещает создавать карточку origin: human и менять секцию «Заметки»: «новое» —
+    /// это отличие от baseState (состояние раздела до пакета; null — базы нет, и всё, что
+    /// относится к human, считается новым).</summary>
     public static IReadOnlyList<string> Check(
         IReadOnlyList<Draft> state,
         string sectionKey,
         IReadOnlyList<string> rawUpChain,
         IReadOnlyDictionary<string, string>? sourceTexts = null,
-        VerbatimScope verbatimScope = VerbatimScope.All)
+        VerbatimScope verbatimScope = VerbatimScope.All,
+        string author = WikiPackage.AuthorAi,
+        IReadOnlyList<Draft>? baseState = null)
     {
         var violations = new List<string>();
+        if (!WikiPackage.AuthorValues.Contains(author))
+            violations.Add($"автор пакета «{author}» не из перечня {string.Join(", ", WikiPackage.AuthorValues)}");
         var upChain = ValidateUpChain(rawUpChain, violations);
         var allowed = new HashSet<string>(StringComparer.Ordinal) { sectionKey };
         allowed.UnionWith(upChain);
@@ -125,9 +140,38 @@ public static class WikiGate
         }
 
         CheckPageForm(target, sectionKey, upChain, allSections, sourceTexts, verbatimScope, violations);
+        CheckAuthorRules(target, author, baseState, violations);
         CheckUniqueness(target, context, violations);
         CheckLinks(target, sectionKey, upChain, allSections, violations);
         return violations;
+    }
+
+    // Права автора (ADR-038): карточку origin: human и секцию «Заметки» создаёт/меняет только
+    // пакет human. «Новое» — отличие от состояния до пакета: ссылаться на уже существующую
+    // карточку human и сохранять неизменной существующую «Заметки» пакету ai можно.
+    private static void CheckAuthorRules(
+        List<(Draft Draft, WikiPage Page)> target,
+        string author,
+        IReadOnlyList<Draft>? baseState,
+        List<string> violations)
+    {
+        if (author == WikiPackage.AuthorHuman)
+            return;
+        var baseByPath = new Dictionary<string, WikiPage?>(StringComparer.Ordinal);
+        foreach (var d in baseState ?? [])
+            baseByPath[d.Path] = WikiPage.Parse(d.Content).Model;
+        foreach (var (draft, page) in target)
+        {
+            baseByPath.TryGetValue(draft.Path, out var before);
+            if (page.Frontmatter.Type == WikiFrontmatter.TypeSource
+                && page.Frontmatter.Origin == OriginHuman
+                && !(before is not null && before.Equals(page)))
+                violations.Add($"{draft.Path}: карточку origin: human создаёт только пакет автора human");
+            var notes = page.Notes?.Lines ?? [];
+            var notesBefore = before?.Notes?.Lines ?? [];
+            if (!notes.SequenceEqual(notesBefore))
+                violations.Add($"{draft.Path}: секцию «{WikiPage.NotesSectionName}» меняет только пакет автора human");
+        }
     }
 
     // «Вверх» — только сферы и общее, без повторов (ADR-036, решение 4): набор видимых
@@ -164,8 +208,13 @@ public static class WikiGate
         {
             foreach (var section in page.Sections)
                 foreach (var line in section.Lines)
+                {
                     if (CheckboxRx.IsMatch(line))
                         violations.Add($"{draft.Path}: страница вики не несёт задач '- [ ]'");
+                    // «Заметки» — свободный текст без сносок и цитат (ADR-038).
+                    if (section.Name == WikiPage.NotesSectionName && FootnoteRefRx.IsMatch(line))
+                        violations.Add($"{draft.Path}: в секции «{WikiPage.NotesSectionName}» нет сносок: {line}");
+                }
 
             if (page.Frontmatter.Type == WikiFrontmatter.TypeSource)
             {

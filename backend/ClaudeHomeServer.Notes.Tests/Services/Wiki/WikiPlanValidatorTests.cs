@@ -397,4 +397,43 @@ public class WikiPlanValidatorTests
         self.Accepted.Should().BeEmpty();
         self.Rejected.Should().ContainSingle().Which.Reason.Should().Contain("цепочка вверх");
     }
+
+    // ─── B1 (ADR-038): «Заметки» человека не мешают ai-плану, который их не трогает ──────────
+
+    [Fact]
+    public void Validate_СтраницаСЗаметкамиПланНеТрогаетЗаметки_ОперацияПринята()
+    {
+        // Мутация «без базы» (убрать baseState из WikiGate.Check в WikiPlanValidator): «Заметки»
+        // считаются новыми, операция страницы отклонена — HaveCount(1) и Rejected.BeEmpty краснеют.
+        var withNotes = PageFile + "\n\n## Заметки\nМоя мысль.\n";
+        var snapshot = new List<WikiGate.Draft>
+        {
+            new(CardPath, CardFile), new(ForeignCardPath, ForeignCardFile), new(PagePath, withNotes),
+        };
+
+        var r = WikiPlanValidator.Validate(
+            Plan(Op(WikiPackage.OpAppend, "Сущность", 0)), Claims(GoodClaim), Src, Section,
+            [WikiSections.Common], snapshot, new());
+
+        r.Accepted.Should().ContainSingle(op => op.Text == GoodClaim.Text);
+        r.Rejected.Should().BeEmpty();
+        r.Violations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Validate_КарточкаHumanУжеВРазделе_НарушениеНеШумит()
+    {
+        var human = ForeignCardFile.Replace("origin: session", "origin: human");
+        var snapshot = new List<WikiGate.Draft>
+        {
+            new(CardPath, CardFile), new(ForeignCardPath, human), new(PagePath, PageFile),
+        };
+
+        var r = WikiPlanValidator.Validate(
+            Plan(Op(WikiPackage.OpAppend, "Сущность", 0)), Claims(GoodClaim), Src, Section,
+            [WikiSections.Common], snapshot, new());
+
+        r.Accepted.Should().ContainSingle();
+        r.Violations.Should().BeEmpty("карточка human была в разделе до плана — ai её не создавал");
+    }
 }

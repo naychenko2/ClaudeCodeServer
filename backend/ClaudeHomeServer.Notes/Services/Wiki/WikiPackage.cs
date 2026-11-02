@@ -205,8 +205,8 @@ public sealed record WikiPackage
                 }
                 if (!WikiGate.OriginValues.Contains(s.Origin))
                     errors.Add($"origin «{s.Origin}» не из перечня");
-                else if (s.Origin == WikiGate.OriginHuman && p.Author != AuthorHuman)
-                    errors.Add("источник origin: human допустим только у пакета автора human");
+                // Ссылка на существующую карточку human допустима и пакету ai (ADR-038, §2);
+                // создание такой карточки отбивает гейт сравнением с состоянием раздела.
                 if (string.IsNullOrWhiteSpace(s.Ref))
                     errors.Add("источник без карточки");
             }

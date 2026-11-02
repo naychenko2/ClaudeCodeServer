@@ -312,6 +312,9 @@ public static class WikiPlanValidator
 
         // ── 4. Черновой рендер, итоговое состояние и весь WikiGate. ──
         var state = new List<WikiGate.Draft>(pages.Select(p => new WikiGate.Draft(p.Path, p.Content)));
+        // База правил автора — состояние раздела ДО рендера плана: карточка human и «Заметки»,
+        // уже лежащие на страницах, нарушением ai-плана не считаются.
+        var baseState = state.ToArray();
         var touched = new Dictionary<string, List<int>>(StringComparer.Ordinal);
         foreach (var (index, op, quote, rendered) in candidates)
         {
@@ -351,7 +354,8 @@ public static class WikiPlanValidator
         // GivenOnly — потому и проверяются только сноски на неё: чужие (принятые прошлыми
         // ночами) сноски страницы не могут отвергнуть новую операцию (ревью S6b-2, M2).
         var sourceTexts = new Dictionary<string, string> { [card.Path] = source.Text };
-        foreach (var v in WikiGate.Check(state, sectionKey, chain, sourceTexts, WikiGate.VerbatimScope.GivenOnly))
+        foreach (var v in WikiGate.Check(state, sectionKey, chain, sourceTexts, WikiGate.VerbatimScope.GivenOnly,
+                     WikiPackage.AuthorAi, baseState))
         {
             var path = v.Split(':', 2)[0];
             if (touched.TryGetValue(path, out var ids))

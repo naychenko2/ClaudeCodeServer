@@ -816,7 +816,10 @@ public sealed class WikiRetractService
         var working = new List<WikiGate.Draft>(state.Drafts);
         working.RemoveAll(d => d.Path == page);
         working.Add(new WikiGate.Draft(page, finalText));
-        var violations = WikiGate.Check(working, section, state.UpChain);
+        // База — состояние раздела до снятия сносок: ретракт ничего не создаёт и «Заметки» не
+        // меняет, поэтому уже лежащие карточка human и «Заметки» нарушением не считаются.
+        var violations = WikiGate.Check(working, section, state.UpChain,
+            author: WikiPackage.AuthorAi, baseState: state.Drafts);
         if (violations.Count > 0)
             return (false, "результат после снятия сносок не проходит гейт: " + violations[0]);
 

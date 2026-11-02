@@ -381,5 +381,5 @@ public static class WikiGate
 
     // Нормализация для сравнения заголовков/алиасов/owns (ADR-036, решение 5:
     // «заголовок или aliases после нормализации»): регистр и обрамляющие пробелы.
-    private static string Norm(string text) => text.Trim().Normalize(NormalizationForm.FormC).ToLowerInvariant();
+    internal static string Norm(string text) => text.Trim().Normalize(NormalizationForm.FormC).ToLowerInvariant();
 }

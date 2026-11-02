@@ -290,6 +290,31 @@ public class WikiRetractFootnoteTests : IDisposable
         model.Footnotes.Should().OnlyContain(f => f.Target.Text == CardTitleB);
     }
 
+    // ─── B1 (ADR-038): уже лежащие карточка human и «Заметки» не мешают снятию сносок ──────────
+
+    [Fact]
+    public async Task Retract_ВРазделеЕстьКарточкаHumanИЗаметки_СнятиеПроходит()
+    {
+        // Мутация «без базы» (убрать baseState из WikiGate.Check в WikiRetractService): гейт
+        // видит карточку human и «Заметки» как новые — страница названа в Failed, Ok-проверка
+        // и NotContain(ClaimA2) краснеют. Карточка и «Заметки» лежат на диске ДО снятия.
+        await WriteCardsAndPage();
+        await ApplyAThenB();
+        var humanCard = CardFile("Моя карточка", "human-1").Replace("origin: session", "origin: human");
+        File.WriteAllText(PageFull("Общее/Моя-карточка.md"), humanCard, new UTF8Encoding(false));
+        const string notesPage = "---\ntype: topic\naliases: []\nowns: []\nsources: []\nstatus: active\n---\n\n" +
+            "# Страница с заметками\n\n## Сводка\n\n## Хронология\n\n## Противоречия\n\n## История\n\n" +
+            "## Заметки\nМоя мысль.\n";
+        File.WriteAllText(PageFull("Общее/Страница-с-заметками.md"), notesPage, new UTF8Encoding(false));
+
+        var r = await _sut.RetractAsync(User, RefA);
+
+        r.Ok.Should().BeTrue(r.Reason);
+        r.Failed.Should().BeEmpty("карточка human и «Заметки» уже были в разделе — ретракт их не создаёт");
+        File.ReadAllText(PageFull(PagePath)).Should().NotContain(ClaimA2);
+        File.ReadAllText(PageFull("Общее/Страница-с-заметками.md")).Should().Contain("Моя мысль.");
+    }
+
     // ─── 2. c2: на странице после retract — ни одной сноски на источник A ──────────────────────
 
     [Fact]

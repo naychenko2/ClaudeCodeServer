@@ -69,7 +69,7 @@ public static class WikiProjections
         return result;
     }
 
-    private static string NormTitle(string title) => title.Trim().ToLowerInvariant();
+    private static string NormTitle(string title) => WikiGate.Norm(title);
 
     /// <summary>Перегенерировать обе проекции раздела целиком. Раздел обязан быть
     /// разбираемым ключом (тот же контракт, что у CheckPage Хранителя).</summary>

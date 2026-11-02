@@ -64,8 +64,9 @@ function allNodes(root: Cont, out: Cont[] = []): Cont[] {
 }
 function click(node: Cont | null, what: string) {
   if (!node) throw new Error(`нет узла: ${what}`);
-  const p = reactProps(node) as { onClick?: (e: unknown) => void } | null;
+  const p = reactProps(node) as { onClick?: (e: unknown) => void; disabled?: boolean } | null;
   if (!p?.onClick) throw new Error(`у «${what}» нет onClick`);
+  if (p.disabled) return; // отключённая кнопка клик не принимает
   act(() => { p.onClick!(undefined); });
 }
 function typeInto(c: Cont, itemId: number, value: string) {

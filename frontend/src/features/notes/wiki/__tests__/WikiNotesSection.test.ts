@@ -83,8 +83,9 @@ const byId = (c: Cont, id: string) => findNodeByAttr(c, 'data-testid', id);
 
 function click(node: AnyNode | null, what: string) {
   if (!node) throw new Error(`нет узла: ${what}`);
-  const p = reactProps(node) as { onClick?: (e: unknown) => void } | null;
+  const p = reactProps(node) as { onClick?: (e: unknown) => void; disabled?: boolean } | null;
   if (!p?.onClick) throw new Error(`у «${what}» нет onClick`);
+  if (p.disabled) return; // отключённая кнопка клик не принимает
   act(() => { p.onClick!(undefined); });
 }
 
@@ -227,6 +228,8 @@ describe('Секция «Заметки»: правка', () => {
     expect(texts(byId(c, 'wiki-edit-notes')!)).toContain('свободный текст, без сносок');
     expect(reactProps(byId(c, 'wiki-edit-save')!) as { disabled?: boolean }).toMatchObject({ disabled: true });
     typeNotes(c, 'Другая заметка');
+    // обратный переход true → false: правка «Заметок» включает «Сохранить»
+    expect((reactProps(byId(c, 'wiki-edit-save')!) as { disabled?: boolean }).disabled).toBe(false);
     click(byId(c, 'wiki-edit-save'), 'Сохранить');
     await settle();
     expect(posts).toHaveLength(1);

@@ -238,7 +238,7 @@ public class WikiController : ControllerBase
         var content = System.IO.File.ReadAllText(full);
         var (authorship, footnotes) = ReadAuthorship(root, key!, content);
         var overrides = _journal.PageOverrides(userId, key!, page!, _time.GetUtcNow() - OverridesWindow)
-            .Select(o => new WikiOverrideDto(o.Op, o.Statement, o.Previous, o.At, o.PackageId))
+            .Select(o => new WikiOverrideDto(o.Op, o.Statement, ResolveHistoryLine(content, o.Previous), o.At, o.PackageId))
             .ToList();
         return Ok(new
         {
@@ -252,6 +252,20 @@ public class WikiController : ControllerBase
             drift = IsDrifted(root, page!, manifest),
             manifestState = ManifestStateOf(manifest.State),
         });
+    }
+
+    // «Вернуть мою» принимает формулировку из «Истории» страницы, а не цитату цели модели: цель
+    // бывает короче строки (буллет, разметка, сноски). Пару previous отдаём как фактическую строку
+    // «Истории», найденную терпимым поиском (как в retract); не нашли — null, метка остаётся без пары.
+    private static string? ResolveHistoryLine(string content, string? target)
+    {
+        if (string.IsNullOrWhiteSpace(target)
+            || WikiPage.Parse(content).Model?.Sections.FirstOrDefault(s => s.Name == "История") is not { } history)
+            return null;
+        foreach (var line in history.Lines)
+            if (QuoteMatcher.ContainsVerbatim(line, target))
+                return line.Trim();
+        return null;
     }
 
     // Авторство и сноски страницы: карточки источников берутся из папки «Источники/» раздела

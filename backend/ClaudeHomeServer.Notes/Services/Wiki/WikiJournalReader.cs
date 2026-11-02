@@ -351,14 +351,40 @@ public sealed class WikiJournalReader
     public IReadOnlyList<PageOverride> PageOverrides(string ownerId, string section, string page, DateTimeOffset since)
     {
         var root = WikiPaths.Root(_dataDir, ownerId);
-        var log = Read(ownerId, new Query(section, null, null, MaxTake, OverrodeHuman: true));
         var result = new List<PageOverride>();
-        if (log.Entries.Count == 0)
+        // Журнал читается целиком построчно, без окна выдачи MaxTake: окно меток — по времени
+        // (since), а не по числу строк, и хвост в 1000 строк не должен гасить метку раньше срока.
+        var hits = new List<Entry>();
+        try
+        {
+            var path = SafePath.Join(root, LogRelPath);
+            if (File.Exists(path))
+            {
+                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: false);
+                string? line;
+                while ((line = reader.ReadLine()) is not null)
+                {
+                    var e = ParseLine(line);
+                    if (e is null || !e.OverrodeHuman || e.Op != "apply" || e.Ts < since || e.Section != section
+                        || !e.Pages.Contains(page, StringComparer.Ordinal))
+                        continue;
+                    hits.Add(e);
+                }
+            }
+        }
+        catch (IOException)
+        {
+            // Нечитаемый журнал — без меток, страница от этого не падает.
+        }
+        if (hits.Count == 0)
             return result;
+        // Новые сверху — как у Read.
+        hits.Reverse();
         var byId = new Dictionary<string, WikiPackage>(StringComparer.Ordinal);
         foreach (var p in WikiPackageStore.List(root).Packages)
             byId.TryAdd(p.Id, p);
-        foreach (var e in log.Entries)
+        foreach (var e in hits)
         {
             if (e.Op != "apply" || e.Ts < since || !e.Pages.Contains(page, StringComparer.Ordinal))
                 continue;

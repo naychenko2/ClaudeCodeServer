@@ -584,7 +584,7 @@ public class WikiJournalReaderTests : IDisposable
         var rep = byPkg[human];
         rep.GetProperty("op").GetString().Should().Be("supersede");
         rep.GetProperty("statement").GetString().Should().Be("Новая формулировка.", "ссылки на сноски срезаны");
-        rep.GetProperty("previous").GetString().Should().Be("Старая формулировка человека");
+        rep.GetProperty("previous").ValueKind.Should().Be(JsonValueKind.Null, "в «Истории» страницы строки нет — пара previous не отдаётся, метка остаётся");
         byPkg[disputed].GetProperty("op").GetString().Should().Be("conflict");
 
         // Через 15 дней — пусто: метка живёт 14 дней и состояния не имеет.
@@ -629,5 +629,46 @@ public class WikiJournalReaderTests : IDisposable
         var catalog = (WikiCatalogDto)((OkObjectResult)Controller().Section("common")).Value!;
         catalog.Pages.Single(p => p.PageKey == OverridePage).Authorship.Should().Be("ai");
         catalog.Pages.Single(p => p.Type == "source").Authorship.Should().BeNull("у карточки источника авторства нет");
+    }
+
+    [Fact]
+    public void Страница_Overrides_ЖурналДлиннееТысячиСтрок_МеткаДесятидневнойДавностиЖива()
+    {
+        // Мутация: вернуть чтение через Read(…, MaxTake) — метка выпадает за хвост в 1000 строк, тест краснеет.
+        WritePage(OverridePage, "# А\n");
+        var id = NewPackage("common", WikiPackage.StatusApplied, WikiGate.OriginSession, "session:h",
+            OverrideOp(WikiPackage.OpSupersede, OverridePage, true, "Новое.", "Старое"));
+        var now = DateTimeOffset.Parse("2026-11-02T10:00:00+00:00");
+        var sb = new StringBuilder();
+        sb.Append($$"""{"ts":"{{now.AddDays(-10):O}}","op":"apply","section":"common","pages":["{{OverridePage}}"],"source":"session:h","actor":"keeper","policy":"auto","packages":["{{id}}"],"overrodeHuman":true}""" + "\n");
+        for (var i = 0; i < 1100; i++)
+            sb.Append($$"""{"ts":"{{now.AddDays(-5):O}}","op":"apply","section":"common","pages":["Общее/Б.md"],"source":"session:f{{i}}","actor":"keeper","policy":"auto"}""" + "\n");
+        WriteLog(sb.ToString());
+
+        PageOf(new FixedTime(now)).GetProperty("overrides").GetArrayLength().Should().Be(1, "окно меток — по времени, а не по хвосту журнала");
+    }
+
+    [Fact]
+    public void Страница_Overrides_СтрокаИсторииДлиннееЦели_PreviousСовпадаетСНейИПроходитRestore()
+    {
+        // Мутация: previous = цель модели (StripFootnoteRefs(op.Target)) вместо строки «Истории» — тест краснеет.
+        const string historyLine = "- **Старая** формулировка человека, подробнее цели.[^s1]";
+        const string card = "---\ntype: source\nsummary: к\norigin: human\nref: x:1\nhash: h\ncaptured: 2026-11-02\nstatus: active\n---\n\n# Моя заметка\n";
+        const string body = "---\ntype: entity\nsummary: с\nstatus: active\n---\n\n# А\n\n## Сводка\n- Факт.\n\n## Хронология\n\n## Противоречия\n\n## История\n" + historyLine + "\n\n[^s1]: [[Моя заметка]] — «цитата»\n";
+        WritePage(OverridePage, body);
+        WritePage("Общее/Источники/Моя заметка.md", card);
+        var id = NewPackage("common", WikiPackage.StatusApplied, WikiGate.OriginSession, "session:h",
+            OverrideOp(WikiPackage.OpSupersede, OverridePage, true, "Новая формулировка.", "Старая формулировка человека"));
+        WikiManifest.AppendLog(Root(), "apply", "common", [OverridePage], "session:h", "keeper", "auto", [id], overrodeHuman: true);
+
+        var previous = PageOf(new FixedTime(DateTimeOffset.UtcNow.AddMinutes(1)))
+            .GetProperty("overrides")[0].GetProperty("previous").GetString();
+        previous.Should().Be(historyLine, "previous — фактическая строка «Истории»");
+
+        var model = WikiPage.Parse(body).Model!;
+        var state = new List<WikiGate.Draft> { new("Общее/Источники/Моя заметка.md", card) };
+        var (cardRef, error) = WikiHumanRender.ResolveRestoreCard(state, model, WikiHumanEditPlanner.Normalize(previous!));
+        error.Should().BeNull("restore по previous не даёт «в «Истории» нет такой формулировки»");
+        cardRef.Should().Be("x:1");
     }
 }

@@ -332,6 +332,70 @@ public class WikiAdoptTransferTests : IDisposable
     }
 
     [Fact]
+    public async Task Перенос_СбойЗамены_Отказ_ПовторДоводит_СтраницаОдна_ЗаметкаСсылка()
+    {
+        var note = PersonalNote("Сбой", "Единственное утверждение.");
+        var before = NoteText(note);
+        var calls = 0;
+        _transfer.ReplaceNoteHook = (u, id, req) =>
+        {
+            if (Interlocked.Increment(ref calls) == 1) throw new IOException("диск");
+            return _notes.Update(u, id, req);
+        };
+        AssertCode(await Controller().IngestNote(new WikiIngestNoteRequest(note.Id, null, true)), 409, "wiki_refused");
+        NoteText(note).Should().Be(before, "замена не состоялась: заметка цела");
+        PersonalPages().Should().HaveCount(1);
+
+        Json(await Controller().IngestNote(new WikiIngestNoteRequest(note.Id, null, true)), 200)
+            .GetProperty("outcome").GetString().Should().Be("transferred");
+        PersonalPages().Should().HaveCount(1, "повтор доводит замену, второй страницы нет");
+        NoteText(note).Trim().Should().Be("Перенесено в вики: [[Личное/Сбой]]");
+    }
+
+    [Fact]
+    public async Task Перенос_ЗаметкаИсчезлаДоЗамены_404_НеТранслируется200()
+    {
+        var note = PersonalNote("Исчезла", "Утверждение.");
+        _transfer.ReplaceNoteHook = (_, _, _) => null;
+        AssertCode(await Controller().IngestNote(new WikiIngestNoteRequest(note.Id, null, true)), 404, "not_found");
+    }
+
+    [Fact]
+    public async Task Перенос_СтраницуПравилиПослеСбоя_НеДоводитЧужое()
+    {
+        var note = PersonalNote("Правленная", "Утверждение один.");
+        _transfer.ReplaceNoteHook = (_, _, _) => throw new IOException("диск");
+        await Controller().IngestNote(new WikiIngestNoteRequest(note.Id, null, true));
+        var file = Path.Combine(_pages, "Личное", "Правленная.md");
+        File.WriteAllText(file, File.ReadAllText(file).Replace("Утверждение один.", "Совсем другое."), new UTF8Encoding(false));
+        _transfer.ReplaceNoteHook = null;
+        var before = NoteText(note);
+        // Правка мимо веб-морды — дрейф: перенос не доводит чужую версию и не создаёт вторую страницу.
+        ((IStatusCodeActionResult)await Controller().IngestNote(new WikiIngestNoteRequest(note.Id, null, true)))
+            .StatusCode.Should().Be(409);
+        NoteText(note).Should().Be(before);
+        PersonalPages().Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task Adopt_Mine_СтраницаДоФичи_БезОсновы_BackfillДаётОсновуИзФайла()
+    {
+        // Страница записана «до фичи»: основы нет, манифест есть, файл не дрейфует. Первый вход
+        // под замок раздела донесёт основу, и правка мимо веб-морды принимается как мою.
+        var baselines = Path.Combine(WikiPaths.Keeper(_dir, User), "baselines");
+        Directory.Delete(baselines, recursive: true);
+        var markers = Path.Combine(WikiPaths.Keeper(_dir, User), "baselines-backfilled");
+        if (Directory.Exists(markers)) Directory.Delete(markers, recursive: true);
+
+        await _keeper.WithSectionsLockedAsync(User, [_key], () => Task.FromResult(0)); // первый вход под замок раздела
+        Directory.Exists(baselines).Should().BeTrue("backfill донёс основу из файла");
+        ExternalEdit();
+        var body = Json(await Controller().Adopt(AdoptReq("mine")), 200);
+        body.GetProperty("status").GetString().Should().Be("applied");
+        PackageFiles().Should().HaveCount(1);
+    }
+
+    [Fact]
     public async Task Перенос_ИмяСтраницыЗанято_409_ЗаметкаЦела()
     {
         var a = PersonalNote("Одинаковое", "Первая заметка.");

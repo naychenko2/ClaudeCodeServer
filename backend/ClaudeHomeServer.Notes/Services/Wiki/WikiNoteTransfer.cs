@@ -59,6 +59,9 @@ public sealed class WikiNoteTransfer
     /// Тест обязан знать, где стоит каждый вызов, а не мерить это паузой. В проде оба null.</summary>
     internal Action<string>? NoteLockRequestedHook;
     internal Action<string>? NoteReadHook;
+    /// <summary>Тестовый шов замены заметки (NotesService запечатан): подмена даёт сбой или null
+    /// ровно на нужном вызове. В проде null — работает NotesService.Update.</summary>
+    internal Func<string, string, UpdateNoteRequest, NoteDetail?>? ReplaceNoteHook;
 
     public async Task<TransferResult> TransferAsync(string ownerId, string noteId)
     {
@@ -114,11 +117,17 @@ public sealed class WikiNoteTransfer
         var page = folder + title + ".md";
         var content = PageText(title, statements);
 
-        // baseHash=null: страница создаётся, а не перезаписывается. Имя занято — Changed.
+        // baseHash=null: страница создаётся, а не перезаписывается. Имя занято — Changed; если
+        // занявшая страница — недоделанный перенос этой же заметки (сбой между созданием страницы и
+        // заменой заметки), перенос просто доводится: второй страницы не будет.
         var res = await _apply.EditPageAsync(ownerId, section, page, null, content).ConfigureAwait(false);
+        string? packageId = null;
         switch (res.Outcome)
         {
             case WikiApplyService.HumanEditOutcome.Applied:
+                packageId = res.PackageId;
+                break;
+            case WikiApplyService.HumanEditOutcome.Changed when IsPageOfThisTransfer(res.Content, title, statements):
                 break;
             case WikiApplyService.HumanEditOutcome.Changed:
                 return new(TransferOutcome.Exists, $"страница «{title}» в разделе уже есть: переименуйте заметку и повторите перенос");
@@ -129,9 +138,36 @@ public sealed class WikiNoteTransfer
         }
 
         // Страница на месте — теперь заметка заменяется ссылкой, и только через NotesService.
+        // «Перенесено» значит «заметка заменена»: исчезновение заметки и сбой записи — отказ с
+        // причиной, а повтор перенос доведёт (страница уже есть и узнаётся выше).
         var stub = StubPrefix + folder.TrimEnd('/') + "/" + title + "]]\n";
-        _notes.Update(ownerId, noteId, new UpdateNoteRequest(Content: stub));
-        return new(TransferOutcome.Transferred, null, section, page, res.PackageId);
+        try
+        {
+            if ((ReplaceNoteHook ?? _notes.Update)(ownerId, noteId, new UpdateNoteRequest(Content: stub)) is null)
+                return new(TransferOutcome.NotFound, "заметка исчезла до замены ссылкой");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or KeyNotFoundException)
+        {
+            return new(TransferOutcome.Refused,
+                $"страница создана, но заметку заменить не удалось ({ex.Message}); повторите перенос — он доведёт замену");
+        }
+        return new(TransferOutcome.Transferred, null, section, page, packageId);
+    }
+
+    // Страница уже создана этим переносом: заголовок тот же, а утверждения «Сводки» (без сносок)
+    // совпадают с утверждениями заметки. Страница, которую правили после, не узнаётся — Exists.
+    private static bool IsPageOfThisTransfer(string? pageText, string title, IReadOnlyList<string> statements)
+    {
+        if (pageText is null || WikiPage.Parse(pageText).Model is not { } model || model.Title != title)
+            return false;
+        var summary = model.Sections.FirstOrDefault(s => s.Name == "Сводка");
+        if (summary is null)
+            return false;
+        var lines = summary.Lines
+            .Select(l => string.Join(' ', FootnoteRx.Replace(l, "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)))
+            .Where(l => l.Length > 0)
+            .ToList();
+        return lines.SequenceEqual(statements, StringComparer.Ordinal);
     }
 
     // Текст заметки без frontmatter.

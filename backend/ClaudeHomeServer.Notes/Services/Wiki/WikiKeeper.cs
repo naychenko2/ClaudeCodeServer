@@ -265,6 +265,10 @@ public sealed class WikiKeeper : IWikiRelink
                 await sem.WaitAsync().ConfigureAwait(false);
                 acquired.Add(sem);
             }
+            // Ленивый backfill основ (ADR-038 §6): под замком раздела, один раз на раздел.
+            if (WikiPaths.IsInitialized(_dataDir, ownerId))
+                foreach (var key in ordered)
+                    WikiBaselines.BackfillOnce(WikiPaths.Root(_dataDir, ownerId), key);
             return await body().ConfigureAwait(false);
         }
         finally

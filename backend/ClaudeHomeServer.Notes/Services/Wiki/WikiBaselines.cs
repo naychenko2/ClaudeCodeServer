@@ -13,6 +13,7 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 internal static class WikiBaselines
 {
     private const string Dir = "keeper/baselines";
+    private const string MarkerDir = "keeper/baselines-backfilled";
 
     /// <summary>Кладёт байты версии страницы; возвращает их sha256. Повторная запись той же
     /// версии только обновляет время файла. Сбой записи основы не должен ронять запись страницы
@@ -61,6 +62,44 @@ internal static class WikiBaselines
             // Нечитаемое — как отсутствующее: вызывающий скажет «основы нет».
         }
         return null;
+    }
+
+    /// <summary>Разовое донесение основ для страниц, записанных до появления основ: запись манифеста,
+    /// чей хэш совпадает с байтами файла, получает основу (файл не дрейфует — это именно её версия).
+    /// Дрейфующие файлы не трогаются: их версия манифеста в файле уже не лежит. Делается один раз
+    /// на раздел (маркер вне каталога основ — чистка по возрасту его не снесёт), под замком раздела.
+    /// Возвращает число сохранённых основ; сбой ввода-вывода маркер не ставит — повтор при следующем входе.</summary>
+    internal static int BackfillOnce(string root, string section)
+    {
+        try
+        {
+            var marker = SafePath.Join(root, $"{MarkerDir}/{WikiApplyService.Sha256OfBytes(System.Text.Encoding.UTF8.GetBytes(section))}");
+            if (File.Exists(marker))
+                return 0;
+            var mres = WikiManifest.TryRead(root, section);
+            if (mres.State == WikiManifestState.Invalid)
+                return 0;
+            var saved = 0;
+            foreach (var (page, hash) in mres.Manifest)
+            {
+                if (File.Exists(SafePath.Join(root, $"{Dir}/{hash}")))
+                    continue;
+                var file = SafePath.JoinBelowRoot(root, "pages/" + page);
+                if (!File.Exists(file))
+                    continue;
+                var bytes = File.ReadAllBytes(file);
+                if (WikiApplyService.Sha256OfBytes(bytes) != hash)
+                    continue;
+                Save(root, bytes);
+                saved++;
+            }
+            WikiApplyService.WriteBytesAtomic(root, $"{MarkerDir}/{WikiApplyService.Sha256OfBytes(System.Text.Encoding.UTF8.GetBytes(section))}", []);
+            return saved;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException)
+        {
+            return 0;
+        }
     }
 
     /// <summary>Чистка основ старше срока хранения (вызывает PurgeOldPreimages); возвращает число

@@ -39,9 +39,9 @@ public class ClaudeSessionDisposeTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch { /* best-effort */ }
     }
 
-    // Launcher считает вызовы Kill: снимок ДО DisposeAsync хранится в Start, после уборки
-    // разница и есть «сколько раз уборка позвала Kill». Без Kill в DisposeAsync разница 0,
-    // и тест роняется — это и есть мутация, которую тест ловит.
+    // Launcher считает вызовы Kill, пришедшие из DisposeAsync (по вызывающему кадру стека).
+    // Kill финализации хода и отмены токена сессии не считаются. Без Kill в DisposeAsync
+    // счётчик 0, и тест роняется — это и есть мутация, которую тест ловит.
     //
     // Выход процесса ловим СОБЫТИЕМ Exited, подписанным при старте, а не синхронным HasExited
     // сразу после Kill: Kill посылает сигнал, а выход фиксируется позже — на загруженном CI
@@ -50,11 +50,12 @@ public class ClaudeSessionDisposeTests : IDisposable
     private sealed class CapturingLauncher(
         ConcurrentDictionary<int, Process> clis) : IProcessLauncher
     {
-        private int _killCount;
-        private int _killCountAtStart;
+        private int _disposeKillCount;
         private readonly TaskCompletionSource _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public int KillCallsSinceStart => _killCount - _killCountAtStart;
+        // Только Kill, пришедшие НЕПОСРЕДСТВЕННО из DisposeAsync: Kill финализации хода и отмены
+        // (FinalizeRunAsync и др.) в счёт не идут, иначе ассерт не отличал бы их от уборки
+        public int DisposeKillCalls => Volatile.Read(ref _disposeKillCount);
         public Task Exited => _exited.Task;
 
         public bool IsSandboxed => false;
@@ -84,9 +85,6 @@ public class ClaudeSessionDisposeTests : IDisposable
             process.Exited += (_, _) => _exited.TrySetResult();
             if (process.HasExited) _exited.TrySetResult();
             clis[clis.Count + 1] = process;
-            // Фиксируем снимок счётчика Kill на момент старта хода — после уборки разница
-            // покажет «сколько Kill пришло из уборки, а не откуда-то ещё»
-            _killCountAtStart = _killCount;
             return process;
         }
 
@@ -105,13 +103,17 @@ public class ClaudeSessionDisposeTests : IDisposable
         {
             try { process.Kill(entireProcessTree: true); }
             catch { /* уже мёртв */ }
-            _killCount++;
+            // Кадр 0 — этот Kill, кадр 1 — его вызывающий; у async-метода это MoveNext
+            // конечного автомата с типом «<DisposeAsync>d__N»
+            var caller = new StackTrace(1, false).GetFrame(0)?.GetMethod()?.DeclaringType?.Name;
+            if (caller is not null && caller.Contains("<DisposeAsync>"))
+                Interlocked.Increment(ref _disposeKillCount);
         }
     }
 
     // Инвариант: после DisposeAsync уборка убила процесс CLI (Kill + WaitForExitAsync).
     // Мутация «убрать `_launcher.Kill(_currentProcess, ...)` из DisposeAsync» — тест
-    // должен упасть на ассерте KillCallsSinceStart == 0.
+    // должен упасть на ассерте DisposeKillCalls == 1.
     [Fact]
     public async Task DisposeAsync_УбиваетПроцессCLI()
     {
@@ -141,8 +143,8 @@ public class ClaudeSessionDisposeTests : IDisposable
         // Уборка: обязана позвать Kill на _currentProcess
         await session.DisposeAsync();
 
-        // 1. Kill был вызван уборкой (а не где-то ещё)
-        launcher.KillCallsSinceStart.Should().BeGreaterThanOrEqualTo(1,
+        // 1. Kill был вызван именно уборкой: счётчик ведёт только вызовы из DisposeAsync
+        launcher.DisposeKillCalls.Should().Be(1,
             "DisposeAsync обязан звать _launcher.Kill — иначе процесс CLI переживёт сессию и утечёт в фоне (на Windows это node-MCP-серверы, остаются сиротами на сутки)");
         // 2. Процесс реально завершился. Фейк живёт 60 с — заметно дольше 10-секундного
         // ожидания выхода в уборке: без Kill он переживает DisposeAsync, и событие не приходит.

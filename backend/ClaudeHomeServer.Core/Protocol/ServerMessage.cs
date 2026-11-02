@@ -450,6 +450,12 @@ public record ModuleRecordMessage(string Module, string RecordType, System.Text.
 public record ChatArchivedMessage(bool Archived)
     : ServerMessage("chat_archived");
 
+// Видимость чата изменилась (S2d-7a): без содержимого — только id (SessionId) и новое состояние.
+// Private=true уходит группе проекта ПОСЛЕ того, как чужие соединения сняты с session-группы:
+// клиент участника убирает чат с экрана, автор обновляет тумблер.
+public record ChatVisibilityChangedMessage(bool Private)
+    : ServerMessage("chat_visibility_changed");
+
 // «Продолжить в новом чате»: чат (SessionId = исходный) продолжён в NewSessionId — записка
 // передана, новый чат создан. Живое событие: человек, смотрящий ИСХОДНЫЙ чат, должен
 // автоматически перейти в новый (фронт решает по тому, какой чат открыт). ProjectId — для

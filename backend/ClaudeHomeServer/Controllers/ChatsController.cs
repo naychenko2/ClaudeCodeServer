@@ -334,12 +334,14 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     // Читатель — 403 reader, не автор — 403 not_chat_author. Остальное (общий проект, «сообщений нет»,
     // атомарность с отправкой) — в SessionManager.SetChatVisibility под замком видимости.
     [HttpPut("{id}/visibility")]
-    public IActionResult SetVisibility(string id, [FromBody] SetVisibilityRequest req)
+    public async Task<IActionResult> SetVisibility(string id, [FromBody] SetVisibilityRequest req)
     {
         if (sessions.GetAccessible(id, UserId) is not { } found) return NotFound();
         if (found.Scope.Role == ProjectRole.Reader)
             return StatusCode(StatusCodes.Status403Forbidden, new { error = "Читатель проекта не меняет видимость чата", code = "reader" });
         var result = sessions.SetChatVisibility(id, UserId, req.Private);
+        if (result.Outcome == ChatVisibilityOutcome.Ok && req.Private)
+            await sessions.EvictForeignViewersAsync(id, UserId);
         return result.Outcome switch
         {
             ChatVisibilityOutcome.Ok => Ok(result.Session),

@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
@@ -94,8 +94,20 @@ public partial class SessionManagerTests : IDisposable
     // в общий шаблон.
     private sealed class TrackingBroadcaster(
         TestSessionBroadcaster inner, List<ServerMessage> sentMessages, object sentLock)
-        : ClaudeHomeServer.Services.Composition.ISessionBroadcaster
+        : ClaudeHomeServer.Services.Composition.ISessionBroadcaster,
+          ClaudeHomeServer.Services.Composition.ISessionGroupEvictor
     {
+        // Вышибание из session-группы (S2d-7a): вызовы записываются, снятыми «считаются» соединения,
+        // которые тест положил в EvictableConnections
+        public List<(string SessionId, string[] UserIds)> EvictCalls { get; } = [];
+        public List<string> EvictableConnections { get; } = [];
+
+        public Task<IReadOnlyList<string>> EvictUsersFromSessionGroup(string sessionId, IReadOnlyCollection<string> userIds)
+        {
+            lock (EvictCalls) EvictCalls.Add((sessionId, userIds.ToArray()));
+            return Task.FromResult<IReadOnlyList<string>>(EvictableConnections.ToArray());
+        }
+
         // Гейт медленного клиента: пока он не завершён, рассылка в session-группу «висит»
         // (как SignalR Group.SendAsync при полном буфере клиента). Запись в sentMessages
         // идёт ПОСЛЕ гейта — в списке только реально доставленное.

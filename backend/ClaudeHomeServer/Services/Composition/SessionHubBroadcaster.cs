@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Hubs;
+﻿using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Protocol;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,7 +24,7 @@ namespace ClaudeHomeServer.Services.Composition;
 // Регистрация — в Program.cs, рядом с другими форвардерами Core-швов
 // (NotesHubNotifier и т.п.).
 public sealed class SessionHubBroadcaster(IHubContext<SessionHub> hub, IServiceProvider? services = null)
-    : ISessionBroadcaster, IChatVisibilitySource
+    : ISessionBroadcaster, IChatVisibilitySource, ISessionGroupEvictor
 {
     // Каталог чатов и проектов для маски чужих приватных чатов в событии доски (S2d-4b2).
     // Резолвится лениво при вызове: SessionManager сам зависит от вещателя, прямая зависимость
@@ -59,6 +59,23 @@ public sealed class SessionHubBroadcaster(IHubContext<SessionHub> hub, IServiceP
     /// ловит парный тест), поэтому проверка по префиксу безопасна.</summary>
     public static bool IsPreviewLogGroupOf(string group, string projectId) =>
         group.StartsWith(PreviewLogGroupPrefix + projectId + ":", StringComparison.Ordinal);
+
+    // Снять соединения пользователей с session-группы (S2d-7a, по образцу ProjectMembershipService.
+    // RevokeHubAccessAsync): все вкладки человека, а не только зрители — LeaveSession из группы не выводит.
+    // Реестр соединений берётся из DI лениво (как каталоги выше).
+    public async Task<IReadOnlyList<string>> EvictUsersFromSessionGroup(string sessionId, IReadOnlyCollection<string> userIds)
+    {
+        var registry = services?.GetService<UserConnectionRegistry>();
+        var evicted = new List<string>();
+        if (registry is null) return evicted;
+        foreach (var userId in userIds)
+            foreach (var connectionId in registry.ConnectionIdsOf(userId))
+            {
+                await hub.Groups.RemoveFromGroupAsync(connectionId, sessionId);
+                evicted.Add(connectionId);
+            }
+        return evicted;
+    }
 
     public Task ToSession(string sessionId, ServerMessage message) =>
         hub.Clients.Group(sessionId).SendAsync("message", message);

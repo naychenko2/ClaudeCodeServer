@@ -383,6 +383,11 @@ public class Session
     // следующих шагов. null — автор не зафиксирован (записи до появления поля).
     // Аддитивное nullable-поле, тот же приём.
     public string? CreatedByUserId { get; set; }
+    // Отметка «чат занят» (S2d-7a): в чат уже пытались записать сообщение или карточку, поэтому
+    // приватным его не сделать (chat_has_messages), а после приватного периода — тем более. Ставится
+    // под замком видимости SessionManager и ПЕРЕЖИВАЕТ рестарт: очередь отложенных сообщений и записи
+    // ленты тоже на диске. Аддитивное nullable-поле (null — не занят), BackupSchema.Version не двигается.
+    public bool? MessageClaimed { get; set; }
     // Закреплён в списке чатов («Закреплённые»)
     public bool IsPinned { get; set; }
     public string? ClaudeSessionId { get; set; }

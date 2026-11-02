@@ -1,4 +1,4 @@
-using System.Security.Claims;
+﻿using System.Security.Claims;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -185,16 +185,16 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
     {
         var c = ChatsAs(_editorId);
 
-        Read(c.SetVisibility(EditorChatId, new SetVisibilityRequest(true))).Status.Should().Be(200);
+        Read(c.SetVisibilitySync(EditorChatId, new SetVisibilityRequest(true))).Status.Should().Be(200);
         var s = _sessions.GetById(EditorChatId)!;
         s.PrivateToUserId.Should().Be(_editorId);
         s.ExcludeFromDossiers.Should().BeTrue();
 
-        Read(c.SetVisibility(EditorChatId, new SetVisibilityRequest(false))).Status.Should().Be(200);
+        Read(c.SetVisibilitySync(EditorChatId, new SetVisibilityRequest(false))).Status.Should().Be(200);
         s.PrivateToUserId.Should().BeNull();
         s.ExcludeFromDossiers.Should().BeTrue("после «сделать общим» прошлое не раскрываем");
 
-        Read(c.SetVisibility(EditorChatId, new SetVisibilityRequest(true))).Should().Be((409, "chat_has_messages"));
+        Read(c.SetVisibilitySync(EditorChatId, new SetVisibilityRequest(true))).Should().Be((409, "chat_has_messages"));
     }
 
     [Fact]
@@ -202,16 +202,16 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
     {
         var c = ChatsAs(_readerId);
 
-        Read(c.SetVisibility(EditorChat2Id, new SetVisibilityRequest(true))).Should().Be((403, "reader"));
+        Read(c.SetVisibilitySync(EditorChat2Id, new SetVisibilityRequest(true))).Should().Be((403, "reader"));
         _sessions.GetById(EditorChat2Id)!.PrivateToUserId.Should().BeNull();
     }
 
     [Fact]
     public void НеАвтор_403notChatAuthor_ДажеВладелецПроекта()
     {
-        Read(ChatsAs(_ownerId).SetVisibility(EditorChat2Id, new SetVisibilityRequest(true)))
+        Read(ChatsAs(_ownerId).SetVisibilitySync(EditorChat2Id, new SetVisibilityRequest(true)))
             .Should().Be((403, "not_chat_author"));
-        Read(ChatsAs(_editorId).SetVisibility(OwnerChatId, new SetVisibilityRequest(true)))
+        Read(ChatsAs(_editorId).SetVisibilitySync(OwnerChatId, new SetVisibilityRequest(true)))
             .Should().Be((403, "not_chat_author"));
     }
 
@@ -220,8 +220,8 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
     {
         var c = ChatsAs(_editorId);
 
-        Read(c.SetVisibility(OwnerPrivateId, new SetVisibilityRequest(false))).Status.Should().Be(404);
-        Read(c.SetVisibility("no-such-chat", new SetVisibilityRequest(false))).Status.Should().Be(404);
+        Read(c.SetVisibilitySync(OwnerPrivateId, new SetVisibilityRequest(false))).Status.Should().Be(404);
+        Read(c.SetVisibilitySync("no-such-chat", new SetVisibilityRequest(false))).Status.Should().Be(404);
         _sessions.GetById(OwnerPrivateId)!.PrivateToUserId.Should().Be(_ownerId, "чужую приватность не снять");
     }
 
@@ -230,8 +230,8 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
     {
         var c = ChatsAs(_ownerId);
 
-        Read(c.SetVisibility(EditorPrivateId, new SetVisibilityRequest(false))).Status.Should().Be(404);
-        Read(c.SetVisibility(EditorPrivateId, new SetVisibilityRequest(true))).Status.Should().Be(404);
+        Read(c.SetVisibilitySync(EditorPrivateId, new SetVisibilityRequest(false))).Status.Should().Be(404);
+        Read(c.SetVisibilitySync(EditorPrivateId, new SetVisibilityRequest(true))).Status.Should().Be(404);
         _sessions.GetById(EditorPrivateId)!.PrivateToUserId.Should().Be(_editorId);
     }
 
@@ -240,15 +240,23 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
     {
         var c = ChatsAs(_ownerId);
 
-        Read(c.SetVisibility(PersonalChatId, new SetVisibilityRequest(true))).Should().Be((409, "not_shared_project"));
-        Read(c.SetVisibility(OutsideChatId, new SetVisibilityRequest(true))).Should().Be((409, "not_shared_project"));
+        Read(c.SetVisibilitySync(PersonalChatId, new SetVisibilityRequest(true))).Should().Be((409, "not_shared_project"));
+        Read(c.SetVisibilitySync(OutsideChatId, new SetVisibilityRequest(true))).Should().Be((409, "not_shared_project"));
     }
 
     [Fact]
     public void ЧатСоСообщениями_409chatHasMessages()
     {
-        Read(ChatsAs(_editorId).SetVisibility(WithMessagesId, new SetVisibilityRequest(true)))
+        Read(ChatsAs(_editorId).SetVisibilitySync(WithMessagesId, new SetVisibilityRequest(true)))
             .Should().Be((409, "chat_has_messages"));
         _sessions.GetById(WithMessagesId)!.PrivateToUserId.Should().BeNull();
     }
+}
+
+// SetVisibility стал асинхронным (вышибание из session-группы после Ok); тесты ручки читают результат синхронно
+internal static class ChatsControllerVisibilityExtensions
+{
+    public static Microsoft.AspNetCore.Mvc.IActionResult SetVisibilitySync(
+        this ClaudeHomeServer.Controllers.ChatsController c, string id, ClaudeHomeServer.Controllers.SetVisibilityRequest req) =>
+        c.SetVisibility(id, req).GetAwaiter().GetResult();
 }

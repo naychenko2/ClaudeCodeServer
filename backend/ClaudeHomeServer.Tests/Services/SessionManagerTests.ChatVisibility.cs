@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Models;
+﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
 using FluentAssertions;
@@ -195,5 +195,92 @@ public partial class SessionManagerTests
                 session.PrivateToUserId.Should().BeNull($"итерация {i}");
             }
         }
+    }
+
+    // S2d-7a доработка 1, пункт 1: перевод в приватный снимает чужие соединения с session-группы
+    // (содержимое группы не фильтруется адресацией) и шлёт группе проекта событие без содержимого.
+    [Fact]
+    public async Task ВПриватный_ВышибаетЧужихИзSessionГруппы_АвторНеВышибается_ИшлётСобытие()
+    {
+        var session = await SharedChatAsync("evict");
+        _broadcaster.EvictableConnections.Add("conn-участник");
+        _sut.AddViewer(session.Id, "conn-участник");
+        _sut.AddViewer(session.Id, "conn-автор");
+
+        _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: true).Outcome.Should().Be(ChatVisibilityOutcome.Ok);
+        await _sut.EvictForeignViewersAsync(session.Id, TestUserId);
+
+        var call = _broadcaster.EvictCalls.Should().ContainSingle().Subject;
+        call.SessionId.Should().Be(session.Id);
+        call.UserIds.Should().Contain(Участник).And.NotContain(TestUserId, "автора не вышибаем");
+        _broadcaster.Inner.Project.Select(p => p.Message).OfType<Protocol.ChatVisibilityChangedMessage>()
+            .Should().ContainSingle(m => m.SessionId == session.Id && m.Private);
+        // реестр зрителей почищен по снятым соединениям: вышибленный не глушит уведомления автору
+        _sut.HasViewers(session.Id).Should().BeTrue("автор остался зрителем");
+        _sut.RemoveViewer(session.Id, "conn-автор");
+        _sut.HasViewers(session.Id).Should().BeFalse("вышибленный участник из реестра убран");
+    }
+
+    // Пункт 2: карточка ленты (модуль/штаб) уходит мимо LastMessage и MessageCount, но чат пустым
+    // уже не считается — 409, а отметка переживает рестарт (лежит в Session).
+    [Fact]
+    public async Task КарточкаЛентыЧерезAppendStored_ЧатЗанят_ТумблерОтказывает()
+    {
+        var session = await SharedChatAsync("card");
+
+        await _sut.AppendModuleRecordAsync(session.Id,
+            new Protocol.StoredModuleRecord { Module = "imageeditor", RecordType = "done", Fallback = "готово" });
+
+        _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: true).Outcome
+            .Should().Be(ChatVisibilityOutcome.HasMessages);
+        session.PrivateToUserId.Should().BeNull();
+        session.MessageClaimed.Should().BeTrue("отметка в Session переживает рестарт процесса");
+    }
+
+    // Пункт 3: доставка отложенного сообщения после рестарта (DrainRestoredPendingAsync →
+    // DeliverPendingAsync → SendDirectAsync) идёт мимо трёх входов с отметкой — теперь занимает чат сама.
+    // Порядок «тумблер первым»: доставка ждёт замок видимости, уходит по приватной адресации.
+    [Fact]
+    public async Task ВосстановленнаяОчередь_ДоставкаЖдётЗамок_ТумблерПервым_ГруппеПроектаНичего()
+    {
+        var session = await SharedChatAsync("restored-queue");
+        var entry = GetEntry(session.Id);
+        var lk = VisibilityLockOf(session.Id);
+        var queued = new SessionManager.QueuedMessage("q1", "после рестарта", null, null, 0, DateTime.UtcNow,
+            Kind: SessionManager.PendingKind.User, SenderUserId: TestUserId);
+        var deliver = typeof(SessionManager).GetMethod("DeliverPendingAsync",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        Task send;
+        ChatVisibilityOutcome toggled;
+
+        lock (lk)
+        {
+            send = Task.Run(() => (Task)deliver.Invoke(_sut, [session.Id, entry, queued])!);
+            Thread.Sleep(400);
+            send.IsCompleted.Should().BeFalse("доставка из очереди обязана ждать тот же замок видимости");
+            toggled = _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: true).Outcome;
+        }
+        await send.WaitAsync(TimeSpan.FromSeconds(10));
+
+        toggled.Should().Be(ChatVisibilityOutcome.Ok);
+        ProjectEventsOf(session.Id).Should().Be(0, "приватный чат: группе проекта события не адресуются");
+    }
+
+    // Та же доставка первой: тумблер отказывает, а отметка стоит в Session.
+    [Fact]
+    public async Task ВосстановленнаяОчередь_ДоставкаПервой_Тумблер409()
+    {
+        var session = await SharedChatAsync("restored-queue-first");
+        var entry = GetEntry(session.Id);
+        var queued = new SessionManager.QueuedMessage("q2", "после рестарта", null, null, 0, DateTime.UtcNow,
+            Kind: SessionManager.PendingKind.User, SenderUserId: TestUserId);
+        var deliver = typeof(SessionManager).GetMethod("DeliverPendingAsync",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+
+        await (Task)deliver.Invoke(_sut, [session.Id, entry, queued])!;
+
+        _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: true).Outcome
+            .Should().Be(ChatVisibilityOutcome.HasMessages);
+        session.MessageClaimed.Should().BeTrue();
     }
 }

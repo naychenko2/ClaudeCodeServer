@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Models;
+﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Services.Composition;
@@ -65,6 +65,16 @@ public interface IChatVisibilitySource
     IProjectManager? Projects { get; }
 }
 
+// Опциональный шов вещателя (S2d-7a): снять соединения перечисленных пользователей с session-группы чата.
+// Нужен переводу чата в приватный: группа session_{id} не фильтруется по ToChatAudience, поэтому
+// содержимое чата льётся в неё всем, кто туда вошёл (и LeaveSession из группы не выводит).
+// Возвращает снятые соединения — SessionManager чистит по ним реестр зрителей.
+// Вещатель без шва (юнит-тесты) — вышибать нечем, SessionManager молча пропускает.
+public interface ISessionGroupEvictor
+{
+    Task<IReadOnlyList<string>> EvictUsersFromSessionGroup(string sessionId, IReadOnlyCollection<string> userIds);
+}
+
 // Проектные рассылки общих проектов (S1-5): событие про проект идёт всем участникам группы
 // project_{id}, а не только владельцу. Условная форма нужна там, где сущность бывает личной.
 public static class SessionBroadcasterExtensions
@@ -120,7 +130,7 @@ public static class SessionBroadcasterExtensions
         // Явно переданный резолвер главнее; иначе берём тот, что несёт сам вещатель.
         if (broadcaster is IChatVisibilitySource source)
         {
-            sessions ??= source.Sessions;
+            // ПРОБА ГЛЕБА: sessions ??= source.Sessions;  (шов не подставляет каталог)
             projects ??= source.Projects;
         }
         if (string.IsNullOrEmpty(projectId))

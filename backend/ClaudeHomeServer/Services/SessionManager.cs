@@ -195,9 +195,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // нет» и ставит PrivateToUserId. Без общего замка отправка и тумблер из соседних вкладок
         // дали бы приватный чат с сообщением, уже разосланным в группу проекта.
         public readonly Lock VisibilityLock = new();
-        // Чат принял (или пытался принять) сообщение: после этого его нельзя сделать приватным.
-        // Читается и пишется ТОЛЬКО под VisibilityLock.
-        public bool MessageClaimed;
+        // Отметка «чат занят» живёт в Session.MessageClaimed (переживает рестарт); читается и пишется
+        // ТОЛЬКО под VisibilityLock.
         // Меняется только через PersistPending-места (FreezePending, возобновление человеком)
         public volatile bool QueueFrozen;
         // Сообщения старше срока годности, не оживлённые при загрузке: карточку «не доставлено»
@@ -2529,9 +2528,18 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // «сообщений нет» в SetChatVisibilityAsync: либо отметка встала раньше — и тумблер видит
     // chat_has_messages, либо тумблер успел первым — и адресация сообщения (читается позже,
     // в момент рассылки) уже приватная. Третьего исхода нет.
-    private static void ClaimFirstMessage(SessionEntry entry)
+    // Отметка хранится в Session (переживает рестарт: очередь отложенных и записи ленты — на диске),
+    // поэтому первое занятие чата сохраняет sessions.json. Зовётся ещё и из SendDirectAsync и
+    // AppendStoredAsync: доставка очереди после рестарта и карточки ленты идут мимо трёх входов выше.
+    private void ClaimFirstMessage(SessionEntry entry)
     {
-        lock (entry.VisibilityLock) entry.MessageClaimed = true;
+        bool first;
+        lock (entry.VisibilityLock)
+        {
+            first = entry.Info.MessageClaimed != true;
+            entry.Info.MessageClaimed = true;
+        }
+        if (first) SaveSessions();
     }
 
     // Тумблер видимости чата (S2d-7a, PUT /api/chats/{id}/visibility). Вызывающий уже прошёл
@@ -2558,8 +2566,11 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
                 // Уже приватный — идемпотентно: повторный true не должен падать на «сообщениях»
                 if (info.PrivateToUserId != userId)
                 {
-                    if (entry.MessageClaimed || info.MessageCount > 0 || info.LastMessage is not null
-                        || info.LastUserMessageAt is not null)
+                    // «Пусто» = нет записей ленты (карточки модулей и штаба шлются мимо LastMessage и
+                    // MessageCount) и нет прежних признаков хода; Accumulator null — лента не загружена,
+                    // тогда её следы ловит персистентная отметка MessageClaimed (ставит AppendStoredAsync).
+                    if (info.MessageClaimed == true || info.MessageCount > 0 || info.LastMessage is not null
+                        || info.LastUserMessageAt is not null || entry.Accumulator?.GetAll().Count > 0)
                         return new(ChatVisibilityOutcome.HasMessages, null);
                     info.PrivateToUserId = userId;
                 }
@@ -2570,12 +2581,32 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
                 // Чат побывал общим (или остаётся им): вернуть приватность уже нельзя — его могли
                 // видеть другие участники. Метка та же, что у первого сообщения: единый отказ
                 // chat_has_messages на повторном true.
-                if (info.PrivateToUserId is not null) entry.MessageClaimed = true;
+                if (info.PrivateToUserId is not null) info.MessageClaimed = true;
                 info.PrivateToUserId = null;
             }
         }
         SaveSessions();
         return new(ChatVisibilityOutcome.Ok, info);
+    }
+
+    // Вторая половина перевода в приватный (S2d-7a): чужие соединения снимаются с session-группы и
+    // группа проекта получает событие без содержимого. Порядок важен: сначала вышибаем, потом шлём
+    // событие — клиент участника после него уже не получит ни одного события чата. Звать после Ok от
+    // SetChatVisibility(makePrivate: true); вещатель без шва вышибания — только событие.
+    public async Task EvictForeignViewersAsync(string sessionId, string authorId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        var info = entry.Info;
+        if (info.ProjectId is not string pid || info.PrivateToUserId != authorId) return;
+        var project = _projects.GetById(pid);
+        if (project is null) return;
+        var others = new HashSet<string>(project.Members?.Select(m => m.UserId) ?? []);
+        if (project.OwnerId is { } ownerId) others.Add(ownerId);
+        others.Remove(authorId);
+        if (_broadcaster is ISessionGroupEvictor evictor)
+            foreach (var connectionId in await evictor.EvictUsersFromSessionGroup(sessionId, others))
+                RemoveViewer(sessionId, connectionId);
+        await _broadcaster.ToProject(pid, new ChatVisibilityChangedMessage(true) { SessionId = sessionId });
     }
 
     public Session? SetNotificationsMuted(string sessionId, bool muted)
@@ -5455,6 +5486,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         bool fromQueue = false, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown,
         int agentDepth = 0, string? senderUserId = null)
     {
+        // Общая точка доставки хода: сюда идут и три входа с отметкой, и разбор очереди отложенных
+        // после рестарта (DrainRestoredPendingAsync → DeliverPendingAsync), которая отметки не ставила
+        ClaimFirstMessage(entry);
         // Проект вышел из сферы персоны чата: ход не стартует, персону молча не подменяем
         if (entry.Info.PersonaId is { } zonePersonaId && ResolveOwnerId(entry.Info) is { } zoneOwnerId
             && _personas.Get(zonePersonaId, zoneOwnerId) is { } zonePersona
@@ -11188,6 +11222,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public async Task AppendStoredAsync(string sessionId, StoredMessage stored, ServerMessage broadcast, bool inTurn = false)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        // Запись в ленту = «чат занят» (S2d-7a): карточка уходит в группу проекта, и приватным такой чат уже не сделать
+        ClaimFirstMessage(entry);
 
         // Как в PublishFalCostAsync: лок держим РОВНО один раз на «проверить entry.Accumulator
         // → выбрать ветку → записать», иначе EnsureAccumulatorAsync вклинится между

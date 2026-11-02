@@ -214,4 +214,49 @@ public class HumanEditCommitterTests : IDisposable
         (await CommitsCountAsync()).Should().Be(before);
         _sut.PendingAuthor(_repo, "base.txt").Should().BeNull();
     }
+
+    [Fact]
+    public async Task Гонка_таймер_и_новый_Record_по_тому_же_пути_не_теряет_автора()
+    {
+        var (project, first) = await SetupAsync(shared: true);
+        var second = _users.Add("second-" + Guid.NewGuid().ToString("N")[..6], "password", "user");
+        _projects.SetMembers(project.Id,
+        [
+            new ProjectMember { UserId = first.Id, Role = ProjectRole.Editor, AddedBy = project.OwnerId! },
+            new ProjectMember { UserId = second.Id, Role = ProjectRole.Editor, AddedBy = project.OwnerId! },
+        ]);
+        await File.WriteAllTextAsync(Path.Combine(_repo, "mine.md"), "x\n");
+        _sut.Record(project.Id, _repo, "mine.md", first.Id);
+        _clock.Advance(TimeSpan.FromSeconds(30));
+
+        // Между осмотром созревшей записи и её снятием приходит новая запись по тому же пути
+        _sut.BeforeClaim = _ => { _sut.BeforeClaim = null; _sut.Record(project.Id, _repo, "mine.md", second.Id); };
+        var before = await CommitsCountAsync();
+        await _sut.FlushAsync(all: false);
+
+        // Снятие не прошло: старой записи не коммитим, новая (со своим автором) жива
+        (await CommitsCountAsync()).Should().Be(before);
+        _sut.PendingAuthor(_repo, "mine.md")!.UserId.Should().Be(second.Id);
+
+        _clock.Advance(TimeSpan.FromSeconds(20));
+        await _sut.FlushAsync(all: false);
+        var log = await LogAsync();
+        log.Should().Contain(second.Id).And.NotContain(first.Id);
+        _sut.PendingAuthor(_repo, "mine.md").Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Замок_репозитория_не_держится_на_время_дебаунса()
+    {
+        var (project, human) = await SetupAsync(shared: true);
+        await File.WriteAllTextAsync(Path.Combine(_repo, "mine.md"), "x\n");
+        _sut.Record(project.Id, _repo, "mine.md", human.Id);
+
+        // Запись ждёт окна; в это время обычный коммит агента не блокируется замком репозитория
+        await File.WriteAllTextAsync(Path.Combine(_repo, "agent.txt"), "агент\n");
+        await _git.StageAsync(null, _repo, "agent.txt");
+        var agentCommit = _git.CommitAsync(null, _repo, "коммит агента");
+        (await Task.WhenAny(agentCommit, Task.Delay(TimeSpan.FromSeconds(10)))).Should().BeSameAs(agentCommit);
+        _sut.PendingAuthor(_repo, "mine.md").Should().NotBeNull();
+    }
 }

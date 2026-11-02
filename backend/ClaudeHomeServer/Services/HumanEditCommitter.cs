@@ -52,6 +52,8 @@ public sealed class HumanEditCommitter(
     private readonly ConcurrentDictionary<(string Root, string Rel), Pending> _flushing = new();
     // Один сброс за раз: сторож цикла и StopAsync не гоняют коммиты параллельно.
     private readonly SemaphoreSlim _flushGate = new(1, 1);
+    // Тестовый шов гонки: вызывается между осмотром записи и её атомарным снятием.
+    internal Action<(string Root, string Rel)>? BeforeClaim { get; set; }
     private CancellationTokenSource? _loopCts;
     private Task? _loop;
 
@@ -135,6 +137,7 @@ public sealed class HumanEditCommitter(
             {
                 if (!all && now - kv.Value.At < debounce) continue;
                 // Сначала маркер «в полёте», затем атомарное снятие именно этой записи.
+                BeforeClaim?.Invoke(kv.Key);
                 _flushing[kv.Key] = kv.Value;
                 if (_pending.TryRemove(kv)) claimed.Add(kv);
                 else _flushing.TryRemove(kv);

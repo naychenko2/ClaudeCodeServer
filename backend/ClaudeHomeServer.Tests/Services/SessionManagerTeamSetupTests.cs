@@ -26,7 +26,7 @@ namespace ClaudeHomeServer.Tests.Services;
 public class SessionManagerTeamSetupTests : SessionManagerTestBase
 {
     // Окно для негативных проверок «карточки не появилось»: см. комментарий в TurnWire_OutcomeInterrupted
-    private static readonly TimeSpan NegativeSettle = TimeSpan.FromMilliseconds(150);
+    private static readonly TimeSpan NegativeSettle = TimeSpan.FromMilliseconds(500);
 
     // --- Этап 4 / шаг 1а: слот текста хода на SessionEntry с ключом по TurnSeq ---
     // Этап 4 / шаг 1в: тесты LastTurnText_* сняты вместе с шагом 1а — LastTurnTexts ушёл в

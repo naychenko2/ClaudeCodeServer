@@ -343,12 +343,16 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // ToMarkdown молча затирал параллельную правку того же .md — ни хеша, ни 409. Конвертация
             // — вне замка: сериализовать нужно запись, а не работу конвертера (соседняя правка не
             // обязана ждать markitdown). Без If-Match — прежнее поведение (перезапись), но под замком.
+            // F-4 (п.2): тот же отказ, что у Upload — по ЦЕЛЕВОМУ .md: конверт пишет поверх него,
+            // не редактируя то, что в нём лежит. Конвертация — вне замка и вне проверки (работать
+            // над отказом нет смысла, но и чужую правку она не трогает).
             var absTarget = FileService.SafeJoinPublic(root, targetRel);
             var ifMatch = RequestIfMatch();
             var sem = LockFor(absTarget);
             await sem.WaitAsync();
             try
             {
+                if (await UncommittedDenialForEditorAsync(projectId, root, targetRel, absTarget) is { } denied) return denied;
                 if (ifMatch is not null)
                 {
                     // Тот же канонический хеш, что у GET/SaveContent: назван клиентом версии —
@@ -596,19 +600,58 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // появляется в S3-3; здесь сервер автора не знает — null (авторство из тела запроса
     // не принимается — по разрез §2). source — форма ChatRef (К5) в коде ещё нет (S2d-4),
     // индекса «последний правивший чат» нет — null.
-    private FileConflictResponse FileConflictBodyFor(string root, string path, string abs, string? currentSha)
+    // code — причина отказа: "file_changed" (сверка If-Match, К8) или "file_uncommitted"
+    // (F-4: чужая незакоммиченная правка, которую редактору затирать нельзя). Тело — одно и то
+    // же: актуальное состояние файла, чтобы клиент показал, что именно он мог бы потерять.
+    private FileConflictResponse FileConflictBodyFor(string root, string path, string abs, string? currentSha,
+        string code = "file_changed")
     {
         var isText = currentSha is not null && files.GetDocumentInfo(path) is null && !files.IsBinaryFile(root, path);
         var mtime = System.IO.File.Exists(abs)
             ? new DateTimeOffset(DateTime.SpecifyKind(System.IO.File.GetLastWriteTimeUtc(abs), DateTimeKind.Utc))
             : (DateTimeOffset?)null;
         return new FileConflictResponse(
-            "file_changed",
+            code,
             isText ? files.ReadFile(root, path) : null,
             currentSha,
             Author: null,
             ChangedAt: mtime,
             Source: null);
+    }
+
+    // Право владельца (Write) по вызывающему — тот же тест, что был в ветке папки Delete (S2c-8):
+    // Write в общем проекте нет ни у редактора, ни у читателя (ProjectRight.Write — «только
+    // владелец»), в личном проекте вызывающий — владелец. id вызывающего входит только в
+    // запрошенное право, ключом хранилищ не служит (снимок ProjectActionCallerKey).
+    private bool CallerIsProjectOwner(string projectId) =>
+        access.Resolve(UserId, projectId, ProjectRight.Write) is not null;
+
+    // F-4 (п.2, разрез 4bc3d04f §3): не-владелец (редактор) удаляет или перезаписывает только
+    // ЧИСТЫЙ отслеживаемый git файл. Незакоммиченное — правка агента или другого человека,
+    // которой ещё не коммитил ни один из них: для редактора она необратима (Revert остаётся на
+    // Write, у него её нет), поэтому молча затирать или удалять её нельзя → 409 file_uncommitted.
+    // Владелец и личный проект — как раньше (первый же тест).
+    // Значение — из того же лёгкого статуса, что рисует панель «Изменения» (StatusPathsAsync:
+    // staged + unstaged + untracked, -uall): путь в любом из множеств — незакоммичен. Файла нет
+    // — создавать нечего, проверять нечего. Не-репозиторий или нет Git-подсистемы —
+    // «незакоммиченного» нет как класса: прежнее поведение (без git судить нечем, дверь не
+    // закрывается вслепую). Игнорируемые .gitignore файлы в этом статусе не видны — для
+    // проверки они равны чистым отслеживаемым (оценено в отчёте F-4).
+    // Проверка — ВНУТРИ замка пути: запись под замком делает файл незакоммиченным, и второй
+    // редактор того же пути уже видит чужую правку и получает 409, а не затирает её молча.
+    private async Task<IActionResult?> UncommittedDenialForEditorAsync(
+        string projectId, string root, string rel, string abs)
+    {
+        if (CallerIsProjectOwner(projectId)) return null;
+        if (!System.IO.File.Exists(abs)) return null;
+        if (git is null) return null;
+        var status = await git.StatusPathsAsync(TenantId, root);
+        if (!status.IsRepo) return null;
+        var key = Normalize(rel);
+        if (!status.Staged.Concat(status.Unstaged).Concat(status.Untracked).Any(f => Normalize(f.Path) == key))
+            return null;
+        var current = IsEtaggableText(root, rel, abs) ? CanonicalSha256OfTextFile(abs) : null;
+        return Conflict(FileConflictBodyFor(root, rel, abs, current, "file_uncommitted"));
     }
 
     [HttpGet("diff")]
@@ -696,6 +739,9 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // гонка rename↔save молча дала бы два файла (или перенос уже записанной версии) — data loss.
     // If-Match — тот же контракт, что у SaveContent: назван клиентом версии — переименовываем
     // только её; параллельная запись того же пути проигрывает по хешу (409), а не затирает.
+    // F-4 (пп.3–4): существующая цель — 409 «exists», а не 500; переименование и перенос папки
+    // — только владельцу (403), как её удаление. Незакоммиченное содержимое при rename не
+    // затирается: оно переезжает целиком, поэтому п.2 здесь не нужен.
     [HttpPost("rename")]
     [ProjectScope(Right = ProjectRight.WriteContent)]
     public async Task<IActionResult> Rename(string projectId, [FromBody] RenameRequest req)
@@ -717,6 +763,18 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                     await semSecond.WaitAsync();
                 }
                 if (!System.IO.File.Exists(absOld) && !Directory.Exists(absOld)) return NotFound();
+                // F-4 (п.4, решение Андрея 01.11): переименование и перенос ПАПКИ редактору
+                // закрыты — тот же тест права, что у удаления папки. Массовая операция без 409:
+                // у папки нет версии (тега ей сервер не выдавал), а под её именем — чужие правки
+                // всего дерева, которые молча потерять нельзя.
+                if (Directory.Exists(absOld) && !CallerIsProjectOwner(projectId))
+                    return StatusCode(403, new { error = "Переименование и перенос папки — только владелец проекта", code = ProjectScopeAttribute.ErrorCode });
+                // F-4 (п.3): коллизия имени — 409, а не 500. На существующую цель File.Move бросает
+                // IOException (.NET Core 3.0+), Directory.Move — то же: раньше это выходило 500.
+                // Та же форма отказа, что у CreateFile («exists»): цель существует. Тот же путь
+                // (self-rename) — не коллизия: эта ветка ведёт себя как раньше.
+                if (firstKey != secondKey && (System.IO.File.Exists(absNew) || Directory.Exists(absNew)))
+                    return Conflict(new { error = "exists" });
                 var ifMatch = RequestIfMatch();
                 if (ifMatch is not null)
                 {
@@ -748,8 +806,9 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // S2c-8: дверь открыта редактору только для файла (WriteContent). Папка остаётся на Write:
     // ветка папки — явная проверка права вызывающего (редактору 403, владельцу как раньше).
     // Файловая ветка — под тем же замком пути, что SaveContent (S2c-1), с If-Match там, где
-    // клиент назвал версию. До S3-3 (буфера коммиттера) удаление незакоммиченного файла
-    // редактором необратимо — откат через Revert остаётся на Write, у редактора его нет.
+    // клиент назвал версию. F-4 (п.2): незакоммиченный файл редактору отказан (409
+    // file_uncommitted): до S3-3 (буфера коммиттера) его удаление необратимо — откат через
+    // Revert остаётся на Write, у редактора его нет.
     [HttpDelete]
     [ProjectScope(Right = ProjectRight.WriteContent)]
     // Секция destructive: на делегированном ходу агент не удаляет данные (раньше — срезанием
@@ -761,10 +820,10 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         {
             var root = GetRoot(projectId);
             if (IsDirectoryPath(root, path))
-                return access.Resolve(UserId, projectId, ProjectRight.Write) is null
-                    ? StatusCode(403, new { error = "Удаление папки — только владелец проекта", code = ProjectScopeAttribute.ErrorCode })
-                    : await DeleteUnderLockAsync(root, path, ifMatch: null);
-            return await DeleteUnderLockAsync(root, path, RequestIfMatch());
+                return CallerIsProjectOwner(projectId)
+                    ? await DeleteUnderLockAsync(projectId, root, path, ifMatch: null)
+                    : StatusCode(403, new { error = "Удаление папки — только владелец проекта", code = ProjectScopeAttribute.ErrorCode });
+            return await DeleteUnderLockAsync(projectId, root, path, RequestIfMatch());
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (FileNotFoundException) { return NotFound(); }
@@ -773,13 +832,17 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
 
     // Файловая ветка Delete под замком пути (S2c-8): If-Match — тот же контракт, что у SaveContent;
     // папка удаляется без сверки версии — тега папке сервер не выдавал.
-    private async Task<IActionResult> DeleteUnderLockAsync(string root, string path, string? ifMatch)
+    // F-4 (п.2): перед сверкой версии — отказ редактору на незакоммиченном файле (он важнее:
+    // If-Match здесь о версии, а отказа причина — в праве на чужую правку). Ветка папки доходит
+    // сюда только от владельца (гейт в Delete), для неё проверка проходит по построению.
+    private async Task<IActionResult> DeleteUnderLockAsync(string projectId, string root, string path, string? ifMatch)
     {
         var abs = FileService.SafeJoinPublic(root, path);
         var sem = LockFor(abs);
         await sem.WaitAsync();
         try
         {
+            if (await UncommittedDenialForEditorAsync(projectId, root, path, abs) is { } denied) return denied;
             if (ifMatch is not null)
             {
                 if (!System.IO.File.Exists(abs)) return NotFound();
@@ -817,11 +880,14 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // ни 409. Без If-Match — прежнее поведение (перезапись), но под замком.
             var safePath = FileService.SafeJoinPublic(root, relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(safePath)!);
+            // F-4 (п.2): перед сверкой версии — отказ редактору на незакоммиченном целевом файле:
+            // загрузка не редактирует то, что клиент видел, а затирает его целиком.
             var ifMatch = RequestIfMatch();
             var sem = LockFor(safePath);
             await sem.WaitAsync();
             try
             {
+                if (await UncommittedDenialForEditorAsync(projectId, root, relativePath, safePath) is { } denied) return denied;
                 if (ifMatch is not null)
                 {
                     var current = IsEtaggableText(root, relativePath, safePath) ? CanonicalSha256OfTextFile(safePath) : null;

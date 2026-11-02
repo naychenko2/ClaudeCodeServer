@@ -1694,10 +1694,13 @@ public sealed class FeatureProjector(TaskManager tasks)
     internal static string? KeySession(TaskItem epic, IReadOnlyList<TaskItem> featureTasks,
         IReadOnlyCollection<FeatureIndexSession> sessions)
     {
-        var live = new HashSet<string>(sessions.Select(s => s.Id));
-        // Цепочка звеньев — в Core (FeatureKeyChain, дефект 79d0fa9a): её читает и корневой
-        // TaskExecutionService; прокси-обёртки здесь нет.
-        return FeatureKeyChain.Of(epic, featureTasks).FirstOrDefault(live.Contains);
+        // Повтор id в снимке не роняет индекс (прежний HashSet их терпел): берётся первая запись
+        var live = new Dictionary<string, FeatureIndexSession>();
+        foreach (var s in sessions) live.TryAdd(s.Id, s);
+        // Цепочка звеньев и «первое живое с переходом по продолжениям» — в Core (FeatureKeyChain):
+        // второй копии правила здесь нет.
+        return FeatureKeyChain.FirstLive(FeatureKeyChain.Of(epic, featureTasks),
+            id => live.TryGetValue(id, out var s) ? new FeatureKeyChain.KeyChatProbe(s.ContinuedInSessionId) : null);
     }
 
     // Оркестратор фичи (W4-1B): персона, ведущая фичу. Ключевой чат приходит готовым из

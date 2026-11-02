@@ -72,6 +72,10 @@ public sealed class TasksSubsystem : IAppSubsystem
         services.AddSingleton<FeatureProjector>();
         // Напоминание оркестратору об устаревшем голосе фичи — хвост хода ключевого чата (InTurnTail).
         services.AddPromptSectionContributor<FeatureVoiceReminderContributor>();
+        // Счётчик локальных исполнителей в хвосте хода оркестратора (InTurnTail) и серверный пинок
+        // при их простое. Шовы ILocalExecutorRoster / IKeyChatCardSender (Core) реализует Main.
+        services.AddPromptSectionContributor<LocalExecutorsContributor>();
+        services.AddGatedHostedService<LocalIdleNudgeService>(config, "tasks");
         // Журнал событий фичи (волна 3, Б8a): append-only JSONL, источник точной статистики.
         // Зависимость только на IConfiguration (DataPath) — новых швов нет.
         services.AddSingleton<FeatureJournalStore>();

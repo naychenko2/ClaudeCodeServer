@@ -190,15 +190,14 @@ const attrs = (n: AnyNode | null): Record<string, string> =>
 const adoptBtn = (root: AnyNode) => buttonByText(root, 'Принять как мою правку');
 const confirmBtn = () => buttonByText(docBody(), 'Принять как мою правку');
 
+// плашка исхода (Notice) под своим testid — узел с заголовком и текстом
+const notice = (root: AnyNode) => findNodeByAttr(root, 'data-testid', 'wiki-health-adopt-mine-flash');
+
 // строка «дрейфа» из HEALTH — единственная страница с дрейфом в моканом отчёте
 const driftRow = (c: Cont) => rows(c).find(r => textNodes(r).join(' ').includes('файл изменён')) ?? null;
 
-// отчёт без дрейфа — каким он обязан стать после принятого дрейфа (перечитка)
-const noDrift = (h: string) => h
-  .split('\n').filter(l => !l.startsWith('- дрейф')).join('\n')
-  .replace('## Находки (10)', '## Находки (9)');
-
-// Весь поток F5c: здоровье (первый ответ — моканый, второй — secondContent, если задан),
+// Весь поток F5c: здоровье (каждый ответ — firstContent: GET health отдаёт _health.md как
+// есть, бэк его не пересчитывает — второй ответ = тот же контент, вердикт R-F5c),
 // GET page с хэшем, POST /wiki/adopt — отложенным промисом, чтобы тест держал запрос
 // открытым (гонка). health/post — счётчики и тела вызовов (url — чтобы отличать разделы).
 function mockAdoptFlow(firstContent: string, secondContent?: string) {
@@ -597,29 +596,34 @@ describe('«Здоровье» раздела (S5f)', () => {
   });
 });
 
-// ─── «Принять как мою правку» на строке дрейфа (F5c, ADR-038 «Контракт для фронта», §adopt) ───
+// ─── «Принять как мою правку» на строке дрейфа (F5c, ADR-038 «Контракт для фронта», §adopt;
+// доработка F5c-rw по вердикту R-F5c: без ложных обещаний свежести) ───
 // Кнопка — только на строке «дрейфа» с путём страницы и только при обоих флагах; клик —
 // подтверждение текстом записки notes-wiki-unified-v1 (§«д. Изменили снаружи», дословно,
 // кроме «✎ вы» вместо имени макета); до подтверждения — ни одного запроса. Подтверждение →
-// GET page (хэш) → POST /wiki/adopt {section, page, mode:"mine", baseHash}; 200 → Notice и
-// перечитанный дрейф. Отказы — Notice русским текстом по коду: 409 wiki_page_changed
-// (перечитать дрейф, ничего не перезаписывать), 409 wiki_unified_off, 400 wiki_edit_invalid
-// (issues, без них — message бэка). Конкурентность: двойной клик — один запрос (замок в ref);
-// ответ после смены страницы отбрасывается по ключу «раздел + путь».
+// GET page (хэш) → POST /wiki/adopt {section, page, mode:"mine", baseHash}. «Здоровье» —
+// отчёт ПОСЛЕДНЕГО прогона линта (бэк его не пересчитывает), поэтому после 200 и после 409
+// wiki_page_changed второй ответ здоровья = ТОТ ЖЕ контент: строка «дрейфа» остаётся на
+// экране, а текст плашки ведёт к «Проверить сейчас». Страницы фронт нигде не записывает
+// (ни одного PUT/PATCH): ровно один POST /wiki/adopt и одна плашка исхода. Отказы — Notice
+// русским текстом по коду: 409 wiki_page_changed (ничего не перезаписано), 409 wiki_unified_off,
+// 400 wiki_edit_invalid (issues, без них — message бэка). Конкурентность: двойной клик —
+// один запрос (замок в ref); ответ после смены страницы отбрасывается по ключу «раздел + путь».
 //
 // Мутации этого блока (вывод — в отчёте задачи):
 //  (F1) рендерить кнопку без условия флагов (убрать canAdoptMine) → «только при обоих
 //      флагах» краснеет;
 //  (F2) убрать подтверждение (звать runAdoptMine прямо из кнопки строки) → «до подтверждения
 //      ни одного запроса» краснеет;
-//  (F3) снять перечитку здоровья после 200 (load() в успехе) → «200 → Notice и перечитанный
-//      дрейф» краснеет;
-//  (F4) не перечитывать здоровье при 409 wiki_page_changed → «409 wiki_page_changed»
-//      краснеет;
+//  (F3) снять перечитку здоровья после 200 (load() в успехе) → «200 → …» краснеет
+//      (проверка f.health.length 2);
+//  (F4) не перечитывать здоровье при 409 wiki_page_changed → «409 …» краснеет (та же проверка);
 //  (F5) снять замок inFlightRef в начале runAdoptMine → «двойной клик — один запрос»
 //      краснеет;
 //  (F6) снять проверку ключа пути после await (activeRef в успехе) → «ответ после смены
-//      страницы отбрасывается по пути» краснеет.
+//      страницы отбрасывается по пути» краснеет;
+//  (F7) вернуть обещание свежести в текст плашки (например, «Решение применено.» вместо
+//      «Отчёт устарел…») → «409 …» краснеет (проверка точного текста).
 
 describe('«Принять как мою правку» на строке дрейфа (F5c)', () => {
   it('кнопка — только на строке «дрейфа» и только при обоих флагах', async () => {
@@ -658,9 +662,10 @@ describe('«Принять как мою правку» на строке дре
     expect(req.mock.calls.filter(([, init]) => (init as { method?: string } | undefined)?.method === 'POST')).toHaveLength(0);
   });
 
-  it('подтверждение → GET page (хэш) → POST {mode:"mine", baseHash}; 200 → Notice и перечитанный дрейф', async () => {
+  it('200 → одна плашка с честным текстом; строка «дрейфа» остаётся (бэк отчёт не пересчитывает), страница не записана', async () => {
     bothFlags();
-    const f = mockAdoptFlow(HEALTH, noDrift(HEALTH));
+    // второй ответ здоровья = ТОТ ЖЕ контент: GET health отдаёт _health.md как есть
+    const f = mockAdoptFlow(HEALTH);
     const c = render();
     await settle();
     click(adoptBtn(c), 'кнопка строки');
@@ -674,15 +679,26 @@ describe('«Принять как мою правку» на строке дре
     // файла (единственный источник хэша на этом экране)
     expect(f.post).toHaveLength(1);
     expect(f.post[0].body).toEqual({ section: 'projects/p1', page: 'Проекты/p1/Д.md', mode: 'mine', baseHash: 'h-base' });
-    expect(texts(c)).toContain('Принято как ваша правка');
-    // здоровье перечитано, и перечитанный дрейф уже не на экране
+    // страница нигде не записана: ни одного PUT/PATCH — единственный запрос на запись это POST adopt
+    expect(req.mock.calls.filter(([, init]) => {
+      const m = (init as { method?: string } | undefined)?.method ?? '';
+      return m === 'PUT' || m === 'PATCH';
+    }), 'записи страницы').toHaveLength(0);
+    const view = texts(c);
+    expect(view).toContain('Принято как ваша правка');
+    expect(view).toContain('Строка «дрейфа» останется в отчёте до следующей проверки — нажмите «Проверить сейчас».');
+    // ровно одна плашка исхода
+    expect(notice(c), 'плашка исхода').not.toBeNull();
+    expect(allNodes(c).filter(n => n.getAttribute('data-testid') === 'wiki-health-adopt-mine-flash')).toHaveLength(1);
+    // здоровье перечитано (разрешено задачей), но перечитан = то же: бэк не пересчитывает
+    // отчёт последнего прогона — строка «дрейфа» остаётся на экране до следующей проверки
     expect(f.health).toHaveLength(2);
-    expect(texts(c)).not.toContain('файл изменён · сверка с манифестом не сошлась');
+    expect(view).toContain('файл изменён · сверка с манифестом не сошлась');
     // подтверждение закрыто исходом
     expect(docText()).not.toContain('Принять как мою правку?');
   });
 
-  it('409 wiki_page_changed — русский текст, перечитанный дрейф, ничего не перезаписано', async () => {
+  it('409 wiki_page_changed — русский текст без обещаний, ничего не перезаписано; строка «дрейфа» остаётся (тот же отчёт)', async () => {
     bothFlags();
     const f = mockAdoptFlow(HEALTH);
     const c = render();
@@ -695,12 +711,22 @@ describe('«Принять как мою правку» на строке дре
     await settle();
     const view = texts(c);
     expect(view).toContain('Страницу поправили ещё раз');
+    expect(view).toContain('Страница изменилась. Отчёт устарел — нажмите «Проверить сейчас».');
     expect(view).not.toContain('wiki_page_changed');
     expect(view).not.toContain('Принято как ваша правка');
+    // ровно одна плашка исхода
+    expect(notice(c), 'плашка исхода').not.toBeNull();
+    expect(allNodes(c).filter(n => n.getAttribute('data-testid') === 'wiki-health-adopt-mine-flash')).toHaveLength(1);
     // свежая страница из ответа никуда не вставлена: ничего не перезаписано
     expect(view).not.toContain('СВЕЖАЯ-ВЕРСИЯ');
-    // человек видит текущий дрейф, а не тот, на который смотрел: здоровье перечитано
+    expect(req.mock.calls.filter(([, init]) => {
+      const m = (init as { method?: string } | undefined)?.method ?? '';
+      return m === 'PUT' || m === 'PATCH';
+    }), 'записи страницы').toHaveLength(0);
+    // здоровье перечитано (разрешено задачей), но перечитан = то же: строка «дрейфа»
+    // остаётся на экране до следующей проверки — обещать её снятие здесь нельзя
     expect(f.health).toHaveLength(2);
+    expect(view).toContain('файл изменён · сверка с манифестом не сошлась');
   });
 
   it('409 wiki_unified_off — русский текст по коду, без сырого кода; здоровье не перечитано', async () => {
@@ -715,6 +741,8 @@ describe('«Принять как мою правку» на строке дре
     await settle();
     expect(texts(c)).toContain('Правка страниц сейчас выключена');
     expect(texts(c)).not.toContain('wiki_unified_off');
+    // этот отказ — не про изменённый файл: своей плашки-текста про «отчёт устарел» нет
+    expect(texts(c)).not.toContain('Отчёт устарел');
     expect(f.health, 'этот отказ — не про изменённый файл: перечитки нет').toHaveLength(1);
   });
 
@@ -745,7 +773,7 @@ describe('«Принять как мою правку» на строке дре
 
   it('двойной клик по подтверждению — один запрос', async () => {
     bothFlags();
-    const f = mockAdoptFlow(HEALTH, noDrift(HEALTH));
+    const f = mockAdoptFlow(HEALTH);
     const c = render();
     await settle();
     click(adoptBtn(c), 'кнопка строки');

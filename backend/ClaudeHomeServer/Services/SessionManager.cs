@@ -1989,8 +1989,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             else if (info.ProjectId != projectId) continue;
             // S2d-4h: приватный чат (PrivateToUserId != null, включая пустой — тот же
             // fail-closed, что у SessionAccess.CanSee) не входит в машинные обходы ни в какой
-            // форме: правило проекта не действует над приватным чатом — ни чужим, ни своим
-            // своим; свой архивирует автор ручкой (ручная архивация через эту выборку не идёт).
+            // форме: правило проекта не действует над приватным чатом — ни чужим, ни своим;
+            // свой архивирует автор ручкой (ручная архивация через эту выборку не идёт).
             if (info.PrivateToUserId is not null) continue;
             if (!MatchesArchiveRule(info, _taskLookup, cutoff)) continue;
             // Живость в чистый предикат не входит: она — свойство entry/адаптера, не Session

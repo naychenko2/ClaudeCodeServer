@@ -45,6 +45,13 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //   рестарт ночью не повторит завершённый проход; outcome=error дату не закрывает — следующий тик
 //   окна пробует снова.
 //
+// Утреннее уведомление (N7c): после записи итога владелец получает итог ночи человеческими
+// словами — «Ночной разбор: применено N, во „Входящих“ M», со ссылкой на «Журнал». Молчание
+// ровно в двух случаях: диспетчера нет в этом составе (сборка/тест без шва — итог всё равно в
+// файле) и «ничего не разобрано, и ночь обычная» — сказать нечего. Любой иной исход называется
+// простым языком (причины — в OutcomeReason). Сбой доставки ничего не отменяет и не рвёт: итог
+// к тому моменту уже записан, исключение отправителя не выходит из службы (LogSafe).
+
 // Честные пределы:
 // - Токены — ОЦЕНКА (символы дельты / 4, плюс потолок входа на каждый вызов ступени 2): фактический
 //   расход ChatResult не возвращает. Чатам отдано ≤ 70 % InputTokenBudget, остаток — запас на
@@ -102,6 +109,7 @@ public sealed class WikiNightlyService : BackgroundService
     private readonly ICheapTextRunner _llm;
     private readonly IConfiguration _config;
     private readonly Composition.IFeatureFlagGate? _flags;
+    private readonly Composition.INotificationSender? _notifications;
     private readonly ILogger<WikiNightlyService> _log;
     private readonly Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> _analyze;
     private readonly Func<DateTimeOffset> _clock;
@@ -109,20 +117,23 @@ public sealed class WikiNightlyService : BackgroundService
 
     public WikiNightlyService(ISessionDirectory sessions, WikiChatRecalc recalc, WikiChatStage2 stage2,
         WikiChatIngestService ingest, ICheapTextRunner llm, IConfiguration config,
-        ILogger<WikiNightlyService> log, Composition.IFeatureFlagGate? flags = null)
+        ILogger<WikiNightlyService> log, Composition.IFeatureFlagGate? flags = null,
+        Composition.INotificationSender? notifications = null)
         : this(sessions, recalc, stage2,
             // actionKey — только константа места: внешнего ввода у ночи нет.
             (owner, chat, ct) => ingest.AnalyzeAsync(owner, chat, ct, LocalActionCatalog.WikiNightly),
-            llm, config, log, flags, clock: null)
+            llm, config, log, flags, clock: null, notifications: notifications)
     {
     }
 
     // Шов теста: разбор и часы подменяются (ограничения проверяются без настоящей модели, а окно —
     // без ожидания ночи). В приложении сюда попадает только цепочка из публичного конструктора.
+    // notifications — после clock: существующие вызовы шва (позиционные) не сдвигаются.
     internal WikiNightlyService(ISessionDirectory sessions, WikiChatRecalc recalc, WikiChatStage2 stage2,
         Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> analyze,
         ICheapTextRunner llm, IConfiguration config, ILogger<WikiNightlyService> log,
-        Composition.IFeatureFlagGate? flags, Func<DateTimeOffset>? clock)
+        Composition.IFeatureFlagGate? flags, Func<DateTimeOffset>? clock,
+        Composition.INotificationSender? notifications = null)
     {
         _sessions = sessions;
         _recalc = recalc;
@@ -131,6 +142,7 @@ public sealed class WikiNightlyService : BackgroundService
         _llm = llm;
         _config = config;
         _flags = flags;
+        _notifications = notifications;
         _log = log;
         _clock = clock ?? (() => DateTimeOffset.Now);
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
@@ -256,6 +268,9 @@ public sealed class WikiNightlyService : BackgroundService
             {
                 LogSafe(ex, "Итог ночного разбора {Owner} не записан", ownerId);
             }
+            // Уведомление — ПОСЛЕ записи итога: даже если доставка откажет, итог уже на диске
+            // и в следующем тике читается настройками. Сбой отправителя остаёт в TryNotifyAsync.
+            await TryNotifyAsync(ownerId, result);
         }
         finally
         {
@@ -461,6 +476,51 @@ public sealed class WikiNightlyService : BackgroundService
         {
             try { File.Delete(temp); } catch (IOException) { } catch (UnauthorizedAccessException) { }
             throw;
+        }
+    }
+
+    // ─── Утреннее уведомление (N7c) ───────────────────────────────────────────
+
+    // Простой язык для исхода, отличного от обычного: что помешало ночи, без имён внутренних
+    // констант. Формулировки — по постановке шага; обычный исход причины не имеет (null).
+    private static string? OutcomeReason(string outcome) => outcome switch
+    {
+        OutcomeBudget => "Кончился бюджет — остальное разберём в следующую ночь.",
+        OutcomeOpenLimit => "Уперлись в лимит открытых пакетов — разберите «Входящие».",
+        OutcomeWindowClosed => "Окно закрылось.",
+        OutcomeDisabledMidway => "Ночь прервана — отключили в настройках.",
+        OutcomeError => "Ошибка — повторим в следующий тик.",
+        _ => null,
+    };
+
+    /// <summary>Сообщение владельцу об итоге ночи — ровно одно на проход, после записи итога.
+    /// Молчание: диспетчера нет в составе; или «ничего не разобрано, и ночь обычная» (сказать
+    /// нечего). Иной исход — с причиной из OutcomeReason. Сбой доставки — предупреждение в
+    /// журнале: итог уже записан, исключение наружу из службы не выходит.</summary>
+    private async Task TryNotifyAsync(string ownerId, NightResult result)
+    {
+        if (_notifications is null) return; // диспетчера в этом составе нет (тест/сборка без шва): итог всё равно в файле
+        if (result.Analyzed == 0 && result.Outcome == OutcomeCompleted) return;
+
+        var reason = OutcomeReason(result.Outcome);
+        try
+        {
+            await _notifications.SendAsync(ownerId, new CreateNotificationRequest
+            {
+                Kind = result.Outcome == OutcomeCompleted ? "info" : "warning",
+                Type = "wiki_nightly",
+                Title = $"Ночной разбор: применено {result.Applied}, во «Входящих» {result.ToInbox}",
+                Body = (reason is not null ? reason + " " : "") + "Подробности — в «Журнале».",
+                // Ссылка — вкладка «Вики» → «Журнал» (тот же маршрут, что у сигнала здоровья классов).
+                Url = "#/wiki",
+                Source = "wiki",
+            }).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            // Ночь уже разобрана и итог записан: сбой доставки не отменяет его и не рвёт проход.
+            // Он назван в журнале — молчания нет.
+            LogSafe(ex, "уведомление об итоге ночного разбора {Owner} не доставлено", ownerId);
         }
     }
 }

@@ -20,6 +20,10 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // merged-блок — 400 wiki_nightly, файл не тронут; пустой блок — «менять нечего»; GET отдаёт
 // nightly с подставленными умолчаниями; выключенный флаг llm-wiki — 409 без записи файла;
 // отказ записи — 500 с кодом, без temp-файла.
+//
+// N7c: GET несёт lastNight — итог последней ночи из keeper/nightly-last.json (пишет его
+// ночная служба; здесь файл подменяется, прогон службы — в WikiNightlyNotifyTests). Нет
+// файла или он нечитаем — null без 500. PUT итога не несёт (стор фронта хранит его от GET).
 public class WikiSettingsControllerTests : IDisposable
 {
     private const string User = "u1";
@@ -182,10 +186,77 @@ public class WikiSettingsControllerTests : IDisposable
             .NotContain(f => f.EndsWith(".tmp"), "WriteAtomic убирает свой temp перед тем, как бросать дальше");
     }
 
+    // ─── N7c: lastNight в GET ────────────────────────────────────────────────────
+
+    private const string LastNightJson =
+        """{"date":"2026-11-02","selected":4,"analyzed":3,"applied":3,"toInbox":1,"estTokens":1200,"outcome":"completed"}""";
+
+    [Fact]
+    public async Task GETПослеПроходаНесётИтогНочи()
+    {
+        WriteLastNight(LastNightJson);
+
+        var res = await Controller().Get();
+
+        var dto = (WikiSettingsDto)((OkObjectResult)res.Result!).Value!;
+        dto.LastNight.Should().NotBeNull();
+        dto.LastNight!.Date.Should().Be("2026-11-02");
+        dto.LastNight!.Selected.Should().Be(4);
+        dto.LastNight!.Analyzed.Should().Be(3);
+        dto.LastNight!.Applied.Should().Be(3);
+        dto.LastNight!.ToInbox.Should().Be(1);
+        dto.LastNight!.EstTokens.Should().Be(1200);
+        dto.LastNight!.Outcome.Should().Be("completed");
+    }
+
+    [Fact]
+    public async Task GETБезФайлаИтогаОтдаётNull_Без500()
+    {
+        var res = await Controller().Get();
+
+        var dto = (WikiSettingsDto)((OkObjectResult)res.Result!).Value!;
+        dto.LastNight.Should().BeNull("нет файла — «итога не было»");
+    }
+
+    [Fact]
+    public async Task GETБитогоФайлаИтогаОтдаётNull_Без500()
+    {
+        // Нечитаемый итог — то же «итога не было» для читающего и тот же reading, что у службы:
+        // 500 из-за него быть не может, настройки при этом отвечаются как обычно.
+        WriteLastNight("{ это не json");
+
+        var res = await Controller().Get();
+
+        var dto = (WikiSettingsDto)((OkObjectResult)res.Result!).Value!;
+        dto.LastNight.Should().BeNull();
+        dto.Nightly.Enabled.Should().BeFalse();
+        dto.Nightly.InputTokenBudget.Should().Be(700_000);
+    }
+
+    [Fact]
+    public void PUTИтогаНочиНеНесёт_ДажеКогдаФайлЕсть()
+    {
+        // PUT меняет настройки, а не читает прошлые проходы: стор фронта хранит lastNight
+        // от последнего GET (wiki.ts:983-985).
+        WriteLastNight(LastNightJson);
+
+        var put = Controller().Put(new WikiSettingsRequest { Nightly = new() { Enabled = true } });
+
+        var dto = (WikiSettingsDto)((OkObjectResult)put.Result!).Value!;
+        dto.LastNight.Should().BeNull();
+    }
+
     // ─── построение состояния ───────────────────────────────────────────────────
 
     private string Root() => WikiPaths.Root(_dir, User);
     private string SettingsPath() => Path.Combine(Root(), "keeper/settings.json");
+    private string LastNightPath() => Path.Combine(Root(), "keeper", "nightly-last.json");
+
+    private void WriteLastNight(string json)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(LastNightPath())!);
+        File.WriteAllText(LastNightPath(), json, new UTF8Encoding(false));
+    }
 
     private WikiSettingsController Controller(string user = User)
     {

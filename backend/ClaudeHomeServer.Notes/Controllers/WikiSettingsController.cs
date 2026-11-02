@@ -23,6 +23,13 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // идемпотентна и однопоточна на владельца; выключение класса и уведомление — её часть, а не
 // действие человека. PUT ничего не переоценивает: он меняет настройки и возвращает их.
 //
+// С N7c GET несёт и итог последней ночи (lastNight — из keeper/nightly-last.json, пишет его
+// ночная служба): блок «Ночной разбор» показывает результат, а не пустоту. Нет файла или он
+// нечитаем — null без 500: «итога не было» и «файл не читается» для человека одно и то же,
+// а чинит его сама служба (ReadLast — тот же reading, что у её проверки даты прохода).
+// PUT итога не несёт: он меняет настройки, а не читает прошлые проходы (стор фронта
+// сохраняет lastNight от последнего GET).
+//
 // «Только своя вики»: у ручки нет другого способа назвать чужую — явно названный в запросе
 // чужой владелец отвергается 403 (тот же контракт, что у чужого ключа раздела в WikiController).
 [ApiController]
@@ -59,7 +66,9 @@ public class WikiSettingsController : ControllerBase
     /// и источникам за 7 и 30 дней (мера 8). Побочный эффект — оценка здоровья: она же
     /// выключает перешагнувший порог класс (с уведомлением). Невалидный settings.json —
     /// умолчания в ответе, сигнала наружу нет: оценка поставила строку в _health.md.
-    /// Ночный блок в ответе целый всегда: absent в файле — умолчания с выключенной ночью.</summary>
+    /// Ночный блок в ответе целый всегда: absent в файле — умолчания с выключенной ночью.
+    /// lastNight — итог последней ночи из keeper/nightly-last.json; нет файла или он нечитаем —
+    /// null (для читающего это одно «итога не было»), 500 из-за него нет.</summary>
     [HttpGet]
     public async Task<ActionResult<WikiSettingsDto>> Get()
     {
@@ -68,10 +77,13 @@ public class WikiSettingsController : ControllerBase
         if (_flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) != true)
             return LlmWikiOff();
 
+        var root = WikiPaths.Root(_dataDir, userId);
         var outcome = await _health.EvaluateAsync(userId);
-        var (settings, _) = WikiSettingsStore.Read(WikiPaths.Root(_dataDir, userId));
+        var (settings, _) = WikiSettingsStore.Read(root);
         var stats = outcome.State == WikiClassHealth.RunState.Ran ? outcome.Stats : [];
-        return Ok(BuildDto(settings, stats));
+        // Итог последней ночи — из того же файла, что читает служба (ReadLast): без файла или
+        // битый — null, тот же reading, что у её собственной проверки даты прохода.
+        return Ok(BuildDto(settings, stats, WikiNightlyService.ReadLast(root)));
     }
 
     /// <summary>PUT /api/wiki/settings — общий выключатель «Применять без ревью», состояние
@@ -169,7 +181,8 @@ public class WikiSettingsController : ControllerBase
             return StatusCode(500, new { code = CodeWriteFailed, message = "файл настроек не записан" });
         }
 
-        return Ok(BuildDto(next, []));
+        // PUT итога ночи не несёт: он меняет настройки, а не читает прошлые проходы (шапка).
+        return Ok(BuildDto(next, [], null));
     }
 
     /// <summary>Мerged-ночной блок кривой: сигнал функции мерджа (под замком, по состоянию на
@@ -184,7 +197,9 @@ public class WikiSettingsController : ControllerBase
 
     // Строки класса — объединение состояния из settings и замера оценки: класс без замера
     // (выключен давно, активности нет) остаётся видимым; активный без записи — тоже.
-    private static WikiSettingsDto BuildDto(WikiSettingsStore.Settings settings, IReadOnlyList<WikiClassHealth.ClassStat> stats)
+    // lastNight — прочитанный итог ночи (GET) или null (PUT, и GET без читаемого файла).
+    private static WikiSettingsDto BuildDto(WikiSettingsStore.Settings settings, IReadOnlyList<WikiClassHealth.ClassStat> stats,
+        WikiNightlyService.NightResult? lastNight)
     {
         var night = settings.NightlyOrDefaults();
         var byClass = new Dictionary<string, WikiClassDto>(StringComparer.Ordinal);
@@ -221,6 +236,18 @@ public class WikiSettingsController : ControllerBase
                 MaxChatsPerSection = night.MaxChatsPerSection,
                 InputTokenBudget = night.InputTokenBudget,
             },
+            // Итог ночи — как есть из файла службы; читающий различает только null
+            // («итога не было») и строку.
+            LastNight = lastNight is null ? null : new WikiLastNightDto
+            {
+                Date = lastNight.Date,
+                Selected = lastNight.Selected,
+                Analyzed = lastNight.Analyzed,
+                Applied = lastNight.Applied,
+                ToInbox = lastNight.ToInbox,
+                EstTokens = lastNight.EstTokens,
+                Outcome = lastNight.Outcome,
+            },
         };
     }
 }
@@ -228,12 +255,29 @@ public class WikiSettingsController : ControllerBase
 /// <summary>Настройки для блока «Применение» (макет M2): общий выключатель и строки классов
 /// с долей откатов. Замер полей Applied/Retracted/Share — из GET-оценки; PUT возвращает
 /// состояние настроек без замера (нули). Nightly — блок «Ночной разбор» (Ф2), всегда с
-/// подставленными умолчаниями.</summary>
+/// подставленными умолчаниями. LastNight — итог последней ночи (N7c): его несёт только GET;
+/// null — «итога не было» (нет файла или он нечитаем).</summary>
 public sealed class WikiSettingsDto
 {
     public bool AutoApplyEnabled { get; set; }
     public List<WikiClassDto> Classes { get; set; } = [];
     public WikiNightlyDto Nightly { get; set; } = new();
+    public WikiLastNightDto? LastNight { get; set; }
+}
+
+/// <summary>Итог последней ночи (N7c) — поле в точности файла keeper/nightly-last.json
+/// (план N7b): дата прохода, счётчики и исход. Значения outcome — константы службы
+/// (completed/budget/open_limit/window_closed/disabled_midway/error); неизвестное будущее
+/// значение проходит как есть (тот же приём, что у фронта).</summary>
+public sealed class WikiLastNightDto
+{
+    public string Date { get; set; } = "";
+    public int Selected { get; set; }
+    public int Analyzed { get; set; }
+    public int Applied { get; set; }
+    public int ToInbox { get; set; }
+    public long EstTokens { get; set; }
+    public string Outcome { get; set; } = "";
 }
 
 /// <summary>Блок «Ночной разбор» (макет Ф2): тумблер, окно [WindowStartHour, WindowEndHour),

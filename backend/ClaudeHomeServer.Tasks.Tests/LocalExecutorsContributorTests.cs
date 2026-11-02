@@ -46,6 +46,20 @@ public class LocalExecutorsContributorTests : IDisposable
         section.Text.Should().Be("Локальные исполнители сейчас: занято 2 из 3 — Кира (фича «X», S2), Денис (фича «Y», R-3); свободны: Кузьма.");
     }
 
+    // Критерий c3: две локальные персоны, одна ведёт ход в ДРУГОЙ фиче со своим ключевым чатом
+    [Fact]
+    public async Task ЗанятаВЧужойФиче_СДругимКлючевымЧатом_Считается()
+    {
+        _kit.Roster.Locals.AddRange([new LocalExecutor("kira", "Кира"), new LocalExecutor("kuzma", "Кузьма")]);
+        _kit.NewFeature("X");
+        _kit.Sessions.Add("chat-other-key", SessionStatus.Active);
+        var z = _kit.Tasks.Create(null, Owner, new CreateTaskRequest("Z", Role: TaskRoles.Feature));
+        z.ExecutorLaunchedBySessionId = "chat-other-key";
+        _kit.NewStep(z, "kira", "S5", running: true);
+
+        (await Build(KeyChat))!.Text.Should().Be("Локальные исполнители сейчас: занято 1 из 2 — Кира (фича «Z», S5); свободны: Кузьма.");
+    }
+
     [Fact]
     public async Task Никто_НеЗанят_ВсеСвободны()
     {

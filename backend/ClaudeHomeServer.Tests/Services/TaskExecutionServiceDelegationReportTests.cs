@@ -474,6 +474,20 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
     }
 
     [Fact]
+    public async Task Доклад_ШагФичи_ВсеЗвеньяКлючевойЦепочкиМертвы_ПрежняяЦепочка()
+    {
+        var team = await ArrangeTeamAsync();
+        var (epic, leaf) = MakeFeatureLeaf(team, key: team.Sofya, creatorChat: team.Egor,
+            reportTo: team.Egor.Id, launchedById: null);
+        epic.SourceSessionId = "удалённый-чат";
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 1), "ключевого чата нет — адресат ReportToSessionId, как до правки");
+        (await CountAsync(team.Sofya.Id)).Should().Be((0, 0));
+    }
+
+    [Fact]
     public async Task Доклад_ЭпикФичи_НеУходитВКлючевойЧат_ПрежняяЦепочка()
     {
         var team = await ArrangeTeamAsync();

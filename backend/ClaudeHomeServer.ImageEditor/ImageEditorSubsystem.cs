@@ -69,7 +69,11 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         services.AddSingleton<IMediaHistoryResultSource, ImageEditorHistorySource>();
         // Траты пишутся в общий учёт ISpendCollector (вертикаль Spend); выключенный Spend —
         // null, исполнитель тогда только предупреждает в лог
-        services.AddSingleton<ImageEditJobService>();
+        // ISessionDirectory — это SessionManager, а он собирает контрибьюторов секций промпта,
+        // среди которых ImageEditorStateContributor → IImageEditJobs: прямая зависимость замыкает круг
+        // и хост на старте зависает. Каталог чатов исполнителю нужен только в момент рассылки события
+        services.AddSingleton(sp => ActivatorUtilities.CreateInstance<ImageEditJobService>(
+            sp, new LazySessionDirectory(sp)));
         services.AddSingleton<IImageEditJobs>(sp => sp.GetRequiredService<ImageEditJobService>());
         // Правки без ИИ и шаги истории (ADR-018 §9). Без растра шагов нет: фабрика отдаёт null,
         // и контроллер получает его вместо исключения резолва
@@ -120,5 +124,21 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.ImageEditorToolset>();
         // Агент позвал local_* напрямую: картинка результата получает ту же карточку, что запуск через image_*
         services.AddSingleton<ClaudeHomeServer.Services.Media.ILocalMediaAdopter, Threads.LocalImageAdopter>();
+    }
+
+    // Отложенный резолв каталога чатов: см. регистрацию ImageEditJobService
+    private sealed class LazySessionDirectory(IServiceProvider sp) : ClaudeHomeServer.Services.ISessionDirectory
+    {
+        private ClaudeHomeServer.Services.ISessionDirectory Inner =>
+            sp.GetRequiredService<ClaudeHomeServer.Services.ISessionDirectory>();
+
+        public ClaudeHomeServer.Models.Session? GetById(string id) => Inner.GetById(id);
+
+        public IReadOnlyCollection<ClaudeHomeServer.Models.Session> GetAll() => Inner.GetAll();
+
+        public string? ResolveOwnerId(ClaudeHomeServer.Models.Session s) => Inner.ResolveOwnerId(s);
+
+        public Task<IReadOnlyList<ClaudeHomeServer.Protocol.StoredMessage>> GetHistoryAsync(string sessionId) =>
+            Inner.GetHistoryAsync(sessionId);
     }
 }

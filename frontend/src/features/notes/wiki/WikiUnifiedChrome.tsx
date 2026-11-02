@@ -4,6 +4,7 @@
 // WIKI_SUBTABS (кроме «Страниц»: каталог — это центр), сама подвкладка рисуется своим
 // компонентом из реестра.
 
+import { useEffect, useRef } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { ICON_SIZE } from '../../../components/ui/icons';
@@ -91,11 +92,34 @@ export function PanelHead({ title, onClose }: { title: string; onClose: () => vo
   );
 }
 
-/** Шторка на 360: подложка + выезжающая панель слева или справа */
-export function WikiDrawer({ side, label, onClose, children }: {
-  side: 'left' | 'right'; label: string; onClose: () => void; children: ReactNode;
+/** Шторка на 360: подложка + выезжающая панель слева или справа.
+ *  Доступность: aria-modal, Esc закрывает, фокус уходит внутрь при открытии и возвращается
+ *  на элемент, бывший в фокусе до неё (кнопку-триггер), при закрытии. Esc — слушатель document,
+ *  как у Modal: общий useEscapeClose тут не годится — он молчит при любом [role=dialog] в
+ *  документе, а сама шторка и есть такой диалог. */
+export function WikiDrawer({ side, label, id, onClose, children }: {
+  side: 'left' | 'right'; label: string; id?: string; onClose: () => void; children: ReactNode;
 }) {
   const left = side === 'left';
+  const boxRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
+  useEffect(() => {
+    const prev = document.activeElement as HTMLElement | null;
+    boxRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      e.preventDefault();
+      closeRef.current();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      prev?.focus?.();
+    };
+  }, []);
+
   return (
     <>
       <div
@@ -104,13 +128,17 @@ export function WikiDrawer({ side, label, onClose, children }: {
         style={{ position: 'fixed', inset: 0, background: C.overlay, zIndex: Z.modal }}
       />
       <div
+        ref={boxRef}
+        id={id}
+        tabIndex={-1}
         data-testid={`wiki-drawer-${side}`}
         role="dialog"
+        aria-modal="true"
         aria-label={label}
         style={{
           position: 'fixed', top: 0, bottom: 0, [left ? 'left' : 'right']: 0, zIndex: Z.modal + 1,
           width: `min(${left ? DRAWER_W : DRAWER_PANEL_W}px, 92vw)`, background: C.bgWhite,
-          display: 'flex', flexDirection: 'column', boxShadow: SHADOW.dropdown,
+          display: 'flex', flexDirection: 'column', boxShadow: SHADOW.dropdown, outline: 'none',
           borderRadius: left ? `0 ${R.sheet}px ${R.sheet}px 0` : `${R.sheet}px 0 0 ${R.sheet}px`,
         }}
       >

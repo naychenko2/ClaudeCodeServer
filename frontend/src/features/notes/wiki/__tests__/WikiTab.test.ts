@@ -806,18 +806,22 @@ describe('Вкладка «Вики»: возврат к каталогу, ко�
 // (2) вернуть PillSwitch подвкладок в unified → «в центре нет вкладок» краснеет;
 // (3) панель не закрывать повторным нажатием → «повторное нажатие закрывает» краснеет.
 describe('Единая раскладка (F1, unified)', () => {
-  function renderUnified(tree: typeof TREE) {
+  function renderUnified(tree: typeof TREE, treeHost: unknown = null) {
     route(tree);
     installFakeDom();
-    const { root, container } = mount(createElement(WikiTab, { unified: true }));
+    const { root, container } = mount(createElement(WikiTab, { unified: true, treeHost: treeHost as HTMLElement | null }));
     roots.push(root);
     return container;
   }
+  const makeHost = () => (globalThis as unknown as { document: { createElement(t: string): never } }).document.createElement('div');
 
-  it('дерево слева, документ в центре, справа рельса из четырёх разделов; панель закрыта', async () => {
-    const c = renderUnified(TREE);
+  it('дерево — в левой зоне (узел treeHost), в центре его нет; документ в центре, справа рельса из четырёх разделов; панель закрыта', async () => {
+    installFakeDom();
+    const host = makeHost();
+    const c = renderUnified(TREE, host);
     await settle();
-    expect(findNodeByAttr(c, 'data-testid', 'wiki-tree'), 'дерево слева').not.toBeNull();
+    expect(findNodeByAttr(host, 'data-testid', 'wiki-tree'), 'дерево в левой зоне').not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-tree'), 'в контентной зоне дерева нет').toBeNull();
     expect(has(c, 'Ревью фронта'), 'в центре каталог выбранного раздела').toBe(true);
     expect(findNodeByAttr(c, 'data-testid', 'wiki-rail'), 'рельса').not.toBeNull();
     for (const id of ['inbox', 'journal', 'health', 'settings']) {
@@ -826,10 +830,42 @@ describe('Единая раскладка (F1, unified)', () => {
     expect(findNodeByAttr(c, 'data-testid', 'wiki-panel'), 'панель закрыта, пока не выбрали раздел').toBeNull();
   });
 
+  it('левая зона закрыта (treeHost = null): дерева нет нигде, центр цел', async () => {
+    const c = renderUnified(TREE, null);
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-tree'), 'дерево без узла-хозяина не рисуется').toBeNull();
+    expect(has(c, 'Ревью фронта')).toBe(true);
+  });
+
+  it('выбор раздела в дереве левой зоны меняет документ в центре', async () => {
+    installFakeDom();
+    const host = makeHost();
+    const c = renderUnified(TREE, host);
+    await settle();
+    const doc = findNodeByAttr(c, 'data-testid', 'wiki-doc')!;
+    expect(textNodes(doc).join(' '), 'выбран проект').toContain('AI Home');
+    const rows: NonNullable<ReturnType<typeof findNodeByAttr>>[] = [];
+    const walk = (n: NonNullable<ReturnType<typeof findNodeByAttr>>) => {
+      if (n.getAttribute?.('data-testid') === 'wiki-section-row') rows.push(n);
+      for (const ch of n.childNodes) walk(ch as never);
+    };
+    walk(host as never);
+    const common = rows.find(r => textNodes(r).join(' ').includes('Общее'));
+    expect(common, 'строка «Общее» в левой зоне').toBeDefined();
+    const props = reactProps(common!) as { onClick?: (e: unknown) => void };
+    act(() => { props.onClick!(undefined); });
+    await settle();
+    expect(textNodes(doc).join(' '), 'в центре раздел «Общее»').toContain('Общее');
+  });
+
   it('в центре нет вкладок и «Страниц»: подвкладки ушли в рельсу', async () => {
     const c = renderUnified(TREE);
     await settle();
     const doc = findNodeByAttr(c, 'data-testid', 'wiki-doc')!;
+    // роли, а не слова: переименование подписей вкладку-невидимку не спрячет
+    for (const role of ['tab', 'tablist', 'navigation']) {
+      expect(findNodeByAttr(doc, 'role', role), `в центре нет role=${role}`).toBeNull();
+    }
     expect(textNodes(doc).join(' ')).not.toContain('Страницы');
     expect(textNodes(doc).join(' ')).not.toContain('Журнал');
   });
@@ -845,9 +881,12 @@ describe('Единая раскладка (F1, unified)', () => {
     expect(findNodeByAttr(c, 'data-testid', 'wiki-panel'), 'повторное нажатие закрывает').toBeNull();
   });
 
-  it('без unified рельсы нет — прежняя раскладка с вкладками', async () => {
+  it('без unified рельсы нет — прежняя раскладка с вкладками и колонкой дерева внутри', async () => {
     const c = render(TREE);
     await settle();
     expect(findNodeByAttr(c, 'data-testid', 'wiki-rail')).toBeNull();
+    // прежние вкладки живы: их PillSwitch подписан именами подвкладок (иконки — вне текста)
+    expect(has(c, 'Страницы') && has(c, 'Журнал'), 'вкладки подвкладок на месте').toBe(true);
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-tree'), 'дерево прежней раскладки — в центре').not.toBeNull();
   });
 });

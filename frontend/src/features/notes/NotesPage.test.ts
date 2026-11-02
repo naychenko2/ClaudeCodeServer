@@ -347,6 +347,69 @@ describe('NotesPage: вкладка «Вики» за флагом llmWiki (S5d)
     root.unmount();
   });
 
+  // Доступность шторок на 360 (вердикт Глеба, M2). Мутации (вывод — в отчёте задачи):
+  // убрать слушатель Esc / aria-modal / возврат фокуса / переключатель setDrawer(d => ...) / ariaExpanded
+  async function openUnifiedMobile() {
+    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+    wikiMock.tree = WIKI_TREE;
+    wikiMock.catalog = WIKI_CATALOG;
+    const { root, container } = mountNotes();
+    clickNode(findButtonByText(container, 'Вики')!);
+    await settle();
+    return { root, container };
+  }
+  const pressEsc = () => {
+    const fns = [...((document as unknown as { listeners: Record<string, Set<(e: unknown) => void>> }).listeners.keydown ?? [])];
+    act(() => { fns.forEach(f => f({ key: 'Escape', defaultPrevented: false, preventDefault() {} })); });
+  };
+
+  it('F1/шторка: aria-modal, id для aria-controls, фокус внутри; Esc закрывает и возвращает фокус на кнопку', async () => {
+    const { root, container } = await openUnifiedMobile();
+    const trigger = findNodeByAttr(container, 'data-testid', 'wiki-open-tree')!;
+    expect(trigger.getAttribute('aria-expanded'), 'шторка закрыта').toBe('false');
+    expect(trigger.getAttribute('aria-controls')).toBe('wiki-drawer-tree');
+    (trigger as unknown as { focus(): void }).focus();
+    clickNode(trigger);
+    const drawer = findNodeByAttr(container, 'data-testid', 'wiki-drawer-left')!;
+    expect(drawer.getAttribute('aria-modal')).toBe('true');
+    expect(drawer.getAttribute('id'), 'id шторки = aria-controls триггера').toBe('wiki-drawer-tree');
+    expect(trigger.getAttribute('aria-expanded'), 'шторка открыта').toBe('true');
+    expect((document as unknown as { activeElement: unknown }).activeElement, 'фокус ушёл в шторку').toBe(drawer);
+    pressEsc();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-drawer-left'), 'Esc закрыл шторку').toBeNull();
+    expect(trigger.getAttribute('aria-expanded'), 'aria-expanded снова false').toBe('false');
+    expect((document as unknown as { activeElement: unknown }).activeElement, 'фокус вернулся на кнопку').toBe(trigger);
+    root.unmount();
+  });
+
+  it('F1/шторка: повторное нажатие на кнопку закрывает шторку (дерево и панель)', async () => {
+    const { root, container } = await openUnifiedMobile();
+    for (const [btn, drawerId, aria] of [
+      ['wiki-open-tree', 'wiki-drawer-left', 'wiki-drawer-tree'],
+      ['wiki-open-panel', 'wiki-drawer-right', 'wiki-drawer-panel'],
+    ] as const) {
+      const trigger = findNodeByAttr(container, 'data-testid', btn)!;
+      expect(trigger.getAttribute('aria-controls')).toBe(aria);
+      clickNode(trigger);
+      expect(findNodeByAttr(container, 'data-testid', drawerId), `${btn}: открыта`).not.toBeNull();
+      expect(trigger.getAttribute('aria-expanded')).toBe('true');
+      clickNode(trigger);
+      expect(findNodeByAttr(container, 'data-testid', drawerId), `${btn}: повторное нажатие закрывает`).toBeNull();
+      expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    }
+    root.unmount();
+  });
+
+  it('F1/шторка панели: выбор по умолчанию запоминается (панель не «висит» на null)', async () => {
+    const { root, container } = await openUnifiedMobile();
+    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-open-panel')!);
+    const drawer = findNodeByAttr(container, 'data-testid', 'wiki-drawer-right')!;
+    // заголовок шторки — название раздела, а не общее «Панель вики»
+    expect(findNodeByAttr(drawer, 'data-testid', 'wiki-panel-close'), 'шапка шторки есть').not.toBeNull();
+    expect(hasText(drawer, 'Входящие'), 'заголовок — выбранный раздел').toBe(true);
+    root.unmount();
+  });
+
   it('флаг включён: «Вики» → каталог; «Раздел ▸» → экран «Разделы»; раздел → обратно каталог', async () => {
     setAllFlags({ 'llm-wiki': true });
     wikiMock.tree = WIKI_TREE;
@@ -482,6 +545,28 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     expect(findButtonByText(container, 'Править'), 'заметка открыта').not.toBeNull();
     expect(hasText(container, 'Тестовая страница вики'), 'каталога «Вики» в центре больше нет').toBe(false);
     expect(findNodeByAttr(container, 'data-testid', 'wiki-tree'), 'WikiTab размонтирован').toBeNull();
+    root.unmount();
+  });
+
+  it('F1: unified на десктопе — дерево разделов в левой зоне, в центре только документ', async () => {
+    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+    const { root, container } = mountNotes();
+    await settle();
+    clickNode(findNodeByAttr(container, 'aria-label', 'Вики')!);
+    await settle();
+    const host = findNodeByAttr(container, 'data-testid', 'wiki-tree-host');
+    expect(host, 'узел левой зоны под дерево вики').not.toBeNull();
+    expect(findNodeByAttr(host!, 'data-testid', 'wiki-tree'), 'дерево в левой зоне').not.toBeNull();
+    const doc = findNodeByAttr(container, 'data-testid', 'wiki-doc')!;
+    expect(findNodeByAttr(doc, 'data-testid', 'wiki-tree'), 'в центре дерева нет').toBeNull();
+    expect(hasText(doc, 'Тестовая страница вики'), 'в центре документ').toBe(true);
+    // список заметок в левой зоне уступил место дереву
+    expect(findNodeByAttr(container, 'title', NOTE_TITLE), 'списка заметок на месте дерева нет').toBeNull();
+    // назад в «Заметки»: дерево уходит, список возвращается
+    clickNode(findNodeByAttr(container, 'aria-label', 'Заметки')!);
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-tree'), 'дерева больше нет').toBeNull();
+    expect(findNodeByAttr(container, 'title', NOTE_TITLE), 'список заметок вернулся').not.toBeNull();
     root.unmount();
   });
 

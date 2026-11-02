@@ -94,6 +94,9 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // Десктопный режим «Вики»: граф на десктопе — панель (своего mode у него нет), поэтому
   // второй режим — отдельный флаг, а не третье значение mobileMode
   const [wikiOn, setWikiOn] = useState(false);
+  // Узел левой зоны, куда WikiTab порталом кладёт дерево разделов (единая раскладка, десктоп).
+  // Состояние, а не ref: WikiTab должен перерисоваться, когда узел появился
+  const [wikiTreeHost, setWikiTreeHost] = useState<HTMLElement | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   // Активные фильтры-операторы в запросе — бейдж на свёрнутой группе «Фильтры»
@@ -499,8 +502,16 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
 
   // Панели рельсы: «Заметки» (поиск, фильтры, список) и «Граф» (статистика и
   // настройки карты связей). Заголовок каждой рисует PanelShell.
+  const wikiTreeInLeft = wikiUnified && !isMobile && wikiOn && !graphPanelOpen;
   const zonePanels = {
-    notesList: (
+    notesList: wikiTreeInLeft ? (
+      // Единая раскладка, режим «Вики»: в левой зоне вместо списка заметок — дерево разделов
+      // вики (его рисует WikiTab порталом); переключатель режимов остаётся
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
+        {sidebarControls({ withModeSwitch: true, listMode: false })}
+        <div ref={setWikiTreeHost} data-testid="wiki-tree-host" style={{ flex: 1, minHeight: 0, overflowY: 'auto' }} />
+      </div>
+    ) : (
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
         {sidebarControls({ withModeSwitch: wikiEnabled, listMode: true })}
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>{listPane}</div>
@@ -521,7 +532,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // десктопный режим вкладки
   const mode: Mode = isMobile ? mobileMode : (graphPanelOpen ? 'graph' : wikiOn ? 'wiki' : 'notes');
   const centerPane = mode === 'wiki'
-    ? <WikiTab unified={wikiUnified} />
+    ? <WikiTab unified={wikiUnified} treeHost={wikiTreeInLeft ? wikiTreeHost : null} />
     : mode === 'graph'
     ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden',
         ...(!isMobile ? { background: C.bgMain, border: `1px solid ${ISLAND.border}`, borderRadius: ISLAND.radius, boxShadow: ISLAND.shadow } : {}) }}>

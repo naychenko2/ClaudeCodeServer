@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { AlertTriangle, BookOpen, Check, ChevronLeft, ChevronRight, Folder, FolderTree, Lock, Monitor, PanelRight, Shield, Trash2 } from 'lucide-react';
 import {
   C, FONT, FS, R, SP, useIsMobile, FLAGS, useFeature,
@@ -37,11 +38,14 @@ import { panelTabs, PanelHead, WikiDrawer, WikiPanelBody, WikiRail, WikiSidePane
 import { WIKI_SUBTABS, wikiSubTabIcon, WikiSubTabStub, type WikiSubTabId } from './wikiTabs';
 import { PAGE_STATUS, PAGE_TYPE, sectionPrefix, wikiErrorText } from './wikiLabels';
 
-// Колонка дерева на десктопе; на мобиле дерева в каталоге нет вовсе — оно отдельный
-// экран «Разделы» (кнопка «Раздел ▸»)
+// Колонка дерева прежней раскладки на десктопе; на мобиле дерева в каталоге нет вовсе —
+// оно отдельный экран «Разделы» (кнопка «Раздел ▸»)
 const TREE_W = 300;
 // Строка кнопки «Раздел ▸» — та же тач-высота, что у строк дерева (макет .trow 44)
 const SECTION_SWITCH_H = 44;
+// id шторок для aria-controls кнопок-триггеров
+const DRAWER_TREE_ID = 'wiki-drawer-tree';
+const DRAWER_PANEL_ID = 'wiki-drawer-panel';
 
 // ─── Словари подписей ───
 
@@ -224,9 +228,11 @@ function PageRow({ page, onOpen }: { page: WikiPageInfoDto; onOpen: () => void }
 // ─── Вкладка ───
 
 // unified — единая раскладка «Заметки + Вики» (ADR-038, F1; флаг notesWikiUnified держит
-// NotesPage): дерево слева, рельса с панелью справа, на 360 — две шторки; в центре только
-// документ. Без неё — прежние вкладки, поведение не меняется.
-export function WikiTab({ unified = false }: { unified?: boolean } = {}) {
+// NotesPage): в центре только документ + рельса с панелью справа, на 360 — две шторки.
+// Дерево разделов на десктопе стоит в ЛЕВОЙ зоне NotesPage: состояние выбора живёт здесь,
+// поэтому дерево уходит туда порталом в узел treeHost (null — левая зона закрыта, дерева
+// нет). Без unified — прежние вкладки, поведение не меняется.
+export function WikiTab({ unified = false, treeHost = null }: { unified?: boolean; treeHost?: HTMLElement | null } = {}) {
   const enabled = useFeature(FLAGS.llmWiki);
   const isMobile = useIsMobile();
   const tree = useWikiTree();
@@ -493,7 +499,7 @@ export function WikiTab({ unified = false }: { unified?: boolean } = {}) {
   // Единая раскладка: навигации вики в центре нет — ни вкладок, ни «Назад», ни крошек
   if (unified) {
     const panelLabel = panelTabs().find(t => t.id === panelTab)?.label ?? 'Панель вики';
-    const tree = (onPick?: () => void) => (
+    const renderTree = (onPick?: () => void) => (
       <WikiSectionTree
         sections={sections} selectedKey={selectedKey}
         onSelect={k => { selectSection(k, true); onPick?.(); }}
@@ -507,22 +513,28 @@ export function WikiTab({ unified = false }: { unified?: boolean } = {}) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minHeight: 0, height: '100%' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, padding: `0 ${SP.sm}px` }}>
             <Button variant="ghost" size="md" dataTestId="wiki-open-tree" ariaLabel="Дерево разделов" title="Дерево разделов"
-              leftIcon={<FolderTree size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />} onClick={() => setDrawer('tree')}>{null}</Button>
+              leftIcon={<FolderTree size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />} ariaExpanded={drawer === 'tree'} ariaControls={DRAWER_TREE_ID}
+              onClick={() => setDrawer(d => d === 'tree' ? null : 'tree')}>{null}</Button>
             <span style={{ flex: 1 }} />
             <Button variant="ghost" size="md" dataTestId="wiki-open-panel" ariaLabel="Входящие, журнал, здоровье, настройки"
               title="Входящие, журнал, здоровье, настройки"
-              leftIcon={<PanelRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />} onClick={() => setDrawer('panel')}>{null}</Button>
+              leftIcon={<PanelRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />} ariaExpanded={drawer === 'panel'} ariaControls={DRAWER_PANEL_ID}
+              onClick={() => {
+                // Панель открывается на выбранном разделе; не выбран — на первом, и выбор запоминается
+                if (!panelTab) setPanelTab(panelTabs()[0].id);
+                setDrawer(d => d === 'panel' ? null : 'panel');
+              }}>{null}</Button>
           </div>
           {errorBanner}
           {centerPane}
           {drawer === 'tree' && (
-            <WikiDrawer side="left" label="Дерево разделов" onClose={() => setDrawer(null)}>
+            <WikiDrawer side="left" label="Дерево разделов" id={DRAWER_TREE_ID} onClose={() => setDrawer(null)}>
               <PanelHead title="Разделы" onClose={() => setDrawer(null)} />
-              <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>{tree(() => setDrawer(null))}</div>
+              <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>{renderTree(() => setDrawer(null))}</div>
             </WikiDrawer>
           )}
           {drawer === 'panel' && (
-            <WikiDrawer side="right" label="Панель вики" onClose={() => setDrawer(null)}>
+            <WikiDrawer side="right" label="Панель вики" id={DRAWER_PANEL_ID} onClose={() => setDrawer(null)}>
               <PanelHead title={panelTab ? panelLabel : 'Панель вики'} onClose={() => setDrawer(null)} />
               <div style={{ display: 'flex', justifyContent: 'center', padding: SP.xs, borderBottom: `1px solid ${C.border}` }}>
                 <PillSwitch<WikiSubTabId>
@@ -542,7 +554,7 @@ export function WikiTab({ unified = false }: { unified?: boolean } = {}) {
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minHeight: 0, height: '100%' }}>
         {errorBanner}
         <div style={{ display: 'flex', gap: SP.md, flex: 1, minHeight: 0 }}>
-          <div style={{ width: TREE_W, flexShrink: 0, overflow: 'auto' }}>{tree()}</div>
+          {treeHost && createPortal(renderTree(), treeHost)}
           {centerPane}
           {panelTab && <WikiSidePanel tab={panelTab} selectedKey={selectedKey} onClose={() => setPanelTab(null)} />}
           <WikiRail active={panelTab} onSelect={setPanelTab} />

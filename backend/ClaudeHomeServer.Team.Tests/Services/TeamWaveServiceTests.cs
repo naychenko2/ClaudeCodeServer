@@ -2162,6 +2162,70 @@ public class TeamWaveServiceTests : IDisposable
         Notifications().Should().ContainSingle("после рестарта счётчик прочитан с диска, а не обнулён");
     }
 
+    // --- Приватный штаб: адресат уведомлений — только автор (S2d-4f, дефект e127cef0) ---
+    // Владелец проекта не видит чужой приватный чат: эскалация, вопрос интервью и напоминание
+    // должны уходить автору (user_{author}), а не владельцу (user_{owner}) — с именем и id
+    // того, кто их не увидит. Общий штаб — прежний адресат: это покрыто тестами выше.
+
+    private const string PrivateAuthor = "editor-1";
+
+    private async Task<Session> MakePrivateStabAsync(string name)
+    {
+        var (session, _, _) = await MakeStabAsync(name);
+        // Приватность — на живом объекте каталога (тот же приём, что PrivateChatBroadcastLeakTests)
+        var live = _sessions.GetById(session.Id)!;
+        live.PrivateToUserId = PrivateAuthor;
+        return live;
+    }
+
+    private List<ClaudeHomeServer.Protocol.NotificationMessage> NotificationsFor(string userId) =>
+        _broadcaster.Owner.Where(t => t.OwnerId == userId).Select(t => t.Message)
+            .OfType<ClaudeHomeServer.Protocol.NotificationMessage>().ToList();
+
+    [Fact]
+    public async Task Эскалация_ПриватныйШтаб_УведомлениеТолькоАвтору()
+    {
+        var session = await MakePrivateStabAsync("priv-raise");
+
+        await _sut.RaiseEscalationAsync(session, new TeamEscalation
+        {
+            Kind = TeamEscalationKind.Blocker,
+            Title = "Практика остановлена тестом",
+            Details = "Тестовая карточка",
+            Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
+        });
+
+        var forAuthor = NotificationsFor(PrivateAuthor);
+        forAuthor.Should().ContainSingle("остановка приватного штаба — её автору");
+        forAuthor[0].SessionId.Should().Be(session.Id);
+        NotificationsFor(UserId).Should().BeEmpty(
+            "владелец проекта не получает ни имя, ни id чужого приватного чата");
+    }
+
+    [Fact]
+    public async Task ВопросИнтервью_ПриватныйШтаб_УведомлениеТолькоАвтору()
+    {
+        var session = await MakePrivateStabAsync("priv-question");
+
+        await _sut.OnStabQuestionAsync(session);
+
+        NotificationsFor(PrivateAuthor).Should().ContainSingle("интервью ждёт ответа автора чата");
+        NotificationsFor(UserId).Should().BeEmpty("владелец проекта не видит приватный штаб");
+    }
+
+    [Fact]
+    public async Task Напоминание_ПриватныйШтаб_ПовторУведомленияТолькоАвтору()
+    {
+        var session = await MakePrivateStabAsync("priv-remind");
+        await PublishAgedCardAsync(session.Id, TeamEscalationKind.BudgetExhausted,
+            TimeSpan.FromHours(2), "Бюджет итерации израсходован");
+
+        await _sut.CheckAwaitingEscalationsAsync();
+
+        NotificationsFor(PrivateAuthor).Should().ContainSingle("первый оклик — автору приватного штаба");
+        NotificationsFor(UserId).Should().BeEmpty("напоминание о чужом приватном чате владельцу не идёт");
+    }
+
     // --- Э5: непрерывный контур — новая вводная разворачивает волну с нуля ---
 
     [Fact]

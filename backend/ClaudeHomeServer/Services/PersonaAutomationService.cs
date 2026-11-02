@@ -1,6 +1,7 @@
 using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.TriggerSources;
 
@@ -349,6 +350,10 @@ public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnl
         if (string.IsNullOrEmpty(session.AutomationRuleId)) return;
         var ownerId = ResolveOwner(session);
         if (ownerId is null) return;
+        // Адресат уведомления — по приватности чата (S2d-4f): приватный чат — только автор.
+        // Поиск правила и резюмер остаются по владельцу чата: атрибуция правила не меняется.
+        var recipient = ChatNotificationAudience.OwnerOf(_sessions, session);
+        if (recipient is null) return;
         var (persona, rule) = FindRule(ownerId, session.AutomationRuleId);
 
         // Если пользователь смотрит этот чат — не шлём уведомление (он видит в реальном времени)
@@ -388,7 +393,7 @@ public sealed class PersonaAutomationService : IDisposable, Execution.IDeviceOnl
             ? $"/chats/{session.Id}"
             : $"/project/{session.ProjectId}/chat/{session.Id}";
 
-            await _notif.SendNotificationMessageAsync(ownerId, new NotificationMessage(
+            await _notif.SendNotificationMessageAsync(recipient, new NotificationMessage(
                 Title: title, Body: body,
                 Url: chatUrl,
                 Kind: "claude", Tag: "Автоматизация",

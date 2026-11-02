@@ -1253,8 +1253,8 @@ public class TeamWaveService
             // Человек прямо сейчас в этом чате — он и так видит карточку в ленте
             if (_run.HasViewers(session.Id)) continue;
 
-            var ownerId = session.OwnerId
-                ?? (session.ProjectId is { } pid ? _projects.GetById(pid)?.OwnerId : null);
+            // Адресат — по приватности чата (S2d-4f): приватный штаб — только автор
+            var ownerId = ChatNotificationAudience.OwnerOf(_sessions, session);
             if (ownerId is null || _notif is null) continue;
 
             foreach (var card in await _history.GetOpenTeamEscalationsAsync(session.Id))
@@ -1303,8 +1303,8 @@ public class TeamWaveService
     {
         await _history.PublishTeamEscalationAsync(session.Id, escalation);
 
-        var ownerId = session.OwnerId
-            ?? (session.ProjectId is { } pid ? _projects.GetById(pid)?.OwnerId : null);
+        // Адресат — по приватности чата (S2d-4f): приватный штаб — только автор
+        var ownerId = ChatNotificationAudience.OwnerOf(_sessions, session);
         if (ownerId is null || _notif is null) return;
 
         // Push — только когда человека нет в этом чате: он и так видит карточку в ленте
@@ -1334,8 +1334,8 @@ public class TeamWaveService
     internal async Task OnStabQuestionAsync(Session session)
     {
         if (_notif is null) return;
-        var ownerId = session.OwnerId
-            ?? (session.ProjectId is { } pid ? _projects.GetById(pid)?.OwnerId : null);
+        // Адресат — по приватности чата (S2d-4f): приватный штаб — только автор
+        var ownerId = ChatNotificationAudience.OwnerOf(_sessions, session);
         if (ownerId is null) return;
 
         var authorId = session.TeamImplement?.CoordinatorPersonaId ?? session.PersonaId;

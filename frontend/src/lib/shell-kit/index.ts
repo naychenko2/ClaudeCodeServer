@@ -42,6 +42,7 @@ export {
   listWikiPackages, decideWikiPackage, acceptAllWikiPackage,
   loadWikiJournal, retractWikiSource, getWikiHealth, runWikiLint,
   analyzeWikiChat, loadWikiChatAnalyzeStatus, loadWikiChats, ingestWikiNote, transferWikiNote,
+  adoptWikiPageMine,
   useWikiTree, useWikiCatalog, useWikiPage, useWikiPageGone,
   requestOpenWikiPage, consumeOpenWikiPage, useWikiOpenRequest,
   loadWikiSettings, useWikiSettings, putWikiNightly, putWikiAutoApply, resumeWikiApplyClass,
@@ -55,6 +56,7 @@ export type {
   WikiSettingsSnapshot, WikiApplyClassDto, WikiNightlySettings, WikiLastNight, WikiPutNightlyResult,
   WikiAuthorship, WikiPageInfoAuthoredDto, WikiCatalogDto, WikiSourceCardInfo, WikiPageEditableDto, WikiConflictPage, WikiFootnoteDto,
   WikiOverrideDto, WikiOverrideOp, WikiPageOverriddenDto, WikiOverrodeKind, WikiJournalEntryOverrideDto,
+  WikiAdoptMineResult,
 } from '../wiki';
 
 // ─── subsystems ──────────────────────────────────────────────────────────────

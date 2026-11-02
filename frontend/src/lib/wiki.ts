@@ -1571,3 +1571,38 @@ export async function transferWikiNote(noteId: string): Promise<WikiNoteTransfer
     packageId: typeof res.packageId === 'string' ? res.packageId : null,
   };
 }
+
+// ─── «Принять как мою правку» (F5c; POST /api/wiki/adopt с mode: "mine", ADR-038 «Контракт для фронта») ───
+// Внешняя правка (дрейф) становится правкой человека: бэк собирает дифф «манифест → диск»
+// в пакет human (WikiController.Adopt → AdoptMineAsync). baseHash обязателен — «хэш файла,
+// каким его видел человек»: «Здоровье» страницу не читает, поэтому хэш берётся из GET page
+// непосредственно перед запросом — единственный источник хэша на этом экране. Между чтением
+// и применением файл мог быть правлен ещё раз — это ровно 409 wiki_page_changed, бэк ничего
+// не пишет. Ответы как у edit: 200 applied/unchanged; 409 wiki_page_changed (файл правили
+// ещё раз), 409 wiki_drift (дрейф других страниц раздела), 409 wiki_unified_off (любой из
+// флагов выключен — UnifiedOffRefusal до ветки), 400 wiki_edit_invalid (.violations/.issues),
+// 400 wiki_adopt_mode. Чистый транспорт (тот же порядок, что analyzeWikiChat/transferWikiNote):
+// состояния стора не трогает, ничего не перечитывает — перечитку здоровья и отбивку ответа
+// по пути страницы делает вызывающий.
+
+export interface WikiAdoptMineResult {
+  status: 'applied' | 'unchanged';
+  hash: string;
+}
+
+export async function adoptWikiPageMine(sectionKey: string, pageKey: string): Promise<WikiAdoptMineResult> {
+  const page = await wikiHttp<WikiPageEditableDto>(
+    `/wiki/page?${sectionQuery(sectionKey)}&page=${encodeURIComponent(pageKey)}`,
+  );
+  const baseHash = typeof page?.hash === 'string' ? page.hash : '';
+  const res = await wikiHttp<{ status?: unknown; hash?: unknown }>('/wiki/adopt', {
+    method: 'POST',
+    body: JSON.stringify({ section: sectionKey, page: pageKey, mode: 'mine', baseHash }),
+  });
+  if (res?.status !== 'applied' && res?.status !== 'unchanged') {
+    // 200 — всегда {status:"applied"|"unchanged", hash}: тело вне формы — ответ вне контракта
+    // (тот же порядок, что в transferWikiNote), а не тихая пустота
+    throw new WikiError(0, null, 'неожиданный ответ принятия правки');
+  }
+  return { status: res.status, hash: typeof res.hash === 'string' ? res.hash : '' };
+}

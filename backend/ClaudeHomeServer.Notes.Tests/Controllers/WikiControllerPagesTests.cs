@@ -165,6 +165,24 @@ public class WikiControllerPagesTests : IDisposable
     }
 
     [Fact]
+    public async Task Edit_ФормаUnicodeСтрокиНеПравка_ВИсториюТолькоИзменённая_СноскиHumanУНеизменённойНет()
+    {
+        const string other = "Всё идёт через шлюз, это ёжик.";
+        var withOther = PageText().Replace(Statement + " [^s1]", Statement + " [^s1]\n" + other + " [^s1]");
+        (await _keeper.WritePageAsync(User, _key, _pageKey, withOther)).Status.Should().Be(WikiOpStatus.Applied);
+
+        var edited = Statement.Replace("тысяч.", "тысяч один.");
+        var now = PageText().Replace(Statement, edited).Replace(other, other.Normalize(NormalizationForm.FormD));
+        Json(await Controller().Edit(EditReq(now)), 200).GetProperty("status").GetString().Should().Be("applied");
+
+        var page = WikiPage.Parse(PageText()).Model!;
+        page.Sections.Single(s => s.Name == "История").Lines.Should().ContainSingle()
+            .Which.Should().Be(Statement + " [^s1]");
+        page.Sections.Single(s => s.Name == "Сводка").Lines
+            .Single(l => l.StartsWith("Всё", StringComparison.Ordinal)).Should().EndWith("[^s1]", "ИИ-утверждение не получает сноску human");
+    }
+
+    [Fact]
     public async Task Edit_НовоеУтверждение_ДобавляетсяВСекциюСоСноскойНаКарточку()
     {
         var res = await Controller().Edit(EditReq(Replace(PageText(), "## Хронология\n", "## Хронология\nЗапустили в ноябре две тысячи двадцать шестого.\n")));

@@ -271,4 +271,16 @@ public class WikiHumanEditPlannerTests
         var broken = WikiHumanEditPlanner.Build(Path, "---\nzzz", Page(Base));
         broken.Ok.Should().BeFalse();
     }
+
+    [Theory]
+    [InlineData(NormalizationForm.FormC, NormalizationForm.FormD)]
+    [InlineData(NormalizationForm.FormD, NormalizationForm.FormC)]
+    public void Форма_Unicode_не_правка_содержания_план_пуст(NormalizationForm was, NormalizationForm now)
+    {
+        const string line = "Всё идёт через шлюз, é и ё в тексте";
+        var plan = Plan(Page([line.Normalize(was) + " [^s1]"]), Page([line.Normalize(now) + " [^s1]"]));
+
+        plan.Ok.Should().BeTrue(plan.Reason);
+        plan.Operations.Should().BeEmpty("смена формы Unicode не порождает edit/supersede");
+    }
 }

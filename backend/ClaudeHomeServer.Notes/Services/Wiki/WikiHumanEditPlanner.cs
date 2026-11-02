@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace ClaudeHomeServer.Services.Notes.Wiki;
@@ -160,8 +161,10 @@ public static class WikiHumanEditPlanner
     private static List<string> Statements(WikiPage.Section section) =>
         section.Lines.Select(Normalize).Where(t => t.Length > 0).ToList();
 
+    // NFC: форма Unicode («ё» цельная/составная, «é») не считается правкой содержания.
     internal static string Normalize(string line) =>
-        string.Join(' ', FootnoteRefRx.Replace(line, "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        string.Join(' ', FootnoteRefRx.Replace(line, "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            .Normalize(NormalizationForm.FormC);
 
     private static string NotesText(WikiPage.Section? notes) =>
         notes is null ? "" : string.Join('\n', notes.Lines.Select(l => l.TrimEnd())).Trim();
@@ -182,9 +185,11 @@ public static class WikiHumanEditPlanner
         }
 
         // 2. Оставшиеся: пары «было → стало» по похожести слов, жадно по убыванию.
+        var wasWords = oldLeft.ToDictionary(o => o, o => Words(was[o]));
+        var nowWords = newLeft.ToDictionary(n => n, n => Words(now[n]));
         var pairs = (from o in oldLeft
                      from n in newLeft
-                     let score = Similarity(was[o], now[n])
+                     let score = Similarity(wasWords[o], nowWords[n])
                      where score >= EditSimilarity
                      orderby score descending, o, n
                      select (o, n)).ToList();
@@ -208,10 +213,8 @@ public static class WikiHumanEditPlanner
         return ops;
     }
 
-    private static double Similarity(string a, string b)
+    private static double Similarity(HashSet<string> x, HashSet<string> y)
     {
-        var x = Words(a);
-        var y = Words(b);
         if (x.Count == 0 || y.Count == 0)
             return 0;
         var common = x.Intersect(y).Count();

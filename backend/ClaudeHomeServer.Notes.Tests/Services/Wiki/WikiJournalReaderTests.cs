@@ -474,4 +474,58 @@ public class WikiJournalReaderTests : IDisposable
 
         Read(Any()).Entries.Single().OverrodeHuman.Should().BeFalse();
     }
+
+    // ─── B6 (находки В2/В5): REST журнала — фильтр overrodeHuman и вид действия ───
+
+    private static WikiPackage.Operation HumanTargetOp(string op, string decision, string page) =>
+        Op(WikiGate.OriginSession, op, decision, page) with
+        {
+            Class = WikiPackage.ClassKey(WikiGate.OriginSession, op, humanTarget: true),
+        };
+
+    [Fact]
+    public void Ручка_OverrodeHuman_ФильтрПолеИВидДействия_СтарыеСтрокиБезПризнака()
+    {
+        // Мутации (по одной): убрать overrodeHuman из Query в контроллере — фильтр не сужает
+        // (HaveCount(2) краснеет); подменить KindDisputed на KindReplaced — "disputed" краснеет;
+        // убрать OverrodeKind из DTO-проекции — "replaced" краснеет.
+        NewPackage("common", WikiPackage.StatusApplied, WikiGate.OriginSession, "session:rep",
+            HumanTargetOp(WikiPackage.OpSupersede, WikiPackage.DecisionAuto, "Общее/А.md"));
+        NewPackage("common", WikiPackage.StatusApplied, WikiGate.OriginSession, "session:dis",
+            HumanTargetOp(WikiPackage.OpConflict, WikiPackage.DecisionAuto, "Общее/Б.md"));
+        NewPackage("common", WikiPackage.StatusApplied, WikiGate.OriginSession, "session:plain",
+            Op(WikiGate.OriginSession, WikiPackage.OpAppend, WikiPackage.DecisionAuto, "Общее/В.md"));
+        WikiManifest.AppendLog(Root(), "apply", "common", ["Общее/А.md"], "session:rep", "keeper", "auto", overrodeHuman: true);
+        WikiManifest.AppendLog(Root(), "apply", "common", ["Общее/Б.md"], "session:dis", "keeper", "auto", overrodeHuman: true);
+        WikiManifest.AppendLog(Root(), "apply", "common", ["Общее/В.md"], "session:plain", "keeper", "auto");
+        // Старая строка без поля overrodeHuman вовсе.
+        Log("apply", "common", ["Общее/Г.md"], null, "keeper", WikiPackage.DecisionAuto);
+
+        var all = (WikiJournalDto)((OkObjectResult)Controller().Journal(null, null, null, null)).Value!;
+        all.Entries.Should().HaveCount(4, "без фильтра виден весь журнал");
+        var a = all.Entries.Single(e => e.Pages.Contains("Общее/А.md"));
+        (a.OverrodeHuman, a.OverrodeKind).Should().Be((true, "replaced"));
+        var b = all.Entries.Single(e => e.Pages.Contains("Общее/Б.md"));
+        (b.OverrodeHuman, b.OverrodeKind).Should().Be((true, "disputed"));
+        var v = all.Entries.Single(e => e.Pages.Contains("Общее/В.md"));
+        (v.OverrodeHuman, v.OverrodeKind).Should().Be((false, null));
+        var g = all.Entries.Single(e => e.Pages.Contains("Общее/Г.md"));
+        (g.OverrodeHuman, g.OverrodeKind).Should().Be((false, null), "старая строка: признака нет, ничего не падает");
+
+        var filtered = (WikiJournalDto)((OkObjectResult)Controller().Journal(null, null, null, null, overrodeHuman: true)).Value!;
+        filtered.Entries.Should().HaveCount(2);
+        filtered.Entries.Select(e => e.OverrodeKind).Should().BeEquivalentTo(["replaced", "disputed"]);
+    }
+
+    [Fact]
+    public void Ручка_OverrodeHuman_РешилЧеловекИзВходящих_ВидаНет()
+    {
+        // Операция `…@human`, принятая человеком (decision=inbox), — не «ИИ поменял»: вид не ставится.
+        NewPackage("common", WikiPackage.StatusApplied, WikiGate.OriginSession, "session:inb",
+            HumanTargetOp(WikiPackage.OpSupersede, WikiPackage.DecisionInbox, "Общее/А.md"));
+        WikiManifest.AppendLog(Root(), "apply", "common", ["Общее/А.md"], "session:inb", "keeper", "inbox", overrodeHuman: true);
+
+        var dto = (WikiJournalDto)((OkObjectResult)Controller().Journal(null, null, null, null)).Value!;
+        dto.Entries.Single().OverrodeKind.Should().BeNull();
+    }
 }

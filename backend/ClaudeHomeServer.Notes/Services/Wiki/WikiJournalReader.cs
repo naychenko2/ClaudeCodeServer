@@ -70,7 +70,14 @@ public sealed class WikiJournalReader
         string? Status,
         string? Policy,
         IReadOnlyList<string> Classes,
-        bool OverrodeHuman = false);
+        bool OverrodeHuman = false,
+        string? OverrodeKind = null);
+
+    /// <summary>Вид действия ИИ над утверждением человека в строке `overrodeHuman` (ADR-038,
+    /// предохранители 1 и 6): ИИ заменил формулировку (`supersede@human`).</summary>
+    public const string KindReplaced = "replaced";
+    /// <summary>ИИ не заменил, а оспорил утверждение человека (`conflict@human`).</summary>
+    public const string KindDisputed = "disputed";
 
     /// <summary>Результат чтения. Take — фактическое окно после обрезки (клиентский take выше
     /// потолка урезается, и ответ должен показывать, какое окно читалось). LinesRead — сколько
@@ -351,8 +358,21 @@ public sealed class WikiJournalReader
                 ? WikiPackage.DecisionInbox
                 : WikiPackage.DecisionAuto);
 
+        // Вид действия — по автоприменённым операциям пакета с классом `…@human`. Пакет не найден
+        // или строка без признака — вида нет (старые строки, системные операции). Замена и
+        // оспаривание в одной строке — «replaced»: замена весомее.
+        string? kind = null;
+        if (e.OverrodeHuman)
+        {
+            var overrides = joined.SelectMany(p => p.Operations).Where(WikiPackage.IsAutoOverrideOfHuman).ToList();
+            kind = overrides.Any(o => o.Op == WikiPackage.OpSupersede) ? KindReplaced
+                : overrides.Any(o => o.Op == WikiPackage.OpConflict) ? KindDisputed
+                : null;
+        }
+
         return e with
         {
+            OverrodeKind = kind,
             // Статус — только когда пакет один: строка retract могла откатать несколько, и
             // одного статуса у них нет — их id лежат в поле packages, их видно по ним.
             Status = joined.Count == 1 ? joined[0].Status : null,

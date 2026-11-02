@@ -469,7 +469,7 @@ public class WikiController : ControllerBase
 
     // ─── Журнал ─────────────────────────────────────────────────────────────
 
-    /// <summary>GET /api/wiki/journal?section=&amp;origin=&amp;class=&amp;take= — журнал своей вики:
+    /// <summary>GET /api/wiki/journal?section=&amp;origin=&amp;class=&amp;take=&amp;overrodeHuman= — журнал своей вики:
     /// записи log.jsonl, склеенные с пакетами (статус, политика «само / через Входящие», класс
     /// origin × op, страницы), с именем источника (чат — название его владельца, заметка —
     /// заголовок). Новые сверху. Только чтение: ручка ничего не пишет (S7c-0, ADR-035 §12г
@@ -482,7 +482,8 @@ public class WikiController : ControllerBase
     /// журнал пустой (раздел мог не иметь ни одной операции).</summary>
     [HttpGet("journal")]
     public IActionResult Journal(
-        [FromQuery] string? section, [FromQuery] string? origin, [FromQuery] string? @class, [FromQuery] int? take)
+        [FromQuery] string? section, [FromQuery] string? origin, [FromQuery] string? @class, [FromQuery] int? take,
+        [FromQuery] bool overrodeHuman = false)
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
@@ -501,11 +502,11 @@ public class WikiController : ControllerBase
         if (@class is not null && !WikiSettingsStore.IsValidClassKey(@class))
             return BadRequest(new { code = CodeClassKey, message = $"класс «{@class}» не пары «источник × операция»" });
 
-        var res = _journal.Read(userId, new WikiJournalReader.Query(key, origin, @class, take));
+        var res = _journal.Read(userId, new WikiJournalReader.Query(key, origin, @class, take, overrodeHuman));
         return Ok(new WikiJournalDto(
             [.. res.Entries.Select(e => new WikiJournalEntryDto(
                 e.Ts, e.Op, e.Section, e.Actor, e.Source, e.Origin, e.SourceName, e.Pages, e.Packages,
-                e.Status, e.Policy, e.Classes))],
+                e.Status, e.Policy, e.Classes, e.OverrodeHuman, e.OverrodeKind))],
             res.Take, res.LinesRead, res.InvalidLines));
     }
 
@@ -685,12 +686,16 @@ public sealed record WikiIngestNoteRequest(string? NoteId, string? Target = null
 /// status/policy/classes — из склейки с пакетом: status null, когда пакетов несколько (их id в
 /// packages), classes пуст, когда пакета нет (relink, adopt). policy «auto» | «inbox» — из
 /// строки применения, иначе по пакету; packages — id, названные строкой retract. Формат добавляет
-/// поля к тому, что фронт строит на GET /api/wiki/packages, и ничего не меняет (S7c-2).</summary>
+/// поля к тому, что фронт строит на GET /api/wiki/packages, и ничего не меняет (S7c-2).
+/// overrodeHuman — ИИ сам заменил или оспорил утверждение человека (ADR-038, предохранитель 4);
+/// overrodeKind — `replaced` (supersede@human) | `disputed` (conflict@human), null без признака
+/// и у старых строк; при замене и оспаривании в одной строке — `replaced`.</summary>
 public sealed record WikiJournalEntryDto(
     DateTimeOffset Ts, string Op, string Section, string Actor,
     string? Source, string? Origin, string? SourceName,
     IReadOnlyList<string> Pages, IReadOnlyList<string> Packages,
-    string? Status, string? Policy, IReadOnlyList<string> Classes);
+    string? Status, string? Policy, IReadOnlyList<string> Classes,
+    bool OverrodeHuman = false, string? OverrodeKind = null);
 
 /// <summary>Окно журнала. take — фактическое окно после обрезки (запрошенное выше потолка
 /// урезается); linesRead — сколько строк журнала реально прочитано (мера того, что хвост

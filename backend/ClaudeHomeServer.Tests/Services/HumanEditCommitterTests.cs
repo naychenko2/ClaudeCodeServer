@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Tests.Helpers;

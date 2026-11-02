@@ -251,6 +251,7 @@ public sealed class EgressGatewayTests : IDisposable,
 
         Encoding.ASCII.GetString(buffer, 0, got.Count).Should().Be("proxy:ping");
         (await proxy.Head.Task.WaitAsync(TimeSpan.FromSeconds(10))).Should().StartWith("CONNECT 93.184.216.34:443 HTTP/1.1");
+        proxy.Connections.Should().Be(1, "заглушка прокси рассчитана на одно соединение; второму тесту нужен свой ProxyHost");
     }
 
     [Fact]
@@ -394,7 +395,7 @@ public sealed class EgressGatewayTests : IDisposable,
     }
 
     // Соединение наружу без сети: пишет в никуда и молчит до отмены
-    internal sealed class SinkConnector() : EgressConnector(null, new EgressAddressPolicy())
+    private sealed class SinkConnector() : EgressConnector(null, new EgressAddressPolicy())
     {
         public override Task<Opened> ConnectAsync(IPAddress[] addresses, int port, CancellationToken ct) =>
             Task.FromResult(new Opened(new SinkStream(), 0, ""));
@@ -427,8 +428,14 @@ public sealed class EgressGatewayTests : IDisposable,
     {
         private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
 
+        private int _connections;
+
         public TaskCompletionSource<string> Head { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int Port { get; }
+
+        // Сколько соединений принято за жизнь прокси: заглушка обслуживает ровно одно, лишние
+        // закрываются сразу, чтобы второй пользователь хоста падал быстро, а не висел до таймаута
+        public int Connections => Volatile.Read(ref _connections);
 
         public FakeHttpProxy(string statusLine)
         {
@@ -439,6 +446,20 @@ public sealed class EgressGatewayTests : IDisposable,
                 try
                 {
                     using var client = await _listener.AcceptTcpClientAsync();
+                    Interlocked.Increment(ref _connections);
+                    // Лишние соединения (второй тест на том же хосте) принимаем и сразу закрываем
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            while (true)
+                            {
+                                using var extra = await _listener.AcceptTcpClientAsync();
+                                Interlocked.Increment(ref _connections);
+                            }
+                        }
+                        catch (Exception) { /* прокси остановлен */ }
+                    });
                     var stream = client.GetStream();
                     var head = new StringBuilder();
                     var one = new byte[1];

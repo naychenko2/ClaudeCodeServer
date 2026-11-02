@@ -174,7 +174,11 @@ export type WikiErrorCode =
   // выключены / гейт записи отказал по существу (violations, issues)
   | 'wiki_page_changed'
   | 'wiki_unified_off'
-  | 'wiki_edit_invalid';
+  | 'wiki_edit_invalid'
+  // Перенос заметки в вики (F5b, ADR-038): заметка уже перенесена (в ней ссылка) / target
+  // задан там, где его задать нельзя (дом страницы — дом заметки)
+  | 'wiki_note_transferred'
+  | 'wiki_transfer_target';
 
 const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'wiki_foreign', 'wiki_section_key', 'wiki_page_key', 'wiki_project_missing', 'wiki_section_off',
@@ -192,6 +196,7 @@ const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'packages_limit', 'wiki_note_id', 'wiki_triage_invalid',
   'wiki_nightly', 'wiki_settings_write_failed',
   'wiki_page_changed', 'wiki_unified_off', 'wiki_edit_invalid',
+  'wiki_note_transferred', 'wiki_transfer_target',
 ]);
 
 export class WikiError extends Error {
@@ -1529,4 +1534,40 @@ export async function restoreWikiPage(
   if (res?.status === 'unchanged') return { status: 'unchanged', hash };
   if (res?.status !== 'applied') throw new WikiError(0, null, 'неожиданный ответ возврата формулировки');
   return { status: 'applied', hash, content: typeof res.content === 'string' ? res.content : '' };
+}
+
+// ─── «Перенести в вики» (F5b; POST /api/wiki/ingest/note с transfer: true, ADR-038 «Контракт для фронта») ───
+// Заметка становится страницей human в доме заметки (личный vault → «Личное», notes/ проекта →
+// раздел проекта), а сама заметка заменяется ссылкой на неё: ручка делает обе записи сразу,
+// подтверждение UI спрашивает ДО вызова. target не передаём — дом задаёт бэк (400
+// wiki_transfer_target). section/page ответа — ключи созданной страницы в той же форме, что
+// ключ раздела дерева и ключ страницы каталога, — экран открывает их requestOpenWikiPage (OPEN-1).
+// Отказы — WikiError с кодом: 404 not_found (заметки нет или чужая), 409 wiki_unified_off |
+// wiki_not_initialized | wiki_note_transferred (уже перенесена) | wiki_page_changed (имя занято:
+// «переименуйте заметку и повторите»), 400 wiki_edit_invalid (.violations/.issues) | wiki_note_id;
+// сервисному токену 403 — до ветки переноса. Повтор переноса доводит несделанную замену:
+// занятая страница этого же переноса узнаётся на бэке (WikiNoteTransfer.IsPageOfThisTransfer).
+
+export interface WikiNoteTransferDto {
+  section: string;
+  page: string;
+  packageId: string | null;
+}
+
+export async function transferWikiNote(noteId: string): Promise<WikiNoteTransferDto> {
+  const res = await wikiHttp<{ outcome?: unknown; section?: unknown; page?: unknown; packageId?: unknown }>(
+    '/wiki/ingest/note',
+    { method: 'POST', body: JSON.stringify({ noteId, transfer: true }) },
+  );
+  // 200 — всегда {outcome:"transferred", section, page}; тело вне этой формы — не HTTP-отказ,
+  // ответ вне контракта (тот же порядок, что в ingestWikiNote): вызывающий видит ошибку,
+  // а не тихую пустоту
+  if (res?.outcome !== 'transferred' || typeof res.section !== 'string' || typeof res.page !== 'string') {
+    throw new WikiError(0, null, 'неожиданный ответ переноса заметки');
+  }
+  return {
+    section: res.section,
+    page: res.page,
+    packageId: typeof res.packageId === 'string' ? res.packageId : null,
+  };
 }

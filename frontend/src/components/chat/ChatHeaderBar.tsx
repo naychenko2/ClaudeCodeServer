@@ -43,7 +43,8 @@ import { Badge, Button, IconButton, ChatTopicIcon, Modal, ModalActions, ConfirmD
 import { FeatureBackChip } from './FeatureBackChip';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
-import { chatActionAuthorLock, chatAuthorOnlyReason, isNotChatAuthorError } from '../../features/projects/members/participantGate';
+import { chatActionDeniedReason, isNotChatAuthorError } from '../../features/projects/members/participantGate';
+import { readStoredUserId } from '../../lib/offline';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import { useSlotItem } from '../../lib/subsystems/registry';
 import type { ChatHeaderSummaryCtx, ChatHeaderMenuItemCtx, ChatHeaderBadgeCtx } from '../../lib/subsystems/registryCore';
@@ -1821,6 +1822,11 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       {badgeVisible('spend') && spendBadge}
     </>
   );
+  // Причина недоступности действия ЭТОМУ участнику (QA-P1): решение живёт в едином гейте
+  // (chatActionDeniedReason): rename/archive — право записи чата (отказан только читателю),
+  // delete — автор чата и владелец. myUserId — текущий человек из stored-пары
+  const myUserId = readStoredUserId();
+  const actionDenied = (key: string): string | null => chatActionDeniedReason(key, project, session, myUserId);
   // Тумблер уведомлений ЭТОГО чата — сигнал о завершённом ходе, когда вкладка не в фокусе.
   // compact (колонка стены): не показываем — в тесной колонке хватает срока жизни,
   // а заглушить чат можно из меню его карточки в списке. Общий рубильник уведомлений
@@ -1833,7 +1839,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const summaryBtn = summaryAction?.render?.({ session, hasMessages, online });
   const wikiActionsBtn = wikiActions?.render?.({ session, hasMessages, online, compact: isCompact || compact });
   const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} />;
-  const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} locked={!!chatAuthorOnlyReason(project)} />;
+  const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} locked={!!actionDenied('rename')} />;
 
   // === Видимость ряда действий ===
   // «⋯» стоит в ряду ВСЕГДА, а тумблеры внутри решают, что показывать рядом с ним.
@@ -1887,7 +1893,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       .catch(failToast('Чат', 'Не удалось переименовать чат'));
   };
   const runAction = (key: ChatActionKey, anchor?: DOMRect) => {
-    if (chatActionAuthorLock(key, project)) return;
+    if (actionDenied(key)) return;
     switch (key) {
       case 'rename': setRenameDialog(session.name ?? ''); break;
       case 'pin':
@@ -1982,12 +1988,12 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     if (key === 'expiry') return expiryBadge;
     if (key === 'notify') return notifyBtn;
     const m = actionMeta(key);
-    const authorLock = chatActionAuthorLock(key, project);
+    const denied = actionDenied(key);
     return (
       <ToolbarIconButton
         onClick={e => runAction(key, (e.currentTarget as HTMLElement).getBoundingClientRect())}
-        title={authorLock ?? m.label}
-        disabled={!!authorLock}
+        title={denied ?? m.label}
+        disabled={!!denied}
         isMobile={isCompact}
         active={m.active}
         color={m.danger ? C.danger : undefined}
@@ -2074,15 +2080,15 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // «осталось 2 ч» (меньше часа — C.warningText); порядок остальных — канонический
   const overflowActionItems: OverflowItem[] = headerActions.map(k => {
     const m = actionMeta(k);
-    const authorLock = chatActionAuthorLock(k, project);
+    const denied = actionDenied(k);
     const visible = headerVis.isVisible(k);
     const it: OverflowItem = {
       key: k,
       icon: m.icon,
       label: m.label,
       danger: m.danger,
-      disabled: !!authorLock,
-      sublabel: authorLock ?? undefined,
+      disabled: !!denied,
+      sublabel: denied ?? undefined,
       // Теги и срок открывают свои поповеры по якорю «⋯» — сама кнопка исчезнет
       // вместе с меню, и её rect брать было бы неоткуда
       onClick: () => runAction(k, overflowAnchorRef.current ?? undefined),
@@ -2114,8 +2120,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       // композер растянут во весь экран и места ему не осталось (placeFab, hidden)
       ...(isMobile ? [{
         key: 'ai-hub', icon: <Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'AI-действия',
-        disabled: !!chatAuthorOnlyReason(project),
-        sublabel: chatAuthorOnlyReason(project) ?? undefined,
+        disabled: !!actionDenied('rename'),
+        sublabel: actionDenied('rename') ?? undefined,
         onClick: () => window.dispatchEvent(new Event(OPEN_AI_EVENT)),
       }] : []),
       ...(canContinue ? [{
@@ -2258,8 +2264,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           <MenuItem
             icon={<Pencil size={15} strokeWidth={2} />}
             label="Переименовать по переписке"
-            hint={chatAuthorOnlyReason(project) ?? undefined}
-            disabled={!!chatAuthorOnlyReason(project)}
+            hint={actionDenied('rename') ?? undefined}
+            disabled={!!actionDenied('rename')}
             onClick={() => { setCtxMenu(null); runAi('chat.retitle'); }}
           />
           <MenuItem

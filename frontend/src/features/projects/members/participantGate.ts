@@ -3,7 +3,7 @@
 // и редактора, S2a-10a; ответы на разрешения/планы — только Configure владельца); фронт лишь
 // не обещает того, что бэк откажет.
 
-import type { Project } from '../../../types';
+import type { Project, Session } from '../../../types';
 
 // Участник — не владелец общего проекта. myRole авторитетна, когда она есть
 export function isParticipant(project: Pick<Project, 'myRole'> | null | undefined): boolean {
@@ -36,18 +36,43 @@ export function participantSendTitle(_gate: Extract<ParticipantComposerGate, { b
   return 'Не отправится: вы читатель проекта';
 }
 
-// Переименовать, архивировать и удалить чат может только его автор (в S1 — владелец проекта).
-// null — можно; строка — причина для подсказки выключенного пункта и тоста
-export const CHAT_AUTHOR_ONLY = 'Только автор чата';
-export function chatAuthorOnlyReason(project: Pick<Project, 'myRole'> | null | undefined): string | null {
-  return isParticipant(project) ? CHAT_AUTHOR_ONLY : null;
+// Действия чата (QA-P1, бэк f777c8460): переименовать и архивировать — право записи чата,
+// владелец и редактор (любой видимый чат, зеркало DenyContentWrite); удалить — автор чата и
+// владелец проекта (зеркало ChatAuthorGate/ChatWriteRightsEndpointTests); читателю — ничего.
+// Обычный проект (без myRole) — всё разрешено, как раньше. null — можно; строка — причина
+// для подсказки выключенного пункта и сублейбла меню.
+export const CHAT_WRITE_DENIED = 'Только владелец и редактор проекта';
+export const CHAT_DELETE_DENIED = 'Только автор чата и владелец проекта';
+
+// Переименовать/архивировать/AI-переименовать: отказан только читателю
+export function chatWriteDeniedReason(project: Pick<Project, 'myRole'> | null | undefined): string | null {
+  return project?.myRole === 'reader' ? CHAT_WRITE_DENIED : null;
 }
 
-// Причина блокировки действия шапки чата для участника: только rename/archive/delete
-// принадлежат автору; остальные пункты («Теги», «Срок» и др.) гейт не трогает
-const AUTHOR_ONLY_ACTIONS: readonly string[] = ['rename', 'archive', 'delete'];
-export function chatActionAuthorLock(key: string, project: Pick<Project, 'myRole'> | null | undefined): string | null {
-  return AUTHOR_ONLY_ACTIONS.includes(key) ? chatAuthorOnlyReason(project) : null;
+// Удалить: автор чата и владелец проекта. Свой чат редактора опознаётся по createdByUserId
+// (поле с бэка; у старых записей null — чат чужой, fail-closed); мой id — из stored-пары
+export function chatDeleteDeniedReason(
+  project: Pick<Project, 'myRole'> | null | undefined,
+  chat: Pick<Session, 'createdByUserId'> | null | undefined,
+  myUserId: string | null | undefined,
+): string | null {
+  const role = project?.myRole;
+  if (!role || role === 'owner') return null;
+  if (role === 'reader') return CHAT_DELETE_DENIED;
+  return chat?.createdByUserId && chat.createdByUserId === myUserId ? null : CHAT_DELETE_DENIED;
+}
+
+// Единый диспетчер для петель шапки (ряд, «⋯», runAction): rename/archive — гейт записи,
+// delete — авторский; прочие пункты («Теги», «Срок» и др.) правило не трогает
+export function chatActionDeniedReason(
+  key: string,
+  project: Pick<Project, 'myRole'> | null | undefined,
+  chat: Pick<Session, 'createdByUserId'> | null | undefined,
+  myUserId: string | null | undefined,
+): string | null {
+  if (key === 'rename' || key === 'archive') return chatWriteDeniedReason(project);
+  if (key === 'delete') return chatDeleteDeniedReason(project, chat, myUserId);
+  return null;
 }
 
 // Сообщение об отзыве доступа на списке проектов (QA-1): базовый текст фиксирован; строка

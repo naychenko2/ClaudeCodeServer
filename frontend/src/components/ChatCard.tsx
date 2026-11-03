@@ -231,9 +231,13 @@ interface Props {
   // Архив: убрать/вернуть. Вызывающая сторона ловит 409 «в чате идёт ход» и показывает
   // тостом. Не задан — пункта меню «В архив» нет (например, витрина UI-кита)
   onArchive?: (archived: boolean) => void;
-  // Причина, по которой автор-только действия (переименовать, в архив, удалить) недоступны
-  // участнику общего проекта. Задана — пункты выключены с этой подсказкой
-  authorOnlyReason?: string | null;
+  // Причины недоступности действий чата участнику общего проекта (QA-P1): переименовать/
+  // архивировать — нет права записи чата (читатель), удалить — не автор чата. Значения считает
+  // единый гейт (chatActionDeniedReason), здесь они только ложатся на свои пункты: задана
+  // причина — пункт выключен с этой подсказкой
+  renameDeniedReason?: string | null;
+  archiveDeniedReason?: string | null;
+  deleteDeniedReason?: string | null;
   // Сохранить сессию как заметку. Сеть на стороне списка (saveArchiveSessionAsNote).
   // Не задан — пункта меню «Сохранить в заметки» нет
   onSaveAsNote?: () => Promise<unknown>;
@@ -323,7 +327,7 @@ function ChatCardView({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
   agentsRunning: agentsRunningProp, bgCommandRunning: bgCommandRunningProp, uncommitted,
   onSelect, onHover, onDelete, onTogglePin, tags, onAssignTags, onPickSubject, subjectHint, subjectTitle,
-  onRename, onAddToWall, onArchive, authorOnlyReason, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle, featureRole, inFeatureGroup,
+  onRename, onAddToWall, onArchive, renameDeniedReason, archiveDeniedReason, deleteDeniedReason, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle, featureRole, inFeatureGroup,
 }: Props) {
   // Персоны и механики карточка читает из сторов напрямую — подписка своя, иначе
   // мемоизированная карточка не узнает, что персона догрузилась или механика сменилась
@@ -483,7 +487,12 @@ function ChatCardView({
   // переименования нет: там в заголовке стоит имя ЗАДАЧИ (taskChat.title), и правка
   // s.name не изменила бы ни строчки на экране
   const canRename = !!onRename && !taskChat;
-  const isAuthorOnly = (k: ChatActionKey) => !!authorOnlyReason && (k === 'rename' || k === 'archive' || k === 'delete');
+  // Причина недоступности действия в этой карточке (QA-P1): значения приходят из единого
+  // гейта (chatActionDeniedReason у списка), здесь только сопоставление ключа с его причиной
+  const deniedReason = (k: ChatActionKey): string | null =>
+    k === 'rename' ? renameDeniedReason ?? null
+      : k === 'archive' ? archiveDeniedReason ?? null
+        : k === 'delete' ? deleteDeniedReason ?? null : null;
 
   // Быстрые действия карточки (hover-кластер на desktop, кнопки свайпа на мобиле).
   // Набор — общий каталог действий чата (тот же, что в шапке открытого чата); какие
@@ -623,11 +632,12 @@ function ChatCardView({
     }
   };
 
-  // Автор-только действия участнику выключены: подсказка вместо названия, клика нет
+  // Действие без права выключено: подсказка причины вместо названия, клика нет
   const quickBtn = (key: ChatActionKey) => {
     const b = quickButton(key);
-    return isAuthorOnly(key)
-      ? { ...b, disabled: true, title: `${b.title}: ${authorOnlyReason}` }
+    const reason = deniedReason(key);
+    return reason
+      ? { ...b, disabled: true, title: `${b.title}: ${reason}` }
       : b;
   };
 
@@ -1322,8 +1332,8 @@ function ChatCardView({
             <MenuItem
               icon={<Pencil size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label="Переименовать"
-              hint={authorOnlyReason ?? undefined}
-              disabled={isAuthorOnly('rename')}
+              hint={deniedReason('rename') ?? undefined}
+              disabled={!!deniedReason('rename')}
               isMobile={isMobile}
             action={visAction('rename')}
               onClick={e => { e.stopPropagation(); setMenu(null); startRename(); }}
@@ -1409,8 +1419,8 @@ function ChatCardView({
                 ? <ArchiveRestore size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
                 : <Archive size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label={isArchivedChat(s) ? 'Вернуть из архива' : 'В архив'}
-              hint={authorOnlyReason ?? undefined}
-              disabled={isAuthorOnly('archive')}
+              hint={deniedReason('archive') ?? undefined}
+              disabled={!!deniedReason('archive')}
               isMobile={isMobile}
               action={visAction('archive')}
               onClick={e => { e.stopPropagation(); setMenu(null); onArchive(!isArchivedChat(s)); }}
@@ -1433,8 +1443,8 @@ function ChatCardView({
           <MenuItem
             icon={<Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
             label="Удалить"
-            hint={authorOnlyReason ?? undefined}
-            disabled={isAuthorOnly('delete')}
+            hint={deniedReason('delete') ?? undefined}
+            disabled={!!deniedReason('delete')}
             danger
             isMobile={isMobile}
             action={visAction('delete')}

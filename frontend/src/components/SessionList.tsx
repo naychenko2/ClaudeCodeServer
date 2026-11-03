@@ -1,11 +1,11 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, useRef } from 'react';
-import { canCreateChats, chatAuthorOnlyReason, isNotChatAuthorError } from '../features/projects/members/participantGate';
+import { canCreateChats, chatActionDeniedReason, isNotChatAuthorError } from '../features/projects/members/participantGate';
 import { FilterX, ChevronUp, ChevronDown, MessageCircle, Archive, CheckCircle2, Sparkles } from 'lucide-react';
 import type { Project, ProjectSubject, ProjectTag, Session } from '../types';
 import type { FeatureIndexFeature } from '../types/featureIndex';
 import { api } from '../lib/api';
 import { idbGet } from '../lib/idb';
-import { passiveCacheKey } from '../lib/offline';
+import { passiveCacheKey, readStoredUserId } from '../lib/offline';
 import { forgetChatContextOnDeleted } from '../lib/chatContext/forget';
 import { archiveApi, saveArchiveSessionAsNote } from '../api/chats';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
@@ -1232,6 +1232,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       </>
     );
   };
+  // id текущего пользователя для авторского гейта действий чата (QA-P1): читается один раз
+  // на рендер списка и передаётся в единый гейт (chatActionDeniedReason)
+  const myUserId = readStoredUserId();
   // leadingInset — место под контрол ветки дерева. На док стены чат отправляется
   // пунктом меню «На стену»: строки дерева держит dnd-kit (ChatTreeRow.useDraggable),
   // и нативный drag на стену глушил бы вложение — его здесь нет намеренно
@@ -1271,7 +1274,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           // Возврат из архива открывает чат и выводит список из архивного вида
           if (!archived) leaveArchiveAndOpen(s);
         } : undefined}
-        authorOnlyReason={chatAuthorOnlyReason(project)}
+        renameDeniedReason={chatActionDeniedReason('rename', project, s, myUserId)}
+        archiveDeniedReason={chatActionDeniedReason('archive', project, s, myUserId)}
+        deleteDeniedReason={chatActionDeniedReason('delete', project, s, myUserId)}
         onSaveAsNote={online && notesOn ? () => handleSaveAsNote(s) : undefined}
         swipeOpen={openSwipeId === s.id}
         onSwipeToggle={open => setOpenSwipeId(open ? s.id : null)}

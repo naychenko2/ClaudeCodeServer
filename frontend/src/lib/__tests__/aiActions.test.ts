@@ -106,14 +106,15 @@ describe('rankedActions — file.toMarkdown и файл не из корня', (
   });
 });
 
-describe('chat.retitle — не-автор чата', () => {
+describe('chat.retitle — право записи чата (QA-P1)', () => {
   const ids = (myRole?: 'owner' | 'editor' | 'reader') => rankedActions(ctx({
     nav: { screen: 'project', project: { id: 'p', myRole } as never },
     chat: { active: true, hasMessages: true },
   })).map(x => x.action.id);
 
-  it('участнику пункта нет, владельцу и проекту без роли — есть', () => {
-    expect(ids('editor')).not.toContain('chat.retitle');
+  // Бэк (f777c8460): retitle — DenyContentWrite, редактор и выше; читателю — нет
+  it('редактору, владельцу и проекту без роли — есть, читателю — нет', () => {
+    expect(ids('editor')).toContain('chat.retitle');
     expect(ids('reader')).not.toContain('chat.retitle');
     expect(ids('owner')).toContain('chat.retitle');
     expect(ids(undefined)).toContain('chat.retitle');

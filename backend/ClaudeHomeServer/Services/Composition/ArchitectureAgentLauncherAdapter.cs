@@ -33,7 +33,7 @@ public sealed class ArchitectureAgentLauncherAdapter(
     // незапущенной и заблокирует следующие сборки меткой arch-build.
     public async Task<ArchitectureAgentLaunch> LaunchAsync(
         string projectId, string ownerId, ArchitectureAgentBrief brief, CancellationToken ct,
-        string? createdByUserId = null)
+        string? createdByUserId)
     {
         var architect = ResolveArchitect(ownerId, projectId);
 

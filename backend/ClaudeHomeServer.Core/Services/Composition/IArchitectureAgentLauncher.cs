@@ -32,7 +32,7 @@ public interface IArchitectureAgentLauncher
     // автозапуск исполнителя (F-9); null — вызов без человека.
     Task<ArchitectureAgentLaunch> LaunchAsync(
         string projectId, string ownerId, ArchitectureAgentBrief brief, CancellationToken ct,
-        string? createdByUserId = null);
+        string? createdByUserId);
 
     // Read-only проверка ДО прохода 1: id незавершённой задачи агентной сборки проекта или
     // null. Главная проверка — всё равно под замком в LaunchAsync (между ними окно гонки).

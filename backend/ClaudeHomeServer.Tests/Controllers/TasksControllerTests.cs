@@ -1946,6 +1946,10 @@ public class TasksControllerTests : IClassFixture<TestWebApplicationFactory>
             var description = task.GetProperty("description").GetString()!;
             description.Should().Contain("Эпик не закрывать")
                 .And.NotContain("закрыть эпик");
+            // F-9: мерж ставит человек по кнопке — он записан создателем (для владельца это равно OwnerId записи,
+            // эффекта на автозапуске нет; инициатор-участник дал бы «понижение» актора, не повышение)
+            var stored = _factory.Services.GetRequiredService<TaskManager>().GetById(task.GetProperty("id").GetString()!)!;
+            stored.CreatedByUserId.Should().Be(OwnerId, "создатель merge-задачи — человек-инициатор");
         }
         finally
         {

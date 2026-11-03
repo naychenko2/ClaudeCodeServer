@@ -52,20 +52,20 @@ const SECTIONS = [
   sec(PROJECT_KEY, { name: 'AI Home', pageCount: 3 }),
 ];
 
-const page = (pageKey: string, title: string, authorship?: string, summary: string | null = null) => ({
-  pageKey, title, summary, type: 'decision', status: 'active', sourcesCount: 1, updated: null,
+const page = (pageKey: string, title: string, authorship?: string, summary: string | null = null, type = 'decision') => ({
+  pageKey, title, summary, type, status: 'active', sourcesCount: 1, updated: null,
   ...(authorship ? { authorship } : {}),
 });
 
 const CATALOGS: Record<string, unknown> = {
-  common: { key: 'common', name: 'Общее', orphan: false, pages: [page('c1.md', 'Правила команды', 'human')] },
-  personal: { key: 'personal', name: 'Личное', orphan: false, pages: [page('p1.md', 'Мои цели', 'together')] },
+  common: { key: 'common', name: 'Общее', orphan: false, pages: [page('Общее/c1.md', 'Правила команды', 'human')] },
+  personal: { key: 'personal', name: 'Личное', orphan: false, pages: [page('Личное/p1.md', 'Мои цели', 'together')] },
   [PROJECT_KEY]: {
     key: PROJECT_KEY, name: 'AI Home', orphan: false,
     pages: [
-      page('a1.md', 'Апскейл картинок', 'ai', 'как увеличить'),
-      page('a2.md', 'Без метки'),
-      page('a3.md', 'Ревью фронта', 'together'),
+      page(`Проекты/${PROJECT_ID}/a1.md`, 'Апскейл картинок', 'ai', 'как увеличить'),
+      page(`Проекты/${PROJECT_ID}/a2.md`, 'Без метки'),
+      page(`Проекты/${PROJECT_ID}/a3.md`, 'Ревью фронта', 'together'),
     ],
   },
 };
@@ -79,6 +79,7 @@ const NOTES = [note('n1', 'Идея про граф', 'personal'), note('n2', '�
 
 const sectionFromUrl = (url: string) => decodeURIComponent(url.split('section=')[1] ?? '');
 
+const OTHER = '__other__';
 const roots: Root[] = [];
 
 const baseProps = (over: Partial<WikiUnifiedTreeProps> = {}): WikiUnifiedTreeProps => ({
@@ -179,37 +180,52 @@ describe('Чистая логика дерева', () => {
   });
 });
 
-describe('Дубли и служебные карточки (F2-qa)', () => {
+describe('Дубли и служебные карточки (формат данных бэка)', () => {
   const withPages = (pages: unknown[]) => ({
     ...CATALOGS, [PROJECT_KEY]: { key: PROJECT_KEY, name: 'AI Home', orphan: false, pages },
   });
+  const pk = (rel: string) => `Проекты/${PROJECT_ID}/${rel}`;
+  // Вики-страница в /api/notes: источник 'wiki', путь = полный pageKey (NotesService.cs:179)
+  const wikiNote = (id: string, title: string, rel: string): NoteSummary => ({ ...note(id, title, 'wiki'), path: pk(rel) });
 
-  // Мутация: убрать continue по pageTitles/pagePaths в buildUnifiedGroups → тест краснеет
-  it('дубль: заметка, чей файл лежит под вики-разделом или заменена страницей, — один ряд, счётчики по рядам', () => {
-    const cats = withPages([page('Решения/Граф.md', 'Граф'), page('Перенесённая.md', 'Перенесённая')]);
-    const byPath = { ...note('d1', 'Граф', PROJECT_ID), path: `Проекты/${PROJECT_ID}/Решения/Граф.md` };
-    const byTitle = note('d2', 'Перенесённая', PROJECT_ID);
-    const groups = buildUnifiedGroups(SECTIONS, [byPath, byTitle, NOTES[1]], cats as never, '');
+  // Мутация: убрать `if (n.source === 'wiki') continue` в buildUnifiedGroups → тест краснеет
+  it('вики-заметка (source=wiki) не дублирует страницу из каталога; счётчики по рядам', () => {
+    const cats = withPages([page(pk('Решения/Граф.md'), 'Граф'), page(pk('Перенесённая.md'), 'Перенесённая')]);
+    const notes = [wikiNote('w1', 'Граф', 'Решения/Граф.md'), wikiNote('w2', 'Перенесённая', 'Перенесённая.md'), NOTES[1]];
+    const groups = buildUnifiedGroups(SECTIONS, notes, cats as never, '');
     const g = groups.find(x => x.key === PROJECT_KEY)!;
     expect(g.items.map(i => `${i.kind}:${i.title}`)).toEqual(['page:Граф', 'page:Перенесённая', 'note:Заметка проекта']);
+    expect(groups.some(x => x.key === OTHER)).toBe(false);
     expect(countByOrigin(groups).all).toBe(2 + 1 + 1 + 1);
   });
 
-  it('дубль не возвращается при поиске: сверка идёт по всему каталогу', () => {
-    const cats = withPages([page('Граф.md', 'Граф')]);
-    const dup = { ...note('d1', 'Граф', PROJECT_ID), path: `Проекты/${PROJECT_ID}/Граф.md` };
-    const groups = buildUnifiedGroups(SECTIONS, [dup], cats as never, 'граф');
+  it('заметка пользователя с заголовком как у страницы — остаётся (сверки по заголовку нет)', () => {
+    const cats = withPages([page(pk('Граф.md'), 'Граф')]);
+    const own = { ...note('u1', 'Граф', PROJECT_ID), path: 'Граф.md' };
+    const g = buildUnifiedGroups(SECTIONS, [own], cats as never, '').find(x => x.key === PROJECT_KEY)!;
+    expect(g.items.map(i => i.kind)).toEqual(['page', 'note']);
+  });
+
+  it('вики-заметка не возвращается при поиске', () => {
+    const cats = withPages([page(pk('Граф.md'), 'Граф')]);
+    const groups = buildUnifiedGroups(SECTIONS, [wikiNote('w1', 'Граф', 'Граф.md')], cats as never, 'граф');
     expect(groups.flatMap(x => x.items.map(i => i.kind))).toEqual(['page']);
   });
 
-  // Мутация: убрать continue по SOURCE_CARD_DIR → тест краснеет
-  it('служебные карточки «Источники/…» скрыты и не в счётчиках; хроника и обычные остаются', () => {
+  // Мутация: убрать `if (isSourceCard(p)) continue` → тест краснеет
+  it('карточки источников скрыты по type=source и по сегменту «Источники»; хроника и обычные остаются', () => {
     const cats = withPages([
-      page('Источники/Чат-1.md', 'Чат-1'), page('Хроники/s1.md', 'Хроника чата'), page('a1.md', 'Обычная'),
+      page(pk('Источники/Чат-1-abc12345.md'), 'Чат-1', undefined, null, 'source'),
+      page(pk('Источники/Без-типа-def67890.md'), 'Без типа', undefined, null, 'decision'),
+      page(pk('Прочее/Типовая.md'), 'Типовая', undefined, null, 'source'),
+      page(pk('Хроники/s1.md'), 'Хроника чата', undefined, null, 'chronicle'),
+      page(pk('a1.md'), 'Обычная'),
     ]);
     const groups = buildUnifiedGroups(SECTIONS, [], cats as never, '');
     const titles = groups.flatMap(x => x.items.map(i => i.title));
     expect(titles).not.toContain('Чат-1');
+    expect(titles).not.toContain('Без типа');
+    expect(titles).not.toContain('Типовая');
     expect(titles).toContain('Хроника чата');
     expect(titles).toContain('Обычная');
     expect(countByOrigin(groups).all).toBe(2 + 2);
@@ -255,7 +271,7 @@ describe('Дерево в интерфейсе', () => {
     click('Идея про граф');
     expect(props.onSelectNote).toHaveBeenCalledWith('n1');
     click('Апскейл картинок');
-    expect(props.onOpenPage).toHaveBeenCalledWith(PROJECT_KEY, 'a1.md');
+    expect(props.onOpenPage).toHaveBeenCalledWith(PROJECT_KEY, `Проекты/${PROJECT_ID}/a1.md`);
   });
 
   it('фильтр «кто написал»: «Вместе» оставляет только совместные страницы', async () => {
@@ -316,7 +332,7 @@ describe('Конкурентность загрузки', () => {
     expect(rowTitles(m.container)).toContain('Мои цели');
     // поздний ответ первого запроса — с другим содержимым
     await act(async () => {
-      releaseOld({ key: 'personal', name: 'Личное', orphan: false, pages: [page('old.md', 'Устаревшая страница')] });
+      releaseOld({ key: 'personal', name: 'Личное', orphan: false, pages: [page('Личное/old.md', 'Устаревшая страница')] });
       await Promise.resolve();
     });
     await settle();

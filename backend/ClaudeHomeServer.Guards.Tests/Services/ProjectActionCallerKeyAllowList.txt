@@ -107,8 +107,18 @@ backend/ClaudeHomeServer/Controllers/FilesController.cs|11
 # (GitCommitAuthor: имя/логин для git-автора). Ключом хранилищ ничто не стало: git-операции идут
 # по Owner(p) (арендатору), а автор — это сам человек, ради которого фича и затевалась.
 backend/ClaudeHomeServer/Controllers/GitController.cs|3
+# S2d-6b-6 (хвост S2d-6b-5): KnowledgeController 0→3 — IndexFile/IndexFolder закрывают чужое private-
+# вложение (S2d-6b-1): id вызывающего входит только в признак «чужой автор пути»
+# (PrivateAttachments.IsForeign → 404 до индексации/обхода) и передаётся в FileService.Tree как
+# ЗРИТЕЛЬ обхода (тот же фильтр, что у читающих ручек, S2d-6b-2 доработка 1). Ключом хранилищ он
+# не стал: индексация адресована корнем проекта арендатора (GetScopedProject → GetById), записей
+# по вызывающему нет; тот же класс мест, что FilesController в S2d-6b-2.
+backend/ClaudeHomeServer/Controllers/KnowledgeController.cs|3
 backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
-backend/ClaudeHomeServer/Controllers/PersonasController.cs|110
+# 94c2fd37 доработка 1: PersonasController 110→111 — AskCallerIsPrivateOrUnknown: id вызывающего входит
+# только в GetOwnedVisible (видит ли человек чат-вызыватель persona_ask) для признака «приватный или
+# неизвестный» (fail-closed: запись фактов консультации в память отключена). Ключом хранилищ не стал.
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|111
 backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6

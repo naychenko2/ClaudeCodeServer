@@ -82,7 +82,7 @@ public class PersonasController(
     // Запись фактов консультации в память персоны закрыта, если чат-вызыватель приватный ИЛИ
     // не определён (нет заголовка, чужая или несуществующая сессия): fail-closed, ответ отдаётся
     private bool AskCallerIsPrivateOrUnknown(string? callerSessionId) =>
-        callerSessionId is null || _sessions.GetOwned(callerSessionId, UserId) is not { } caller
+        callerSessionId is null || _sessions.GetOwnedVisible(callerSessionId, UserId) is not { } caller
         || caller.PrivateToUserId is not null;
 
     private Task Broadcast(string action, string? personaId = null) =>

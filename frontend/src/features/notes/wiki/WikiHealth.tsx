@@ -382,8 +382,13 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
 
   // ─── «Принять как мою правку» (F5c) ───
   // Действие есть только под обоими флагами: бэк проверяет те же два до ветки mode:mine
-  // (UnifiedOffRefusal), без них запрос не начать
-  const canAdoptMine = useFeature(FLAGS.llmWiki) && useFeature(FLAGS.notesWikiUnified);
+  // (UnifiedOffRefusal), без них запрос не начать.
+  // Оба useFeature — безусловные (F5c-rw2, образец WikiPageView.tsx:328-330): при «&&» прямо
+  // второй вызов пропускается при выключенном первом, и переключение флага при открытом
+  // «Здоровье» меняло бы число хуков между рендерами (rules-of-hooks).
+  const wikiFlag = useFeature(FLAGS.llmWiki);
+  const unifiedFlag = useFeature(FLAGS.notesWikiUnified);
+  const canAdoptMine = wikiFlag && unifiedFlag;
   const [mineAsk, setMineAsk] = useState<string | null>(null); // путь страницы под подтверждением
   const [mineUi, setMineUi] = useState<{ id: string; busy: boolean; notice: MineNotice | null } | null>(null);
   // Текущий ключ действия «раздел\nпуть»: ref пишется в эффектах и обработчиках, не во время

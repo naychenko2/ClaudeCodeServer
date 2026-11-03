@@ -51,12 +51,20 @@ vi.mock('../../../../lib/offline', async (orig) => ({
 }));
 
 // Флаги управляются тестом: по умолчанию выключены — прежние тесты видят прежний вид;
-// блок F5c включает llm-wiki и notes-wiki-unified (тот же приём, что в WikiPageView.test)
+// блок F5c включает llm-wiki и notes-wiki-unified (тот же приём, что в WikiPageView.test).
+// useFeature — хук, и мок зовёт настоящий хук при каждом вызове (F5c-rw2): если второй
+// useFeature вызывается условно, при перерисовке с другим флагом число хуков меняется и
+// React падает — тест «переключение флага при открытом Здоровье» краснеет. При безусловных
+// вызовах число хуков постоянно в любом порядке флагов, и остальные тесты это не задевает:
+// в их пределах флаг на одном экземпляре не меняется.
 const flags = vi.hoisted(() => ({ on: new Set<string>() }));
-vi.mock('../../../../lib/featureFlags', async (orig) => ({
-  ...await orig<typeof import('../../../../lib/featureFlags')>(),
-  useFeature: (k: string) => flags.on.has(k),
-}));
+vi.mock('../../../../lib/featureFlags', async (orig) => {
+  const { useState } = await import('react');
+  return {
+    ...await orig<typeof import('../../../../lib/featureFlags')>(),
+    useFeature: (k: string) => { useState(0); return flags.on.has(k); },
+  };
+});
 
 import { request } from '../../../../lib/offline';
 
@@ -623,7 +631,11 @@ describe('«Здоровье» раздела (S5f)', () => {
 //  (F6) снять проверку ключа пути после await (activeRef в успехе) → «ответ после смены
 //      страницы отбрасывается по пути» краснеет;
 //  (F7) вернуть обещание свежести в текст плашки (например, «Решение применено.» вместо
-//      «Отчёт устарел…») → «409 …» краснеет (проверка точного текста).
+//      «Отчёт устарел…») → «409 …» краснеет (проверка точного текста);
+//  (F8) вернуть условный вызов флагов — `useFeature(llmWiki) && useFeature(notesWikiUnified)`
+//      одной строкой → «переключение флага при открытом „Здоровье“» краснеет: при выключенном
+//      первом флага второй хук не вызван, при включении число хуков растёт и React падает
+//      («Should have a queue. You are likely calling Hooks conditionally»).
 
 describe('«Принять как мою правку» на строке дрейфа (F5c)', () => {
   it('кнопка — только на строке «дрейфа» и только при обоих флагах', async () => {
@@ -810,5 +822,25 @@ describe('«Принять как мою правку» на строке дре
     expect(f.health.filter(h => h.url.includes('/wiki/health/projects/p1')), 'перечитки прежнего раздела').toHaveLength(1);
     // подтверждение прежней страницы не перешло в новый раздел
     expect(docText()).not.toContain('Принять как мою правку?');
+  });
+
+  it('переключение флага при открытом «Здоровье» не роняет экран: оба useFeature безусловны (F5c-rw2)', async () => {
+    mockHealth(HEALTH);
+    const { root, container: c } = mountAt('projects/p1');
+    await settle();
+    // старт с выключенными флагами: действия нет, экран живой
+    expect(adoptBtn(c), 'при выключенных флагах').toBeNull();
+    // пользователь включает оба флага при открытом «Здоровье»: перерисовка того же
+    // экземпляра с теми же props (тот же путь, что делает родитель при ререндере)
+    bothFlags();
+    act(() => { root.render(createElement(WikiHealth, { selectedKey: 'projects/p1' })); });
+    await settle();
+    // экран не упал (число хуков не изменилось) и действие появилось
+    expect(adoptBtn(c), 'после включения флагов').not.toBeNull();
+    // и обратно: выключение флага на том же экземпляре — тоже без падения, действие исчезло
+    flags.on.clear();
+    act(() => { root.render(createElement(WikiHealth, { selectedKey: 'projects/p1' })); });
+    await settle();
+    expect(adoptBtn(c), 'после выключения флагов').toBeNull();
   });
 });

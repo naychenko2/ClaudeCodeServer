@@ -854,6 +854,20 @@ public static class WebDavHandler
             return;
         }
 
+        // QA-W1 доработка (ревью 16cc5042, MAJOR): тот же гейт по РАЗЫМЕНОВАННОМУ пути цели.
+        // Текстовый IsPrivateContainerPath выше молчит на цели через симлинк: ссылка «L» →
+        // .cc-attachments, Destination «L/private» — текстово не контейнер, а на диске это
+        // .cc-attachments/private: CopyDirectory (ниже) идёт по разыменованному и слил бы
+        // поддерево источника в настоящий private/. Сравнение — по каноническим формам обеих
+        // сторон (IsPrivateContainerDestinationResolved ниже), по образцу WikiPaths.IsWikiPath.
+        // Отказ — до любого следа на диске, при любом Overwrite.
+        if (IsPrivateContainerDestinationResolved(root, destRel))
+        {
+            ctx.Response.StatusCode = 403;
+            ctx.Response.ContentLength = 0;
+            return;
+        }
+
         var overwrite = !string.Equals(ctx.Request.Headers["Overwrite"].ToString(), "F", StringComparison.OrdinalIgnoreCase);
         var srcAbs = FileService.SafeJoinPublic(root, relPath);
         var dstAbs = FileService.SafeJoinPublic(root, destRel);
@@ -941,6 +955,21 @@ public static class WebDavHandler
         // (тот же 403, что даёт JoinBelowRoot ниже; он остаётся для запределья). Каталоги авторов
         // — не контейнеры: перенос в свой private разрешён, чужой отказан IsForeignPrivatePath выше.
         if (IsPrivateContainerPath(root, destRel))
+        {
+            ctx.Response.StatusCode = 403;
+            ctx.Response.ContentLength = 0;
+            return;
+        }
+
+        // QA-W1 доработка (ревью 16cc5042, MAJOR): тот же гейт по РАЗЫМЕНОВАННОМУ пути цели.
+        // Текстовый IsPrivateContainerPath выше молчит на цели через симлинк: ссылка «L» →
+        // .cc-attachments, Destination «L/private» — текстово не контейнер, а на диске это
+        // .cc-attachments/private: Directory.Delete(dstAbs, true) (ниже) снесёт настоящий
+        // private/ со всеми авторами. Разыменование — SafePath.Canonical, тот же примитив,
+        // что у проверок «сам в себе» ниже, и по образцу WikiPaths.IsWikiPath: корень и
+        // контейнеры канонизируются тем же обходом; неразрешимый путь (цикл ссылок) —
+        // fail-closed здесь, до JoinBelowRoot и до сноса.
+        if (IsPrivateContainerDestinationResolved(root, destRel))
         {
             ctx.Response.StatusCode = 403;
             ctx.Response.ContentLength = 0;
@@ -1241,6 +1270,49 @@ public static class WebDavHandler
         }
         catch (UnauthorizedAccessException) { return false; }
         return PrivateAttachments.IsPrivateContainerPath(rel.Replace('\\', '/'));
+    }
+
+    // QA-W1 доработка (ревью 16cc5042, MAJOR): цель-контейнер по РАЗЫМЕНОВАННОМУ пути.
+    // IsPrivateContainerPath выше судит по текстовому пути: SafeJoin раскрывает «..», «./»,
+    // слеши — но не символьные ссылки, а COPY/MOVE работают на диске по разыменованному.
+    // Симлинк «L» → .cc-attachments делает «L/private» тем же .cc-attachments/private: MOVE
+    // снёс бы настоящий private/ со всеми авторами, COPY слил бы поддерево источника в него.
+    // Здесь — сравнение канонических форм обеих сторон по образцу WikiPaths.IsWikiPath:
+    // и путь цели, и сами контейнеры (корень, .cc-attachments, .cc-attachments/private)
+    // канонизируются одним обходом SafePath.Canonical — иначе «L/private» и настоящий
+    // .cc-attachments/private описывают разные деревья (тот же MAJOR 2 ревью S1a: стороны
+    // гейта обязаны быть в одном пространстве имён). Canonical == null (цикл ссылок, бюджет)
+    // — true: предикат fail-closed, как IsWikiPath; отказ возможной операции безопаснее
+    // действия по неразрешённому пути. Регистр — по правилам ФС хоста (ComparisonFor), как у
+    // канонических проверок MOVE ниже. Текстовый гейт выше остаётся первой линией обороны:
+    // он держит «..»/%2F/регистр без ссылок и дешевле обхода по диску. Каталоги автора и
+    // {guid}-каталоги — не контейнеры и через ссылку: их канонический путь не равен ни
+    // одному контейнеру, операция разрешена (та же граница, что у IsAttachmentsContainer).
+    private static bool IsPrivateContainerDestinationResolved(string root, string relPath)
+    {
+        string dstAbs;
+        try
+        {
+            dstAbs = relPath.Length == 0 ? Path.GetFullPath(root) : FileService.SafeJoinPublic(root, relPath);
+        }
+        catch (UnauthorizedAccessException) { return false; } // за пределом корня — свой отказ ниже по потоку
+        var target = SafePath.Canonical(dstAbs);
+        if (target is null) return true; // неразрешимый путь (цикл ссылок): fail-closed
+        // Корневая форма Canonical отдаёт с завершающим разделителем — равенство не сдваиваем.
+        target = target.TrimEnd('/');
+        var comparison = SafePath.ComparisonFor(OperatingSystem.IsWindows());
+        foreach (var container in new[]
+        {
+            root,
+            Path.Combine(root, TreeExcludes.AttachmentsDir),
+            Path.Combine(root, TreeExcludes.AttachmentsDir, PrivateAttachments.PrivateRoot),
+        })
+        {
+            var canonical = SafePath.Canonical(container);
+            if (canonical is null) return true; // контейнер неразрешим — тот же fail-closed
+            if (target.Equals(canonical.TrimEnd('/'), comparison)) return true;
+        }
+        return false;
     }
 
     private static string? ParseDestination(HttpContext ctx, string projectName)

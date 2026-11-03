@@ -26,6 +26,10 @@ namespace ClaudeHomeServer.Tests.Services;
 /// диске: каталог private/ не сносится и не сливается переносом/копированием. Каталоги авторов
 /// контейнеры не затрагивает: перенос/копия в свой private разрешены, как прежде.
 ///
+/// QA-W1 доработка (ревью 16cc5042, MAJOR): тот же гейт по РАЗЫМЕНОВАННОМУ пути цели
+/// (SafePath.Canonical): цель через символьную ссылку на контейнер — тот же 403; неразрешимый
+/// путь (цикл ссылок) — fail-closed; каталог автора и {guid}-каталог через ссылку — разрешены.
+///
 /// Проверяется без хоста по образцу WebDavPutTests: HandleAsync с настоящим UserStore/ProjectManager/
 /// FileService на временном дереве (Basic-заголовок, путь запроса — как их приносит клиент).
 /// </summary>
@@ -399,6 +403,120 @@ public class WebDavPrivateAttachmentTests : IDisposable
         r.Response.StatusCode.Should().BeOneOf(201, 204);
         File.ReadAllText(AbsOf($".cc-attachments/private/{_davId}/copied.txt")).Should().Be("обычное");
         File.ReadAllText(AbsOf(_foreignPath)).Should().Be("чужое");
+    }
+
+    // ── QA-W1 доработка (ревью 16cc5042, MAJOR): цель-контейнер через РАЗЫМЕНОВАННЫЙ путь ──
+    // Гейты выше судили текстовый путь, а MOVE/COPY работают на диске по разыменованному:
+    // ссылка «L» → .cc-attachments делает «L/private» тем же .cc-attachments/private.
+    // Linux-only: ссылка на каталог требует привилегий (образец WebDavMoveRootTests.cs:264-306).
+
+    [Fact]
+    public async Task Move_ЦельЧерезСимлинВКонтейнер_403_ДваMOVEПодряд_PrivateЦелоПобайтно()
+    {
+        if (OperatingSystem.IsWindows()) return; // ссылка на каталог требует привилегий; CI и дев-машины — Linux
+        Directory.CreateSymbolicLink(AbsOf("L"), ".cc-attachments"); // относительная цель — от каталога ссылки
+
+        var snapshot = SnapshotPrivate();
+
+        // «L/private» текстово не контейнер, на диске — настоящий private/: раньше сносился
+        // весь private/ со всеми авторами (Directory.Delete по разыменованному), теперь — 403.
+        var r = await RunAsync(Req("MOVE", PlainPath, destination: Dest("L/private"), overwrite: "T"));
+        r.Response.StatusCode.Should().Be(403, "цель через ссылку — тот же .cc-attachments/private на диске");
+        AssertPrivateUnchanged(snapshot, "отказ до Directory.Delete: private/ цел побайтно");
+        File.ReadAllText(AbsOf(PlainPath)).Should().Be("обычное", "источник не сдвинут");
+
+        // две подряд операции в симлинк-цель: ни одной частично снесённой — отказ стоит до сноса
+        r = await RunAsync(Req("MOVE", PlainPath, destination: Dest("L/private"), overwrite: "T"));
+        r.Response.StatusCode.Should().Be(403);
+        AssertPrivateUnchanged(snapshot, "после второй отказанной операции private/ цел побайтно");
+
+        // Overwrite:F — тот же 403, а не 412: изоляция контейнера приоритетнее (как текстовая цель)
+        r = await RunAsync(Req("MOVE", PlainPath, destination: Dest("L/private"), overwrite: "F"));
+        r.Response.StatusCode.Should().Be(403);
+        AssertPrivateUnchanged(snapshot);
+
+        // сама ссылка-цель («L» → .cc-attachments) — тоже контейнер: снос снёс бы саму ссылку
+        r = await RunAsync(Req("MOVE", PlainPath, destination: Dest("L")));
+        r.Response.StatusCode.Should().Be(403);
+        AssertPrivateUnchanged(snapshot);
+        new DirectoryInfo(AbsOf("L")).LinkTarget.Should().NotBeNull("ссылка цела: отказ до любого следа на диске");
+
+        // обход через ссылку в тот же контейнер («L/private/../private») — тот же путь, тот же 403:
+        // текстовый гейт здесь молчит (сегмент «L»), решает каноническая форма
+        r = await RunAsync(Req("MOVE", PlainPath, destination: Dest("L/private/../private")));
+        r.Response.StatusCode.Should().Be(403);
+        AssertPrivateUnchanged(snapshot);
+
+        File.ReadAllText(AbsOf(_foreignPath)).Should().Be("чужое", "чужой автор не тронут");
+    }
+
+    [Fact]
+    public async Task Copy_ЦельЧерезСимлинВКонтейнер_403_СлиянияНет()
+    {
+        if (OperatingSystem.IsWindows()) return; // см. предыдущий тест
+        Directory.CreateSymbolicLink(AbsOf("L"), ".cc-attachments");
+        Write("docs/sub/nested.txt", "вложенное");
+
+        var snapshot = SnapshotPrivate();
+
+        // копия каталога в «L/private»: CopyDirectory идёт по разыменованному и слил бы
+        // поддерево источника в настоящий private/; теперь — 403 до записи
+        var r = await RunAsync(Req("COPY", "docs", destination: Dest("L/private")));
+        r.Response.StatusCode.Should().Be(403, "цель через ссылку — тот же .cc-attachments/private на диске");
+        AssertPrivateUnchanged(snapshot, "отказ до CopyDirectory: слияния нет");
+        File.Exists(AbsOf(".cc-attachments/private/plain.txt")).Should().BeFalse();
+        File.Exists(AbsOf(".cc-attachments/private/sub")).Should().BeFalse();
+
+        // копия файла в саму ссылку-контейнер — тот же отказ, копия не создана
+        r = await RunAsync(Req("COPY", PlainPath, destination: Dest("L")));
+        r.Response.StatusCode.Should().Be(403);
+        AssertPrivateUnchanged(snapshot);
+        File.Exists(AbsOf(".cc-attachments/plain.txt")).Should().BeFalse();
+
+        File.ReadAllText(AbsOf(_foreignPath)).Should().Be("чужое");
+    }
+
+    // Граница правила на разыменованном пути: каталог своего автора и общий {guid}-каталог —
+    // не контейнеры и через ссылку (их канонический путь не равен ни одному контейнеру):
+    // перенос/копия в них остаются разрешёнными, чужой private при этом не тронут.
+    [Fact]
+    public async Task MoveICopy_ЦельЧерезСимлинНеКонтейнер_Разрешена_ЧужойPrivateЦел()
+    {
+        if (OperatingSystem.IsWindows()) return; // см. предыдущий тест
+        var ownAuthor = _ownPath.Split('/')[2];
+        var commonGuid = _commonPath.Split('/')[1];
+        Directory.CreateSymbolicLink(AbsOf("A"), $".cc-attachments/private/{ownAuthor}"); // каталог своего автора
+        Directory.CreateSymbolicLink(AbsOf("G"), $".cc-attachments/{commonGuid}");         // общий {guid}-каталог
+
+        // копия через ссылку в общий {guid}-каталог — разрешена, как без ссылки
+        var r = await RunAsync(Req("COPY", PlainPath, destination: Dest("G/copied.txt")));
+        r.Response.StatusCode.Should().BeOneOf(201, 204);
+        File.ReadAllText(AbsOf($".cc-attachments/{commonGuid}/copied.txt")).Should().Be("обычное");
+
+        // перенос через ссылку в свой private-каталог автора — разрешён, как без ссылки
+        r = await RunAsync(Req("MOVE", PlainPath, destination: Dest("A/moved.txt")));
+        r.Response.StatusCode.Should().BeOneOf(201, 204);
+        File.ReadAllText(AbsOf($".cc-attachments/private/{ownAuthor}/moved.txt")).Should().Be("обычное");
+
+        // чужой private не тронут ни одной из разрешённых операций
+        File.ReadAllText(AbsOf(_foreignPath)).Should().Be("чужое");
+    }
+
+    // Цикл ссылок в цели («a» → «b», «b» → «a»): путь неразрешим (бюджет разыменования) —
+    // fail-closed 403 на гейте контейнера, до JoinBelowRoot и до любого следа на диске.
+    [Fact]
+    public async Task Move_ЦиклСимлинковВЦели_403_ДоЛюбогоСледаНаДиске_PrivateЦело()
+    {
+        if (OperatingSystem.IsWindows()) return; // см. предыдущий тест
+        Directory.CreateSymbolicLink(AbsOf("a"), "b");
+        Directory.CreateSymbolicLink(AbsOf("b"), "a");
+
+        var snapshot = SnapshotPrivate();
+
+        var r = await RunAsync(Req("MOVE", PlainPath, destination: Dest("a/x.txt"), overwrite: "T"));
+        r.Response.StatusCode.Should().Be(403, "неразрешимый путь — fail-closed, не 404 и не 500");
+        AssertPrivateUnchanged(snapshot, "отказ до любого следа на диске");
+        File.ReadAllText(AbsOf(PlainPath)).Should().Be("обычное", "источник цел");
     }
 
     [Fact]

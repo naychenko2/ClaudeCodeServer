@@ -70,15 +70,26 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         Directory.Exists(FileService.SafeJoinPublic(root, path));
 
     // S2d-6b-2 (разрез 4bc3d04f §1 путь 19): чужое приватное вложение (раскладка S2d-6b-1 —
-    // .cc-attachments/private/{автор}/…) для ЧИТАЮЩЕЙ ручки — 404, а не 403: «нет такого файла»
-    // неотличим от чужого приватного — тот же приём, что GetOwnedSession ниже на чужом приватном
-    // чате. Автор своего private, общие вложения (.cc-attachments/{guid}/…) и любые прочие пути —
-    // как раньше; без JWT (UserId null) любое private чужое — fail-closed, как сам IsForeign.
-    // Путь берётся в том виде, в котором его назвал клиент: обходы («./», «..», %2F, слеши,
-    // регистр) канонизирует IsForeign. Ручки записи (SaveContent/Upload/Delete/rename/…) этот
-    // гейт не получают: шаг закрывает чтение, право на чужую запись — вне его.
+    // .cc-attachments/private/{автор}/…) — 404, а не 403: «нет такого файла» неотличим от чужого
+    // приватного — тот же приём, что GetOwnedSession ниже на чужом приватном чате. Автор своего
+    // private, общие вложения (.cc-attachments/{guid}/…) и любые прочие пути — как раньше; без JWT
+    // (UserId null) любое private чужое — fail-closed, как сам IsForeign. Путь берётся в том виде,
+    // в котором его назвал клиент: обходы («./», «..», %2F, слеши, регистр) канонизирует IsForeign.
+    // S2d-6b-5 (дефект e5d55007, асимметрия с MCP/WebDAV): тот же гейт закрыл и пишущие ручки
+    // (SaveContent/Create/mkdir/Rename/Delete/Upload/ToMarkdown-цель/Revert/SaveFromUrl) —
+    // до любого эффекта: до замка пути, до CreateDirectory, до загрузки.
     private bool IsForeignPrivate(string? path) => PrivateAttachments.IsForeign(path, UserId);
     private IActionResult? ForeignPrivateDenied(string? path) => IsForeignPrivate(path) ? NotFound() : null;
+
+    // Контейнеры закрытого поддерева — корень проекта, .cc-attachments, .cc-attachments/private
+    // (IsForeign их не видит: нет сегмента-автора), — для РАЗРУШИТЕЛЬНЫХ Rename/Delete — 404,
+    // владельцу тоже: операция над контейнером относится ко всему private- поддереву (тот же
+    // предикат, что у MCP files_rename/files-delete и WebDAV COPY/MOVE, S2d-6b-3 доработка 2).
+    // Свой {id}-каталог автора и общие {guid}-каталоги — не контейнеры: с ними как раньше.
+    // Читающим ручкам и листингу контейнер НЕ ставится: List(.cc-attachments) и корень —
+    // открыты (закреплено тестом S2d-6b-2 доработки 1).
+    private IActionResult? PrivateContainerDenied(string? path) =>
+        PrivateAttachments.IsPrivateContainerPath(path) ? NotFound() : null;
 
     // Проставляет состояние синхронизации (direct/inherited/null) каждой записи
     private IEnumerable<FileEntry> Annotate(string projectId, IEnumerable<FileEntry> entries) =>
@@ -360,19 +371,23 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             if (!System.IO.File.Exists(abs))
                 return NotFound(new { error = "Файл не найден" });
 
+            // Имя целевого .md — по исходному имени; каталог — targetDir или рядом с исходником.
+            // Расчёт — до конвертации: S2d-6b-5 (дефект e5d55007) отказывает чужую цель
+            // (targetDir под чужим private) до любого эффекта, в том числе до работы markitdown
+            // и до CreateDirectory целевой папки.
+            var baseName = System.IO.Path.GetFileNameWithoutExtension(req.Path) + ".md";
+            var dir = string.IsNullOrWhiteSpace(req.TargetDir)
+                ? (System.IO.Path.GetDirectoryName(req.Path.Replace('\\', '/')) ?? "")
+                : req.TargetDir.Replace('\\', '/').Trim('/');
+            var targetRel = string.IsNullOrEmpty(dir) ? baseName : $"{dir}/{baseName}";
+            if (ForeignPrivateDenied(targetRel) is { } targetDenied) return targetDenied;
+
             var md = await docAi.ConvertAsync(abs, ct);
             if (md is null)
                 return StatusCode(502, new { error = "Не удалось конвертировать файл (markitdown недоступен или формат не поддержан)" });
 
             // Опционально: восстановить Markdown-разметку локальной моделью (для pdf без структуры)
             if (req.Enhance) md = await docAi.EnhanceMarkdownAsync(UserId, md, ct);
-
-            // Имя целевого .md — по исходному имени; каталог — targetDir или рядом с исходником
-            var baseName = System.IO.Path.GetFileNameWithoutExtension(req.Path) + ".md";
-            var dir = string.IsNullOrWhiteSpace(req.TargetDir)
-                ? (System.IO.Path.GetDirectoryName(req.Path.Replace('\\', '/')) ?? "")
-                : req.TargetDir.Replace('\\', '/').Trim('/');
-            var targetRel = string.IsNullOrEmpty(dir) ? baseName : $"{dir}/{baseName}";
 
             // Целевая папка может не существовать (пользователь указал новую) — создаём
             if (!string.IsNullOrEmpty(dir)) files.CreateDirectory(root, dir);
@@ -440,6 +455,9 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     {
         try
         {
+            // S2d-6b-5 (дефект e5d55007): запись в чужое private — 404 до любого эффекта:
+            // до проверки пути и до замка. Обе ветки (с If-Match и без) — за гейтом.
+            if (ForeignPrivateDenied(path) is { } denied) return denied;
             var root = GetRoot(projectId);
             if (IsDirectoryPath(root, path)) return NotFound();
 
@@ -810,6 +828,9 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     {
         try
         {
+            // S2d-6b-5: откат чужого private — 404 до git-операции (как отказ чтения:
+            // чужой файл неотличим от несуществующего)
+            if (ForeignPrivateDenied(req.Path) is { } denied) return denied;
             var ok = files.RevertFile(GetRoot(projectId), req.Path);
             return ok ? Ok() : BadRequest(new { error = "Не удалось откатить (не git-репозиторий?)" });
         }
@@ -823,6 +844,8 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     {
         try
         {
+            // S2d-6b-5: создание файла в чужом private — 404 до создания
+            if (ForeignPrivateDenied(req.Path) is { } denied) return denied;
             var root = GetRoot(projectId);
             files.CreateFile(root, req.Path, req.Content ?? "");
             RecordHumanEdit(projectId, root, req.Path);   // S3-3b: коллизия имени — выше, до этой строки
@@ -840,7 +863,14 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     [ProjectScope(Right = ProjectRight.WriteContent)]
     public IActionResult CreateDir(string projectId, [FromBody] PathRequest req)
     {
-        try { files.CreateDirectory(GetRoot(projectId), req.Path); return Ok(); }
+        // S2d-6b-5: каталог под чужим автором — 404 до CreateDirectory. Сам контейнер
+        // (.cc-attachments, private/) — не «чужой» и не разрушителен: mkdir над ним, как раньше
+        try
+        {
+            if (ForeignPrivateDenied(req.Path) is { } denied) return denied;
+            files.CreateDirectory(GetRoot(projectId), req.Path);
+            return Ok();
+        }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
@@ -860,6 +890,14 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     {
         try
         {
+            // S2d-6b-5: ОБА пути — чужое private и контейнеры (корень, .cc-attachments,
+            // .cc-attachments/private) — 404 до замков и до любого эффекта. Контейнерный
+            // предикат — тот же, что у MCP files_rename и WebDAV MOVE; владельцу тоже.
+            // Свой {id}-каталог автора и общие {guid}-каталоги — не контейнеры, как раньше.
+            if (ForeignPrivateDenied(req.OldPath) is { } dOld) return dOld;
+            if (ForeignPrivateDenied(req.NewPath) is { } dNew) return dNew;
+            if (PrivateContainerDenied(req.OldPath) is { } cOld) return cOld;
+            if (PrivateContainerDenied(req.NewPath) is { } cNew) return cNew;
             var root = GetRoot(projectId);
             var absOld = FileService.SafeJoinPublic(root, req.OldPath);
             var absNew = FileService.SafeJoinPublic(root, req.NewPath);
@@ -940,6 +978,12 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     {
         try
         {
+            // S2d-6b-5: чужое private (файл и каталог) — 404; контейнеры (корень проекта,
+            // .cc-attachments, .cc-attachments/private) — 404 и владельцу: удаление контейнера
+            // сносит всё private-поддерево (тот же предикат, что у MCP files_delete и WebDAV).
+            // Гейт — до ветки файл/папка, до замка, до files.Delete.
+            if (ForeignPrivateDenied(path) is { } denied) return denied;
+            if (PrivateContainerDenied(path) is { } container) return container;
             var root = GetRoot(projectId);
             if (IsDirectoryPath(root, path))
                 return CallerIsProjectOwner(projectId)
@@ -1000,6 +1044,10 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                 return BadRequest(new { error = "Некорректное имя файла" });
 
             var relativePath = string.IsNullOrEmpty(path) ? safeName : $"{path}/{safeName}";
+
+            // S2d-6b-5 (дефект e5d55007): каталог назначения под чужим private — 404 до
+            // SafeJoin/CreateDirectory: отказанная загрузка не должна создавать каталог назначения
+            if (ForeignPrivateDenied(relativePath) is { } foreign) return foreign;
 
             // S2c-10 (хвост ревью R-S2c-8, карточка 1ac0075a п.1): та же дверь, что у SaveContent:
             // замок на путь, If-Match по тому же контракту, запись через временный файл. Без замка
@@ -1390,6 +1438,10 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         if (!Uri.TryCreate(req.Url, UriKind.Absolute, out var uri) ||
             (uri.Scheme != "https" && uri.Scheme != "http"))
             return BadRequest(new { error = "Некорректный URL" });
+
+        // S2d-6b-5: цель под чужим private — 404 до сетевой работы и до CreateDirectory:
+        // скачивать ответ ради отказанной цели не за чем
+        if (ForeignPrivateDenied(req.Path) is { } foreign) return foreign;
 
         // SSRF: не даём серверу скачивать с внутренних адресов (localhost, приватные сети,
         // cloud metadata). Клиент "safe-download" без авто-редиректов — редирект на приватный

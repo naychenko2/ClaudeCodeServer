@@ -94,6 +94,12 @@ export const personalSectionRefusalText = 'Личный раздел пока н
 // кодом. Без контекста — нейтральный текст: вызывающий не знает, какой отказ перед ним.
 export type NotFoundContext = 'chat' | 'note';
 
+// Отказы «правка недоступна по устройству раздела» (локальный проект, раздел сферы) —
+// одна формулировка на оба места: её даёт и отказ контракта (коды ниже), и плашка
+// нечитаемой страницы (READONLY_TEXT, F3a-qa) — второй копии текста в фиче нет
+export const SECTION_OFF_TEXT = 'Вики локальных проектов — отдельной фичей';
+export const SPHERE_RESERVED_TEXT = 'Раздел сферы — следующая фича';
+
 // Отказы контракта (WikiErrorCode, S2f) — понятным русским текстом; 401/404 приходят без
 // тела и без кода, их отличаем по статусу. Формулировки — черновые (тексты фичи ведёт Софья).
 export function wikiErrorText(e: WikiError, ctx?: NotFoundContext): string {
@@ -102,8 +108,8 @@ export function wikiErrorText(e: WikiError, ctx?: NotFoundContext): string {
     case 'wiki_section_key': return 'Раздел не найден';
     case 'wiki_page_key': return 'Страница не найдена';
     case 'wiki_project_missing': return 'Проект не найден';
-    case 'wiki_section_off': return 'Вики локальных проектов — отдельной фичей';
-    case 'wiki_sphere_reserved': return 'Раздел сферы — следующая фича';
+    case 'wiki_section_off': return SECTION_OFF_TEXT;
+    case 'wiki_sphere_reserved': return SPHERE_RESERVED_TEXT;
     case 'wiki_refused': return 'Правку нельзя применить к этому состоянию страницы';
     case 'wiki_drift': return 'Страницу изменили мимо Хранителя — сначала разберите дрейф';
     case 'wiki_not_orphan': return 'Удалить можно только раздел удалённого проекта';
@@ -265,6 +271,9 @@ export const EDIT_TEXT = {
   removeAsk: 'Убрать утверждение?',
   removeHistory: 'Оно уйдёт в «Историю» страницы, удалено не будет.',
   aiWarn: 'Это формулировка ИИ. После сохранения прежняя уйдёт в «Историю» страницы, а утверждение станет вашим.',
+  add: 'Добавить утверждение',
+  addPlaceholder: 'Новое утверждение',
+  addRemove: 'Убрать новое утверждение',
   blank: 'Пустое утверждение не сохранить — уберите его кнопкой «Убрать».',
   offTitle: 'Правка страниц выключена',
   offText: 'Ваши изменения не сохранены. Включите «Заметки и Вики» в настройках и повторите.',
@@ -289,6 +298,19 @@ export const EDIT_TEXT = {
   invalidKeep: 'Ваша правка осталась в редакторе — поправьте и сохраните ещё раз.',
   failTitle: 'Не удалось сохранить',
   failText: 'Ваша правка осталась в редакторе. Проверьте соединение и повторите.',
+} as const;
+
+// ─── Плашка «только чтение» / «нельзя править здесь» (F3a-qa, дефект QA a16c6167) ───
+
+// Где правка недоступна по устройству раздела (локальный проект, раздел сферы), формулировка
+// про Хранителя неверна: причина другая. Заголовок — смысл, данный в дефекте; причины —
+// существующие тексты отказа (SECTION_OFF_TEXT / SPHERE_RESERVED_TEXT), не новая выдумка.
+// Для прочих случаев (без флагов, дрейф, сирота, правка выключена) текст плашки прежний —
+// он там верен и остаётся в компоненте.
+export const READONLY_TEXT = {
+  blockedTitle: 'Эту страницу нельзя править здесь',
+  localReason: SECTION_OFF_TEXT,
+  sphereReason: SPHERE_RESERVED_TEXT,
 } as const;
 
 // ─── Метки «ИИ заменил / оспаривает» и «Вернуть мою» (F3b; тексты — записка notes-wiki-unified-v1) ───

@@ -13,7 +13,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { AlertTriangle, Archive, Check, Info, Undo2 } from 'lucide-react';
+import { AlertTriangle, Archive, Check, Info, Plus, Undo2, X } from 'lucide-react';
 import { C, FONT, FS, R, SP, useIsMobile, WikiError, editWikiPage, loadWikiPage, wikiFootnoteLabel, type WikiFootnoteDto, type WikiSectionDto } from 'aihome_shell/kit';
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
@@ -84,7 +84,9 @@ export function scanEditable(content: string): { lines: string[]; items: EditIte
 
 // Полный новый текст страницы: нетронутые строки — как были (вместе со сносками), изменённые
 // — «маркер + новый текст» (сноску поставит сервер), убранные — выпадают из текста
-export function buildContent(content: string, edits: ReadonlyMap<number, EditEntry>, notes?: string): string {
+export interface AddedItem { key: number; section: string; text: string }
+
+export function buildContent(content: string, edits: ReadonlyMap<number, EditEntry>, notes?: string, added: readonly AddedItem[] = []): string {
   const { lines, items } = scanEditable(content);
   const out = lines.slice();
   const drop = new Set<number>();
@@ -94,7 +96,28 @@ export function buildContent(content: string, edits: ReadonlyMap<number, EditEnt
     if (e.gone) { drop.add(it.line); continue; }
     if (e.text !== undefined && e.text.trim() !== it.text) out[it.line] = `${it.bullet}${e.text.trim()}`;
   }
-  const built = out.filter((_, idx) => !drop.has(idx)).join('\n');
+  // Новые утверждения: в конец своей секции (после её последней строки), пустые не пишутся;
+  // секции в базе нет (ИИ убрал) — дописываем её в конец текста
+  const inserts = new Map<number, string[]>();
+  const orphans = new Map<string, string[]>();
+  for (const a of added) {
+    const text = a.text.trim();
+    if (!text) continue;
+    const heading = lines.indexOf(`## ${a.section}`);
+    if (heading < 0) { orphans.set(a.section, [...(orphans.get(a.section) ?? []), `- ${text}`]); continue; }
+    const own = items.filter(it => it.section === a.section);
+    const at = Math.max(heading, ...own.map(it => it.line));
+    const bullet = own.length ? own[own.length - 1].bullet : '- ';
+    inserts.set(at, [...(inserts.get(at) ?? []), `${bullet}${text}`]);
+  }
+  const kept: string[] = [];
+  out.forEach((l, idx) => {
+    if (!drop.has(idx)) kept.push(l);
+    const add = inserts.get(idx);
+    if (add) kept.push(...add);
+  });
+  for (const [name, rows] of orphans) kept.push('', `## ${name}`, ...rows);
+  const built = kept.join('\n');
   // Текст «Заметок» подменяем только если человек его менял: нетронутый уезжает как был
   return notes !== undefined && notes.trim() !== (extractNotes(content) ?? '') ? withNotes(built, notes) : built;
 }
@@ -167,6 +190,9 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
   const notesBase = extractNotes(base.content) ?? '';
   const notesText = notesEdit ?? notesBase;
   const notesChanged = notesText.trim() !== notesBase;
+  // Новые утверждения человека: привязаны к секции по имени, поэтому переживают «Слить вручную»
+  const [added, setAdded] = useState<AddedItem[]>([]);
+  const addKey = useRef(0);
   const [ask, setAsk] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [refusal, setRefusal] = useState<Refusal | null>(null);
@@ -181,8 +207,8 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
   const notesArg = notesEdit === null ? undefined : notesText;
   const locked = busy || conflict !== null;
 
-  const blank = items.some(it => it.editable && !goneOf(it) && textOf(it).trim() === '');
-  const dirty = notesChanged || items.some(it => it.editable && (goneOf(it) || changed(it)));
+  const blank = items.some(it => it.editable && !goneOf(it) && textOf(it).trim() === '') || added.some(a => a.text.trim() === '');
+  const dirty = notesChanged || added.some(a => a.text.trim() !== '') || items.some(it => it.editable && (goneOf(it) || changed(it)));
 
   // Единственный путь отправки: замок и сверка ключа страницы общие для «Сохранить» и
   // «Взять мою версию поверх». baseHash — хэш текста, на который опирается отправляемое
@@ -221,7 +247,7 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
 
   const save = () => {
     if (conflict || blank) return;
-    void submit(base.hash, buildContent(base.content, edits, notesArg));
+    void submit(base.hash, buildContent(base.content, edits, notesArg, added));
   };
 
   // Только по явному клику: правки человека переносятся на свежую версию (правки ИИ в
@@ -229,7 +255,7 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
   const takeMine = () => {
     const t = conflict?.theirs;
     if (!t) return;
-    void submit(t.hash, buildContent(t.content, rebaseEdits(base.content, t.content, edits), notesArg));
+    void submit(t.hash, buildContent(t.content, rebaseEdits(base.content, t.content, edits), notesArg, added));
   };
 
   const takeAi = () => {
@@ -281,7 +307,7 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
 
       {conflict && (
         <WikiEditConflict
-          conflict={{ mine: buildContent(base.content, edits, notesArg), theirs: conflict.theirs }}
+          conflict={{ mine: buildContent(base.content, edits, notesArg, added), theirs: conflict.theirs }}
           was={base.content}
           busy={busy}
           onTakeMine={takeMine}
@@ -329,7 +355,41 @@ export function WikiPageEditor({ section, pageKey, content, hash, footnotes, onD
                 onBack={() => patch(it.id, { gone: false })}
               />
             ))}
+            {sec.name !== READONLY_SECTION && added.filter(a => a.section === sec.name).map(a => (
+              <div key={a.key} data-testid={`wiki-edit-added-${a.key}`} style={{ display: 'flex', alignItems: 'flex-start', gap: SP.sm }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <TextArea
+                    value={a.text}
+                    onChange={v => setAdded(prev => prev.map(x => x.key === a.key ? { ...x, text: v.replace(/\s*\n\s*/g, ' ') } : x))}
+                    autoGrow minHeight={44} disabled={locked} isMobile={isMobile} placeholder={EDIT_TEXT.addPlaceholder}
+                  />
+                </div>
+                <IconButton
+                  size={isMobile ? 'lg' : 'md'}
+                  tone="danger"
+                  ariaLabel={EDIT_TEXT.addRemove}
+                  disabled={locked}
+                  onClick={() => setAdded(prev => prev.filter(x => x.key !== a.key))}
+                >
+                  <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                </IconButton>
+              </div>
+            ))}
           </div>
+          {sec.name !== READONLY_SECTION && (
+            <div style={{ marginTop: SP.sm }}>
+              <Button
+                variant="ghost"
+                size={btnSize}
+                dataTestId={`wiki-edit-add-${sec.name}`}
+                disabled={locked}
+                leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+                onClick={() => setAdded(prev => [...prev, { key: addKey.current++, section: sec.name, text: '' }])}
+              >
+                {EDIT_TEXT.add}
+              </Button>
+            </div>
+          )}
         </section>
       ))}
 

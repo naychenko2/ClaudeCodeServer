@@ -171,6 +171,98 @@ describe('Разбор и сборка текста правки', () => {
   });
 });
 
+describe('Добавление утверждения (F4c)', () => {
+  const addBtn = (c: Cont, name = 'Сводка') => byId(c, `wiki-edit-add-${name}`);
+  const addedArea = (c: Cont, key: number) => {
+    const row = byId(c, `wiki-edit-added-${key}`);
+    const ta = row && allNodes(row).find(n => n.nodeName === 'TEXTAREA');
+    if (!ta) throw new Error(`нет поля добавленного ${key}`);
+    return ta;
+  };
+  const typeAdded = (c: Cont, key: number, value: string) => {
+    const p = reactProps(addedArea(c, key)) as { onChange: (e: unknown) => void };
+    act(() => { p.onChange({ target: { value } }); });
+  };
+
+  it('buildContent: новое утверждение — в конец секции до «Истории», пустое не пишется', () => {
+    const out = buildContent(TEXT, new Map(), undefined, [
+      { key: 0, section: 'Сводка', text: ' Новое. ' },
+      { key: 1, section: 'Сводка', text: '   ' },
+    ]);
+    expect(out).toContain('- Второе утверждение. [^s2]\n- Новое.\n');
+    expect(out.indexOf('- Новое.')).toBeLessThan(out.indexOf('## История'));
+    expect(out.match(/- Новое\./g)).toHaveLength(1);
+  });
+
+  it('кнопка «Добавить утверждение» есть в каждой правимой секции, в «Истории» нет ни её, ни полей', async () => {
+    unifiedOn();
+    await seed(dtoOf(), async () => ({}));
+    const c = render();
+    await settle();
+    await openEditor(c);
+    expect(addBtn(c)).not.toBeNull();
+    expect(texts(addBtn(c)!)).toContain('Добавить утверждение');
+    expect(addBtn(c, 'История')).toBeNull();
+    const hist = allNodes(c).find(n => n.getAttribute('data-section-name') === 'История')!;
+    expect(hist).toBeTruthy();
+    expect(allNodes(hist).filter(n => n.nodeName === 'TEXTAREA')).toHaveLength(0);
+    expect(texts(hist)).not.toContain('Добавить');
+    expect(allNodes(hist).filter(n => n.getAttribute('aria-label') === 'Убрать утверждение')).toHaveLength(0);
+  });
+
+  it('пустое поле блокирует «Сохранить» с подсказкой; поле можно убрать до сохранения', async () => {
+    unifiedOn();
+    await seed(dtoOf(), async () => ({}));
+    const c = render();
+    await settle();
+    await openEditor(c);
+    click(addBtn(c), 'Добавить');
+    expect((reactProps(byId(c, 'wiki-edit-save')!) as { disabled?: boolean }).disabled).toBe(true);
+    expect(texts(c)).toContain('Пустое утверждение не сохранить');
+    click(allNodes(byId(c, 'wiki-edit-added-0')!).find(n => n.getAttribute('aria-label') === 'Убрать новое утверждение') ?? null, 'Убрать новое');
+    expect(byId(c, 'wiki-edit-added-0')).toBeNull();
+    expect(texts(c)).not.toContain('Пустое утверждение не сохранить');
+  });
+
+  it('добавил → «Сохранить»: новая строка секции в содержимом запроса', async () => {
+    unifiedOn();
+    await seed(dtoOf(), async () => ({ status: 'applied', hash: 'h2', content: TEXT }));
+    const c = render();
+    await settle();
+    await openEditor(c);
+    click(addBtn(c), 'Добавить');
+    typeAdded(c, 0, 'Дописанное человеком.');
+    click(byId(c, 'wiki-edit-save'), 'Сохранить');
+    await settle();
+    expect(posts).toHaveLength(1);
+    expect(String(posts[0].content)).toContain('- Второе утверждение. [^s2]\n- Дописанное человеком.\n');
+  });
+
+  it('добавил → 409 → «Оставить моё»: новое утверждение уезжает в payload поверх свежей версии', async () => {
+    unifiedOn();
+    const fresh = TEXT.replace('Ведёт ревью.', 'ИИ поправил.');
+    let n = 0;
+    await seed(dtoOf(), async () => {
+      if (n++ === 0) return refusal(409, { code: 'wiki_page_changed', message: 'c', page: { pageKey: KEY_A, content: fresh, hash: 'h9' } });
+      return { status: 'applied', hash: 'h10', content: fresh };
+    });
+    const c = render();
+    await settle();
+    await openEditor(c);
+    click(addBtn(c), 'Добавить');
+    typeAdded(c, 0, 'Моё новое.');
+    click(byId(c, 'wiki-edit-save'), 'Сохранить');
+    await settle();
+    expect(byId(c, 'wiki-edit-conflict')).not.toBeNull();
+    click(byId(c, 'wiki-conflict-take-mine'), 'Оставить моё');
+    await settle();
+    expect(posts).toHaveLength(2);
+    expect(posts[1].baseHash).toBe('h9');
+    expect(String(posts[1].content)).toContain('ИИ поправил.');
+    expect(String(posts[1].content)).toContain('- Моё новое.\n');
+  });
+});
+
 describe('Редактор страницы (F4a)', () => {
   it('без флага кнопки «Править» нет; без хэша в ответе — тоже', async () => {
     await seed(dtoOf(), async () => ({}));

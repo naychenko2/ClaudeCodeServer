@@ -35,7 +35,7 @@ import { PressableArea } from '../../../components/ui/PressableArea';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { fmtDayMonth, WikiFootnotePopover, type FootnoteView } from './WikiFootnotePopover';
 import { WikiPageEditor, type EditDone } from './WikiPageEditor';
-import { EDIT_TEXT, NOTES_TEXT, OVERRIDE_TEXT, PAGE_STATUS, PAGE_TYPE, sectionPrefix, wikiErrorText } from './wikiLabels';
+import { EDIT_TEXT, NOTES_TEXT, OVERRIDE_TEXT, PAGE_STATUS, PAGE_TYPE, READONLY_TEXT, sectionPrefix, wikiErrorText } from './wikiLabels';
 import { extractNotes, WikiNotesSection } from './WikiNotesSection';
 import { useRestoreWikiStatement } from './useRestoreWikiStatement';
 
@@ -598,7 +598,13 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
         />
       ) : (
         <>
-      {/* Плашка «только чтение» — тихая строка, не Notice (макет): правки идут через Хранителя */}
+      {/* Плашка «только чтение» — тихая строка, не Notice (макет). При доступной правке
+          (оба флага и страница правится) её нет: она противоречила бы кнопке «Править»
+          (дефект QA a16c6167). Она остаётся без флагов (прежний вид) и там, где править
+          нельзя: хроника — свой текст; локальный раздел / сфера — «нельзя править здесь»
+          с причиной отказа (тексты — в wikiLabels); прочие случаи (дрейф, сирота, правка
+          выключена) — прежний текст про Хранителя, он там верен */}
+      {!canEdit && (
       <div data-testid="wiki-readonly" style={{ display: 'flex', gap: SP.sm, alignItems: 'flex-start', marginTop: SP.md, padding: `${SP.sm}px ${SP.md}px`, background: C.bgInset, borderRadius: R.md, fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.45 }}>
         <Lock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden style={{ flexShrink: 0, marginTop: 2, color: C.textMuted }} />
         <span>
@@ -606,6 +612,11 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
             <>
               <b style={{ color: C.textHeading }}>Хроника пишется сама</b> каждую ночь, когда в чате
               появилось новое. Неверное — откатите чат целиком: чат получит пометку «Не разбирать».
+            </>
+          ) : unified && (section.local || section.sphereReserved) ? (
+            <>
+              <b style={{ color: C.textHeading }}>{READONLY_TEXT.blockedTitle}</b> —{' '}
+              {section.local ? READONLY_TEXT.localReason : READONLY_TEXT.sphereReason}.
             </>
           ) : (
             <>
@@ -616,6 +627,7 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
           )}
         </span>
       </div>
+      )}
 
       {page.strayLines.length > 0 && (
         <div style={{ marginTop: SP.md, fontSize: FS.md, color: C.textPrimary, lineHeight: 1.5, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>

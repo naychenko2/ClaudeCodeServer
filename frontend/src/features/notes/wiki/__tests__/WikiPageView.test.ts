@@ -947,3 +947,79 @@ updated: 2026-11-02
     expect(findNodeByAttr(container, 'data-testid', 'wiki-replacement-dot')).toBeNull();
   });
 });
+
+// ─── Плашка «только чтение» и правка (F3a-qa, дефект QA a16c6167) ───
+// Плашка противоречит кнопке «Править»: при доступной правке её нет; она остаётся без
+// флагов (прежние тесты выше) и там, где править нельзя: хроника — свой текст, локальный
+// раздел и сфера — «нельзя править здесь» с причиной отказа (тексты — в wikiLabels),
+// сирота — прежний текст (он верен).
+// Мутация этого прогона: «показывать плашку всегда» (снять условие !canEdit в
+// WikiPageView) → «с обоими флагами и доступной правкой» краснеет.
+
+const LOCAL_SECTION = { ...SECTION, local: true };
+const SPHERE_SECTION = { ...SECTION, sphereReserved: true };
+
+describe('Плашка «только чтение» и правка (F3a-qa)', () => {
+  it('с обоими флагами и доступной правкой: плашки нет, кнопка «Править» есть', async () => {
+    unifiedOn();
+    await seedPage(withOvr([]));
+    const c = renderPage();
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-readonly')).toBeNull();
+    expect(has(c, 'Только чтение')).toBe(false);
+    expect(buttonByText(c, 'Править')).not.toBeNull();
+  });
+
+  it('без флагов плашка прежняя, даже когда сервер отдал hash', async () => {
+    await seedPage(withOvr([]));
+    const c = renderPage();
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-readonly')).not.toBeNull();
+    expect(has(c, 'Только чтение')).toBe(true);
+    expect(buttonByText(c, 'Править')).toBeNull();
+  });
+
+  it('хроника под флагами: плашка остаётся со своим объяснением, кнопки правки нет', async () => {
+    unifiedOn();
+    await seedPage(withOvr([], { content: PAGE_CHRONICLE }));
+    const c = renderPage();
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-readonly')).not.toBeNull();
+    expect(has(c, 'Хроника пишется сама')).toBe(true);
+    expect(buttonByText(c, 'Править')).toBeNull();
+  });
+
+  it('локальный раздел под флагами: «нельзя править здесь» с причиной отказа', async () => {
+    unifiedOn();
+    await seedPage(withOvr([]));
+    const c = renderPage(LOCAL_SECTION);
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-readonly')).not.toBeNull();
+    expect(has(c, 'Эту страницу нельзя править здесь')).toBe(true);
+    expect(has(c, 'Вики локальных проектов — отдельной фичей')).toBe(true);
+    expect(has(c, 'Только чтение')).toBe(false);
+    expect(buttonByText(c, 'Править')).toBeNull();
+  });
+
+  it('раздел сферы под флагами: «нельзя править здесь» с причиной отказа', async () => {
+    unifiedOn();
+    await seedPage(withOvr([]));
+    const c = renderPage(SPHERE_SECTION);
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-readonly')).not.toBeNull();
+    expect(has(c, 'Эту страницу нельзя править здесь')).toBe(true);
+    expect(has(c, 'Раздел сферы — следующая фича')).toBe(true);
+    expect(has(c, 'Только чтение')).toBe(false);
+    expect(buttonByText(c, 'Править')).toBeNull();
+  });
+
+  it('сирота под флагами: плашка остаётся с прежним текстом (он верен)', async () => {
+    unifiedOn();
+    await seedPage(withOvr([]), ORPHAN_SECTION.key, ORPHAN_PAGE_KEY);
+    const c = renderPage(ORPHAN_SECTION, ORPHAN_PAGE_KEY);
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-readonly')).not.toBeNull();
+    expect(has(c, 'Только чтение')).toBe(true);
+    expect(buttonByText(c, 'Править')).toBeNull();
+  });
+});

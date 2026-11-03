@@ -119,6 +119,11 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         // видимости GetAccessible, авторский — после него.
         if (sessions.GetOwnedVisible(sessionId, UserId) is null)
             return sessions.GetAccessible(sessionId, UserId) is null ? NotFound() : ChatAuthorGate.Denied();
+        // S2d-6c: «Не сохранять решения» нельзя выключить, пока чат приватный. Зовётся раньше
+        // остальных Set*: отказ 409 не должен применять половину запроса (остальные поля —
+        // mute/озвучка/срок/имя — тогда не трогаются вовсе). true принимается всегда.
+        if (req.ExcludeFromDossiers is { } optOut && !sessions.TrySetExcludeFromDossiers(sessionId, optOut))
+            return Conflict(new { error = "Пока чат приватный, «Не сохранять решения» нельзя выключить", code = "private_chat_dossiers" });
         if (req.NotificationsMuted is bool muted) sessions.SetNotificationsMuted(sessionId, muted);
         // Хотя бы одно из двух — см. тот же блок в ChatsController.Update
         if (req.VoiceStyle is not null && !VoiceStyles.IsKnown(req.VoiceStyle))
@@ -130,8 +135,6 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
             if (req.ExpiresAfterMinutes is <= 0) return BadRequest(new { error = "Срок жизни чата должен быть положительным" });
             sessions.SetExpiry(sessionId, req.ExpiresAfterMinutes);
         }
-        if (req.ExcludeFromDossiers is { } optOut)
-            sessions.SetExcludeFromDossiers(sessionId, optOut);
         try
         {
             var updated = await sessions.UpdateAsync(sessionId, UserId, req.Name, req.Model, req.Effort, req.Tags);

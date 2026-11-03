@@ -283,4 +283,85 @@ public partial class SessionManagerTests
             .Should().Be(ChatVisibilityOutcome.HasMessages);
         session.MessageClaimed.Should().BeTrue();
     }
+
+    // S2d-6c: пока чат приватный, opt-out «Не сохранять решения» не выключается — иначе
+    // паспорта приватного разговора попали бы в общую «Историю решений» проекта.
+    [Fact]
+    public async Task ПриватныйЧат_СнятьExcludeFromDossiers_Нельзя_ФлагОстаётсяTrue()
+    {
+        var session = await SharedChatAsync("optout-priv");
+        _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: true).Outcome
+            .Should().Be(ChatVisibilityOutcome.Ok);
+
+        _sut.TrySetExcludeFromDossiers(session.Id, false).Should().BeFalse("приватный чат не выходит в «Историю решений»");
+        session.ExcludeFromDossiers.Should().BeTrue("отказ не меняет флаг");
+
+        // true принимается и в приватном: opt-out остаётся включённым
+        _sut.TrySetExcludeFromDossiers(session.Id, true).Should().BeTrue();
+        session.ExcludeFromDossiers.Should().BeTrue();
+    }
+
+    // Пустой PrivateToUserId (старые записи без автора) — тоже приватность: false не принимается,
+    // флаг остаётся как был.
+    [Fact]
+    public async Task ПриватныйЧат_ПустойPrivateToUserId_ТожеОтказ()
+    {
+        var session = await SharedChatAsync("optout-empty");
+        session.PrivateToUserId = "";
+
+        _sut.TrySetExcludeFromDossiers(session.Id, false).Should().BeFalse("пустая строка — тоже приватный чат");
+        session.ExcludeFromDossiers.Should().BeFalse("отказ не меняет флаг");
+    }
+
+    // Общий чат: автор сам решает. После приватного периода (флаг true по тумблеру) снятие
+    // приватности остаётся возможным, и только тогда автор может выключить флаг — явное согласие.
+    [Fact]
+    public async Task ОбщийЧат_СнятьExcludeFromDossiers_Можно_ИПослеСнятияПриватности()
+    {
+        var session = await SharedChatAsync("optout-shared");
+
+        _sut.TrySetExcludeFromDossiers(session.Id, true).Should().BeTrue();
+        _sut.TrySetExcludeFromDossiers(session.Id, false).Should().BeTrue("общий чат: opt-out выключается");
+        session.ExcludeFromDossiers.Should().BeFalse();
+
+        _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: true).Outcome
+            .Should().Be(ChatVisibilityOutcome.Ok);
+        _sut.TrySetExcludeFromDossiers(session.Id, false).Should().BeFalse("пока приватный — нельзя");
+        session.ExcludeFromDossiers.Should().BeTrue();
+
+        _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: false).Outcome
+            .Should().Be(ChatVisibilityOutcome.Ok);
+        _sut.TrySetExcludeFromDossiers(session.Id, false).Should().BeTrue("после снятия — явное согласие автора");
+        session.ExcludeFromDossiers.Should().BeFalse();
+    }
+
+    // Гонка S2d-6c: тумблер «в приватный» и снятие флага идут параллельно под одним VisibilityLock.
+    // Инвариант после каждой пары: PrivateToUserId != null ⇒ ExcludeFromDossiers == true.
+    // Чтение признака приватности вне замка дало бы быстрое «не приватный» в запись false после
+    // тумблера — приватный чат с выключенным флагом. Каждой итерации возвращается свежее
+    // состояние пустого неприватного чата (сообщений у него никогда не было — путь HasMessages
+    // не задействуется).
+    [Fact]
+    public async Task ГонкаПриватностьИСнятиеФлага_ИнвариантВоВсех500Парах()
+    {
+        var session = await SharedChatAsync("race-optout");
+        for (var i = 0; i < 500; i++)
+        {
+            session.PrivateToUserId = null;
+            session.ExcludeFromDossiers = false;
+            using var go = new ManualResetEventSlim(false);
+
+            var toggle = Task.Run(() => { go.Wait(); return _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: true).Outcome; });
+            var optOut = Task.Run(() => { go.Wait(); return _sut.TrySetExcludeFromDossiers(session.Id, false); });
+            go.Set();
+            var toggled = await toggle.WaitAsync(TimeSpan.FromSeconds(10));
+            var accepted = await optOut.WaitAsync(TimeSpan.FromSeconds(10));
+
+            toggled.Should().Be(ChatVisibilityOutcome.Ok, $"итерация {i}: пустой чат становится приватным");
+            if (session.PrivateToUserId is not null)
+                session.ExcludeFromDossiers.Should().BeTrue($"итерация {i}: приватный чат с выключенным флагом");
+            if (!accepted)
+                session.PrivateToUserId.Should().NotBeNullOrEmpty($"итерация {i}: отказ возможен только на приватном");
+        }
+    }
 }

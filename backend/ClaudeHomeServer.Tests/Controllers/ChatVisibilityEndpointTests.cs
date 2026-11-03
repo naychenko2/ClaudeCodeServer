@@ -102,8 +102,10 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
             new Session { Id = EditorChatId, ProjectId = _projectId, CreatedByUserId = _editorId, Status = SessionStatus.Finished },
             new Session { Id = EditorChat2Id, ProjectId = _projectId, CreatedByUserId = _editorId, Status = SessionStatus.Finished },
             new Session { Id = OwnerChatId, ProjectId = _projectId, CreatedByUserId = _ownerId, Status = SessionStatus.Finished },
-            new Session { Id = OwnerPrivateId, ProjectId = _projectId, CreatedByUserId = _ownerId, PrivateToUserId = _ownerId, Status = SessionStatus.Finished },
-            new Session { Id = EditorPrivateId, ProjectId = _projectId, CreatedByUserId = _editorId, PrivateToUserId = _editorId, Status = SessionStatus.Finished },
+            // Приватные сиды — с флагом opt-out true: его ставит тумблер приватности (S2d-7a),
+            // инвариант PrivateToUserId != null ⇒ ExcludeFromDossiers == true
+            new Session { Id = OwnerPrivateId, ProjectId = _projectId, CreatedByUserId = _ownerId, PrivateToUserId = _ownerId, ExcludeFromDossiers = true, Status = SessionStatus.Finished },
+            new Session { Id = EditorPrivateId, ProjectId = _projectId, CreatedByUserId = _editorId, PrivateToUserId = _editorId, ExcludeFromDossiers = true, Status = SessionStatus.Finished },
             new Session { Id = WithMessagesId, ProjectId = _projectId, CreatedByUserId = _editorId, MessageCount = 2, Status = SessionStatus.Finished },
             new Session { Id = PersonalChatId, ProjectId = _personalProjectId, CreatedByUserId = _ownerId, Status = SessionStatus.Finished },
             new Session { Id = OutsideChatId, OwnerId = _ownerId, CreatedByUserId = _ownerId, Status = SessionStatus.Finished },
@@ -161,6 +163,11 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
     private ChatsController ChatsAs(string userId) =>
         new(_sessions, _projects, null!, null!, null!, null!, null!, null!, null!, null!,
             NullLogger<ChatsController>.Instance) { ControllerContext = AsUser(userId) };
+
+    // PUT /api/projects/{id}/sessions/{sid} (S2d-6c): Update не трогает provisioner/контекст/кэш —
+    // несуществующие для ручки зависимости, как null! в ChatsAs выше.
+    private SessionsController SessionsAs(string userId) =>
+        new(_sessions, _projects, null!, _personas, null!, null!) { ControllerContext = AsUser(userId) };
 
     private static ControllerContext AsUser(string userId) => new()
     {
@@ -251,6 +258,53 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
             .Should().Be((409, "chat_has_messages"));
         _sessions.GetById(WithMessagesId)!.PrivateToUserId.Should().BeNull();
     }
+
+    // S2d-6c: PUT sessions/{sid} с excludeFromDossiers=false на приватном чате — 409
+    // private_chat_dossiers, и ни одно поле запроса не применяется (имя остаётся).
+    // После снятия приватности автором флаг остаётся true (прошлое не раскрываем), но теперь
+    // автор может выключить его сам: тот же PUT проходит и флаг гаснет.
+    [Fact]
+    public void ПриватныйЧат_ВыключитьOptOut_409_ИмяНеМеняется_ПослеСнятияПриватности_200()
+    {
+        var c = SessionsAs(_ownerId);
+        var s = _sessions.GetById(OwnerPrivateId)!;
+        s.ExcludeFromDossiers.Should().BeTrue("приватный чат по тумблеру уже вне «Истории решений»");
+
+        Read(c.UpdateSync(_projectId, OwnerPrivateId, new UpdateSessionRequest(Name: "новое имя", ExcludeFromDossiers: false)))
+            .Should().Be((409, "private_chat_dossiers"));
+        s.Name.Should().BeNull("отказ 409: прочие поля запроса не применяются");
+        s.ExcludeFromDossiers.Should().BeTrue("отказ не меняет флаг");
+        s.PrivateToUserId.Should().Be(_ownerId, "отказ не трогает приватность");
+
+        // Снять приватность может только автор; флаг после этого остаётся true (S2d-7a)
+        Read(ChatsAs(_ownerId).SetVisibilitySync(OwnerPrivateId, new SetVisibilityRequest(false))).Status.Should().Be(200);
+        s.PrivateToUserId.Should().BeNull();
+        s.ExcludeFromDossiers.Should().BeTrue("после «сделать общим» прошлое приватного периода не раскрываем");
+
+        // Явное согласие автора после снятия приватности — принимается
+        Read(c.UpdateSync(_projectId, OwnerPrivateId, new UpdateSessionRequest(ExcludeFromDossiers: false))).Status.Should().Be(200);
+        s.ExcludeFromDossiers.Should().BeFalse();
+    }
+
+    // Тот же PUT на чужом приватном чате — прежний 404 (существование не выдаётся).
+    // На общем чате opt-out включается и выключается без ограничений — но у проектного чата
+    // настройки принадлежат владельцу-арендатору (ResolveOwnerId, SessionManager.cs:4454),
+    // редактор-автор на этой ручке — прежний 403 not_chat_author (контракт Update, не этот шаг).
+    [Fact]
+    public void ЧужойПриватный_404_АОбщийЧатВладельца_МеняетOptOut_Свободно()
+    {
+        Read(SessionsAs(_editorId).UpdateSync(_projectId, OwnerPrivateId, new UpdateSessionRequest(ExcludeFromDossiers: false)))
+            .Status.Should().Be(404, "чужой приватный неотличим от несуществующего");
+        _sessions.GetById(OwnerPrivateId)!.ExcludeFromDossiers.Should().BeTrue("чужой флаг не трогается");
+
+        var c = SessionsAs(_ownerId);
+        var s = _sessions.GetById(OwnerChatId)!;
+        Read(c.UpdateSync(_projectId, OwnerChatId, new UpdateSessionRequest(ExcludeFromDossiers: true))).Status.Should().Be(200);
+        s.ExcludeFromDossiers.Should().BeTrue();
+        Read(c.UpdateSync(_projectId, OwnerChatId, new UpdateSessionRequest(ExcludeFromDossiers: false))).Status.Should().Be(200);
+        s.ExcludeFromDossiers.Should().BeFalse("общий чат: owner сам решает");
+        s.PrivateToUserId.Should().BeNull("opt-out не трогает приватность");
+    }
 }
 
 // SetVisibility стал асинхронным (вышибание из session-группы после Ok); тесты ручки читают результат синхронно
@@ -259,4 +313,12 @@ internal static class ChatsControllerVisibilityExtensions
     public static Microsoft.AspNetCore.Mvc.IActionResult SetVisibilitySync(
         this ClaudeHomeServer.Controllers.ChatsController c, string id, ClaudeHomeServer.Controllers.SetVisibilityRequest req) =>
         c.SetVisibility(id, req).GetAwaiter().GetResult();
+}
+
+// Update — async (UpdateAsync в менеджере); та же синхронная читка, что у SetVisibilitySync
+internal static class SessionsControllerUpdateExtensions
+{
+    public static Microsoft.AspNetCore.Mvc.IActionResult UpdateSync(
+        this ClaudeHomeServer.Controllers.SessionsController c, string projectId, string id, ClaudeHomeServer.Controllers.UpdateSessionRequest req) =>
+        c.Update(projectId, id, req).GetAwaiter().GetResult();
 }

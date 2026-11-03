@@ -2770,12 +2770,22 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // Opt-out «Истории решений» (ADR-004 §6): тумблер «Не сохранять решения из этого чата».
     // Персистится в sessions.json; DossierCaptureService проверяет его при захвате коммита.
     // UpdatedAt не трогаем по той же причине, что в SetExpiry: это настройка, а не активность.
-    public Session? SetExcludeFromDossiers(string sessionId, bool value)
+    // S2d-6c: пока чат приватный, false не принимается — иначе паспорта приватного разговора
+    // молча попали бы в общую «Историю решений» проекта. Признак приватности (PrivateToUserId,
+    // включая пустую строку у старых записей) читается ПОД VisibilityLock — тем же замком, под
+    // которым SetChatVisibility ставит приватность: чтение до замка пропустило бы быстрое
+    // «не приватный» в запись после тумблера. false после снятия приватности — явное согласие
+    // автора, принимается. Отказ — false, флаг не меняется; исключений наружу нет.
+    public bool TrySetExcludeFromDossiers(string sessionId, bool value)
     {
-        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
-        entry.Info.ExcludeFromDossiers = value;
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
+        lock (entry.VisibilityLock)
+        {
+            if (!value && entry.Info.PrivateToUserId is not null) return false;
+            entry.Info.ExcludeFromDossiers = value;
+        }
         SaveSessions();
-        return entry.Info;
+        return true;
     }
 
     // Сменить состав контекста чата (фича chat-context): идемпотентная замена списка

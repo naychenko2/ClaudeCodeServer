@@ -21,6 +21,10 @@ const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:5500';
 const MAIN_PAGE = 'Замеры локальной GPU';
 const EDIT_PAGE = 'Тест правки';
 const EDIT_PAGE_2 = 'Тест правки 2';
+const ADD_PAGE = 'Тест добавления';
+const CHRONICLE_PAGE = 'Хроника чата QA';
+const DISPUTE_PAGE = 'Тест спора';
+const DISPUTE_PKG_ID = 'ccddeeff-eeff-0011-2233-445566778899';
 const AI_CARD = 'ИИ-разбор 111111';
 const HUMAN_CARD = 'Правка человека 222222';
 const PKG_ID = 'aabbccdd-eeff-0011-2233-445566778899';
@@ -133,6 +137,84 @@ status: active
 `;
 }
 
+// Страница под «＋ Добавить утверждение» (дефект 02125be1): «Сводка» с утверждением ИИ
+// и «История», которая в редакторе только для чтения.
+const PAGE_ADD = `---
+type: topic
+aliases: []
+owns: []
+sources: []
+status: active
+---
+
+# ${ADD_PAGE}
+
+## Сводка
+ИИ записал это утверждение про очередь GPU. [^s1]
+
+## Хронология
+
+## Противоречия
+
+## История
+Прежняя формулировка про очередь GPU. [^s2]
+
+[^s1]: [[${AI_CARD}]] — «ИИ записал это утверждение про очередь GPU.»
+[^s2]: [[${HUMAN_CARD}]] — «Прежняя формулировка про очередь GPU.»
+`;
+
+const HUMAN_STATEMENT = 'Вы записали это утверждение про очередь GPU.';
+const DISPUTE_TEXT = 'Очередь GPU обслуживают посменно, а не один человек.';
+
+// Страница под спор «ИИ оспаривает ваше утверждение» (конфликт пакета conflict@human):
+// состояние собирается фикстурой (пакет + строка журнала), как и пакет замены в первом круге.
+const PAGE_DISPUTE = `---
+type: topic
+aliases: []
+owns: []
+sources: []
+status: active
+---
+
+# ${DISPUTE_PAGE}
+
+## Сводка
+${HUMAN_STATEMENT} [^s2]
+
+## Хронология
+
+## Противоречия
+${DISPUTE_TEXT} [^s1]
+
+## История
+
+[^s1]: [[${AI_CARD}]] — «${DISPUTE_TEXT}»
+[^s2]: [[${HUMAN_CARD}]] — «${HUMAN_STATEMENT}»
+`;
+
+// Страница-хроника (type: chronicle): правки нет, и вместо плашки про Хранителя —
+// своё объяснение (дефект a16c6167).
+const PAGE_CHRONICLE = `---
+type: chronicle
+summary: хроника чата QA
+status: active
+---
+
+# ${CHRONICLE_PAGE}
+
+## О чём
+Обсуждали очередь локальной GPU.
+
+## Что решили
+- Лимит очереди держим вручную.
+
+## Что выяснили
+- Локальная модель быстрее облака.
+
+## Открытые вопросы
+- Когда поднимать лимит?
+`;
+
 // Пересобрать фикстуру на диске стенда: страницы, карточки, пакет ИИ и строку журнала.
 // Требуется потому, что проверки правки и возврата меняют страницу — без пересборки
 // повторный прогон спека видел бы уже изменённое состояние.
@@ -158,6 +240,9 @@ async function reseed(): Promise<void> {
   hashes[`Личное/${MAIN_PAGE}.md`] = write(path.join(pages, `${MAIN_PAGE}.md`), PAGE_MAIN);
   hashes[`Личное/${EDIT_PAGE}.md`] = write(path.join(pages, `${EDIT_PAGE}.md`), editPage(EDIT_PAGE));
   hashes[`Личное/${EDIT_PAGE_2}.md`] = write(path.join(pages, `${EDIT_PAGE_2}.md`), editPage(EDIT_PAGE_2));
+  hashes[`Личное/${ADD_PAGE}.md`] = write(path.join(pages, `${ADD_PAGE}.md`), PAGE_ADD);
+  hashes[`Личное/${CHRONICLE_PAGE}.md`] = write(path.join(pages, `${CHRONICLE_PAGE}.md`), PAGE_CHRONICLE);
+  hashes[`Личное/${DISPUTE_PAGE}.md`] = write(path.join(pages, `${DISPUTE_PAGE}.md`), PAGE_DISPUTE);
 
   // Страница раздела «Общее» — для пробы отказа гейта (ссылка вниз, в «Личное»)
   const commonDir = path.join(root, 'pages', 'Общее');
@@ -231,12 +316,35 @@ status: active
   };
   writeFileSync(path.join(root, 'keeper/packages', `${INBOX_PKG_ID}.json`), JSON.stringify(inboxPkg), 'utf8');
 
-  const logLine = {
-    ts: '2026-11-02T05:48:05.0000000+00:00', op: 'apply', section: 'personal',
-    pages: [`Личное/${MAIN_PAGE}.md`], source: 'session:qa11111111#m1-m9', actor: 'ai',
-    policy: 'auto', packages: [PKG_ID], overrodeHuman: true,
+  // Пакет ИИ: спор утверждения человека (conflict@human), применённый автоматом.
+  // Строка журнала — старше строки замены, чтобы порядок «Журнала» в других сценариях не менялся.
+  const disputePkg = {
+    v: 1, id: DISPUTE_PKG_ID, author: 'ai', section: 'personal',
+    sources: [{ origin: 'session', ref: 'session:qa11111111#m1-m9' }],
+    operations: [{
+      op: 'conflict', page: `Личное/${DISPUTE_PAGE}.md`, pageSection: 'Сводка',
+      target: HUMAN_STATEMENT, text: DISPUTE_TEXT,
+      class: 'session×conflict@human', decision: 'auto', reason: null, baseHashes: {},
+      inputTokens: null, outputTokens: null, humanDecision: null, humanReason: null,
+    }],
+    status: 'applied', statusReason: null,
+    createdAt: '2026-11-02T05:30:00.0000000+00:00', updatedAt: '2026-11-02T05:30:00.0000000+00:00',
   };
-  writeFileSync(path.join(root, 'keeper/log.jsonl'), JSON.stringify(logLine) + '\n', 'utf8');
+  writeFileSync(path.join(root, 'keeper/packages', `${DISPUTE_PKG_ID}.json`), JSON.stringify(disputePkg), 'utf8');
+
+  const logLines = [
+    {
+      ts: '2026-11-02T05:30:05.0000000+00:00', op: 'apply', section: 'personal',
+      pages: [`Личное/${DISPUTE_PAGE}.md`], source: 'session:qa11111111#m1-m9', actor: 'ai',
+      policy: 'auto', packages: [DISPUTE_PKG_ID], overrodeHuman: true,
+    },
+    {
+      ts: '2026-11-02T05:48:05.0000000+00:00', op: 'apply', section: 'personal',
+      pages: [`Личное/${MAIN_PAGE}.md`], source: 'session:qa11111111#m1-m9', actor: 'ai',
+      policy: 'auto', packages: [PKG_ID], overrodeHuman: true,
+    },
+  ];
+  writeFileSync(path.join(root, 'keeper/log.jsonl'), logLines.map(l => JSON.stringify(l)).join('\n') + '\n', 'utf8');
 }
 
 // ─── Хелперы страницы ───
@@ -257,6 +365,14 @@ async function openApp(page: Page): Promise<void> {
   await page.reload();
   await page.waitForTimeout(1500);
   await closeToasts(page);
+  // Раздел мог не открыться (после reload стартовый экран иногда возвращается к чатам):
+  // идём по навигации, как человек, чтобы сценарии не зависели от стартового состояния
+  const inSection = await page.getByRole('button', { name: 'Вики', exact: true }).count()
+    + await page.getByTestId('unified-filter').count();
+  if (inSection === 0) {
+    const nav = page.getByRole('button', { name: 'Заметки', exact: true }).first();
+    if (await nav.count()) { await nav.click(); await page.waitForTimeout(1500); }
+  }
 }
 
 // Строка страницы вики в дереве: только kind=page — иначе под тем же заголовком есть ещё
@@ -268,6 +384,89 @@ function pageRow(page: Page, title: string) {
 async function openWikiPage(page: Page, title: string): Promise<void> {
   await pageRow(page, title).first().click();
   await expect(page.getByTestId('wiki-page')).toBeVisible();
+}
+
+// Снимки ключевых состояний второго круга — в тот же каталог, что и первого
+const SHOTS = path.resolve(process.cwd(), '../../.cc-attachments/notes-wiki');
+async function shot(p: Page, name: string): Promise<void> {
+  mkdirSync(SHOTS, { recursive: true });
+  await p.screenshot({ path: path.join(SHOTS, name) });
+}
+
+// Форма дерева: группы (текст заголовка со счётчиком) и их строки. Обход прямой: строки
+// лежат соседями заголовка, а не внутри него — по data-testid, не по вёрстке.
+async function treeShape(page: Page): Promise<{ group: string; rows: { kind: string; origin: string; title: string }[] }[] | null> {
+  return page.evaluate(() => {
+    const root = document.querySelector('[data-testid="wiki-unified-tree"]');
+    if (!root) return null;
+    const out: { group: string; rows: { kind: string; origin: string; title: string }[] }[] = [];
+    let cur: { group: string; rows: { kind: string; origin: string; title: string }[] } | null = null;
+    const walk = (el: Element) => {
+      for (const ch of Array.from(el.children)) {
+        const tid = ch.getAttribute('data-testid');
+        if (tid === 'unified-group') {
+          cur = { group: (ch.textContent || '').trim(), rows: [] };
+          out.push(cur);
+        } else if (tid === 'unified-row') {
+          if (!cur) { cur = { group: '', rows: [] }; out.push(cur); }
+          cur.rows.push({
+            kind: ch.getAttribute('data-kind') || '',
+            origin: ch.getAttribute('data-origin') || '',
+            title: (ch.getAttribute('title') || '').trim(),
+          });
+        } else walk(ch);
+      }
+    };
+    walk(root);
+    return out;
+  });
+}
+
+// Число строк-утверждений в секциях открытой страницы, содержащих текст.
+// Только «li» секций: блок «Источники» цитирует утверждение второй раз по построению,
+// и считать его — мера, которая сама себе врёт.
+async function occurrences(page: Page, text: string): Promise<number> {
+  return page.evaluate((t) => {
+    const root = document.querySelector('[data-testid="wiki-page"]');
+    if (!root) return -1;
+    let n = 0;
+    for (const sec of Array.from(root.querySelectorAll('[data-testid="wiki-section"]'))) {
+      for (const li of Array.from(sec.querySelectorAll('li'))) {
+        if ((li.textContent || '').includes(t)) n++;
+      }
+    }
+    return n;
+  }, text);
+}
+
+// Мобильная шторка единого дерева: режим «Вики» → кнопка дерева
+async function openMobileTree(p: Page): Promise<void> {
+  await p.goto(BASE + '/#/notes');
+  await p.reload();
+  await p.waitForTimeout(1800);
+  await closeToasts(p);
+  await p.getByRole('button', { name: 'Вики', exact: true }).first().click();
+  await p.waitForTimeout(600);
+  await p.getByTestId('wiki-open-tree').click();
+  // Дерево грузит каталоги разделов само и не синхронно со списком заметок: ждём строки
+  // страниц вики, а не первых строк вообще (иначе мерили бы промежуточное состояние).
+  // Замер времени до строк — доказательство в отчёте.
+  const t0 = Date.now();
+  await expect(p.locator('[data-testid="unified-row"][data-kind="page"]').first()).toBeVisible({ timeout: 20000 });
+  console.log(`WAIT-page-rows ${p.viewportSize()?.width}: ${Date.now() - t0} ms`);
+}
+
+// Что именно рисует дерево в момент замера (для разбора пустых состояний)
+async function treeDiag(p: Page): Promise<unknown> {
+  return p.evaluate(() => ({
+    skeleton: document.querySelectorAll('[data-testid="unified-skeleton"]').length,
+    empty: document.querySelectorAll('[data-testid="unified-empty"]').length,
+    groups: document.querySelectorAll('[data-testid="unified-group"]').length,
+    rows: document.querySelectorAll('[data-testid="unified-row"]').length,
+    pageRows: document.querySelectorAll('[data-testid="unified-row"][data-kind="page"]').length,
+    noteRows: document.querySelectorAll('[data-testid="unified-row"][data-kind="note"]').length,
+    text: (document.querySelector('[data-testid="wiki-unified-tree"]')?.innerText || '').slice(0, 300),
+  }));
 }
 
 test.beforeAll(async ({ playwright }) => {
@@ -616,36 +815,298 @@ test('сценарий 8: ширины 360, 400 и 1280 — нет горизо�
   expect(findings, 'находки по вёрстке').toEqual([]);
 });
 
-test('находка D4: заголовки групп дерева на 360 — 23 px, ниже тач-цели 40 px (строки разделов — 44 px, норма)', async ({ browser }) => {
+// ─── QA-2: повторная проверка дефектов первого круга ───
+
+test('QA2 44db9ab9: страница вики не дублируется в «Другие заметки»; счётчики чипов равны числу строк', async ({ page, context }) => {
+  const errors = collectConsoleErrors(page);
+  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await setFlags(true);
+  await reseed();
+
+  // Данные, на которых вообще есть что проверять: бэк отдаёт страницы вики и списком заметок
+  const notes = await client.get<{ id: string; title: string; source: string }[]>('/api/notes');
+  const asNote = notes.filter(n => n.source === 'wiki' && n.title === MAIN_PAGE);
+  expect(asNote.length, 'бэк отдаёт страницу вики заметкой source=wiki — без этих данных проверка не о чём').toBeGreaterThan(0);
+
+  await openApp(page);
+  // Один ряд на страницу: только как страница раздела
+  await expect(page.locator('[data-testid="unified-row"][data-kind="page"]', { hasText: MAIN_PAGE })).toHaveCount(1);
+  await expect(page.locator('[data-testid="unified-row"][data-kind="note"]', { hasText: MAIN_PAGE })).toHaveCount(0);
+
+  const shape = await treeShape(page);
+  expect(shape, 'дерево открылось').not.toBeNull();
+  // «Другие заметки» (если есть) — только заметки, вики-страниц там быть не должно
+  for (const g of shape!) {
+    if (g.group.includes('Другие заметки')) {
+      const wikiRows = g.rows.filter(r => r.kind === 'page');
+      expect(wikiRows.map(r => r.title), 'в «Другие заметки» нет страниц вики').toEqual([]);
+    }
+  }
+
+  // Счётчики чипов «кто написал» = числу строк дерева по происхождению
+  const chips = await page.getByTestId('unified-filter').evaluate(el =>
+    Array.from(el.querySelectorAll('[role="option"], button, [class*="chip" i]'))
+      .map(c => (c.textContent || '').trim())
+      .filter(t => /\s\d+$/.test(t)));
+  expect(chips.length, 'чипы со счётчиками на месте').toBeGreaterThanOrEqual(2);
+  const claimed: Record<string, number> = {};
+  for (const c of chips) {
+    const m = /^(.+?)\s+(\d+)$/.exec(c);
+    if (m) claimed[m[1].trim()] = Number(m[2]);
+  }
+  const rows = shape!.flatMap(g => g.rows);
+  const counted = {
+    Все: rows.length,
+    Заметки: rows.filter(r => r.origin === 'note').length,
+    ИИ: rows.filter(r => r.origin === 'ai').length,
+    Вместе: rows.filter(r => r.origin === 'together').length,
+    Мои: rows.filter(r => r.origin === 'me').length,
+  };
+  for (const [label, want] of Object.entries(counted)) {
+    if (claimed[label] !== undefined) {
+      expect(claimed[label], `счётчик чипа «${label}» = числу строк`).toBe(want);
+    }
+  }
+
+  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
+});
+
+test('QA2 3e2ec144: карточки «Источники/…» не в дереве и не в счётчиках; хроника и обычные страницы на месте', async ({ page, context }) => {
+  const errors = collectConsoleErrors(page);
+  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await setFlags(true);
+  await reseed();
+  await openApp(page);
+  // Дерево может монтироваться чуть позже загрузки страницы: ждём его, а не читаем сразу
+  await expect(page.getByTestId('wiki-unified-tree')).toBeVisible({ timeout: 20000 });
+
+  const shape = await treeShape(page);
+  expect(shape, 'дерево открылось').not.toBeNull();
+  const titles = shape!.flatMap(g => g.rows.map(r => r.title));
+  expect(titles, 'служебных карточек источников в дереве нет').not.toContain(AI_CARD);
+  expect(titles, 'служебных карточек источников в дереве нет').not.toContain(HUMAN_CARD);
+  // Обычная страница и хроника — на месте
+  expect(titles).toContain(MAIN_PAGE);
+  expect(titles).toContain(CHRONICLE_PAGE);
+
+  // Счётчик в заголовке группы = числу её строк (карточки в него не входят)
+  for (const g of shape!) {
+    const m = /(\d+)\s*$/.exec(g.group);
+    expect(Number(m?.[1] ?? -1), `счётчик группы «${g.group}»`).toBe(g.rows.length);
+  }
+  await shot(page, 'qa2-01-tree-1280.png');
+
+  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
+});
+
+test('QA2 a16c6167: плашки «Только чтение» рядом с «Править» нет; у хроники — своё объяснение', async ({ page, context }) => {
+  const errors = collectConsoleErrors(page);
+  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await setFlags(true);
+  await reseed();
+  await openApp(page);
+
+  // Страница, которую можно править: кнопки «Править» и плашки «Только чтение» вместе нет
+  await openWikiPage(page, MAIN_PAGE);
+  await expect(page.getByTestId('wiki-edit-open')).toBeVisible();
+  await expect(page.getByTestId('wiki-readonly')).toHaveCount(0);
+  await shot(page, 'qa2-02-page-editable-1280.png');
+
+  // Хроника: правки нет, но объяснение — про хронику, а не про Хранителя
+  await openWikiPage(page, CHRONICLE_PAGE);
+  await expect(page.getByTestId('wiki-edit-open')).toHaveCount(0);
+  const ro = page.getByTestId('wiki-readonly');
+  await expect(ro).toBeVisible();
+  await expect(ro).toContainText('Хроника пишется сама');
+  await expect(ro).not.toContainText('вики ведёт Хранитель');
+  await shot(page, 'qa2-03-chronicle-1280.png');
+
+  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
+});
+
+test('QA2 72bb73fd: на 360 и 400 в шторке единое дерево со значками; выбор страницы открывает её и закрывает шторку', async ({ browser }) => {
   const ctx = await browser.newContext({ baseURL: BASE });
   await ctx.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
   await reseed();
-  const p = await ctx.newPage();
-  await p.setViewportSize({ width: 360, height: 800 });
-  await p.goto(BASE + '/#/notes');
-  await p.reload();
-  await p.waitForTimeout(1800);
-  await closeToasts(p);
-  await p.getByRole('button', { name: 'Вики', exact: true }).first().click();
-  await p.waitForTimeout(600);
-  const treeBtn = p.getByTestId('wiki-open-tree');
-  if (await treeBtn.count()) await treeBtn.click();
-  await p.waitForTimeout(800);
+  for (const width of [360, 400]) {
+    const p = await ctx.newPage();
+    await p.setViewportSize({ width, height: 800 });
+    await openMobileTree(p);
 
-  // Строки разделов вики — по макету 44 px на тач-экране
-  const rows = await p.locator('[data-testid="wiki-section-row"]').evaluateAll(
-    els => els.map(e => Math.round(e.getBoundingClientRect().height)));
-  // Заголовки групп дерева («Разделы», «Проекты», «Сферы») — те же кликабельные кнопки, но ниже
-  const heads = await p.locator('[data-testid="wiki-tree"] button').evaluateAll(
-    els => els.filter(e => !e.getAttribute('data-testid'))
-      .map(e => ({ text: (e.textContent || '').trim().slice(0, 20), h: Math.round(e.getBoundingClientRect().height) })));
+    await expect(p.getByTestId('wiki-unified-tree'), `${width}: в шторке единое дерево`).toBeVisible();
+    await expect(p.getByTestId('unified-legend'), `${width}: значки авторства на месте`).toContainText('заметка');
+    await expect(p.getByTestId('unified-legend')).toContainText('вместе');
+    // Строки и заметок, и страниц вики
+    const pageRows = p.locator('[data-testid="unified-row"][data-kind="page"]');
+    if (await pageRows.count() === 0) console.log('DIAG ' + width + ' ' + JSON.stringify(await treeDiag(p)));
+    expect(await pageRows.count(), `${width}: в шторке есть строки страниц вики`).toBeGreaterThan(0);
+    expect(await p.locator('[data-testid="unified-row"][data-kind="note"]').count(), `${width}: в шторке есть заметки}`).toBeGreaterThan(0);
+
+    await shot(p, `qa2-04-drawer-tree-${width}.png`);
+    await pageRows.filter({ hasText: MAIN_PAGE }).first().click();
+    await expect(p.getByTestId('wiki-page'), `${width}: страница открылась`).toBeVisible({ timeout: 15000 });
+    await expect(p.getByTestId('wiki-drawer-overlay'), `${width}: шторка закрылась`).toHaveCount(0);
+    await p.close();
+  }
   await ctx.close();
+});
 
-  expect(rows.length, 'дерево разделов открылось').toBeGreaterThan(0);
-  expect(Math.min(...rows), 'строки разделов на 360 — 44 px').toBeGreaterThanOrEqual(40);
-  // Зафиксировано как находка: после правки значение должно вырасти до 40 px
-  expect(heads.length, 'в дереве есть заголовки групп').toBeGreaterThan(0);
-  expect(Math.max(...heads.map(h => h.h)), 'заголовки групп дерева на 360 ниже тач-цели').toBeLessThan(40);
+test('QA2 4dfec12c: цели касания в шторке (заголовки групп и строки) ≥ 40 px на 360 и 400', async ({ browser }) => {
+  const ctx = await browser.newContext({ baseURL: BASE });
+  await ctx.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await reseed();
+  for (const width of [360, 400]) {
+    const p = await ctx.newPage();
+    await p.setViewportSize({ width, height: 800 });
+    await openMobileTree(p);
+
+    const measured = await p.locator('[data-testid="unified-group"]').count();
+    expect(measured, `${width}: заголовки групп в шторке есть`).toBeGreaterThan(0);
+    const tooSmall = await p.evaluate(() => {
+      const bad: string[] = [];
+      for (const sel of ['[data-testid="unified-group"]', '[data-testid="unified-row"]']) {
+        for (const el of Array.from(document.querySelectorAll(sel))) {
+          const h = Math.round(el.getBoundingClientRect().height);
+          if (h < 40) bad.push(`${sel} «${(el.textContent || '').trim().slice(0, 24)}» = ${h}px`);
+        }
+      }
+      return bad;
+    });
+    expect(tooSmall, `${width}: цели касания ниже 40 px`).toEqual([]);
+    await p.close();
+  }
+  await ctx.close();
+});
+
+test('QA2 02125be1: «＋ Добавить утверждение» — добавить, сохранить, ✎; пустое не сохраняется; «История» только для чтения', async ({ page, context }) => {
+  const errors = collectConsoleErrors(page);
+  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await setFlags(true);
+  await reseed();
+  await openApp(page);
+  await openWikiPage(page, ADD_PAGE);
+  await page.getByTestId('wiki-edit-open').click();
+  await expect(page.getByTestId('wiki-editor')).toBeVisible();
+
+  // «История» — только для чтения: кнопки добавить в ней нет
+  await expect(page.getByTestId('wiki-edit-add-История')).toHaveCount(0);
+  await expect(page.getByTestId('wiki-edit-add-Сводка')).toBeVisible();
+
+  // Пустое утверждение не сохраняется: кнопка «Сохранить» заблокирована, есть пояснение.
+  // Ключ строки — счётчик внутри редактора (0, 1, …), поэтому строку ищем не по ключу, а префиксом.
+  const addedRow = page.locator('[data-testid^="wiki-edit-added-"]').last();
+  await page.getByTestId('wiki-edit-add-Сводка').click();
+  await expect(addedRow).toBeVisible();
+  await expect(page.getByTestId('wiki-edit-save')).toBeDisabled();
+  await expect(page.getByText('Пустое утверждение не сохранить')).toBeVisible();
+  await addedRow.getByRole('button', { name: 'Убрать новое утверждение' }).click();
+  await expect(page.locator('[data-testid^="wiki-edit-added-"]')).toHaveCount(0);
+
+  // Новое утверждение: добавлено, сохранено, на странице со сноской ✎
+  const NEW_TEXT = 'Новое утверждение человека про очередь.';
+  await page.getByTestId('wiki-edit-add-Сводка').click();
+  await page.locator('[data-testid^="wiki-edit-added-"]').last().locator('textarea').fill(NEW_TEXT);
+  await shot(page, 'qa2-05-editor-add-1280.png');
+  await page.getByTestId('wiki-edit-save').click();
+  await expect(page.getByTestId('wiki-editor')).toHaveCount(0, { timeout: 15000 });
+  await expect(page.getByTestId('wiki-page')).toContainText(NEW_TEXT);
+  // Строка-«li» нового утверждения: её сноска — человеческая «✎ …»
+  const line = page.locator('[data-testid="wiki-section"] li', { hasText: NEW_TEXT });
+  await expect(line).toHaveCount(1);
+  await expect(line.getByTestId('wiki-footnote')).toContainText('✎');
+  await shot(page, 'qa2-06-new-statement-1280.png');
+
+  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
+});
+
+test('QA2 02125be1: конфликт 409 с добавленным утверждением — «Оставить моё» не теряет новое и не дублирует такое же', async ({ browser }) => {
+  const errors: string[] = [];
+  const ctx = await browser.newContext({ baseURL: BASE });
+  await ctx.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  const a = await ctx.newPage();
+  const b = await ctx.newPage();
+  const push = (t: string) => { if (!t.includes('409')) errors.push(t); };
+  a.on('console', m => { if (m.type() === 'error') push(m.text()); });
+  b.on('console', m => { if (m.type() === 'error') push(m.text()); });
+
+  const UNIQUE = 'Уникальное новое утверждение про очередь.';
+  const SAME = 'Одинаковое утверждение про очередь.';
+
+  await reseed();
+  // Окно A: два новых утверждения — одно уникальное, второе такое же, что допишет окно B
+  await a.goto(BASE + '/#/notes'); await a.waitForTimeout(1500);
+  await openWikiPage(a, EDIT_PAGE_2);
+  await a.getByTestId('wiki-edit-open').click();
+  await a.getByTestId('wiki-edit-add-Сводка').click();
+  await a.getByTestId('wiki-edit-added-0').locator('textarea').fill(UNIQUE);
+  await a.getByTestId('wiki-edit-add-Сводка').click();
+  await a.getByTestId('wiki-edit-added-1').locator('textarea').fill(SAME);
+
+  // Окно B: та же страница, то же утверждение — и сохраняет первым
+  await b.goto(BASE + '/#/notes'); await b.waitForTimeout(1500);
+  await openWikiPage(b, EDIT_PAGE_2);
+  await b.getByTestId('wiki-edit-open').click();
+  await b.getByTestId('wiki-edit-item-0').locator('textarea').fill(SAME);
+  await b.getByTestId('wiki-edit-save').click();
+  await expect(b.getByTestId('wiki-editor')).toHaveCount(0, { timeout: 15000 });
+
+  // A сохраняет — 409 и сравнение; «Оставить моё»
+  await a.getByTestId('wiki-edit-save').click();
+  const conflict = a.getByTestId('wiki-edit-conflict');
+  await expect(conflict).toBeVisible({ timeout: 15000 });
+  await shot(a, 'qa2-07-conflict-1280.png');
+  await a.getByTestId('wiki-conflict-take-mine').click();
+  await expect(a.getByTestId('wiki-editor')).toHaveCount(0, { timeout: 15000 });
+
+  // Новое не потеряно — ровно один раз; то, что уже есть у ИИ, не задублировано
+  expect(await occurrences(a, UNIQUE), 'новое утверждение сохранено ровно один раз').toBe(1);
+  expect(await occurrences(a, SAME), 'совпадающее утверждение не задублировано').toBe(1);
+
+  await ctx.close();
+  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
+});
+
+// Из «не проверено» первого круга: спор «ИИ оспаривает». Состояние собирается фикстурой
+// (пакет conflict@human + строка журнала apply с overrodeHuman) — проверяется UI спора,
+// а не ночной разбор, который такой пакет в жизни порождает.
+test('QA2 «ИИ оспаривает» (conflict@human): метка на утверждении, карточка спора и «оспорил» в журнале', async ({ page, context }) => {
+  const errors = collectConsoleErrors(page);
+  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await setFlags(true);
+  await reseed();
+  await openApp(page);
+  await expect(page.getByTestId('wiki-unified-tree')).toBeVisible({ timeout: 20000 });
+  await openWikiPage(page, DISPUTE_PAGE);
+
+  // Карточка спора и метка на человеческом утверждении; текст человека на месте
+  await expect(page.getByTestId('wiki-override-disputed')).toContainText('ИИ оспаривает ваше утверждение');
+  await expect(page.getByTestId('wiki-override-disputed')).toContainText('Ваш текст на месте');
+  const tag = page.getByTestId('wiki-override-tag');
+  await expect(tag).toHaveCount(1);
+  await expect(tag).toHaveAttribute('data-kind', 'disputed');
+  await expect(tag).toContainText('ИИ оспаривает');
+  await expect(page.getByTestId('wiki-page')).toContainText(HUMAN_STATEMENT);
+  // Где именно метка: по коду она у строки previous, а previous живого спора бэк отдаёт только
+  // из «Истории» — фиксирую фактическое место как доказательство в отчёт
+  console.log('DISPUTE-MARK ' + JSON.stringify(await page.evaluate(() => {
+    const t = document.querySelector('[data-testid="wiki-override-tag"]');
+    return {
+      section: t?.closest('[data-testid="wiki-section"]')?.getAttribute('data-section-name') ?? null,
+      line: (t?.closest('li')?.textContent || '').slice(0, 80),
+    };
+  })));
+  await shot(page, 'qa2-08-dispute-1280.png');
+
+  // «Журнал»: вид «оспорил» и действие «Открыть страницу» (не «Вернуть мою»).
+  // Заголовок строки — имя источника, страницы в тексте строки нет: мерим по виду действия
+  await page.getByTestId('wiki-rail-journal').click();
+  const row = page.getByTestId('wiki-journal-row').filter({ hasText: 'оспорил' });
+  await expect(row).toHaveCount(1, { timeout: 15000 });
+  // Кнопка действия — сосед строки (не внутри неё): у спора «Открыть страницу», не «Вернуть мою»
+  await expect(page.getByTestId('wiki-journal-open-page')).toContainText('Открыть страницу');
+  await shot(page, 'qa2-09-journal-dispute-1280.png');
+
+  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
 });
 
 test('сценарий 2: на 360 сноска открывает шторку снизу (bottom-sheet)', async ({ browser }) => {
@@ -654,18 +1115,11 @@ test('сценарий 2: на 360 сноска открывает шторку 
   await reseed();
   const p = await ctx.newPage();
   await p.setViewportSize({ width: 360, height: 800 });
-  await p.goto(BASE + '/#/notes');
-  await p.reload();
-  await p.waitForTimeout(1800);
-  await closeToasts(p);
-  await p.getByRole('button', { name: 'Вики', exact: true }).first().click();
-  await p.waitForTimeout(800);
-  // Раздел «Личное» выбираем в шторке дерева (по умолчанию открыт «Общее»)
-  await p.getByTestId('wiki-open-tree').click();
-  await p.waitForTimeout(500);
-  await p.getByTestId('wiki-section-row').filter({ hasText: 'Личное' }).click();
-  await p.waitForTimeout(700);
-  await p.getByTestId('wiki-page-row').filter({ hasText: MAIN_PAGE }).first().click();
+  await reseed();
+  await openMobileTree(p);
+  // Страницу выбираем в едином дереве шторки (после правки 081a9bdc отдельного дерева
+  // разделов на 360 больше нет)
+  await p.locator('[data-testid="unified-row"][data-kind="page"]', { hasText: MAIN_PAGE }).first().click();
   await expect(p.getByTestId('wiki-page')).toBeVisible({ timeout: 15000 });
   const fn = p.getByTestId('wiki-footnote').first();
   await fn.click();

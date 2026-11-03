@@ -138,7 +138,12 @@ backend/ClaudeHomeServer/Controllers/ProjectsController.cs|15
 # SessionAccess.CanSee — это видимость, а не ключ хранилищ: переименование и удаление адресуются
 # id чата и остаются на авторе-арендаторе (ResolveOwnerId), новых вызовов с ключом владельца
 # или участника эти ветки не добавили.
-backend/ClaudeHomeServer/Controllers/SessionsController.cs|17
+# QA-P1 (доработка, возврат Глеба a21170f7): SessionsController 17→18 — срок жизни, мьют уведомлений,
+# озвучка и opt-out в PUT сессии закрыты гейтом владельца DenyOwnerTurn: id вызывающего входит только
+# в него (GetWithRight/GetAccessible — право и видимость, тот же уровень, что у модели и режима).
+# Ключом хранилищ ничто не стало: эти поля пишутся на чате по его id (SetExpiry/SetNotificationsMuted/
+# SetVoiceMode/TrySetExcludeFromDossiers), а право на них — арендатора.
+backend/ClaudeHomeServer/Controllers/SessionsController.cs|18
 backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
 # S2d-4i: TasksController 86→92 — шесть write-ответов (POST задачи проекта, POST личной задачи, PUT,
 # merge ×2, execute) отдают копию хранимой задачи с маской чужих приватных чатов: тот же класс мест,

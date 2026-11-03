@@ -102,7 +102,8 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     // Переименование и прочие правки чата: QA-P1 (решение Андрея, продуктовый вопрос 2 плана v2) —
     // право записи (редактор и выше), а не авторство чата: участник упирался даже в своём чате.
     // Область — Read: постороннего отбивает атрибут (404, проект не виден), участнику остаётся
-    // цепочка тела: видимость чата (404 на чужом приватном) → режим чата (409) → право (403)
+    // цепочка тела: видимость чата (404 на чужом приватном) → режим чата (409) → право записи (403)
+    // → настройки владельца чата (403 owner_settings, доработка QA-P1: ниже)
     [HttpPut("{sessionId}")]
     [ProjectScope]
     public async Task<IActionResult> Update(string projectId, string sessionId, [FromBody] UpdateSessionRequest req)
@@ -127,10 +128,25 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         // режима и после гейта права.
         if (req.ExcludeFromDossiers is false && sessions.IsPrivateChat(sessionId))
             return PrivateChatDossiersDenied();
-        // QA-P1 (решение Андрея, продуктовый вопрос 2 плана v2): переименование и поля чата —
+        // QA-P1 (решение Андрея, продуктовый вопрос 2 плана v2): переименование и метки чата —
         // право WriteContent (редактор и выше), читателю — 403 project_scope. Авторство чата здесь
         // больше не решает ничего; модель и effort — на владельном гейте DenyOwnerTurn выше.
         if (sessions.DenyContentWrite(sessionId, UserId) is { } noWrite) return noWrite;
+        // QA-P1 (доработка, возврат Глеба a21170f7): WriteContent открывает редактору ТОЛЬКО name и
+        // tags. Остальные поля запроса — настройки владельца чата: срок жизни, мьют уведомлений,
+        // озвучка со стилем, opt-out «Не сохранять решения». Им — тот же гейт владельца-арендатора,
+        // что у модели и режима (DenyOwnerTurn → 403 owner_settings): право записи контента их не
+        // открывает, срок жизни чата ставит только владелец. Без этого редактор с
+        // {"expiresAfterMinutes":1} на чате владельца снимал его через ChatExpiryService
+        // (SetExpiry → SessionManager.cs:2474, удаление — ChatExpiryService.cs:35,47-50) — обход
+        // правила удаления этого же шага. Гейт стоит ДО любой записи поля: смешанный запрос
+        // (name + срок) отказывается целиком, имя не записано. Предикат — ровно тот, что у
+        // записи ниже: поле считается запрошенным, когда его запись состоялась бы.
+        if ((req.ExpiresAfterMinutes is not -1 || req.NotificationsMuted is not null
+                || req.VoiceMode is not null || req.VoiceStyle is not null
+                || req.ExcludeFromDossiers is not null)
+            && sessions.DenyOwnerTurn(sessionId, UserId) is { } notOwner)
+            return notOwner;
         // S2d-6c: «Не сохранять решения» нельзя выключить, пока чат приватный. Зовётся раньше
         // остальных Set*: отказ 409 не должен применять половину запроса (остальные поля —
         // mute/озвучка/срок/имя — тогда не трогаются вовсе). true принимается всегда. Ниже это
@@ -351,6 +367,9 @@ public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSe
 // необязателен — подпись со стороны добавившего, сервер только тримит).
 public record SessionContextItemRequest(string Type, string Id, string? Title = null);
 
+// Name/Tags — право записи контента чата (WriteContent: редактор и выше). Остальные поля —
+// настройки владельца чата: они открыты только владельцу-арендатору, остальным — 403
+// owner_settings (доработка QA-P1, возврат Глеба a21170f7).
 // ExpiresAfterMinutes: -1 (поле не прислано) — не менять; null — сделать сессию постоянной;
 // N > 0 — временная, авто-удаление через N минут после последней активности
 // ExcludeFromDossiers: null (поле не прислано) — не менять; иначе — признак opt-out

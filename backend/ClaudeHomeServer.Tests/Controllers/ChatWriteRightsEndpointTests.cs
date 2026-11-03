@@ -28,7 +28,10 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// QA-P1 (решение Андрея, продуктовый вопрос 2 плана v2): права на чат общего проекта.
 /// Переименование (PUT /api/projects/{p}/sessions/{id} и POST /api/chats/{id}/retitle) и архив
 /// (PUT /api/chats/{id}/archived) — право записи контента чата (WriteContent: редактор и выше,
-/// DenyContentWrite в TurnRightExtensions); удаление (DELETE /api/projects/{p}/sessions/{id}) —
+/// DenyContentWrite в TurnRightExtensions); доработка QA-P1 (возврат Глеба a21170f7): тот же PUT
+/// в сессии открывает WriteContent только на name и tags — срок жизни, мьют уведомлений, озвучка
+/// и opt-out «Не сохранять решения» остаются настройками владельца (403 owner_settings);
+/// удаление (DELETE /api/projects/{p}/sessions/{id}) —
 /// автор чата (CreatedByUserId; nil — автор неизвестен и автором не считается) или владелец проекта.
 /// Читатель — ничего (403 project_scope), посторонний и чужой приватный — 404: существование
 /// не раскрываем, решение о праве идёт ПОСЛЕ проверки видимости.
@@ -283,6 +286,84 @@ public sealed class ChatWriteRightsEndpointTests : IDisposable
         _sessions.GetById(OwnerPrivateId)!.Name.Should().BeNull();
         _sessions.GetById(OwnerPrivateId)!.ArchivedAt.Should().BeNull();
         _cheap.Calls.Should().Be(0);
+    }
+
+    // ── настройки владельца чата: срок, opt-out, мьют, озвучка — только владельцу ──────────
+    // Доработка QA-P1 (возврат Глеба a21170f7): право записи контента (WriteContent) открывает
+    // редактору только name и tags; остальные поля PUT сессии — тот же гейт владельца-арендатора,
+    // что у модели и режима (DenyOwnerTurn → 403 owner_settings). Состояние проверяется по всем
+    // полям разом: мутация «срок пишется до гейта владельца» краснит случай срока и смешанный
+    // тест ниже — то есть отказ действительно стоит ДО записи, а не после неё.
+
+    // Запрошенное поле — ровно то, которое запись ниже написала бы: срок — любое значение,
+    // кроме -1 («не прислано»); флаги и строка — любой не-null.
+    private static UpdateSessionRequest OwnerSettingReq(string field) => field switch
+    {
+        "expiresAfterMinutes" => new UpdateSessionRequest(ExpiresAfterMinutes: 1),
+        "excludeFromDossiers" => new UpdateSessionRequest(ExcludeFromDossiers: true),
+        "notificationsMuted" => new UpdateSessionRequest(NotificationsMuted: true),
+        "voiceMode" => new UpdateSessionRequest(VoiceMode: true),
+        "voiceStyle" => new UpdateSessionRequest(VoiceStyle: "digest"),
+        _ => throw new ArgumentOutOfRangeException(nameof(field), field, "неизвестное поле запроса"),
+    };
+
+    [Theory]
+    [InlineData("expiresAfterMinutes")]
+    [InlineData("excludeFromDossiers")]
+    [InlineData("notificationsMuted")]
+    [InlineData("voiceMode")]
+    [InlineData("voiceStyle")]
+    public async Task РедакторНеПишетНастройкиВладельцаЧата_403ownerSettings_ЧатНеТронут(string field)
+    {
+        var s = _sessions.GetById(OwnerChatId)!;
+
+        Read(await SessionsAs(_editorId).Update(_projectId, OwnerChatId, OwnerSettingReq(field)))
+            .Should().Be((403, "owner_settings"), $"{field}: настройка владельца чата, не контент чата");
+
+        s.ExpiresAfterMinutes.Should().BeNull("срок чата ставит только владелец: expiresAfterMinutes=1 не принят");
+        s.ExpiryAnchor.Should().BeNull("якорь отсчёта срока — вместе со сроком");
+        s.ExcludeFromDossiers.Should().BeFalse("opt-out «Не сохранять решения» не переключён");
+        s.NotificationsMuted.Should().BeFalse();
+        s.VoiceMode.Should().BeFalse();
+        s.VoiceStyle.Should().BeNull();
+        // Чат жив: срок не поставлен — уборка (ChatExpiryService) его не снесёт
+        _sessions.GetById(OwnerChatId).Should().NotBeNull("редактор не удаляет чат чужой заявкой срока");
+    }
+
+    // Конкурентность порядка: смешанный запрос (name + срок) отказывается целиком — гейт стоит
+    // до любой записи поля, поэтому имя из отказанной заявки не записано, срок не поставлен.
+    [Fact]
+    public async Task СмешанныйЗапросИмяИСрок_403ownerSettings_НичегоНеЗаписано()
+    {
+        Read(await SessionsAs(_editorId).Update(_projectId, OwnerChatId,
+            new UpdateSessionRequest(Name: "имя редактора", ExpiresAfterMinutes: 1)))
+            .Should().Be((403, "owner_settings"));
+
+        var s = _sessions.GetById(OwnerChatId)!;
+        s.Name.Should().BeNull("отказ всей заявки: имя из неё не записано");
+        s.ExpiresAfterMinutes.Should().BeNull();
+        s.ExpiryAnchor.Should().BeNull();
+    }
+
+    // Позитивный контроль гейта: владельцу-арендатору те же поля открыты (200, состояние
+    // изменилось); редактору — name и tags (200).
+    [Fact]
+    public async Task ВладелецПишетНастройкиЧата_200_РедакторИмяИМетки_200()
+    {
+        Read(await SessionsAs(_ownerId).Update(_projectId, OwnerChatId,
+            new UpdateSessionRequest(ExpiresAfterMinutes: 60, NotificationsMuted: true, VoiceMode: true,
+                VoiceStyle: "digest", ExcludeFromDossiers: true))).Status.Should().Be(200);
+        var s = _sessions.GetById(OwnerChatId)!;
+        s.ExpiresAfterMinutes.Should().Be(60, "срок — настройка владельца: ему она открыта");
+        s.NotificationsMuted.Should().BeTrue();
+        s.VoiceMode.Should().BeTrue();
+        s.VoiceStyle.Should().Be("digest");
+        s.ExcludeFromDossiers.Should().BeTrue();
+
+        Read(await SessionsAs(_editorId).Update(_projectId, OwnerChatId,
+            new UpdateSessionRequest(Name: "имя редактора", Tags: ["метка"]))).Status.Should().Be(200);
+        s.Name.Should().Be("имя редактора");
+        s.Tags.Should().Equal("метка");
     }
 
     // ── удаление: автор чата или владелец проекта ─────────────────────────────────

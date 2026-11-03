@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -527,5 +528,36 @@ public class SharedProjectNotesHttpTests : IClassFixture<TestWebApplicationFacto
         status.EnsureSuccessStatusCode();
         JsonSerializer.Deserialize<JsonElement>(await status.Content.ReadAsStringAsync())
             .GetProperty("annotation").GetProperty("status").GetString().Should().Be("resolved");
+    }
+
+    /// <summary>QA-D1 (дефект 805c570b): сквозная цепочка Notes → журнал правок → git на
+    /// настоящем репозитории, без фейк-швов. Репозиторий и снятие игнора заметок создаёт
+    /// само приглашение (AddAsync: InitAsync + EnsureNotesVersionedAsync), коммит — сброс
+    /// журнала. До QA-D1 тест был красным: .gitignore шаблона игнорировал notes/, git молча
+    /// не брал путь в index, коммит по pathspec выходил пустым (тот самый дефект).</summary>
+    [Fact]
+    public async Task Участник_ПишетЗаметку_Журнал_Коммитит_Её_В_Git_С_Автором_Участника()
+    {
+        await SetMemberAsync("editor");
+        var projectId = await SharedProjectIdAsync();
+        var title = "Журнальная заметка";
+        var created = await Member().PostAsJsonAsync("/api/notes",
+            new { title, content = "тело журнальной заметки", source = projectId });
+        created.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Тот же синглтон, что греет NotesService через IHumanEditJournal: Record уже
+        // произошёл в записи заметки; здесь — сброс буфера (окно дебаунса не ждём).
+        var committer = _factory.Services.GetRequiredService<HumanEditCommitter>();
+        await committer.FlushAsync(all: true);
+
+        var git = _factory.Services.GetRequiredService<GitService>();
+        var log = (await git.RunAsync(null, _projectDir!,
+            ["log", "--format=%an|%s", "--", $"notes/{title}.md"])).Stdout.Trim();
+        // Ровно один коммит по своему пути. Тема — общая для группы правок одного автора
+        // (так устроен журнал): в неё могли лечь и незакоммиченные записи предыдущих
+        // тестов класса — проверяется своё: автор и свой путь в теме.
+        var lines = log.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        lines.Should().HaveCount(1);
+        lines[0].Should().StartWith("seconduser|Правка: ").And.Contain($"notes/{title}.md");
     }
 }

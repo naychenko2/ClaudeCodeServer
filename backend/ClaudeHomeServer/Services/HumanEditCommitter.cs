@@ -56,6 +56,7 @@ public sealed class HumanEditCommitter(
     internal Action<(string Root, string Rel)>? BeforeClaim { get; set; }
     private CancellationTokenSource? _loopCts;
     private Task? _loop;
+    private Task? _sweep;
 
     private TimeSpan Debounce => TimeSpan.FromSeconds(Math.Max(1, config.GetValue("HumanEdit:DebounceSeconds", DefaultDebounceSeconds)));
 
@@ -124,7 +125,38 @@ public sealed class HumanEditCommitter(
         _loopCts = new CancellationTokenSource();
         var token = _loopCts.Token;
         _loop = Task.Run(() => LoopAsync(token), CancellationToken.None);
+        // QA-D1: разовое лечение уже открытых общих проектов (их репозитории заведены до
+        // снятия игнора заметок) — в фоне, старт хоста не держит. Свежие приглашения покрывает
+        // ProjectMembershipService; идемпотентность Ensure делает повтор безвредным.
+        _sweep = Task.Run(() => EnsureNotesVersionedSweepAsync(token), CancellationToken.None);
         return Task.CompletedTask;
+    }
+
+    // Разовый проход (QA-D1): только проекты с живыми участниками, серверными файлами и
+    // репозиторием — те же условия, что принимает Record. Личные проекты и проекты без
+    // участников не трогает. Отказ по одному проекту — в лог, проход продолжается:
+    // это служебная правка чужого репозитория, не операция пользователя.
+    internal async Task EnsureNotesVersionedSweepAsync(CancellationToken ct)
+    {
+        foreach (var project in projects.GetAll())
+        {
+            if (ct.IsCancellationRequested) return;
+            if (project.Members is not { Count: > 0 }) continue;
+            if (!ProjectCapabilities.FilesOnServer(project)) continue;
+            if (string.IsNullOrWhiteSpace(project.RootPath) || !git.IsGitRepo(project.RootPath)) continue;
+            try
+            {
+                var owner = project.OwnerId is null ? null : users.GetById(project.OwnerId);
+                await git.EnsureNotesVersionedAsync(
+                    project.OwnerId, project.RootPath, ct,
+                    owner is null ? null : new GitCommitAuthor(
+                        owner.Id, owner.DisplayName ?? owner.Username, owner.Username));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger.LogWarning(ex, "Снятие игнора заметок в проекте {ProjectId} не удалось", project.Id);
+            }
+        }
     }
 
     // Остановка сбрасывает буфер коммитом: ожидающие окна не ждём.
@@ -136,6 +168,11 @@ public sealed class HumanEditCommitter(
             if (_loop is not null)
             {
                 try { await _loop.WaitAsync(ct); }
+                catch (OperationCanceledException) { }
+            }
+            if (_sweep is not null)
+            {
+                try { await _sweep.WaitAsync(ct); }
                 catch (OperationCanceledException) { }
             }
         }
@@ -209,6 +246,18 @@ public sealed class HumanEditCommitter(
 
         var author = new GitCommitAuthor(userId, user.DisplayName ?? user.Username, user.Username);
         paths.Sort(StringComparer.Ordinal);
+
+        // Защита от тихой потери (QA-D1): git не берёт игнорируемый путь в index, и коммит
+        // по такому pathspec выходит пустым — правка человека исчезала без следа. Теперь
+        // потеря названа в логе ДО коммита; -f не ставим намеренно: игнор в файле
+        // пользователя — его правило, журнал его не отменяет (свои .gitignore остались,
+        // их снимает Ensure только с нашим точным блоком).
+        var ignored = await git.IgnoredPathsAsync(project.OwnerId, root, paths);
+        if (ignored.Count > 0)
+            logger.LogWarning(
+                "Журнал правок человека в проекте {ProjectId} ({Root}): {Count} путей исключены .gitignore и не попадут в коммит",
+                projectId, root, ignored.Count);
+
         var names = string.Join(", ", paths.Take(MaxNamesInMessage));
         var subject = paths.Count > MaxNamesInMessage
             ? $"Правка: {names} и ещё {paths.Count - MaxNamesInMessage}"

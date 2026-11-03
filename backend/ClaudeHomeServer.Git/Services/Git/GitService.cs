@@ -162,8 +162,9 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     // write-операций те же ls-files/rev-parse идут обычным RunAsync под семафором.
     private Task<GitResult> RunReadAsync(
         string? ownerId, string root, IReadOnlyList<string> args,
+        string? stdin = null,
         int timeoutMs = DefaultTimeoutMs, CancellationToken ct = default) =>
-        RunAsync(ownerId, root, args,
+        RunAsync(ownerId, root, args, stdin: stdin,
             env: new Dictionary<string, string> { [OptionalLocksEnv] = "0" },
             timeoutMs: timeoutMs, ct: ct);
 
@@ -1458,6 +1459,14 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
 
         """;
 
+    // Тот самый блок из DefaultGitignore: строка игнора заметок и наш комментарий над ней.
+    // EnsureNotesVersionedAsync удаляет ТОЛЬКО его, побайтово. Текст обязан совпадать с
+    // DefaultGitignore: расход ловит тест HumanEditCommitterTests «Заметки общего проекта
+    // после Ensure…» — его .gitignore пишет InitAsync, и без совпадения заметки не доезжают
+    // до коммита.
+    private const string NotesIgnoreBlock =
+        "# Заметки и комментарии проекта — живут в приложении, не в истории документов\n/notes/";
+
     public async Task InitAsync(string? ownerId, string root, CancellationToken ct = default)
     {
         // Дефолтный .gitignore кладём и в уже существующий репозиторий, если файла нет:
@@ -1484,6 +1493,81 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             .Select(f => f.Trim('\r')).Where(f => f.Length > 0).ToList();
         foreach (var batch in files.Chunk(50))
             await RunAsync(ownerId, root, ["rm", "-r", "--cached", "--ignore-unmatch", "--", .. batch.Select(LiteralSpec)], ct: ct);
+    }
+
+    // Снятие игнора заметок в общем проекте (QA-D1, решение (б) разреза 2cc7578d): в общем
+    // проекте notes/ версионируются наравне с файлами — иначе журнал правок человека
+    // (HumanEditCommitter) молча теряет каждую правку заметки: git не берёт игнорируемый
+    // путь в index, и коммит по pathspec выходит пустым. Идемпотентно: нет точного блока —
+    // no-op без коммита. Свой .gitignore пользователя правится ТОЛЬКО побайтовым совпадением
+    // блока: его «notes/» без нашего комментария — его правило, оно остаётся (для такого
+    // проекта журнала заметок не будет — это видно по Warning в журнале). Чужие правила
+    // файла не трогать. Личные проекты этот метод не вызывает: у них остаётся DefaultGitignore.
+    // Коммит .gitignore отдельный, по pathspec [".gitignore"], автор — владелец (приходит
+    // явным author: серверный git-конфиг может не иметь user.name, см. DossierBranch.cs).
+    // Чтение-проверка-запись — под замком репозитория: две гонящиеся Ensure дают один коммит
+    // (вторая видит уже очищенный файл и выходит no-op). Коммит — вне замка: CommitAsync
+    // берёт тот же семафор, а он не реентрантный. Возврат — sha; "" — нечего коммитить
+    // (нет файла, нет совпадения, содержимое совпало с HEAD).
+    public async Task<string> EnsureNotesVersionedAsync(
+        string? ownerId, string root, CancellationToken ct = default, GitCommitAuthor? author = null)
+    {
+        var sem = LockFor(root);
+        await sem.WaitAsync(ct);
+        try
+        {
+            var gitignore = Path.Combine(root, ".gitignore");
+            // Файла нет — заметки не игнорируются, удалять нечего. InitAsync пишет шаблон
+            // всегда; отсутствие — руками заведённый репозиторий, его не заводим к своему.
+            if (!File.Exists(gitignore)) return "";
+            var text = await File.ReadAllTextAsync(gitignore, ct);
+            var cleaned = WithoutOurNotesBlock(text);
+            if (cleaned is null) return "";
+            await File.WriteAllTextAsync(gitignore, cleaned, ct);
+        }
+        finally { sem.Release(); }
+        return await CommitAsync(ownerId, root, "Настройка .gitignore: проектные заметки версионируются",
+            ct: ct, author: author, paths: [".gitignore"]);
+    }
+
+    // Побайтовое удаление нашего блока; нет совпадения — null (файл не трогается). Удаляются
+    // все вхождения: блок попал в файл дважды — оба раза он наш. Перевод строки блока
+    // убирается вместе с ним, пустой строки на его месте не остаётся. Файл с окончаниями
+    // строк CRLF не совпадает никогда — это и есть «побайтовое совпадение»: наш шаблон
+    // пишет \n, чужой файл с CRLF — чужой.
+    private static string? WithoutOurNotesBlock(string text)
+    {
+        var idx = text.IndexOf(NotesIgnoreBlock, StringComparison.Ordinal);
+        if (idx < 0) return null;
+        var sb = new StringBuilder();
+        while (idx >= 0)
+        {
+            sb.Append(text, 0, idx);
+            var cut = idx + NotesIgnoreBlock.Length;
+            if (cut < text.Length && text[cut] == '\n') cut++;
+            text = text[cut..];
+            idx = text.IndexOf(NotesIgnoreBlock, StringComparison.Ordinal);
+        }
+        sb.Append(text);
+        return sb.ToString();
+    }
+
+    // Пути, которые .gitignore не пускает в индекс (QA-D1): git check-ignore, пути через
+    // stdin под NUL (с -z и вход, и вывод с NUL-разделителями — проверено пробой). Уже
+    // отслеживаемые пути не возвращаются (их git коммитит и под маской): тихая потеря
+    // журнала — ровно не-отслеживаемый случай. Коды возврата check-ignore: 0 — хотя бы
+    // один путь игнорируется, 1 — ни одного (не ошибка), прочее — ошибка git.
+    public async Task<List<string>> IgnoredPathsAsync(
+        string? ownerId, string root, IReadOnlyList<string> relPaths, CancellationToken ct = default)
+    {
+        if (relPaths.Count == 0 || !IsGitRepo(root)) return [];
+        var specs = relPaths.Select(p => ValidateRel(root, p)).ToList();
+        var stdin = string.Join('\0', specs) + '\0';
+        var r = await RunReadAsync(ownerId, root, ["check-ignore", "-z", "--stdin"], stdin: stdin, ct: ct);
+        if (r.ExitCode == 1) return [];
+        if (!r.Ok) throw new GitCommandException(FirstLine(r.Stderr) ?? "git check-ignore завершился с ошибкой");
+        return r.Stdout.Split('\0', StringSplitOptions.RemoveEmptyEntries)
+            .Select(p => p.Trim()).Where(p => p.Length > 0).ToList();
     }
 
     // Подключить/обновить origin (идемпотентно)

@@ -73,13 +73,23 @@ public sealed class ProjectMembershipService(
                 "У этого человека выключены «Общие проекты»: пусть включит их в экспериментальных функциях, и приглашение пройдёт.");
 
         // Репозиторий нужен до записи: сбой git не должен оставить участника в проекте без истории
-        if (!git.IsGitRepo(project.RootPath))
+        try
         {
-            try { await git.InitAsync(project.OwnerId, project.RootPath, ct); }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                return new(500, "git_init_failed", "Не удалось подготовить git-репозиторий проекта.");
-            }
+            if (!git.IsGitRepo(project.RootPath))
+                await git.InitAsync(project.OwnerId, project.RootPath, ct);
+            // QA-D1 (решение (б) разреза 2cc7578d): при каждом приглашении — снятие игнора
+            // заметок в общем проекте. Идемпотентно и безопасно ставить здесь: покрывает и
+            // свежий init, и репозиторий, заведённый до QA-D1. Свой .gitignore владельца
+            // метод не трогает (только побайтовое совпадение нашего блока). Автор коммита —
+            // владелец: серверный git-конфиг может не иметь user.name.
+            var owner = project.OwnerId is null ? null : users.GetById(project.OwnerId);
+            await git.EnsureNotesVersionedAsync(
+                project.OwnerId, project.RootPath, ct,
+                owner is null ? null : AuthorOf(owner));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new(500, "git_init_failed", "Не удалось подготовить git-репозиторий проекта.");
         }
 
         Project updated;
@@ -230,6 +240,11 @@ public sealed class ProjectMembershipService(
             return new(403, "not_owner", "Участниками проекта управляет только его владелец.");
         return null;
     }
+
+    // Автор технического коммита репозитория проекта — владелец (тот же образец, что
+    // GitAutoCommitService и HumanEditCommitter: DisplayName ?? Username).
+    private static GitCommitAuthor AuthorOf(User user) =>
+        new(user.Id, user.DisplayName ?? user.Username, user.Username);
 }
 
 /// <summary>

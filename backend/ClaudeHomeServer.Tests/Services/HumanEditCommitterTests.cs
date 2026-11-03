@@ -6,6 +6,7 @@ using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -30,8 +31,19 @@ public class HumanEditCommitterTests : IDisposable
         public void Advance(TimeSpan by) => _now += by;
     }
 
+    // Лог-приёмник для проверок «потеря названа в логе» (QA-D1: Warning об игнорируемом
+    // пути журнала вместо тихой пустоты).
+    private sealed class RecordingLogger<T>(List<(LogLevel Level, string Message)> sink) : ILogger<T>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => sink.Add((logLevel, formatter(state, exception)));
+    }
+
     private readonly string _dir;
     private readonly string _repo;
+    private readonly IConfiguration _config;
     private readonly UserStore _users;
     private readonly ProjectManager _projects;
     private readonly GitService _git = new(new LocalOnlyFactory());
@@ -43,16 +55,16 @@ public class HumanEditCommitterTests : IDisposable
         _dir = Path.Combine(Path.GetTempPath(), "humanedit_" + Guid.NewGuid().ToString("N"));
         _repo = Path.Combine(_dir, "repo");
         Directory.CreateDirectory(_repo);
-        var config = new ConfigurationBuilder()
+        _config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["DataPath"] = Path.Combine(_dir, "projects.json"),
                 ["HumanEdit:DebounceSeconds"] = "20",
             })
             .Build();
-        _users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
-        _projects = new ProjectManager(config, _users, new AppSettingsService(config));
-        _sut = new HumanEditCommitter(_projects, _users, _git, config, NullLogger<HumanEditCommitter>.Instance, _clock);
+        _users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        _projects = new ProjectManager(_config, _users, new AppSettingsService(_config));
+        _sut = new HumanEditCommitter(_projects, _users, _git, _config, NullLogger<HumanEditCommitter>.Instance, _clock);
     }
 
     public void Dispose()
@@ -63,10 +75,14 @@ public class HumanEditCommitterTests : IDisposable
 
     // Репозиторий с базовым коммитом; shared=true — проекту добавлен участник. Возвращает проект
     // и человека, который «правит» (участник общего проекта либо владелец личного).
-    private async Task<(Project Project, User Human)> SetupAsync(bool shared, bool initGit = true)
+    // gitignoreContent — чужой .gitignore, записанный ДО InitAsync (тот пишет шаблон только
+    // когда файла нет): тесты «свой файл не трогается» строятся на нём.
+    private async Task<(Project Project, User Human)> SetupAsync(bool shared, bool initGit = true, string? gitignoreContent = null)
     {
         if (initGit)
         {
+            if (gitignoreContent is not null)
+                await File.WriteAllTextAsync(Path.Combine(_repo, ".gitignore"), gitignoreContent);
             await _git.InitAsync(null, _repo);
             await _git.RunAsync(null, _repo, ["config", "user.email", "test@test"]);
             await _git.RunAsync(null, _repo, ["config", "user.name", "Тест"]);
@@ -88,6 +104,14 @@ public class HumanEditCommitterTests : IDisposable
 
     private async Task<string> CommitsCountAsync() =>
         (await _git.RunAsync(null, _repo, ["rev-list", "--count", "HEAD"])).Stdout.Trim();
+
+    // Автор технического коммита .gitignore — владелец (тот же порядок, что в прод-вызовах
+    // ProjectMembershipService/HumanEditCommitter).
+    private GitCommitAuthor OwnerAuthor(Project project)
+    {
+        var owner = _users.GetById(project.OwnerId!)!;
+        return new(owner.Id, owner.DisplayName ?? owner.Username, owner.Username);
+    }
 
     [Fact]
     public async Task Flush_коммитит_только_записанный_путь_с_автором_человеком()
@@ -356,5 +380,104 @@ public class HumanEditCommitterTests : IDisposable
         var agentCommit = _git.CommitAsync(null, _repo, "коммит агента");
         (await Task.WhenAny(agentCommit, Task.Delay(TimeSpan.FromSeconds(10)))).Should().BeSameAs(agentCommit);
         _sut.PendingAuthor(_repo, "mine.md").Should().NotBeNull();
+    }
+
+    // ── QA-D1: заметки общего проекта версионируются (решение (б) разреза 2cc7578d) ──
+
+    [Fact]
+    public async Task Заметки_общего_проекта_после_Ensure_коммитятся_журналом_с_автором_участника()
+    {
+        var (project, human) = await SetupAsync(shared: true);
+        // Репозиторий создан шаблоном InitAsync: /notes/ игнорируется. Лечение — Ensure
+        // (тот же вызов, что при приглашении). Мутация «убрать этот вызов» краснит тест:
+        // игнорируемый путь не попадает в index, коммит по pathspec выходит пустым.
+        (await _git.EnsureNotesVersionedAsync(null, _repo, author: OwnerAuthor(project)))
+            .Should().NotBeEmpty();
+        Directory.CreateDirectory(Path.Combine(_repo, "notes"));
+        await File.WriteAllTextAsync(Path.Combine(_repo, "notes", "a.md"), "заметка\n");
+
+        _sut.Record(project.Id, _repo, "notes/a.md", human.Id);
+        await _sut.FlushAsync(all: true);
+
+        var log = (await _git.RunAsync(null, _repo, ["log", "--format=%an|%s", "--", "notes/a.md"])).Stdout.Trim();
+        log.Should().Be($"{human.DisplayName ?? human.Username}|Правка: notes/a.md");
+        (await _git.RunAsync(null, _repo, ["rev-list", "--count", "HEAD", "--", "notes/a.md"])).Stdout.Trim()
+            .Should().Be("1");
+    }
+
+    [Fact]
+    public async Task Гонка_двух_Ensure_даёт_ровно_один_коммит_по_gitignore()
+    {
+        var (project, _) = await SetupAsync(shared: true);
+        var author = OwnerAuthor(project);
+        var before = int.Parse(await CommitsCountAsync());
+
+        // Две Ensure на одном проекте (приглашение + стартовый проход) — под замком
+        // репозитория: вторая видит уже очищенный файл и выходит no-op.
+        await Task.WhenAll(
+            _git.EnsureNotesVersionedAsync(null, _repo, author: author),
+            _git.EnsureNotesVersionedAsync(null, _repo, author: author));
+
+        (await File.ReadAllTextAsync(Path.Combine(_repo, ".gitignore"))).Should().NotContain("/notes/");
+        (int.Parse(await CommitsCountAsync())).Should().Be(before + 1);
+    }
+
+    [Fact]
+    public async Task Ensure_убирает_только_наш_блок_чужие_правила_целы_повтор_не_коммитит()
+    {
+        var (project, _) = await SetupAsync(shared: true);
+        var gitignorePath = Path.Combine(_repo, ".gitignore");
+        // Сверху — свои правила пользователя: их Ensure не трогает.
+        await File.AppendAllTextAsync(gitignorePath, "build/\nnotes/\n");
+        var author = OwnerAuthor(project);
+
+        (await _git.EnsureNotesVersionedAsync(null, _repo, author: author)).Should().NotBeEmpty();
+        var after = await File.ReadAllTextAsync(gitignorePath);
+        after.Should().NotContain("Заметки и комментарии проекта").And.NotContain("/notes/");
+        after.Should().Contain("build/").And.Contain("\nnotes/\n").And.Contain(".cc-attachments/");
+
+        var count = await CommitsCountAsync();
+        (await _git.EnsureNotesVersionedAsync(null, _repo, author: author)).Should().BeEmpty();
+        (await CommitsCountAsync()).Should().Be(count);
+    }
+
+    [Fact]
+    public async Task Свой_gitignore_не_меняется_и_журнал_пишет_Warning_вместо_тихой_потери()
+    {
+        var log = new List<(LogLevel Level, string Message)>();
+        var sut = new HumanEditCommitter(_projects, _users, _git, _config,
+            new RecordingLogger<HumanEditCommitter>(log), _clock);
+        var (project, human) = await SetupAsync(shared: true, gitignoreContent: "notes/\n");
+        var gitignorePath = Path.Combine(_repo, ".gitignore");
+
+        // Нашего блока в файле нет — Ensure не трогает чужой файл и не коммитит.
+        var before = await CommitsCountAsync();
+        (await _git.EnsureNotesVersionedAsync(null, _repo, author: OwnerAuthor(project))).Should().BeEmpty();
+        (await File.ReadAllTextAsync(gitignorePath)).Should().Be("notes/\n");
+
+        Directory.CreateDirectory(Path.Combine(_repo, "notes"));
+        await File.WriteAllTextAsync(Path.Combine(_repo, "notes", "a.md"), "заметка\n");
+        sut.Record(project.Id, _repo, "notes/a.md", human.Id);
+        await sut.FlushAsync(all: true);
+
+        // Путь игнорируется: коммита нет — и это названо в логе (c3), а не потеряно молча.
+        (await CommitsCountAsync()).Should().Be(before);
+        log.Should().Contain(l => l.Level == LogLevel.Warning
+            && l.Message.Contains("исключены .gitignore") && l.Message.Contains(project.Id));
+    }
+
+    [Fact]
+    public async Task Личный_проект_сохраняет_игнор_notes_и_стартовый_проход_его_не_трогает()
+    {
+        var (personal, _) = await SetupAsync(shared: false);
+        var gitignorePath = Path.Combine(_repo, ".gitignore");
+        (await File.ReadAllTextAsync(gitignorePath)).Should().Contain("/notes/");
+        var before = await CommitsCountAsync();
+
+        // Тот же проход, который StartAsync делает в фоне: проекты без участников — мимо.
+        await _sut.EnsureNotesVersionedSweepAsync(CancellationToken.None);
+
+        (await File.ReadAllTextAsync(gitignorePath)).Should().Contain("/notes/");
+        (await CommitsCountAsync()).Should().Be(before);
     }
 }

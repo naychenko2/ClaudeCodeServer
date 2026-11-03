@@ -197,6 +197,9 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
             var updated = sessions.SetParticipants(id, UserId, req.PersonaIds ?? []);
             return updated is null ? NotFound() : Ok(updated);
         }
+        // Гонка с тумблером видимости: приватность проверена повторно под замком (S2d-7b-3).
+        catch (Services.PrivateChatModeException ex)
+        { return Conflict(new { error = ex.Message, code = FeatureChatDoor.PrivateChatCode }); }
         // Глобальная персона в состав чата общего проекта (доработка R-S2a-8): тот же код отказа.
         catch (SessionManager.GlobalPersonaInSharedException ex)
         { return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }); }
@@ -447,6 +450,9 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
                 req.ExecutorPersonaIds, UserId, req.CoordinatorNoCode);
             return updated is null ? NotFound() : Ok(updated);
         }
+        // Гонка с тумблером видимости: приватность проверена повторно под замком (S2d-7b-3).
+        catch (Services.PrivateChatModeException ex)
+        { return Conflict(new { error = ex.Message, code = FeatureChatDoor.PrivateChatCode }); }
         // Гард на входе (B2): нет координатора либо состава. Код отказа машинный — фронт по
         // нему показывает пикер и НЕ отправляет вводную обычным сообщением.
         catch (TeamImplementSetupException ex)

@@ -331,6 +331,42 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
         Read(_sessions.DenyTurn(ReaderPrivateId, _ownerId)!).Status.Should().Be(404);
     }
 
+    // S2d-7b-3, доработка 1: позитив — общий чат принимает состав и становится штабом через ручки;
+    // те же ручки на приватном чате — 409 private_chat_mode и состав/штаб не записываются.
+    [Fact]
+    public async Task ОбщийЧат_ПринимаетСоставИСтановитсяШтабом_ПриватныйНет()
+    {
+        Persona P(string n) => _personas.Create(_ownerId, n, role: null, description: null, systemPrompt: null,
+            model: null, effort: null, scope: PersonaScope.Project, projectId: _projectId,
+            color: null, greeting: null, memoryEnabled: false);
+        var p1 = P("Участник-1");
+        var p2 = P("Участник-2");
+        var c = ChatsAs(_ownerId);
+
+        Read(c.SetParticipants(OwnerChatId, new SetParticipantsRequest([p1.Id, p2.Id]))).Status.Should().Be(200);
+        _sessions.GetById(OwnerChatId)!.Participants.Should().BeEquivalentTo([p1.Id, p2.Id]);
+
+        Read(await c.SetTeamImplement(OwnerChatId, new SetTeamImplementRequest(true, CoordinatorPersonaId: p1.Id, ExecutorPersonaIds: [p2.Id])))
+            .Status.Should().Be(200);
+        _sessions.GetById(OwnerChatId)!.TeamImplement.Should().NotBeNull("общий чат становится штабом");
+
+        // Приватный чат владельца — оба режима 409, ничего не записано
+        Read(c.SetParticipants(OwnerPrivateId, new SetParticipantsRequest([p1.Id, p2.Id]))).Should().Be((409, "private_chat_mode"));
+        Read(await c.SetTeamImplement(OwnerPrivateId, new SetTeamImplementRequest(true, CoordinatorPersonaId: p1.Id)))
+            .Should().Be((409, "private_chat_mode"));
+        _sessions.GetById(OwnerPrivateId)!.Participants.Should().BeNullOrEmpty();
+        _sessions.GetById(OwnerPrivateId)!.TeamImplement.Should().BeNull();
+    }
+
+    // Автор-читатель: GET /api/chats/{id} по настоящей ручке — 200 ему, 404 остальным.
+    [Fact]
+    public void АвторЧитатель_GetChats_200_ДругимУчастникамИВладельцу404()
+    {
+        Read(ChatsAs(_readerId).Get(ReaderPrivateId)).Status.Should().Be(200);
+        Read(ChatsAs(_editorId).Get(ReaderPrivateId)).Status.Should().Be(404);
+        Read(ChatsAs(_ownerId).Get(ReaderPrivateId)).Status.Should().Be(404);
+    }
+
     // S2d-6c: PUT sessions/{sid} с excludeFromDossiers=false на приватном чате — 409
     // private_chat_dossiers, и ни одно поле запроса не применяется (имя остаётся).
     // После снятия приватности автором флаг остаётся true (прошлое не раскрываем), но теперь

@@ -72,6 +72,14 @@ internal interface ITeamSessionDirectory
     void Persist();
 
     /// <summary>
+    /// Выполнить запись режима штаба под замком видимости чата, предварительно проверив, что чат
+    /// не приватный (иначе <c>PrivateChatModeException</c>, запись не выполняется). Достройка
+    /// S2d-7b-3: проверка приватности и запись <c>TeamImplement</c> не должны разделяться окном
+    /// гонки с тумблером видимости. Шов не пятый — метод в существующем контракте.
+    /// </summary>
+    void WriteUnlessPrivate(string sessionId, Action write);
+
+    /// <summary>
     /// Обновить <c>UpdatedAt</c> чата, сбросить каталог на диск и разослать состояние
     /// режима. Достройка шага 2г-4 (волна 3): единый путь для шести точек «правка +
     /// бродкаст» (TeamWaveService — пять вызовов, TeamTurnCompletionService — один).

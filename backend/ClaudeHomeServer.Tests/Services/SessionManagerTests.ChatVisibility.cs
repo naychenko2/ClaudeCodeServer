@@ -364,4 +364,68 @@ public partial class SessionManagerTests
                 session.PrivateToUserId.Should().NotBeNullOrEmpty($"итерация {i}: отказ возможен только на приватном");
         }
     }
+    // Гонка S2d-7b-3 (доработка 1): тумблер «в приватный» ‖ запись состава. Проверка приватности и
+    // запись Participants — под одним VisibilityLock, как проверка IsTeamOrGroup в тумблере.
+    // Инвариант после каждой пары: НЕ (приватный И есть состав). Исход один из двух: либо чат
+    // приватный (состав отклонён PrivateChatModeException), либо общий со составом (тумблер TeamOrGroup).
+    [Fact]
+    public async Task ГонкаПриватностьИСостав_ПриватныйЧатБезУчастников_Во200Парах()
+    {
+        var session = await SharedChatAsync("race-participants");
+        var a = MkPersona("Гонка-А", null, session.ProjectId!);
+        var b = MkPersona("Гонка-Б", null, session.ProjectId!);
+        for (var i = 0; i < 200; i++)
+        {
+            session.PrivateToUserId = null;
+            session.ExcludeFromDossiers = false;
+            session.Participants = null;
+            using var go = new ManualResetEventSlim(false);
+
+            var toggle = Task.Run(() => { go.Wait(); return _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: true).Outcome; });
+            var setSet = Task.Run(() =>
+            {
+                go.Wait();
+                try { _sut.SetParticipants(session.Id, TestUserId, [a.Id, b.Id]); return true; }
+                catch (PrivateChatModeException) { return false; }
+            });
+            go.Set();
+            await toggle.WaitAsync(TimeSpan.FromSeconds(10));
+            await setSet.WaitAsync(TimeSpan.FromSeconds(10));
+
+            (session.PrivateToUserId is not null && session.Participants is { Count: > 0 })
+                .Should().BeFalse($"итерация {i}: приватный чат с составом персон");
+        }
+    }
+
+    // То же для штаба: тумблер ‖ SetTeamImplementAsync(enabled). Запись TeamImplement идёт
+    // через шов ядра под VisibilityLock; приватный чат TeamImplement не получает.
+    [Fact]
+    public async Task ГонкаПриватностьИШтаб_ПриватныйЧатБезTeamImplement_Во200Парах()
+    {
+        var session = await SharedChatAsync("race-team");
+        var coordinator = MkPersona("Координатор-гонка", null, session.ProjectId!);
+        var executor = MkPersona("Исполнитель-гонка", null, session.ProjectId!);
+        for (var i = 0; i < 200; i++)
+        {
+            session.PrivateToUserId = null;
+            session.ExcludeFromDossiers = false;
+            session.TeamImplement = null;
+            using var go = new ManualResetEventSlim(false);
+
+            var toggle = Task.Run(() => { go.Wait(); return _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: true).Outcome; });
+            var enable = Task.Run(async () =>
+            {
+                go.Wait();
+                try { await _sut.SetTeamImplementAsync(session.Id, true, coordinatorPersonaId: coordinator.Id,
+                    executorPersonaIds: [executor.Id], userId: TestUserId); return true; }
+                catch (PrivateChatModeException) { return false; }
+            });
+            go.Set();
+            await toggle.WaitAsync(TimeSpan.FromSeconds(10));
+            await enable.WaitAsync(TimeSpan.FromSeconds(10));
+
+            (session.PrivateToUserId is not null && session.TeamImplement is not null)
+                .Should().BeFalse($"итерация {i}: приватный чат стал штабом");
+        }
+    }
 }

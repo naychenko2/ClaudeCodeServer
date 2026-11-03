@@ -4450,7 +4450,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // Новый участник чата общего проекта не глобальная персона (доработка R-S2a-8): та же общая
         // проверка рамки, что при создании группового чата, — по фактическому проекту этого чата.
         EnsurePersonasVisibleInFrame(entry.Info.ProjectId, participants);
-        entry.Info.Participants = participants.Select(p => p.Id).ToList();
+        // S2d-7b-3: проверка приватности и запись состава — одна критическая секция под тем же
+        // замком, под которым SetChatVisibility ставит приватность и сверяет IsTeamOrGroup:
+        // приватный чат с составом невозможен ни при каком порядке параллельных запросов.
+        lock (entry.VisibilityLock)
+        {
+            if (entry.Info.PrivateToUserId is not null)
+                throw new PrivateChatModeException(Controllers.FeatureChatDoor.PrivateModeReason);
+            entry.Info.Participants = participants.Select(p => p.Id).ToList();
+        }
         var speaker = participants.FirstOrDefault(p => p.Id == entry.Info.PersonaId) ?? participants[0];
         SwitchSpeaker(entry, speaker);
         return entry.Info;
@@ -9341,6 +9349,20 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Идемпотентен — внутренний лок SaveSessions сериализует записи и под concurrent.
     // Связки «правка + бродкаст» идут не сюда, а в PersistAndBroadcastAsync того же шва.
     void ITeamSessionDirectory.Persist() => SaveSessions();
+
+    // Запись режима штаба под VisibilityLock с проверкой приватности (S2d-7b-3, доработка 1):
+    // тот же замок, что у SetChatVisibility и SetParticipants. Приватный чат — write не вызывается,
+    // PrivateChatModeException. Вертикаль штаба замок сама не берёт.
+    void ITeamSessionDirectory.WriteUnlessPrivate(string sessionId, Action write)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        lock (entry.VisibilityLock)
+        {
+            if (entry.Info.PrivateToUserId is not null)
+                throw new PrivateChatModeException(Controllers.FeatureChatDoor.PrivateModeReason);
+            write();
+        }
+    }
 
     // Точка «правка состояния режима + бродкаст»: тело прежнего
     // TeamStateService.SaveTeamImplementStateAsync, перенесено в шов. public-обёртка

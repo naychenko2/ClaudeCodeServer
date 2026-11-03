@@ -304,18 +304,23 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
         IReadOnlyList<DifyRetrieveChunk> chunks, Dictionary<string, DocRef> docs,
         IReadOnlyList<NoteSummary> allSummaries)
     {
-        var byDocId = docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
+        // Не ToDictionary по DocId: на общем DocId он падает (см. MatchDocIds)
+        var byDocId = Knowledge.KnowledgeSyncTarget.MatchDocIds(docs, d => d.DocId,
+                chunks.Select(c => c.DocumentId).ToList())
+            .ToLookup(p => p.DocId, p => p.EntryKey);
         var summaries = allSummaries.ToDictionary(s => s.Id);
         var hits = new List<NoteSemanticHit>();
         var seen = new HashSet<string>();
         foreach (var ch in chunks)
         {
-            if (!byDocId.TryGetValue(ch.DocumentId, out var noteId)) continue;
-            if (!summaries.TryGetValue(noteId, out var note)) continue;
-            if (!seen.Add(noteId)) continue;   // одна заметка — лучший чанк
             var snippet = ch.Content.Length > 220 ? ch.Content[..217] + "…" : ch.Content;
-            hits.Add(new NoteSemanticHit(noteId, note.Title, note.Source, note.SourceLabel,
-                Math.Round(ch.Score, 3), snippet.Replace('\n', ' ')));
+            foreach (var noteId in byDocId[ch.DocumentId])
+            {
+                if (!summaries.TryGetValue(noteId, out var note)) continue;
+                if (!seen.Add(noteId)) continue;   // одна заметка — лучший чанк
+                hits.Add(new NoteSemanticHit(noteId, note.Title, note.Source, note.SourceLabel,
+                    Math.Round(ch.Score, 3), snippet.Replace('\n', ' ')));
+            }
         }
         return hits;
     }
@@ -424,11 +429,7 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
             lock (_saveLock)
             {
                 if (!_store.TryGetValue(userId, out var entry)) return [];
-                var byDocId = entry.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
-                return docIds
-                    .Where(byDocId.ContainsKey)
-                    .Select(d => (d, byDocId[d]))
-                    .ToList();
+                return Knowledge.KnowledgeSyncTarget.MatchDocIds(entry.Docs, d => d.DocId, docIds);
             }
         }
         finally { _syncLock.Release(); }

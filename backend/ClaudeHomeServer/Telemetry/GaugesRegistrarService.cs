@@ -29,7 +29,8 @@ public sealed class GaugesRegistrarService : IHostedService
             var reconciler = _sp.GetRequiredService<Services.Knowledge.KnowledgeIndexReconciler>();
             GaugeRegistrar.RegisterKnowledgeReconcile(
                 errorDocumentsProvider: () => ErrorDocuments(reconciler),
-                recoveredProvider: () => reconciler.RecoveredTotal);
+                recoveredProvider: () => reconciler.RecoveredTotal,
+                staleQueuingProvider: () => ErrorDocuments(reconciler, stale: true));
         }
         catch
         {
@@ -52,11 +53,12 @@ public sealed class GaugesRegistrarService : IHostedService
     /// <summary>
     /// Срез error-документов Dify для многотегового гейджа. Агрегация по типу датасета
     /// живёт в реконсайлере (<c>AggregateByType</c>): Label цели содержит id персоны и путь
-    /// проекта, в теги это отдавать нельзя.
+    /// проекта, в теги это отдавать нельзя. <paramref name="stale"/> — срез зависших в
+    /// очереди вместо error (гейдж <c>ccs.dify.stale_queuing_documents</c>).
     /// </summary>
     internal static IEnumerable<Measurement<long>> ErrorDocuments(
-        Services.Knowledge.KnowledgeIndexReconciler reconciler) =>
-        Services.Knowledge.KnowledgeIndexReconciler.AggregateByType(reconciler.LastCounts)
+        Services.Knowledge.KnowledgeIndexReconciler reconciler, bool stale = false) =>
+        Services.Knowledge.KnowledgeIndexReconciler.AggregateByType(reconciler.LastCounts, stale)
             .Select(x => new Measurement<long>(x.Count,
                 new KeyValuePair<string, object?>("dataset_type", x.DatasetType),
                 new KeyValuePair<string, object?>("healability", x.Healable ? "healable" : "unhealable")));

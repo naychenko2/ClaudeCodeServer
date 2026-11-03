@@ -102,9 +102,10 @@ public class TtsVoiceCatalogTests
     [Fact]
     public void Canonical_ЛюбоеИмяБелогоСписка_ЕстьВКаталоге()
     {
-        // Двусторонняя проверка: нет голоса без подписи и подписи без голоса
-        foreach (var voice in new[] { "alena", "jane", "omazh", "marina", "filipp", "zahar", "ermil",
-                     "madirus", "madi_ru", "dasha", "julia", "lera", "masha", "alexander", "kirill", "anton" })
+        // Двусторонняя проверка: нет голоса без подписи и подписи без голоса. Перебираем сам
+        // белый список, а не его копию: иначе голос, добавленный без подписи, тест не заметит
+        TtsVoiceCatalog.KnownNames.Should().NotBeEmpty();
+        foreach (var voice in TtsVoiceCatalog.KnownNames)
         {
             var canonical = TtsVoiceCatalog.Canonical(voice);
             canonical.Should().NotBeNull($"{voice} есть в белом списке");
@@ -117,5 +118,80 @@ public class TtsVoiceCatalogTests
     {
         TtsVoiceCatalog.All.Single(v => v.Voice == "filipp").Roles.Should().BeEmpty();
         TtsVoiceCatalog.All.Single(v => v.Voice == "masha").Roles.Should().HaveCount(3);
+    }
+
+    // Амплуа новых голосов v3 (живые запросы 24.10.2026): лишняя роль дала бы 400 у Яндекса,
+    // недостающая — спрятала бы рабочее амплуа из формы
+    [Theory]
+    [InlineData("saule_ru", new[] { "strict", "whisper" })]
+    [InlineData("zamira_ru", new[] { "strict", "friendly" })]
+    [InlineData("zhanar_ru", new[] { "strict", "friendly" })]
+    [InlineData("yulduz_ru", new[] { "strict", "friendly", "whisper" })]
+    public void All_НовыеГолосаV3_ЖенскиеСоСвоимиАмплуа(string voice, string[] roles)
+    {
+        var info = TtsVoiceCatalog.All.Single(v => v.Voice == voice);
+        info.Gender.Should().Be(TtsVoiceCatalog.Gender.Female);
+        info.Roles.Should().BeEquivalentTo(roles);
+    }
+
+    // --- LiveTTS: модель — поле каталога ---
+
+    private static readonly string[] LiveTtsVoices = ["sofia", "vera", "irina", "denis", "sergey", "vasily"];
+
+    // Амплуа LiveTTS замерены живыми запросами 24.10.2026 (MP3, без speed); neutral не пишем:
+    // у четырёх голосов явный neutral — 400, у denis и irina он равен «без роли»
+    [Theory]
+    [InlineData("sofia", TtsVoiceCatalog.Gender.Female, new[] { "casual", "support" })]
+    [InlineData("vera", TtsVoiceCatalog.Gender.Female, new[] { "casual", "support" })]
+    [InlineData("irina", TtsVoiceCatalog.Gender.Female, new[] { "formal", "support", "narrator", "sales" })]
+    [InlineData("denis", TtsVoiceCatalog.Gender.Male, new[] { "casual", "formal", "sales" })]
+    [InlineData("sergey", TtsVoiceCatalog.Gender.Male, new[] { "support", "sales" })]
+    [InlineData("vasily", TtsVoiceCatalog.Gender.Male, new[] { "support", "sales" })]
+    public void LiveTts_ГолосаСМодельюПоломИАмплуа(string voice, TtsVoiceCatalog.Gender gender, string[] roles)
+    {
+        var info = TtsVoiceCatalog.All.Single(v => v.Voice == voice);
+        info.Model.Should().Be(TtsVoiceCatalog.LiveTts);
+        info.Gender.Should().Be(gender);
+        info.Roles.Should().BeEquivalentTo(roles);
+        info.Roles.Should().NotContain("neutral");
+        TtsVoiceCatalog.ModelFor(voice).Should().Be(TtsVoiceCatalog.LiveTts);
+        TtsVoiceCatalog.SupportsSpeed(voice).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Модель_УКаждогоГолоса_ИLiveTtsТолькоУШести()
+    {
+        TtsVoiceCatalog.All.Should().OnlyContain(v =>
+            v.Model == TtsVoiceCatalog.General || v.Model == TtsVoiceCatalog.LiveTts);
+        TtsVoiceCatalog.All.Where(v => v.Model == TtsVoiceCatalog.LiveTts).Select(v => v.Voice)
+            .Should().BeEquivalentTo(LiveTtsVoices);
+        TtsVoiceCatalog.ModelFor("zahar").Should().Be(TtsVoiceCatalog.General);
+        TtsVoiceCatalog.ModelFor("madirus").Should().Be(TtsVoiceCatalog.General);
+        TtsVoiceCatalog.ModelFor("зорро").Should().Be(TtsVoiceCatalog.General);
+        TtsVoiceCatalog.SupportsSpeed("zahar").Should().BeTrue();
+    }
+
+    [Fact]
+    public void LiveTts_ВКонцеСвоихГрупп_НикогдаНеПервыми()
+    {
+        // От порядка зависит «первый голос» редактора звука: дорогая модель не должна стать
+        // умолчанием ни в одной группе
+        foreach (var gender in new[] { TtsVoiceCatalog.Gender.Female, TtsVoiceCatalog.Gender.Male })
+        {
+            var group = TtsVoiceCatalog.All.Where(v => v.Gender == gender).Select(v => v.Model).ToList();
+            group[0].Should().Be(TtsVoiceCatalog.General);
+            var firstLive = group.IndexOf(TtsVoiceCatalog.LiveTts);
+            firstLive.Should().BePositive();
+            group.Skip(firstLive).Should().OnlyContain(m => m == TtsVoiceCatalog.LiveTts,
+                "после первого голоса LiveTTS в группе идут только голоса LiveTTS");
+        }
+    }
+
+    [Fact]
+    public void LiveTts_ВсегдаВКаталоге()
+    {
+        TtsVoiceCatalog.All.Select(v => v.Voice).Should().Contain(LiveTtsVoices);
+        TtsVoiceCatalog.IsKnown("sofia").Should().BeTrue();
+        TtsVoiceCatalog.Canonical("SOFIA").Should().Be("sofia");
     }
 }

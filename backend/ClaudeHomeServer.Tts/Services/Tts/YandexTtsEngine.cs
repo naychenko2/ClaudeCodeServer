@@ -13,17 +13,19 @@ public sealed class YandexTtsEngine(YandexTtsService tts) : ITtsEngine
     // Предел одной операции модуля; запросы SpeechKit по 249 символов нарезает сам сервис
     public const int MaxTextChars = 3000;
 
-    private static readonly IReadOnlyList<TtsEngineVoice> VoiceList =
-        TtsVoiceCatalog.All.Select(v => new TtsEngineVoice(v.Voice, v.Label, v.Roles)).ToArray();
+    private readonly IReadOnlyList<TtsEngineVoice> _voices =
+        TtsVoiceCatalog.All
+            .Select(v => new TtsEngineVoice(v.Voice, v.Label, v.Roles, v.Model, TtsVoiceCatalog.SupportsSpeed(v.Voice)))
+            .ToArray();
 
-    private static readonly IReadOnlyList<string> RoleList =
-        VoiceList.SelectMany(v => v.Roles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    private IReadOnlyList<string>? _roles;
 
     public bool Configured => tts.IsConfigured;
 
-    public IReadOnlyList<TtsEngineVoice> Voices => VoiceList;
+    public IReadOnlyList<TtsEngineVoice> Voices => _voices;
 
-    public IReadOnlyList<string> Roles => RoleList;
+    public IReadOnlyList<string> Roles =>
+        _roles ??= _voices.SelectMany(v => v.Roles).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
 
     public int MaxChars => MaxTextChars;
 
@@ -46,7 +48,9 @@ public sealed class YandexTtsEngine(YandexTtsService tts) : ITtsEngine
         if (wantedRole is not null && !TtsVoiceCatalog.SupportsRole(name, wantedRole))
             return TtsSynthesis.Fail($"Голос «{name}» не умеет амплуа «{wantedRole}».");
 
-        if (double.IsNaN(speed) || speed < MinSpeed || speed > MaxSpeed)
+        // Скорость проверяем только у голосов со скоростью: LiveTTS её не принимает, и BuildPayload
+        // её не отправит, так что отказ по ней был бы отказом ни за что
+        if (TtsVoiceCatalog.SupportsSpeed(name) && (double.IsNaN(speed) || speed < MinSpeed || speed > MaxSpeed))
             return TtsSynthesis.Fail($"Скорость {speed} вне пределов {MinSpeed}–{MaxSpeed}.");
 
         var result = await tts.SynthesizeAsync(text, new VoiceChoice(name, wantedRole, speed), ct);

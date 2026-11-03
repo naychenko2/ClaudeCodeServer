@@ -158,14 +158,50 @@ public class YandexTtsServiceTests
         YandexTtsService.ExtractAudio("""{"result":{}}""").Should().BeNull();
     }
 
+    // Форма ответа LiveTTS (снята живым запросом): аудиочанки AUDIO_ONLY, а замыкает поток
+    // чанк TEXT_ONLY с audioChunk: null. На нём разбор падал InvalidOperationException → 500
+    private static string LiveTtsAudioChunk(params byte[] bytes) =>
+        "{\"result\":{\"audioChunk\":{\"data\":\"" + Convert.ToBase64String(bytes) +
+        "\"},\"textChunk\":null,\"startMs\":\"0\",\"lengthMs\":\"480\",\"wordTimings\":[],\"chunkType\":\"AUDIO_ONLY\"}}";
+
+    private const string LiveTtsTextOnlyChunk =
+        """{"result":{"audioChunk":null,"textChunk":{"text":"Привет"},"startMs":"0","lengthMs":"0","wordTimings":[],"chunkType":"TEXT_ONLY"}}""";
+
+    [Fact]
+    public void Extract_LiveTts_ЧанкTextOnlyПропускается_АудиоСклеено()
+    {
+        var body = $"{LiveTtsAudioChunk(1, 2)}\n{LiveTtsAudioChunk(3)}\n{LiveTtsTextOnlyChunk}\n";
+        YandexTtsService.ExtractAudio(body).Should().Equal(1, 2, 3);
+    }
+
+    [Fact]
+    public void Extract_ТолькоTextOnly_Null()
+    {
+        // Чанк без аудио — не отказ, но если аудио нет вовсе, озвучки нет
+        YandexTtsService.ExtractAudio(LiveTtsTextOnlyChunk).Should().BeNull();
+    }
+
+    [Fact]
+    public void Extract_КривойВидЗначения_NullБезИсключения()
+    {
+        // data числом, audioChunk строкой — не тот вид JSON-значения: отказ, а не исключение мимо catch
+        YandexTtsService.ExtractAudio("""{"result":{"audioChunk":{"data":42}}}""").Should().BeNull();
+        YandexTtsService.ExtractAudio("""{"result":{"audioChunk":"x"}}""").Should().BeNull();
+        YandexTtsService.ExtractAudio("""{"result":null}""").Should().BeNull();
+    }
+
     // --- учёт оплаченных запросов: SpeechKit тарифицируется ЗА ЗАПРОС ---
 
     private sealed class StubHandler(Func<int, HttpResponseMessage> respond) : HttpMessageHandler
     {
         public int Calls;
+        public readonly List<string> Bodies = [];
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
-            => Task.FromResult(respond(Interlocked.Increment(ref Calls)));
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            Bodies.Add(await request.Content!.ReadAsStringAsync(ct));
+            return respond(Interlocked.Increment(ref Calls));
+        }
     }
 
     private sealed class StubHttpFactory(HttpMessageHandler handler) : IHttpClientFactory
@@ -173,7 +209,8 @@ public class YandexTtsServiceTests
         public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
     }
 
-    private static YandexTtsService MakeLive(StubHandler handler, double? rubPerRequest = null)
+    private static YandexTtsService MakeLive(StubHandler handler, double? rubPerRequest = null,
+        double? liveTtsRubPerRequest = null)
     {
         var values = new Dictionary<string, string?>
         {
@@ -181,6 +218,8 @@ public class YandexTtsServiceTests
             ["Yandex:SpeechKit:FolderId"] = "folder",
         };
         if (rubPerRequest is { } r) values["Yandex:SpeechKit:RubPerRequest"] = r.ToString(
+            System.Globalization.CultureInfo.InvariantCulture);
+        if (liveTtsRubPerRequest is { } l) values["Yandex:SpeechKit:LiveTtsRubPerRequest"] = l.ToString(
             System.Globalization.CultureInfo.InvariantCulture);
         var config = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
         return new YandexTtsService(new StubHttpFactory(handler), config,
@@ -258,5 +297,289 @@ public class YandexTtsServiceTests
 
         res.Audio.Should().BeNull();
         res.BilledRequests.Should().Be(1);
+    }
+
+    // Тело, которое падает при чтении: 200 уже пришёл, а разобрать ответ не вышло
+    private sealed class ExplodingContent : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context) =>
+            throw new InvalidOperationException("boom");
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
+    [Fact]
+    public async Task Synthesize_ИсключениеРазбора_НеТеряетЗаписьРасхода()
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new ExplodingContent() });
+
+        var res = await MakeLive(handler, liveTtsRubPerRequest: 0.25)
+            .SynthesizeAsync("Привет.", new VoiceChoice("sofia", null, 1.0));
+
+        res.Audio.Should().BeNull();
+        res.BilledRequests.Should().Be(1, "Яндекс ответил 200 — запрос оплачен, даже если разбор упал");
+        res.Rub.Should().BeApproximately(0.25, 1e-6);
+    }
+
+    // Тело, которое не приходит никогда: держит чтение, пока его не отменят
+    private sealed class HangingContent : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context) =>
+            SerializeToStreamAsync(stream, context, CancellationToken.None);
+
+        protected override async Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context,
+            CancellationToken ct) => await Task.Delay(Timeout.Infinite, ct);
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
+    // Заголовки приходят с задержкой, тело — зависшее
+    private sealed class SlowHeadersHandler(TimeSpan delay, HttpStatusCode status) : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            await Task.Delay(delay, ct);
+            return new HttpResponseMessage(status) { Content = new HangingContent() };
+        }
+    }
+
+    private static YandexTtsService MakeWithHandler(HttpMessageHandler handler, TimeSpan chunkTimeout)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Yandex:SpeechKit:ApiKey"] = "key",
+            ["Yandex:SpeechKit:FolderId"] = "folder",
+        }).Build();
+        return new YandexTtsService(new StubHttpFactory(handler), config, NullLogger<YandexTtsService>.Instance)
+        {
+            ChunkTimeout = chunkTimeout,
+        };
+    }
+
+    [Fact]
+    public async Task Synthesize_ЗависшееТелоОшибки_ОбрываетсяПоДедлайнуКуска()
+    {
+        // Отказ 500, а тело отказа не приходит: без дедлайна кусок висел бы вечно
+        var tts = MakeWithHandler(new SlowHeadersHandler(TimeSpan.Zero, HttpStatusCode.InternalServerError),
+            TimeSpan.FromMilliseconds(300));
+
+        var res = await tts.SynthesizeAsync("Привет.", new VoiceChoice("zahar", null, 1.0))
+            .WaitAsync(TimeSpan.FromSeconds(10));
+
+        res.Audio.Should().BeNull();
+        res.BilledRequests.Should().Be(0, "отказ Яндекс не тарифицирует");
+    }
+
+    [Fact]
+    public async Task Synthesize_ЗаголовкиПлюсТело_ОдинБюджетНаКусок()
+    {
+        // Время ручное: заголовки съели 29 с из 30 с бюджета, тело зависло. Ещё 1 с — и кусок
+        // обязан оборваться; отдельный потолок на тело дал бы ему свои 30 с, и кусок повис бы
+        var clock = new ManualClock();
+        var handler = new GatedHeadersHandler();
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Yandex:SpeechKit:ApiKey"] = "key",
+            ["Yandex:SpeechKit:FolderId"] = "folder",
+        }).Build();
+        var tts = new YandexTtsService(new StubHttpFactory(handler), config, NullLogger<YandexTtsService>.Instance)
+        {
+            ChunkTimeout = TimeSpan.FromSeconds(30),
+            Time = clock,
+        };
+
+        var synth = tts.SynthesizeAsync("Привет.", new VoiceChoice("zahar", null, 1.0));
+        await handler.HeadersRequested.WaitAsync(TimeSpan.FromSeconds(10));
+        clock.Advance(TimeSpan.FromSeconds(29));
+        handler.ReleaseHeaders();
+        await handler.BodyRequested.WaitAsync(TimeSpan.FromSeconds(10));
+        clock.Advance(TimeSpan.FromSeconds(1));
+
+        var res = await synth.WaitAsync(TimeSpan.FromSeconds(10));
+
+        res.Audio.Should().BeNull();
+        res.BilledRequests.Should().Be(1, "200 пришёл — запрос оплачен, даже если тело не дочитали");
+    }
+
+    // Заголовки отдаются по команде теста, тело зависшее; оба момента видны тесту событиями
+    private sealed class GatedHeadersHandler : HttpMessageHandler
+    {
+        private readonly TaskCompletionSource _headersRequested = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _bodyRequested = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task HeadersRequested => _headersRequested.Task;
+        public Task BodyRequested => _bodyRequested.Task;
+        public void ReleaseHeaders() => _release.TrySetResult();
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            _headersRequested.TrySetResult();
+            await _release.Task;
+            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new SignalingHangingContent(_bodyRequested) };
+        }
+    }
+
+    // Как HangingContent, но сообщает, что чтение тела началось
+    private sealed class SignalingHangingContent(TaskCompletionSource started) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context) =>
+            SerializeToStreamAsync(stream, context, CancellationToken.None);
+
+        protected override async Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context,
+            CancellationToken ct)
+        {
+            started.TrySetResult();
+            await Task.Delay(Timeout.Infinite, ct);
+        }
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+            return false;
+        }
+    }
+
+    // Часы с ручным ходом: таймер срабатывает только от Advance, периодические не нужны
+    private sealed class ManualClock : TimeProvider
+    {
+        private readonly object _gate = new();
+        private readonly List<ManualTimer> _timers = [];
+        private DateTimeOffset _now = new(2026, 10, 24, 12, 0, 0, TimeSpan.Zero);
+
+        public override DateTimeOffset GetUtcNow() { lock (_gate) return _now; }
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = new ManualTimer(this, callback, state);
+            timer.Change(dueTime, period);
+            return timer;
+        }
+
+        public void Advance(TimeSpan by)
+        {
+            List<ManualTimer> due;
+            lock (_gate)
+            {
+                _now += by;
+                due = _timers.Where(t => t.DueAt <= _now).ToList();
+                foreach (var t in due) _timers.Remove(t);
+            }
+            foreach (var t in due) t.Fire();
+        }
+
+        private void Arm(ManualTimer timer, DateTimeOffset? at)
+        {
+            lock (_gate)
+            {
+                _timers.Remove(timer);
+                timer.DueAt = at;
+                if (at is not null) _timers.Add(timer);
+            }
+        }
+
+        private sealed class ManualTimer(ManualClock clock, TimerCallback callback, object? state) : ITimer
+        {
+            public DateTimeOffset? DueAt { get; set; }
+
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                clock.Arm(this, dueTime == Timeout.InfiniteTimeSpan ? null : clock.GetUtcNow() + dueTime);
+                return true;
+            }
+
+            public void Fire() => callback(state);
+
+            public void Dispose() => clock.Arm(this, null);
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Synthesize_LiveTtsСTextOnlyВКонце_АудиоИОплата()
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent($"{LiveTtsAudioChunk(1, 2, 3)}\n{LiveTtsTextOnlyChunk}",
+                Encoding.UTF8, "application/json"),
+        });
+
+        var res = await MakeLive(handler).SynthesizeAsync("Привет.", new VoiceChoice("sofia", null, 1.0));
+
+        res.Audio.Should().Equal(1, 2, 3);
+        res.BilledRequests.Should().Be(1);
+    }
+
+    // --- тело запроса по модели голоса: снимается перехватом HTTP, BuildPayload не открываем ---
+
+    private static async Task<System.Text.Json.JsonElement> BodyFor(VoiceChoice voice)
+    {
+        var handler = new StubHandler(_ => AudioOk());
+        await MakeLive(handler).SynthesizeAsync("Привет.", voice);
+        handler.Bodies.Should().ContainSingle();
+        return System.Text.Json.JsonDocument.Parse(handler.Bodies[0]).RootElement.Clone();
+    }
+
+    private static List<string> HintNames(System.Text.Json.JsonElement body) =>
+        [.. body.GetProperty("hints").EnumerateArray().Select(h => h.EnumerateObject().Single().Name)];
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("casual")]
+    public async Task Тело_LiveTts_ЕстьModel_НетSpeed(string? role)
+    {
+        // speed у LiveTTS — 400, поэтому он выкидывается, что бы ни пришло в VoiceChoice
+        var body = await BodyFor(new VoiceChoice("sofia", role, 1.4));
+
+        body.GetProperty("model").GetString().Should().Be("livetts");
+        HintNames(body).Should().NotContain("speed");
+        HintNames(body).Should().Equal(role is null ? ["voice"] : ["voice", "role"]);
+        body.GetProperty("outputAudioSpec").GetProperty("containerAudio")
+            .GetProperty("containerAudioType").GetString().Should().Be("MP3");
+        body.GetProperty("loudnessNormalizationType").GetString().Should().Be("LUFS");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("good")]
+    public async Task Тело_General_НетModel_ЕстьSpeed(string? role)
+    {
+        // general работает без поля model — как и до LiveTTS, лишний ключ не шлём
+        var body = await BodyFor(new VoiceChoice("zahar", role, 1.4));
+
+        body.TryGetProperty("model", out _).Should().BeFalse();
+        HintNames(body).Should().Equal(role is null ? ["voice", "speed"] : ["voice", "speed", "role"]);
+        body.GetProperty("hints")[1].GetProperty("speed").GetDouble().Should().Be(1.4);
+    }
+
+    [Fact]
+    public async Task Цена_LiveTts_ПоСвоемуКлючу_ДефолтЧетвертьРубля()
+    {
+        var handler = new StubHandler(_ => AudioOk());
+        var byDefault = await MakeLive(handler, rubPerRequest: 0.1626)
+            .SynthesizeAsync(TwoChunkText(), new VoiceChoice("irina", null, 1.0));
+        byDefault.BilledRequests.Should().Be(2);
+        byDefault.Rub.Should().BeApproximately(0.5, 1e-6, "дефолт LiveTTS — 0,25 ₽ за запрос");
+
+        var configured = await MakeLive(handler, rubPerRequest: 0.1626, liveTtsRubPerRequest: 0.3)
+            .SynthesizeAsync("Привет.", new VoiceChoice("denis", null, 1.0));
+        configured.Rub.Should().BeApproximately(0.3, 1e-6);
+
+        var general = await MakeLive(handler, rubPerRequest: 0.1626, liveTtsRubPerRequest: 0.3)
+            .SynthesizeAsync("Привет.", new VoiceChoice("zahar", null, 1.0));
+        general.Rub.Should().BeApproximately(0.1626, 1e-6, "general считается по прежнему ключу");
     }
 }

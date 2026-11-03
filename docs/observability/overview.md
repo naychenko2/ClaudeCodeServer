@@ -315,9 +315,12 @@ CLI его сообщит.
 | Метрика | Тип | Что считает |
 |---|---|---|
 | `ccs.dify.error_documents` | ObservableGauge, `{document}` | документы в статусе `error` на последнем обходе, с разрезом по типу датасета и лечимости |
-| `ccs.dify.documents_recovered` | ObservableCounter, `{document}` | записи, вернувшиеся из `error` после пересоздания (считается по исчезновению из error-множества, а не по попытке лечения) |
+| `ccs.dify.stale_queuing_documents` | ObservableGauge, `{document}` | документы, зависшие в очереди Dify (`queuing`) дольше `Dify:Reconcile:StaleQueuingAfter`, те же теги |
+| `ccs.dify.documents_recovered` | ObservableCounter, `{document}` | записи, вернувшиеся из `error` или из зависшей очереди после пересоздания (считается по исчезновению из множества, а не по попытке лечения) |
 
-Теги гейджа: `dataset_type` (`notes` | `persona` | `team` | `dossiers` | `project`) и
+Зависшие в очереди — отдельный гейдж, а не тег статуса на `error_documents`: причина другая
+(Dify потерял celery-задачу), а новый тег на старой метрике удвоил бы суммы в уже настроенных
+запросах и алертах. Теги гейджей: `dataset_type` (`notes` | `persona` | `team` | `dossiers` | `project`) и
 `healability` (`healable` — документ сопоставлен с записью локального стора и будет пересоздан;
 `unhealable` — сирота или ручной документ, источника контента у CCS нет). Всего 5 × 2 ряда.
 

@@ -367,4 +367,18 @@ public class TeamImplementPromptsTests
         text.Should().Contain("15414",
             "baseline-число FQN должно быть в блоке как явный эталон");
     }
+
+    // Ход виден человеку в ленте: голый маркер лента прячет как служебный (незакрытый
+    // <escalate:check> срезал хвост сообщения, <team:resolved> становился автоссылкой).
+    // Каждый маркер в тексте хода обязан стоять внутри бэктиков.
+    [Fact]
+    public void BlockerReactionTurn_МаркерыТолькоВБэктиках()
+    {
+        var text = TeamImplementPrompts.BlockerReactionTurn("Вера", "sess-vera");
+        var outsideCode = System.Text.RegularExpressions.Regex.Replace(text, "`[^`]*`", "");
+
+        outsideCode.Should().NotContain("<team:", "маркер вне бэктиков лента вырежет");
+        outsideCode.Should().NotContain("<escalate:", "незакрытый маркер срезал бы хвост хода");
+        outsideCode.Should().NotContain("</team>");
+    }
 }

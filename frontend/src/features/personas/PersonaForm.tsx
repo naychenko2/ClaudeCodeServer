@@ -5,6 +5,7 @@ import type { Persona, PersonaAccess, PersonaContract, PersonaGender, PersonaMem
 import { api } from '../../lib/api';
 import { specialtyLabel, useSpecialtyCatalog } from '../../lib/specialties';
 import { PersonaVoicePicker } from './PersonaVoicePicker';
+import { createVoicePayload } from './voicePayload';
  import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Select, Menu, MenuItem, WaitingIndicator, ConfirmDialog } from '../../components/ui';
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
 import { ImageGenNote, isImageGenQueued } from '../../components/ImageGenNote';
@@ -228,6 +229,11 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Голос персоны сохраняется отдельным эндпоинтом (PUT {id}/voice), поэтому в форме
   // он живёт своим состоянием и уходит после создания/обновления персоны
   const [voice, setVoice] = useState<Persona['voice']>(persona?.voice ?? null);
+  // Трогал ли человек пикер: при создании «не выбран» (сервер подберёт голос) и явный
+  // «голос по умолчанию» (не подбирать) — разные решения
+  const [voiceTouched, setVoiceTouched] = useState(false);
+  // Панель подбора голоса открыта — подсказка поля прячется, иначе она уезжает под панель
+  const [voicePickOpen, setVoicePickOpen] = useState(false);
   const [avatar, setAvatar] = useState<Persona['avatar']>(persona?.avatar ?? { kind: 'initials', color: initial?.color ?? 'orange' });
   const [canGenerate, setCanGenerate] = useState(false);
   const [avatarPrompt, setAvatarPrompt] = useState('');
@@ -578,6 +584,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       description: description.trim() || undefined,
       // Характер — только контрактом; legacy-поле systemPrompt чистим при каждом сохранении
       contract: buildContract(),
+      // Создание: выбранный голос едет сразу; явный «по умолчанию» — пустым объектом;
+      // пикер не трогали — сервер подберёт по характеру
+      voice: isEdit ? undefined : createVoicePayload(voice ?? null, voiceTouched),
       systemPrompt: '',
       // Правка: шлём значение как есть — "" сбрасывает модель/усилие к дефолту (бэкенд: ""→null).
       // Создание: пусто → не пишем (иначе сохранилась бы пустая строка вместо null).
@@ -612,10 +621,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         ? await api.personas.update(persona!.id, dto)
         : await api.personas.create(dto);
 
-      // Голос — отдельным запросом (у него свой эндпоинт со своей валидацией) и ПОСЛЕ
-      // сохранения: при создании персоны id появляется только здесь. Шлём, только если
-      // он менялся, — иначе каждое сохранение формы дёргало бы лишний PUT
-      const savedVoice = await syncVoice(saved);
+      // Голос правки — отдельным запросом (у него свой эндпоинт со своей валидацией), только
+      // если он менялся. При создании он уже уехал в dto (или подобран сервером)
+      const savedVoice = isEdit ? await syncVoice(saved) : saved;
 
       bumpPersonas();
       invalidateEffectiveLines(); // строки «Сейчас пойдёт» пересчитаются свежим резолвом
@@ -811,11 +819,15 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
               />
             </Field>
           </div>
-          <div style={{ maxWidth: isMobile ? '100%' : 360 }}>
-            <Field label="Голос" hint="Как персона звучит в голосовом режиме">
+          {/* Шире соседних полей: рядом с выбором голоса стоят ▶ и «Подобрать под персону» */}
+          <div style={{ maxWidth: isMobile ? '100%' : 520 }}>
+            <Field label="Голос" hint={voicePickOpen ? undefined : 'Как персона звучит в голосовом режиме'}>
               <PersonaVoicePicker
+                onPickPanelChange={setVoicePickOpen}
                 value={voice ?? null}
-                onChange={setVoice}
+                onChange={(v) => { setVoice(v); setVoiceTouched(true); }}
+                // Создание, пикер не трогали: голос подберёт сервер — так и подписываем
+                emptyLabel={!isEdit && !voiceTouched ? 'Подберётся по характеру' : undefined}
                 // Подбор смотрит на то, что набрано в форме СЕЙЧАС, а не на сохранённое
                 describe={() => ({
                   name: name.trim() || undefined,
@@ -824,6 +836,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                   character: character.trim() || undefined,
                   tone: tone.trim() || undefined,
                 })}
+                greeting={greeting}
               />
             </Field>
           </div>

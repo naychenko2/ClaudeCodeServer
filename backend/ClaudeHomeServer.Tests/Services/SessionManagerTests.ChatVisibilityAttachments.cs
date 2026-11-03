@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
 using FluentAssertions;
@@ -106,5 +107,68 @@ public partial class SessionManagerTests
 
         session.PrivateToUserId.Should().BeNull();
         File.Exists(Path.Combine(ProjectRootOf(session), shared)).Should().BeTrue();
+    }
+    // Эмуляция рестарта: sessions.json перечитывается заново, записи в памяти заменяются десериализованными.
+    private void ReloadSessionsFromDisk() =>
+        typeof(SessionManager).GetMethod("LoadSessions", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .Invoke(_sut, null);
+
+    [Fact]
+    public async Task УчётВложения_ПереживаетРестарт_ПриватностьПослеНегоПереноситФайл()
+    {
+        var session = await SharedChatAsync("att-restart");
+        var shared = Upload(session, TestUserId, "pic.png", "secret");
+        var root = ProjectRootOf(session);
+
+        // Автосейв по таймеру в тестах выключен: учёт обязан лечь на диск самим сохранением вложения
+        ReloadSessionsFromDisk();
+
+        var result = _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: true);
+
+        result.Outcome.Should().Be(ChatVisibilityOutcome.Ok);
+        var moved = result.AttachmentMoves!.Should().ContainKey(shared).WhoseValue;
+        File.Exists(Path.Combine(root, shared)).Should().BeFalse("в общей раскладке файла приватного чата быть не должно");
+        File.ReadAllText(Path.Combine(root, moved)).Should().Be("secret");
+        moved.Should().StartWith(".cc-attachments/private/" + TestUserId + "/");
+    }
+
+    private (string Private, string Key) PrivateChatWithMessage(Session session, bool accumulatorLive)
+    {
+        _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: true).Outcome.Should().Be(ChatVisibilityOutcome.Ok);
+        var priv = Upload(session, TestUserId, "doc.txt", "body");
+        var entry = GetEntry(session.Id);
+        var key = session.ClaudeSessionId ?? session.Id;
+        var acc = new TurnAccumulator([], key);
+        acc.OnUserMessage("смотри файл", [priv]);
+        var flush = acc.GetAll();
+        // Сообщение должно лежать в истории, а не только в текущем ходе: тот же вид, что после завершённого хода
+        _historyService.SaveAsync(key, flush).GetAwaiter().GetResult();
+        entry.GetType().GetField("Accumulator")!.SetValue(entry,
+            accumulatorLive ? new TurnAccumulator(_historyService.LoadAsync(key).GetAwaiter().GetResult(), key) : null);
+        return (priv, key);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task СнятиеПриватности_ПутиВСообщенияхПереписаны_ФайлыПоНимЧитаются(bool accumulatorLive)
+    {
+        var session = await SharedChatAsync("att-paths" + accumulatorLive);
+        var (priv, key) = PrivateChatWithMessage(session, accumulatorLive);
+
+        var result = _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: false);
+
+        result.Outcome.Should().Be(ChatVisibilityOutcome.Ok);
+        var shared = result.AttachmentMoves!.Should().ContainKey(priv).WhoseValue;
+        var root = ProjectRootOf(session);
+        var fromDisk = (await _historyService.LoadAsync(key)).OfType<StoredUserMessage>().Single();
+        fromDisk.AttachedPaths.Should().BeEquivalentTo(new[] { shared }, "history.json ссылается на новый путь");
+        PrivateAttachments.IsForeign(fromDisk.AttachedPaths![0], Участник).Should().BeFalse("участник читает общее вложение");
+        File.ReadAllText(Path.Combine(root, fromDisk.AttachedPaths[0])).Should().Be("body");
+        if (accumulatorLive)
+        {
+            var acc = (TurnAccumulator)GetEntry(session.Id).GetType().GetField("Accumulator")!.GetValue(GetEntry(session.Id))!;
+            acc.GetAll().OfType<StoredUserMessage>().Single().AttachedPaths.Should().BeEquivalentTo(new[] { shared }, "аккумулятор в памяти тоже переписан");
+        }
     }
 }

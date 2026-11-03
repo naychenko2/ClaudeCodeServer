@@ -689,6 +689,26 @@ internal class TurnAccumulator
         }
     }
 
+    // Переписать пути вложений в сообщениях пользователя по карте «старый → новый» (снятие
+    // приватности переносит файлы, записанные пути должны за ними поехать). Правит элементы
+    // массива на месте — сами сообщения init-only. true — что-то изменилось.
+    public bool RewriteAttachedPaths(IReadOnlyDictionary<string, string> map)
+    {
+        lock (_lock) return RewriteAttachedPaths(_history.Concat(_currentTurn).Concat(_outOfTurn), map);
+    }
+
+    internal static bool RewriteAttachedPaths(IEnumerable<StoredMessage> messages, IReadOnlyDictionary<string, string> map)
+    {
+        var changed = false;
+        foreach (var m in messages)
+        {
+            if (m is not StoredUserMessage { AttachedPaths: { } paths }) continue;
+            for (var i = 0; i < paths.Length; i++)
+                if (map.TryGetValue(paths[i], out var to)) { paths[i] = to; changed = true; }
+        }
+        return changed;
+    }
+
     // Снапшот: новый список; элементы разделяются (StoredToolUseMessage и карточки
     // вопроса/плана мутируются позже), но их поля — атомарные ссылки/bool,
     // поэтому глубокая копия не нужна.

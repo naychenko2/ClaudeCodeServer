@@ -2594,6 +2594,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
                     // не страшен для утечки (файлы остаются закрытыми), но флаг не снимаем — состояние целое.
                     if (!TryRelocateAttachments(info, userId, toPrivate: false, out moves))
                         return new(ChatVisibilityOutcome.AttachmentsMoveFailed, null);
+                    // Пути в сообщениях едут за файлами: иначе автор и участники получают 404 на картинки ленты.
+                    if (moves is { Count: > 0 }) RewriteMessageAttachedPaths(entry, moves);
                     info.MessageClaimed = true;
                 }
                 info.PrivateToUserId = null;
@@ -2613,15 +2615,44 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         var info = entry.Info;
+        string? rel;
         lock (entry.VisibilityLock)
         {
-            string? rel = info.ProjectId is not null && info.PrivateToUserId is { } author && author == callerId
+            rel = info.ProjectId is not null && info.PrivateToUserId is { } author && author == callerId
                 ? PrivateAttachments.Build(author, Guid.NewGuid(), fileName)
                 : AttachmentsGitExclude.AttachmentPath(fileName);
             if (rel is null) return null;
             write(rel);
             (info.Attachments ??= []).Add(rel);
-            return rel;
+        }
+        // Учёт должен пережить рестарт раньше автосейва: иначе перенос при включении приватности
+        // не увидит файл и оставит его в общей раскладке (по образцу ClaimFirstMessage).
+        SaveSessions();
+        return rel;
+    }
+
+    // Переписывает пути вложений в сообщениях чата (память и history.json) по карте переноса.
+    // Активный аккумулятор — в памяти плюс снимок на диск; неактивный чат — прямо файл истории.
+    // Сбой записи не откатывает перенос: логируем, состояние флага и файлов остаётся целым.
+    private void RewriteMessageAttachedPaths(SessionEntry entry, IReadOnlyDictionary<string, string> map)
+    {
+        var info = entry.Info;
+        try
+        {
+            if (entry.Accumulator is { } acc)
+            {
+                if (acc.RewriteAttachedPaths(map))
+                    acc.SaveSnapshotAsync(_history).GetAwaiter().GetResult();
+                return;
+            }
+            var key = HistoryKeyOf(info);
+            var stored = _history.LoadAsync(key).GetAwaiter().GetResult();
+            if (TurnAccumulator.RewriteAttachedPaths(stored, map))
+                _history.SaveAsync(key, stored).GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Не удалось переписать пути вложений в сообщениях чата {Id} при снятии приватности", info.Id);
         }
     }
 
@@ -2657,7 +2688,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         {
             _log.LogWarning(ex, "Перенос вложений чата {Id} при смене видимости не удался, откат", info.Id);
             foreach (var (from, to) in done)
-                try { File.Move(to, from, overwrite: false); } catch { /* откат best-effort */ }
+                try { File.Move(to, from, overwrite: false); }
+                catch (Exception rex) { _log.LogWarning(rex, "Откат переноса вложения чата {Id} не удался: {To} остался на месте", info.Id, to); }
             moves = null;
             return false;
         }

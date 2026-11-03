@@ -18,6 +18,7 @@ import { installFakeDom, mount, reactProps, findNodeByAttr, textNodes } from './
 
 installFakeDom();
 
+// Частичное обновление полей и выбор эндпоинта по projectId — в updateChatFields.
 // chatUpdate: подменён только updateChatFields (разбор кода — НАСТОЯЩИЙ api:
 // тексты отказов живут в api и проверяются как есть). Тип мока — реальная сигнатура
 // вызова (chatUpdate.ts:38)
@@ -27,9 +28,12 @@ vi.mock('../../../lib/chatUpdate', () => ({ updateChatFields: updateMock }));
 vi.mock('../../../lib/toast', () => ({ showToast: toastMock }));
 
 import { NewChatSetup } from '../NewChatSetup';
+import { OWNER_SETTINGS_DENIED } from '../../../features/projects/members/participantGate';
 
 // Пилюля «История решений» есть только у проектного чата (личные в историю не пишутся)
 const project = { id: 'p1', name: 'Проект' } as unknown as Project;
+// Общий проект по роли (QA-P1G): myRole авторитетна (types/index.ts:318)
+const sharedProject = (myRole: 'editor' | 'reader' | 'owner'): Project => ({ ...project, myRole }) as Project;
 
 const chat = (over: Partial<Session> = {}): Session => ({
   id: 'c1', projectId: 'p1', mode: 'auto', status: 'active', messageCount: 0,
@@ -48,11 +52,12 @@ const httpError = (status: number, body: { error?: string; code?: string }): Err
 // Монтаж одного экземпляра; afterEach снимает root — панель живёт внутри контейнера,
 // без снятия её DOM остался бы в следующем кейсе
 let current: { root: ReturnType<typeof mount>['root'] } | null = null;
-function render(session: Session) {
+// proj — проект для рендера; null — чат вне проекта (проп project не передаётся вовсе)
+function render(session: Session, proj: Project | null = project) {
   const onSessionUpdated = vi.fn();
   const m = mount(createElement(NewChatSetup, {
     session,
-    project,
+    ...(proj === null ? {} : { project: proj }),
     onSessionUpdated,
     isMobile: false,
   }));
@@ -154,5 +159,82 @@ describe('NewChatSetup: выключение opt-out в приватном ча�
     expect(updateMock).toHaveBeenCalledWith(s, { excludeFromDossiers: false });
     expect(m.onSessionUpdated).toHaveBeenCalledWith(updated);
     expect(toastMock).not.toHaveBeenCalled();
+  });
+});
+
+// QA-P1G (находка Глеба на дельта-ревью QA-P1F): пилюли «Время жизни» и «История решений»
+// в пустом чате не гейтились по роли: редактор общего проекта выбирал срок и получал
+// 403 owner_settings (бэковый OwnerSettingsGate — настройки закрыты и редактору, и читателю).
+// Теперь тот же гейт, что у кнопок шапки (ExpiryButton.tsx:36): пилюля неактивна с причиной,
+// панель не открывается, поля не уходят на PUT. Владелец, обычный проект (без myRole) и чат
+// вне проекта — как раньше; «Теги» вне owner-гейта (в PUT редактору открыты name/tags,
+// participantGate.ts:69). Приватный переключатель — отдельная дверь автора, не трогается.
+// Мутация «пилюли не гейтятся» (в NewChatSetup settingsDenied = null) → оба ролевых кейса
+// красные: клик открывает панель и поле уходит в updateChatFields; откат — зелёный.
+describe('NewChatSetup: участник общего проекта (QA-P1G)', () => {
+  const pillBtn = (m: { container: ReturnType<typeof mount>['container'] }, label: string): any => {
+    const b = pillByLabel(m.container, label);
+    expect(b, `пилюля не найдена: ${label}`).not.toBeNull();
+    return b;
+  };
+  const click = (b: any): void => { act(() => { (reactProps(b as never)!.onClick as () => void)(); }); };
+
+  for (const role of ['editor', 'reader'] as const) {
+    it(`${role}: «Время жизни» и «История решений» выключены с причиной; клик не открывает панель и не шлёт поле`, () => {
+      const m = render(chat(), sharedProject(role));
+      const exp = pillBtn(m, 'Время жизни');
+      const dos = pillBtn(m, 'История решений');
+      expect(exp.getAttribute('disabled')).not.toBeNull();
+      expect(exp.getAttribute('title')).toContain(OWNER_SETTINGS_DENIED);
+      expect(dos.getAttribute('disabled')).not.toBeNull();
+      expect(dos.getAttribute('title')).toContain(OWNER_SETTINGS_DENIED);
+      // «неактивен» проверяется поведением: даже прямой клик не открывает панель и
+      // не выпускает поле на updateChatFields — бэковый отказ не обещается запросом
+      click(exp);
+      click(dos);
+      expect(updateMock).not.toHaveBeenCalled();
+      expect(m.onSessionUpdated).not.toHaveBeenCalled();
+      // панель не открылась: ни тумблера opt-out, ни описания ExpiryPicker в DOM нет
+      expect(switchNode(m)).toBeNull();
+      expect(textNodes(m.container).join('')).not.toContain('Временный чат удалится сам');
+    });
+  }
+
+  it('редактору «Теги» можно (в PUT открыты name/tags) — пилюля активна, без причины', () => {
+    const m = render(chat(), sharedProject('editor'));
+    const tags = pillBtn(m, 'Теги');
+    expect(tags.getAttribute('disabled')).toBeNull();
+    expect(tags.getAttribute('title')).toBeNull();
+  });
+
+  it('владельцу (myRole: owner) — активны без причины, панель открывается и работает как раньше', async () => {
+    const s = chat({ excludeFromDossiers: true });
+    const updated = { ...s, excludeFromDossiers: false } as Session;
+    updateMock.mockResolvedValue(updated);
+    const m = render(s, sharedProject('owner'));
+    const exp = pillBtn(m, 'Время жизни');
+    expect(exp.getAttribute('disabled')).toBeNull();
+    expect(exp.getAttribute('title')).toBeNull();
+    openDossiers(m);
+    await act(async () => { (reactProps(switchNode(m) as never)!.onClick as () => void)(); });
+    expect(updateMock).toHaveBeenCalledWith(s, { excludeFromDossiers: false });
+    expect(m.onSessionUpdated).toHaveBeenCalledWith(updated);
+  });
+
+  it('обычный проект (без myRole) — активны без причины, как раньше', () => {
+    const m = render(chat());
+    for (const label of ['Время жизни', 'История решений', 'Теги']) {
+      const b = pillBtn(m, label);
+      expect(b.getAttribute('disabled'), label).toBeNull();
+      expect(b.getAttribute('title'), label).toBeNull();
+    }
+  });
+
+  it('чат вне проекта — «Время жизни» активно, «История решений» не показывается (как раньше)', () => {
+    const m = render(chat(), null);
+    const exp = pillBtn(m, 'Время жизни');
+    expect(exp.getAttribute('disabled')).toBeNull();
+    expect(exp.getAttribute('title')).toBeNull();
+    expect(pillByLabel(m.container, 'История решений')).toBeNull();
   });
 });

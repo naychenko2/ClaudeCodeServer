@@ -4,6 +4,7 @@ import type { Session, Project, ProjectTag } from '../../types';
 import { api, chatFieldsErrorText } from '../../lib/api';
 import { expiryOptionLabel } from '../../lib/expiry';
 import { updateChatFields, type ChatFieldsPatch } from '../../lib/chatUpdate';
+import { ownerSettingsDeniedReason } from '../../features/projects/members/participantGate';
 import { showToast } from '../../lib/toast';
 import { ExpiryPicker } from './ExpiryPicker';
 import { DossierOptOutRow } from './DossierOptOutRow';
@@ -75,6 +76,15 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
     }
   };
 
+  // Участник общего проекта (QA-P1G): срок и «Не сохранять решения» — настройки владельца,
+  // бэк отвечает 403 owner_settings и редактору, и читателю (OwnerSettingsGate). Тот же гейт,
+  // что у кнопок шапки после дельты 1 QA-P1F (ExpiryButton.tsx:36, DossierOptOutButton.tsx:34):
+  // пилюля неактивна с причиной, панель не открывается — запрос не уходит вовсе. Обычный
+  // проект (без myRole) и чат вне проекта — как раньше. «Теги» вне этого гейта: в PUT сессии
+  // редактору открыты name/tags (participantGate.ts:69-70)
+  const settingsDenied = ownerSettingsDeniedReason(project);
+  const pillDenied = (p: Exclude<Panel, null>): string | null => (p === 'tags' ? null : settingsDenied);
+
   const pickExpiry = (minutes: number | null) => {
     if (minutes !== (session.expiresAfterMinutes ?? null)) persist({ expiresAfterMinutes: minutes }, 'expiry');
     setPanel(null);
@@ -102,19 +112,30 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
     }
   };
 
-  const toggle = (p: Exclude<Panel, null>) => setPanel(cur => (cur === p ? null : p));
+  const toggle = (p: Exclude<Panel, null>) => {
+    // Неактивная пилюля: панель не открывается — pickExpiry и тумблер opt-out не вызываются,
+    // поля не уходят на PUT, который бэк этому человеку и так откажет
+    if (pillDenied(p)) return;
+    setPanel(cur => (cur === p ? null : p));
+  };
 
   const pill = (p: Exclude<Panel, null>, icon: React.ReactNode, value: string) => {
     const active = panel === p;
+    const denied = pillDenied(p);
     return (
       <button
         type="button"
         onClick={() => toggle(p)}
-        disabled={saving}
+        disabled={saving || !!denied}
+        // Причина — на той самой пилюле, которую человек держал курсором: подпись + текст
+        // гейта (тот же паттерн подсказки, что у кнопок шапки и композера)
+        title={denied ? `${PANEL_LABEL[p]}: ${denied}` : undefined}
         style={{
           display: 'flex', alignItems: 'center', gap: 9,
           padding: isMobile ? '8px 12px' : '7px 12px',
-          borderRadius: R.lg, cursor: saving ? 'default' : 'pointer',
+          // Состояние срока/opt-out читается и участнику (значение на пилюле прежнее),
+          // но указатель «можно нажать» при неактивной кнопке врал бы
+          borderRadius: R.lg, cursor: saving || denied ? 'default' : 'pointer',
           border: `1px solid ${active ? C.accent : C.border}`,
           background: active ? C.accentLight : C.bgWhite,
           fontFamily: FONT.sans, opacity: saving ? 0.7 : 1,

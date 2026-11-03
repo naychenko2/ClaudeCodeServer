@@ -65,12 +65,34 @@ public class GitCommitAuthorRestTests : IDisposable
         return stdout;
     }
 
-    private async Task<string> SetupRepoAsync()
+    // Арранж репозитория. Идентичность — локальным конфигом репозитория, а не env одного
+    // вызова и не глобальным конфигом машины: её читает серверный git там, где автора не
+    // передают (личный проект), и в committer — всегда. Глобальный конфиг тестовой машины
+    // другой (user.name «QA Host»), и без локального конфига проверка «автор из конфига
+    // репозитория» зависела бы от хоста.
+    private async Task SetupRepoAsync()
     {
         await RunGitAsync(_repo, "init", "-b", "main");
+        await RunGitAsync(_repo, "config", "user.name", "Тест");
+        await RunGitAsync(_repo, "config", "user.email", "test@test");
         await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "текст\n");
         await RunGitAsync(_repo, "add", "-A");
-        return (await RunGitAsync(_repo, "commit", "-m", "начальный")).Trim();
+        await RunGitAsync(_repo, "commit", "-m", "начальный");
+    }
+
+    // Ревизия HEAD — SHA из rev-parse, а не человекочитаемый вывод «git commit»: его формат
+    // («[main (root-commit) <sha>] …», «(корневой коммит)» в русской локали) и длина хеша
+    // меняются по версии и локали git — с rev-parse он не совпадает ни в одной из них.
+    private async Task<string> HeadShaAsync() => (await RunGitAsync(_repo, "rev-parse", "HEAD")).Trim();
+
+    // Правка в индексе до вызова ручки: git.CommitAsync коммитит то, что лежит в индексе
+    // (GitService.cs:912), а на чистом дереве git отказывает (exit 1, сообщение — по локали:
+    // «нечего коммитить…» / «nothing to commit») и ручка отвечает 409 (GitController.cs:512).
+    // Арранж — сырой git, как весь остальной.
+    private async Task StageChangeAsync(string name)
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, name), "правка\n");
+        await RunGitAsync(_repo, "add", "--", name);
     }
 
     private async Task<(HttpClient Owner, string ProjectId)> CreateSharedProjectAsync()
@@ -131,6 +153,8 @@ public class GitCommitAuthorRestTests : IDisposable
         chat.EnsureSuccessStatusCode();
         var chatId = IdOf(await chat.Content.ReadAsStringAsync());
 
+        await StageChangeAsync("b.txt");
+
         // Сообщение из UI-коммита уже заканчивается блоком трейлеров (так их приносит ход
         // агента: Co-Authored-By + CCS-Task) — именно этот случай рвал AppendDossierTrailer.
         owner.DefaultRequestHeaders.Add("X-Caller-Session-Id", chatId);
@@ -161,8 +185,12 @@ public class GitCommitAuthorRestTests : IDisposable
     [Fact]
     public async Task КоммитРедактораОбщегоПроекта_Отказ403_КоммитаНет()
     {
-        var baseSha = await SetupRepoAsync();
-        var (_, editor, projectId, _, _) = await SetupSharedWithEditorAsync();
+        await SetupRepoAsync();
+        var (_, editor, projectId, _, editorUser) = await SetupSharedWithEditorAsync();
+        // Правка в индексе обязательна и здесь: без неё отказ неотличим от «git нечего
+        // коммитить», а с ней отказанное действие — то, которое коммит бы сделало.
+        await StageChangeAsync("b.txt");
+        var baseSha = await HeadShaAsync();
 
         var resp = await editor.PostAsJsonAsync($"/api/projects/{projectId}/git/commit", new
         {
@@ -170,8 +198,9 @@ public class GitCommitAuthorRestTests : IDisposable
         });
         resp.StatusCode.Should().Be(HttpStatusCode.Forbidden, "Write участнику закрыт (Q1)");
 
-        var head = (await RunGitAsync(_repo, "rev-parse", "HEAD")).Trim();
-        head.Should().Be(baseSha, "отказанное действие не оставило коммита");
+        (await HeadShaAsync()).Should().Be(baseSha, "отказанное действие не оставило коммита");
+        (await RunGitAsync(_repo, "log", "--format=%an")).Split('\n')
+            .Should().NotContain(editorUser.Username, "автора-участника в истории коммитов нет");
     }
 
     [Fact]
@@ -184,6 +213,7 @@ public class GitCommitAuthorRestTests : IDisposable
         chat.EnsureSuccessStatusCode();
         var chatId = IdOf(await chat.Content.ReadAsStringAsync());
 
+        await StageChangeAsync("b.txt");
         owner.DefaultRequestHeaders.Add("X-Caller-Session-Id", chatId);
         var resp = await owner.PostAsJsonAsync($"/api/projects/{projectId}/git/commit", new
         {

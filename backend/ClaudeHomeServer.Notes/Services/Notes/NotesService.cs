@@ -1150,7 +1150,15 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
         var oldFull = SafePath.Join(rootDir, oldFolder);
         var newFull = SafePath.Join(rootDir, newFolder);
-        // МУТАЦИЯ B (проба ревьюера): запись новых путей ДО проверки источника и ДО переноса
+        if (!Directory.Exists(oldFull)) throw new KeyNotFoundException("Папка не найдена");
+        if (Directory.Exists(newFull) || File.Exists(newFull))
+            throw new InvalidOperationException($"«{newFolder}» уже существует");
+
+        // Заметки папки — по скану диска под замком: после взятия замка источника их никто не
+        // создаёт и не удаляет, а их id уже взяты (список выше) — состав под замком стабилен.
+        // F-6a: не через модель — модель могла не увидеть заметку, созданную до этого окна;
+        // маппинг обязан соответствовать тому, что реально переезжает. Нечитаемый .md — не
+        // заметка и не в маппинге (тот же пропуск, что у модели и у списка замков выше).
         var before = new List<string>();
         try
         {
@@ -1161,24 +1169,20 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             }
         }
         catch (Exception ex) { _logger.LogWarning(ex, "Сканирование переносимой папки {Dir}", oldFull); }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(newFull)!);
+        Directory.Move(oldFull, newFull);
+        // S3-3c2: человеческий перенос папки — старый и новый путь КАЖДОГО её файла (тот же
+        // порядок, что S3-3b в FilesController.RecordRenamedDir: путь папки в журнал не идёт —
+        // её pathspec затянул бы чужую работу). Список берётся из скана под замком источника ДО
+        // переноса; вызов — после состоявшегося Directory.Move: отказанный перенос (404 /
+        // «уже существует») сюда не доходит — проигравший не пишет ни одного пути.
         if (byHuman)
             foreach (var rel in before)
             {
                 RecordHumanEdit(userId, sourceKey, SafePath.Join(rootDir, rel));
                 RecordHumanEdit(userId, sourceKey, SafePath.Join(rootDir, newFolder + rel[oldFolder.Length..]));
             }
-        if (!Directory.Exists(oldFull)) throw new KeyNotFoundException("Папка не найдена");
-        if (Directory.Exists(newFull) || File.Exists(newFull))
-            throw new InvalidOperationException($"«{newFolder}» уже существует");
-
-        // Заметки папки — по скану диска под замком: после взятия замка источника их никто не
-        // создаёт и не удаляет, а их id уже взяты (список выше) — состав под замком стабилен.
-        // F-6a: не через модель — модель могла не увидеть заметку, созданную до этого окна;
-        // маппинг обязан соответствовать тому, что реально переезжает. Нечитаемый .md — не
-        // заметка и не в маппинге (тот же пропуск, что у модели и у списка замков выше).
-
-        Directory.CreateDirectory(Path.GetDirectoryName(newFull)!);
-        Directory.Move(oldFull, newFull);
         // S2c-11: содержимое папки переезжает — модель арендатора источника обязана быть сброшена
         InvalidateWrite(userId, sourceKey);
         // Привязки комментариев к документам внутри перенесённой папки — по префиксу.

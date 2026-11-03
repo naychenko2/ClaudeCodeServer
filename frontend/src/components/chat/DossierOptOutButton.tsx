@@ -3,6 +3,7 @@ import { History } from 'lucide-react';
 import type { Session } from '../../types';
 import { C, FONT, R, TB } from '../../lib/design';
 import { updateChatFields } from '../../lib/chatUpdate';
+import { chatFieldsErrorText } from '../../lib/api';
 import { showToast } from '../../lib/toast';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Menu } from '../ui';
@@ -31,8 +32,11 @@ export function DossierOptOutButton({ session, isMobile, onSessionUpdated }: {
     setSaving(true);
     try {
       onSessionUpdated?.(await updateChatFields(session, { excludeFromDossiers: next }));
-    } catch {
-      showToast('История решений', 'Не удалось изменить настройку чата', 'info');
+    } catch (e) {
+      // 409 private_chat_dossiers — причина и действие вместо нейтрального текста (S2d-6c-F);
+      // прочие ошибки — тот же нейтральный, что был. Значение не оптимистичное:
+      // наверх уходит только ответ бэка (onSessionUpdated — после await)
+      showToast('История решений', chatFieldsErrorText(e), 'info');
     } finally {
       setSaving(false);
     }

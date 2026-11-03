@@ -1050,6 +1050,24 @@ export class ChatVisibilityError extends Error {
 // есть только когда перенос был. Вызывающий применяет её к ленте (remapSessionAttachedPaths).
 export type ChatVisibilityResponse = Session & { attachmentMoves?: Record<string, string> };
 
+// Отказ обновления полей чата (S2d-6c-F): 409 с полем body.code от PUT sessions/{sid}
+// (SessionsController.cs:126: пока чат приватный, «Не сохранять решения» нельзя
+// выключить). Серверный текст — только отказ; клиентский добавляет
+// действие (docs/design/guidelines.md: ошибка — с полезным действием), тон тот же,
+// что у CHAT_VISIBILITY_TEXTS: коротко, без кода и статуса.
+export const CHAT_FIELDS_ERROR_TEXTS = {
+  private_chat_dossiers: 'Пока чат приватный, решения из него не сохраняются — это нельзя выключить. Сначала сделайте чат общим.',
+} as const;
+
+// Текст тоста об отказе изменить настройки чата: знакомый код — понятный текст,
+// любая другая ошибка — тот же нейтральный, что был (отказ не меняет локальное состояние).
+export function chatFieldsErrorText(e: unknown): string {
+  const code = (e as { body?: { code?: string } })?.body?.code;
+  return code && code in CHAT_FIELDS_ERROR_TEXTS
+    ? CHAT_FIELDS_ERROR_TEXTS[code as keyof typeof CHAT_FIELDS_ERROR_TEXTS]
+    : 'Не удалось изменить настройку чата';
+}
+
 // Заметка + тег прочитанной версии (S2c-F3): etag есть только у сетевых get/update;
 // офлайн-доставка из кэша и локальный черновик тега не имеют — версии, по которой можно
 // сохранить по If-Match, без сервера нет. Вызывающие без etag работают как раньше.

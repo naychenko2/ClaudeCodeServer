@@ -14,6 +14,7 @@ import { ExpiryBadge } from './ExpiryBadge';
 import { ExpiryPicker } from './chat/ExpiryPicker';
 import { expiresAt, expiryOptionLabel, formatExpiryDate } from '../lib/expiry';
 import { updateChatFields } from '../lib/chatUpdate';
+import { chatFieldsErrorText } from '../lib/api';
 import { isNotifySupported, setChatNotifyEnabled, useChatNotifyOn } from '../lib/notify';
 import { showToast } from '../lib/toast';
 import { ChatOriginBadge } from './ChatOriginBadge';
@@ -673,8 +674,9 @@ function ChatCardView({
   const toggleDossier = async () => {
     try {
       onEdited?.(await updateChatFields(s, { excludeFromDossiers: !s.excludeFromDossiers }));
-    } catch {
-      showToast('История решений', 'Не удалось изменить настройку чата', 'info');
+    } catch (e) {
+      // 409 private_chat_dossiers — причина и действие вместо нейтрального текста (S2d-6c-F)
+      showToast('История решений', chatFieldsErrorText(e), 'info');
     }
   };
 

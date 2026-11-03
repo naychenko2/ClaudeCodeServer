@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles, SlidersHorizontal, MessageSquareShare } from 'lucide-react';
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag, ChatItem } from '../../types';
-import { api } from '../../lib/api';
+import { api, chatFieldsErrorText } from '../../lib/api';
 import { openChatById } from '../../lib/openChat';
 import { isArchivedChat } from '../../lib/chatFilters';
 import { TagAssignMenu } from '../TagChip';
@@ -1891,7 +1891,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       case 'dossier':
         void updateChatFields(session, { excludeFromDossiers: !session.excludeFromDossiers })
           .then(s => onSessionUpdated?.(s))
-          .catch(() => showToast('История решений', 'Не удалось изменить настройку чата', 'info'));
+          .catch(e => showToast('История решений', chatFieldsErrorText(e), 'info'));
         break;
       case 'expiry': if (anchor) setExpiryMenu(anchor); break;
       case 'archive':
@@ -2218,7 +2218,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
             setCtxMenu(null);
             void updateChatFields(session, { excludeFromDossiers: !dossierExcluded })
               .then(s => onSessionUpdated?.(s))
-              .catch(() => showToast('История решений', 'Не удалось изменить настройку чата', 'info'));
+              .catch(e => showToast('История решений', chatFieldsErrorText(e), 'info'));
           }}
         />
       )}

@@ -384,6 +384,17 @@ export function wikiInboxReasonText(reason: string | null | undefined): string {
   return code ? INBOX_REASON_TEXT[code] : INBOX_TEXT.unknown;
 }
 
+// ─── Класс «Замена ваших формулировок» в «Настройках» (F6c; ADR-038 «Класс @human в „Настройках“») ───
+
+// Бэк отдаёт класс замены формулировок человека сырыми ключами `…@human` (по одному на
+// origin × supersede/conflict). Строка «Замена ваших формулировок» — агрегат этих записей
+// (ADR-038:440); имя и описание — дословно из ADR-038 (решение 4, «Настройки») и макета
+// notes-wiki-unified-v1-proposal («Применение»). Случай класса — та же проверка хвоста
+// ключа, что во «Входящих» (F6a), а не таблица классов: бэк добавит origin — строка
+// останется одной.
+export const HUMAN_CLASS_TITLE = 'Замена ваших формулировок';
+export const HUMAN_CLASS_DESC = 'ИИ меняет ваше сам, если источник новее вашей правки. Прежняя — в «Истории», на странице — «Вернуть мою».';
+
 // ─── Секция «Заметки» страницы (F5a; подпись — макет и записка notes-wiki-unified-v1, §6) ───
 
 export const NOTES_TEXT = {

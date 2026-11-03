@@ -13,6 +13,15 @@
 // для чтения; в запрос уходит ключ как есть. Тексты состояний — по контракту: «само» для
 // включённого, «выключен» + причина бэка для выключенного (кто выключил — говорит причина,
 // отдельного поля «кем» в контракте нет).
+//
+// Класс замены формулировок человека (F6c, ADR-038 «Класс @human в „Настройках“»): бэк отдаёт
+// его сырыми ключами `…@human` (по одному на origin × supersede/conflict), строка — агрегат
+// этих записей под именем «Замена ваших формулировок»: сырой ключ на экран не выходит, счёт
+// — сумма записей, доля — пересчитана из сумм (среднять классные доли — неверно), состояние
+// включено только когда выключенных нет; причина и дата — первой выключенной записи порядка
+// списка (порядок бэка — Ordinal по ключу). «Снова применять само» — PUT с enable:true по каждой
+// выключенной записи агрегата (.:440); общий busy-слот действия покрывает всю последовательность.
+// Записи `human×…` (без «@») — шум до SV1-Б, фронт их не показывает (тот же ADR).
 
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, SlidersHorizontal } from 'lucide-react';
@@ -28,7 +37,7 @@ import { EmptyState } from '../../../components/ui/EmptyState';
 import { Notice } from '../../../components/ui/Notice';
 import { Toggle } from '../../../components/ui/Toggle';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { countWord, wikiErrorText } from './wikiLabels';
+import { countWord, isHumanTargetClass, wikiErrorText, HUMAN_CLASS_DESC, HUMAN_CLASS_TITLE } from './wikiLabels';
 
 // Доля — число уже в процентах (WikiClassHealth.ClassStat «доля, процент»); запятая —
 // русская запись, как её читает человек
@@ -49,7 +58,11 @@ function disabledDateText(iso: string): string {
 // человеку нечитабельно; ключ для запроса остаётся исходным
 const classLabel = (key: string) => key.split('×').join(' × ');
 
-function statsText(c: WikiApplyClassDto): string {
+// Замер строки — шесть чисел, а не весь DTO: строке агрегата (F6c) их считает HumanClassRow
+// из суммы записей, а не берёт из одной строки бэка
+type ClassStats = Pick<WikiApplyClassDto, 'applied7' | 'retracted7' | 'share7' | 'applied30' | 'retracted30' | 'share30'>;
+
+function statsText(c: ClassStats): string {
   if (!c.applied30 && !c.applied7) return 'операций в окне ещё не было';
   const part = (applied: number, retracted: number, share: number) =>
     `${countWord(applied, 'операция', 'операции', 'операций')} · откатов ${retracted} (${pctText(share)})`;
@@ -116,6 +129,64 @@ function ClassRow({ cls, busy, onResume }: { cls: WikiApplyClassDto; busy: boole
   );
 }
 
+// Строка класса «Замена ваших формулировок» — агрегат записей `…@human` (F6c, ADR-038:440):
+// та же разметка строки, что у ClassRow, но вместо ключа — имя, вместо замера одной строки —
+// сумма записей и доля, пересчитанная из сумм. Причина и дата — первой выключенной записи
+// порядка списка (бэк сортирует Ordinal по ключу). Описание класса — только у включённого
+// (по макету: у выключенного его место занимает причина выключения).
+function HumanClassRow({ entries, busy, onResume }: { entries: WikiApplyClassDto[]; busy: boolean; onResume: () => void }) {
+  const sum = (f: 'applied7' | 'retracted7' | 'applied30' | 'retracted30') => entries.reduce((a, c) => a + c[f], 0);
+  const applied7 = sum('applied7'); const retracted7 = sum('retracted7');
+  const applied30 = sum('applied30'); const retracted30 = sum('retracted30');
+  // Доля класса — процент из бэка; средняя нескольких классов она не складывается —
+  // пересчёт из сумм: откаты/применения агрегата, те же числа, что показывает строка
+  const share = (applied: number, retracted: number) => (applied > 0 ? (retracted * 100) / applied : 0);
+  const off = entries.find(c => c.disabled);
+  return (
+    <div
+      data-testid="wiki-apply-human-row"
+      style={{
+        display: 'flex', flexDirection: 'column', gap: 4,
+        padding: `${SP.sm}px ${SP.md}px`, borderBottom: `1px solid ${C.borderLight}`,
+      }}
+    >
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, alignItems: 'center' }}>
+        <span style={{ fontSize: FS.sm, color: C.textHeading, overflowWrap: 'anywhere' }}>
+          {HUMAN_CLASS_TITLE}
+        </span>
+        {off ? <Badge tone="warning">выключен</Badge> : <Badge tone="success">само</Badge>}
+      </div>
+      {!off && (
+        <div style={{ fontSize: FS.sm, color: C.textSecondary, overflowWrap: 'break-word' }}>
+          {HUMAN_CLASS_DESC}
+        </div>
+      )}
+      <div style={{ fontSize: FS.xs, color: C.textMuted }}>
+        {statsText({ applied7, retracted7, share7: share(applied7, retracted7), applied30, retracted30, share30: share(applied30, retracted30) })}
+      </div>
+      {off && (
+        <div style={{ fontSize: FS.sm, color: C.textSecondary, overflowWrap: 'break-word' }}>
+          {off.reason ?? 'причина не названа'}{off.disabledAt ? disabledDateText(off.disabledAt) : ''}
+        </div>
+      )}
+      {off && (
+        <div style={{ marginTop: SP.xs }}>
+          {/* size="md": тач-цель ≥40 px (xs — 24 px, ниже цели; дефект ed08c823) */}
+          <Button
+            variant="secondary" size="md"
+            dataTestId="wiki-apply-resume-human"
+            ariaLabel={`Снова применять само: ${HUMAN_CLASS_TITLE}`}
+            disabled={busy}
+            onClick={onResume}
+          >
+            Снова применять само
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function WikiApplySettings() {
   const snapshot = useWikiSettings();
   const [loadError, setLoadError] = useState<unknown>(null);
@@ -161,6 +232,11 @@ export function WikiApplySettings() {
   if (!snapshot) return <LoadingSkeleton />;
 
   const auto = snapshot.autoApplyEnabled;
+  // F6c: записи `…@human` — один агрегат под именем класса (первым в списке: по макету это
+  // именованная настройка, а не одна из сырых пар); записи `human×…` (без «@») — шум до SV1-Б,
+  // фронт их не показывает (ADR-038:440); остальные — строки с ключом, как раньше
+  const human = snapshot.classes.filter(c => isHumanTargetClass(c.class));
+  const plain = snapshot.classes.filter(c => !isHumanTargetClass(c.class) && !c.class.startsWith('human×'));
   return (
     <div style={{ padding: `${SP.sm}px ${SP.md}px ${SP.md}px` }}>
       <h2 style={{ margin: `${SP.xs}px 0 0`, fontFamily: FONT.serif, fontSize: FS.lg, color: C.textHeading }}>
@@ -206,7 +282,7 @@ export function WikiApplySettings() {
         После «Снова применять само» окно начинается заново.
       </div>
 
-      {snapshot.classes.length === 0 ? (
+      {human.length === 0 && plain.length === 0 ? (
         <EmptyState
           icon={<SlidersHorizontal size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
           title="Классов правок ещё нет"
@@ -214,7 +290,26 @@ export function WikiApplySettings() {
         />
       ) : (
         <div style={{ border: `1px solid ${C.border}`, borderRadius: R.md, background: C.bgPanel, boxShadow: SHADOW.card, overflow: 'hidden' }}>
-          {snapshot.classes.map(c => (
+          {human.length > 0 && (
+            <HumanClassRow
+              entries={human}
+              busy={busy}
+              // PUT с enable:true по каждой выключенной записи агрегата (ADR-038:440) — одной
+              // последовательностью под общим busy-слотом: двойной клик не удваивает запросы;
+              // отказ первой же записи останавливает серию и называется её кодом
+              onResume={() => {
+                void runAction(async () => {
+                  for (const c of human) {
+                    if (!c.disabled) continue;
+                    const r = await resumeWikiApplyClass(c.class);
+                    if (!r.ok) return r;
+                  }
+                  return { ok: true };
+                });
+              }}
+            />
+          )}
+          {plain.map(c => (
             <ClassRow
               key={c.class}
               cls={c}

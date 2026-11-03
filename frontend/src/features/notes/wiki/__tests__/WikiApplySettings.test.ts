@@ -24,6 +24,17 @@
 // (6) не звать loadWikiSettings после успеха (стор) → «после ответа доли перечитаны» краснеет;
 // (7) в mergeClassStats брать множество классов из ответа (return next.map) → «смена окна ночи»
 //     и «между ответом и перечиткой» краснеют (активный класс выпадает из снимка).
+//
+// Класс «Замена ваших формулировок» (F6c, ADR-038 «Класс @human в „Настройках“»): записи
+// …@human — агрегат под именем класса, «Снова применять само» — PUT по каждой выключенной
+// записи. Мутации этих тестов:
+// (8) снять проверку ключа (isHumanTargetClass в разделении блока) → «строка-агрегат под
+//     именем» краснеет: сырой ключ выходит на экран, имени и агрегата нет;
+// (9) убрать if (busy) return в runAction → «двойной клик под первым запросом» краснеет:
+//     второй клик добавляет PUT по оставшейся выключенной записи;
+// (10) снять фильтр записей human×… → «шум human×… не показан» краснеет.
+// Отбрасывание устаревшего ответа — поколение слота настроек стора (проверено на сторе,
+// wiki.test.ts «ДваБыстрыхPUT»), механизм не различает классы.
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -80,6 +91,36 @@ const SETTINGS = { autoApplyEnabled: true, classes: [CLS_ON, CLS_OFF], nightly: 
 // строки в settings.json не было (BuildDto строит класс-часть из settings.Classes, :206–214)
 const NO_STATS = { applied7: 0, retracted7: 0, share7: 0, applied30: 0, retracted30: 0, share30: 0 };
 
+// Класс замены формулировок человека — бэковая форма ключа с хвостом @human (по одному на
+// origin × supersede/conflict, ADR-038:440). Числа согласованы: откатов не больше применённых
+const HUMAN_OFF_CONFLICT = {
+  class: 'session×conflict@human', disabled: true,
+  reason: '3 откатов за 7 дней при пороге 3',
+  disabledAt: '2026-10-25T12:00:00Z', resumedAt: null,
+  applied7: 3, retracted7: 3, share7: 100, applied30: 10, retracted30: 6, share30: 60,
+};
+const HUMAN_OFF_SUPERSEDE = {
+  class: 'session×supersede@human', disabled: true,
+  reason: 'в окне последних 50 операций откатили 6 из 18 (33,3 %) при пороге 10 %',
+  disabledAt: '2026-10-26T12:00:00Z', resumedAt: null,
+  applied7: 2, retracted7: 2, share7: 100, applied30: 18, retracted30: 6, share30: 33.3,
+};
+const HUMAN_ON_NOTE = {
+  class: 'note×supersede@human', disabled: false, reason: null, disabledAt: null, resumedAt: null,
+  applied7: 2, retracted7: 1, share7: 50, applied30: 12, retracted30: 2, share30: 16.7,
+};
+const HUMAN_ON_SESSION = {
+  class: 'session×supersede@human', disabled: false, reason: null, disabledAt: null, resumedAt: null,
+  applied7: 3, retracted7: 0, share7: 0, applied30: 20, retracted30: 1, share30: 5,
+};
+// Запись human×… (без «@») — шум до SV1-Б: оценка её больше не мерит (пакеты AuthorHuman
+// пропускаются, WikiClassHealth.cs:140), но старая строка settings.json BuildDto отдаёт
+// как есть; фронт её не показывает (ADR-038:440)
+const NOISE_HUMAN_EDIT = {
+  class: 'human×edit', disabled: false, reason: null, disabledAt: null, resumedAt: null,
+  applied7: 1, retracted7: 0, share7: 0, applied30: 1, retracted30: 0, share30: 0,
+};
+
 const httpError = (status: number, body?: unknown): Error =>
   Object.assign(new Error(`HTTP ${status}`), { status, body });
 
@@ -93,52 +134,80 @@ const httpError = (status: number, body?: unknown): Error =>
 let server: Record<string, unknown> = SETTINGS;
 let withEntry = new Set<string>([CLS_OFF.class]);
 let putDone = false;
+// выключение/возврат — та же строка состояния, что ставит бэк (:135–143): возврат
+// начинает окно класса заново (ResumedAt), выключение сохраняет его
+function applyPut(body: Record<string, unknown>): void {
+  if (body.autoApplyEnabled !== undefined) server = { ...server, autoApplyEnabled: body.autoApplyEnabled };
+  if (body.class !== undefined) {
+    withEntry.add(body.class as string);
+    const at = '2026-11-02T10:00:00Z';
+    server = {
+      ...server,
+      classes: (server.classes as Record<string, unknown>[]).map(c => (c.class === body.class
+        ? (body.enable === true
+          ? { ...c, disabled: false, reason: null, disabledAt: null, resumedAt: at, ...NO_STATS }
+          : { ...c, disabled: true, reason: 'класс выключен человеком', disabledAt: at, ...NO_STATS })
+        : c)),
+    };
+  }
+  if (body.nightly !== undefined) {
+    // ночной блок: названное поле — менять, null — не менять (:146–168)
+    const patch = Object.fromEntries(
+      Object.entries(body.nightly as Record<string, unknown>).filter(([, v]) => v !== null));
+    server = { ...server, nightly: { ...(server.nightly as Record<string, unknown>), ...patch } };
+  }
+}
+// ответ PUT — формы реального бэка: BuildDto(next, [], null): только классы с записью,
+// замер нулевой, активного класса без записи нет вовсе
+function putResponse(): Record<string, unknown> {
+  return {
+    ...server,
+    classes: (server.classes as Record<string, unknown>[])
+      .filter(c => withEntry.has(c.class as string))
+      .map(c => ({ ...c, ...NO_STATS })),
+  };
+}
+function getResponse(): Record<string, unknown> {
+  if (putDone) {
+    return {
+      ...server,
+      classes: (server.classes as Record<string, unknown>[]).map(c =>
+        (c.class === 'session×append' ? { ...c, applied30: 42 } : c)),
+    };
+  }
+  return server;
+}
 function serveSettings(): void {
   req.mockImplementation(async (url: string, init?: RequestInit) => {
     const method = (init?.method ?? 'GET').toUpperCase();
     if (url !== '/wiki/settings') return null;
     if (method === 'PUT') {
-      const body = JSON.parse((init?.body ?? '{}') as string);
       putDone = true;
-      if (body.autoApplyEnabled !== undefined) server = { ...server, autoApplyEnabled: body.autoApplyEnabled };
-      if (body.class !== undefined) {
-        // выключение/возврат — та же строка состояния, что ставит бэк (:135–143): возврат
-        // начинает окно класса заново (ResumedAt), выключение сохраняет его
-        withEntry.add(body.class as string);
-        const at = '2026-11-02T10:00:00Z';
-        server = {
-          ...server,
-          classes: (server.classes as Record<string, unknown>[]).map(c => (c.class === body.class
-            ? (body.enable === true
-              ? { ...c, disabled: false, reason: null, disabledAt: null, resumedAt: at, ...NO_STATS }
-              : { ...c, disabled: true, reason: 'класс выключен человеком', disabledAt: at, ...NO_STATS })
-            : c)),
-        };
-      }
-      if (body.nightly !== undefined) {
-        // ночной блок: названное поле — менять, null — не менять (:146–168)
-        const patch = Object.fromEntries(
-          Object.entries(body.nightly as Record<string, unknown>).filter(([, v]) => v !== null));
-        server = { ...server, nightly: { ...(server.nightly as Record<string, unknown>), ...patch } };
-      }
-      // ответ PUT — формы реального бэка: BuildDto(next, [], null): только классы с записью,
-      // замер нулевой, активного класса без записи нет вовсе
-      return {
-        ...server,
-        classes: (server.classes as Record<string, unknown>[])
-          .filter(c => withEntry.has(c.class as string))
-          .map(c => ({ ...c, ...NO_STATS })),
-      };
+      applyPut(JSON.parse((init?.body ?? '{}') as string));
+      return putResponse();
     }
-    if (putDone) {
-      return {
-        ...server,
-        classes: (server.classes as Record<string, unknown>[]).map(c =>
-          (c.class === 'session×append' ? { ...c, applied30: 42 } : c)),
-      };
-    }
-    return server;
+    return getResponse();
   });
+}
+// Тот же «сервер», но первый PUT держится открытым: под ним блок перечитывается на
+// оптимистичном состоянии — этим проверяется конкурентность кнопки (двойной клик, busy-слот)
+function serveHoldingFirstPut(): { release: () => void; puts: () => number } {
+  let releaseFn: (v: unknown) => void = () => {};
+  const gate = new Promise<unknown>((r) => { releaseFn = r; });
+  let n = 0;
+  req.mockImplementation(async (url: string, init?: RequestInit) => {
+    const method = (init?.method ?? 'GET').toUpperCase();
+    if (url !== '/wiki/settings') return null;
+    if (method === 'PUT') {
+      putDone = true;
+      applyPut(JSON.parse((init?.body ?? '{}') as string));
+      n += 1;
+      if (n === 1) return gate;
+      return putResponse();
+    }
+    return getResponse();
+  });
+  return { release: () => releaseFn(putResponse()), puts: () => n };
 }
 
 const roots: Root[] = [];
@@ -171,10 +240,24 @@ function click(node: AnyNode, what: string): void {
 const putCalls = (): unknown[][] => req.mock.calls.filter((c) => ((c[1] as RequestInit | undefined)?.method ?? 'GET') === 'PUT');
 const sentBody = (call: unknown[]): Record<string, unknown> => JSON.parse(((call[1] as RequestInit).body ?? '') as string);
 
+function allNodes(root: AnyNode, out: AnyNode[] = []): AnyNode[] {
+  out.push(root);
+  for (const c of root.childNodes) allNodes(c, out);
+  return out;
+}
+
+// Инлайн-стиль узла — из props React (в fakeDom он не дублируется в атрибут): тест читает
+// ровно то, что задал компонент (тот же приём, что в WikiPageView.test)
+function styleOf(n: AnyNode): Record<string, string> {
+  return ((reactProps(n) ?? {}).style ?? {}) as Record<string, string>;
+}
+
 beforeEach(() => {
   wikiStore.reset();
   req.mockReset();
   server = SETTINGS;
+  // «сервер» каждого теста начинается с одного и того же состояния записи классов
+  withEntry = new Set<string>([CLS_OFF.class]);
   putDone = false;
   serveSettings();
 });
@@ -331,5 +414,178 @@ describe('блок «Применение» (S7d-1)', () => {
     await settle();
     expect(findNodeByAttr(c2, 'data-testid', 'wiki-apply-error')).toBeTruthy();
     expect(has(c2, 'Вики выключена в настройках')).toBe(true);
+  });
+});
+
+// Класс «Замена ваших формулировок» (F6c, ADR-038 «Класс @human в „Настройках“»): бэк отдаёт
+// класс замены формулировок человека сырыми ключами …@human; блок показывает их одной
+// строкой-агрегатом под именем класса: счёт — сумма записей, доля — пересчёт из сумм,
+// состояние/причина — первой выключенной записи; «Снова применять само» — PUT по каждой
+// выключенной записи. Сырой ключ и шум human×… на экран не выходят.
+describe('класс «Замена ваших формулировок» (F6c)', () => {
+  it('строка-агрегат под именем класса: доли по суммам записей, сырой ключ не показан', async () => {
+    server = { ...SETTINGS, classes: [CLS_ON, HUMAN_ON_NOTE, HUMAN_ON_SESSION] };
+    const c = render();
+    await settle();
+    expect(has(c, 'Замена ваших формулировок')).toBe(true);
+    // описание класса — дословно из макета (notes-wiki-unified-v1-proposal, «Применение»)
+    expect(has(c, 'ИИ меняет ваше сам, если источник новее вашей правки')).toBe(true);
+    // агрегат: 2+3 применено / 1+0 откатов за 7 дн → 20 %; 12+20 / 2+1 за 30 дн → 9,4 %
+    expect(has(c, 'за 7 дн: 5 операций · откатов 1 (20 %)')).toBe(true);
+    expect(has(c, '32 операции · откатов 3 (9,4 %)')).toBe(true);
+    // сырой ключ на экран не выходит ни в какой форме
+    expect(has(c, 'supersede')).toBe(false);
+    expect(has(c, '@human')).toBe(false);
+    // агрегат — первой строкой списка (именованная настройка, по макету), остальные — как были
+    const ts = texts(c);
+    expect(ts.indexOf('Замена ваших формулировок')).toBeGreaterThanOrEqual(0);
+    expect(ts.indexOf('Замена ваших формулировок')).toBeLessThan(ts.indexOf('session × append'));
+    expect(has(c, 'само')).toBe(true);
+  });
+
+  it('выключенный агрегат: причина и дата первой выключенной записи; «Снова применять само» — PUT по каждой выключенной', async () => {
+    server = { ...SETTINGS, classes: [HUMAN_OFF_CONFLICT, HUMAN_OFF_SUPERSEDE] };
+    const c = render();
+    await settle();
+    expect(has(c, 'Замена ваших формулировок')).toBe(true);
+    expect(has(c, 'выключен')).toBe(true);
+    // причина и дата — первой выключенной записи порядка бэка (ADR-038: «текст — её reason»);
+    // причина второй наружу не выходит
+    expect(has(c, '3 откатов за 7 дней при пороге 3')).toBe(true);
+    expect(has(c, '25.10.2026')).toBe(true);
+    expect(has(c, '6 из 18')).toBe(false);
+    // по макету у выключенного описание класса заменяется причиной
+    expect(has(c, 'ИИ меняет ваше сам')).toBe(false);
+    // агрегатный замер: 3+2 / 3+2 за 7 дн → 100 %; 10+18 / 6+6 за 30 дн → 42,9 %
+    expect(has(c, '5 операций · откатов 5 (100 %)')).toBe(true);
+    expect(has(c, '28 операций · откатов 12 (42,9 %)')).toBe(true);
+    const btn = findNodeByAttr(c, 'data-testid', 'wiki-apply-resume-human')!;
+    click(btn, 'Снова применять само');
+    await settle();
+    // одна последовательность: ровно один PUT по каждой выключенной записи, чужие не тронуты
+    const puts = putCalls();
+    expect(puts.length).toBe(2);
+    expect(sentBody(puts[0])).toEqual({ class: 'session×conflict@human', enable: true });
+    expect(sentBody(puts[1])).toEqual({ class: 'session×supersede@human', enable: true });
+    // после подтверждённого и перечитки выключенных записей нет — кнопки тоже
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-apply-resume-human')).toBeNull();
+  });
+
+  it('двойной клик по одиночному классу — один запрос: кнопка снята оптимистичным состоянием до ответа', async () => {
+    server = { ...SETTINGS, classes: [HUMAN_OFF_CONFLICT] };
+    const c = render();
+    await settle();
+    const hold = serveHoldingFirstPut();
+    const btn = findNodeByAttr(c, 'data-testid', 'wiki-apply-resume-human')!;
+    click(btn, 'Снова применять само');
+    await settle();
+    // до ответа сервера: класс оптимистично включён, кнопки нет — физическому второму клику
+    // некуда попасть; запрос ровно один, он ещё в полёте
+    expect(getWikiSettingsSnapshot()!.classes.find(cl => cl.class === 'session×conflict@human')!.disabled).toBe(false);
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-apply-resume-human')).toBeNull();
+    expect(hold.puts()).toBe(1);
+    hold.release();
+    await settle();
+    expect(hold.puts()).toBe(1);
+    expect(sentBody(putCalls()[0])).toEqual({ class: 'session×conflict@human', enable: true });
+  });
+
+  it('двойной клик под первым запросом (две выключенные записи) — второй клик не добавляет PUT', async () => {
+    server = { ...SETTINGS, classes: [HUMAN_OFF_CONFLICT, HUMAN_OFF_SUPERSEDE] };
+    const c = render();
+    await settle();
+    const hold = serveHoldingFirstPut();
+    const btn = findNodeByAttr(c, 'data-testid', 'wiki-apply-resume-human')!;
+    click(btn, 'Снова применять само');
+    await settle();
+    // первый PUT в полёте: первая запись оптимистично включена, вторая ещё выключена —
+    // кнопка на месте, но под busy-слотом; повторный клик не должен создать запрос
+    const btn2 = findNodeByAttr(c, 'data-testid', 'wiki-apply-resume-human')!;
+    click(btn2, 'Снова применять само повторно');
+    expect(hold.puts()).toBe(1);
+    hold.release();
+    await settle();
+    // серия первой же последовательности дошла до конца: ровно по одному PUT на запись
+    expect(hold.puts()).toBe(2);
+    expect(sentBody(putCalls()[0])).toEqual({ class: 'session×conflict@human', enable: true });
+    expect(sentBody(putCalls()[1])).toEqual({ class: 'session×supersede@human', enable: true });
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-apply-resume-human')).toBeNull();
+  });
+
+  it('отказ PUT по классу @human: оптимистичное откатано, плашка с текстом по коду, действие остаётся', async () => {
+    server = { ...SETTINGS, classes: [HUMAN_OFF_CONFLICT] };
+    const c = render();
+    await settle();
+    req.mockImplementation(async () => { throw httpError(400, { code: 'wiki_class_key', message: 'класс не пары «источник × операция»' }); });
+    click(findNodeByAttr(c, 'data-testid', 'wiki-apply-resume-human')!, 'Снова применять само');
+    await settle();
+    expect(getWikiSettingsSnapshot()!.classes.find(cl => cl.class === 'session×conflict@human')!.disabled).toBe(true);
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-apply-resume-human')).toBeTruthy();
+    expect(has(c, 'Неизвестный класс')).toBe(true);
+  });
+
+  it('между ответом PUT и перечиткой агрегат не пустеет: обе записи и их замер сохранены', async () => {
+    server = { ...SETTINGS, classes: [HUMAN_OFF_CONFLICT, HUMAN_ON_NOTE] };
+    const c = render();
+    await settle();
+    // ответ — только возвращённая запись с нулевым замером (форма BuildDto(next, [], null));
+    // перечитку GET держим открытой: видим ровно тот снимок, что стор пишет из ответа
+    req.mockImplementation((url: string, init?: RequestInit) => {
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (url !== '/wiki/settings') return Promise.resolve(null);
+      if (method === 'PUT') {
+        return Promise.resolve({
+          ...server,
+          classes: [{ ...HUMAN_OFF_CONFLICT, disabled: false, reason: null, disabledAt: null, resumedAt: '2026-11-02T10:00:00Z', ...NO_STATS }],
+        });
+      }
+      return new Promise<unknown>(() => { /* перечитки в этом тесте нет: она и есть проверяемое */ });
+    });
+    click(findNodeByAttr(c, 'data-testid', 'wiki-apply-resume-human')!, 'Снова применять само');
+    await settle();
+    const snap = getWikiSettingsSnapshot()!;
+    expect(snap.classes.length).toBe(2);
+    // подтверждённая запись включена, её замер — прежний (PUT его не несёт); чужая — как была
+    const off = snap.classes.find(cl => cl.class === 'session×conflict@human')!;
+    expect(off.disabled).toBe(false);
+    expect(off.applied30).toBe(10);
+    expect(snap.classes.find(cl => cl.class === 'note×supersede@human')!.applied30).toBe(12);
+    expect(has(c, 'Замена ваших формулировок')).toBe(true);
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-apply-resume-human')).toBeNull();
+  });
+
+  it('шум human×… (без «@») не показан: список только из таких записей — пустое состояние', async () => {
+    server = { ...SETTINGS, classes: [NOISE_HUMAN_EDIT] };
+    const c = render();
+    await settle();
+    expect(has(c, 'human × edit')).toBe(false);
+    expect(has(c, 'Классов правок ещё нет')).toBe(true);
+  });
+
+  it('строка агрегата на 320 px не переполняется горизонтально: перенос строки заголовка и переносимый текст', async () => {
+    server = { ...SETTINGS, classes: [HUMAN_OFF_CONFLICT] };
+    const c = render();
+    await settle();
+    const row = findNodeByAttr(c, 'data-testid', 'wiki-apply-human-row')!;
+    // шапка строки — переносной flex-ряд (как в ClassRow): бейдж не вылезает за 320 px
+    const header = row.childNodes[0];
+    expect(styleOf(header).flexWrap).toBe('wrap');
+    // ищем элемент с прямой текстовой дочерней строкой (textNodes рекурсивен: по нему
+    // внешние контейнеры тоже «содержат» строку, а стиль нужен у того, кто её рендерит)
+    const hasOwnText = (n: AnyNode, needle: string) =>
+      Array.from(n.childNodes as unknown[]).some(ch => (ch as { nodeType?: number; nodeValue?: string }).nodeType === 3 && (ch as { nodeValue?: string }).nodeValue?.includes(needle));
+    const title = allNodes(c).find(n => n.nodeName === 'SPAN' && hasOwnText(n, 'Замена ваших формулировок'));
+    expect(title).not.toBeUndefined();
+    expect(styleOf(title!).overflowWrap).toBe('anywhere');
+    const reason = allNodes(c).find(n => n.nodeName === 'DIV' && hasOwnText(n, 'при пороге 3'));
+    expect(reason).not.toBeUndefined();
+    expect(styleOf(reason!).overflowWrap).toBe('break-word');
+    // описание включённого класса — тоже переносимый текст (длинная строка на мобиле)
+    server = { ...SETTINGS, classes: [HUMAN_ON_NOTE] };
+    const c2 = render();
+    await settle();
+    const desc = allNodes(c2).find(n => n.nodeName === 'DIV' && hasOwnText(n, 'ИИ меняет ваше сам'));
+    expect(desc).not.toBeUndefined();
+    expect(styleOf(desc!).overflowWrap).toBe('break-word');
   });
 });

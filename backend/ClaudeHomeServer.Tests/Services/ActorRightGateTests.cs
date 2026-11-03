@@ -189,7 +189,8 @@ public class ActorRightGateUnitTests
     {
         var wsp = WorkspaceToolset.ToolSection.Keys;
         var tasks = TasksToolset.ProjectChatTools.Concat(TasksToolset.PersonalTools).Select(t => t.Name).Distinct();
-        var notes = NotesToolset.CoreTools.Concat(NotesToolset.AnnotationTools).Select(t => t.Name);
+        // WikiTools (master, ADR-035/036) отдаются тулсетом всегда, рядом с ядром
+        var notes = NotesToolset.CoreTools.Concat(NotesToolset.WikiTools).Concat(NotesToolset.AnnotationTools).Select(t => t.Name);
 
         var live = wsp.Select(n => ActorToolRights.Key("wsp", n))
             .Concat(tasks.Select(n => ActorToolRights.Key("tasks", n)))

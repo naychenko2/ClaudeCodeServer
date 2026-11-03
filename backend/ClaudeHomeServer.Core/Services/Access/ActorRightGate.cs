@@ -95,6 +95,10 @@ public static class ActorToolRights
         Add(Notes, ActorToolRule.Needs(ProjectRight.WriteContent),
             "notes_create", "notes_update", "notes_move", "notes_delete",
             "notes_annotate", "notes_reply", "notes_set_status", "notes_daily", "notes_promote_task");
+        // Вики (master, ADR-035/036) — личное пространство владельца data/wiki/{владелец}: агент
+        // участника работает под токеном арендатора, поэтому и чтение (query/status) ему закрыто —
+        // иначе он читал бы чужую вику. Узкая рамка общего проекта режет их отдельно (NarrowDenied).
+        Add(Notes, ActorToolRule.OwnerOnly, "wiki_ingest", "wiki_add_fact", "wiki_query", "wiki_status");
 
         // --- прочие серверы (доработка S2c-6): участнику открыто только чтение; пишущее, исполняющее и
         // тратящее GPU/деньги арендатора — OwnerOnly. Инструмента нет в таблице — отказ (default-deny).

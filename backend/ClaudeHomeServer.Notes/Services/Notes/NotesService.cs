@@ -64,10 +64,13 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
     // Замок записи заметок — ОДНА система на весь сервис (S2c-2 К8 → S2c-5 → S2c-11 → S2c-12).
     // Ключ — id заметки (Update/Delete — «сравнить и записать»; Move — ещё и на id перемещаемой:
-    // гонка переноса с удалением той же заметки; LinkMention/SetAnnotationStatus/Repin — правка
+    // гонка переноса с удалением той же заметки, и на целевой путь: гонка двух переносов в одну
+    // цель; LinkMention/SetAnnotationStatus/Repin — правка
     // той же заметки; Annotate/Repin — ещё на id заметки-документа, куда пишется ^id) или ключ
     // источника (Create — коллизия имени файла; MoveFolder/CreateFolder/DeleteFolder — структура
-    // папок источника). Многозаметочные каскады (RemoveWikilinksTo, RewriteAnnotationTargets)
+    // папок источника; MoveFolder/DeleteFolder — ещё id всех заметок папки: их правка держит
+    // замок своего id, а не источника — без этих ключей гонка «папка ↔ заметка внутри» не
+    // сериализована, F-6a). Многозаметочные каскады (RemoveWikilinksTo, RewriteAnnotationTargets)
     // берут по замку на каждую правимую заметку, ключи — по возрастанию, одним вызовом
     // (WithWriteGates): две операции не разойдутся по кругу. Вложенного WithWriteGates нет нигде:
     // внутренний вызов каскада из-под чужого замка (Update/Move/MoveFolder →
@@ -793,11 +796,37 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     internal static string SanitizeFolder(string? folder)
     {
         if (string.IsNullOrWhiteSpace(folder)) return "";
+        // Быстрый путь: чистый относительный путь — тот, где общий путь ничего не меняет
+        // (результат = NormalizeRel). Проверка — один проход строки, без аллокаций на сегмент:
+        // ключ целевого пути в Move считается до взятия замка, и аллокация на сегмент глубокой
+        // папки там дороже окна параллельной операции над файлом (замер: ~300 мкс на 300 сегментов
+        // против ~100 мкс Exists+Delete такой же папки).
+        if (IsCleanRelativePath(folder)) return NormalizeRel(folder);
         var segments = folder.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(SanitizeFileName)
             .Where(s => s.Length > 0 && s != "." && s != "..")
             .ToArray();
         return string.Join('/', segments);
+    }
+
+    // Ровно те случаи, где общий путь — тождество: нет обратных слэшей, ведущего/замыкающего
+    // слэша, пустых сегментов и сегментов, начинающихся/кончающихся пробелом или точкой
+    // (это же отсекает "." и ".."), недопустимых символов имени внутри сегментов. Всё остальное
+    // — общий путь. Консервативно: «чистый» тут ⊆ «общий путь ничего не меняет».
+    private static bool IsCleanRelativePath(string path)
+    {
+        if (path.IndexOf('\\') >= 0 || path[0] == '/' || path[^1] == '/') return false;
+        var start = 0;
+        for (var i = 0; i <= path.Length; i++)
+        {
+            if (i < path.Length && path[i] != '/') continue;
+            if (i == start) return false;
+            if (path[start] == ' ' || path[start] == '.' || path[i - 1] == ' ' || path[i - 1] == '.') return false;
+            for (var j = start; j < i; j++)
+                if (Array.IndexOf(InvalidFileNameChars, path[j]) >= 0) return false;
+            start = i + 1;
+        }
+        return true;
     }
 
     public NoteDetail Create(string userId, CreateNoteRequest req)
@@ -949,17 +978,25 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // меняется только id (источник + путь).
     public NoteDetail? Move(string userId, string id, string? folder, string? targetSource = null)
     {
-        var (sourceKey, _) = DecodeId(id);
+        var (sourceKey, relPath) = DecodeId(id);
         // S2c-11: замок на id перемещаемой заметки — тот же ключ, что у Update/Delete: гонка
         // переноса редактора с удалением той же заметки сериализована, полуреального состояния
         // («исходный файл удалён, целевой создан») нет. Плюс замок на затронутые источники:
-        // целевое место и структура папок. Ключи берутся в фиксированном порядке по возрастанию
-        // (WithWriteGates) — две многоключевые операции не разойдутся по кругу.
+        // целевое место и структура папок. F-6a: и замок на целевой путь (тот же ключ, что
+        // стоит на Update/Delete заметки в нём) — перенос в занятую цель сериализован с
+        // операцией на этой цели, а не только с источником. Целевой id считается здесь же, по
+        // тем же SanitizeFolder/NormalizeRel, что MoveCore: имена замка и файла расходятся
+        // только при невалидном id (ArgumentException из DecodeId — до любой записи).
+        // Ключи берутся в фиксированном порядке по возрастанию (WithWriteGates) — две
+        // многоключевые операции не разойдутся по кругу.
         var newSource = string.IsNullOrWhiteSpace(targetSource) ? sourceKey : targetSource!;
-        var keys = newSource == sourceKey
-            ? new[] { id, SourceGateKey(userId, sourceKey) }
-            : new[] { id, SourceGateKey(userId, sourceKey), SourceGateKey(userId, newSource) };
-        return WithWriteGates(() => MoveCore(userId, id, folder, targetSource), keys);
+        var fileName = Path.GetFileName(relPath);
+        var target = SanitizeFolder(folder);
+        var newRel = NormalizeRel(target.Length > 0 ? $"{target}/{fileName}" : fileName);
+        var keys = new List<string> { id, EncodeId(newSource, newRel) };
+        keys.Add(SourceGateKey(userId, sourceKey));
+        if (newSource != sourceKey) keys.Add(SourceGateKey(userId, newSource));
+        return WithWriteGates(() => MoveCore(userId, id, folder, targetSource), [.. keys]);
     }
 
     private NoteDetail? MoveCore(string userId, string id, string? folder, string? targetSource)
@@ -1022,8 +1059,45 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     public IReadOnlyList<MovedNoteId> MoveFolder(string userId, string sourceKey, string path, string newPath)
     {
         // S2c-11: перенос папки меняет id всех её заметок — под замком источника: гонка с
-        // переносом отдельной заметки или созданием файла в той же папке сериализована
-        return WithWriteGates(() => MoveFolderCore(userId, sourceKey, path, newPath), SourceGateKey(userId, sourceKey));
+        // переносом отдельной заметки или созданием файла в той же папке сериализована.
+        // F-6a (хвост 565100e3 п.6): плюс замки всех заметок папки — Update/Delete/Move заметки
+        // внутри держат замок на её id, а не на источник: без этих замков гонка «перенос папки ↔
+        // правка заметки внутри» не сериализована — правка уходит в «не найдена» или теряется
+        // под переездом. Заметки папки перечисляются сканом диска ДО замка (поиск — только
+        // чтение, замок не держится во время скана); их id и ключ источника берутся одним
+        // WithWriteGates по возрастанию — тот же набор ключей при любом порядке запросов даёт
+        // ту же очередь, цикла нет. Заметка, созданная между сканом и взятием замка, закрыта
+        // замком источника: Create его берёт всегда.
+        var oldFolder = SanitizeFolder(path);
+        var noteIds = oldFolder.Length == 0
+            ? []
+            : FolderNoteIds(userId, sourceKey, oldFolder);
+        return WithWriteGates(() => MoveFolderCore(userId, sourceKey, path, newPath),
+            [SourceGateKey(userId, sourceKey), .. noteIds]);
+    }
+
+    // id всех .md-заметок папки по скану диска (тот же EncodeId, что у id заметок модели):
+    // ключи замка и маппинга id. Зовётся ДО взятия замка; под замком состав папки проверяется
+    // Directory.Exists — повторный скан не нужен. Нечитаемый файл — не заметка: его переносит
+    // Directory.Move, ключа замка у него нет (тот же разбор, что у пропуска битых файлов в Scan).
+    private List<string> FolderNoteIds(string userId, string sourceKey, string folder)
+    {
+        var result = new List<string>();
+        string rootDir;
+        try { rootDir = ResolveRoot(userId, sourceKey, ProjectRight.Read); }
+        catch { return result; }   // нет права/источника — отказ придёт из Core под замком
+        var full = SafePath.Join(rootDir, folder);
+        if (!Directory.Exists(full)) return result;
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(full, "*.md", SearchOption.AllDirectories))
+            {
+                try { File.ReadAllText(file); } catch { continue; }
+                result.Add(EncodeId(sourceKey, NormalizeRel(Path.GetRelativePath(rootDir, file))));
+            }
+        }
+        catch (Exception ex) { _logger.LogWarning(ex, "Перечисление заметок папки {Dir}", full); }
+        return result;
     }
 
     private IReadOnlyList<MovedNoteId> MoveFolderCore(string userId, string sourceKey, string path, string newPath)
@@ -1045,11 +1119,21 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         if (Directory.Exists(newFull) || File.Exists(newFull))
             throw new InvalidOperationException($"«{newFolder}» уже существует");
 
-        // Заметки папки до переезда — для маппинга id
-        var before = GetModel(userId).Notes
-            .Where(n => n.SourceKey == sourceKey &&
-                        (n.RelPath.StartsWith(oldFolder + "/", StringComparison.OrdinalIgnoreCase)))
-            .Select(n => n.RelPath).ToList();
+        // Заметки папки — по скану диска под замком: после взятия замка источника их никто не
+        // создаёт и не удаляет, а их id уже взяты (список выше) — состав под замком стабилен.
+        // F-6a: не через модель — модель могла не увидеть заметку, созданную до этого окна;
+        // маппинг обязан соответствовать тому, что реально переезжает. Нечитаемый .md — не
+        // заметка и не в маппинге (тот же пропуск, что у модели и у списка замков выше).
+        var before = new List<string>();
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(oldFull, "*.md", SearchOption.AllDirectories))
+            {
+                try { File.ReadAllText(file); } catch { continue; }
+                before.Add(NormalizeRel(Path.GetRelativePath(rootDir, file)));
+            }
+        }
+        catch (Exception ex) { _logger.LogWarning(ex, "Сканирование переносимой папки {Dir}", oldFull); }
 
         Directory.CreateDirectory(Path.GetDirectoryName(newFull)!);
         Directory.Move(oldFull, newFull);
@@ -1121,8 +1205,16 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // Возвращает число удалённых .md-заметок.
     public int DeleteFolder(string userId, string sourceKey, string path)
     {
-        // S2c-11: та же дверь и тот же замок источника, что у CreateFolder
-        return WithWriteGates(() => DeleteFolderCore(userId, sourceKey, path), SourceGateKey(userId, sourceKey));
+        // S2c-11: та же дверь и тот же замок источника, что у CreateFolder.
+        // F-6a (хвост 565100e3 п.6): плюс замки всех заметок папки — правка/удаление заметки
+        // внутри (замок на её id) с удалением папки не сериализованы: правка могла писать в
+        // файл под его удалением. Порядок захвата — тот же: одним WithWriteGates по возрастанию.
+        var folder = SanitizeFolder(path);
+        var noteIds = folder.Length == 0
+            ? []
+            : FolderNoteIds(userId, sourceKey, folder);
+        return WithWriteGates(() => DeleteFolderCore(userId, sourceKey, path),
+            [SourceGateKey(userId, sourceKey), .. noteIds]);
     }
 
     private int DeleteFolderCore(string userId, string sourceKey, string path)
@@ -1554,12 +1646,15 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
     private static string Norm(string s) => s.Trim().ToLowerInvariant();
 
+    // Список недопустимых символов неизменяем — он не пересоздаётся на каждый сегмент:
+    // SanitizeFolder зовёт SanitizeFileName на каждый сегмент глубокого пути.
+    private static readonly char[] InvalidFileNameChars = Path.GetInvalidFileNameChars();
+
     private static string SanitizeFileName(string title)
     {
-        var invalid = Path.GetInvalidFileNameChars();
         var sb = new StringBuilder();
         foreach (var ch in title.Trim())
-            sb.Append(Array.IndexOf(invalid, ch) >= 0 ? '_' : ch);
+            sb.Append(Array.IndexOf(InvalidFileNameChars, ch) >= 0 ? '_' : ch);
         return sb.ToString().Trim().TrimEnd('.');
     }
 

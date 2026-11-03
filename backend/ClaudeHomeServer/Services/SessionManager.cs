@@ -2557,6 +2557,13 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         if (string.IsNullOrEmpty(userId) || info.CreatedByUserId != userId)
             return new(ChatVisibilityOutcome.NotAuthor, null);
 
+        // Чат, уже входящий в фичу, приватным не делается (S2d-7b-2). Шов берётся лениво (не из
+        // конструктора: ядро не зависит от Tasks) и считается ДО замка видимости — чтобы не брать
+        // замки задач под ним; привязать приватный чат к фиче потом не даёт дверь привязки.
+        var boundToFeature = makePrivate && info.PrivateToUserId != userId
+            && _services?.GetService<IFeatureChatLinks>() is { } links
+            && ResolveOwnerId(info) is { } chatOwner && links.IsBoundToFeature(chatOwner, info.Id);
+
         Dictionary<string, string>? moves = null;
         lock (entry.VisibilityLock)
         {
@@ -2565,6 +2572,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
                 var project = info.ProjectId is not null ? _projects.GetById(info.ProjectId) : null;
                 if (project?.Members is not { Count: > 0 })
                     return new(ChatVisibilityOutcome.NotSharedProject, null);
+                if (boundToFeature)
+                    return new(ChatVisibilityOutcome.BoundToFeature, null);
                 // Уже приватный — идемпотентно: повторный true не должен падать на «сообщениях»
                 if (info.PrivateToUserId != userId)
                 {
@@ -11580,8 +11589,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 }
 
 // Исход смены видимости чата (SetChatVisibility, S2d-7a). Отказы различимы для контроллера:
-// NotAuthor — 403, NotSharedProject / HasMessages / AttachmentsMoveFailed — 409, NotFound — 404.
-public enum ChatVisibilityOutcome { Ok, NotFound, NotAuthor, NotSharedProject, HasMessages, AttachmentsMoveFailed }
+// NotAuthor — 403, NotSharedProject / HasMessages / AttachmentsMoveFailed / BoundToFeature — 409, NotFound — 404.
+public enum ChatVisibilityOutcome { Ok, NotFound, NotAuthor, NotSharedProject, HasMessages, AttachmentsMoveFailed, BoundToFeature }
 
 // AttachmentMoves (S2d-6b-4): карта «старый путь → новый» перенесённых вложений — композеру
 // заменить ссылки черновика; null — переносить было нечего.

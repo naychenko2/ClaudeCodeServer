@@ -408,6 +408,7 @@ builder.Services.AddSingleton<ProjectManager>();
 builder.Services.AddSingleton<IProjectManager, ProjectManagerAdapter>();
 // Точка доступа к проекту/чату: область запроса (RequestScope) для [ProjectScope] и явных резолвов (S0-2)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Access.IProjectAccess, ClaudeHomeServer.Services.ProjectAccessService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.IFeatureChatLinks, ClaudeHomeServer.Services.FeatureChatLinks>();
 // Шов для вертикалей (Этап 3, волна 1): вместо прямой зависимости от ProjectManager
 // вертикали берут узкий контракт IProjectRootLookup. Реализация — тонкая обёртка
 // над ProjectManager в `Services/ProjectRootLookup`, живёт здесь же в Main.

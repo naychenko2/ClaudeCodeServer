@@ -350,6 +350,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
             ChatVisibilityOutcome.AttachmentsMoveFailed => Conflict(new { error = "Не удалось перенести вложения чата — видимость не изменена", code = "attachments_move_failed" }),
             ChatVisibilityOutcome.NotAuthor => ChatAuthorGate.Denied(),
             ChatVisibilityOutcome.NotSharedProject => Conflict(new { error = "Приватным можно сделать только чат общего проекта", code = "not_shared_project" }),
+            ChatVisibilityOutcome.BoundToFeature => Conflict(new { error = "Чат уже привязан к фиче — приватным его не сделать", code = FeatureChatDoor.PrivateChatCode }),
             ChatVisibilityOutcome.HasMessages => Conflict(new { error = "В чате уже есть сообщения — приватным его не сделать", code = "chat_has_messages" }),
             _ => NotFound(),
         };

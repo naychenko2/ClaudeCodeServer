@@ -12,6 +12,23 @@ public static class FeatureChatDoor
     // Код отказа REST (409 { error, code }); текст отказа — DenyReason, один и тот же в REST и MCP.
     public const string DeniedCode = "chat_feature_bound";
 
+    // Приватный чат (Session.PrivateToUserId) не привязывается к фиче (S2d-7b-2): чат фичи
+    // виден участникам проекта через страницу фичи, а приватный — только автору. Код общий
+    // для REST (409 { error, code }), MCP-отказа и обратного направления (смена видимости).
+    public const string PrivateChatCode = "private_chat_mode";
+    public const string PrivateChatReason =
+        "Приватный чат нельзя привязать к фиче: сначала сделайте чат общим либо работайте с фичей из общего чата.";
+
+    // Дверь «приватный чат»: чат-вызыватель приватный, а действие привязывает его к фиче
+    // (цель непустая) → причина отказа. Признак берётся с серверной сессии, не из тела запроса.
+    public static string? DenyPrivate(Session? caller, string? targetFeatureId) =>
+        !string.IsNullOrEmpty(targetFeatureId) && caller?.PrivateToUserId is not null ? PrivateChatReason : null;
+
+    // REST-вход той же двери: чат-вызыватель — по заголовку X-Caller-Session-Id (его ставит конфиг
+    // хода). Без владельца в сверке: чужой приватный чат в заголовке — тоже отказ (fail-closed).
+    public static string? DenyPrivateForHeader(SessionManager sessions, string? callerSessionHeader, string? targetFeatureId) =>
+        string.IsNullOrEmpty(callerSessionHeader) ? null : DenyPrivate(sessions.GetById(callerSessionHeader), targetFeatureId);
+
     // Узкий снимок живых сессий владельца — единственная сборка для индекса фич и для гарда.
     // Busy — та же занятость чата, что в ClassifyStall (TaskExecutionService.cs:1806): ход идёт или
     // ждёт ответа человека; остальные статусы (Active/Finished/Error/Orphaned) — свободен.

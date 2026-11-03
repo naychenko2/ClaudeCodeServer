@@ -221,6 +221,11 @@ public sealed class TasksToolset(
                 if (modelTier.Length > 0 && !ModelTiers.IsValidWireValue(modelTier))
                     return Deny(ModelTiers.WireError);
 
+                // Приватный чат не привязывается к фиче (S2d-7b-2)
+                if (FeatureChatDoor.DenyPrivate(session, FeatureChatDoor.CreateTarget(
+                        OptionalArg(arguments, "featureId"), OptionalArg(arguments, "role"))) is { } privateChat)
+                    return Deny(privateChat);
+
                 // Чат, ведущий фичу, не заводит задачи чужой фичи (правило FeatureChatBinding; текст
                 // отказа общий с REST)
                 if (FeatureChatDoor.DenyReason(tasks, FeatureChatDoor.Snapshot(sessions, context.OwnerId),
@@ -333,6 +338,10 @@ public sealed class TasksToolset(
                 if (denied is not null) return Deny(denied);
 
                 // Смена фичи задачи (featureId или превращение в эпик ролью) — та же дверь, что у создания
+                if (FeatureChatDoor.DenyPrivate(session, FeatureChatDoor.UpdateTarget(existing,
+                        arguments.ContainsKey("featureId") ? StringArg(arguments, "featureId") : null,
+                        arguments.ContainsKey("role") ? StringArg(arguments, "role") : null)) is { } privateChat)
+                    return Deny(privateChat);
                 if (FeatureChatDoor.DenyReason(tasks, FeatureChatDoor.Snapshot(sessions, context.OwnerId),
                         context.OwnerId, session.Id, FeatureChatDoor.UpdateTarget(existing,
                             arguments.ContainsKey("featureId") ? StringArg(arguments, "featureId") : null,
@@ -680,6 +689,11 @@ public sealed class TasksToolset(
                 {
                     DelegatedTurnGate.Refund(sessions, session.Id, context.OwnerId, gate);
                     return Deny(scopeDenied);
+                }
+                if (FeatureChatDoor.DenyPrivate(session, FeatureChatDoor.TargetFeature(task)) is { } privateChat)
+                {
+                    DelegatedTurnGate.Refund(sessions, session.Id, context.OwnerId, gate);
+                    return Deny(privateChat);
                 }
                 // Чат, ведущий фичу, не запускает исполнителя задачи чужой фичи
                 if (FeatureChatDoor.DenyReason(tasks, FeatureChatDoor.Snapshot(sessions, context.OwnerId),

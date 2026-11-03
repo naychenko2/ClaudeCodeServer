@@ -1991,6 +1991,9 @@ public class SubsystemBoundaryTests
         // ── Shared contracts (interfaces crossing vertical boundaries) ──
         "ClaudeHomeServer.Services.IChatHistoryLoader",
         "ClaudeHomeServer.Services.IDailyBriefingRunner",
+        // Шов «чат привязан к фиче?» (S2d-7b-2): SetChatVisibility ядра не делает приватным чат фичи;
+        // реализация — в Main (FeatureChatLinks), резолв лениво из IServiceProvider, без цикла DI
+        "ClaudeHomeServer.Services.IFeatureChatLinks",
         "ClaudeHomeServer.Services.IDataBackupService",
         "ClaudeHomeServer.Services.IKnowledgeHubNotifier",
         "ClaudeHomeServer.Services.IModelCatalog",

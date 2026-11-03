@@ -69,6 +69,10 @@ public class ProjectTasksController(
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
 
+        // Приватный чат не привязывается к фиче (S2d-7b-2)
+        if (FeatureChatDoor.DenyPrivateForHeader(sessions,
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), FeatureChatDoor.CreateTarget(req.FeatureId, req.Role)) is { } privateChat)
+            return Conflict(new { error = privateChat, code = FeatureChatDoor.PrivateChatCode });
         // Чат, ведущий фичу, не заводит задачи чужой фичи (правило FeatureChatBinding)
         if (FeatureChatDoor.DenyForHeader(sessions, tasks, UserId,
                 Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), FeatureChatDoor.CreateTarget(req.FeatureId, req.Role)) is { } bound)
@@ -300,6 +304,10 @@ public class TasksController(
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
 
+        // Приватный чат не привязывается к фиче (S2d-7b-2)
+        if (FeatureChatDoor.DenyPrivateForHeader(sessions,
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), FeatureChatDoor.CreateTarget(req.FeatureId, req.Role)) is { } privateChat)
+            return Conflict(new { error = privateChat, code = FeatureChatDoor.PrivateChatCode });
         // Чат, ведущий фичу, не заводит задачи чужой фичи (правило FeatureChatBinding)
         if (FeatureChatDoor.DenyForHeader(sessions, tasks, UserId,
                 Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), FeatureChatDoor.CreateTarget(req.FeatureId, req.Role)) is { } bound)
@@ -439,6 +447,10 @@ public class TasksController(
             return BadRequest(new { error = ModelTiers.WireError });
 
         // Смена фичи задачи (featureId или превращение в эпик ролью) — та же дверь, что у создания
+        if (FeatureChatDoor.DenyPrivateForHeader(sessions,
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(),
+                FeatureChatDoor.UpdateTarget(task, req.FeatureId, req.Role)) is { } privateChat)
+            return Conflict(new { error = privateChat, code = FeatureChatDoor.PrivateChatCode });
         if (FeatureChatDoor.DenyForHeader(sessions, tasks, UserId,
                 Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(),
                 FeatureChatDoor.UpdateTarget(task, req.FeatureId, req.Role)) is { } bound)
@@ -1651,6 +1663,8 @@ public class TasksController(
             var callerSessionId = Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault();
             var callerSession = callerSessionId is not null && sessions.GetById(callerSessionId) is { } cs
                 && sessions.ResolveOwnerId(cs) == UserId ? cs : null;
+            if (FeatureChatDoor.DenyPrivateForHeader(sessions, callerSessionId, FeatureChatDoor.TargetFeature(task)) is { } privateChat)
+                return Conflict(new { error = privateChat, code = FeatureChatDoor.PrivateChatCode });
             if (callerSession is not null
                 && FeatureChatDoor.DenyReason(tasks, FeatureChatDoor.Snapshot(sessions, UserId), UserId, callerSession.Id,
                     FeatureChatDoor.TargetFeature(task)) is { } bound)

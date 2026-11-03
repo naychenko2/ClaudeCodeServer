@@ -300,6 +300,8 @@ public class FilesControllerWriteContentTests : IClassFixture<TestWebApplication
         Directory.CreateDirectory(dir);
         if (fixtureFile is not null) File.WriteAllText(Path.Combine(dir, fixtureFile), "базовое содержимое");
         if (fixtureDir is not null) Directory.CreateDirectory(Path.Combine(dir, fixtureDir));
+        // Как в реальном общем проекте: файлы закоммичены, иначе гейт F-4 даёт редактору file_uncommitted
+        GitFixture.CommitAll(dir);
 
         var created = await owner.PostAsJsonAsync("/api/projects",
             new { name = "WC" + Guid.NewGuid().ToString("N")[..6], rootPath = dir });

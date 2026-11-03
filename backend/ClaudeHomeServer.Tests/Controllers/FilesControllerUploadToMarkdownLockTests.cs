@@ -70,6 +70,8 @@ public class FilesControllerUploadToMarkdownLockTests : IClassFixture<TestWebApp
         var dir = Path.Combine(_tempDir, "r_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         foreach (var (p, c) in fixtures) File.WriteAllText(Path.Combine(dir, p), c);
+        // Как в реальном общем проекте: файлы закоммичены, иначе гейт F-4 даёт редактору file_uncommitted
+        GitFixture.CommitAll(dir);
 
         var created = await owner.PostAsJsonAsync("/api/projects",
             new { name = "S2C10" + Guid.NewGuid().ToString("N")[..6], rootPath = dir });

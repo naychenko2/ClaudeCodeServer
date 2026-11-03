@@ -44,7 +44,7 @@ public class McpHttpTransportConfigTests : IDisposable
         WorkspaceMcpContext? workspace = null, NotificationsMcpContext? notifications = null,
         CodeGraphMcpContext? codeGraph = null, DifyMcpContext? dify = null,
         string? difyDatasetId = null, string? mcpConfigPath = null, Func<bool>? httpEnabled = null,
-        WatchMcpContext? watch = null)
+        WatchMcpContext? watch = null, string? privateToUserId = null)
     {
         var context = new LlmSessionContext(
             RootPath: _root,
@@ -63,7 +63,7 @@ public class McpHttpTransportConfigTests : IDisposable
             PersonaAgentsProvider: personaAgents is null ? null : () => personaAgents,
             HttpMcpEnabledProvider: httpEnabled,
             WatchMcp: watch);
-        var session = new ClaudeSession(new Session(), context, mcpConfigPath);
+        var session = new ClaudeSession(new Session { PrivateToUserId = privateToUserId }, context, mcpConfigPath);
         return BuildFor(session, difyDatasetId, personaAgents);
     }
 
@@ -401,6 +401,62 @@ public class McpHttpTransportConfigTests : IDisposable
             // Сборка вне дерева репозитория: index.js не найден — но http-узла точно нет
             keys.Should().NotContain("memory:t:http");
         }
+    }
+
+    /// <summary>Кладёт заглушку index.js рядом с exe, чтобы stdio-ветка памяти реально собиралась (иначе тесты отката вакуумны).</summary>
+    private static IDisposable FakeMemoryServer()
+    {
+        var dir = Path.Combine(AppContext.BaseDirectory, "mcp", "memory-server");
+        var file = Path.Combine(dir, "index.js");
+        var existed = File.Exists(file);
+        Directory.CreateDirectory(dir);
+        if (!existed) File.WriteAllText(file, "// заглушка для теста");
+        return new FakeServerScope(existed ? null : file);
+    }
+
+    private sealed class FakeServerScope(string? file) : IDisposable
+    {
+        public void Dispose() { if (file is not null) File.Delete(file); }
+    }
+
+    /// <summary>
+    /// Приватный чат + откатный stdio: замороженный node-сервер не знает гейта приватности и
+    /// пишет в общую team-memory, поэтому memory-сервер приватному чату не объявляется вовсе.
+    /// </summary>
+    [Fact]
+    public void Memory_ПриватныйЧат_Откат_СерверНеОбъявляется()
+    {
+        using var _ = FakeMemoryServer();
+        var (servers, keys) = BuildConfig(memory: new MemoryMcpContext(
+            "https://naychenko.me", () => "tok", "persona-1", "proj-1", UseHttp: false),
+            privateToUserId: "author-1");
+
+        servers.ContainsKey("memory").Should().BeFalse("stdio-память пишет в общую полку мимо гейта приватности");
+        keys.Should().NotContain("memory:");
+    }
+
+    /// <summary>Контроль: общий чат на откате объявляет stdio-память как раньше (иначе тест выше вакуумен).</summary>
+    [Fact]
+    public void Memory_ОбщийЧат_Откат_КакРаньше()
+    {
+        using var _ = FakeMemoryServer();
+        var (servers, keys) = BuildConfig(memory: new MemoryMcpContext(
+            "https://naychenko.me", () => "tok", "persona-1", "proj-1", UseHttp: false));
+
+        servers.ContainsKey("memory").Should().BeTrue();
+        keys.Should().Contain("memory:d0:t:stdio");
+    }
+
+    /// <summary>Приватный чат на http: гейт приватности в тулсете, конфиг как раньше.</summary>
+    [Fact]
+    public void Memory_ПриватныйЧат_Http_КакРаньше()
+    {
+        var (servers, keys) = BuildConfig(memory: new MemoryMcpContext(
+            "http://localhost:5000", () => "tok", "persona-1", "proj-1", UseHttp: true),
+            privateToUserId: "author-1");
+
+        servers["memory"]!["type"]!.GetValue<string>().Should().Be("http");
+        keys.Should().Contain("memory:d0:t:http");
     }
 
     /// <summary>

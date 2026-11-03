@@ -77,7 +77,8 @@ public class TeamMemoryAutolearnPrivateChatTests : IDisposable
         await _observer.Handler(session, Result);
 
         // даём фону шанс «догнать» (контроль «общий чат» ниже доказывает, что пайплайн быстрый)
-        await Task.Delay(300);
+        var winner = await Task.WhenAny(_cheap.Done.Task, Task.Delay(300));
+        winner.Should().NotBe(_cheap.Done.Task, "приватный чат не должен дойти до LLM");
         _sessions.HistoryCalls.Should().Be(0, "приватный чат отсекается ДО чтения истории");
         _cheap.Calls.Should().Be(0,
             "приватный чат не должен доходить ни до истории, ни до платного LLM");
@@ -98,7 +99,8 @@ public class TeamMemoryAutolearnPrivateChatTests : IDisposable
 
         await _observer.Handler(session, Result);
 
-        await Task.Delay(300);
+        var winner = await Task.WhenAny(_cheap.Done.Task, Task.Delay(300));
+        winner.Should().NotBe(_cheap.Done.Task, "приватный чат не должен дойти до LLM");
         _sessions.HistoryCalls.Should().Be(0);
         _cheap.Calls.Should().Be(0);
     }

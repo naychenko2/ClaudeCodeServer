@@ -1323,7 +1323,13 @@ public class ClaudeSession : ILlmSessionAdapter
             || personaAgents?.MemoryServers.Any(s => !ConsultantHttp(s)) == true;
         var memoryServerPath = _memoryMcp is not null || hasConsultants
             ? (hasStdioMemory ? MapMcpPath(MemoryServerLocator.FindMemoryServerPath()) : null) : null;
-        var hasMemory = _memoryMcp is not null && (memoryHttp || memoryServerPath is not null);
+        // Приватный чат не пишет в общую память в ЛЮБОМ транспорте: гейт приватности стоит только в
+        // http-тулсете, замороженный node-сервер (stdio) его не знает и пишет в team-memory
+        // сервисным JWT владельца. Fail-closed: на откате приватному чату memory не объявляется
+        // (признак — свойство сессии, не хода: сигнатура запуска стабильна)
+        var privateStdioMemoryBlocked = Info.PrivateToUserId is not null;
+        var hasMemory = _memoryMcp is not null
+            && (memoryHttp || (memoryServerPath is not null && !privateStdioMemoryBlocked));
         var personasServerPath = _personasMcp is not null && !personasHttp
             ? MapMcpPath(PersonasServerLocator.FindPersonasServerPath()) : null;
         var hasPersonas = _personasMcp is not null && (personasHttp || personasServerPath is not null);
@@ -2316,7 +2322,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     // stdio-ветке нужен файл сервера (в песочнице может не резолвиться);
                     // http-запись едет и без него — процесса node нет
-                    if (!ConsultantHttp(c) && memoryServerPath is null) continue;
+                    // приватный чат на stdio: тот же memory-сервер пишет в общую полку — не объявляем
+                    if (!ConsultantHttp(c) && (memoryServerPath is null || privateStdioMemoryBlocked)) continue;
                     servers[c.ServerKey] = ConsultantHttp(c)
                         ? new System.Text.Json.Nodes.JsonObject
                         {

@@ -81,9 +81,19 @@ public sealed class HumanEditCommitter(
         // Удалённый файл (путь не существует) допустим — удаление тоже правка.
         if (Directory.Exists(full)) return;
 
-        var rel = relPath.Replace('\\', '/');
+        // Ключ — по каноническому пути, а не по сырой строке запроса (доработка по ревью e5f6c10c).
+        var rel = CanonicalRel(root, full);
         _pending[(root, rel)] = new Pending(projectId, root, rel, userId, _clock.GetUtcNow());
     }
+
+    // Ключ журнала = канонический путь от корня: тот же вид, что пути `git status` и ключ
+    // file_uncommitted. Нормализация одна и на записи, и на чтении — из уже собранного SafePath
+    // full, поэтому алиасы («./x», «sub/../x», слеши) сходятся с тем же путём, что «x».
+    // Без неё ключ не совпадает с буквальным pathspec git (GitService.CommitAsync → LiteralSpec):
+    // алиас молча отсеивается на этапе git и правка человека уходит без атрибуции, а «./x» к тому
+    // же плодит вторую запись, которую PendingAuthor по «x» не находит.
+    private static string CanonicalRel(string root, string full) =>
+        Path.GetRelativePath(root, full).Replace('\\', '/');
 
     private static bool IsUnderProjectRoot(string root, string projectRoot)
     {
@@ -96,7 +106,13 @@ public sealed class HumanEditCommitter(
 
     public HumanEditEntry? PendingAuthor(string root, string relPath)
     {
-        var key = (root, relPath.Replace('\\', '/'));
+        // Тот же канонический ключ, что при записи: алиас в запросе чтения — та же правка.
+        // Путь за пределами корня не имеет ключа в журнале — null, как и раньше.
+        if (string.IsNullOrEmpty(root) || string.IsNullOrEmpty(relPath)) return null;
+        string full;
+        try { full = SafePath.Join(root, relPath); }
+        catch { return null; }
+        var key = (root, CanonicalRel(root, full));
         // Порядок важен: при сбросе запись сначала попадает в _flushing и лишь потом уходит
         // из _pending — в этом порядке чтения путь не пропадает ни на мгновение.
         var p = _pending.TryGetValue(key, out var a) ? a : _flushing.TryGetValue(key, out var b) ? b : null;

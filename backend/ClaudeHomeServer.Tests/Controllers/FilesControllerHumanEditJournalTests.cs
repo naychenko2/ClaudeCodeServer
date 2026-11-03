@@ -250,6 +250,60 @@ public sealed class FilesControllerHumanEditJournalTests : IDisposable
         (await HeadBodyAsync(root)).Should().Contain($"CCS-User: {_editorId}");
     }
 
+    // --- доработка по ревью e5f6c10c: ключ журнала — канонический путь от корня ---
+
+    // Ручка получает путь как его назвал клиент («sub/../x.txt»), файл пишется по каноническому
+    // пути, и в журнал правка уходит тем же каноническим путём: иначе алиас не совпадает с
+    // буквальным pathspec git (GitService.CommitAsync) и правка человека уходит автору-агенту.
+    // Мутация «убрать нормализацию в HumanEditCommitter» краснит эту строку: ключ остался бы
+    // «sub/../x.txt», и AuthorOf по «x.txt» — null.
+    [Fact]
+    public async Task СохранениеПоАлиасуПути_ЖурналКлючуетКаноническийПуть_ИКоммититПравкуЧеловека()
+    {
+        var (projectId, root) = SharedProject(("x.txt", "база"));   // чистый отслеживаемый
+        var before = await CommitsAsync(root);
+
+        (await As(_editorId, projectId).SaveContent(projectId, "sub/../x.txt", new SaveContentRequest("правка"))).Should().BeOfType<OkResult>();
+        File.ReadAllText(Abs(root, "x.txt")).Should().Be("правка", "файл — по каноническому пути");
+
+        AuthorOf(root, "x.txt").Should().Be(_editorId, "алиас пути — та же правка, что канонический путь");
+
+        await FlushAsync();
+        (await HeadPathsAsync(root)).Should().Equal("M\tx.txt");
+        (await HeadBodyAsync(root)).Should().Contain($"CCS-User: {_editorId}");
+        (await CommitsAsync(root)).Should().Be(before + 1);
+        AuthorOf(root, "x.txt").Should().BeNull("после сброса буфера автор больше не «висящий»");
+    }
+
+    // Три записи одного файла по разным формам пути — ОДНА запись журнала и ОДНИ коммит:
+    // «одна запись» наблюдаема швом BeforeClaim (он вызывается на каждую снимаемую запись),
+    // поэтому мутация «убрать нормализацию» краснит и этот тест (появятся ключи «./x.txt»,
+    // «sub/../x.txt» рядом с «x.txt»).
+    [Fact]
+    public async Task ТотЖеФайлПоРазнымФормамПути_ОднаЗаписьЖурналаИОдинКоммит()
+    {
+        var (projectId, root) = SharedProject(("x.txt", "база"));
+        var before = await CommitsAsync(root);
+        var claimed = new List<string>();
+        _journal.BeforeClaim = k => claimed.Add(k.Rel);
+
+        (await As(_editorId, projectId).SaveContent(projectId, "x.txt", new SaveContentRequest("первая"))).Should().BeOfType<OkResult>();
+        (await As(_editorId, projectId).SaveContent(projectId, "./x.txt", new SaveContentRequest("вторая"))).Should().BeOfType<OkResult>();
+        (await As(_editorId, projectId).SaveContent(projectId, "sub/../x.txt", new SaveContentRequest("третья"))).Should().BeOfType<OkResult>();
+
+        // Все три формы дают один и тот же ключ: автор один, и чтение по любой форме его находит.
+        AuthorOf(root, "x.txt").Should().Be(_editorId);
+        AuthorOf(root, "./x.txt").Should().Be(_editorId, "чтение по алиасу — тот же ключ");
+        AuthorOf(root, "sub/../x.txt").Should().Be(_editorId);
+
+        await FlushAsync();
+        claimed.Should().Equal(new[] { "x.txt" }, "три записи одного пути — одна запись журнала");
+        (await CommitsAsync(root)).Should().Be(before + 1, "три записи одного пути — один коммит");
+        (await HeadPathsAsync(root)).Should().Equal("M\tx.txt");
+        File.ReadAllText(Abs(root, "x.txt")).Should().Be("третья");
+        (await _git.RunAsync(null, root, ["status", "--porcelain"])).Stdout.Should().BeEmpty("после коммита в дереве нечего");
+    }
+
     // to-markdown пишет ЦЕЛЕВОЙ .md — в журнал идёт он; источник, который не менялся, — нет.
     [Fact]
     public async Task ToMarkdown_ВЖурналЦелевойМд_ИсточникНеИдёт()

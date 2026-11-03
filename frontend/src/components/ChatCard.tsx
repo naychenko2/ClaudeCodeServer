@@ -238,6 +238,15 @@ interface Props {
   renameDeniedReason?: string | null;
   archiveDeniedReason?: string | null;
   deleteDeniedReason?: string | null;
+  // Настройки чата (QA-P1F, остаток M1): срок, мьют и досье — право владельца
+  // (бэковый OwnerSettingsGate, 403 owner_settings — отказ и редактору, и читателю);
+  // «Теги» — правка содержимого чата, тот же гейт записи, что у переименования.
+  // Ложатся на свои пункты так же, как rename/archive/delete: задана причина —
+  // пункт выключен с этой подсказкой
+  tagsDeniedReason?: string | null;
+  notifyDeniedReason?: string | null;
+  dossierDeniedReason?: string | null;
+  expiryDeniedReason?: string | null;
   // Сохранить сессию как заметку. Сеть на стороне списка (saveArchiveSessionAsNote).
   // Не задан — пункта меню «Сохранить в заметки» нет
   onSaveAsNote?: () => Promise<unknown>;
@@ -327,7 +336,7 @@ function ChatCardView({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
   agentsRunning: agentsRunningProp, bgCommandRunning: bgCommandRunningProp, uncommitted,
   onSelect, onHover, onDelete, onTogglePin, tags, onAssignTags, onPickSubject, subjectHint, subjectTitle,
-  onRename, onAddToWall, onArchive, renameDeniedReason, archiveDeniedReason, deleteDeniedReason, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle, featureRole, inFeatureGroup,
+  onRename, onAddToWall, onArchive, renameDeniedReason, archiveDeniedReason, deleteDeniedReason, tagsDeniedReason, notifyDeniedReason, dossierDeniedReason, expiryDeniedReason, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle, featureRole, inFeatureGroup,
 }: Props) {
   // Персоны и механики карточка читает из сторов напрямую — подписка своя, иначе
   // мемоизированная карточка не узнает, что персона догрузилась или механика сменилась
@@ -487,12 +496,13 @@ function ChatCardView({
   // переименования нет: там в заголовке стоит имя ЗАДАЧИ (taskChat.title), и правка
   // s.name не изменила бы ни строчки на экране
   const canRename = !!onRename && !taskChat;
-  // Причина недоступности действия в этой карточке (QA-P1): значения приходят из единого
-  // гейта (chatActionDeniedReason у списка), здесь только сопоставление ключа с его причиной
+  // Причина недоступности действия в этой карточке (QA-P1, QA-P1F): значения приходят из
+  // единого гейта (chatActionDeniedReason у списка), здесь только сопоставление ключа
+  // с его причиной. Ключей без причины (pin/wall/subject) в таблице нет — они null
   const deniedReason = (k: ChatActionKey): string | null =>
-    k === 'rename' ? renameDeniedReason ?? null
-      : k === 'archive' ? archiveDeniedReason ?? null
-        : k === 'delete' ? deleteDeniedReason ?? null : null;
+    ({ rename: renameDeniedReason, archive: archiveDeniedReason, delete: deleteDeniedReason,
+      tags: tagsDeniedReason, notify: notifyDeniedReason, dossier: dossierDeniedReason,
+      expiry: expiryDeniedReason } as Partial<Record<ChatActionKey, string | null>>)[k] ?? null;
 
   // Быстрые действия карточки (hover-кластер на desktop, кнопки свайпа на мобиле).
   // Набор — общий каталог действий чата (тот же, что в шапке открытого чата); какие
@@ -1352,6 +1362,8 @@ function ChatCardView({
             <MenuItem
               icon={<Tags size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label="Теги"
+              hint={deniedReason('tags') ?? undefined}
+              disabled={!!deniedReason('tags')}
               isMobile={isMobile}
             action={visAction('tags')}
               // Меню маркировки открывается по тому же якорю: кнопка «⋮» уже
@@ -1386,6 +1398,8 @@ function ChatCardView({
             <MenuItem
               icon={notifyOn ? <Bell size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> : <BellOff size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label={notifyOn ? 'Заглушить' : 'Уведомления'}
+              hint={deniedReason('notify') ?? undefined}
+              disabled={!!deniedReason('notify')}
               isMobile={isMobile}
             action={visAction('notify')}
               onClick={e => { e.stopPropagation(); setMenu(null); void toggleNotify(); }}
@@ -1397,6 +1411,8 @@ function ChatCardView({
             <MenuItem
               icon={<History size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label={s.excludeFromDossiers ? 'Досье: не сохраняются' : 'Досье: сохраняются'}
+              hint={deniedReason('dossier') ?? undefined}
+              disabled={!!deniedReason('dossier')}
               isMobile={isMobile}
             action={visAction('dossier')}
               onClick={e => { e.stopPropagation(); setMenu(null); void toggleDossier(); }}
@@ -1406,6 +1422,8 @@ function ChatCardView({
             <MenuItem
               icon={<Hourglass size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label={s.expiresAfterMinutes ? `Хранить: ${expiryOptionLabel(s.expiresAfterMinutes)}` : 'Срок хранения'}
+              hint={deniedReason('expiry') ?? undefined}
+              disabled={!!deniedReason('expiry')}
               isMobile={isMobile}
             action={visAction('expiry')}
               // Пикер сроков открывается по тому же якорю, что и это меню: кнопка «⋮»

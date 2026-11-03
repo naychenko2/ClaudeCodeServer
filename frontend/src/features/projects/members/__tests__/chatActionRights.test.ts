@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CHAT_DELETE_DENIED, CHAT_WRITE_DENIED, OWNER_SETTINGS_DENIED,
   chatActionDeniedReason, chatDeleteDeniedReason, chatWriteDeniedReason, isNotChatAuthorError,
+  ownerSettingsDeniedReason,
 } from '../participantGate';
 
 const ME = 'user-me';
@@ -47,6 +48,19 @@ describe('chatDeleteDeniedReason (удалить)', () => {
     expect(chatDeleteDeniedReason({ myRole: 'owner' }, { createdByUserId: OTHER }, ME)).toBeNull();
     expect(chatDeleteDeniedReason({}, { createdByUserId: OTHER }, ME)).toBeNull();
     expect(chatDeleteDeniedReason(null, { createdByUserId: OTHER }, null)).toBeNull();
+  });
+});
+
+describe('ownerSettingsDeniedReason (настройки: срок/мьют/голос/досье)', () => {
+  it('редактору и читателю — отказ с причиной (зеркало бэкового OwnerSettingsGate)', () => {
+    expect(ownerSettingsDeniedReason({ myRole: 'editor' })).toBe(OWNER_SETTINGS_DENIED);
+    expect(ownerSettingsDeniedReason({ myRole: 'reader' })).toBe(OWNER_SETTINGS_DENIED);
+  });
+  it('владельцу, обычному проекту и чату вне проекта — можно, как раньше', () => {
+    expect(ownerSettingsDeniedReason({ myRole: 'owner' })).toBeNull();
+    expect(ownerSettingsDeniedReason({})).toBeNull();
+    expect(ownerSettingsDeniedReason(null)).toBeNull();
+    expect(ownerSettingsDeniedReason(undefined)).toBeNull();
   });
 });
 
@@ -98,20 +112,44 @@ describe('isNotChatAuthorError', () => {
 describe('проводка в карточку и список', () => {
   const card = readFileSync(new URL('../../../../components/ChatCard.tsx', import.meta.url), 'utf8');
   const list = readFileSync(new URL('../../../../components/SessionList.tsx', import.meta.url), 'utf8');
-  it('карточка выключает каждое действие своей причиной', () => {
-    expect(card).toContain("k === 'rename' ? renameDeniedReason ?? null");
-    expect(card).toContain("k === 'archive' ? archiveDeniedReason ?? null");
-    expect(card).toContain("k === 'delete' ? deleteDeniedReason ?? null");
-    expect(card).toContain("disabled={!!deniedReason('rename')}");
-    expect(card).toContain("disabled={!!deniedReason('archive')}");
-    expect(card).toContain("disabled={!!deniedReason('delete')}");
+  // Мутация «гейт снят» (ключ выпал из таблицы сопоставления / disabled без причины) —
+  // этот кейс красный: без причины человек кликал бы то, что бэк откажет
+  it('карточка выключает каждое действие своей причиной (и настройки владельца — те же ключи)', () => {
+    for (const key of ['rename', 'archive', 'delete', 'tags', 'notify', 'dossier', 'expiry']) {
+      expect(card, `нет сопоставления ключа с причиной: ${key}`).toContain(`${key}: ${key}DeniedReason`);
+      expect(card, `пункт меню не выключен причиной: ${key}`).toContain(`disabled={!!deniedReason('${key}')}`);
+      expect(card, `пункт меню без подсказки причины: ${key}`).toContain(`hint={deniedReason('${key}') ?? undefined}`);
+    }
   });
   it('список передаёт причины из единого гейта и ловит отказ', () => {
-    expect(list).toContain("renameDeniedReason={chatActionDeniedReason('rename', project, s, myUserId)}");
-    expect(list).toContain("archiveDeniedReason={chatActionDeniedReason('archive', project, s, myUserId)}");
-    expect(list).toContain("deleteDeniedReason={chatActionDeniedReason('delete', project, s, myUserId)}");
+    for (const key of ['rename', 'archive', 'delete', 'tags', 'notify', 'dossier', 'expiry']) {
+      expect(list, `список не передаёт причину: ${key}`).toContain(`${key}DeniedReason={chatActionDeniedReason('${key}', project, s, myUserId)}`);
+    }
     expect(list).toContain('const myUserId = readStoredUserId();');
     expect(list).toContain('isNotChatAuthorError(e)');
+  });
+});
+
+describe('проводка гейта «Голоса» (QA-P1F, остаток M1)', () => {
+  const panel = readFileSync(new URL('../../../../components/ChatPanel.tsx', import.meta.url), 'utf8');
+  const composer = readFileSync(new URL('../../../../components/Composer.tsx', import.meta.url), 'utf8');
+  // Мутация «гейт снят» (guard убран из sync-эффекта / кнопка без disabled) — красный:
+  // участник шлёт PUT, который бэк откажет (403 owner_settings), и кликает то, что не сработает
+  it('sync-эффект стиля и переключение режима не шлют voiceStyle/voiceMode участнику', () => {
+    expect(panel).toContain('const voiceDeniedReason = ownerSettingsDeniedReason(project);');
+    // guard стоит ДО вызова updateChatFields в эффекте и в обработчике тумблера
+    const effect = panel.slice(panel.indexOf('const voiceDeniedReason'), panel.indexOf('const handleToggleVoiceMode'));
+    expect(effect).toContain('if (voiceDeniedReason) return;');
+    expect(effect.indexOf('if (voiceDeniedReason) return;')).toBeLessThan(effect.indexOf('updateChatFields(session, { voiceStyle })'));
+    const handler = panel.slice(panel.indexOf('const handleToggleVoiceMode'), panel.indexOf('const handleToggleVoiceMode') + 1500);
+    expect(handler).toContain('if (voiceDeniedReason) throw new Error(voiceDeniedReason);');
+    expect(handler.indexOf('if (voiceDeniedReason) throw')).toBeLessThan(handler.indexOf('updateChatFields(session, next ?'));
+  });
+  it('кнопка режима разговора в композере неактивна участнику с причиной', () => {
+    expect(composer).toContain('const voiceDeniedReason = ownerSettingsDeniedReason(project);');
+    const btn = composer.slice(composer.indexOf('const voiceButton = onToggleVoiceMode'), composer.indexOf('const talkStopButton'));
+    expect(btn).toContain('disabled={!!voiceDeniedReason}');
+    expect(btn).toContain('`Режим разговора: ${voiceDeniedReason}`');
   });
 });
 

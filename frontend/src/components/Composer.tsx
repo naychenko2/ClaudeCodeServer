@@ -34,7 +34,7 @@ import { getDraft, setDraft } from '../lib/drafts';
 import { middleEllipsis } from '../lib/paths';
 import { dativeName } from '../lib/russianName';
 import { showToast } from '../lib/toast';
-import { composerExecBlocked, isParticipant, participantComposerGate, participantComposerText, participantSendTitle } from '../features/projects/members/participantGate';
+import { composerExecBlocked, isParticipant, ownerSettingsDeniedReason, participantComposerGate, participantComposerText, participantSendTitle } from '../features/projects/members/participantGate';
 import { Button, Chip, FileTypeTile, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from './ui';
 import { plusButtonTitle, shortcutOverflowItems, useCreateShortcuts } from './chat/composerShortcuts';
 import { SLOT_COMPOSER_CHIP, useSlot } from '../lib/subsystems/registry';
@@ -783,6 +783,10 @@ export function Composer({
   const isMember = isParticipant(project);
   const execBlocked = composerExecBlocked(project, execGate.available, participantGate);
   const execDeviceOffline = project?.device?.online === false;
+  // «Голос» — настройка чата, только владелец проекта (QA-P1F, зеркало бэкового
+  // OwnerSettingsGate): участнику общего проекта кнопка режима разговора неактивна
+  // с этой причиной; обычный проект и чат вне проекта — без изменений
+  const voiceDeniedReason = ownerSettingsDeniedReason(project);
   // Опасный режим (bypass) ждёт подтверждения в модалке перед применением
   const [pendingMode, setPendingMode] = useState<Mode | null>(null);
   // Штаб «Командной реализации» думает (Э8): стадии интервью/планирования держат чат
@@ -2167,15 +2171,20 @@ export function Composer({
   const voiceButton = onToggleVoiceMode ? (
     <button
       type="button"
+      // «Голос» — настройка только владельца проекта (QA-P1F): участнику неактивна
+      // с причиной в подсказке; при выключенной кнопке петля не стартует вовсе
+      disabled={!!voiceDeniedReason}
       onClick={handleVoiceButton}
       onContextMenu={(e) => e.preventDefault()}
-      title={talkActive
-        ? 'Разговор идёт: говори — отвечу вслух. Нажми, чтобы выключить'
-        : voiceMode
-          ? 'Голосовой режим включён. Нажми — начнём разговор без рук'
-          : digestVoice
-            ? 'Режим разговора: говори — отвечу вслух коротким пересказом, ответ останется на экране'
-            : 'Режим разговора: говори — отвечу вслух и снова буду слушать'}
+      title={voiceDeniedReason
+        ? `Режим разговора: ${voiceDeniedReason}`
+        : talkActive
+          ? 'Разговор идёт: говори — отвечу вслух. Нажми, чтобы выключить'
+          : voiceMode
+            ? 'Голосовой режим включён. Нажми — начнём разговор без рук'
+            : digestVoice
+              ? 'Режим разговора: говори — отвечу вслух коротким пересказом, ответ останется на экране'
+              : 'Режим разговора: говори — отвечу вслух и снова буду слушать'}
       aria-label="Режим разговора"
       aria-pressed={voiceMode}
       style={{
@@ -2183,9 +2192,10 @@ export function Composer({
         width: isMobile ? 38 : 34, height: isMobile ? 38 : 34, borderRadius: R.pill, border: 'none',
         background: talkActive ? C.accent : voiceMode ? C.accentLight : C.bgSelected,
         color: talkActive ? C.onAccent : voiceMode ? C.accent : C.textMuted,
-        cursor: 'pointer',
+        cursor: voiceDeniedReason ? 'default' : 'pointer',
+        opacity: voiceDeniedReason ? 0.4 : 1,
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-        transition: 'background 0.15s, color 0.15s',
+        transition: 'background 0.15s, color 0.15s, opacity 0.15s',
       }}
     >
       <AudioLines size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />

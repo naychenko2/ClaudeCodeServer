@@ -1277,6 +1277,12 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         renameDeniedReason={chatActionDeniedReason('rename', project, s, myUserId)}
         archiveDeniedReason={chatActionDeniedReason('archive', project, s, myUserId)}
         deleteDeniedReason={chatActionDeniedReason('delete', project, s, myUserId)}
+        // Настройки чата (QA-P1F): срок/мьют/досье — право владельца, теги — право
+        // записи; тот же диспетчер, что у rename/archive/delete
+        tagsDeniedReason={chatActionDeniedReason('tags', project, s, myUserId)}
+        notifyDeniedReason={chatActionDeniedReason('notify', project, s, myUserId)}
+        dossierDeniedReason={chatActionDeniedReason('dossier', project, s, myUserId)}
+        expiryDeniedReason={chatActionDeniedReason('expiry', project, s, myUserId)}
         onSaveAsNote={online && notesOn ? () => handleSaveAsNote(s) : undefined}
         swipeOpen={openSwipeId === s.id}
         onSwipeToggle={open => setOpenSwipeId(open ? s.id : null)}

@@ -11,7 +11,7 @@ import { isZoneRefusal } from '../lib/personaZone';
 import { buildBranchAnchors, branchAnchorText as branchAnchorTextOf, BRANCH_BEFORE_PROMPT } from '../lib/branchAnchors';
 import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
-import { denialTextOf, guardTurnAction, ownerDecisionDeniedReason, turnDeniedReason } from '../features/projects/members/participantGate';
+import { denialTextOf, guardTurnAction, ownerDecisionDeniedReason, ownerSettingsDeniedReason, turnDeniedReason } from '../features/projects/members/participantGate';
 import { isArchivedChat } from '../lib/chatFilters';
 import { archiveApi } from '../api/chats';
 import { projectMainColor } from '../features/projects/projectUtil';
@@ -351,6 +351,10 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
   // бэке) + озвучка ответа. Прайминг аудио прямо в обработчике клика — политика autoplay
   // разрешает воспроизведение только после пользовательского жеста.
   const voiceMode = session.voiceMode === true;
+  // «Голос» — настройка чата, только владелец проекта (QA-P1F, зеркало бэкового
+  // OwnerSettingsGate): участнику общего проекта тумблер неактивен (гейт в Composer),
+  // и PUT отсюда не уходит. Обычный проект и чат вне проекта — без изменений
+  const voiceDeniedReason = ownerSettingsDeniedReason(project);
   // Стиль озвучки живёт ЗДЕСЬ, а не в модуле-хранилище: значение читают четыре места в
   // двух компонентах (ветка кнопки и плашка состояния в Composer, гейт стрима и ветка
   // озвучки здесь). Голые функции чтения/записи не реактивны — выбор пункта в меню
@@ -418,13 +422,20 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
   // к handleToggleVoiceMode ниже). Ошибки молча: чинить тут человеку нечего
   useEffect(() => {
     if (!voiceMode) return;
+    // Участнику общего проекта бэк отказал бы этот PUT (403 owner_settings) — не шлём:
+    // стиль остаётся таким, каким его оставил владелец (QA-P1F)
+    if (voiceDeniedReason) return;
     if (normalizeVoiceStyle(session.voiceStyle) === voiceStyle) return;
     if (styleSyncedRef.current === session.id) return;
     styleSyncedRef.current = session.id;
     void updateChatFields(session, { voiceStyle }).catch(() => {});
-  }, [session, voiceMode, voiceStyle]);
+  }, [session, voiceMode, voiceStyle, voiceDeniedReason]);
 
   const handleToggleVoiceMode = useCallback(async (next: boolean) => {
+    // «Голос» — настройка владельца (QA-P1F): у участника кнопка неактивна (гейт в Composer),
+    // а авто-переключение петли падает здесь: причина вместо запроса — её catch гасит
+    // разговор так же, как провал запроса (voiceMode на чате остаётся как у владельца)
+    if (voiceDeniedReason) throw new Error(voiceDeniedReason);
     primeAudio();
     // Разбудить аудиоконтекст сигналов в том же жесте: сигнал «нужно решение» может
     // понадобиться и без запуска петли, а вне жеста браузер контекст не пустит
@@ -442,7 +453,7 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
       // и петля разговора крутилась бы вхолостую — композер по ошибке её гасит
       throw err;
     }
-  }, [session, onSessionUpdated, stopSpeech, voiceStyle]);
+  }, [session, onSessionUpdated, stopSpeech, voiceStyle, voiceDeniedReason]);
 
   // Признак архива — производное от бэка (см. isArchivedChat). Плашка открытого
   // архивного чата сидит над лентой; считаем прямо в рендере, useState тут не нужен —

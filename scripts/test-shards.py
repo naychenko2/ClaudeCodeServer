@@ -665,8 +665,11 @@ def resolve_target(fqn, report, targets):
     """Что перезапускать для упавшего теста: проект его сборки по TRX, иначе проект шарда, иначе проект с самым
     длинным именем-префиксом FQN. None — проект не найден (тест остаётся красным)."""
     assembly = report.get("assemblies", {}).get(fqn)
-    if assembly in targets:
-        return targets[assembly], assembly
+    # VSTest пишет storage в нижнем регистре («claudehomeserver.memory.tests.dll»): имя сверяется без регистра
+    by_lower = {n.lower(): n for n in targets}
+    if assembly and assembly.lower() in by_lower:
+        name = by_lower[assembly.lower()]
+        return targets[name], name
     if report.get("target"):
         return report["target"], assembly or target_name(report["target"])
     owner = next((n for n in sorted(targets, key=len, reverse=True) if fqn.startswith(n + ".")), None)

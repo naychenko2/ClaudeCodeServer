@@ -1329,6 +1329,20 @@ class RerunTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual([("b/Other.Tests/Other.Tests.csproj", ["Other.Tests.X.Y"])], self.launched)
 
+    def test_storage_в_нижнем_регистре_как_пишет_vstest_находит_проект_rest(self):
+        # живой прогон 03.11: storage="/…/claudehomeserver.memory.tests.dll", а пространство имён тестов
+        # (ClaudeHomeServer.Tests.Services.Memory) с именем проекта не совпадает — префикс не спасает
+        fqn = "ClaudeHomeServer.Tests.Services.Memory.ProbeTests.Флак"
+        self.second = {fqn: "Passed"}
+        rest = self.shard(1, [(fqn, "Failed", "claudehomeserver.memory.tests")], expected=set(), target=None,
+                          name="fast-rest")
+        targets = {"ClaudeHomeServer.Tests": "b/ClaudeHomeServer.Tests",
+                   "ClaudeHomeServer.Memory.Tests": "b/ClaudeHomeServer.Memory.Tests/ClaudeHomeServer.Memory.Tests.csproj"}
+        code, _ = self.rerun(rest, targets=targets)
+        self.assertEqual(0, code)
+        self.assertEqual([(targets["ClaudeHomeServer.Memory.Tests"], [fqn])], self.launched)
+        self.assertEqual("ClaudeHomeServer.Memory.Tests", self.flaky_json()["flaky"][0]["assembly"])
+
     def test_проект_не_найден_тест_упал_дважды_без_запуска(self):
         rest = self.shard(1, [("Nowhere.Tests.X.Y", "Failed", None)], expected=set(), target=None, name="fast-rest")
         code, out = self.rerun(rest)

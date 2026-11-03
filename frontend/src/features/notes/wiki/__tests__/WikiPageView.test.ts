@@ -679,7 +679,7 @@ const OVR_REPLACED: WikiOverrideDto = {
   at: '2026-11-02T05:48:00Z', packageId: 'pk1',
 };
 const OVR_DISPUTED: WikiOverrideDto = {
-  op: 'conflict', statement: 'Резину меняем в начале ноября.', previous: 'Резину меняем в конце октября.',
+  op: 'conflict', statement: 'Резину меняем в начале ноября.', previous: null, target: 'Резину меняем в конце октября.',
   at: '2026-11-02T05:31:00Z', packageId: 'pk2',
 };
 const withOvr = (overrides: WikiOverrideDto[], over: Partial<WikiPageOverriddenDto> = {}): WikiPageOverriddenDto =>
@@ -884,9 +884,7 @@ describe('Метки замен и «Вернуть мою» (F3b)', () => {
     }
   });
 
-  it('спор по ответу бэка (previous = null, текст ИИ в «Противоречиях»): метка рисуется, пока запись ИИ на странице', async () => {
-    unifiedOn();
-    const content = `---
+  const PAGE_DISPUTE = `---
 type: entity
 status: active
 updated: 2026-11-02
@@ -905,22 +903,40 @@ updated: 2026-11-02
 [^s1]: [[Источники/Правка]] — «конец октября»
 [^s2]: [[Источники/Чат]] — «начало ноября»
 `;
-    const dto = { ...OVR_DISPUTED, previous: null };
-    await seedPage(withOvr([dto], { content }));
+  const tagsIn = (c: Cont, name: string) => {
+    const sec = allNodes(c).find(n => n.getAttribute('data-testid') === 'wiki-section' && n.getAttribute('data-section-name') === name);
+    return sec ? tag(sec as unknown as Cont) : [];
+  };
+
+  it('спор на формате бэка (строки без маркера): ⚠ на строке человека, не на доводе ИИ в «Противоречиях»', async () => {
+    unifiedOn();
+    await seedPage(withOvr([OVR_DISPUTED], { content: PAGE_DISPUTE }));
     const c = renderPage();
     await settle();
-    const t = tag(c);
-    expect(t).toHaveLength(1);
-    expect(t[0].getAttribute('data-kind')).toBe('disputed');
-    // запись ИИ ушла со страницы — метки нет
-    for (const r of roots) act(() => r.unmount());
-    roots.length = 0;
-    uninstallFakeDom();
-    wikiStore.reset();
-    await seedPage(withOvr([dto], { content: content.replace('Резину меняем в начале ноября. [^s2]\n', '') }));
-    const gone = renderPage();
+    expect(tag(c)).toHaveLength(1);
+    expect(tagsIn(c, 'Сводка')).toHaveLength(1);
+    expect(tagsIn(c, 'Противоречия')).toHaveLength(0);
+    expect(tagsIn(c, 'Сводка')[0].getAttribute('data-kind')).toBe('disputed');
+  });
+
+  it('спор с target = null: меток на строках нет, плашка сверху есть', async () => {
+    unifiedOn();
+    await seedPage(withOvr([{ ...OVR_DISPUTED, target: null }], { content: PAGE_DISPUTE }));
+    const c = renderPage();
     await settle();
-    expect(tag(gone)).toHaveLength(0);
+    expect(tag(c)).toHaveLength(0);
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-override-disputed')).not.toBeNull();
+    expect(has(c, 'ИИ оспаривает ваше утверждение')).toBe(true);
+  });
+
+  it('человек переписал строку (target исчез со страницы): метка и плашка спора гаснут', async () => {
+    unifiedOn();
+    const rewritten = PAGE_DISPUTE.replace('Резину меняем в конце октября.', 'Резину меняем в ноябре.');
+    await seedPage(withOvr([OVR_DISPUTED], { content: rewritten }));
+    const c = renderPage();
+    await settle();
+    expect(tag(c)).toHaveLength(0);
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-override-disputed')).toBeNull();
   });
 
   it('ИИ заменил, потом человек переписал строку: плашки и точки нет', async () => {

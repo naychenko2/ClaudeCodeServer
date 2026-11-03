@@ -203,9 +203,10 @@ function buildMarks(overrides: WikiOverrideDto[]): LineMarks | undefined {
     if (o.op === 'supersede') {
       if (o.statement) marks.tags.set(normStatement(o.statement), { kind: 'replaced', at: o.at });
       if (o.previous) marks.history.add(normStatement(o.previous));
-    } else if (o.previous ?? o.statement) {
-      // Спор: человеческий текст на месте — метка у него (previous), довод ИИ лежит в «Противоречиях»
-      marks.tags.set(normStatement((o.previous ?? o.statement) as string), { kind: 'disputed', at: o.at });
+    } else if (o.target) {
+      // Спор: метка у живой строки человека (target), а не у довода ИИ в «Противоречиях»;
+      // нет target — на строках метки нет, остаётся плашка сверху
+      marks.tags.set(normStatement(o.target), { kind: 'disputed', at: o.at });
     }
   }
   return marks;

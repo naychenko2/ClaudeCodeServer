@@ -1469,6 +1469,9 @@ export interface WikiOverrideDto {
   // Текст утверждения ИИ без сносок
   statement: string | null;
   previous: string | null;
+  // Только у спора (op=conflict): живая строка человека из активной секции, на которой стоит
+  // метка «ИИ оспаривает»; null — строки нет (метки нет, плашка остаётся). У supersede — null
+  target?: string | null;
   // Время замены, ISO 8601
   at: string;
   packageId: string;
@@ -1532,10 +1535,10 @@ export function wikiOverridesOf(page: { overrides?: unknown; content?: unknown }
   if (typeof page?.content !== 'string') return all;
   const active = new Set(wikiActiveLines(page.content).map(normWikiStatement));
   return all.filter(o => {
-    // Замена — по утверждению ИИ. Спор — по той же строке, что несёт метку на витрине: бэк
-    // previous спора находит только в «Истории», так что в живом ответе он null и проверка
-    // идёт по тексту ИИ (лежит в «Противоречиях»); previous, если пришёл, важнее
-    const text = o.op === 'supersede' ? o.statement : (o.previous ?? o.statement);
+    // Замена — по утверждению ИИ. Спор — по живой строке человека (target): переписал её —
+    // спор снят. Без target метки на строке нет, плашка живёт, пока довод ИИ (лежит в
+    // «Противоречиях») на странице; previous, если пришёл, важнее
+    const text = o.op === 'supersede' ? o.statement : (o.target ?? o.previous ?? o.statement);
     return !!text && active.has(normWikiStatement(text));
   });
 }

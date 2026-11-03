@@ -415,7 +415,7 @@ public sealed partial class WorkspaceToolset(
             BaseSection => ContextCall(session, context, plan),
             "projects" => await ProjectsCall(tool, arguments, context, session, plan),
             "files" => await FilesCall(tool, arguments, context, session, plan, ct),
-            "knowledge" => await KnowledgeCall(tool, arguments, context, plan),
+            "knowledge" => await KnowledgeCall(tool, arguments, context, session, plan),
             "search" => await SearchCall(tool, arguments, context, plan),
             "git" or "git_write" => await GitCall(tool, arguments, context, session, plan, ct),
             "knowledge_bases" => await KbCall(tool, arguments, context),
@@ -945,6 +945,10 @@ public sealed partial class WorkspaceToolset(
             {
                 var path = StringArg(arguments, "path");
                 var content = StringArg(arguments, "content");
+                // S2d-6b-3 доработка (ревью 426b21ad): запись в чужое private — тот же отказ, что у
+                // несуществующего файла: чужой путь не создаётся и не перезаписывается
+                if (IsForeignPrivate(root, path, actorId))
+                    return Deny($"Файл не найден: {path}");
                 try
                 {
                     if (Directory.Exists(FileService.SafeJoinPublic(root, path)))
@@ -966,6 +970,10 @@ public sealed partial class WorkspaceToolset(
             case "files_mkdir":
             {
                 var path = StringArg(arguments, "path");
+                // S2d-6b-3 доработка (ревью 426b21ad): каталог внутри чужого private — тот же
+                // отказ: чужой путь не создаётся
+                if (IsForeignPrivate(root, path, actorId))
+                    return Deny($"Файл не найден: {path}");
                 try { files.CreateDirectory(root, path); }
                 catch (UnauthorizedAccessException) { return Deny("Доступ за пределы проекта запрещён"); }
                 return Text($"Папка {path} создана в проекте {p.Id}.");
@@ -975,6 +983,14 @@ public sealed partial class WorkspaceToolset(
             {
                 var oldPath = StringArg(arguments, "oldPath");
                 var newPath = StringArg(arguments, "newPath");
+                // S2d-6b-3 доработка (ревью 426b21ad): гейт по ОБОИМ путям. Источник — каталог
+                // чужого автора: после переноса путевое правило уже не видит private, и чужой
+                // материал оказался бы общим. Цель — чужой путь: в него не пишем. Отказ — как у
+                // несуществующего файла, каталог жертвы остаётся на месте
+                if (IsForeignPrivate(root, oldPath, actorId))
+                    return Deny($"Файл не найден: {oldPath}");
+                if (IsForeignPrivate(root, newPath, actorId))
+                    return Deny($"Файл не найден: {newPath}");
                 try
                 {
                     files.Rename(root, oldPath, newPath);
@@ -1056,10 +1072,17 @@ public sealed partial class WorkspaceToolset(
                 var path = StringArg(arguments, "path");
                 if (path.Length == 0) return Deny("Нужен путь файла");
                 // S2d-6b-3: источник читается по пути — чужое приватное вложение не конвертируется;
-                // тот же отказ, что у несуществующего файла (запись результата — отдельная ветка,
-                // targetDir здесь не private-путь: в чужой private пишет только отказанное здесь чтение)
+                // тот же отказ, что у несуществующего файла
                 if (IsForeignPrivate(root, path, actorId))
                     return Deny($"Файл не найден: {path}");
+                // S2d-6b-3 доработка (ревью 426b21ad): явный targetDir — отдельный путь записи, и он
+                // может вести в чужой private (прежний вывод «targetDir здесь не private-путь» держался
+                // только пока цель брали рядом с источником). Гейт до конвертации: чужой путь не
+                // создаётся, дорогой конвертер не тратится на отказанную запись. Без targetDir цель —
+                // рядом с источником, он уже гейтнут выше
+                var targetDir = OptionalArg(arguments, "targetDir");
+                if (!string.IsNullOrWhiteSpace(targetDir) && IsForeignPrivate(root, targetDir!, actorId))
+                    return Deny($"Файл не найден: {targetDir}");
                 string abs;
                 try { abs = FileService.SafeJoinPublic(root, path); }
                 catch (UnauthorizedAccessException) { return Deny("Доступ за пределы проекта запрещён"); }
@@ -1071,9 +1094,9 @@ public sealed partial class WorkspaceToolset(
                 // без структуры)
                 if (arguments["enhance"] is JsonValue e && e.TryGetValue<bool>(out var enh) && enh)
                     md = await docAi.EnhanceMarkdownAsync(context.OwnerId, md, ct);
-                // Имя целевого .md — по исходному имени; каталог — targetDir или рядом с исходником
+                // Имя целевого .md — по исходному имени; каталог — targetDir (гейтнут выше) или
+                // рядом с исходником
                 var baseName = Path.GetFileNameWithoutExtension(path) + ".md";
-                var targetDir = OptionalArg(arguments, "targetDir");
                 var dir = string.IsNullOrWhiteSpace(targetDir)
                     ? (Path.GetDirectoryName(path.Replace('\\', '/')) ?? "")
                     : targetDir!.Replace('\\', '/').Trim('/');
@@ -1176,7 +1199,7 @@ public sealed partial class WorkspaceToolset(
     // --- Секция knowledge (база знаний ПРОЕКТА) ---
 
     private async Task<McpToolCallResult> KnowledgeCall(string tool, JsonObject arguments,
-        McpToolCallContext context, SessionManager.WorkspaceMcpPlan plan)
+        McpToolCallContext context, Session session, SessionManager.WorkspaceMcpPlan plan)
     {
         if (!TryGetProject(context, plan, arguments, out var p, out var denied))
             return Deny(denied);
@@ -1241,6 +1264,13 @@ public sealed partial class WorkspaceToolset(
             case "knowledge_index":
             {
                 var path = StringArg(arguments, "path");
+                // S2d-6b-3 доработка (ревью 426b21ad): индексация читает файл по пути — чужое
+                // private не индексируется: тот же отказ, что у несуществующего файла, и он стоит
+                // до IndexPathAsync — документ в датасете не создаётся (и чужой текст не уходит в
+                // общую базу знаний проекта)
+                var actorId = turnActors.Actor(session.Id, context.OwnerId);
+                if (IsForeignPrivate(p.RootPath, path, actorId))
+                    return Deny($"Файл не найден: {path}");
                 if (!KnowledgeService.IsKnowledgeIndexable(path))
                     return Deny($"Формат файла не поддерживается для индексирования: {Path.GetExtension(path)}");
                 try
@@ -1860,6 +1890,11 @@ public sealed partial class WorkspaceToolset(
                 if (DelegatedDenied(context, session, "Удаление файлов") is { } gateDenied)
                     return Deny(gateDenied);
                 var path = StringArg(arguments, "path");
+                // S2d-6b-3 доработка (ревью 426b21ad): удаление по пути — чужое private и чужой
+                // каталог автора не удаляются рекурсивно: тот же отказ, что у несуществующего файла
+                var actorId = turnActors.Actor(session.Id, context.OwnerId);
+                if (IsForeignPrivate(p.RootPath, path, actorId))
+                    return Deny($"Файл не найден: {path}");
                 try { files.Delete(p.RootPath, path); }
                 catch (FileNotFoundException) { return Deny($"Файл не найден: {path}"); }
                 catch (UnauthorizedAccessException) { return Deny("Доступ за пределы проекта запрещён"); }

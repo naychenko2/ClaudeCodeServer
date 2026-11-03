@@ -787,6 +787,18 @@ public static class WebDavHandler
             return;
         }
 
+        // S2d-6b-3 доработка (ревью 426b21ad): источник-контейнер, под которым лежит closed-поддерево
+        // private/, — 403: CopyDirectory (:831) копирует поддерево без исключений и чужой private
+        // оказался бы копией вне .cc-attachments/private/{id}. Точный путь чужого private уже отказан
+        // диспетчером (:168); этот гейт — только контейнеры (способ выбран: запрет операции, а не
+        // фильтрация копии — копия без чужих поддеревьев была бы молча НЕполной копией запроса)
+        if (IsPrivateContainerPath(root, relPath))
+        {
+            ctx.Response.StatusCode = 403;
+            ctx.Response.ContentLength = 0;
+            return;
+        }
+
         var overwrite = !string.Equals(ctx.Request.Headers["Overwrite"].ToString(), "F", StringComparison.OrdinalIgnoreCase);
         var srcAbs = FileService.SafeJoinPublic(root, relPath);
         var dstAbs = FileService.SafeJoinPublic(root, destRel);
@@ -841,6 +853,15 @@ public static class WebDavHandler
         // S2d-6b-3: назначение внутри чужого private — отказ, как запись в тот путь: чужой путь не
         // создаётся и не перезаписывается (источник за пределами чужого private — свой путь, разрешён)
         if (IsForeignPrivatePath(root, destRel, davUserId))
+        {
+            ctx.Response.StatusCode = 403;
+            ctx.Response.ContentLength = 0;
+            return;
+        }
+
+        // S2d-6b-3 доработка (ревью 426b21ad): источник-контейнер под private/ — 403: MOVE переносит
+        // каталог целиком, и чужое private ушло бы из-под .cc-attachments/private/{id} вместе с ним
+        if (IsPrivateContainerPath(root, relPath))
         {
             ctx.Response.StatusCode = 403;
             ctx.Response.ContentLength = 0;
@@ -1035,6 +1056,31 @@ public static class WebDavHandler
         catch (UnauthorizedAccessException) { return false; }
         return PrivateAttachments.IsForeign(
             Path.GetRelativePath(Path.GetFullPath(root), abs).Replace('\\', '/'), davUserId);
+    }
+
+    // S2d-6b-3 доработка (ревью 426b21ad): контейнер, под которым лежит закрытое поддерево private/:
+    // сам .cc-attachments, .cc-attachments/private или корень проекта (пустой путь — под ним всё).
+    // IsForeignPrivatePath их не видит: у них нет сегмента-автора (IsForeign требует ≥3), а операция
+    // над каталогом относится ко всему поддереву. Нормализация — та же, что у IsForeignPrivatePath
+    // (SafeJoin раскрывает «..», «./», слеши так, как их раскроет операция на диске). Каталоги
+    // авторов — дети private/, не контейнеры: свой private-каталог автор переносит, как раньше.
+    private static bool IsPrivateContainerPath(string root, string relPath)
+    {
+        string rel;
+        try
+        {
+            rel = Path.GetRelativePath(Path.GetFullPath(root),
+                relPath.Length == 0 ? Path.GetFullPath(root) : FileService.SafeJoinPublic(root, relPath));
+        }
+        catch (UnauthorizedAccessException) { return false; }
+        var segments = rel.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        // GetRelativePath корня от себя — «.»: это тоже корень, под которым лежит весь .cc-attachments
+        if (segments.Length == 0 || (segments.Length == 1 && segments[0] == ".")) return true;
+        if (!string.Equals(segments[0], TreeExcludes.AttachmentsDir, StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (segments.Length == 1) return true; // .cc-attachments
+        return segments.Length == 2
+            && string.Equals(segments[1], PrivateAttachments.PrivateRoot, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? ParseDestination(HttpContext ctx, string projectName)

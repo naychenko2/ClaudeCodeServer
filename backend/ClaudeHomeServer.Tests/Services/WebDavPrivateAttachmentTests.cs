@@ -231,6 +231,58 @@ public class WebDavPrivateAttachmentTests : IDisposable
         File.Exists(AbsOf("copy.txt")).Should().BeFalse();
     }
 
+    // ── доработка 1 по вердикту ревью 426b21ad: источник-контейнер под private/ ──
+
+    [Fact]
+    public async Task CopyIMove_КонтейнераПодPrivate_403_PrivateОстаётсяПодСвоимКорнем()
+    {
+        // COPY .cc-attachments → 403: CopyDirectory (:831) копирует поддерево без исключений,
+        // и чужое private появилось бы копией вне .cc-attachments/private/{id}
+        var r = await RunAsync(Req("COPY", ".cc-attachments", destination: Dest("stolen")));
+        r.Response.StatusCode.Should().Be(403, "источник — контейнер, под которым лежит closed-поддерево private/");
+        Directory.Exists(AbsOf("stolen")).Should().BeFalse("stolen/private/… не появилось на диске");
+        File.ReadAllText(AbsOf(_foreignPath)).Should().Be("чужое", "чужой файл остался под своим корнем");
+
+        // MOVE .cc-attachments → 403: перенос каталога унёс бы чужое private из-под путевого правила
+        r = await RunAsync(Req("MOVE", ".cc-attachments", destination: Dest("stolen")));
+        r.Response.StatusCode.Should().Be(403);
+        Directory.Exists(AbsOf(".cc-attachments")).Should().BeTrue();
+        Directory.Exists(AbsOf("stolen")).Should().BeFalse();
+        File.ReadAllText(AbsOf(_foreignPath)).Should().Be("чужое");
+
+        // .cc-attachments/private — тоже контейнер (под ним все авторы)
+        r = await RunAsync(Req("COPY", ".cc-attachments/private", destination: Dest("stolen")));
+        r.Response.StatusCode.Should().Be(403);
+        Directory.Exists(AbsOf("stolen")).Should().BeFalse();
+        r = await RunAsync(Req("MOVE", ".cc-attachments/private", destination: Dest("stolen")));
+        r.Response.StatusCode.Should().Be(403);
+        Directory.Exists(AbsOf("stolen")).Should().BeFalse();
+
+        // корень проекта — предок, под которым лежит private/
+        r = await RunAsync(Req("COPY", "", destination: Dest("stolen")));
+        r.Response.StatusCode.Should().Be(403);
+        Directory.Exists(AbsOf("stolen")).Should().BeFalse();
+
+        // нормализация до решения: «..» в тот же контейнер — тот же 403
+        r = await RunAsync(Req("COPY", "docs/../.cc-attachments", destination: Dest("stolen")));
+        r.Response.StatusCode.Should().Be(403);
+        Directory.Exists(AbsOf("stolen")).Should().BeFalse();
+
+        // границы правила: каталог автора — НЕ контейнер. Свой private-каталог автор переносит,
+        // как раньше; общее вложение (прежняя раскладка {guid}/) — тоже
+        r = await RunAsync(Req("COPY", $".cc-attachments/private/{_davId}", destination: Dest("mycopy")));
+        r.Response.StatusCode.Should().BeOneOf(200, 201, 204);
+        File.ReadAllText(AbsOf($"mycopy/{_ownPath.Split('/')[3]}/own.txt")).Should().Be("своё");
+
+        r = await RunAsync(Req("COPY", _commonPath.Split('/')[0] + "/" + _commonPath.Split('/')[1],
+            destination: Dest("commoncopy")));
+        r.Response.StatusCode.Should().BeOneOf(200, 201, 204);
+        File.ReadAllText(AbsOf($"commoncopy/{_commonPath.Split('/')[2]}")).Should().Be("общее");
+
+        // чужой private после отказанных операций — цел и на своём месте
+        File.ReadAllText(AbsOf(_foreignPath)).Should().Be("чужое");
+    }
+
     [Fact]
     public async Task СвойPrivateИОбщиеФайлы_ПишутсяКакПрежде()
     {

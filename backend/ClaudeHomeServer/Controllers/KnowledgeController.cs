@@ -108,6 +108,12 @@ public class KnowledgeController(
         var p = GetScopedProject(projectId);
         if (p is null) return NotFound();
 
+        // S2d-6b-6 (хвост S2d-6b-5, доработка по ревью R-S2d-6b-5): явно названное чужое private-
+        // вложение (S2d-6b-1) — 404 до индексации, неотличимо от несуществующего файла — тот же
+        // приём, что у читающих и пишущих ручек FilesController (S2d-6b-2/6b-5). Своё private,
+        // общие вложения (.cc-attachments/{guid}/…) и обычные файлы — как раньше.
+        if (PrivateAttachments.IsForeign(req.RelativePath, UserId)) return NotFound();
+
         if (!KnowledgeService.IsKnowledgeIndexable(req.RelativePath))
             return BadRequest(new { error = $"Формат файла не поддерживается для индексирования: {Path.GetExtension(req.RelativePath)}" });
 
@@ -189,10 +195,24 @@ public class KnowledgeController(
             rel.StartsWith("notes/", StringComparison.OrdinalIgnoreCase))
             return BadRequest(new { error = "Заметки индексируются отдельной базой знаний" });
 
+        // S2d-6b-6 (хвост S2d-6b-5): индексация контейнера относится ко всему closed- поддереву —
+        // тот же разбор, что у Rename/Delete (S2d-6b-3 доработка 2), поэтому сам .cc-attachments
+        // и .cc-attachments/private — 404. Корень проекта здесь НЕ контейнер: обход TreeExcludes
+        // в .cc-attachments не спускается, и индексация всего проекта — штатная цель метода,
+        // поэтому IsAttachmentsContainer (тот же предикат без корня), а не IsPrivateContainerPath.
+        if (PrivateAttachments.IsAttachmentsContainer(rel)) return NotFound();
+
+        // Явно названный чужой private — 404 до обхода: неотличим от несуществующей папки/файла,
+        // тот же приём, что у ручек FilesController (S2d-6b-2/6b-5).
+        if (PrivateAttachments.IsForeign(rel, UserId)) return NotFound();
+
         IEnumerable<FileEntry> allFiles;
         try
         {
-            allFiles = files.Tree(p.RootPath, req.RelativePath ?? "", p.ShowHiddenFiles);
+            // S2d-6b-6: зритель передаётся в обход — чужое private-поддерево выпадает из результата
+            // тем же фильтром FileService.Tree, что у читающих ручек (S2d-6b-2 доработка 1): защита
+            // обхода за пределами названного пути. Своё private и обычные файлы — как раньше.
+            allFiles = files.Tree(p.RootPath, req.RelativePath ?? "", p.ShowHiddenFiles, UserId);
         }
         catch (DirectoryNotFoundException)
         {

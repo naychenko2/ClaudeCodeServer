@@ -90,13 +90,28 @@ public static class PrivateAttachments
     /// private-каталог автор переносит и удаляет, как раньше; общие {guid}-каталоги — тоже.
     /// Нормализация та же, что у IsForeign: «..», «./», %2F/%2E, слеши, двойные разделители, регистр.
     /// Путь за пределами корня решает вызывающий (SafeJoin даёт ему свой отказ раньше этого
-    /// предиката), поэтому сюда он не доходит.
+    /// предиката), поэтому сюда он не доходит. Вариант без корня — <see cref="IsAttachmentsContainer"/>
+    /// (там, где корень — штатная цель операции, напр. IndexFolder, S2d-6b-6).
     /// </summary>
     public static bool IsPrivateContainerPath(string? relPath)
     {
         var segments = Normalize(relPath);
         // корень — под ним лежит весь .cc-attachments: GetRelativePath корня от себя — «.»
         if (segments.Count == 0) return true;
+        return IsAttachmentsContainer(relPath);
+    }
+
+    /// <summary>
+    /// Контейнеры закрытого поддерева без корня проекта: сам .cc-attachments и .cc-attachments/private.
+    /// Отличен от <see cref="IsPrivateContainerPath"/> ровно на корне: для разрушительных операций
+    /// корень — родитель поддерева (Rename/Delete, S2d-6b-3 доработка 2), а индексация корня — штатная
+    /// цель IndexFolder: обход TreeExcludes в .cc-attachments не спускается, и индексация её содержимого
+    /// через корень невозможна в принципе (S2d-6b-6, хвост S2d-6b-5). Нормализация та же, что у IsForeign.
+    /// </summary>
+    public static bool IsAttachmentsContainer(string? relPath)
+    {
+        var segments = Normalize(relPath);
+        if (segments.Count == 0) return false; // корень здесь не контейнер — см. doc метода
         if (!string.Equals(segments[0], TreeExcludes.AttachmentsDir, StringComparison.OrdinalIgnoreCase))
             return false;
         if (segments.Count == 1) return true; // .cc-attachments

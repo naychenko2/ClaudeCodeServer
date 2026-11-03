@@ -2561,8 +2561,9 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // конструктора: ядро не зависит от Tasks) и считается ДО замка видимости — чтобы не брать
         // замки задач под ним; привязать приватный чат к фиче потом не даёт дверь привязки.
         var boundToFeature = makePrivate && info.PrivateToUserId != userId
-            && _services?.GetService<IFeatureChatLinks>() is { } links
-            && ResolveOwnerId(info) is { } chatOwner && links.IsBoundToFeature(chatOwner, info.Id);
+            && _services is not null
+            && ResolveOwnerId(info) is { } chatOwner
+            && _services.GetRequiredService<IFeatureChatLinks>().IsBoundToFeature(chatOwner, info.Id);
 
         Dictionary<string, string>? moves = null;
         lock (entry.VisibilityLock)

@@ -157,6 +157,7 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
         var services = new ServiceCollection();
         services.AddSingleton<IProjectAccess>(_ => new ProjectAccessService(
             _projects, _sessions, new SharedProjectsGate(_config, new FeatureFlagService(_users))));
+        services.AddSingleton<IFeatureChatLinks, NoFeatureChatLinks>();
         return services.BuildServiceProvider();
     }
 

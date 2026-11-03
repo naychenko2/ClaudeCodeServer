@@ -408,7 +408,12 @@ builder.Services.AddSingleton<ProjectManager>();
 builder.Services.AddSingleton<IProjectManager, ProjectManagerAdapter>();
 // Точка доступа к проекту/чату: область запроса (RequestScope) для [ProjectScope] и явных резолвов (S0-2)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Access.IProjectAccess, ClaudeHomeServer.Services.ProjectAccessService>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.IFeatureChatLinks, ClaudeHomeServer.Services.FeatureChatLinks>();
+// Шов привязок чата к фиче (S2d-7b-2): TaskManager живёт в TasksSubsystem.Register, поэтому при
+// выключенной подсистеме регистрируется честное «привязок нет»; неразрешимый шов при включённой — сбой, не молчание.
+if (ClaudeHomeServer.Services.Composition.SubsystemGate.IsEnabled(builder.Configuration, "tasks"))
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.IFeatureChatLinks, ClaudeHomeServer.Services.FeatureChatLinks>();
+else
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.IFeatureChatLinks, ClaudeHomeServer.Services.NoFeatureChatLinks>();
 // Шов для вертикалей (Этап 3, волна 1): вместо прямой зависимости от ProjectManager
 // вертикали берут узкий контракт IProjectRootLookup. Реализация — тонкая обёртка
 // над ProjectManager в `Services/ProjectRootLookup`, живёт здесь же в Main.

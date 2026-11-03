@@ -110,7 +110,7 @@ public class ProjectTasksController(
             // Явный признак происхождения (S2b-1, доработка): этот эндпоинт — человеческий
             // путь (UI/API), признак ставит сервер, а не тело запроса: агентские и серверные
             // пути (тулсет задач, волна, merge, сборка архитектора) зовут TaskManager напрямую.
-            task = tasks.Create(projectId, UserId, req with { CreatedByHuman = true, CreatedByActorUserId = null }, targetColumn);
+            task = tasks.Create(projectId, UserId, req with { CreatedByHuman = true, CreatedByActorUserId = null, SourceSessionId = null }, targetColumn);
         }
         catch (InvalidOperationException ex)
         {
@@ -351,7 +351,7 @@ public class TasksController(
             // обычный кейс гейта.
             // Явный признак происхождения (S2b-1, доработка): человеческий путь (UI/API),
             // как в проектной ветке Create выше.
-            task = tasks.Create(null, UserId, req with { CreatedByHuman = true, CreatedByActorUserId = null }, targetColumn);
+            task = tasks.Create(null, UserId, req with { CreatedByHuman = true, CreatedByActorUserId = null, SourceSessionId = null }, targetColumn);
         }
         catch (InvalidOperationException ex)
         {
@@ -445,6 +445,10 @@ public class TasksController(
         if (task is null || task.OwnerId != UserId) return NotFound();
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
+
+        // Человеческий REST не принимает id чата из тела: ось «чат-исполнитель» ставит сервер
+        // (ExecutorLauncher), иначе приватный чат привязывался бы к фиче мимо двери (S2d-7b-2)
+        req = req with { ExecutorLaunchedBySessionId = null };
 
         // Смена фичи задачи (featureId или превращение в эпик ролью) — та же дверь, что у создания
         if (FeatureChatDoor.DenyPrivateForHeader(sessions,

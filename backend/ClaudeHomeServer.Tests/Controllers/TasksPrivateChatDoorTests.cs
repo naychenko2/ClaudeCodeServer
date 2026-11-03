@@ -253,4 +253,63 @@ public class TasksPrivateChatDoorTests : IClassFixture<TestWebApplicationFactory
         Sessions.SetChatVisibility(chat.Id, OwnerId, makePrivate: true).Outcome.Should().Be(ChatVisibilityOutcome.Ok);
         chat.PrivateToUserId.Should().Be(OwnerId);
     }
+
+    // M1: человеческий REST не принимает id чата из тела — ни ось «источник», ни «чат-исполнитель».
+    [Fact]
+    public async Task RestUpdate_ExecutorLauncherFromBody_Ignored()
+    {
+        var privateChat = await NewChat(true);
+        var task = Tasks.Create(null, OwnerId, new CreateTaskRequest("свободная"));
+
+        var resp = await _client.PutAsJsonAsync($"/api/tasks/{task.Id}",
+            new { executorLaunchedBySessionId = privateChat.Id });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        Tasks.GetById(task.Id)!.ExecutorLaunchedBySessionId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task RestCreate_SourceSessionFromBody_Ignored()
+    {
+        var privateChat = await NewChat(true);
+        var feature = Epic("Фича M1");
+
+        var resp = await _client.PostAsJsonAsync("/api/tasks",
+            new { title = "шаг", featureId = feature.Id, role = "step", sourceSessionId = privateChat.Id });
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var id = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+        Tasks.GetById(id)!.SourceSessionId.Should().BeNull();
+
+        var pid = NewProjectId();
+        var resp2 = await _client.PostAsJsonAsync($"/api/projects/{pid}/tasks",
+            new { title = "шаг2", featureId = feature.Id, role = "step", sourceSessionId = privateChat.Id });
+        resp2.StatusCode.Should().Be(HttpStatusCode.OK);
+        var id2 = JsonSerializer.Deserialize<JsonElement>(await resp2.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+        Tasks.GetById(id2)!.SourceSessionId.Should().BeNull();
+    }
+
+    // M2: легаси-ось (чат создал шаг фичи через SourceSessionId; кураторство эпика — другого чата)
+    // — тоже привязка, как её считает передняя дверь.
+    [Fact]
+    public async Task SetVisibility_ChatBoundByLegacyAxis_Conflict()
+    {
+        var (chat, _) = await SharedProjectChat();
+        var feature = Epic("Фича M2", (await NewChat(false)).Id);
+        Tasks.Create(null, OwnerId, new CreateTaskRequest("шаг", FeatureId: feature.Id, Role: "step", SourceSessionId: chat.Id));
+
+        var resp = await _client.PutAsJsonAsync($"/api/chats/{chat.Id}/visibility", new { @private = true });
+
+        await AssertPrivateDenied(resp);
+        chat.PrivateToUserId.Should().BeNull();
+    }
+
+    // M3: при выключенной подсистеме tasks шов — «привязок нет». Хост с Subsystems:tasks:Enabled=false
+    // не поднимается вовсе (TeamWaveService и другие требуют TaskManager), поэтому проверяем
+    // реализацию «привязок нет» и то, что включённая подсистема даёт настоящую реализацию.
+    [Fact]
+    public void FeatureChatLinks_TasksDisabledSeam_NoLinks_EnabledSeam_Real()
+    {
+        new NoFeatureChatLinks().IsBoundToFeature("any", "chat").Should().BeFalse();
+        _factory.Services.GetRequiredService<IFeatureChatLinks>().Should().BeOfType<FeatureChatLinks>();
+    }
 }

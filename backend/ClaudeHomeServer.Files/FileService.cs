@@ -71,7 +71,18 @@ public class FileService(
     public static string SafeJoinPublic(string root, string relativePath) =>
         SafePath.Join(root, relativePath);
 
-    public IEnumerable<FileEntry> List(string rootPath, string relativePath = "", bool showHidden = false)
+    /// <summary>
+    /// Листинг названной папки. viewerUserId — ЗРИТЕЛЬ (S2d-6b-2 доработка 1, ревью f24f7533): чужие
+    /// приватные вложения (.cc-attachments/private/{другой}/…, S2d-6b-1) из ответа выпадают — ни имён,
+    /// ни id автора, ни количества. null — вызов не про зрителя: поведение существующих вызывающих
+    /// не меняется (WebDAV, MCP files_*, ProjectFiles решают сами: у них свой актор или актора нет
+    /// в контракте, и их тесты держат «своё видно»); пустая строка — явный вызов без зрителя
+    /// (Files-ручка без JWT): любое private закрыто, fail-closed, как сам IsForeign.
+    /// TreeExcludes режет ОБХОД, а не названный путь: прямая ссылка на .cc-attachments или private/
+    /// отдаёт их содержимое — поэтому фильтр стоит по записям, а не по стартовому каталогу.
+    /// </summary>
+    public IEnumerable<FileEntry> List(string rootPath, string relativePath = "", bool showHidden = false,
+        string? viewerUserId = null)
     {
         var dir = SafeJoin(rootPath, relativePath);
         if (!Directory.Exists(dir))
@@ -108,6 +119,8 @@ public class FileService(
             }
             if (TreeExcludes.Contains(name)) continue;
             if (!showHidden && name.StartsWith('.')) continue;
+            // S2d-6b-2 доработка 1: каталог чужого автора (и чужой private выше по дереву) — не в ответе, см. doc метода
+            if (viewerUserId is not null && PrivateAttachments.IsForeign(relDir, viewerUserId)) continue;
             entries.Add(new FileEntry(name, relDir, true, null, modifiedAt, false));
         }
 
@@ -132,6 +145,7 @@ public class FileService(
                 continue;
             }
             if (!showHidden && name.StartsWith('.')) continue;
+            if (viewerUserId is not null && PrivateAttachments.IsForeign(rel, viewerUserId)) continue;
             entries.Add(new FileEntry(name, rel, false, size, modifiedAt,
                 modified.Contains(rel), IsNew: newFiles.Contains(rel)));
         }
@@ -194,7 +208,15 @@ public class FileService(
 
     // Рекурсивный листинг всего поддерева — для prefetch офлайн-снапшота и синхронизации папок.
     // Исключает тяжёлые папки (TreeExcludes), ограничен TreeMaxEntries.
-    public IEnumerable<FileEntry> Tree(string rootPath, string relativePath = "", bool showHidden = false)
+    // viewerUserId — ЗРИТЕЛЬ (S2d-6b-2 доработка 1, ревью f24f7533): чужое private-поддерево из
+    // результата выпадает — ни имён, ни id автора, ни количества; в чужой каталог автора не идём
+    // (его содержимое не съедает слоты своих по TreeMaxEntries — тот же порядок, что фильтр до
+    // Take(100) в Search). null — вызов не про зрителя: поведение существующих вызывающих не
+    // меняется (WebDAV/MCP/ProjectFiles, см. doc List); пустая строка — без зрителя: любое private
+    // закрыто (fail-closed). TreeExcludes режет ОБХОД, а не названный старт: путь внутрь
+    // .cc-attachments вызывающий назвал явно — фильтр по записям, не по стартовому каталогу.
+    public IEnumerable<FileEntry> Tree(string rootPath, string relativePath = "", bool showHidden = false,
+        string? viewerUserId = null)
     {
         var start = SafeJoin(rootPath, relativePath);
         if (!Directory.Exists(start)) throw new DirectoryNotFoundException();
@@ -228,6 +250,8 @@ public class FileService(
                 if (TreeExcludes.Contains(name)) continue;
                 if (!showHidden && name.StartsWith('.')) continue;
                 if (IsWorktreesPath(relDir)) continue;
+                // S2d-6b-2 доработка 1: чужой каталог автора — ни в список, ни в обход (см. doc метода)
+                if (viewerUserId is not null && PrivateAttachments.IsForeign(relDir, viewerUserId)) continue;
                 result.Add(new FileEntry(name, relDir, true, null, modifiedAt, false));
                 Walk(d);
             }
@@ -254,6 +278,7 @@ public class FileService(
                     continue;
                 }
                 if (!showHidden && name.StartsWith('.')) continue;
+                if (viewerUserId is not null && PrivateAttachments.IsForeign(rel, viewerUserId)) continue;
                 result.Add(new FileEntry(name, rel, false, size, modifiedAt,
                     modified.Contains(rel), IsNew: newFiles.Contains(rel)));
             }

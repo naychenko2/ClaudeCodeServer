@@ -90,8 +90,13 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     {
         try
         {
+            // S2d-6b-2 доработка 1 (ревью f24f7533): явно названный чужой private-путь — 404, как
+            // читающие ручки; зритель передаётся в List: каталог чужого автора и чужие файлы ответа
+            // не дают — ни имён, ни id автора, ни количества. Без JWT — пустая строка: любое private
+            // закрыто (fail-closed, как IsForeign по пустому id). Свой private — как раньше.
+            if (ForeignPrivateDenied(path) is { } denied) return denied;
             var p = GetProject(projectId);
-            return Ok(Annotate(projectId, files.List(p.RootPath, path, p.ShowHiddenFiles)));
+            return Ok(Annotate(projectId, files.List(p.RootPath, path, p.ShowHiddenFiles, UserId ?? "")));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (DirectoryNotFoundException) { return NotFound(); }
@@ -105,8 +110,13 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     {
         try
         {
+            // S2d-6b-2 доработка 1 (ревью f24f7533): то же, что для List. TreeExcludes режет ОБХОД,
+            // а не названный путь — прямая ссылка внутрь .cc-attachments отдаёт содержимое, поэтому
+            // фильтр по записям стоит в FileService.Tree до рекурсии: чужое поддерево не съедает
+            // слоты своих по TreeMaxEntries
+            if (ForeignPrivateDenied(path) is { } denied) return denied;
             var p = GetProject(projectId);
-            return Ok(Annotate(projectId, files.Tree(p.RootPath, path, showHidden ?? p.ShowHiddenFiles)));
+            return Ok(Annotate(projectId, files.Tree(p.RootPath, path, showHidden ?? p.ShowHiddenFiles, UserId ?? "")));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (DirectoryNotFoundException) { return NotFound(); }

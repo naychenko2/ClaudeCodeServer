@@ -30,9 +30,12 @@ namespace ClaudeHomeServer.Tests.Controllers;
 ///    private, общее вложение прежней раскладки и обычный файл — как раньше.
 /// 2. Search и Locate: чужие private-выпадаются из выдачи ни именем, ни количеством; автор своего
 ///    находит. В FileService.Search фильтр стоит до Take(100) — 150 чужих не съедают слоты своих.
-/// 3. Дерево и листинг: вся папка .cc-attachments скрыта TreeExcludes — и чужое private, и своё
-///    (текущее поведение, тестом зафиксировано, в этот шаг не менялось); явно названный путь —
-///    отдельное поведение, тоже зафиксировано как есть.
+/// 3. Дерево и листинг: вся папка .cc-attachments скрыта из корневого обхода TreeExcludes — и чужое
+///    private, и своё (служебная папка, не «чужая»; поведение не менялось). TreeExcludes режет ОБХОД,
+///    а не явно названный путь: прямая ссылка внутрь .cc-attachments отдаёт содержимое — поэтому
+///    доработкой 1 (ревью f24f7533) записи по названному пути фильтруются по зрителю: чужого —
+///    ни имён, ни id автора, ни количества; названный чужой private-путь — 404; без зрителя —
+///    fail-closed.
 ///
 /// Стенд бесхостовый (образец FilesControllerEditorDenialsTests): контроллер собирается напрямую
 /// с настоящими ProjectManager/ProjectAccessService/FileService/ProjectTreeLocator/JwtService и
@@ -142,6 +145,17 @@ public sealed class FilesControllerPrivateAttachmentsReadTests : IDisposable
             User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", userId)])),
         };
         http.SetRequestScope(new RequestScope(userId, tenant, userId == tenant ? ProjectRole.Owner : ProjectRole.Editor));
+        return new FilesController(_files, _projects, _access, _sync, _config, _jwt,
+            NullLogger<FilesController>.Instance, DocAi(), null!, _locator)
+        { ControllerContext = new ControllerContext { HttpContext = http } };
+    }
+
+    /// <summary>Ручка без зрителя: в JWT нет sub (машинный шов) — area та же, человека нет.</summary>
+    private FilesController AsNoViewer(string projectId)
+    {
+        var tenant = _projects.GetById(projectId)!.OwnerId!;
+        var http = new DefaultHttpContext { User = new ClaimsPrincipal(new ClaimsIdentity()) };
+        http.SetRequestScope(new RequestScope("", tenant, ProjectRole.Editor));
         return new FilesController(_files, _projects, _access, _sync, _config, _jwt,
             NullLogger<FilesController>.Instance, DocAi(), null!, _locator)
         { ControllerContext = new ControllerContext { HttpContext = http } };
@@ -316,34 +330,85 @@ public sealed class FilesControllerPrivateAttachmentsReadTests : IDisposable
         ((IReadOnlyList<LocatedPath>)forOwner.Value!).Select(p => p.Path).Should().Equal(plain);
     }
 
-    // --- 3. дерево и листинг: что уже делает TreeExcludes (зафиксировано, не менялось) ---
+    // --- 3. дерево и листинг: TreeExcludes режет обход; названный путь внутри .cc-attachments
+    //        фильтруется по зрителю (доработка 1, ревью f24f7533) ---
 
     [Fact]
-    public void ДеревоИЛистинг_ПапкаВложенийСкрытаЦеликом_СвояPrivateТоже_ЯвныйПутьРезаетТолькоОбход()
+    public void ДеревоИЛистинг_ЯвныйПутьВЧужомPrivate_404_ЧужихЗаписейНет_АвторСвойВидит()
     {
         var (projectId, root) = Project();
-        Write(root, PrivateOf(_authorId, "чужое.txt"), "чужое");
-        Write(root, PrivateOf(_authorId, "своё.txt"), "своё");
-        Write(root, SharedAttachmentOf("общее.txt"), "общее");
+        var authorDir = $"{TreeExcludes.AttachmentsDir}/private/{_authorId}";
+        var editorDir = $"{TreeExcludes.AttachmentsDir}/private/{_editorId}";
+        var foreignFile = $"{authorDir}/чужое.txt";
+        var ownFile = $"{editorDir}/своё.txt";
+        var shared = SharedAttachmentOf("общее.txt");
+        var sharedDir = shared[..shared.LastIndexOf('/')];
+        Write(root, foreignFile, "чужое");
+        Write(root, ownFile, "своё");
+        Write(root, shared, "общее");
         Write(root, "visible.txt", "видимое");
 
+        // Корневой обход: вся папка .cc-attachments скрыта TreeExcludes — и чужое private, и своё
+        // (служебная папка, не «чужая»); showHidden=true её тоже не открывает: делает это именно
+        // TreeExcludes, а не правило скрытых файлов. Это поведение не менялось
         foreach (var viewer in new[] { _ownerId, _authorId })
         {
             var c = As(viewer, projectId);
-            var why = $"{viewer}: вся папка {TreeExcludes.AttachmentsDir} скрыта из дерева — и чужое private, и своё (служебная папка, не «чужая»): текущее поведение, этот шаг его не меняет";
-
+            var why = $"{viewer}: вся папка {TreeExcludes.AttachmentsDir} скрыта из корневого обхода TreeExcludes, а не правилом private";
             PathsOf(c.List(projectId, "")).Should().Contain("visible.txt");
             PathsOf(c.List(projectId, "")).Should().NotContain(p => p.StartsWith(TreeExcludes.AttachmentsDir), why);
-            // showHidden=true: исключение делает именно TreeExcludes, а не правило скрытых файлов
             PathsOf(c.Tree(projectId, "", true)).Should().Contain("visible.txt");
             PathsOf(c.Tree(projectId, "", true)).Should().NotContain(p => p.StartsWith(TreeExcludes.AttachmentsDir), why);
         }
 
-        // ТЕКУЩЕЕ поведение, зафиксированное тестом (в этот шаг НЕ менялось): TreeExcludes режет
-        // ОБХОД дерева, а не явно названный путь — прямая ссылка на private-папку отдаёт её
-        // содержимое, включая каталог чужого автора. Находка в отчёте S2d-6b-2.
+        // TreeExcludes режет ОБХОД, а не явно названный путь: родитель private/, названный прямо,
+        // отдаёт своё содержимое — отфильтрованное по зрителю. Прежняя версия теста закрепляла
+        // утечку (каталог чужого автора в List); доработка 1 переписывает на противоположное:
+        // участник видит только свой каталог — ни имён чужих, ни id автора, ни их количества,
+        // и showHidden=true этого не меняет
+        var asEditor = As(_editorId, projectId);
+        PathsOf(asEditor.List(projectId, $"{TreeExcludes.AttachmentsDir}/private"))
+            .Should().Equal(new[] { editorDir }, "участник .cc-attachments/private: только свой каталог");
+        PathsOf(asEditor.Tree(projectId, $"{TreeExcludes.AttachmentsDir}/private", true))
+            .Should().Equal(new[] { editorDir, ownFile }, "showHidden=true: чужое поддерево не открывается");
+        PathsOf(asEditor.Tree(projectId, TreeExcludes.AttachmentsDir, true))
+            .Should().Contain(new[] { editorDir, ownFile })
+            .And.NotContain(p => p.StartsWith(authorDir), "в дереве от названного контейнера чужое private-поддерево тоже закрыто");
+
+        // Явно названный чужой private-путь — 404, как читающие ручки: ни каталог автора, ни его
+        // файл не отличимы от несуществующего
+        asEditor.List(projectId, authorDir).Should().BeOfType<NotFoundResult>("чужой каталог автора — 404, а не пустой список");
+        asEditor.Tree(projectId, authorDir, true).Should().BeOfType<NotFoundResult>();
+        asEditor.List(projectId, foreignFile).Should().BeOfType<NotFoundResult>();
+
+        // Сам контейнер — не «чужой» путь: .cc-attachments перечисляется, чужой автор отфильтрован
+        // в нём; общая раскладка guid — как раньше
+        PathsOf(asEditor.List(projectId, TreeExcludes.AttachmentsDir))
+            .Should().BeEquivalentTo(new[] { $"{TreeExcludes.AttachmentsDir}/private", sharedDir },
+                "контейнер не закрыт: в нём только своё зрителя");
+
+        // Автор своего — как раньше: и родитель, и своё поддерево
+        var asAuthor = As(_authorId, projectId);
+        PathsOf(asAuthor.List(projectId, $"{TreeExcludes.AttachmentsDir}/private")).Should().Equal(new[] { authorDir });
+        PathsOf(asAuthor.Tree(projectId, $"{TreeExcludes.AttachmentsDir}/private", true)).Should().Equal(new[] { authorDir, foreignFile });
+
+        // Владелец проекта без своего private: пустой список — ни id чужих авторов, ни их количества
         PathsOf(As(_ownerId, projectId).List(projectId, $"{TreeExcludes.AttachmentsDir}/private"))
-            .Should().Contain(p => p.StartsWith($"{TreeExcludes.AttachmentsDir}/private/{_authorId}"));
+            .Should().BeEmpty("количество чужого не утекает через список");
+
+        // Поиск по имени чужого: участнику пуст, автору — своё (как раньше)
+        PathsOf(asEditor.Search(projectId, "чужое")).Should().BeEmpty();
+        PathsOf(asAuthor.Search(projectId, "чужое")).Should().Equal(foreignFile);
+
+        // Без зрителя (в JWT нет sub — машинный шов ручки): fail-closed — родитель пуст,
+        // названный private-путь 404; контейнер и общая раскладка — как раньше
+        var anon = AsNoViewer(projectId);
+        PathsOf(anon.List(projectId, $"{TreeExcludes.AttachmentsDir}/private"))
+            .Should().BeEmpty("без зрителя любое private закрыто");
+        anon.List(projectId, authorDir).Should().BeOfType<NotFoundResult>();
+        anon.Tree(projectId, authorDir, true).Should().BeOfType<NotFoundResult>();
+        PathsOf(anon.List(projectId, TreeExcludes.AttachmentsDir))
+            .Should().BeEquivalentTo(new[] { $"{TreeExcludes.AttachmentsDir}/private", sharedDir });
     }
 
     private sealed class NoSessions : ISessionDirectory

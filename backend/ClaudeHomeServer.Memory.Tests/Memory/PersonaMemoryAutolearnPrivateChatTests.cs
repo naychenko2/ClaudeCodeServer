@@ -161,6 +161,31 @@ public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
         _cheap.Calls.Should().Be(1);
     }
 
+    // --- Консультация persona_ask (S2d-5b): LearnFromConsultation ---
+
+    private static readonly string LongQuestion = new('в', 450);
+    private static readonly string LongAnswer = new('о', 300);
+
+    [Fact]
+    public async Task Консультация_ПриватныйВызыватель_ИзвлечениеНеЗапускается_LlmНоль()
+    {
+        _sut.LearnFromConsultation(_persona, LongQuestion, LongAnswer, callerIsPrivate: true);
+
+        await Task.Delay(300);
+        _cheap.Calls.Should().Be(0, "факты приватного чата не уходят в общую полку персоны");
+        _memory.List(Owner, PersonaId, null).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Консультация_ОбщийВызыватель_ИзвлечениеЗапускается_LlmОдинВызов()
+    {
+        _sut.LearnFromConsultation(_persona, LongQuestion, LongAnswer, callerIsPrivate: false);
+
+        var winner = await Task.WhenAny(_cheap.Done.Task, Task.Delay(5000));
+        winner.Should().Be(_cheap.Done.Task, "контроль: без гейта путь живой, нули выше не тривиальны");
+        _cheap.Calls.Should().Be(1);
+    }
+
     // --- Стабы ---
 
     private sealed class CapturingObserver : ISessionMessageObserver

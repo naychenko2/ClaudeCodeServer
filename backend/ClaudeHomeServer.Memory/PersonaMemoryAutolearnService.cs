@@ -179,8 +179,13 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
     // сессионного autolearn, но транскрипт — переданный вопрос + ответ персоны, а рабочий
     // фокус НЕ трогается (консультация — побочный разговор, затирать «что я сейчас делаю»
     // нельзя). Фон, best-effort: ошибки не влияют на уже отданный ответ.
-    public void LearnFromConsultation(Persona persona, string question, string answer)
+    // callerIsPrivate (S2d-5b): вызов из приватного чата (или вызыватель не определён —
+    // fail-closed) — факты вопроса и ответа в память персоны НЕ извлекаются: память проектной
+    // персоны подмешивается ко всем чатам проекта, а приватный чат виден только автору.
+    public void LearnFromConsultation(Persona persona, string question, string answer,
+        bool callerIsPrivate = false)
     {
+        if (callerIsPrivate) return;
         if (!persona.MemoryEnabled) return;
         _ = Task.Run(() => LearnConsultationSafeAsync(persona, question, answer));
     }

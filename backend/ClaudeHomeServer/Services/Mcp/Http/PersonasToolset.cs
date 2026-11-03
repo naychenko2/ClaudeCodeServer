@@ -514,7 +514,11 @@ public sealed partial class PersonasToolset(
 
                 try
                 {
-                    return Text(await ask.AskAsync(ownerId, target, question, OptionalArg(arguments, "context"), ct));
+                    // Приватность выводится на сервере из сессий-вызывателей, не из аргументов
+                    var callerIsPrivate = ConsultationCallerIsPrivateOrUnknown(session,
+                        context.CallerSessionId is { } cid ? sessions.GetById(cid) : null);
+                    return Text(await ask.AskAsync(ownerId, target, question,
+                        OptionalArg(arguments, "context"), ct, callerIsPrivate));
                 }
                 catch (Exception ex)
                 {
@@ -526,6 +530,15 @@ public sealed partial class PersonasToolset(
                 throw new ArgumentException($"Неизвестный инструмент: {tool}", nameof(tool));
         }
     }
+
+    // Запись фактов консультации в память целевой персоны (S2d-5b) закрыта, если вызыватель
+    // приватный ИЛИ не определён: сессия маршрута (PrivateToUserId — S2d-1) и сессия из
+    // X-Caller-Session-Id (как в MemoryToolset.CallerChatIsPrivate) обе должны быть известны
+    // и не приватны. Иначе fail-closed: ответ отдаётся,
+    // память не пишется.
+    internal static bool ConsultationCallerIsPrivateOrUnknown(Session? routeSession, Session? headerSession) =>
+        routeSession is null || headerSession is null
+        || routeSession.PrivateToUserId is not null || headerSession.PrivateToUserId is not null;
 
     // --- Маршрут: /mcp/personas/{sessionId} ---
 

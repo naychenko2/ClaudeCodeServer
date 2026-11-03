@@ -96,7 +96,12 @@ backend/ClaudeHomeServer/Controllers/DossiersController.cs|4
 # (корень репозитория, относительный путь), вызывающий в него не входит. Вторая строка — та же
 # проверка emptiness перед вызовом. Ключи файловых хранилищ не изменились: все файловые вызовы
 # идут от GetRoot(projectId), как в S2c-8.
-backend/ClaudeHomeServer/Controllers/FilesController.cs|9
+# S2d-6b-2 (разрез 4bc3d04f §1 путь 19): FilesController 9→11 — читающие ручки закрывают чужое
+# private-вложение (S2d-6b-1): id вызывающего входит только в признак «чужой автор пути»
+# (PrivateAttachments.IsForeign → 404) и передаётся в FileService.Search как ЗРИТЕЛЬ выдачи.
+# Ключом хранилищ он не стал: файловые вызовы по-прежнему идут от GetRoot(projectId) (S2c-8),
+# хранилищ по вызывающему не появилось; для Search это фильтр видимости, а не адресация.
+backend/ClaudeHomeServer/Controllers/FilesController.cs|11
 # S3-1b: GitController 1→3 — AuthorOfRequestUser: id вызывающего берётся из sub JWT и входит только
 # в чтение своей записи пользователя (UserStore.GetById) и в конструирование автора коммита
 # (GitCommitAuthor: имя/логин для git-автора). Ключом хранилищ ничто не стало: git-операции идут

@@ -1,4 +1,5 @@
-﻿using ClaudeHomeServer.Services.Composition;
+﻿using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Files;
 
@@ -154,11 +155,22 @@ public class FileService(
                norm.StartsWith("notes/", StringComparison.OrdinalIgnoreCase);
     }
 
-    public IEnumerable<FileEntry> Search(string rootPath, string query)
+    /// <summary>
+    /// Поиск по имени файла по всему дереву. viewerUserId — ЗРИТЕЛЬ (S2d-6b-2, разрез 4bc3d04f
+    /// §1 путь 19): чужие приватные вложения (.cc-attachments/private/{другой}/…, S2d-6b-1) из
+    /// выдачи выпадают — ни именем, ни количеством; фильтр стоит ДО Take(100), поэтому чужой
+    /// материал не съедает слоты своих результатов. Свои private, общие вложения и любые прочие
+    /// пути — без изменений. Без id зрителя (машинный шов ProjectFiles: актора в контракте
+    /// IProjectFiles нет) — fail-closed, всё private закрыто, как IsForeign по пустому userId;
+    /// чтение вложений агентом — шаг 6b-3.
+    /// </summary>
+    public IEnumerable<FileEntry> Search(string rootPath, string query, string? viewerUserId = null)
     {
         var (modified, newFiles) = GetGitStatus(rootPath);
         return Directory.EnumerateFiles(rootPath, "*", SearchOption.AllDirectories)
             .Where(f => Path.GetFileName(f).Contains(query, StringComparison.OrdinalIgnoreCase))
+            .Where(f => !PrivateAttachments.IsForeign(
+                Path.GetRelativePath(rootPath, f).Replace('\\', '/'), viewerUserId))
             .Take(100)
             .Select(f =>
             {

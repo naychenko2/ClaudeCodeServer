@@ -2575,6 +2575,9 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
                     return new(ChatVisibilityOutcome.NotSharedProject, null);
                 if (boundToFeature)
                     return new(ChatVisibilityOutcome.BoundToFeature, null);
+                // Штаб «Командной реализации» и групповой чат — режимы общего контура (S2d-7b-3).
+                if (info.PrivateToUserId != userId && IsTeamOrGroup(info))
+                    return new(ChatVisibilityOutcome.TeamOrGroup, null);
                 // Уже приватный — идемпотентно: повторный true не должен падать на «сообщениях»
                 if (info.PrivateToUserId != userId)
                 {
@@ -2614,6 +2617,10 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         SaveSessions();
         return new(ChatVisibilityOutcome.Ok, info) { AttachmentMoves = moves };
     }
+
+    // Чат — штаб «Командной реализации» (роль штаба) или групповой (есть участники-персоны).
+    private static bool IsTeamOrGroup(Session info) =>
+        info.TeamImplement is not null || info.Participants is { Count: > 0 };
 
     // Сохранить вложение чата и записать его в учёт (S2d-6b-4). Раскладку (общая или private/{автор})
     // выбирает ЗДЕСЬ, под VisibilityLock, — тем же замком, под которым SetChatVisibility переносит файлы:
@@ -11600,8 +11607,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 }
 
 // Исход смены видимости чата (SetChatVisibility, S2d-7a). Отказы различимы для контроллера:
-// NotAuthor — 403, NotSharedProject / HasMessages / AttachmentsMoveFailed / BoundToFeature — 409, NotFound — 404.
-public enum ChatVisibilityOutcome { Ok, NotFound, NotAuthor, NotSharedProject, HasMessages, AttachmentsMoveFailed, BoundToFeature }
+// NotAuthor — 403, NotSharedProject / HasMessages / AttachmentsMoveFailed / BoundToFeature / TeamOrGroup — 409, NotFound — 404.
+public enum ChatVisibilityOutcome { Ok, NotFound, NotAuthor, NotSharedProject, HasMessages, AttachmentsMoveFailed, BoundToFeature, TeamOrGroup }
 
 // AttachmentMoves (S2d-6b-4): карта «старый путь → новый» перенесённых вложений — композеру
 // заменить ссылки черновика; null — переносить было нечего.

@@ -188,7 +188,10 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         // на чужом приватном чате — 404, неотличимый от «нет такого чата» (владелец проекта —
         // не адресат чужого приватного, а сервис пропускал его через ResolveOwnerId проекта).
         // Сверка арендатора внутри SetParticipants (GetOwned) остаётся как есть.
-        if (sessions.GetOwnedVisible(id, UserId) is null) return NotFound();
+        if (sessions.GetOwnedVisible(id, UserId) is not { } visible) return NotFound();
+        // S2d-7b-3: приватный чат не становится групповым (общий состав персон — режим общего контура).
+        if (FeatureChatDoor.DenyPrivateMode(visible) is { } privateMode)
+            return Conflict(new { error = privateMode, code = FeatureChatDoor.PrivateChatCode });
         try
         {
             var updated = sessions.SetParticipants(id, UserId, req.PersonaIds ?? []);
@@ -351,6 +354,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
             ChatVisibilityOutcome.NotAuthor => ChatAuthorGate.Denied(),
             ChatVisibilityOutcome.NotSharedProject => Conflict(new { error = "Приватным можно сделать только чат общего проекта", code = "not_shared_project" }),
             ChatVisibilityOutcome.BoundToFeature => Conflict(new { error = "Чат уже привязан к фиче — приватным его не сделать", code = FeatureChatDoor.PrivateChatCode }),
+            ChatVisibilityOutcome.TeamOrGroup => Conflict(new { error = FeatureChatDoor.ModeChatPrivateReason, code = FeatureChatDoor.PrivateChatCode }),
             ChatVisibilityOutcome.HasMessages => Conflict(new { error = "В чате уже есть сообщения — приватным его не сделать", code = "chat_has_messages" }),
             _ => NotFound(),
         };
@@ -433,6 +437,9 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     public async Task<IActionResult> SetTeamImplement(string id, [FromBody] SetTeamImplementRequest req)
     {
         if (sessions.DenyOwnerTurn(id, UserId) is { } denied) return denied;
+        // S2d-7b-3: приватный чат не становится штабом; выключение режима разрешено всегда.
+        if (req.Enabled && FeatureChatDoor.DenyPrivateMode(sessions.GetById(id)) is { } privateMode)
+            return Conflict(new { error = privateMode, code = FeatureChatDoor.PrivateChatCode });
         try
         {
             var updated = await sessions.SetTeamImplementAsync(id, req.Enabled,

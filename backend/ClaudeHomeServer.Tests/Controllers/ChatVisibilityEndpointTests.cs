@@ -55,6 +55,9 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
     private const string WithMessagesId = "with-messages";
     private const string PersonalChatId = "personal-chat";
     private const string OutsideChatId = "outside-chat";
+    private const string TeamChatId = "team-chat";
+    private const string GroupChatId = "group-chat";
+    private const string ReaderPrivateId = "reader-private";
 
     public ChatVisibilityEndpointTests()
     {
@@ -109,6 +112,11 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
             new Session { Id = WithMessagesId, ProjectId = _projectId, CreatedByUserId = _editorId, MessageCount = 2, Status = SessionStatus.Finished },
             new Session { Id = PersonalChatId, ProjectId = _personalProjectId, CreatedByUserId = _ownerId, Status = SessionStatus.Finished },
             new Session { Id = OutsideChatId, OwnerId = _ownerId, CreatedByUserId = _ownerId, Status = SessionStatus.Finished },
+            // S2d-7b-3: штаб «Командной реализации» и групповой чат (общие, автор — владелец); приватный
+            // чат читателя (автор понижен до Reader: приватность ставилась, пока он был редактором)
+            new Session { Id = TeamChatId, ProjectId = _projectId, CreatedByUserId = _ownerId, TeamImplement = new SessionTeamImplement(), Status = SessionStatus.Finished },
+            new Session { Id = GroupChatId, ProjectId = _projectId, CreatedByUserId = _ownerId, Participants = ["p1", "p2"], Status = SessionStatus.Finished },
+            new Session { Id = ReaderPrivateId, ProjectId = _projectId, CreatedByUserId = _readerId, PrivateToUserId = _readerId, ExcludeFromDossiers = true, Status = SessionStatus.Finished },
         ]);
 
         _history = new ChatHistoryService(_config);
@@ -258,6 +266,69 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
         Read(ChatsAs(_editorId).SetVisibilitySync(WithMessagesId, new SetVisibilityRequest(true)))
             .Should().Be((409, "chat_has_messages"));
         _sessions.GetById(WithMessagesId)!.PrivateToUserId.Should().BeNull();
+    }
+
+    // S2d-7b-3: приватный чат не становится групповым — 409 private_chat_mode, состав не меняется.
+    // Общий чат идёт прежним путём: до валидации состава (400 «от 2 до 8 персон»), не 409.
+    [Fact]
+    public void ПриватныйЧат_Участники_409privateChatMode_ОбщийЧат_ПрежнийПуть()
+    {
+        var c = ChatsAs(_ownerId);
+
+        Read(c.SetParticipants(OwnerPrivateId, new SetParticipantsRequest(["p1", "p2"]))).Should().Be((409, "private_chat_mode"));
+        _sessions.GetById(OwnerPrivateId)!.Participants.Should().BeNull("отказ не создаёт группу");
+
+        Read(c.SetParticipants(OwnerChatId, new SetParticipantsRequest([]))).Status.Should().Be(400);
+    }
+
+    // S2d-7b-3: приватный чат не становится штабом — 409 private_chat_mode; выключение режима
+    // дверь не режет. Общий чат дверь пропускает.
+    [Fact]
+    public async Task ПриватныйЧат_ВключитьШтаб_409privateChatMode_ОбщийЧат_ДверьПропускает()
+    {
+        var c = ChatsAs(_ownerId);
+
+        Read(await c.SetTeamImplement(OwnerPrivateId, new SetTeamImplementRequest(true)))
+            .Should().Be((409, "private_chat_mode"));
+        _sessions.GetById(OwnerPrivateId)!.TeamImplement.Should().BeNull();
+
+        ClaudeHomeServer.Controllers.FeatureChatDoor.DenyPrivateMode(_sessions.GetById(OwnerPrivateId)).Should().NotBeNull();
+        ClaudeHomeServer.Controllers.FeatureChatDoor.DenyPrivateMode(_sessions.GetById(OwnerChatId)).Should().BeNull();
+    }
+
+    // S2d-7b-3, обратное направление: штаб или группа приватными не делаются (409 private_chat_mode),
+    // флаг не ставится; снятие приватности и «чат без режима» — прежним путём.
+    [Fact]
+    public void ШтабИГруппа_СделатьПриватным_409privateChatMode_ФлагНеСтавится()
+    {
+        var c = ChatsAs(_ownerId);
+
+        Read(c.SetVisibilitySync(TeamChatId, new SetVisibilityRequest(true))).Should().Be((409, "private_chat_mode"));
+        Read(c.SetVisibilitySync(GroupChatId, new SetVisibilityRequest(true))).Should().Be((409, "private_chat_mode"));
+        _sessions.GetById(TeamChatId)!.PrivateToUserId.Should().BeNull();
+        _sessions.GetById(GroupChatId)!.PrivateToUserId.Should().BeNull();
+        _sessions.GetById(GroupChatId)!.ExcludeFromDossiers.Should().BeFalse("отказ не трогает opt-out");
+
+        Read(c.SetVisibilitySync(OwnerChatId, new SetVisibilityRequest(true))).Status.Should().Be(200);
+    }
+
+    // S2d-7b-3: автор понижен до читателя — его приватный чат виден только ему и только на чтение:
+    // чтение доступно (GetAccessible), право вести ход закрыто 403 project_scope, настройки — 403
+    // owner_settings, смена видимости — 403 reader; другому участнику и владельцу проекта чат не виден (404).
+    [Fact]
+    public void АвторСталЧитателем_ПриватныйЧат_ТолькоЕмуИТолькоНаЧтение()
+    {
+        _sessions.GetAccessible(ReaderPrivateId, _readerId).Should().NotBeNull("читателю-автору чтение остаётся");
+        _sessions.GetAccessible(ReaderPrivateId, _editorId).Should().BeNull();
+        _sessions.GetAccessible(ReaderPrivateId, _ownerId).Should().BeNull("владелец проекта чужой приватный не видит");
+
+        Read(_sessions.DenyTurn(ReaderPrivateId, _readerId)!).Should().Be((403, "project_scope"));
+        Read(_sessions.DenyOwnerTurn(ReaderPrivateId, _readerId)!).Status.Should().Be(403);
+        Read(ChatsAs(_readerId).SetVisibilitySync(ReaderPrivateId, new SetVisibilityRequest(false))).Should().Be((403, "reader"));
+        _sessions.GetById(ReaderPrivateId)!.PrivateToUserId.Should().Be(_readerId);
+
+        Read(_sessions.DenyTurn(ReaderPrivateId, _editorId)!).Status.Should().Be(404);
+        Read(_sessions.DenyTurn(ReaderPrivateId, _ownerId)!).Status.Should().Be(404);
     }
 
     // S2d-6c: PUT sessions/{sid} с excludeFromDossiers=false на приватном чате — 409

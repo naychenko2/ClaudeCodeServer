@@ -24,6 +24,19 @@ public static class FeatureChatDoor
     public static string? DenyPrivate(Session? caller, string? targetFeatureId) =>
         !string.IsNullOrEmpty(targetFeatureId) && caller?.PrivateToUserId is not null ? PrivateChatReason : null;
 
+    // Режимы чата с общим состоянием (S2d-7b-3): штаб «Командной реализации» и групповой чат
+    // видят общую команду персон и пишут в общий контур, поэтому приватному чату недоступны.
+    // Включить режим на приватном чате нельзя; обратное направление (сделать приватным чат,
+    // уже являющийся штабом или группой) закрывает SessionManager.SetChatVisibility. Код тот же.
+    public const string PrivateModeReason =
+        "Приватный чат нельзя сделать штабом или групповым: сначала сделайте чат общим.";
+    public const string ModeChatPrivateReason =
+        "Штаб или групповой чат нельзя сделать приватным: у него уже есть команда персон.";
+
+    // Дверь «приватный чат — штаб или группа»: признак берётся с серверной сессии.
+    public static string? DenyPrivateMode(Session? chat) =>
+        chat?.PrivateToUserId is not null ? PrivateModeReason : null;
+
     // REST-вход той же двери: чат-вызыватель — по заголовку X-Caller-Session-Id (его ставит конфиг
     // хода). Без владельца в сверке: чужой приватный чат в заголовке — тоже отказ (fail-closed).
     public static string? DenyPrivateForHeader(SessionManager sessions, string? callerSessionHeader, string? targetFeatureId) =>

@@ -1757,13 +1757,15 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const expiryValue = expiryLeft ? expiryLeft.replace(/^через /, 'осталось ') : null;
   const expAt = expiresAt(session);
   const expiryUrgent = !!expAt && expAt.getTime() - Date.now() < ONE_HOUR_MS;
+  // project — ради owner-гейта (QA-P1F): срок и досье — настройки владельца, кнопка
+  // гасится сама вне своей границы (тот же паттерн, что у PrivateChatToggle ниже)
   const expiryBadge = online ? (
-    <ExpiryButton session={session} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
+    <ExpiryButton session={session} project={project} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
   ) : null;
   // Opt-out «не сохранять решения из этого чата» — только у проектных чатов, рядом со
   // «Временем жизни» (тем же паттерном кнопки в шапке)
   const dossierBtn = project && online ? (
-    <DossierOptOutButton session={session} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
+    <DossierOptOutButton session={session} project={project} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
   ) : null;
   // Тумблер «Приватный чат» (S2d-F2): компонент сам гасится вне своей границы —
   // только автор чата в общем проекте, не читатель; в личном проекте — нет вовсе
@@ -1822,9 +1824,11 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       {badgeVisible('spend') && spendBadge}
     </>
   );
-  // Причина недоступности действия ЭТОМУ участнику (QA-P1): решение живёт в едином гейте
-  // (chatActionDeniedReason): rename/archive — право записи чата (отказан только читателю),
-  // delete — автор чата и владелец. myUserId — текущий человек из stored-пары
+  // Причина недоступности действия ЭТОМУ участнику (QA-P1, доработка QA-P1F): решение
+  // живёт в едином гейте (chatActionDeniedReason): rename/archive/tags — право записи
+  // чата (отказано только читателю), delete — автор чата и владелец, срок/мьют/досье —
+  // настройки владельца (отказаны и редактору, и читателю). myUserId — текущий человек
+  // из stored-пары
   const myUserId = readStoredUserId();
   const actionDenied = (key: string): string | null => chatActionDeniedReason(key, project, session, myUserId);
   // Тумблер уведомлений ЭТОГО чата — сигнал о завершённом ходе, когда вкладка не в фокусе.
@@ -1832,7 +1836,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // а заглушить чат можно из меню его карточки в списке. Общий рубильник уведомлений
   // живёт в разделе «Уведомления»
   const notifyBtn = online
-    ? <NotifyButton session={session} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
+    ? <NotifyButton session={session} project={project} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
     : null;
   // На узких раскладках артефакты и настройки — плотная пара справа (gap 0 вместо
   // TB.gap), читаются как единая группа действий чата; на десктопе — как раньше, врозь.
@@ -2210,6 +2214,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         <MenuItem
           icon={<Tags size={15} strokeWidth={2} />}
           label="Теги чата"
+          hint={actionDenied('tags') ?? undefined}
+          disabled={!!actionDenied('tags')}
           action={visAction('tags')}
           // Меню тегов открывается по тому же якорю: это меню уже закрылось бы,
           // и rect взять неоткуда — фиксируем якорь до закрытия (приём ChatCard)
@@ -2220,6 +2226,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         <MenuItem
           icon={notifyOn ? <Bell size={15} strokeWidth={2} /> : <BellOff size={15} strokeWidth={2} />}
           label={notifyOn ? 'Уведомления: включены' : 'Уведомления: выключены'}
+          hint={actionDenied('notify') ?? undefined}
+          disabled={!!actionDenied('notify')}
           action={visAction('notify')}
           onClick={() => {
             setCtxMenu(null);
@@ -2233,6 +2241,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         <MenuItem
           icon={<History size={15} strokeWidth={2} />}
           label={dossierExcluded ? 'Досье: не сохраняются' : 'Досье: сохраняются'}
+          hint={actionDenied('dossier') ?? undefined}
+          disabled={!!actionDenied('dossier')}
           action={visAction('dossier')}
           onClick={() => {
             setCtxMenu(null);
@@ -2245,6 +2255,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       <MenuItem
         icon={<Hourglass size={15} strokeWidth={2} />}
         label={chatTemporary ? `Хранить: ${formatTimeLeft(session) ?? 'по сроку'}` : 'Срок хранения…'}
+        hint={actionDenied('expiry') ?? undefined}
+        disabled={!!actionDenied('expiry')}
         action={visAction('expiry')}
         onClick={() => { const a = ctxMenu; setCtxMenu(null); setExpiryMenu(a); }}
       />

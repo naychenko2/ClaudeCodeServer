@@ -36,15 +36,16 @@ export function participantSendTitle(_gate: Extract<ParticipantComposerGate, { b
   return 'Не отправится: вы читатель проекта';
 }
 
-// Действия чата (QA-P1, бэк f777c8460): переименовать и архивировать — право записи чата,
-// владелец и редактор (любой видимый чат, зеркало DenyContentWrite); удалить — автор чата и
-// владелец проекта (зеркало ChatAuthorGate/ChatWriteRightsEndpointTests); читателю — ничего.
+// Действия чата (QA-P1, бэк f777c8460; QA-P1F): переименовать, архивировать и теги —
+// право записи чата, владелец и редактор (любой видимый чат, зеркало DenyContentWrite);
+// удалить — автор чата и владелец проекта (зеркало ChatAuthorGate/ChatWriteRightsEndpointTests);
+// читателю — ничего.
 // Обычный проект (без myRole) — всё разрешено, как раньше. null — можно; строка — причина
 // для подсказки выключенного пункта и сублейбла меню.
 export const CHAT_WRITE_DENIED = 'Только владелец и редактор проекта';
 export const CHAT_DELETE_DENIED = 'Только автор чата и владелец проекта';
 
-// Переименовать/архивировать/AI-переименовать: отказан только читателю
+// Переименовать/архивировать/AI-переименовать/теги: отказан только читателю
 export function chatWriteDeniedReason(project: Pick<Project, 'myRole'> | null | undefined): string | null {
   return project?.myRole === 'reader' ? CHAT_WRITE_DENIED : null;
 }
@@ -62,16 +63,30 @@ export function chatDeleteDeniedReason(
   return chat?.createdByUserId && chat.createdByUserId === myUserId ? null : CHAT_DELETE_DENIED;
 }
 
-// Единый диспетчер для петель шапки (ряд, «⋯», runAction): rename/archive — гейт записи,
-// delete — авторский; прочие пункты («Теги», «Срок» и др.) правило не трогает
+// Настройки чата — право владельца (QA-P1F, зеркало бэкового OwnerSettingsGate): срок
+// жизни, мьют уведомлений, «не сохранять решения» — бэк отвечает 403 owner_settings и
+// редактору, и читателю. «Теги» — правка содержимого чата: в PUT сессии редактору
+// открыты name/tags, значит теги ему можно; читателю бэк отказывает весь Update — тот
+// же отказ, что у переименования. Обычный проект (без myRole) и чат вне проекта — без
+// изменений, как раньше.
+export const OWNER_SETTINGS_DENIED = 'Только владелец проекта';
+
+export function ownerSettingsDeniedReason(project: Pick<Project, 'myRole'> | null | undefined): string | null {
+  return isParticipant(project) ? OWNER_SETTINGS_DENIED : null;
+}
+
+// Единый диспетчер для петель шапки (ряд, «⋯», runAction): rename/archive/tags — гейт
+// записи, delete — авторский, срок/мьют/досье — настройки владельца. Пункты, которые
+// ничего не пишут в чате («Закрепить», «На стену»), правило не трогает
 export function chatActionDeniedReason(
   key: string,
   project: Pick<Project, 'myRole'> | null | undefined,
   chat: Pick<Session, 'createdByUserId'> | null | undefined,
   myUserId: string | null | undefined,
 ): string | null {
-  if (key === 'rename' || key === 'archive') return chatWriteDeniedReason(project);
+  if (key === 'rename' || key === 'archive' || key === 'tags') return chatWriteDeniedReason(project);
   if (key === 'delete') return chatDeleteDeniedReason(project, chat, myUserId);
+  if (key === 'expiry' || key === 'notify' || key === 'dossier') return ownerSettingsDeniedReason(project);
   return null;
 }
 

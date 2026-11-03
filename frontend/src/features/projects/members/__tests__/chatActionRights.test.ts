@@ -1,12 +1,15 @@
-// Действия чата (QA-P1, бэк f777c8460): переименовать и архивировать — владелец и редактор
-// (любой видимый чат, зеркало DenyContentWrite); удалить — автор чата и владелец проекта
-// (зеркало ChatAuthorGate/ChatWriteRightsEndpointTests); читателю — ничего; обычный проект
-// (без myRole) — как раньше. Окружение node без jsdom: логика гейта — чистыми функциями,
+// Действия чата (QA-P1, бэк f777c8460; доработка QA-P1F по ревью 6e843c37): переименовать,
+// архивировать и теги — правка содержимого чата: владелец и редактор (бэковый PUT оставляет
+// редактору name/tags), читателю — ничего; удалить — автор чата и владелец проекта
+// (зеркало ChatAuthorGate/ChatWriteRightsEndpointTests); срок жизни, мьют уведомлений и
+// «не сохранять решения» — настройки владельца: закрыты и редактору, и читателю (зеркало
+// бэкового OwnerSettingsGate, 403 owner_settings). Обычный проект (без myRole) и чат вне
+// проекта — как раньше. Окружение node без jsdom: логика гейта — чистыми функциями,
 // проводка в карточку, список и шапку — сверкой исходников (образец contentRights.test.ts).
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  CHAT_DELETE_DENIED, CHAT_WRITE_DENIED,
+  CHAT_DELETE_DENIED, CHAT_WRITE_DENIED, OWNER_SETTINGS_DENIED,
   chatActionDeniedReason, chatDeleteDeniedReason, chatWriteDeniedReason, isNotChatAuthorError,
 } from '../participantGate';
 
@@ -54,8 +57,25 @@ describe('chatActionDeniedReason (диспетчер)', () => {
       expect(chatActionDeniedReason(key, { myRole: 'reader' }, { createdByUserId: ME }, ME)).toBe(CHAT_WRITE_DENIED);
     }
   });
-  it('прочие пункты («Теги», «Срок», «Закрепить», «Мьют») гейт не трогает', () => {
-    for (const key of ['tags', 'expiry', 'pin', 'notify']) {
+  it('теги — тоже правка содержимого: редактору можно (в PUT ему открыты name/tags), читателю нет', () => {
+    expect(chatActionDeniedReason('tags', { myRole: 'editor' }, { createdByUserId: ME }, ME)).toBeNull();
+    expect(chatActionDeniedReason('tags', { myRole: 'reader' }, { createdByUserId: ME }, ME)).toBe(CHAT_WRITE_DENIED);
+  });
+  it('настройки владельца («Срок», «Мьют», «Досье») — закрыты и редактору, и читателю', () => {
+    for (const key of ['expiry', 'notify', 'dossier']) {
+      expect(chatActionDeniedReason(key, { myRole: 'editor' }, { createdByUserId: ME }, ME)).toBe(OWNER_SETTINGS_DENIED);
+      expect(chatActionDeniedReason(key, { myRole: 'reader' }, { createdByUserId: ME }, ME)).toBe(OWNER_SETTINGS_DENIED);
+    }
+  });
+  it('настройки открыты владельцу, обычному проекту и чату вне проекта — как раньше', () => {
+    for (const key of ['tags', 'expiry', 'notify', 'dossier']) {
+      expect(chatActionDeniedReason(key, { myRole: 'owner' }, { createdByUserId: ME }, ME)).toBeNull();
+      expect(chatActionDeniedReason(key, {}, { createdByUserId: ME }, ME)).toBeNull();
+      expect(chatActionDeniedReason(key, null, { createdByUserId: ME }, null)).toBeNull();
+    }
+  });
+  it('«Закрепить» и «На стену» ничего не пишут в чате — гейт их не трогает', () => {
+    for (const key of ['pin', 'wall']) {
       expect(chatActionDeniedReason(key, { myRole: 'reader' }, { createdByUserId: OTHER }, ME)).toBeNull();
     }
   });
@@ -126,5 +146,29 @@ describe('проводка AI-переименования в палитре (ch
   const actions = readFileSync(new URL('../../../../lib/ai/actions.tsx', import.meta.url), 'utf8');
   it('when-гейт действия — тот же гейт записи', () => {
     expect(actions).toContain('!chatWriteDeniedReason(c.nav?.project)');
+  });
+});
+
+describe('проводка owner-гейта в кнопки настроек шапки (QA-P1F)', () => {
+  const expiry = readFileSync(new URL('../../../../components/chat/ExpiryButton.tsx', import.meta.url), 'utf8');
+  const notify = readFileSync(new URL('../../../../components/chat/NotifyButton.tsx', import.meta.url), 'utf8');
+  const dossier = readFileSync(new URL('../../../../components/chat/DossierOptOutButton.tsx', import.meta.url), 'utf8');
+  const bar = readFileSync(new URL('../../../../components/chat/ChatHeaderBar.tsx', import.meta.url), 'utf8');
+  // Мутация «настройки не гейтятся» (гейт убран из кнопки / disabled без denied) —
+  // этот кейс красный: без причины человек кликал бы то, что бэк откажет
+  it('срок, мьют и досье гасятся сами по роли — тот же гейт, что у диспетчера', () => {
+    for (const src of [expiry, notify, dossier]) {
+      expect(src).toContain('const denied = ownerSettingsDeniedReason(project);');
+      expect(src).toContain('disabled={saving || !!denied}');
+    }
+  });
+  it('шапка даёт этим кнопкам проект и держит пункты right-click меню тем же гейтом', () => {
+    expect(bar).toContain('<ExpiryButton session={session} project={project}');
+    expect(bar).toContain('<NotifyButton session={session} project={project}');
+    expect(bar).toContain('<DossierOptOutButton session={session} project={project}');
+    for (const key of ['tags', 'notify', 'dossier', 'expiry']) {
+      expect(bar).toContain(`disabled={!!actionDenied('${key}')}`);
+      expect(bar).toContain(`hint={actionDenied('${key}') ?? undefined}`);
+    }
   });
 });

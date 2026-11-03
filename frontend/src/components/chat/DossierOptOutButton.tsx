@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { History } from 'lucide-react';
-import type { Session } from '../../types';
+import type { Project, Session } from '../../types';
 import { C, FONT, R, TB } from '../../lib/design';
 import { updateChatFields } from '../../lib/chatUpdate';
 import { chatFieldsErrorText } from '../../lib/api';
+import { ownerSettingsDeniedReason } from '../../features/projects/members/participantGate';
 import { showToast } from '../../lib/toast';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Menu } from '../ui';
@@ -16,8 +17,12 @@ import { DossierOptOutRow } from './DossierOptOutRow';
 // Дефолт — решения сохраняются: прозрачная иконка истории в ряду кнопок шапки.
 // Исключён — обведённая пилюля с иконкой accent и подписью «Не сохраняются»
 // (на мобиле подпись пропадает, как остаток времени у временного чата).
-export function DossierOptOutButton({ session, isMobile, onSessionUpdated }: {
+export function DossierOptOutButton({ session, project, isMobile, onSessionUpdated }: {
   session: Session;
+  // Роль в проекте (QA-P1F): excludeFromDossiers — настройка владельца (бэковый
+  // OwnerSettingsGate, 403 owner_settings): участнику кнопка неактивна с объяснением
+  // в title. Чат вне проекта и обычный проект (myRole нет) — без изменений
+  project?: Pick<Project, 'myRole'> | null;
   isMobile?: boolean;
   onSessionUpdated?: (s: Session) => void;
 }) {
@@ -26,6 +31,7 @@ export function DossierOptOutButton({ session, isMobile, onSessionUpdated }: {
   const [saving, setSaving] = useState(false);
 
   const excluded = !!session.excludeFromDossiers;
+  const denied = ownerSettingsDeniedReason(project);
 
   const persist = async (next: boolean) => {
     if (next === excluded) return;
@@ -51,15 +57,19 @@ export function DossierOptOutButton({ session, isMobile, onSessionUpdated }: {
           const rect = e.currentTarget.getBoundingClientRect();
           setMenu(m => m ? null : rect);
         }}
-        disabled={saving}
-        title={excluded
-          ? 'Решения этого чата не сохраняются. Нажмите, чтобы изменить.'
-          : 'Решения этого чата сохраняются в историю. Нажмите, чтобы изменить.'}
+        disabled={saving || !!denied}
+        title={denied
+          ? '«Не сохранять решения» для этого чата выбирает только владелец проекта'
+          : excluded
+            ? 'Решения этого чата не сохраняются. Нажмите, чтобы изменить.'
+            : 'Решения этого чата сохраняются в историю. Нажмите, чтобы изменить.'}
         style={{
           display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px',
           background: excluded ? C.bgWhite : 'transparent',
           border: `1px solid ${excluded ? C.border : 'transparent'}`,
-          borderRadius: R.lg, flexShrink: 0, cursor: saving ? 'default' : 'pointer',
+          // Состояние «не сохраняются» читается и участнику (обводка на месте), но
+          // указатель «можно нажать» при неактивной кнопке врал бы
+          borderRadius: R.lg, flexShrink: 0, cursor: saving || denied ? 'default' : 'pointer',
           fontFamily: FONT.sans, fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
           // Дефолт — тот же цвет, что у icon-кнопок шапки; исключён — иконка accent,
           // режим считывается с места, не открывая поповер

@@ -414,7 +414,7 @@ public sealed partial class WorkspaceToolset(
         {
             BaseSection => ContextCall(session, context, plan),
             "projects" => await ProjectsCall(tool, arguments, context, session, plan),
-            "files" => await FilesCall(tool, arguments, context, plan, ct),
+            "files" => await FilesCall(tool, arguments, context, session, plan, ct),
             "knowledge" => await KnowledgeCall(tool, arguments, context, plan),
             "search" => await SearchCall(tool, arguments, context, plan),
             "git" or "git_write" => await GitCall(tool, arguments, context, session, plan, ct),
@@ -827,11 +827,15 @@ public sealed partial class WorkspaceToolset(
     // --- Секция files (files_*): все пути — только через FileService (SafeJoin внутри него) ---
 
     private async Task<McpToolCallResult> FilesCall(string tool, JsonObject arguments,
-        McpToolCallContext context, SessionManager.WorkspaceMcpPlan plan, CancellationToken ct)
+        McpToolCallContext context, Session session, SessionManager.WorkspaceMcpPlan plan, CancellationToken ct)
     {
         if (!TryGetProject(context, plan, arguments, out var p, out var denied))
             return Deny(denied);
         var root = p.RootPath;
+        // S2d-6b-3: актор хода — из реестра хода (тот же источник, что у chats_list, S2d-4e), а не из
+        // аргументов: модель может назвать любой id. Актор неизвестен — null: чужое private не
+        // отдаётся (fail-closed: неизвестный актор не равен автору).
+        var actorId = turnActors.Actor(session.Id, context.OwnerId);
 
         switch (tool)
         {
@@ -849,6 +853,10 @@ public sealed partial class WorkspaceToolset(
                     .Select(e => (path: e.Path.Replace('\\', '/'), dir: e.IsDirectory, size: e.Size))
                     .Where(e => depth is null or <= 0
                         || e.path.Split('/').Length - baseDepth <= depth.Value)
+                    // S2d-6b-3: чужие приватные вложения в дерево не попадают: обход TreeExcludes
+                    // отсекает .cc-attachments целиком, но явный путь внутрь поддерева — адресат
+                    // модели, и записи фильтруются здесь (свои private и общие вложения остаются)
+                    .Where(e => !PrivateAttachments.IsForeign(e.path, actorId))
                     .ToList();
                 var truncated = list.Count > TreeMaxEntries;
                 if (truncated) list = list.Take(TreeMaxEntries).ToList();
@@ -875,6 +883,10 @@ public sealed partial class WorkspaceToolset(
                 string content;
                 try
                 {
+                    // S2d-6b-3: чужое приватное вложение — тот же отказ, что у несуществующего
+                    // файла: существования не раскрывается
+                    if (IsForeignPrivate(root, path, actorId))
+                        return Deny($"Файл не найден: {path}");
                     if (Directory.Exists(FileService.SafeJoinPublic(root, path)))
                         return Deny("Файл не найден: путь ведёт в папку");
                     // Бинарники — только метаданные: base64 не тащим, он раздул бы контекст
@@ -917,7 +929,9 @@ public sealed partial class WorkspaceToolset(
             case "files_search":
             {
                 var query = StringArg(arguments, "query");
-                var found = files.Search(root, query)
+                // S2d-6b-3: актор — зритель поиска (S2d-6b-2): чужие private выпадают из выдачи
+                // до Take(100), чужой материал не съедает слоты своих результатов
+                var found = files.Search(root, query, actorId)
                     .Select(e => new Dictionary<string, object?>
                     {
                         ["path"] = e.Path.Replace('\\', '/'),
@@ -982,6 +996,9 @@ public sealed partial class WorkspaceToolset(
                 // инструментов: traversal здесь обязан давать отказ, а не исключение (волна 3.1)
                 try
                 {
+                    // S2d-6b-3: чужое приватное вложение — тот же отказ, что у несуществующего файла
+                    if (IsForeignPrivate(root, path, actorId))
+                        return Deny($"Файл не найден: {path}");
                     if (DocumentAbsPath(root, path) is not { } abs)
                         return Deny("Это не документ (pdf/docx/xlsx/pptx)");
                     var md = await docAi.ConvertAsync(abs, ct);
@@ -997,6 +1014,9 @@ public sealed partial class WorkspaceToolset(
                 var path = StringArg(arguments, "path");
                 try
                 {
+                    // S2d-6b-3: чужое приватное вложение — тот же отказ, что у несуществующего файла
+                    if (IsForeignPrivate(root, path, actorId))
+                        return Deny($"Файл не найден: {path}");
                     var text = await GetAiTextAsync(root, path, ct);
                     if (text is null) return Deny("Файл не поддерживается (нужен документ или текст)");
                     var summary = await docAi.SummaryAsync(context.OwnerId, text, ct);
@@ -1012,6 +1032,9 @@ public sealed partial class WorkspaceToolset(
                 var path = StringArg(arguments, "path");
                 try
                 {
+                    // S2d-6b-3: чужое приватное вложение — тот же отказ, что у несуществующего файла
+                    if (IsForeignPrivate(root, path, actorId))
+                        return Deny($"Файл не найден: {path}");
                     var text = await GetAiTextAsync(root, path, ct);
                     if (text is null) return Deny("Файл не поддерживается (нужен документ или текст)");
                     var extract = await docAi.ExtractAsync(context.OwnerId, text, ct);
@@ -1032,6 +1055,11 @@ public sealed partial class WorkspaceToolset(
             {
                 var path = StringArg(arguments, "path");
                 if (path.Length == 0) return Deny("Нужен путь файла");
+                // S2d-6b-3: источник читается по пути — чужое приватное вложение не конвертируется;
+                // тот же отказ, что у несуществующего файла (запись результата — отдельная ветка,
+                // targetDir здесь не private-путь: в чужой private пишет только отказанное здесь чтение)
+                if (IsForeignPrivate(root, path, actorId))
+                    return Deny($"Файл не найден: {path}");
                 string abs;
                 try { abs = FileService.SafeJoinPublic(root, path); }
                 catch (UnauthorizedAccessException) { return Deny("Доступ за пределы проекта запрещён"); }
@@ -1067,6 +1095,20 @@ public sealed partial class WorkspaceToolset(
             default:
                 return Deny($"Неизвестный инструмент: {tool}");
         }
+    }
+
+    // S2d-6b-3: чужое ли это приватное вложение (S2d-6b-1, раскладка .cc-attachments/private/{author}/…).
+    // Решение по нормализованному пути: SafeJoin разрешает «..», «./», обратные слеши и двойные
+    // разделители так же, как их раскрывает FileService при открытии файла — guard судит ровно о том
+    // пути, который будет открыт. Путь за пределами корня — не чужое (вызывающий отдаёт ему свой
+    // отказ «за пределы», как раньше). Актор null — любое private чужое (IsForeign fail-closed).
+    private static bool IsForeignPrivate(string root, string path, string? actorId)
+    {
+        string abs;
+        try { abs = FileService.SafeJoinPublic(root, path); }
+        catch (UnauthorizedAccessException) { return false; }
+        return PrivateAttachments.IsForeign(
+            Path.GetRelativePath(Path.GetFullPath(root), abs).Replace('\\', '/'), actorId);
     }
 
     // Абсолютный путь документа с проверкой, что это просматриваемый документ

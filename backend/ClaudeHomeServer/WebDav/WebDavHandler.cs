@@ -5,6 +5,7 @@ using System.Security;
 using System.Security.Claims;
 using System.Text;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http.Features;
 using ClaudeHomeServer.Services.Files;
@@ -159,17 +160,29 @@ public static class WebDavHandler
 
         try
         {
+            // S2d-6b-3: чужое приватное вложение (S2d-6b-1, раскладка .cc-attachments/private/{author}/…)
+            // закрыто в WebDAV по пути: чтение — 404 как несуществующий файл (существования не
+            // раскрывается), запись — 403 как запись не-владельца (S1-гейт выше): чужой путь не
+            // создаётся и не перезаписывается. Актор здесь — сам аутентифицированный пользователь
+            // (в WebDAV нет «хода»: он и есть действующее лицо).
+            if (IsForeignPrivatePath(root, relPath, davUserId))
+            {
+                ctx.Response.StatusCode = IsWriteMethod(method) ? 403 : 404;
+                ctx.Response.ContentLength = 0;
+                return;
+            }
+
             switch (method)
             {
-                case "PROPFIND": await HandlePropfindAsync(ctx, files, root, relPath, projectName); break;
+                case "PROPFIND": await HandlePropfindAsync(ctx, files, root, relPath, projectName, davUserId); break;
                 case "PROPPATCH": await HandleProppatchAsync(ctx, relPath, projectName); break;
                 case "GET":
-                case "HEAD": await HandleGetAsync(ctx, files, root, relPath, method == "HEAD"); break;
+                case "HEAD": await HandleGetAsync(ctx, files, root, relPath, method == "HEAD", davUserId); break;
                 case "PUT": await HandlePutAsync(ctx, root, relPath); break;
                 case "DELETE": HandleDelete(ctx, files, root, relPath); break;
                 case "MKCOL": HandleMkcol(ctx, files, root, relPath); break;
-                case "COPY": await HandleCopyAsync(ctx, files, root, relPath, projectName); break;
-                case "MOVE": HandleMove(ctx, files, root, relPath, projectName); break;
+                case "COPY": await HandleCopyAsync(ctx, files, root, relPath, projectName, davUserId); break;
+                case "MOVE": HandleMove(ctx, files, root, relPath, projectName, davUserId); break;
                 case "LOCK": await HandleLockAsync(ctx, files, root, relPath, projectName); break;
                 case "UNLOCK": HandleUnlock(ctx, relPath, projectName); break;
                 default:
@@ -378,7 +391,7 @@ public static class WebDavHandler
     // PROPFIND
     // ────────────────────────────────────────────────────────────────────────
 
-    private static async Task HandlePropfindAsync(HttpContext ctx, FileService files, string root, string relPath, string projectName)
+    private static async Task HandlePropfindAsync(HttpContext ctx, FileService files, string root, string relPath, string projectName, string davUserId)
     {
         var depth = ctx.Request.Headers["Depth"].ToString();
         if (depth == "infinity") depth = "1"; // ограничиваем глубину
@@ -419,6 +432,8 @@ public static class WebDavHandler
         {
             foreach (var entry in files.List(root, relPath))
             {
+                // S2d-6b-3: чужие private-вложения в листинге не показываются (свои и общие — как раньше)
+                if (PrivateAttachments.IsForeign(entry.Path, davUserId)) continue;
                 var childAbs = FileService.SafeJoinPublic(root, entry.Path);
                 var childHref = BuildHref(ctx, projectName, entry.Path, entry.IsDirectory);
                 AppendResponse(sb, childHref, childAbs, entry.IsDirectory, GetActiveLock($"{projectName}/{entry.Path}"));
@@ -544,7 +559,7 @@ public static class WebDavHandler
     // GET / HEAD
     // ────────────────────────────────────────────────────────────────────────
 
-    private static async Task HandleGetAsync(HttpContext ctx, FileService files, string root, string relPath, bool headOnly)
+    private static async Task HandleGetAsync(HttpContext ctx, FileService files, string root, string relPath, bool headOnly, string davUserId)
     {
         var absPath = string.IsNullOrEmpty(relPath)
             ? root
@@ -552,8 +567,11 @@ public static class WebDavHandler
 
         if (Directory.Exists(absPath))
         {
-            // HTML-листинг для браузеров
-            var entries = files.List(root, relPath).ToList();
+            // HTML-листинг для браузеров. S2d-6b-3: чужие private-вложения в список не попадают
+            // (свои и общие — как раньше)
+            var entries = files.List(root, relPath)
+                .Where(e => !PrivateAttachments.IsForeign(e.Path, davUserId))
+                .ToList();
             var sb = new StringBuilder();
             sb.Append("<html><head><meta charset='utf-8'><title>");
             sb.Append(WebUtility.HtmlEncode(relPath.Length > 0 ? relPath : "/"));
@@ -751,12 +769,21 @@ public static class WebDavHandler
     // COPY
     // ────────────────────────────────────────────────────────────────────────
 
-    private static async Task HandleCopyAsync(HttpContext ctx, FileService files, string root, string relPath, string projectName)
+    private static async Task HandleCopyAsync(HttpContext ctx, FileService files, string root, string relPath, string projectName, string davUserId)
     {
         var destRel = ParseDestination(ctx, projectName);
         if (destRel is null)
         {
             ctx.Response.StatusCode = 400;
+            return;
+        }
+
+        // S2d-6b-3: назначение внутри чужого private — отказ, как запись в тот путь: чужой путь не
+        // создаётся и не перезаписывается (источник за пределами чужого private — свой путь, разрешён)
+        if (IsForeignPrivatePath(root, destRel, davUserId))
+        {
+            ctx.Response.StatusCode = 403;
+            ctx.Response.ContentLength = 0;
             return;
         }
 
@@ -802,12 +829,21 @@ public static class WebDavHandler
     // MOVE
     // ────────────────────────────────────────────────────────────────────────
 
-    private static void HandleMove(HttpContext ctx, FileService files, string root, string relPath, string projectName)
+    private static void HandleMove(HttpContext ctx, FileService files, string root, string relPath, string projectName, string davUserId)
     {
         var destRel = ParseDestination(ctx, projectName);
         if (destRel is null)
         {
             ctx.Response.StatusCode = 400;
+            return;
+        }
+
+        // S2d-6b-3: назначение внутри чужого private — отказ, как запись в тот путь: чужой путь не
+        // создаётся и не перезаписывается (источник за пределами чужого private — свой путь, разрешён)
+        if (IsForeignPrivatePath(root, destRel, davUserId))
+        {
+            ctx.Response.StatusCode = 403;
+            ctx.Response.ContentLength = 0;
             return;
         }
 
@@ -985,6 +1021,22 @@ public static class WebDavHandler
     /// Извлекает относительный путь назначения из заголовка Destination.
     /// Заголовок содержит полный URL: http://host/projects/{projectName}/{path}
     /// </summary>
+    // S2d-6b-3: чужое ли это приватное вложение (S2d-6b-1, раскладка .cc-attachments/private/{author}/…).
+    // Решение по нормализованному пути: SafeJoin разрешает «..», «./», обратные слеши и двойные
+    // разделители так же, как их раскрывают обработчики при открытии файла — гейт судит ровно о том
+    // пути, который будет открыт. Путь за пределами корня — не чужое (обработчик отдаёт ему свой
+    // 403/404 как раньше). Пустой relPath — корень проекта, он никогда не private.
+    // Актор — сам аутентифицированный пользователь: в WebDAV нет отдельного «хода».
+    private static bool IsForeignPrivatePath(string root, string relPath, string davUserId)
+    {
+        if (string.IsNullOrEmpty(relPath)) return false;
+        string abs;
+        try { abs = FileService.SafeJoinPublic(root, relPath); }
+        catch (UnauthorizedAccessException) { return false; }
+        return PrivateAttachments.IsForeign(
+            Path.GetRelativePath(Path.GetFullPath(root), abs).Replace('\\', '/'), davUserId);
+    }
+
     private static string? ParseDestination(HttpContext ctx, string projectName)
     {
         var dest = ctx.Request.Headers["Destination"].ToString();

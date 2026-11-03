@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Hourglass, History, Lock, Tag as TagIcon, ChevronDown } from 'lucide-react';
 import type { Session, Project, ProjectTag } from '../../types';
-import { api } from '../../lib/api';
+import { api, chatFieldsErrorText } from '../../lib/api';
 import { expiryOptionLabel } from '../../lib/expiry';
 import { updateChatFields, type ChatFieldsPatch } from '../../lib/chatUpdate';
+import { showToast } from '../../lib/toast';
 import { ExpiryPicker } from './ExpiryPicker';
 import { DossierOptOutRow } from './DossierOptOutRow';
 import { TagPickerBody } from '../TagChip';
@@ -15,6 +16,15 @@ import { C, R, SP, FS, FONT, SHADOW, GROUP_COLORS } from '../../lib/design';
 // в сессию. Инлайн-карточка вместо плавающего поповера — надёжнее на мобильном.
 
 type Panel = 'expiry' | 'dossiers' | 'tags' | null;
+
+// Подпись пилюли — она же заголовок тоста об отказе этой настройки: человек видит
+// название того, что только что трогал (тот же заголовок, что у соседних контролов:
+// ExpiryButton.tsx:38 «Время жизни», DossierOptOutButton.tsx:39 «История решений»)
+const PANEL_LABEL: Record<Exclude<Panel, null>, string> = {
+  expiry: 'Время жизни',
+  dossiers: 'История решений',
+  tags: 'Теги',
+};
 
 // Иконка «песочные часы» (время жизни временного чата)
 const IconExpiry = <Hourglass size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
@@ -47,20 +57,26 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
   useEffect(() => { setRegistryOverride(null); }, [project?.id, project?.tagRegistry]);
   const registry = registryOverride ?? project?.tagRegistry ?? [];
 
-  // Частичное обновление полей и выбор эндпоинта по projectId — в updateChatFields
-  const persist = async (next: ChatFieldsPatch) => {
+  // Частичное обновление полей и выбор эндпоинта по projectId — в updateChatFields.
+  // Отказ — тост с текстом из общей точки разбора (chatFieldsErrorText, api.ts:1064):
+  // 409 private_chat_dossiers — причина и действие (постановка S2d-6c-F), любая другая
+  // ошибка — нейтральный текст, как у соседних контролов той же настройки
+  // (DossierOptOutButton.tsx:35-39, ExpiryButton.tsx:37-38). Молчать это место больше
+  // не может: значение не оптимистичное, при отказе тумблер просто не двигается, и без
+  // текста человек не понимает, почему. Наверх уходит только ответ бэка.
+  const persist = async (next: ChatFieldsPatch, p: Exclude<Panel, null>) => {
     setSaving(true);
     try {
       onSessionUpdated?.(await updateChatFields(session, next));
-    } catch {
-      // молча: не критично — значение просто не применится
+    } catch (e) {
+      showToast(PANEL_LABEL[p], chatFieldsErrorText(e), 'info');
     } finally {
       setSaving(false);
     }
   };
 
   const pickExpiry = (minutes: number | null) => {
-    if (minutes !== (session.expiresAfterMinutes ?? null)) persist({ expiresAfterMinutes: minutes });
+    if (minutes !== (session.expiresAfterMinutes ?? null)) persist({ expiresAfterMinutes: minutes }, 'expiry');
     setPanel(null);
   };
 
@@ -68,7 +84,7 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
   const toggleTag = (name: string) => {
     const tags = session.tags ?? [];
     const has = tags.some(t => t.toLowerCase() === name.toLowerCase());
-    persist({ tags: has ? tags.filter(t => t.toLowerCase() !== name.toLowerCase()) : [...tags, name] });
+    persist({ tags: has ? tags.filter(t => t.toLowerCase() !== name.toLowerCase()) : [...tags, name] }, 'tags');
   };
 
   // Новый тег: в реестр проекта (цвет — следующий из палитры по кругу) и сразу на чат
@@ -82,13 +98,13 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
       .catch(() => setRegistryOverride(registry));
     const tags = session.tags ?? [];
     if (!tags.some(t => t.toLowerCase() === name.toLowerCase())) {
-      persist({ tags: [...tags, name] });
+      persist({ tags: [...tags, name] }, 'tags');
     }
   };
 
   const toggle = (p: Exclude<Panel, null>) => setPanel(cur => (cur === p ? null : p));
 
-  const pill = (p: Exclude<Panel, null>, icon: React.ReactNode, label: string, value: string) => {
+  const pill = (p: Exclude<Panel, null>, icon: React.ReactNode, value: string) => {
     const active = panel === p;
     return (
       <button
@@ -106,7 +122,7 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
       >
         <span style={{ color: C.accent, display: 'flex' }}>{icon}</span>
         <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', lineHeight: 1.2, minWidth: 0 }}>
-          <span style={{ fontSize: FS.xs, fontWeight: 600, color: C.textMuted }}>{label}</span>
+          <span style={{ fontSize: FS.xs, fontWeight: 600, color: C.textMuted }}>{PANEL_LABEL[p]}</span>
           <span style={{
             fontSize: FS.base, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap',
             maxWidth: isMobile ? 130 : 190, overflow: 'hidden', textOverflow: 'ellipsis',
@@ -122,11 +138,11 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.sm, marginTop: SP.md, width: '100%' }}>
       <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', justifyContent: 'center' }}>
-        {pill('expiry', IconExpiry, 'Время жизни', expiryOptionLabel(session.expiresAfterMinutes))}
+        {pill('expiry', IconExpiry, expiryOptionLabel(session.expiresAfterMinutes))}
         {/* История решений — только у проектных чатов (личные в неё не пишутся) */}
-        {project && pill('dossiers', IconDossiers, 'История решений', session.excludeFromDossiers ? 'Не сохраняются' : 'Сохраняются')}
+        {project && pill('dossiers', IconDossiers, session.excludeFromDossiers ? 'Не сохраняются' : 'Сохраняются')}
         {/* Теги — только у проектных чатов (реестр тегов per-project) */}
-        {project && pill('tags', IconTags, 'Теги', session.tags?.length ? session.tags.join(', ') : 'Без тегов')}
+        {project && pill('tags', IconTags, session.tags?.length ? session.tags.join(', ') : 'Без тегов')}
       </div>
 
       {/* Заморозка модели: после первого хода правки цепочки и уровней чат не меняют */}
@@ -154,7 +170,7 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
               onCreate={createTag}
             />
           ) : panel === 'dossiers' ? (
-            <DossierOptOutRow value={!!session.excludeFromDossiers} onChange={v => persist({ excludeFromDossiers: v })} />
+            <DossierOptOutRow value={!!session.excludeFromDossiers} onChange={v => persist({ excludeFromDossiers: v }, 'dossiers')} />
           ) : (
             <ExpiryPicker value={session.expiresAfterMinutes} onChange={pickExpiry} />
           )}

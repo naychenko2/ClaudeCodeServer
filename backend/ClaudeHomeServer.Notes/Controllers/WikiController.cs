@@ -239,7 +239,7 @@ public class WikiController : ControllerBase
         var (authorship, footnotes) = ReadAuthorship(root, key!, content);
         var overrides = _journal.PageOverrides(userId, key!, page!, _time.GetUtcNow() - OverridesWindow)
             .Select(o => new WikiOverrideDto(o.Op, o.Statement, ResolveHistoryLine(content, o.Previous), o.At, o.PackageId,
-                o.Op == WikiPackage.OpConflict ? ResolveLiveLine(content, o.Previous) : null))
+                o.Op == WikiPackage.OpConflict ? ResolveLiveLine(content, o.Previous, o.Statement) : null))
             .ToList();
         return Ok(new
         {
@@ -270,15 +270,22 @@ public class WikiController : ControllerBase
     }
 
     // Спор: метка «ИИ оспаривает» стоит на живой строке человека, на которую ссылается пакет (op.Target).
-    // Ищем терпимым поиском среди действующих строк секций, кроме «Истории»; не нашли — null.
-    private static string? ResolveLiveLine(string content, string? target)
+    // Ищем терпимым поиском только среди секций утверждений, кроме «Истории» (как FindStatement:
+    // «Заметки» и «Открытые вопросы» — не цель спора); строку, дословно цитирующую довод ИИ
+    // (statement), пропускаем — довод не может быть целью. Не нашли — null.
+    private static string? ResolveLiveLine(string content, string? target, string? statement)
     {
         if (string.IsNullOrWhiteSpace(target) || WikiPage.Parse(content).Model is not { } model)
             return null;
-        foreach (var section in model.Sections.Where(s => s.Name != "История"))
+        foreach (var section in model.Sections.Where(s =>
+                     s.Name != "История" && WikiPage.AssertionSectionNames.Contains(s.Name)))
             foreach (var line in section.Lines)
+            {
+                if (!string.IsNullOrWhiteSpace(statement) && QuoteMatcher.ContainsVerbatim(line, statement))
+                    continue;
                 if (QuoteMatcher.ContainsVerbatim(line, target))
                     return line.Trim();
+            }
         return null;
     }
 

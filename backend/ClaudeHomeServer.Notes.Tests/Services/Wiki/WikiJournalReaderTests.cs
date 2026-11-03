@@ -708,6 +708,22 @@ public class WikiJournalReaderTests : IDisposable
     }
 
     [Fact]
+    public void Страница_Overrides_СпорЦельТолькоВЗаметках_TargetNull()
+    {
+        // Мутация: убрать фильтр AssertionSectionNames в ResolveLiveLine — тест краснеет.
+        const string body = "---\ntype: entity\nsummary: с\nstatus: active\n---\n\n# А\n\n## Сводка\n- Другое.[^s1]\n\n## Хронология\n\n## Противоречия\n\n## История\n\n## Заметки\n- Срок сдачи — пятница (запись человека).\n\n[^s1]: [[Нет]] — «цитата»\n";
+        OverrideOf(WikiPackage.OpConflict, "Срок сдачи — пятница", body).GetProperty("target").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public void Страница_Overrides_СпорЦельЦитируетсяТолькоДовеИИ_TargetNull()
+    {
+        // Мутация: убрать пропуск строк, совпадающих со statement — target встаёт на довод ИИ, тест краснеет.
+        const string body = "---\ntype: entity\nsummary: с\nstatus: active\n---\n\n# А\n\n## Сводка\n- Другое.[^s1]\n\n## Хронология\n\n## Противоречия\n- ИИ: срок сдачи — понедельник. Человек писал: срок сдачи — пятница.\n\n## История\n\n[^s1]: [[Нет]] — «цитата»\n";
+        OverrideOf(WikiPackage.OpConflict, "срок сдачи — пятница", body).GetProperty("target").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
     public void Страница_Overrides_Supersede_TargetNull_PreviousКакРаньше()
     {
         var o = OverrideOf(WikiPackage.OpSupersede, "Срок сдачи — среда");

@@ -394,12 +394,7 @@ public sealed class WikiJournalReader
             byId.TryAdd(p.Id, p);
         // Формулировки ИИ, которые человек уже вернул («Вернуть мою»): обратный supersede пакета
         // human с целью — текстом ИИ. Строка restore пакета ИИ не называет, связь — по тексту цели.
-        var returned = new List<(DateTimeOffset Ts, string Target)>();
-        foreach (var r in restores)
-            foreach (var hp in PackagesOf(r, byId))
-                foreach (var op in hp.Operations)
-                    if (op.Page == page && op.Op == WikiPackage.OpSupersede && !string.IsNullOrWhiteSpace(op.Target))
-                        returned.Add((r.Ts, StripFootnoteRefs(op.Target)!));
+        var returned = ReturnedStatements(restores, byId, page);
         var active = pageContent is null ? null : ActiveAssertionLines(pageContent);
         foreach (var e in hits)
         {
@@ -417,7 +412,7 @@ public sealed class WikiJournalReader
                     {
                         var statement = StripFootnoteRefs(op.Text);
                         if (!string.IsNullOrEmpty(statement)
-                            && (returned.Any(x => x.Ts >= e.Ts && SameStatement(x.Target, statement))
+                            && (IsReturned(returned, e.Ts, statement)
                                 || (active is not null && !active.Any(l => QuoteMatcher.ContainsVerbatim(l, statement)))))
                             continue;
                     }
@@ -482,7 +477,7 @@ public sealed class WikiJournalReader
                 : null;
             // Страница замены — первая по порядку операций пакета (фронт открывает её, а не pages[0]).
             overridePage = overrides.FirstOrDefault()?.Page;
-            reverted = IsReverted(e, overrides, restores, byId);
+            reverted = IsReverted(e, overrides, overridePage, restores, byId);
         }
 
         return e with
@@ -499,26 +494,40 @@ public sealed class WikiJournalReader
         };
     }
 
-    // Замена уже возвращена: позже применения есть строка restore, чей обратный supersede на той же
-    // странице целится в текст ИИ (та же связь по тексту, что у PageOverrides). Возвращены должны быть
-    // все замены пакета; спор (conflict) стоит на живой строке человека и «возвращённым» не бывает.
-    private static bool IsReverted(Entry e, List<WikiPackage.Operation> overrides, List<Entry> restores,
-        Dictionary<string, WikiPackage> byId)
+    // Формулировки ИИ, которые человек вернул на странице: обратный supersede пакета human с целью —
+    // текстом ИИ. Единая логика «жива ли замена на странице» для журнала и метки страницы.
+    private List<(DateTimeOffset Ts, string Target)> ReturnedStatements(IEnumerable<Entry> restores,
+        Dictionary<string, WikiPackage> byId, string page)
     {
-        var replaced = overrides.Where(o => o.Op == WikiPackage.OpSupersede).ToList();
-        if (replaced.Count == 0)
-            return false;
-        var returned = new List<(string Page, string Target)>();
-        foreach (var r in restores.Where(x => x.Ts >= e.Ts && x.Section == e.Section))
+        var returned = new List<(DateTimeOffset Ts, string Target)>();
+        foreach (var r in restores)
             foreach (var hp in PackagesOf(r, byId))
                 foreach (var op in hp.Operations)
-                    if (op.Op == WikiPackage.OpSupersede && !string.IsNullOrWhiteSpace(op.Target))
-                        returned.Add((op.Page, StripFootnoteRefs(op.Target)!));
+                    if (op.Page == page && op.Op == WikiPackage.OpSupersede && !string.IsNullOrWhiteSpace(op.Target))
+                        returned.Add((r.Ts, StripFootnoteRefs(op.Target)!));
+        return returned;
+    }
+
+    // Замена возвращена: строка restore не раньше применения целится в текст ИИ.
+    private static bool IsReturned(List<(DateTimeOffset Ts, string Target)> returned, DateTimeOffset appliedAt, string statement) =>
+        returned.Any(x => x.Ts >= appliedAt && SameStatement(x.Target, statement));
+
+    // Замена на странице overridePageKey уже возвращена: считаем постранично, как метка страницы.
+    // Возвращены должны быть все замены пакета НА ЭТОЙ странице; спор (conflict) стоит на живой строке
+    // человека и «возвращённым» не бывает. Окно — вся история журнала, не take-окно выдачи.
+    private bool IsReverted(Entry e, List<WikiPackage.Operation> overrides, string? page, List<Entry> restores,
+        Dictionary<string, WikiPackage> byId)
+    {
+        if (page is null)
+            return false;
+        var replaced = overrides.Where(o => o.Op == WikiPackage.OpSupersede && o.Page == page).ToList();
+        if (replaced.Count == 0)
+            return false;
+        var returned = ReturnedStatements(restores.Where(x => x.Section == e.Section), byId, page);
         return replaced.All(o =>
         {
             var statement = StripFootnoteRefs(o.Text);
-            return !string.IsNullOrEmpty(statement)
-                && returned.Any(x => x.Page == o.Page && SameStatement(x.Target, statement));
+            return !string.IsNullOrEmpty(statement) && IsReturned(returned, e.Ts, statement);
         });
     }
 

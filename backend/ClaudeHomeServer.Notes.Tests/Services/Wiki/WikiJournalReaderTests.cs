@@ -808,6 +808,41 @@ public class WikiJournalReaderTests : IDisposable
         (after.OverridePageKey, after.OverrideReverted).Should().Be((second, true));
     }
 
+    [Theory]
+    [InlineData("Общее/А.md", true)]
+    [InlineData("Общее/Б.md", false)]
+    public void Журнал_OverrideReverted_СчитаетсяПостранично_ПоСтраницеOverridePageKey(string restoredPage, bool expectedReverted)
+    {
+        // Мутация: в IsReverted убрать фильтр `o.Page == page` (вернуть пакетную проверку All по всем
+        // заменам пакета) — вариант «restore на А» краснеет (Б не возвращена); заменить All на Any по
+        // пакету — краснеет вариант «restore на Б» (OverridePageKey=А, а возврат на другой странице).
+        const string a = "Общее/А.md", b = "Общее/Б.md";
+        var ai = NewPackage("common", WikiPackage.StatusApplied, WikiGate.OriginSession, "session:two-pages",
+            OverrideOp(WikiPackage.OpSupersede, a, true, "Формулировка ИИ про А.[^s1]", "Старая про А"),
+            OverrideOp(WikiPackage.OpSupersede, b, true, "Формулировка ИИ про Б.[^s2]", "Старая про Б"));
+        WikiManifest.AppendLog(Root(), "apply", "common", [a, b], "session:two-pages", "keeper", "auto", [ai], overrodeHuman: true);
+
+        var aiText = restoredPage == a ? "Формулировка ИИ про А." : "Формулировка ИИ про Б.";
+        var back = OverrideOp(WikiPackage.OpSupersede, restoredPage, false, "Старая формулировка человека", aiText) with
+        {
+            Class = WikiPackage.ClassKey(WikiGate.OriginHuman, WikiPackage.OpSupersede),
+        };
+        WikiPackageStore.Create(Root(), new WikiPackage
+        {
+            Id = WikiPackageStore.NewId(),
+            Author = WikiPackage.AuthorHuman,
+            Action = WikiPackage.ActionRestore,
+            Section = "common",
+            Sources = [new WikiPackage.SourceRef(WikiGate.OriginHuman, "x:3")],
+            Operations = [back],
+            Status = WikiPackage.StatusChecking,
+        }).Ok.Should().BeTrue();
+        WikiManifest.AppendLog(Root(), "restore", "common", [restoredPage], "x:3", "user");
+
+        var e = Read(Any()).Entries.Single(x => x.Source == "session:two-pages");
+        (e.OverridePageKey, e.OverrideReverted).Should().Be((a, expectedReverted));
+    }
+
     [Fact]
     public void Страница_Overrides_ТекстаИИНетСредиДействующих_МеткиНет()
     {

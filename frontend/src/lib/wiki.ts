@@ -1484,6 +1484,9 @@ export type WikiOverrodeKind = 'replaced' | 'disputed';
 export interface WikiJournalEntryOverrideDto extends WikiJournalEntryDto {
   overrodeHuman?: boolean;
   overrodeKind?: WikiOverrodeKind | null;
+  // Страница, где ИИ заменил утверждение (null/нет — берётся pages[0]); true — человек уже вернул свою
+  overridePageKey?: string | null;
+  overrideReverted?: boolean;
 }
 
 // Отказы «Вернуть мою» читаются по тем же кодам WikiError, что у правки: 409 wiki_page_changed

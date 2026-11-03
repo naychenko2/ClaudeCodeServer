@@ -78,7 +78,7 @@ function entryBadge(e: WikiJournalEntryOverrideDto): { tone: 'success' | 'warnin
 // «оспорил» — оспорил, не переписывая (disputed). Нераспознанный вид остаётся без метки:
 // словарь не выдумывает смысл незнакомому слову (тот же приём, что UNKNOWN_OP_TEXT).
 function kindBadge(e: WikiJournalEntryOverrideDto): { tone: 'info' | 'warning'; text: string } | null {
-  if (!e.overrodeHuman) return null;
+  if (!e.overrodeHuman || e.overrideReverted === true) return null;
   if (e.overrodeKind === 'replaced') return { tone: 'info', text: OVERRIDE_TEXT.kindReplaced };
   if (e.overrodeKind === 'disputed') return { tone: 'warning', text: OVERRIDE_TEXT.kindDisputed };
   return null;
@@ -167,7 +167,7 @@ function LoadingSkeleton() {
 // двойной клик не откроет второго. Записи без страниц вести некуда — кнопки нет.
 function rowOpenPage(e: WikiJournalEntryOverrideDto): (() => void) | null {
   if (e.pages.length === 0) return null;
-  return () => requestOpenWikiPage({ section: e.section, path: e.pages[0] });
+  return () => requestOpenWikiPage({ section: e.section, path: e.overridePageKey ?? e.pages[0] });
 }
 
 function JournalRow({ entry, onOpen }: { entry: WikiJournalEntryOverrideDto; onOpen: () => void }) {
@@ -213,7 +213,7 @@ function JournalRow({ entry, onOpen }: { entry: WikiJournalEntryOverrideDto; onO
           <span style={{ flexShrink: 0, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>{timeText(entry.ts)}</span>
         )}
       </button>
-      {entry.overrodeHuman && openPage && (entry.overrodeKind === 'replaced' ? (
+      {entry.overrodeHuman && entry.overrideReverted !== true && openPage && (entry.overrodeKind === 'replaced' ? (
         <Button variant="secondary" size="sm" dataTestId="wiki-journal-restore" onClick={openPage}>{OVERRIDE_TEXT.restore}</Button>
       ) : entry.overrodeKind === 'disputed' ? (
         <Button variant="ghost" size="sm" dataTestId="wiki-journal-open-page" onClick={openPage}>{OVERRIDE_TEXT.openPage}</Button>

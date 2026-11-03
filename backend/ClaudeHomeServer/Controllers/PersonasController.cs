@@ -79,6 +79,12 @@ public class PersonasController(
     private string? CallerSessionId() =>
         Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault();
 
+    // Запись фактов консультации в память персоны закрыта, если чат-вызыватель приватный ИЛИ
+    // не определён (нет заголовка, чужая или несуществующая сессия): fail-closed, ответ отдаётся
+    private bool AskCallerIsPrivateOrUnknown(string? callerSessionId) =>
+        callerSessionId is null || _sessions.GetOwned(callerSessionId, UserId) is not { } caller
+        || caller.PrivateToUserId is not null;
+
     private Task Broadcast(string action, string? personaId = null) =>
         _hub.Clients.Group("user_" + UserId)
             .SendAsync("message", new PersonasChangedMessage(action, personaId));
@@ -1655,7 +1661,7 @@ public class PersonasController(
         try
         {
             var answer = await _ask.AskAsync(UserId, persona, req.Question, req.Context,
-                HttpContext.RequestAborted);
+                HttpContext.RequestAborted, AskCallerIsPrivateOrUnknown(CallerSessionId()));
             return Ok(new { handle = persona.Handle, name = persona.Name, role = persona.Role, answer });
         }
         catch (Exception ex)

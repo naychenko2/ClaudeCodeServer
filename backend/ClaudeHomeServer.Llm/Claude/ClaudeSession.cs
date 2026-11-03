@@ -1332,7 +1332,10 @@ public class ClaudeSession : ILlmSessionAdapter
             && (memoryHttp || (memoryServerPath is not null && !privateStdioMemoryBlocked));
         var personasServerPath = _personasMcp is not null && !personasHttp
             ? MapMcpPath(PersonasServerLocator.FindPersonasServerPath()) : null;
-        var hasPersonas = _personasMcp is not null && (personasHttp || personasServerPath is not null);
+        // Замороженный stdio-сервер персон ходит в REST без гейта приватной сессии: приватному чату
+        // на откате он не объявляется (симметрично privateStdioMemoryBlocked)
+        var hasPersonas = _personasMcp is not null
+            && (personasHttp || (personasServerPath is not null && !privateStdioMemoryBlocked));
         // wsp/notifications/codegraph живут в Kestrel (ADR-012, фаза 2 волна 3), но пути их
         // stdio-серверов резолвим у откатившихся — как у tasks/notes/personas
         var workspaceServerPath = _workspaceMcp is not null && !workspaceHttp

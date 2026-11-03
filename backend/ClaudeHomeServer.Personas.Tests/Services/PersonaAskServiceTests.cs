@@ -1,3 +1,5 @@
+using System.Net.Http.Json;
+using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
@@ -57,11 +59,139 @@ public class PersonaAskServiceTests
             Effort = "high", MemoryEnabled = false,
         };
 
-        var answer = await svc.AskAsync("owner-42", persona, "Как дела?", context: null);
+        var answer = await svc.AskAsync("owner-42", persona, "Как дела?", context: null,
+            ct: default, callerIsPrivate: false);
 
         answer.Should().Be("ответ персоны");
         fake.Calls.Should().Be(1);
         fake.OwnerId.Should().Be("owner-42");
         fake.Effort.Should().Be("high");
+    }
+
+    // --- Сквозная цепочка persona_ask (MCP CallAsync → AskAsync → LearnFromConsultation) ---
+
+    private static readonly string LongQuestion = new('в', 450);
+    private static readonly string LongAnswer = new('о', 300);
+
+    private sealed class LongAnswerOneShot : IOneShotRunner
+    {
+        public string? NormalizeModel(string? model) => model;
+        public Task<string> RunAsync(string prompt, string? model = null, TimeSpan? timeout = null,
+            CancellationToken ct = default, string? ownerId = null, string? effort = null, string? label = null) =>
+            Task.FromResult(LongAnswer);
+        public Task<OneShotResult> RunDetailedAsync(string prompt, string? model = null, TimeSpan? timeout = null,
+            CancellationToken ct = default, string? ownerId = null, string? effort = null, string? label = null) =>
+            throw new NotSupportedException();
+    }
+
+    // Счётчик LLM-извлечения фактов автообучения: единственный потребитель ICheapTextRunner
+    // на пути persona_ask — LearnFromConsultation
+    private sealed class CountingCheap : ICheapTextRunner
+    {
+        public int Calls;
+        public readonly TaskCompletionSource Done = new();
+        public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => true;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref Calls);
+            Done.TrySetResult();
+            return Task.FromResult("[]");
+        }
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref Calls);
+            Done.TrySetResult();
+            return Task.FromResult<string?>("[]");
+        }
+        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, TimeSpan? timeout = null, int? maxTokens = null,
+            object? jsonFormat = null, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref Calls);
+            Done.TrySetResult();
+            return Task.FromResult(new OneShotResult("[]", null, 0));
+        }
+    }
+
+    // Вызывает persona_ask через настоящий MCP-маршрут. headerSession: "route" — тот же чат,
+    // "ghost" — несуществующая сессия в X-Caller-Session-Id. Возвращает (ответ, счётчик извлечения).
+    private static async Task<(string Text, int ExtractCalls)> AskViaMcpAsync(
+        bool routePrivate, string headerSession, bool expectExtraction)
+    {
+        var cheap = new CountingCheap();
+        using var factory = new TestWebApplicationFactory
+        {
+            ExtraServices = s =>
+            {
+                s.RemoveAll<IOneShotRunner>();
+                s.AddSingleton<IOneShotRunner>(new LongAnswerOneShot());
+                s.RemoveAll<ICheapTextRunner>();
+                s.AddSingleton<ICheapTextRunner>(cheap);
+            }
+        };
+        var client = factory.CreateAuthenticatedClient();
+        var ownerId = factory.Services.GetRequiredService<UserStore>()
+            .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+
+        var project = await client.PostAsJsonAsync("/api/projects", new { name = $"pa-{Guid.NewGuid():N}" });
+        project.EnsureSuccessStatusCode();
+        var projectId = (await project.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        var created = await client.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "acceptEdits" });
+        created.EnsureSuccessStatusCode();
+        var chatId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        if (routePrivate)
+            factory.Services.GetRequiredService<SessionManager>().GetOwned(chatId, ownerId)!.PrivateToUserId = ownerId;
+
+        var target = factory.Services.GetRequiredService<PersonaManager>().Create(ownerId,
+            "Цель" + Guid.NewGuid().ToString("N")[..5], null, null, null, null, null,
+            PersonaScope.Project, projectId, null, null, true);
+        target.MemoryEnabled = true;
+
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"/mcp/personas/{chatId}")
+        {
+            Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0", id = 1, method = "tools/call",
+                @params = new { name = "persona_ask", arguments = new { personaId = target.Id, question = LongQuestion } },
+            }), System.Text.Encoding.UTF8, "application/json"),
+        };
+        req.Headers.Add("X-Caller-Session-Id", headerSession == "route" ? chatId : headerSession);
+        var resp = await client.SendAsync(req);
+        resp.EnsureSuccessStatusCode();
+        var result = (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("result");
+        var text = result.GetProperty("content")[0].GetProperty("text").GetString()!;
+
+        if (expectExtraction) await Task.WhenAny(cheap.Done.Task, Task.Delay(5000));
+        else await Task.Delay(400);
+        return (text, cheap.Calls);
+    }
+
+    [Fact]
+    public async Task PersonaAsk_ПриватныйВызыватель_ОтветЕстьИзвлечениеНоль()
+    {
+        var (text, calls) = await AskViaMcpAsync(routePrivate: true, headerSession: "route", expectExtraction: false);
+        text.Should().Be(LongAnswer);
+        calls.Should().Be(0, "факты приватного чата не уходят в общую полку персоны");
+    }
+
+    [Fact]
+    public async Task PersonaAsk_НесуществующаяСессияВЗаголовке_ОтветЕстьИзвлечениеНоль()
+    {
+        var (text, calls) = await AskViaMcpAsync(routePrivate: false, headerSession: "ghost-session", expectExtraction: false);
+        text.Should().Be(LongAnswer);
+        calls.Should().Be(0, "вызыватель не определён — fail-closed");
+    }
+
+    [Fact]
+    public async Task PersonaAsk_ОбщийЧат_ИзвлечениеОдинВызов()
+    {
+        var (text, calls) = await AskViaMcpAsync(routePrivate: false, headerSession: "route", expectExtraction: true);
+        text.Should().Be(LongAnswer);
+        calls.Should().Be(1, "контроль: путь живой, нули выше не тривиальны");
     }
 }

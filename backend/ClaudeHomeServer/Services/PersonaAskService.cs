@@ -20,7 +20,7 @@ public sealed class PersonaAskService(
     ModelAssignmentResolver? assignments = null)
 {
     public async Task<string> AskAsync(string ownerId, Persona persona, string question,
-        string? context, CancellationToken ct = default, bool callerIsPrivate = false)
+        string? context, CancellationToken ct, bool callerIsPrivate)
     {
         var sb = new System.Text.StringBuilder();
         sb.AppendLine(promptBuilder.Build(persona, persona.Model, greeted: false));

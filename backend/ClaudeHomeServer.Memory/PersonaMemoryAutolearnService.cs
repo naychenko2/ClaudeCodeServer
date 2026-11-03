@@ -183,7 +183,7 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
     // fail-closed) — факты вопроса и ответа в память персоны НЕ извлекаются: память проектной
     // персоны подмешивается ко всем чатам проекта, а приватный чат виден только автору.
     public void LearnFromConsultation(Persona persona, string question, string answer,
-        bool callerIsPrivate = false)
+        bool callerIsPrivate)
     {
         if (callerIsPrivate) return;
         if (!persona.MemoryEnabled) return;

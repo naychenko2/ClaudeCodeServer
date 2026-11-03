@@ -1,6 +1,8 @@
 // QA-D2 (дефект e18f03f2): прямая ссылка #/project/{P}/chat/{chatId} должна открывать
 // ровно чат из адреса, а не «последний активный» из локального хранилища (ws:{P}.activeSession).
 // Риск без починки: набранное сообщение уходит в ЧУЖОЙ чат (общий ↔ приватный).
+// QA-D2b (хвост ревью f7b2057b): и когда адрес называет ровно тот чат, что сохранён, а его
+// на сервере нет (удалён) — отказ, но центр не должен оставаться с удалённым чатом под тостом.
 //
 // Окружение node (без jsdom): fakeDom + desktop 1280; StrictMode как в main.tsx; тяжёлые либы —
 // no-op-моки (по образцу workspaceFeatureCenter.test.ts). ChatPanel — записывающая заглушка:
@@ -332,5 +334,55 @@ describe('WorkspacePage: диплинк на чат против сохранё�
     expect(toastMock.calls.some(t => t.includes('недоступен')), `тоста о недоступном чате нет (${JSON.stringify(toastMock.calls)})`).toBe(true);
     expect(chatPanelMock.seen, `под недоступный адрес открылся другой чат (${JSON.stringify(chatPanelMock.seen)})`).not.toContain('chatPriv');
     expect(findNodeByAttr(container, 'data-testid', 'chat-panel-stub'), 'под недоступный адрес открылся другой чат').toBeNull();
+  });
+
+  // Сценарий ревью f7b2057b в пути загрузки: адрес называет ровно сохранённый чат, его нет на
+  // сервере. Финальное состояние держат два механизма: валидация «чата-призрака» на маунте
+  // (WorkspacePage ~1866) и сброс в ветке «чата нет» pending-эффекта. Кейс фиксирует итог —
+  // он остаётся зелёным и без сброса (валидация на маунте справляет сама), но гасит регрессию,
+  // если валидацию когда-нибудь перенесут/снимут.
+  it('QA-D2b: адрес называет тот же чат, что сохранён, и он удалён (путь загрузки) — отказ, в центре пусто', async () => {
+    const win = globalThis as any;
+    // Сохранённый «последний чат» — ровно тот, что называет адрес: инициализатор возвращает
+    // его («тот же чат, что сохранён», строка ~461) — это штатная перезагрузка в том же чате.
+    // На сервере чата больше нет (удалён/доступ отозван): ни списка, ни разрешения pending.
+    wsState.activeSession = chatPriv;
+    // Соседний живой чат в списке — чтобы «никакой не остаётся открытым» проверялся против
+    // реального соседа: после отказа центр не должен съехать и на него.
+    mockSessionList.push(chatGen);
+    mockData.chats.push(chatGen);
+    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatPriv');
+    win.window.location.hash = '#/project/p1/chat/chatPriv';
+    win.window.history.state = null;
+    const { container } = mountWorkspace();
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(toastMock.calls.some(t => t.includes('недоступен')), `тоста о недоступном чате нет (${JSON.stringify(toastMock.calls)})`).toBe(true);
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel-stub'), 'под отказом в центре остался удалённый чат').toBeNull();
+  });
+
+  it('QA-D2b: открытый в приложении чат удалили, и адрес называет его — отказ, центр не остаётся с удалённым', async () => {
+    const win = globalThis as any;
+    // Состояние «внутри приложения»: открыт chatGen (он же сохранённый), сервер его ещё знает —
+    // валидация «чата-призрака» на маунте проходит, состояние валидно.
+    wsState.activeSession = chatGen;
+    mockSessionList.push(chatGen);
+    mockData.chats.push(chatGen);
+    const { container } = mountWorkspace();
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel-stub'), 'состояние «открытый чат» не сформировано').not.toBeNull();
+    // Чат удалили на сервере, и пользователь кликнул по ссылке на него: App пишет канал и
+    // будит уже смонтированную страницу (путь openNotificationUrl / hashchange — QA-D2b).
+    mockData.chats.length = 0;
+    win.sessionStorage.setItem('cc_pending_project_chat', 'p1|chatGen');
+    win.window.dispatchEvent(new Event('cc-pending-project-chat'));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // КЛЮЧЕВОЕ (хвост ревью f7b2057b): отказ есть, а центр НЕ остаётся с удалённым чатом.
+    // Валидация маунта тут не помогает — страница уже смонтирована; без сброса в ветке
+    // «чата нет» ChatPanel продолжает рендериться по activeSession (строка ~2583).
+    // Мутация «убрать setActiveSession reset в ветке !s» — красный.
+    expect(toastMock.calls.some(t => t.includes('недоступен')), `тоста о недоступном чате нет (${JSON.stringify(toastMock.calls)})`).toBe(true);
+    expect(findNodeByAttr(container, 'data-testid', 'chat-panel-stub'), 'под отказом в центре остался удалённый чат').toBeNull();
   });
 });

@@ -648,10 +648,21 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // QA-D2b (вторая половина дефекта e18f03f2): маркер собственного обхода истории «назад/вперёд».
+  // В обходе истории браузер диспатчит popstate и hashchange по порядку — снимок восстанавливает
+  // popstate, и обработчик hashchange ниже должен пропустить ровно этот случай. Прежний гейт по
+  // наличию снимка глушил любую внешнюю смену hash внутри приложения (вставка адреса, клик по
+  // ссылке на чат): адрес меняется, экран остаётся. Маркер гасится нулевым таймером: обход без
+  // hashchange (тот же hash, другое состояние) не должен оставлять его «навсегда».
+  const historyTraversalRef = useRef(false)
+
   // Кнопки «назад/вперёд» браузера: восстанавливаем уровень проекта из снимка истории.
   // Вложенную навигацию (sidebar/chat/file) обрабатывает WorkspacePage из того же popstate.
   useEffect(() => {
     const onPop = (e: PopStateEvent) => {
+      // QA-D2b: наш обход истории — hashchange того же цикла событий относится к нему
+      historyTraversalRef.current = true
+      setTimeout(() => { historyTraversalRef.current = false }, 0)
       const s = e.state as NavSnapshot | null
       // Уход из зоны проектов кнопкой «назад» — та же память режима, что при клике
       // по пилюле (switchHubTab): клик «Проекты» из другого раздела вернёт туда,
@@ -854,9 +865,13 @@ export default function App() {
       if (target.modelsSpend) { requestOpenModelsSpend('quotas'); return }
       if (target.screen === 'project' && target.projectId && target.chatId) {
         // Чат проекта — тем же каналом, что диплинк уведомления (openNotificationUrl):
-        // он кладёт pending и открывает сам чат, а не список чатов проекта. Запись со
-        // снимком — наш же переход «назад/вперёд», его уже восстановил popstate
-        if (getNav()) return
+        // он кладёт pending и открывает сам чат, а не список чатов проекта.
+        // QA-D2b: пропускаем ровно наш обход истории «назад/вперёд» — маркер ставит popstate
+        // того же обхода, он уже восстановил снимок. Внешняя смена hash внутри приложения
+        // (вставка адреса, клик по ссылке на чат) идёт тем же каналом: открывается именно чат
+        // из адреса, как при перезагрузке. Прежний гейт по одному наличию снимка глушил ровно
+        // этот случай: адрес меняется, экран — нет.
+        if (getNav() && historyTraversalRef.current) return
         window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: window.location.hash } }))
         return
       }

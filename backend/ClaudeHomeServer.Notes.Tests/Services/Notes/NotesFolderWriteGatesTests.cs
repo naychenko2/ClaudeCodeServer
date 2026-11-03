@@ -18,6 +18,8 @@ namespace ClaudeHomeServer.Tests.Services;
 /// в новом месте со своей правкой, или правка честным отказом (null → 404) после переезда/сноса.
 /// Плюс гонка «перенос ↔ правка той же заметки» — чувствительна к снятию id-замка с Move
 /// (единственный тест-мутация этого шага): окно правки с холодной моделью длиннее окна переноса.
+/// И гонка «create ↔ create» одного пути: оба успешны, пути разные (суффикс), ни один файл
+/// не затёрт — ожидание по решению постановщика (409 при коллизии имени не требуется).
 ///
 /// Порядок захвата фиксирован (WithWriteGates по возрастанию ключей) — взаимной блокировки нет;
 /// пустой список заметок папки — обычный случай: замок источника один, чужие заметки не тронуты.
@@ -273,6 +275,43 @@ public class NotesFolderWriteGatesTests : IDisposable
             if (updated is not null)
                 File.ReadAllText(newFull).Should().Contain("Новая правка", $"«{title}»: выигравшая правка переехала вместе с заметкой");
         }
+    }
+
+    // ─── Гонка «create ↔ create» одного пути: оба успешны, пути разные, перезаписи нет ───
+
+    /// <summary>
+    /// Ожидание по решению постановщика (409 не требуется): CreateCore разрешает коллизию имени
+    /// суффиксом (NotesService.cs:838-844) — принятое поведение. Два create под одним замком
+    /// источника сериализованы; полуреального состояния нет: обе заметки настоящие, каждая со
+    /// своим телом, пути разные, ни один файл не затёрт другим.
+    /// </summary>
+    [Fact]
+    public async Task Гонка_СозданиеОднойПапкиИЗаголовка_ОбаУспешныБезПерезаписи()
+    {
+        AddMember(_editorId, ProjectRole.Editor);
+        var sut = Service();
+
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var c1 = Task.Run(async () => { await start.Task; return sut.Create(_editorId, new CreateNoteRequest("Двойная", "# Тело первое\n", _projectId, Folder: "Двойные")); });
+        var c2 = Task.Run(async () => { await start.Task; return sut.Create(_editorId, new CreateNoteRequest("Двойная", "# Тело второе\n", _projectId, Folder: "Двойные")); });
+        start.SetResult();
+        var first = await c1;
+        var second = await c2;
+
+        first.Should().NotBeNull();
+        second.Should().NotBeNull();
+        first.Id.Should().NotBe(second.Id, "тот же заголовок не сливает два create в одну заметку");
+
+        // Поиск по id, не по заголовку: без frontmatter заголовок — имя файла (NotesService.cs:243),
+        // и суффикс «-2» виден в заголовке второй заметки. Ищем то, что вернули сами create.
+        var both = Service().GetSummaries(_editorId, _projectId, null)
+            .Where(n => n.Id == first.Id || n.Id == second.Id).ToList();
+        both.Count.Should().Be(2, "оба create — настоящие заметки");
+        both.Select(n => n.Path).Distinct().Count().Should().Be(2, "пути разные — коллизия решена суффиксом");
+
+        var texts = both.Select(n => File.ReadAllText(ProjectFile(n.Path))).ToList();
+        texts.Should().ContainSingle(t => t.Contains("Тело первое"), "первое тело цело");
+        texts.Should().ContainSingle(t => t.Contains("Тело второе"), "второе тело цело — ни один файл не затёрт");
     }
 
     private sealed class NoSessions : ISessionDirectory

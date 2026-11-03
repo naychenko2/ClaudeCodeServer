@@ -1596,22 +1596,33 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     // решает, что значит сбой (для журнала — Warning и обычный коммит). Так корень не
     // ссылается на GitCommandException (сторож RootSubsystemBoundary, доработка QA-D1);
     // тот же образец, что у RefExists в этом классе: защитная проверка гасится внутри вертикали.
+    // Отказ запуска процесса и таймаут — GitCommandException из RunAsync, а не exit-код:
+    // они гасятся здесь же (возврат ревью e706043c: иначе корень ловил бы их только общим
+    // catch журнала и терял группу правок без попытки коммита).
     public async Task<List<string>?> TryIgnoredPathsAsync(
         string? ownerId, string root, IReadOnlyList<string> relPaths, CancellationToken ct = default)
     {
         if (relPaths.Count == 0 || !IsGitRepo(root)) return [];
-        var specs = relPaths.Select(p => ValidateRel(root, p)).ToList();
-        var stdin = string.Join('\0', specs) + '\0';
-        var r = await RunReadAsync(ownerId, root, ["check-ignore", "-z", "--stdin"], stdin: stdin, ct: ct);
-        if (r.ExitCode == 1) return [];
-        if (!r.Ok)
+        try
         {
-            logger?.LogWarning("git check-ignore для {Root} завершился с ошибкой: {Error}",
-                root, FirstLine(r.Stderr) ?? "текста в stderr нет");
+            var specs = relPaths.Select(p => ValidateRel(root, p)).ToList();
+            var stdin = string.Join('\0', specs) + '\0';
+            var r = await RunReadAsync(ownerId, root, ["check-ignore", "-z", "--stdin"], stdin: stdin, ct: ct);
+            if (r.ExitCode == 1) return [];
+            if (!r.Ok)
+            {
+                logger?.LogWarning("git check-ignore для {Root} завершился с ошибкой: {Error}",
+                    root, FirstLine(r.Stderr) ?? "текста в stderr нет");
+                return null;
+            }
+            return r.Stdout.Split('\0', StringSplitOptions.RemoveEmptyEntries)
+                .Select(p => p.Trim()).Where(p => p.Length > 0).ToList();
+        }
+        catch (GitCommandException ex)
+        {
+            logger?.LogWarning(ex, "git check-ignore для {Root} не состоялся: {Error}", root, ex.Message);
             return null;
         }
-        return r.Stdout.Split('\0', StringSplitOptions.RemoveEmptyEntries)
-            .Select(p => p.Trim()).Where(p => p.Length > 0).ToList();
     }
 
     // Подключить/обновить origin (идемпотентно)

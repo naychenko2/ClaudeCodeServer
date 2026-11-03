@@ -1586,6 +1586,48 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
             "сбой назван в логе вертикали — вызывающий его не теряет");
     }
 
+    // Доработка QA-D1 (возврат ревью e706043c, п.1): тот же защитный контракт для отказа
+    // ЗАПУСКА процесса — RunAsync бросает GitCommandException сам (не exit-код), и он не
+    // должен уходить наружу: null + Warning в логе вертикали.
+    [Fact]
+    public async Task TryIgnoredPathsAsync_ОтказЗапускаGit_ВозвращаетNull_IWarningВЛоге()
+    {
+        var log = new List<(LogLevel Level, string Message)>();
+        var git = new GitService(new UnstartableCheckIgnoreFactory(), new RecordingLogger<GitService>(log));
+
+        (await git.TryIgnoredPathsAsync(null, _repo, ["a.txt"])).Should().BeNull(
+            "отказ запуска check-ignore — признак несостоявшейся проверки, не исключение наружу");
+
+        log.Should().Contain(l => l.Level == LogLevel.Warning && l.Message.Contains("check-ignore"),
+            "сбой назван в логе вертикали — вызывающий его не теряет");
+    }
+
+    // Лончер, который НЕ запускает ТОЛЬКО check-ignore: Start бросает — RunAsync превращает
+    // это в GitCommandException («Не удалось запустить git»). Модель отказа запуска процесса
+    // (git недоступен в песочнице) для одной команды; status/add/commit не тронуты.
+    private sealed class UnstartableCheckIgnoreFactory : ILauncherFactory
+    {
+        private sealed class Wrapping : IProcessLauncher
+        {
+            private static readonly IProcessLauncher Inner = LocalProcessRunner.Instance;
+            public bool IsSandboxed => Inner.IsSandboxed;
+            public bool TargetIsWindows => Inner.TargetIsWindows;
+            public IPathMapper Paths => Inner.Paths;
+            public string ClaudeCliCommand => Inner.ClaudeCliCommand;
+            public string HostTempDir => Inner.HostTempDir;
+            public string? McpApiUrlOverride => Inner.McpApiUrlOverride;
+            public Process Start(ProcessSpec spec) => spec.Args.Contains("check-ignore")
+                ? throw new InvalidOperationException("git недоступен (отказ запуска процесса)")
+                : Inner.Start(spec);
+            public void Kill(Process process, string? turnId) => Inner.Kill(process, turnId);
+            public int EstimateCommandLineLength(ProcessSpec spec) => Inner.EstimateCommandLineLength(spec);
+        }
+
+        public IProcessLauncher Local { get; } = new Wrapping();
+        public IProcessLauncher ForOwner(string? ownerId) => Local;
+        public IProcessLauncher ForProject(ClaudeHomeServer.Models.Project project) => Local;
+    }
+
     // Лончер, который роняет ТОЛЬКО check-ignore: тот же git, но с core.excludesFile,
     // указывающим на каталог, — «fatal: cannot use … as an exclude file», exit 128
     // (тот же аранжмен, что в HumanEditCommitterTests: status/add/commit не тронуты).

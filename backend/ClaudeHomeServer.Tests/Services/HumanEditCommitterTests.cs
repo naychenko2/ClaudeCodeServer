@@ -52,6 +52,33 @@ public class HumanEditCommitterTests : IDisposable
         public IProcessLauncher ForProject(Project project) => Local;
     }
 
+    // Лончер, который НЕ запускает ТОЛЬКО check-ignore: Start бросает — RunAsync превращает
+    // это в GitCommandException («Не удалось запустить git»). Модель отказа запуска процесса
+    // (возврат ревью e706043c, п.1): раньше это исключение вертикали ловилось только общим
+    // catch FlushAsync и уносило группу правок без попытки коммита. status/add/commit не тронуты.
+    private sealed class UnstartableCheckIgnoreFactory : ILauncherFactory
+    {
+        private sealed class Wrapping : IProcessLauncher
+        {
+            private static readonly IProcessLauncher Inner = LocalProcessRunner.Instance;
+            public bool IsSandboxed => Inner.IsSandboxed;
+            public bool TargetIsWindows => Inner.TargetIsWindows;
+            public IPathMapper Paths => Inner.Paths;
+            public string ClaudeCliCommand => Inner.ClaudeCliCommand;
+            public string HostTempDir => Inner.HostTempDir;
+            public string? McpApiUrlOverride => Inner.McpApiUrlOverride;
+            public Process Start(ProcessSpec spec) => spec.Args.Contains("check-ignore")
+                ? throw new InvalidOperationException("git недоступен (отказ запуска процесса)")
+                : Inner.Start(spec);
+            public void Kill(Process process, string? turnId) => Inner.Kill(process, turnId);
+            public int EstimateCommandLineLength(ProcessSpec spec) => Inner.EstimateCommandLineLength(spec);
+        }
+
+        public IProcessLauncher Local { get; } = new Wrapping();
+        public IProcessLauncher ForOwner(string? ownerId) => Local;
+        public IProcessLauncher ForProject(Project project) => Local;
+    }
+
     private sealed class ManualClock : TimeProvider
     {
         private DateTimeOffset _now = new(2026, 11, 2, 12, 0, 0, TimeSpan.Zero);
@@ -570,6 +597,34 @@ public class HumanEditCommitterTests : IDisposable
 
         // Сбой назван в Warning…
         log.Should().Contain(l => l.Level == LogLevel.Warning && l.Message.Contains("Проверка .gitignore"));
+        // …и коммит взял правку: путь не под игнором, pathspec обычный.
+        var files = (await _git.RunAsync(null, _repo, ["show", "--name-only", "--format=", "HEAD"])).Stdout.Trim();
+        files.Should().Be("plain.md");
+        (await LogAsync()).Should().Contain(human.Id);
+    }
+
+    // Возврат ревью e706043c (п.1): отказ ЗАПУСКА check-ignore (GitCommandException из
+    // RunAsync, не exit-код) не должен уносить группу правок: раньше его ловил только
+    // общий catch FlushAsync — коммита не было вовсе. Теперь сбой гасится в вертикали
+    // (Warning там же), корень отвечает своим Warning и коммитит как обычно.
+    [Fact]
+    public async Task Отказ_запуска_check_ignore_не_уносит_группу_правок_Warning_и_коммит()
+    {
+        var (project, human) = await SetupAsync(shared: true);
+        var rootLog = new List<(LogLevel Level, string Message)>();
+        var gitLog = new List<(LogLevel Level, string Message)>();
+        var sut = new HumanEditCommitter(_projects, _users,
+            new GitService(new UnstartableCheckIgnoreFactory(), new RecordingLogger<GitService>(gitLog)),
+            _config, new RecordingLogger<HumanEditCommitter>(rootLog), _clock);
+
+        await File.WriteAllTextAsync(Path.Combine(_repo, "plain.md"), "правка человека\n");
+        sut.Record(project.Id, _repo, "plain.md", human.Id);
+        await sut.FlushAsync(all: true);
+
+        // Сбой назван в логе вертикали…
+        gitLog.Should().Contain(l => l.Level == LogLevel.Warning && l.Message.Contains("check-ignore"));
+        // …и в Warning корня…
+        rootLog.Should().Contain(l => l.Level == LogLevel.Warning && l.Message.Contains("Проверка .gitignore"));
         // …и коммит взял правку: путь не под игнором, pathspec обычный.
         var files = (await _git.RunAsync(null, _repo, ["show", "--name-only", "--format=", "HEAD"])).Stdout.Trim();
         files.Should().Be("plain.md");

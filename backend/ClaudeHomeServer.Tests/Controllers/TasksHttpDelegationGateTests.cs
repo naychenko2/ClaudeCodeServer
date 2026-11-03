@@ -245,6 +245,9 @@ public class TasksHttpDelegationGateTests : IClassFixture<TasksHttpDelegationGat
     /// <summary>
     /// Живой сценарий приёмки «создание задачи работает»: tools/call tasks_create на обычном
     /// ходу создаёт задачу в проекте чата, и она видна через REST того же владельца.
+    /// Происхождение (sourceSessionId) проверяется в пути владельца: ответ MCP-вызова без актора
+    /// хода маскирует ссылки на чат (S2d-4b2: актор неизвестен — «не видит», ForActorMasked →
+    /// TaskView.MaskForeignChats), а запись задачи источник помнит и владелец видит его по REST.
     /// </summary>
     [Fact]
     public async Task СозданиеЗадачи_ЖивымВызовом_Работает()
@@ -260,8 +263,17 @@ public class TasksHttpDelegationGateTests : IClassFixture<TasksHttpDelegationGat
         task.GetProperty("title").GetString().Should().Be("Задача из http-тулсета");
         task.GetProperty("projectId").GetString().Should().Be(projectId,
             "проект по умолчанию — проект чата-вызывателя");
-        // Происхождение: задача из чата помнит его id (sourceSessionId)
-        task.GetProperty("sourceSessionId").GetString().Should().Be(sessionId);
+        // Ответ вызова без актора хода: id чата обнулён, рядом форма-заглушка (текущий контракт
+        // маски — TaskChatRefMcpAndReportTests «актор неизвестен — не видит»)
+        task.GetProperty("sourceSessionId").ValueKind.Should().Be(JsonValueKind.Null,
+            "вызов без актора хода: id своего чата в ответе маскируется");
+        task.GetProperty("sourceChat").GetProperty("private").GetBoolean().Should().BeTrue();
+        // Происхождение записи — в пути владельца: его REST свой чат видит и отдаёт полный id
+        var id = task.GetProperty("id").GetString()!;
+        var viaOwner = JsonSerializer.Deserialize<JsonElement>(
+            await (await Client.GetAsync($"/api/tasks/{id}")).Content.ReadAsStringAsync());
+        viaOwner.GetProperty("sourceSessionId").GetString().Should().Be(sessionId,
+            "задача из чата помнит его id (sourceSessionId)");
     }
 
     // ── Закрытие эпика фичи — только человеком ──────────────────────────────

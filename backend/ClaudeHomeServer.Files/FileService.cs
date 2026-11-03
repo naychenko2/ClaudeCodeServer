@@ -215,7 +215,13 @@ public class FileService(
     // меняется (WebDAV/MCP/ProjectFiles, см. doc List); пустая строка — без зрителя: любое private
     // закрыто (fail-closed). TreeExcludes режет ОБХОД, а не названный старт: путь внутрь
     // .cc-attachments вызывающий назвал явно — фильтр по записям, не по стартовому каталогу.
-    public IEnumerable<FileEntry> Tree(string rootPath, string relativePath = "", bool showHidden = false,
+    // virtual — тестовый шов (S2d-6b-8, хвост ревью R-S2d-6b-6): передача зрителя в обход
+    // (KnowledgeController.IndexFolder) не наблюдаема извне — из разрешённых IndexFolder стартов
+    // чужое private фильтром не достигается (обход ниже .cc-attachments не спускается), и мутация
+    // «снять аргумент UserId» не краснит ни один поведенческий тест (проба А ревьюера: 6/6 зелёные).
+    // Белый тест на шов требует подменного FileService, пишущего переданного зрителя, — тот же
+    // приём, что virtual-шов у EgressConnector/MockupCatalog.
+    public virtual IEnumerable<FileEntry> Tree(string rootPath, string relativePath = "", bool showHidden = false,
         string? viewerUserId = null)
     {
         var start = SafeJoin(rootPath, relativePath);

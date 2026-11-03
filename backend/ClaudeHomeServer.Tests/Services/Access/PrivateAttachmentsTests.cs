@@ -123,4 +123,38 @@ public sealed class PrivateAttachmentsTests
         // общее без идентичности — как раньше
         PrivateAttachments.IsForeign($".cc-attachments/{g}/файл.txt", null).Should().BeFalse();
     }
+
+    // --- IsAttachmentsContainer: контейнеры closed-поддерева БЕЗ корня (хвост ревью R-S2d-6b-6, п.2) ---
+    // Предикат публичный и общий (IndexFolder, S2d-6b-6), раньше был покрыт только косвенно
+    // через контроллеры. Отличен от IsPrivateContainerPath ровно на корне: здесь корень — НЕ
+    // контейнер (индексация корня — штатная цель IndexFolder).
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(".")]
+    [InlineData("./")]
+    [InlineData("docs/..")] // обход к корню — тот же корень, не контейнер здесь
+    [InlineData(".cc-attachments/..")] // «..» выталкивает сам .cc-attachments → корень → false
+    [InlineData("private")] // без префикса вложений — обычный путь
+    [InlineData(".cc-attachments/x/y")] // {guid}-каталог общей раскладки — не контейнер
+    [InlineData(".cc-attachments/private/x")] // каталог автора — не контейнер (с ним как раньше)
+    [InlineData("docs/a.md")]
+    public void IsAttachmentsContainer_КореньИПрочиеПути_Ложь(string? path) =>
+        PrivateAttachments.IsAttachmentsContainer(path).Should().BeFalse();
+
+    [Theory]
+    [InlineData(".cc-attachments")]
+    [InlineData(".cc-attachments/")] // завершающий разделитель — тот же контейнер
+    [InlineData(".CC-ATTACHMENTS")] // регистр имён каталогов нормализуется
+    [InlineData(".cc-attachments/private")]
+    [InlineData(".CC-Attachments/PRIVATE")]
+    [InlineData(".cc-attachments\\private")] // обратные слеши
+    [InlineData(".cc-attachments//private")] // двойной разделитель
+    [InlineData("./.cc-attachments/./private")] // «.» и пустые сегменты
+    [InlineData(".cc-attachments%2Fprivate")] // %-экранированный разделитель
+    [InlineData("%2Ecc-attachments")] // %2E — тот же «.» в начале имени
+    [InlineData(".cc-attachments/private/x/..")] // «..» выталкивает каталог автора → private-корень
+    public void IsAttachmentsContainer_Контейнеры_Истинно_ОбходыИРегистрНормализуются(string path) =>
+        PrivateAttachments.IsAttachmentsContainer(path).Should().BeTrue();
 }

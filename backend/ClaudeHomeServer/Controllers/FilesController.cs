@@ -1344,6 +1344,12 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     {
         try
         {
+            // S2d-6b-8 (хвост ревью R-S2d-6b-5, п.1): ручка откатывает файл через git по клиентскому
+            // пути — та же пишущая операция, что Revert. Раньше инвариант «ни одна пишущая ручка не
+            // меняет файл под чужим private» держился здесь только git-исключением .cc-attachments
+            // (git не знает такого pathspec → отказ); теперь — тем же гейтом, до снятия edit-ключа
+            // и до RevertFile. Своё private автора — открыто, как в Revert.
+            if (ForeignPrivateDenied(path) is { } denied) return denied;
             var root = GetRoot(projectId);
             if (_activeEditKeys.TryRemove($"{projectId}/{path}", out var editKey))
                 _discardedKeys.TryAdd(editKey, 0);

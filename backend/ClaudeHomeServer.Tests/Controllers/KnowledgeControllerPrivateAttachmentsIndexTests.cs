@@ -38,6 +38,10 @@ namespace ClaudeHomeServer.Tests.Controllers;
 ///    проекта — НЕ контейнер для индексации (обход TreeExcludes в .cc-attachments не спускается):
 ///    индексация корня и любых папок — как раньше, поэтому предикат без корня (IsAttachmentsContainer).
 /// 4. Обычные папки и общая раскладка .cc-attachments/{guid}/… — без изменений.
+/// 5. (хвост ревью R-S2d-6b-6) Белый тест на шов передачи зрителя: подменный FileService пишет
+///    переданный viewerUserId обхода — тест требует id вызывающего; мутация «снять аргумент»
+///    краснит этот тест (поведенческие тесты его не ловят: из разрешённых стартов фильтр
+///    чужого private недостижим).
 ///
 /// Стенд бесхостовый (образец FilesControllerPrivateAttachmentsReadTests): контроллер собирается
 /// напрямую с настоящими ProjectManager/FileService/WorkspaceKnowledgeStore/ProjectKnowledgeSyncService;
@@ -173,14 +177,33 @@ public sealed class KnowledgeControllerPrivateAttachmentsIndexTests : IDisposabl
     /// <summary>Общее вложение чата — прежняя раскладка .cc-attachments/{guid}/{имя}.</summary>
     private static string SharedAttachmentOf(string name) => AttachmentsGitExclude.AttachmentPath(name)!;
 
-    private KnowledgeController As(string userId, string projectId)
+    /// <summary>Контроллер от имени зрителя; filesOverride — подменный FileService
+    /// (записывающий обход для теста на шов), без него — общий стендовый.</summary>
+    private KnowledgeController As(string userId, string projectId, FileService? filesOverride = null)
     {
         var http = new DefaultHttpContext
         {
             User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", userId)])),
         };
-        return new KnowledgeController(_projects, _knowledge, _files, _wkStore, _sync, _hub)
+        return new KnowledgeController(_projects, _knowledge, filesOverride ?? _files, _wkStore, _sync, _hub)
         { ControllerContext = new ControllerContext { HttpContext = http } };
+    }
+
+    /// <summary>Подменный FileService: пишет каждый переданный viewerUserId обхода Tree
+    /// (шов — virtual-метод, см. комментарий у FileService.Tree, S2d-6b-8).</summary>
+    private sealed class RecordingTreeFileService : FileService
+    {
+        public readonly List<string?> Viewers = new();
+
+        public RecordingTreeFileService(IProjectManager projects)
+            : base(null, projects, NullLogger<FileService>.Instance) { }
+
+        public override IEnumerable<FileEntry> Tree(string rootPath, string relativePath, bool showHidden,
+            string? viewerUserId)
+        {
+            Viewers.Add(viewerUserId);
+            return base.Tree(rootPath, relativePath, showHidden, viewerUserId);
+        }
     }
 
     /// <summary>Что реально ушло в синк знаний: имена документов create_by_text (сбрасывается между вызовами).</summary>
@@ -345,6 +368,46 @@ public sealed class KnowledgeControllerPrivateAttachmentsIndexTests : IDisposabl
         (await author.IndexFile(projectId, new IndexFileRequest(plain)))
             .Should().BeOfType<OkObjectResult>();
         IndexedNames().Should().Equal(new[] { authorFile, plain }, "обычный файл — без изменений");
+    }
+
+    // --- 7. белый тест на шов: обход IndexFolder идёт от имени зрителя (хвост ревью R-S2d-6b-6) ---
+
+    /// <summary>
+    /// Фильтр чужого private в FileService.Tree работает только при непустом зрителе, а из
+    /// разрешённых IndexFolder стартов он недостижим: обход ниже .cc-attachments не спускается
+    /// (TreeExcludes), названный чужой путь ловит гейт. Поэтому снятие аргумента UserId не краснит
+    /// ни один поведенческий тест (проба А ревьюера R-S2d-6b-6: 6/6 зелёные), и строка передачи
+    /// зрителя держалась без теста. Этот тест — на сам шов: подменный FileService пишет переданного
+    /// зрителя, тест требует id вызывающего в каждой обходящей ветке. Мутация «снять аргумент
+    /// UserId из files.Tree» краснит этот тест; поведение при этом не меняется — и не должно.
+    /// </summary>
+    [Fact]
+    public async Task ИндексацияПередаётЗрителяВОбход_TreeПолучаетНепустойIdВызывающего()
+    {
+        var (projectId, root) = Project();
+        var plain = "docs/обычный.md";
+        var ownFile = PrivateOf(_authorId, "своё.md");
+        Write(root, plain, "обычное");
+        Write(root, ownFile, "своё");
+        Write(root, PrivateOf(_editorId, "чужое.md"), "чужое");
+
+        var recorder = new RecordingTreeFileService(_projects);
+        var c = As(_authorId, projectId, recorder);
+
+        // Штатная цель индексации — корень проекта: обход обязан идти от имени зрителя
+        _dify.Clear();
+        (await c.IndexFolder(projectId, new IndexFileRequest(""))).Should().BeOfType<OkObjectResult>();
+        recorder.Viewers.Should().Equal(new[] { _authorId },
+            "обход корня передан с id зрителя: фильтр чужого private включён");
+        IndexedNames().Should().Equal(new[] { plain }, "поведение не изменилось: только обычные файлы");
+
+        // Вторая штатная цель — свой private-каталог автора: тот же зритель, своё индексируется
+        _dify.Clear();
+        (await c.IndexFolder(projectId, new IndexFileRequest($"{TreeExcludes.AttachmentsDir}/private/{_authorId}")))
+            .Should().BeOfType<OkObjectResult>();
+        recorder.Viewers.Should().Equal(new[] { _authorId, _authorId },
+            "обход своего каталога — тоже от имени зрителя");
+        IndexedNames().Should().Equal(new[] { ownFile }, "своё индексируется, чужое — нет");
     }
 
     private sealed class NoopKnowledgeNotifier : IKnowledgeHubNotifier

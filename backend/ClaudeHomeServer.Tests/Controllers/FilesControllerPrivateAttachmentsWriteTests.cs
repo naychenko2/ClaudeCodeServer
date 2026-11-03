@@ -7,6 +7,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Docs;
 using ClaudeHomeServer.Services.Files;
 using ClaudeHomeServer.Services.Llm;
@@ -27,8 +28,9 @@ namespace ClaudeHomeServer.Tests.Controllers;
 ///
 /// 1. Каждая пишущая ручка FilesController (SaveContent, Create, mkdir, Rename — ОБА пути,
 ///    Delete файла и папки, Upload — каталог назначения, ToMarkdown — targetDir, Revert,
-///    SaveFromUrl) на пути под чужим автором — 404 ДО любого эффекта: до замка пути, до
-///    CreateDirectory, до сетевой загрузки. Файл жертвы цел, побочных каталогов нет.
+///    SaveFromUrl, office-discard) на пути под чужим автором — 404 ДО любого эффекта: до замка
+///    пути, до CreateDirectory, до сетевой загрузки, до снятия edit-ключа и до git-отката.
+///    Файл жертвы цел, побочных каталогов нет.
 /// 2. Контейнеры closed-поддерева (корень проекта, .cc-attachments, .cc-attachments/private)
 ///    для Rename/Delete — 404 и владельцу: операция над контейнером относится ко всему
 ///    private- поддереву (тот же предикат PrivateAttachments.IsPrivateContainerPath, что у
@@ -36,6 +38,11 @@ namespace ClaudeHomeServer.Tests.Controllers;
 ///    {guid}-каталоги — не контейнеры: с ними как раньше.
 /// 3. Автор своего private, обычные файлы и общее вложение (.cc-attachments/{guid}/…) —
 ///    как раньше: гейт смотрит на автора пути, а не на папку.
+///
+/// S2d-6b-8 (хвосты ревью R-S2d-6b-5, п.1 и п.3): office-discard закрыт тем же гейтом — с
+/// записывающим git-швом, доказывающим «отказ ДО RevertFile» (без гейта откат был бы попытан);
+/// ветка SaveContent с If-Match проверяется с ВЕРНЫМ тегом файла-жертвы: без гейта этот If-Match
+/// совпал бы и запись состоялась — то есть отказ даёт именно гейт, а не расхождение хеша.
 ///
 /// Стенд бесхостовый (образец FilesControllerPrivateAttachmentsReadTests): контроллер
 /// собирается напрямую. Три разных человека: владелец проекта, другой его участник и автор
@@ -142,15 +149,21 @@ public sealed class FilesControllerPrivateAttachmentsWriteTests : IDisposable
     /// <summary>Общее вложение чата — прежняя раскладка .cc-attachments/{guid}/{имя}.</summary>
     private static string SharedAttachmentOf(string name) => AttachmentsGitExclude.AttachmentPath(name)!;
 
-    private FilesController As(string userId, string projectId)
+    /// <summary>
+    /// Контроллер от имени зрителя. ifMatch — заголовок If-Match на запросе (ветка «сравнить и
+    /// записать» SaveContent); filesOverride — подменный FileService (напр. с записывающим git-швом
+    /// для office-discard); без него — общий стендовый FileService, как во всех прежних тестах класса.
+    /// </summary>
+    private FilesController As(string userId, string projectId, string? ifMatch = null, FileService? filesOverride = null)
     {
         var tenant = _projects.GetById(projectId)!.OwnerId!;
         var http = new DefaultHttpContext
         {
             User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", userId)])),
         };
+        if (ifMatch is not null) http.Request.Headers["If-Match"] = ifMatch;
         http.SetRequestScope(new RequestScope(userId, tenant, userId == tenant ? ProjectRole.Owner : ProjectRole.Editor));
-        return new FilesController(_files, _projects, _access, _sync, _config, _jwt,
+        return new FilesController(filesOverride ?? _files, _projects, _access, _sync, _config, _jwt,
             NullLogger<FilesController>.Instance, DocAi(), null!, _locator)
         { ControllerContext = new ControllerContext { HttpContext = http } };
     }
@@ -427,6 +440,102 @@ public sealed class FilesControllerPrivateAttachmentsWriteTests : IDisposable
         (await anon.SaveContent(projectId, "обычный.txt", new SaveContentRequest("правка")))
             .Should().BeOfType<OkResult>("пути вне closed-поддерева — без изменений");
         File.ReadAllText(plain).Should().Be("правка");
+    }
+
+    // --- 5. office-discard: чужое private — 404 ДО RevertFile; своё — доходит до git-ветки (хвост R-S2d-6b-5, п.1) ---
+
+    /// <summary>
+    /// Раньше инвариант для этой ручки держался только git-исключением .cc-attachments (git не знает
+    /// такого pathspec → откат не происходит). Чтобы «отказ ДО RevertFile» был наблюдаем, а не выведен
+    /// из кода: корень помечен .git (признак IsGitRepo), а вместо git — записывающий шов. Снятый гейт
+    /// (мутация) доводит чужой путь до DiscardAsync — запись попытки делает тест красным.
+    /// </summary>
+    [Fact]
+    public void ЧужоеPrivate_OfficeDiscard_404_ДоRevertFile_СвоёДоходитДоGit()
+    {
+        var (projectId, root) = Project();
+        var victimFile = ForeignFile("жертва.txt");
+        var victimAbs = Write(root, victimFile, "целое содержимое");
+        var ownFile = $"{AuthorPrivateRoot()}/{Guid.NewGuid():N}/своё.txt";
+        var ownAbs = Write(root, ownFile, "своё");
+        Directory.CreateDirectory(Path.Combine(root, ".git")); // признак git-репо для IsGitRepo
+
+        var git = new RecordingGit();
+        var filesWithGit = new FileService(git, _projects, NullLogger<FileService>.Instance);
+
+        foreach (var viewer in new[] { _ownerId, _editorId })
+        {
+            var c = As(viewer, projectId, filesOverride: filesWithGit);
+            c.OfficeDiscard(projectId, victimFile).Should().BeOfType<NotFoundResult>(
+                $"{viewer}: office-discard чужого private — 404, а не доведённый до конца «откат не удался»");
+            git.DiscardCalls.Should().BeEmpty($"{viewer}: отказ стоит до RevertFile — git-откат не был даже попытан");
+            File.ReadAllText(victimAbs).Should().Be("целое содержимое", "отказанный discard не тронул файл жертвы");
+        }
+
+        // Своё private автора — как раньше: гейт пропускает, цель доходит до git-ветки
+        var asAuthor = As(_authorId, projectId, filesOverride: filesWithGit);
+        asAuthor.OfficeDiscard(projectId, ownFile).Should().BeOfType<OkResult>("свой office-discard открыт");
+        git.DiscardCalls.Should().Equal(new[] { ownFile }, "своя цель дошла до git-ветки, как до шага");
+        File.ReadAllText(ownAbs).Should().Be("своё");
+    }
+
+    // --- 6. SaveContent с If-Match — тоже за гейтом (хвост R-S2d-6b-5, п.3) ---
+
+    /// <summary>
+    /// Ветка If-Match раньше тестом класса не прогонялась. If-Match берётся ВЕРНЫЙ (тот же
+    /// канонический хеш содержимого, что выдаёт GET): без гейта он совпал бы с версией файла и
+    /// запись состоялась бы (200, файл изменён) — краснит тест именно снятие гейта, а не подбор
+    /// хеша. Своё private под If-Match — открыто: «сравнить и записать» не сломано гейтом.
+    /// </summary>
+    [Fact]
+    public async Task ЧужоеPrivate_SaveContentСIfMatch_404_ФайлЦел_СвойПодIfMatchОткрыт()
+    {
+        var (projectId, root) = Project();
+        var victimFile = ForeignFile("жертва.txt");
+        var victimAbs = Write(root, victimFile, "целое содержимое");
+        var etag = "\"" + Sha256Hex("целое содержимое") + "\"";
+
+        foreach (var viewer in new[] { _ownerId, _editorId })
+        {
+            var c = As(viewer, projectId, ifMatch: etag);
+            (await c.SaveContent(projectId, victimFile, new SaveContentRequest("новая правка")))
+                .Should().BeOfType<NotFoundResult>(
+                    $"{viewer}: ветка с If-Match — за тем же гейтом: 404 до сверки хеша и до замка пути");
+            File.ReadAllText(victimAbs).Should().Be("целое содержимое", "отказанная If-Match запись не тронула файл");
+        }
+
+        var (ownProject, ownRoot) = PersonalProjectOf(_authorId);
+        var own = $"{AuthorPrivateRoot()}/{Guid.NewGuid():N}/своё.txt";
+        var ownAbs = Write(ownRoot, own, "своё");
+        var a = As(_authorId, ownProject, ifMatch: "\"" + Sha256Hex("своё") + "\"");
+        (await a.SaveContent(ownProject, own, new SaveContentRequest("своя правка")))
+            .Should().BeOfType<OkResult>("своя правка по верному тегу — ровно как раньше");
+        File.ReadAllText(ownAbs).Should().Be("своя правка");
+    }
+
+    /// <summary>Тот же канонический хеш текста, что считает GET/сверка If-Match (образец Sha256Hex
+    /// из FilesControllerTests): UTF-8 без BOM → SHA-256, hex в нижнем регистре.</summary>
+    private static string Sha256Hex(string content) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(content)))
+            .ToLowerInvariant();
+
+    /// <summary>Записывающий git-шов: RevertFile при наличии git зовёт только DiscardAsync —
+    /// список попыток и есть доказательство «дошла операция до отката / не дошла».</summary>
+    private sealed class RecordingGit : IGitWorkingTree
+    {
+        public readonly List<string> DiscardCalls = new();
+
+        public Task DiscardAsync(string? ownerId, string root, string relPath, CancellationToken ct = default)
+        {
+            DiscardCalls.Add(relPath);
+            return Task.CompletedTask;
+        }
+
+        public Task<GitStatusDto> StatusPathsAsync(string? ownerId, string root, CancellationToken ct = default) =>
+            Task.FromResult(new GitStatusDto(true, null, null, 0, 0, false, [], [], []));
+
+        public Task<string?> DiffFileVsHeadAsync(string? ownerId, string root, string relPath, CancellationToken ct = default) =>
+            Task.FromResult<string?>(null);
     }
 
     private sealed class NoSessions : ISessionDirectory

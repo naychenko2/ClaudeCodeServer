@@ -135,7 +135,7 @@ public class NotesController : ControllerBase
     {
         try
         {
-            var note = _notes.Annotate(UserId, req);
+            var note = _notes.Annotate(UserId, req, byHuman: true);
             await Broadcast("created", note.Id, note.Source);
             return Ok(note);
         }
@@ -165,7 +165,7 @@ public class NotesController : ControllerBase
     {
         try
         {
-            var note = _notes.RepinAnnotation(UserId, id, selection);
+            var note = _notes.RepinAnnotation(UserId, id, selection, byHuman: true);
             await Broadcast("updated", id, note.Source);
             return Ok(note);
         }
@@ -182,7 +182,7 @@ public class NotesController : ControllerBase
     {
         try
         {
-            var note = _notes.Reply(UserId, id, req);
+            var note = _notes.Reply(UserId, id, req, byHuman: true);
             await Broadcast("created", note.Id, note.Source);
             return Ok(note);
         }
@@ -207,7 +207,7 @@ public class NotesController : ControllerBase
     {
         try
         {
-            var note = _notes.SetAnnotationStatus(UserId, id, req.Status);
+            var note = _notes.SetAnnotationStatus(UserId, id, req.Status, byHuman: true);
             if (note is null) return NotFound();
             await Broadcast("updated", id, note.Source);
             return Ok(note);
@@ -450,7 +450,7 @@ public class NotesController : ControllerBase
             return BadRequest("Не задан заголовок цели");
         try
         {
-            var note = _notes.LinkMention(UserId, id, req.TargetTitle);
+            var note = _notes.LinkMention(UserId, id, req.TargetTitle, byHuman: true);
             if (note is null) return NotFound();
             await Broadcast("updated", note.Id, note.Source);
             return Ok(note);

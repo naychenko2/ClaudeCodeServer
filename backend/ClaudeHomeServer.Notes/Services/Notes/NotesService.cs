@@ -963,10 +963,10 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // в [[…]]; при отличии регистра исходный текст сохраняется как алиас.
     // S2c-12: это правка содержимого заметки — под тем же замком на её id, что Update/Delete:
     // гонка «связать» с правкой той же заметки сериализована, потерянной правки нет.
-    public NoteDetail? LinkMention(string userId, string id, string targetTitle) =>
-        WithWriteGates(() => LinkMentionCore(userId, id, targetTitle), id);
+    public NoteDetail? LinkMention(string userId, string id, string targetTitle, bool byHuman = false) =>
+        WithWriteGates(() => LinkMentionCore(userId, id, targetTitle, byHuman), id);
 
-    private NoteDetail? LinkMentionCore(string userId, string id, string targetTitle)
+    private NoteDetail? LinkMentionCore(string userId, string id, string targetTitle, bool byHuman)
     {
         // Право записи — как в Move/Update: ResolveRoot с правым WriteContent (S2c-7).
         // Без этой проверки «связать» переписывало файл проекта, видимого читателю лишь
@@ -988,6 +988,9 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             : $"[[{targetTitle}|{original}]]";
         content = content[..at] + replacement + content[(at + targetTitle.Length)..];
         File.WriteAllText(note.FullPath, content, new UTF8Encoding(false));
+        // S3-3c1 доработка 1 (вердикт ea994f7c): «связать» — правка содержимого заметки,
+        // под её замком — в журнал; исчезнувшее упоминание (выход выше, без записи) — молчит.
+        if (byHuman) RecordHumanEdit(userId, sourceKey, note.FullPath);
 
         // S2c-11: это правка содержимого чужой заметки — сбрасывает и модель арендатора
         InvalidateWrite(userId, sourceKey);
@@ -1147,15 +1150,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
         var oldFull = SafePath.Join(rootDir, oldFolder);
         var newFull = SafePath.Join(rootDir, newFolder);
-        if (!Directory.Exists(oldFull)) throw new KeyNotFoundException("Папка не найдена");
-        if (Directory.Exists(newFull) || File.Exists(newFull))
-            throw new InvalidOperationException($"«{newFolder}» уже существует");
-
-        // Заметки папки — по скану диска под замком: после взятия замка источника их никто не
-        // создаёт и не удаляет, а их id уже взяты (список выше) — состав под замком стабилен.
-        // F-6a: не через модель — модель могла не увидеть заметку, созданную до этого окна;
-        // маппинг обязан соответствовать тому, что реально переезжает. Нечитаемый .md — не
-        // заметка и не в маппинге (тот же пропуск, что у модели и у списка замков выше).
+        // МУТАЦИЯ B (проба ревьюера): запись новых путей ДО проверки источника и ДО переноса
         var before = new List<string>();
         try
         {
@@ -1166,20 +1161,24 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             }
         }
         catch (Exception ex) { _logger.LogWarning(ex, "Сканирование переносимой папки {Dir}", oldFull); }
-
-        Directory.CreateDirectory(Path.GetDirectoryName(newFull)!);
-        Directory.Move(oldFull, newFull);
-        // S3-3c2: человеческий перенос папки — старый и новый путь КАЖДОГО её файла (тот же
-        // порядок, что S3-3b в FilesController.RecordRenamedDir: путь папки в журнал не идёт —
-        // её pathspec затянул бы чужую работу). Список берётся из скана под замком источника ДО
-        // переноса; вызов — после состоявшегося Directory.Move: отказанный перенос (404 /
-        // «уже существует») сюда не доходит — проигравший не пишет ни одного пути.
         if (byHuman)
             foreach (var rel in before)
             {
                 RecordHumanEdit(userId, sourceKey, SafePath.Join(rootDir, rel));
                 RecordHumanEdit(userId, sourceKey, SafePath.Join(rootDir, newFolder + rel[oldFolder.Length..]));
             }
+        if (!Directory.Exists(oldFull)) throw new KeyNotFoundException("Папка не найдена");
+        if (Directory.Exists(newFull) || File.Exists(newFull))
+            throw new InvalidOperationException($"«{newFolder}» уже существует");
+
+        // Заметки папки — по скану диска под замком: после взятия замка источника их никто не
+        // создаёт и не удаляет, а их id уже взяты (список выше) — состав под замком стабилен.
+        // F-6a: не через модель — модель могла не увидеть заметку, созданную до этого окна;
+        // маппинг обязан соответствовать тому, что реально переезжает. Нечитаемый .md — не
+        // заметка и не в маппинге (тот же пропуск, что у модели и у списка замков выше).
+
+        Directory.CreateDirectory(Path.GetDirectoryName(newFull)!);
+        Directory.Move(oldFull, newFull);
         // S2c-11: содержимое папки переезжает — модель арендатора источника обязана быть сброшена
         InvalidateWrite(userId, sourceKey);
         // Привязки комментариев к документам внутри перенесённой папки — по префиксу.
@@ -1376,12 +1375,20 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         if (req.ExpiresAfterMinutes != -1)
         {
             var current = File.ReadAllText(full, Encoding.UTF8);
-            if (req.ExpiresAfterMinutes is null)
-                current = RemoveExpiresField(current);
-            else if (req.ExpiresAfterMinutes > 0)
-                current = InjectExpiresField(current, DateTime.UtcNow.AddMinutes(req.ExpiresAfterMinutes.Value).ToString("o"));
-            File.WriteAllText(full, current, new UTF8Encoding(false));
-            Touched(full);
+            var updated = req.ExpiresAfterMinutes is null
+                ? RemoveExpiresField(current)
+                : req.ExpiresAfterMinutes > 0
+                    ? InjectExpiresField(current, DateTime.UtcNow.AddMinutes(req.ExpiresAfterMinutes.Value).ToString("o"))
+                    : current;
+            // S3-3c1 доработка 1 (minor, вердикт ea994f7c): снятие несуществующего срока или
+            // срок 0 оставляют контент ровно тем же — файла нет, и в журнал с ним не идёт
+            // ничего: no-op не должен плодить запись нетронутого файла (git затем не находит
+            // изменений и пишет «Коммит правок человека не удался»).
+            if (!string.Equals(updated, current, StringComparison.Ordinal))
+            {
+                File.WriteAllText(full, updated, new UTF8Encoding(false));
+                Touched(full);
+            }
         }
 
         // Авто-обновление входящих ссылок при смене заголовка: во всех заметках,

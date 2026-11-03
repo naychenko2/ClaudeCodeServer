@@ -69,7 +69,7 @@ public sealed partial class NotesService
 
     // --- Создание комментария ---
 
-    public NoteDetail Annotate(string userId, AnnotateRequest req)
+    public NoteDetail Annotate(string userId, AnnotateRequest req, bool byHuman = false)
     {
         var scope = req.Doc.Scope.Trim();
         var relPath = NormalizeRel(req.Doc.Path);
@@ -86,7 +86,7 @@ public sealed partial class NotesService
         var keys = docId is null
             ? new[] { SourceGateKey(userId, scope) }
             : new[] { docId, SourceGateKey(userId, scope) };
-        var id = WithWriteGates(() => AnnotateCore(userId, req, title, docFull, canWriteId, scope, relPath), keys);
+        var id = WithWriteGates(() => AnnotateCore(userId, req, title, docFull, canWriteId, scope, relPath, byHuman), keys);
 
         // журнал — за замком (тот же порядок, что у Create: Append — чужой код, способный
         // стоять на внешнем барьере; под замком такой стоп не держат)
@@ -101,18 +101,25 @@ public sealed partial class NotesService
     // комментария той же файловой частью, что у Create, но без повторного замка (ключ
     // уже взят). Возвращает id комментария.
     private string AnnotateCore(string userId, AnnotateRequest req, string title, string docFull,
-        bool canWriteId, string scope, string relPath)
+        bool canWriteId, string scope, string relPath, bool byHuman)
     {
         var anchor = ResolveSelectionAnchor(docFull, canWriteId, req.Selection);
+
+        // S3-3c1 доработка 1 (вердикт ea994f7c): маркер ^id — человеческая правка файла документа,
+        // его путь идёт в журнал раньше комментария: порядок Record следует порядку записей
+        // файла (сначала документ в ResolveSelectionAnchor, потом комментарий в CreateCore).
+        // Личный vault отсекает сам RecordHumanEdit; агентский вызов (byHuman=false) молчит.
+        if (byHuman && anchor.DocWritten) RecordHumanEdit(userId, scope, docFull);
 
         // Заметка-комментарий: источник = область документа, папка «Комментарии»
         var sourceKey = scope;                       // personal | projectId — совпадает с ключом источника
         var annotates = $"{scope}/{relPath}" + (anchor.BlockId is not null ? $"#^{anchor.BlockId}" : "");
         var content = BuildAnnotationContent(title, annotates, anchor.Quote, anchor.Heading,
             req.Tags, req.Selection.Text ?? "", req.Comment);
-        // S3-3c1: создание комментария — вне шага журнала правок (в нём только Create/Update/
-        // Delete заметок), поэтому byHuman=false: путь в журнал не идёт ни с какой стороны.
-        return CreateCore(userId, new CreateNoteRequest(title, content, sourceKey, Folder: AnnotationsFolder), sourceKey, byHuman: false);
+        // S3-3c1 доработка 1: создание комментария — это Create заметки (комментарий живёт в
+        // notes/ проекта), и он идёт в журнал через CreateCore как есть. Прежнее обоснование
+        // «вне шага журнала» было неверно и снято по вердикту ревью.
+        return CreateCore(userId, new CreateNoteRequest(title, content, sourceKey, Folder: AnnotationsFolder), sourceKey, byHuman);
     }
 
     // id заметки-документа по его области и пути — тот же ключ замка, что у Update/Delete
@@ -123,7 +130,9 @@ public sealed partial class NotesService
         scope == PersonalKey ? EncodeId(PersonalKey, rel)
         : EncodeId(scope, NormalizeRel(rel["notes/".Length..]));
 
-    private sealed record SelectionAnchor(string? BlockId, string? Heading, string Quote);
+    // DocWritten — маркер ^id был ЗАПИСАН в файл документа именно здесь (новый; существующий
+    // не переписывает файл). По нему аннотация решает, звать ли журнал по пути документа.
+    private sealed record SelectionAnchor(string? BlockId, string? Heading, string Quote, bool DocWritten);
 
     // Резолв выделения в якорь: verify-before-write (посимвольная сверка, иначе
     // единственное вхождение; провал → 409 без порчи), якорный параграф, ^id
@@ -173,6 +182,7 @@ public sealed partial class NotesService
 
         // ^id: в конце последней строки блока; существующий переиспользуем
         string? blockId = null;
+        var docWritten = false;
         var lastLineText = lines[blockLast].Text;
         var existing = BlockIdAtEol.Match(lastLineText);
         if (existing.Success) blockId = existing.Groups[1].Value;
@@ -182,12 +192,13 @@ public sealed partial class NotesService
             var insertAt = lines[blockLast].Start + lastLineText.TrimEnd('\r').Length;
             doc = doc[..insertAt] + " ^" + blockId + doc[insertAt..];
             File.WriteAllText(docFull, doc, new UTF8Encoding(false));
+            docWritten = true;
         }
 
         var heading = HeadingPathAbove(lines, selLine);
         var quote = NormalizeWs(selText);
         if (quote.Length > MaxQuoteStored) quote = quote[..MaxQuoteStored];
-        return new SelectionAnchor(blockId, heading, quote);
+        return new SelectionAnchor(blockId, heading, quote, docWritten);
     }
 
     // Перепривязка комментария к новому выделению («место изменилось»/«сирота» при
@@ -195,7 +206,7 @@ public sealed partial class NotesService
     // S2c-12: repin пишет два файла — ^id в заметку-документ и frontmatter комментария.
     // Оба под замком на свой id, одним WithWriteGates по возрастанию (вложенного нет):
     // гонка repin с правкой/удалением той же заметки сериализована, потерянной правки нет.
-    public NoteDetail RepinAnnotation(string userId, string id, AnnotateSelection selection)
+    public NoteDetail RepinAnnotation(string userId, string id, AnnotateSelection selection, bool byHuman = false)
     {
         var model = GetModel(userId);
         if (!model.ById.TryGetValue(id, out var note))
@@ -210,13 +221,20 @@ public sealed partial class NotesService
 
         var docId = canWriteId ? DocNoteId(ann.DocScope, ann.DocPath) : null;
         var keys = docId is null ? new[] { id } : new[] { id, docId };
-        return WithWriteGates(() => RepinAnnotationCore(userId, id, note, ann, docFull, canWriteId, selection), keys);
+        return WithWriteGates(() => RepinAnnotationCore(userId, id, note, ann, docFull, canWriteId, selection, byHuman), keys);
     }
 
     private NoteDetail RepinAnnotationCore(string userId, string id, RawNote note, NoteAnnotationInfo ann,
-        string docFull, bool canWriteId, AnnotateSelection selection)
+        string docFull, bool canWriteId, AnnotateSelection selection, bool byHuman)
     {
         var anchor = ResolveSelectionAnchor(docFull, canWriteId, selection);
+        var (sourceKey, _) = DecodeId(id);
+
+        // S3-3c1 доработка 1 (вердикт ea994f7c): перепривязка пишет два файла — порядок
+        // Record следует порядку записей: сначала документ (новый ^id в ResolveSelectionAnchor),
+        // потом комментарий. Путь документа — по его собственному источнику (перенесённый
+        // комментарий мог разойтись с областью документа).
+        if (byHuman && anchor.DocWritten) RecordHumanEdit(userId, ann.DocScope, docFull);
 
         var annotates = $"{ann.DocScope}/{ann.DocPath}" + (anchor.BlockId is not null ? $"#^{anchor.BlockId}" : "");
         var content = File.ReadAllText(note.FullPath, Encoding.UTF8);
@@ -225,11 +243,11 @@ public sealed partial class NotesService
         if (!string.IsNullOrWhiteSpace(anchor.Heading))
             content = SetFrontmatterField(content, "anchor_heading", $"\"{Escape(anchor.Heading!)}\"");
         File.WriteAllText(note.FullPath, content, new UTF8Encoding(false));
+        if (byHuman) RecordHumanEdit(userId, sourceKey, note.FullPath);
 
         // S2c-12: сброс по ключу арендатора, а не только своему: комментарий и документ —
         // один источник (Annotate создаёт их в scope документа); перенесённый комментарий
         // мог разойтись с ним — тогда сбрасываются оба.
-        var (sourceKey, _) = DecodeId(id);
         InvalidateWrite(userId, sourceKey);
         if (ann.DocScope != sourceKey) InvalidateWrite(userId, ann.DocScope);
         return GetDetail(userId, id)
@@ -313,7 +331,7 @@ public sealed partial class NotesService
 
     // --- Треды: ответы на комментарий (реплика = заметка с annotates на корневую) ---
 
-    public NoteDetail Reply(string userId, string rootId, ReplyRequest req)
+    public NoteDetail Reply(string userId, string rootId, ReplyRequest req, bool byHuman = false)
     {
         var model = GetModel(userId);
         if (!model.ById.TryGetValue(rootId, out var root))
@@ -341,7 +359,9 @@ public sealed partial class NotesService
         if (clean.Count > 0) sb.Append($"tags: [{string.Join(", ", clean)}]\n");
         sb.Append("---\n\n").Append(comment).Append('\n');
 
-        return Create(userId, new CreateNoteRequest(title, sb.ToString(), root.SourceKey, Folder: AnnotationsFolder));
+        // S3-3c1 доработка 1 (вердикт ea994f7c): ответ в треде — заметка проекта, её создание —
+        // человеческий Create: byHuman проходит в Create как есть (запись — в CreateCore).
+        return Create(userId, new CreateNoteRequest(title, sb.ToString(), root.SourceKey, Folder: AnnotationsFolder), byHuman: byHuman);
     }
 
     public IReadOnlyList<NoteReplyDto> GetReplies(string userId, string rootId)
@@ -547,15 +567,15 @@ public sealed partial class NotesService
     // S2c-12: смена статуса — правка файла комментария: под тем же замком на его id, что
     // Update/Delete (гонка «закрыть комментарий» с правкой той же заметки сериализована,
     // статуса потерянного молча, нет), и сбрасывает модель арендатора, а не только свою.
-    public NoteDetail? SetAnnotationStatus(string userId, string id, string status)
+    public NoteDetail? SetAnnotationStatus(string userId, string id, string status, bool byHuman = false)
     {
         var st = status?.Trim().ToLowerInvariant();
         if (st is not ("open" or "resolved"))
             throw new ArgumentException("Статус должен быть open или resolved");
-        return WithWriteGates(() => SetAnnotationStatusCore(userId, id, st!), id);
+        return WithWriteGates(() => SetAnnotationStatusCore(userId, id, st!, byHuman), id);
     }
 
-    private NoteDetail? SetAnnotationStatusCore(string userId, string id, string st)
+    private NoteDetail? SetAnnotationStatusCore(string userId, string id, string st, bool byHuman)
     {
         var (sourceKey, relPath) = DecodeId(id);
         // S2c-7: статус комментария — правка заметки, дверь WriteContent
@@ -567,6 +587,9 @@ public sealed partial class NotesService
         if (ParseFrontmatter(content, "").Annotation is null)
             throw new InvalidOperationException("Заметка не является комментарием к документу");
         File.WriteAllText(full, SetFrontmatterField(content, "status", st), new UTF8Encoding(false));
+        // S3-3c1 доработка 1 (вердикт ea994f7c): frontmatter статуса — правка файла комментария,
+        // под его замком — в журнал; агентский вызов (byHuman=false) молчит.
+        if (byHuman) RecordHumanEdit(userId, sourceKey, full);
         InvalidateWrite(userId, sourceKey);
         return GetDetail(userId, id);
     }

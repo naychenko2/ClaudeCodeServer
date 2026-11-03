@@ -23,6 +23,13 @@ namespace ClaudeHomeServer.Tests.Services;
 /// порядок S3-3b в FilesController); список файлов папки снимается до операции. Отказанный
 /// перенос (403/404) — ни одного пути; агентские вызовы — молчат.
 ///
+/// S3-3c1 доработка 1 (вердикт ea994f7c): пять человеческих ручек аннотаций — annotate
+/// (комментарий-заметка + маркер ^id в файле документа), reply, repin, status, link-mention —
+/// тот же журнал. Документ журналится только когда ^id был реально записан (новый маркер);
+/// порядок Record следует порядку записей файла. Агентские вызовы тех же Core
+/// (NotesToolset: Annotate/Reply/SetAnnotationStatus) — молчат; личный vault — молчит;
+/// no-op правки срока (снятие несуществующего) — молчит.
+///
 /// Фейк-журнал записывает полученные вызовы как есть: правила отбора (общий проект,
 /// git-репозиторий, автор-участник) — ответственность самого HumanEditCommitter, здесь не
 /// проверяются. Стенд — как в SharedProjectNotesWriteContentTests: границы на уровне сервиса,
@@ -106,6 +113,12 @@ public class NotesHumanEditJournalTests : IDisposable
         sut.GetSummaries(_ownerId, _projectId, null).Single(n => n.Title == ProjectNote).Id;
 
     private string ProjectFile(string rel) => Path.Combine(_projectRoot, "notes", rel);
+
+    // Комментарий к проектной заметке-документу — та же форма, что в
+    // SharedProjectNotesWriteContentTests (офсеты-хинт, истина — сверка Text)
+    private AnnotateRequest ProjectAnnotate(string comment) =>
+        new(new AnnotateDocRef(_projectId, "notes/" + ProjectNote + ".md"),
+            new AnnotateSelection(0, 0, "Текст проектной заметки"), Comment: comment);
 
     // --- Полный цикл человека: каждая состоявшаяся правка — ровно один Record (c1) ---
 
@@ -498,6 +511,178 @@ public class NotesHumanEditJournalTests : IDisposable
         journal.Calls.Should().AllSatisfy(c => c.UserId.Should().Be(firstUserId));
         journal.Calls.Should().NotContain(c => c.Rel.StartsWith("notes/" + loserTarget + "/"));
         journal.Calls.Should().NotContain(c => c.Rel == "notes/Гонка" || c.Rel == "notes/ЦельА" || c.Rel == "notes/ЦельБ");
+    }
+
+    // --- S3-3c1 доработка 1 (вердикт ea994f7c): пять человеческих ручек аннотаций ---
+
+    [Fact]
+    public void КомментарийКДокументу_ДваRecord_ДокументИКомментарий_АгентИЛичныйVaultМолчат()
+    {
+        AddMember(_editorId, ProjectRole.Editor);
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+
+        var comment = sut.Annotate(_editorId, ProjectAnnotate("Комментарий человека"), byHuman: true);
+        comment.Should().NotBeNull();
+
+        // Ровно две записи, в порядке записей файла: сначала документ (в него записан маркер
+        // ^id), потом комментарий-заметка в «Комментарии»
+        journal.Calls.Should().HaveCount(2);
+        journal.Calls[0].Rel.Should().Be("notes/Заметка проекта.md");
+        journal.Calls[1].Rel.Should().Be("notes/Комментарии/Комментарий человека.md");
+        journal.Calls.Should().AllSatisfy(c =>
+        {
+            c.ProjectId.Should().Be(_projectId);
+            c.Root.Should().Be(_projectRoot);
+            c.UserId.Should().Be(_editorId);
+        });
+
+        // Агентский annotate того же документа (так зовёт NotesToolset.cs:216): комментарий
+        // создан, ^id уже существует — журнал молчит
+        var agentComment = sut.Annotate(_editorId, ProjectAnnotate("Комментарий агента"));
+        agentComment.Should().NotBeNull();
+        journal.Calls.Should().HaveCount(2);
+
+        // Личный vault: документ и комментарий в нём — ни одной новой записи
+        var personalDoc = sut.Create(_ownerId, new CreateNoteRequest("Личный документ", "Текст личного документа.\n"), byHuman: true);
+        personalDoc.Should().NotBeNull();
+        var personalComment = sut.Annotate(_ownerId, new AnnotateRequest(
+            new AnnotateDocRef("personal", "Личный документ.md"),
+            new AnnotateSelection(0, 0, "Текст личного документа"), Comment: "Комментарий личный"), byHuman: true);
+        personalComment.Should().NotBeNull();
+        journal.Calls.Should().HaveCount(2, "личный vault — вне журнала, даже когда обе стороны его");
+    }
+
+    [Fact]
+    public void ОтветВТреде_ОдинRecord_ПутьЗаметкиОтвета_АгентМолчит()
+    {
+        AddMember(_editorId, ProjectRole.Editor);
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+
+        // Корневой комментарий создан агентом — журнал молчит
+        var root = sut.Annotate(_editorId, ProjectAnnotate("Корневой комментарий"));
+        root.Should().NotBeNull();
+        journal.Calls.Should().BeEmpty();
+
+        var reply = sut.Reply(_editorId, root.Id, new ReplyRequest("Ответ человека"), byHuman: true);
+        reply.Should().NotBeNull();
+
+        // Ответ — заметка в «Комментарии» проекта: ровно одна запись её пути
+        journal.Calls.Should().ContainSingle().Which.Should()
+            .Be(new FakeJournal.Call(_projectId, _projectRoot, "notes/Комментарии/Ответ человека.md", _editorId));
+
+        // Агентский ответ (NotesToolset.cs:241) — молчит
+        sut.Reply(_editorId, root.Id, new ReplyRequest("Ответ агента")).Should().NotBeNull();
+        journal.Calls.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void ПерепривязкаКомментария_ДваRecord_ДокументИКомментарий_АгентМолчит()
+    {
+        AddMember(_editorId, ProjectRole.Editor);
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+
+        // Комментарий создан агентом (^id в текстовом блоке) — журнал молчит
+        var comment = sut.Annotate(_editorId, ProjectAnnotate("Комментарий для перепривязки"));
+        comment.Should().NotBeNull();
+        journal.Calls.Should().BeEmpty();
+
+        // Перепривязка человеком к блоку заголовка: в документ пишется НОВЫЙ ^id —
+        // оба пути, в порядке записей файла: сначала документ, потом комментарий
+        var repinned = sut.RepinAnnotation(_editorId, comment.Id,
+            new AnnotateSelection(0, 0, "Заметка проекта"), byHuman: true);
+        repinned.Should().NotBeNull();
+
+        journal.Calls.Should().HaveCount(2);
+        journal.Calls[0].Rel.Should().Be("notes/Заметка проекта.md");
+        journal.Calls[1].Rel.Should().Be("notes/Комментарии/Комментарий для перепривязки.md");
+        journal.Calls.Should().AllSatisfy(c =>
+        {
+            c.ProjectId.Should().Be(_projectId);
+            c.Root.Should().Be(_projectRoot);
+            c.UserId.Should().Be(_editorId);
+        });
+
+        // Агентская перепривязка к старому месту (^id уже есть, файла документа нет) — молчит
+        sut.RepinAnnotation(_editorId, comment.Id, new AnnotateSelection(0, 0, "Текст проектной заметки"))
+            .Should().NotBeNull();
+        journal.Calls.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public void СтатусКомментария_ОдинRecord_ПутьКомментария_АгентМолчит()
+    {
+        AddMember(_editorId, ProjectRole.Editor);
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+
+        var comment = sut.Annotate(_editorId, ProjectAnnotate("Комментарий для статуса"));
+        comment.Should().NotBeNull();
+        journal.Calls.Should().BeEmpty();
+
+        var resolved = sut.SetAnnotationStatus(_editorId, comment.Id, "resolved", byHuman: true);
+        resolved.Should().NotBeNull();
+
+        // Frontmatter статуса — правка файла комментария: ровно одна запись его пути
+        journal.Calls.Should().ContainSingle().Which.Should()
+            .Be(new FakeJournal.Call(_projectId, _projectRoot, "notes/Комментарии/Комментарий для статуса.md", _editorId));
+
+        // Агентская смена статуса (NotesToolset.cs:273) — молчит
+        sut.SetAnnotationStatus(_editorId, comment.Id, "open").Should().NotBeNull();
+        journal.Calls.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void СвязатьУпоминание_ОдинRecord_ПутьЗаметки_АгентМолчит()
+    {
+        AddMember(_editorId, ProjectRole.Editor);
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+
+        // Заметка с упоминанием, созданная агентом в проекте — журнал молчит
+        var note = sut.Create(_editorId, new CreateNoteRequest("Заметка с упоминанием", "Текст про Важная Тема внутри.\n", _projectId));
+        note.Should().NotBeNull();
+        journal.Calls.Should().BeEmpty();
+
+        var linked = sut.LinkMention(_editorId, note.Id, "Важная Тема", byHuman: true);
+        linked.Should().NotBeNull();
+        linked!.Content.Should().Contain("[[Важная Тема]]");
+
+        // Ровно одна запись: путь заметки, содержимое которой переписано
+        journal.Calls.Should().ContainSingle().Which.Should()
+            .Be(new FakeJournal.Call(_projectId, _projectRoot, "notes/Заметка с упоминанием.md", _editorId));
+
+        // Агентское «связать» другой проектной заметки: файл переписан, журнал молчит
+        var other = sut.Create(_editorId, new CreateNoteRequest("Другая заметка", "И про Важная Тема.\n", _projectId));
+        other.Should().NotBeNull();
+        sut.LinkMention(_editorId, other.Id, "Важная Тема").Should().NotBeNull();
+        journal.Calls.Should().HaveCount(1);
+    }
+
+    // --- S3-3c1 доработка 1 (minor): no-op срока не пишет лишнего Record ---
+
+    [Fact]
+    public void СнятиеОтсутствующегоСрока_НиОдногоRecord_УстановкаСрока_Один()
+    {
+        AddMember(_editorId, ProjectRole.Editor);
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+        var created = sut.Create(_editorId, new CreateNoteRequest("Заметка без срока", "тело", _projectId));
+        created.Should().NotBeNull();
+        journal.Calls.Should().BeEmpty();
+
+        // Снятие срока у заметки без срока: контент ровно тот же — файла не было,
+        // Record тоже нет
+        var kept = sut.Update(_editorId, created.Id, new UpdateNoteRequest(ExpiresAfterMinutes: null), byHuman: true);
+        kept.Should().NotBeNull();
+        journal.Calls.Should().BeEmpty("no-op срока не должен плодить запись нетронутого файла");
+
+        // Настоящий срок: содержимое изменено — ровно одна запись
+        var dated = sut.Update(_editorId, created.Id, new UpdateNoteRequest(ExpiresAfterMinutes: 10), byHuman: true);
+        dated.Should().NotBeNull();
+        journal.Calls.Should().ContainSingle().Which.Rel.Should().Be("notes/Заметка без срока.md");
     }
 
     /// <summary>

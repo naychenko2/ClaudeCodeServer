@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using ClaudeHomeServer.Core.Telemetry;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.ChatSubjects;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
@@ -2556,6 +2557,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         if (string.IsNullOrEmpty(userId) || info.CreatedByUserId != userId)
             return new(ChatVisibilityOutcome.NotAuthor, null);
 
+        Dictionary<string, string>? moves = null;
         lock (entry.VisibilityLock)
         {
             if (makePrivate)
@@ -2572,21 +2574,95 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
                     if (info.MessageClaimed == true || info.MessageCount > 0 || info.LastMessage is not null
                         || info.LastUserMessageAt is not null || entry.Accumulator?.GetAll().Count > 0)
                         return new(ChatVisibilityOutcome.HasMessages, null);
+                    // Вложения, загруженные до перевода, переезжают в закрытое поддерево автора ДО флага
+                    // и под тем же замком, что Upload: файла в неверной раскладке не остаётся.
+                    // Не вышло — откат и отказ, флаг не ставится (иначе содержимое приватного чата осталось бы общим).
+                    if (!TryRelocateAttachments(info, userId, toPrivate: true, out moves))
+                        return new(ChatVisibilityOutcome.AttachmentsMoveFailed, null);
                     info.PrivateToUserId = userId;
                 }
                 info.ExcludeFromDossiers = true;
             }
             else
             {
-                // Чат побывал общим (или остаётся им): вернуть приватность уже нельзя — его могли
+                // Чат побывал общим (или остаётся им): вернуть приватность нельзя — его могли
                 // видеть другие участники. Метка та же, что у первого сообщения: единый отказ
                 // chat_has_messages на повторном true.
-                if (info.PrivateToUserId is not null) info.MessageClaimed = true;
+                if (info.PrivateToUserId is not null)
+                {
+                    // Обратный перенос: иначе участники общего чата получают 404 на картинки. Отказ
+                    // не страшен для утечки (файлы остаются закрытыми), но флаг не снимаем — состояние целое.
+                    if (!TryRelocateAttachments(info, userId, toPrivate: false, out moves))
+                        return new(ChatVisibilityOutcome.AttachmentsMoveFailed, null);
+                    info.MessageClaimed = true;
+                }
                 info.PrivateToUserId = null;
             }
         }
         SaveSessions();
-        return new(ChatVisibilityOutcome.Ok, info);
+        return new(ChatVisibilityOutcome.Ok, info) { AttachmentMoves = moves };
+    }
+
+    // Сохранить вложение чата и записать его в учёт (S2d-6b-4). Раскладку (общая или private/{автор})
+    // выбирает ЗДЕСЬ, под VisibilityLock, — тем же замком, под которым SetChatVisibility переносит файлы:
+    // upload либо успевает до переноса (и файл переедет вместе с флагом), либо идёт после и пишет
+    // уже в новую раскладку. write получает итоговый путь и пишет файл (под замком — вызывающий
+    // передал готовые байты, ожидания ввода-вывода по сети нет). null — имя не прошло санацию
+    // или чата нет.
+    public string? SaveChatAttachment(string sessionId, string callerId, string? fileName, Action<string> write)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        var info = entry.Info;
+        lock (entry.VisibilityLock)
+        {
+            string? rel = info.ProjectId is not null && info.PrivateToUserId is { } author && author == callerId
+                ? PrivateAttachments.Build(author, Guid.NewGuid(), fileName)
+                : AttachmentsGitExclude.AttachmentPath(fileName);
+            if (rel is null) return null;
+            write(rel);
+            (info.Attachments ??= []).Add(rel);
+            return rel;
+        }
+    }
+
+    // Перенос учтённых вложений чата между раскладками. Зовётся ТОЛЬКО под VisibilityLock.
+    // Файла на диске нет (удалён вручную) — пропускаем и снимаем с учёта; ошибка переноса — откат уже
+    // перенесённых и false. Возвращает карту «старый путь → новый» для композера (черновик ссылается на старые).
+    private bool TryRelocateAttachments(Session info, string authorId, bool toPrivate, out Dictionary<string, string>? moves)
+    {
+        moves = null;
+        if (info.Attachments is not { Count: > 0 } list) return true;
+        var rootPath = info.ProjectId is not null ? _projects.GetById(info.ProjectId)?.RootPath : null;
+        if (rootPath is null) return true;
+        var root = EffectiveRoot(info, rootPath);
+        var done = new List<(string From, string To)>();
+        var next = new List<string>();
+        try
+        {
+            foreach (var rel in list)
+            {
+                var target = toPrivate ? PrivateAttachments.ToPrivate(authorId, rel) : PrivateAttachments.ToShared(rel);
+                if (target is null) { next.Add(rel); continue; }
+                var from = SafePath.Join(root, rel);
+                var to = SafePath.Join(root, target);
+                if (!File.Exists(from)) continue;
+                Directory.CreateDirectory(Path.GetDirectoryName(to)!);
+                File.Move(from, to, overwrite: false);
+                done.Add((from, to));
+                next.Add(target);
+                (moves ??= [])[rel] = target;
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Перенос вложений чата {Id} при смене видимости не удался, откат", info.Id);
+            foreach (var (from, to) in done)
+                try { File.Move(to, from, overwrite: false); } catch { /* откат best-effort */ }
+            moves = null;
+            return false;
+        }
+        info.Attachments = next;
+        return true;
     }
 
     // Вторая половина перевода в приватный (S2d-7a): чужие соединения снимаются с session-группы и
@@ -11447,10 +11523,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 }
 
 // Исход смены видимости чата (SetChatVisibility, S2d-7a). Отказы различимы для контроллера:
-// NotAuthor — 403, NotSharedProject / HasMessages — 409, NotFound — 404.
-public enum ChatVisibilityOutcome { Ok, NotFound, NotAuthor, NotSharedProject, HasMessages }
+// NotAuthor — 403, NotSharedProject / HasMessages / AttachmentsMoveFailed — 409, NotFound — 404.
+public enum ChatVisibilityOutcome { Ok, NotFound, NotAuthor, NotSharedProject, HasMessages, AttachmentsMoveFailed }
 
-public record ChatVisibilityResult(ChatVisibilityOutcome Outcome, Session? Session);
+// AttachmentMoves (S2d-6b-4): карта «старый путь → новый» перенесённых вложений — композеру
+// заменить ссылки черновика; null — переносить было нечего.
+public record ChatVisibilityResult(ChatVisibilityOutcome Outcome, Session? Session)
+{
+    public IReadOnlyDictionary<string, string>? AttachmentMoves { get; init; }
+}
 
 // Итог завершённого хода для синхронного ожидания (SendMessageAndWaitAsync):
 // текст последней реплики ассистента, длительность и стоимость (если провайдер её отдал).

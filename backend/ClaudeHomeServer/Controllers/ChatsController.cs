@@ -344,12 +344,28 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
             await sessions.EvictForeignViewersAsync(id, UserId);
         return result.Outcome switch
         {
-            ChatVisibilityOutcome.Ok => Ok(result.Session),
+            // Карта «старый → новый путь» перенесённых вложений (S2d-6b-4) едет рядом с чатом: композеру
+            // заменить ссылки в черновике. Без переноса поле отсутствует, форма ответа прежняя.
+            ChatVisibilityOutcome.Ok => Ok(WithAttachmentMoves(result)),
+            ChatVisibilityOutcome.AttachmentsMoveFailed => Conflict(new { error = "Не удалось перенести вложения чата — видимость не изменена", code = "attachments_move_failed" }),
             ChatVisibilityOutcome.NotAuthor => ChatAuthorGate.Denied(),
             ChatVisibilityOutcome.NotSharedProject => Conflict(new { error = "Приватным можно сделать только чат общего проекта", code = "not_shared_project" }),
             ChatVisibilityOutcome.HasMessages => Conflict(new { error = "В чате уже есть сообщения — приватным его не сделать", code = "chat_has_messages" }),
             _ => NotFound(),
         };
+    }
+
+    // Чат + карта переноса вложений (S2d-6b-4): поле attachmentMoves ({старый путь: новый}) рядом с полями
+    // чата, композеру заменить ссылки черновика. Нет переноса — прежняя форма ответа (голый чат).
+    private object? WithAttachmentMoves(ChatVisibilityResult result)
+    {
+        if (result.AttachmentMoves is not { Count: > 0 } moves) return result.Session;
+        var options = HttpContext.RequestServices
+            .GetRequiredService<Microsoft.Extensions.Options.IOptions<Microsoft.AspNetCore.Mvc.JsonOptions>>()
+            .Value.JsonSerializerOptions;
+        var node = System.Text.Json.JsonSerializer.SerializeToNode(result.Session, options)!.AsObject();
+        node["attachmentMoves"] = System.Text.Json.JsonSerializer.SerializeToNode(moves, options);
+        return node;
     }
 
     // Сводка карточки архива (шаг 5 плана «Архив чатов»): кнопка «Собрать сводку» строит
@@ -798,15 +814,8 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         // Правило пути одно с агентом устройства: {AttachmentsDir}/{guid}/{имя файла}.
         // Вложение приватного проектного чата (S2d-6b-1) — в закрытое поддерево
         // private/{автор}/…: принадлежность читается из пути, её закрывают на чтение 6b-2/6b-3.
-        // Автор — только из JWT: поддерево пишется, когда PrivateToUserId есть сам вызывающий
-        // (гейт GetOwnedVisible выше покрывает это для проектных чатов, но не чат вне проекта;
-        // чат вне проекта — прежняя раскладка: его папка и так личная). Мусорное значение
-        // PrivateToUserId (не прошедшее санацию) — Build отдаёт null → тот же отказ, что по имени.
-        string? rel = chat.ProjectId is not null && chat.PrivateToUserId is { } privateAuthor && privateAuthor == UserId
-            ? PrivateAttachments.Build(privateAuthor, Guid.NewGuid(), file.FileName)
-            : AttachmentsGitExclude.AttachmentPath(file.FileName);
-        if (rel is null)
-            return BadRequest(new { error = "Некорректное имя файла" });
+        // Раскладку выбирает SessionManager.SaveChatAttachment под замком видимости (S2d-6b-4):
+        // автор — только из JWT, а переключение видимости не может пройти между выбором пути и записью.
 
         // Вложения не должны светиться в git-статусе проекта и уезжать в историю по `git add -A`.
         // Лениво, до записи файла: у проекта со своим .gitignore дефолтный игнор не создавался.
@@ -815,7 +824,10 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
 
         using var ms = new MemoryStream();
         await file.CopyToAsync(ms);
-        files.WriteFileBytes(root, rel, ms.ToArray());
+        var bytes = ms.ToArray();
+        var rel = sessions.SaveChatAttachment(id, UserId, file.FileName, r => files.WriteFileBytes(root, r, bytes));
+        if (rel is null)
+            return BadRequest(new { error = "Некорректное имя файла" });
         return Ok(new { path = rel });
     }
 }

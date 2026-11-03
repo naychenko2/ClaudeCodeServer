@@ -23,6 +23,8 @@
 // (5) показать сырой код вместо текста → «отказ — русским текстом» краснеет;
 // (6) вернуть действия после успеха внутрь try переноса (bumpNotes/requestOpenWikiPage/
 //     dispatchEvent до catch отказа) → «бросающий слушатель» краснеет.
+// (7) вернуть молчаливый catch переноса (убрать console.warn в приёмнике) →
+//     «бросающий слушатель» краснеет: лог с префиком [notes] — часть контракта (TL-5-rw).
 //
 // Стор вики и флаги — настоящие; мокан только транспорт (offline.request), чтение заметки
 // (notesOffline.getNoteForView) и leaf-вызовы api — тот же приём, что в NotesPage.test и
@@ -268,11 +270,16 @@ describe('«Перенести в вики» на экране заметки (F
     const w = globalThis as { window: { addEventListener: Function; removeEventListener: Function } };
     const boom = () => { throw new Error('слушатель cc-open-note упал'); };
     w.window.addEventListener('cc-open-note', boom);
+    // защитный catch обязан логировать (образец проекта: console.warn с префиком [notes]) —
+    // spy глушит вывод в прогоне, восстанавливается в finally
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       t.resolve(TRANSFER_OK);
       await settle();
+      expect(warnSpy).toHaveBeenCalledWith('[notes] приёмник cc-open-note упал:', expect.any(Error));
     } finally {
       w.window.removeEventListener('cc-open-note', boom);
+      warnSpy.mockRestore();
     }
     // Исход переноса определяет только ответ сервера: состояние слушателя на него не влияет
     const view = texts(container);

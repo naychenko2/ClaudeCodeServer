@@ -164,7 +164,11 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         bumpNotes();
         requestOpenWikiPage(openPage);
         window.dispatchEvent(new Event('cc-open-note'));
-      } catch { /* приёмник 'cc-open-note' упал: перенос уже состоялся — плашка остаётся «Перенесено» */ }
+      } catch (e) {
+        // Приёмник 'cc-open-note' упал: перенос уже состоялся — плашка остаётся «Перенесено».
+        // Молча не глотаем: сбой слушателя виден в логе (образец: notesOffline.putOpOrWarn)
+        console.warn('[notes] приёмник cc-open-note упал:', e);
+      }
     } else {
       setTransferFlash({ ok: false, text: transferFailText(failure) });
       setTransferBusy(false);

@@ -111,6 +111,12 @@ export function PrivateChatToggle({ session, project, hasMessages, online, isMob
         title={title}
         style={{
           display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px',
+          // QA-D6: на узкой раскладке (тот же isMobile, что убирает подпись) от кнопки
+          // остаётся одна иконка — её hit-зона выходила 32×22, ниже минимума гайда
+          // «тач-цели не меньше 40px» (docs/design/guidelines.md). Доводится до
+          // TB.iconHitMobile (40×40) и центрируется по ширине; на десктопе минимальных
+          // размеров нет — вид ряда не меняется.
+          ...(isMobile ? { justifyContent: 'center', minWidth: TB.iconHitMobile, minHeight: TB.iconHitMobile } : {}),
           background: privateOn ? C.bgWhite : 'transparent',
           border: `1px solid ${privateOn ? C.border : 'transparent'}`,
           borderRadius: R.lg, flexShrink: 0, cursor: saving ? 'default' : 'pointer',

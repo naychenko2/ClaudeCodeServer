@@ -55,7 +55,7 @@ const chat = (over: Partial<Session> = {}): Session => ({
 // Монтаж одного экземпляра; afterEach снимает root — поповер живёт порталом в body,
 // без снятия его окно осталось бы в DOM следующего кейса (и поиск ловил бы чужой)
 let current: { root: ReturnType<typeof mount>['root'] } | null = null;
-function render(opts: { session?: Session; project?: Project | null; hasMessages?: boolean } = {}) {
+function render(opts: { session?: Session; project?: Project | null; hasMessages?: boolean; isMobile?: boolean } = {}) {
   const onSessionUpdated = vi.fn();
   const onAttachmentMoves = vi.fn();
   const m = mount(createElement(PrivateChatToggle, {
@@ -63,7 +63,7 @@ function render(opts: { session?: Session; project?: Project | null; hasMessages
     project: opts.project !== undefined ? opts.project : sharedProject,
     hasMessages: opts.hasMessages ?? false,
     online: true,
-    isMobile: false,
+    isMobile: opts.isMobile ?? false,
     onSessionUpdated,
     onAttachmentMoves,
   }));
@@ -326,5 +326,40 @@ describe('PrivateChatToggle: повторный клик во время зап�
     expect(apiMock.setChatVisibility).toHaveBeenLastCalledWith('c1', true);
     // второй запрос тоже завершаем: цикл не оставляет компонент в saving
     await act(async () => { resolveRequest(updated); });
+  });
+});
+
+// === Геометрия тач-цели (QA-D6): на узкой раскладке hit-зона кнопки ≥ 40×40
+// (TB.iconHitMobile, гайд «тач-цели не меньше 40px» на 360 CSS — target-devices.md);
+// на десктопе минимальных размеров нет — вид ряда шапки не меняется.
+// Мутация «убрать условный spread» (PrivateChatToggle.tsx) → мобильные кейсы красные;
+// «ставить размеры всегда» → десктопный кейс красный. ===
+describe('PrivateChatToggle: тач-цель кнопки (QA-D6)', () => {
+  // Style узла — как в реальном DOM (React пишет '40px'); число берём с разбором,
+  // чтобы кейс не зависел от формы записи
+  const btnStyle = (m: { container: ReturnType<typeof mount>['container'] }): Record<string, string> => {
+    const btn = toggleBtn(m.container);
+    expect(btn, 'кнопка тумблера найдена').not.toBeNull();
+    return btn!.style as Record<string, string>;
+  };
+  const px = (v: string | undefined): number => Number(String(v ?? '0').replace('px', ''));
+
+  it('мобила: тач-цель ≥ 40 px по обеим сторонам (TB.iconHitMobile)', () => {
+    const st = btnStyle(render({ isMobile: true }));
+    expect(px(st.minHeight), 'minHeight — тач-цель по высоте').toBeGreaterThanOrEqual(40);
+    expect(px(st.minWidth), 'minWidth — тач-цель по ширине').toBeGreaterThanOrEqual(40);
+  });
+
+  it('мобила, приватный чат: та же цель (подпись и здесь скрыта — одна иконка)', () => {
+    const st = btnStyle(render({ session: chat({ privateToUserId: ME }), isMobile: true }));
+    expect(px(st.minHeight), 'minHeight — тач-цель по высоте').toBeGreaterThanOrEqual(40);
+    expect(px(st.minWidth), 'minWidth — тач-цель по ширине').toBeGreaterThanOrEqual(40);
+  });
+
+  it('десктоп: вид не меняется — без min-height/min-width, прежний padding', () => {
+    const st = btnStyle(render());
+    expect(st.minHeight, 'десктоп: minHeight не ставится').toBeUndefined();
+    expect(st.minWidth, 'десктоп: minWidth не ставится').toBeUndefined();
+    expect(st.padding, 'десктоп: паддинг прежний').toBe('3px 8px');
   });
 });

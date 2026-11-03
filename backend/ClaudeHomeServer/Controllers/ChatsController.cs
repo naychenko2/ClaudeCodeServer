@@ -795,8 +795,17 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         var root = sessions.GetChatRoot(id, UserId);
         if (root is null) return NotFound();
 
-        // Правило пути одно с агентом устройства: {AttachmentsDir}/{guid}/{имя файла}
-        if (AttachmentsGitExclude.AttachmentPath(file.FileName) is not { } rel)
+        // Правило пути одно с агентом устройства: {AttachmentsDir}/{guid}/{имя файла}.
+        // Вложение приватного проектного чата (S2d-6b-1) — в закрытое поддерево
+        // private/{автор}/…: принадлежность читается из пути, её закрывают на чтение 6b-2/6b-3.
+        // Автор — только из JWT: поддерево пишется, когда PrivateToUserId есть сам вызывающий
+        // (гейт GetOwnedVisible выше покрывает это для проектных чатов, но не чат вне проекта;
+        // чат вне проекта — прежняя раскладка: его папка и так личная). Мусорное значение
+        // PrivateToUserId (не прошедшее санацию) — Build отдаёт null → тот же отказ, что по имени.
+        string? rel = chat.ProjectId is not null && chat.PrivateToUserId is { } privateAuthor && privateAuthor == UserId
+            ? PrivateAttachments.Build(privateAuthor, Guid.NewGuid(), file.FileName)
+            : AttachmentsGitExclude.AttachmentPath(file.FileName);
+        if (rel is null)
             return BadRequest(new { error = "Некорректное имя файла" });
 
         // Вложения не должны светиться в git-статусе проекта и уезжать в историю по `git add -A`.

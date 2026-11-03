@@ -36,6 +36,32 @@ public static class PrivateAttachments
     }
 
     /// <summary>
+    /// Общий путь вложения <c>.cc-attachments/{guid}/{имя}</c> → путь в закрытом поддереве автора
+    /// <c>.cc-attachments/private/{author}/{guid}/{имя}</c> (S2d-6b-4, перенос при включении приватности).
+    /// null — путь не в общей раскладке (уже private/ или чужой формы) либо автор не прошёл санацию.
+    /// </summary>
+    public static string? ToPrivate(string? authorUserId, string? sharedRel)
+    {
+        var seg = Normalize(sharedRel);
+        if (seg.Count != 3 || !string.Equals(seg[0], TreeExcludes.AttachmentsDir, StringComparison.OrdinalIgnoreCase)) return null;
+        if (string.Equals(seg[1], PrivateRoot, StringComparison.OrdinalIgnoreCase)) return null;
+        if (string.IsNullOrEmpty(authorUserId) || !UserIdPattern.IsMatch(authorUserId)) return null;
+        return $"{TreeExcludes.AttachmentsDir}/{PrivateRoot}/{authorUserId}/{seg[1]}/{seg[2]}";
+    }
+
+    /// <summary>
+    /// Путь в поддереве автора → общий путь <c>.cc-attachments/{guid}/{имя}</c> (обратный перенос при
+    /// снятии приватности). null — путь не вида <c>.cc-attachments/private/{author}/{guid}/{имя}</c>.
+    /// </summary>
+    public static string? ToShared(string? privateRel)
+    {
+        var seg = Normalize(privateRel);
+        if (seg.Count != 5 || !string.Equals(seg[0], TreeExcludes.AttachmentsDir, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(seg[1], PrivateRoot, StringComparison.OrdinalIgnoreCase)) return null;
+        return $"{TreeExcludes.AttachmentsDir}/{seg[3]}/{seg[4]}";
+    }
+
+    /// <summary>
     /// Чужое ли это приватное вложение. Путь после канонизации (проценты, обратные слеши,
     /// «.» и «..», пустые сегменты) лежит под <c>.cc-attachments/private/{X}/…</c> и X ≠ userId →
     /// true. Всё остальное — общие вложения, свои private, пути вне .cc-attachments — false:

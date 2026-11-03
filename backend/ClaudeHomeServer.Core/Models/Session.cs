@@ -388,6 +388,11 @@ public class Session
     // под замком видимости SessionManager и ПЕРЕЖИВАЕТ рестарт: очередь отложенных сообщений и записи
     // ленты тоже на диске. Аддитивное nullable-поле (null — не занят), BackupSchema.Version не двигается.
     public bool? MessageClaimed { get; set; }
+    // Учёт вложений чата (S2d-6b-4): пути относительно рабочей папки, загруженные через Upload этого
+    // чата, в той раскладке, где они лежат сейчас. Нужен переносу при смене видимости: до перевода в
+    // приватный общие вложения переезжают в private/{автор}/…, при снятии приватности — обратно.
+    // Пишется ТОЛЬКО под VisibilityLock SessionManager. Аддитивное nullable-поле, BackupSchema.Version не двигается.
+    public List<string>? Attachments { get; set; }
     // Закреплён в списке чатов («Закреплённые»)
     public bool IsPinned { get; set; }
     public string? ClaudeSessionId { get; set; }

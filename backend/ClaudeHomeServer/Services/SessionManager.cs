@@ -2650,12 +2650,20 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
 
     // Переписывает пути вложений в сообщениях чата (память и history.json) по карте переноса.
     // Активный аккумулятор — в памяти плюс снимок на диск; неактивный чат — прямо файл истории.
-    // Сбой записи не откатывает перенос: логируем, состояние флага и файлов остаётся целым.
+    // Отложенные сообщения очереди (entry.Pending и pending.json) — тем же проходом: иначе
+    // отложенное сообщение уйдёт по старому private/… и AttachmentInliner молча пропустит
+    // перенесённый файл. Сбой записи не откатывает перенос: логируем, состояние флага и файлов
+    // остаётся целым.
     private void RewriteMessageAttachedPaths(SessionEntry entry, IReadOnlyDictionary<string, string> map)
     {
         var info = entry.Info;
         try
         {
+            // Очередь — под PendingLock, тем же замком, под которым EnqueuePendingAsync ставит
+            // новые сообщения: параллельная постановка не потеряется и не задублируется.
+            // Снятое из очереди (его уже доставляет drain — RemoveAt под этим же замком) сюда
+            // не попадает: его в очереди уже нет.
+            lock (entry.PendingLock) entry.Pending.ReplaceWhere(q => MapQueuedAttachedPaths(q, map));
             if (entry.Accumulator is { } acc)
             {
                 if (acc.RewriteAttachedPaths(map))
@@ -2671,6 +2679,22 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         {
             _log.LogWarning(ex, "Не удалось переписать пути вложений в сообщениях чата {Id} при снятии приватности", info.Id);
         }
+    }
+
+    // Новый снимок отложенного сообщения с переписанными по карте путями вложений; null —
+    // менять нечего. Чужие пути (не входящие в перенос) и порядок списка сохраняются как были:
+    // record неизменяем, поэтому замена — копия через with, а не правка на месте.
+    private static QueuedMessage? MapQueuedAttachedPaths(QueuedMessage q, IReadOnlyDictionary<string, string> map)
+    {
+        if (q.AttachedPaths is not { Count: > 0 } paths) return null;
+        var changed = false;
+        var next = new List<string>(paths.Count);
+        foreach (var p in paths)
+        {
+            if (map.TryGetValue(p, out var to)) { next.Add(to); changed = true; }
+            else next.Add(p);
+        }
+        return changed ? q with { AttachedPaths = next } : null;
     }
 
     // Перенос учтённых вложений чата между раскладками. Зовётся ТОЛЬКО под VisibilityLock.

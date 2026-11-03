@@ -148,6 +148,135 @@ public partial class SessionManagerTests
         return (priv, key);
     }
 
+    // Поставить сообщение с вложением в очередь занятого чата — тем же путём, что «честная
+    // очередь» пользователя (SendMessageAsync по занятому чату → EnqueuePendingAsync).
+    private async Task EnqueueWithAttachmentAsync(Session session, string text, IReadOnlyList<string> paths)
+    {
+        session.Status = SessionStatus.Working;
+        var outcome = await _sut.SendMessageAsync(session.Id, text, paths, senderUserId: TestUserId);
+        outcome.Should().Be(SessionManager.SendUserOutcome.Queued, "занятый чат: сообщение встаёт в очередь");
+    }
+
+    // Файл в рабочей папке проекта по относительному пути (для чужого пути вне .cc-attachments).
+    private void WriteProjectFile(Session session, string rel, string content)
+    {
+        var full = Path.Combine(ProjectRootOf(session), rel);
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.WriteAllText(full, content);
+    }
+
+    // S2d-6b-7: очередь отложенных сообщений едет за файлами так же, как лента. Без переписи
+    // отложенное сообщение ушло бы по старому private/… и AttachmentInliner молча пропустил бы
+    // перенесённый файл — вложение терялось бы для автора и участников общего чата.
+    [Fact]
+    public async Task СнятиеПриватности_ПутиВОчередиПереписаны_ФайлыПоНимЧитаются()
+    {
+        var session = await SharedChatAsync("att-queue");
+        _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: true).Outcome.Should().Be(ChatVisibilityOutcome.Ok);
+        var priv = Upload(session, TestUserId, "doc.txt", "body");
+        await EnqueueWithAttachmentAsync(session, "посмотри файл", [priv]);
+
+        var result = _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: false);
+
+        result.Outcome.Should().Be(ChatVisibilityOutcome.Ok);
+        var shared = result.AttachmentMoves!.Should().ContainKey(priv).WhoseValue;
+        var root = ProjectRootOf(session);
+        var queued = _sut.GetPending(session.Id).Should().ContainSingle().Subject;
+        queued.AttachedPaths.Should().BeEquivalentTo(new[] { shared }, "отложенное сообщение ссылается на новый путь");
+        File.ReadAllText(Path.Combine(root, queued.AttachedPaths![0])).Should().Be("body");
+        PrivateAttachments.IsForeign(queued.AttachedPaths[0], Участник).Should().BeFalse("участник читает общее вложение");
+        // Снимок на диске — тот же: перепись переживает рестарт (её читает RestorePending)
+        _historyService.LoadPending(session.Id)!.Items.Should().ContainSingle().Subject
+            .AttachedPaths.Should().BeEquivalentTo(new[] { shared }, "pending.json переписан вместе с памятью");
+    }
+
+    // Контракт карты: меняются только пути из attachmentMoves, порядок списка не трогается.
+    [Fact]
+    public async Task СнятиеПриватности_ЧужойПутьИПорядокВСообщенииСохраняются()
+    {
+        var session = await SharedChatAsync("att-queue-foreign");
+        _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: true).Outcome.Should().Be(ChatVisibilityOutcome.Ok);
+        var priv = Upload(session, TestUserId, "doc.txt", "body");
+        WriteProjectFile(session, "docs/note.md", "чужое");
+        await EnqueueWithAttachmentAsync(session, "файл и заметка", [priv, "docs/note.md"]);
+
+        var result = _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: false);
+
+        result.Outcome.Should().Be(ChatVisibilityOutcome.Ok);
+        var shared = result.AttachmentMoves!.Should().ContainKey(priv).WhoseValue;
+        var queued = _sut.GetPending(session.Id).Should().ContainSingle().Subject;
+        queued.AttachedPaths.Should().Equal(new[] { shared, "docs/note.md" },
+            "чужой путь не тронут, порядок списка сохранён");
+        File.ReadAllText(Path.Combine(ProjectRootOf(session), "docs/note.md")).Should().Be("чужое");
+    }
+
+    // Порядок «перенос → перепись»: не удалось перенести файлы — очередь остаётся как была,
+    // вместе с флагом (состояние целое, путь в нём резолвится).
+    [Fact]
+    public async Task ПереносНеУдался_ОчередьНеМеняется_ФлагОстаётсяПриватным()
+    {
+        var session = await SharedChatAsync("att-queue-fail");
+        _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: true).Outcome.Should().Be(ChatVisibilityOutcome.Ok);
+        var priv = Upload(session, TestUserId, "doc.txt", "body");
+        await EnqueueWithAttachmentAsync(session, "посмотри файл", [priv]);
+        // Занимаем целевой общий путь: File.Move(overwrite:false) падает
+        var target = Path.Combine(ProjectRootOf(session), PrivateAttachments.ToShared(priv)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+        File.WriteAllText(target, "occupied");
+
+        _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: false).Outcome
+            .Should().Be(ChatVisibilityOutcome.AttachmentsMoveFailed);
+
+        var queued = _sut.GetPending(session.Id).Should().ContainSingle().Subject;
+        queued.AttachedPaths.Should().Equal(new[] { priv }, "отказ переноса не трогает очередь");
+        session.PrivateToUserId.Should().Be(TestUserId, "флаг не снимается");
+        File.ReadAllText(Path.Combine(ProjectRootOf(session), priv)).Should().Be("body");
+    }
+
+    // Гонка (S2d-6b-7): снятие приватности и постановка сообщения в очередь идут параллельно.
+    // Перепись — под PendingLock, постановка — под тем же замком: ни одно сообщение не теряется
+    // и не дублируется, порядок очереди сохраняется, каждый путь очереди резолвится. Чужой путь
+    // второго сообщения вне .cc-attachments — чтобы гонка не рвала assertion на переносимом.
+    [Fact]
+    public async Task ГонкаСнятиеПриватностиИПостановкаВОчередь_НичегоНеТеряется_ПутиРезолвятся()
+    {
+        for (var i = 0; i < 10; i++)
+        {
+            var session = await SharedChatAsync("att-queue-race" + i);
+            _sut.SetChatVisibility(session.Id, TestUserId, makePrivate: true).Outcome.Should().Be(ChatVisibilityOutcome.Ok);
+            var priv = Upload(session, TestUserId, $"d{i}.txt", "body");
+            var foreign = $"docs/n{i}.md";
+            WriteProjectFile(session, foreign, "чужое");
+            var id = session.Id;
+            var root = ProjectRootOf(session);
+            await EnqueueWithAttachmentAsync(session, "первое", [priv]);
+
+            using var go = new ManualResetEventSlim(false);
+            var enqueue = Task.Run(async () =>
+            {
+                go.Wait();
+                return await _sut.SendMessageAsync(id, "второе", [foreign], senderUserId: TestUserId);
+            });
+            var toggle = Task.Run(() => { go.Wait(); return _sut.SetChatVisibility(id, TestUserId, makePrivate: false); });
+            go.Set();
+            var sent = await enqueue.WaitAsync(TimeSpan.FromSeconds(10));
+            var result = await toggle.WaitAsync(TimeSpan.FromSeconds(10));
+
+            sent.Should().Be(SessionManager.SendUserOutcome.Queued, $"итерация {i}");
+            result.Outcome.Should().Be(ChatVisibilityOutcome.Ok, $"итерация {i}");
+            var moved = result.AttachmentMoves!.Should().ContainKey(priv).WhoseValue;
+
+            var queued = _sut.GetPending(id);
+            queued.Should().HaveCount(2, $"итерация {i}: ни одно сообщение не потеряно и не задублировано");
+            queued[0].Text.Should().Be("первое", "порядок очереди не изменился");
+            queued[1].Text.Should().Be("второе");
+            queued[0].AttachedPaths.Should().Equal(new[] { moved }, $"итерация {i}: стоявшее в очереди переписано");
+            queued[1].AttachedPaths.Should().Equal(new[] { foreign }, "чужой путь не тронут");
+            foreach (var p in queued.SelectMany(q => q.AttachedPaths!))
+                File.Exists(Path.Combine(root, p)).Should().BeTrue($"итерация {i}: {p} не резолвится");
+        }
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

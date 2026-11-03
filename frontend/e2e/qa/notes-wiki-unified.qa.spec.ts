@@ -913,8 +913,10 @@ test('сценарий 1: флаг включён — дерево слева, �
   await expect(page.getByTestId('wiki-rail-health')).toBeVisible();
   await expect(page.getByTestId('wiki-rail-settings')).toBeVisible();
 
-  // В центре — только документ: вкладок каталога и кнопок правки в центре нет
-  await expect(page.getByRole('button', { name: 'Страницы', exact: true })).toHaveCount(0);
+  // В центре — только документ: вкладок каталога и кнопок правки в центре нет.
+  // Кнопку проверяем по контейнеру центра: «Страницы» есть на рельсе — её добавил
+  // фикс 5a12368dd (вход в центральный вид вики), глобальная проверка ловила её как ложный провал.
+  await expect(page.getByTestId('wiki-doc').getByRole('button', { name: 'Страницы', exact: true })).toHaveCount(0);
   await expect(page.getByTestId('wiki-page-row')).toHaveCount(0);
 
   expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);

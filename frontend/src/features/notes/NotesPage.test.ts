@@ -631,6 +631,79 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     root.unmount();
   });
 
+  // Мутации (вывод прогона — в отчёте задачи): (1) не рисовать WikiRail в центре unified →
+  // «в режиме заметок рельса есть» краснеет; (2) не передавать pages в WikiRail → «вход в вики
+  // из пустой вики» краснеет; (3) вернуть рельсу в WikiTab → «ровно одна рельса» краснеет.
+  const rails = (c: AnyNode) => {
+    const out: AnyNode[] = [];
+    const walk = (x: AnyNode) => {
+      if (x.nodeType === 1 && (x as unknown as { getAttribute(n: string): string | null }).getAttribute('data-testid') === 'wiki-rail') out.push(x);
+      for (const ch of x.childNodes) walk(ch);
+    };
+    walk(c);
+    return out;
+  };
+
+  it('TL-8: unified — в режиме заметок рельса вики есть (четыре раздела + «Страницы»), панель закрыта', async () => {
+    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+    const { root, container } = mountNotes();
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-doc'), 'режим заметок: центр не вики').toBeNull();
+    expect(rails(container as unknown as AnyNode).length, 'рельса одна').toBe(1);
+    for (const id of ['pages', 'inbox', 'journal', 'health', 'settings'])
+      expect(findNodeByAttr(container, 'data-testid', `wiki-rail-${id}`), `кнопка ${id}`).not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-panel'), 'панель закрыта').toBeNull();
+    root.unmount();
+  });
+
+  it('TL-8: пустая вики — «Страницы» на рельсе ведут к «Завести вики»; панель вики открывается без заведённой вики', async () => {
+    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+    wikiMock.tree = { initialized: false, sections: [] };
+    const { root, container } = mountNotes();
+    await settle();
+    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-rail-settings')!);
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-panel'), 'панель «Настройки» открыта при пустой вики').not.toBeNull();
+    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-rail-pages')!);
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-init-btn'), '«Завести вики» достижима').not.toBeNull();
+    expect(rails(container as unknown as AnyNode).length, 'в режиме «Вики» рельса ровно одна').toBe(1);
+    // повторное нажатие «Страниц» возвращает к заметкам
+    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-rail-pages')!);
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-init-btn')).toBeNull();
+    root.unmount();
+  });
+
+  it('TL-8: кнопка рельсы открывает панель, повторное нажатие закрывает; в режиме «Вики» рельса одна', async () => {
+    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+    const { root, container } = mountNotes();
+    await settle();
+    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-rail-journal')!);
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-panel'), 'панель открыта').not.toBeNull();
+    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-rail-pages')!);
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-doc'), 'центр — вики').not.toBeNull();
+    expect(rails(container as unknown as AnyNode).length, 'ровно одна рельса').toBe(1);
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-panel'), 'панель пережила смену режима').not.toBeNull();
+    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-rail-journal')!);
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-panel'), 'повторное нажатие закрывает').toBeNull();
+    root.unmount();
+  });
+
+  it('TL-8: без notes-wiki-unified рельсы на десктопе нет', async () => {
+    setAllFlags({ 'llm-wiki': true });
+    const { root, container } = mountNotes();
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-rail'), 'рельсы нет').toBeNull();
+    clickNode(findNodeByAttr(container, 'aria-label', 'Вики')!);
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-rail'), 'и в режиме «Вики» прежней раскладки нет').toBeNull();
+    root.unmount();
+  });
+
   it('переключение «Заметки ↔ Вики» работает в обе стороны', async () => {
     setAllFlags({ 'llm-wiki': true });
     const { root, container } = mountNotes();

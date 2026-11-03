@@ -41,10 +41,28 @@ export function ReplacementDot({ top = 4, right = 4 }: { top?: number; right?: n
   );
 }
 
-/** Рельса кнопок раздела: нажатие открывает панель, повторное — закрывает */
-export function WikiRail({ active, onSelect }: { active: WikiSubTabId | null; onSelect: (id: WikiSubTabId | null) => void }) {
+/** Рельса кнопок раздела: нажатие открывает панель, повторное — закрывает.
+ *  pages — первая кнопка «Страницы»: вход в центральный вид вики из режима заметок
+ *  (в том числе при пустой вики, где в дереве нет ни одной страницы); повторное нажатие
+ *  возвращает к заметкам. Не передано — кнопки нет */
+export function WikiRail({ active, onSelect, pages }: {
+  active: WikiSubTabId | null; onSelect: (id: WikiSubTabId | null) => void;
+  pages?: { active: boolean; onClick: () => void };
+}) {
+  const pagesTab = WIKI_SUBTABS.find(t => t.id === 'pages');
   return (
     <div data-testid="wiki-rail" role="toolbar" aria-label="Панель вики" aria-orientation="vertical" style={railStyle}>
+      {pages && pagesTab && (
+        <Button
+          variant={pages.active ? 'secondary' : 'ghost'}
+          size="md"
+          dataTestId="wiki-rail-pages"
+          ariaLabel={pagesTab.label}
+          title={pagesTab.label}
+          ariaPressed={pages.active}
+          leftIcon={wikiSubTabIcon(pagesTab)}
+          onClick={pages.onClick} >{null}</Button>
+      )}
       {panelTabs().map(t => (
         <span key={t.id} style={{ position: 'relative', display: 'inline-flex' }}>
         <Button

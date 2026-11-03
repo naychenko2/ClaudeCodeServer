@@ -815,7 +815,7 @@ describe('Единая раскладка (F1, unified)', () => {
   }
   const makeHost = () => (globalThis as unknown as { document: { createElement(t: string): never } }).document.createElement('div');
 
-  it('дерево — в левой зоне (узел treeHost), в центре его нет; документ в центре, справа рельса из четырёх разделов; панель закрыта', async () => {
+  it('дерево — в левой зоне (узел treeHost), в центре его нет; документ в центре; рельсы и панели в самом WikiTab нет (они в NotesPage)', async () => {
     installFakeDom();
     const host = makeHost();
     const c = renderUnified(TREE, host);
@@ -823,11 +823,8 @@ describe('Единая раскладка (F1, unified)', () => {
     expect(findNodeByAttr(host, 'data-testid', 'wiki-tree'), 'дерево в левой зоне').not.toBeNull();
     expect(findNodeByAttr(c, 'data-testid', 'wiki-tree'), 'в контентной зоне дерева нет').toBeNull();
     expect(has(c, 'Ревью фронта'), 'в центре каталог выбранного раздела').toBe(true);
-    expect(findNodeByAttr(c, 'data-testid', 'wiki-rail'), 'рельса').not.toBeNull();
-    for (const id of ['inbox', 'journal', 'health', 'settings']) {
-      expect(findNodeByAttr(c, 'data-testid', `wiki-rail-${id}`), `кнопка рельсы ${id}`).not.toBeNull();
-    }
-    expect(findNodeByAttr(c, 'data-testid', 'wiki-panel'), 'панель закрыта, пока не выбрали раздел').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-rail'), 'рельса живёт в NotesPage, дубля здесь нет').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-panel')).toBeNull();
   });
 
   it('левая зона закрыта (treeHost = null): дерева нет нигде, центр цел', async () => {
@@ -868,17 +865,6 @@ describe('Единая раскладка (F1, unified)', () => {
     }
     expect(textNodes(doc).join(' ')).not.toContain('Страницы');
     expect(textNodes(doc).join(' ')).not.toContain('Журнал');
-  });
-
-  it('кнопка рельсы открывает панель, повторное нажатие закрывает', async () => {
-    const c = renderUnified(TREE);
-    await settle();
-    clickTestId(c, 'wiki-rail-settings');
-    const panel = findNodeByAttr(c, 'data-testid', 'wiki-panel');
-    expect(panel, 'панель «Настройки» открыта').not.toBeNull();
-    expect(textNodes(panel!).join(' ')).toContain('Настройки');
-    clickTestId(c, 'wiki-rail-settings');
-    expect(findNodeByAttr(c, 'data-testid', 'wiki-panel'), 'повторное нажатие закрывает').toBeNull();
   });
 
   it('без unified рельсы нет — прежняя раскладка с вкладками и колонкой дерева внутри', async () => {

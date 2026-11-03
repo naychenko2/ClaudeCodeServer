@@ -24,7 +24,11 @@ const EDIT_PAGE_2 = 'Тест правки 2';
 const ADD_PAGE = 'Тест добавления';
 const CHRONICLE_PAGE = 'Хроника чата QA';
 const DISPUTE_PAGE = 'Тест спора';
+// Имя варианта намеренно не содержит «Тест спора»: выбор страницы в дереве идёт по подстроке,
+// иначе основной сценарий открывал бы вариант.
+const DISPUTE_NOTES_PAGE = 'Спор только в заметках';
 const DISPUTE_PKG_ID = 'ccddeeff-eeff-0011-2233-445566778899';
+const DISPUTE_NOTES_PKG_ID = 'ddeeff00-1122-3344-5566-778899001122';
 const AI_CARD = 'ИИ-разбор 111111';
 const HUMAN_CARD = 'Правка человека 222222';
 const PKG_ID = 'aabbccdd-eeff-0011-2233-445566778899';
@@ -192,6 +196,37 @@ ${DISPUTE_TEXT} [^s1]
 [^s2]: [[${HUMAN_CARD}]] — «${HUMAN_STATEMENT}»
 `;
 
+// Вариант (QA3, п.4): оспоренная строка человека осталась только в «Заметках» — «Заметки» не
+// секция утверждений (WikiPage.AssertionSectionNames), поэтому цель спора не находится: метки
+// нигде нет, карточка спора остаётся.
+const OTHER_STATEMENT = 'Формулировка про очередь в Сводке другая.';
+const PAGE_DISPUTE_NOTES = `---
+type: topic
+aliases: []
+owns: []
+sources: []
+status: active
+---
+
+# ${DISPUTE_NOTES_PAGE}
+
+## Сводка
+${OTHER_STATEMENT} [^s2]
+
+## Хронология
+
+## Противоречия
+${DISPUTE_TEXT} [^s1]
+
+## История
+
+## Заметки
+${HUMAN_STATEMENT}
+
+[^s1]: [[${AI_CARD}]] — «${DISPUTE_TEXT}»
+[^s2]: [[${HUMAN_CARD}]] — «${OTHER_STATEMENT}»
+`;
+
 // Страница-хроника (type: chronicle): правки нет, и вместо плашки про Хранителя —
 // своё объяснение (дефект a16c6167).
 const PAGE_CHRONICLE = `---
@@ -243,6 +278,7 @@ async function reseed(): Promise<void> {
   hashes[`Личное/${ADD_PAGE}.md`] = write(path.join(pages, `${ADD_PAGE}.md`), PAGE_ADD);
   hashes[`Личное/${CHRONICLE_PAGE}.md`] = write(path.join(pages, `${CHRONICLE_PAGE}.md`), PAGE_CHRONICLE);
   hashes[`Личное/${DISPUTE_PAGE}.md`] = write(path.join(pages, `${DISPUTE_PAGE}.md`), PAGE_DISPUTE);
+  hashes[`Личное/${DISPUTE_NOTES_PAGE}.md`] = write(path.join(pages, `${DISPUTE_NOTES_PAGE}.md`), PAGE_DISPUTE_NOTES);
 
   // Страница раздела «Общее» — для пробы отказа гейта (ссылка вниз, в «Личное»)
   const commonDir = path.join(root, 'pages', 'Общее');
@@ -332,11 +368,25 @@ status: active
   };
   writeFileSync(path.join(root, 'keeper/packages', `${DISPUTE_PKG_ID}.json`), JSON.stringify(disputePkg), 'utf8');
 
+  // Вариант п.4: тот же спор на странице, где цель осталась только в «Заметках»
+  const disputeNotesPkg = {
+    ...disputePkg,
+    id: DISPUTE_NOTES_PKG_ID,
+    operations: [{ ...disputePkg.operations[0], page: `Личное/${DISPUTE_NOTES_PAGE}.md` }],
+    createdAt: '2026-11-02T05:31:00.0000000+00:00', updatedAt: '2026-11-02T05:31:00.0000000+00:00',
+  };
+  writeFileSync(path.join(root, 'keeper/packages', `${DISPUTE_NOTES_PKG_ID}.json`), JSON.stringify(disputeNotesPkg), 'utf8');
+
   const logLines = [
     {
       ts: '2026-11-02T05:30:05.0000000+00:00', op: 'apply', section: 'personal',
       pages: [`Личное/${DISPUTE_PAGE}.md`], source: 'session:qa11111111#m1-m9', actor: 'ai',
       policy: 'auto', packages: [DISPUTE_PKG_ID], overrodeHuman: true,
+    },
+    {
+      ts: '2026-11-02T05:31:05.0000000+00:00', op: 'apply', section: 'personal',
+      pages: [`Личное/${DISPUTE_NOTES_PAGE}.md`], source: 'session:qa11111111#m1-m9', actor: 'ai',
+      policy: 'auto', packages: [DISPUTE_NOTES_PKG_ID], overrodeHuman: true,
     },
     {
       ts: '2026-11-02T05:48:05.0000000+00:00', op: 'apply', section: 'personal',
@@ -1066,10 +1116,12 @@ test('QA2 02125be1: конфликт 409 с добавленным утверж�
   expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
 });
 
-// Из «не проверено» первого круга: спор «ИИ оспаривает». Состояние собирается фикстурой
-// (пакет conflict@human + строка журнала apply с overrodeHuman) — проверяется UI спора,
+// Из «не проверено» первого круга (дефект 94d531be): спор «ИИ оспаривает». Состояние собирается
+// фикстурой (пакет conflict@human + строка журнала apply с overrodeHuman) — проверяется UI спора,
 // а не ночной разбор, который такой пакет в жизни порождает.
-test('QA2 «ИИ оспаривает» (conflict@human): метка на утверждении, карточка спора и «оспорил» в журнале', async ({ page, context }) => {
+// QA3 (после фикса overrides[].target): метка обязана стоять на живой строке человека в «Сводке»,
+// а не на доводе ИИ в «Противоречиях» (ADR-038 §308, макет §516/§730).
+test('QA3 «ИИ оспаривает»: метка на строке человека в «Сводке», карточка и «оспорил» в журнале', async ({ page, context }) => {
   const errors = collectConsoleErrors(page);
   await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
   await setFlags(true);
@@ -1078,33 +1130,97 @@ test('QA2 «ИИ оспаривает» (conflict@human): метка на утв
   await expect(page.getByTestId('wiki-unified-tree')).toBeVisible({ timeout: 20000 });
   await openWikiPage(page, DISPUTE_PAGE);
 
-  // Карточка спора и метка на человеческом утверждении; текст человека на месте
-  await expect(page.getByTestId('wiki-override-disputed')).toContainText('ИИ оспаривает ваше утверждение');
-  await expect(page.getByTestId('wiki-override-disputed')).toContainText('Ваш текст на месте');
+  // П.1: метка — ровно одна, на строке человека в «Сводке»; на доводе ИИ в «Противоречиях» её нет
   const tag = page.getByTestId('wiki-override-tag');
   await expect(tag).toHaveCount(1);
   await expect(tag).toHaveAttribute('data-kind', 'disputed');
   await expect(tag).toContainText('ИИ оспаривает');
-  await expect(page.getByTestId('wiki-page')).toContainText(HUMAN_STATEMENT);
-  // Где именно метка: по коду она у строки previous, а previous живого спора бэк отдаёт только
-  // из «Истории» — фиксирую фактическое место как доказательство в отчёт
-  console.log('DISPUTE-MARK ' + JSON.stringify(await page.evaluate(() => {
+  const mark = await page.evaluate(() => {
     const t = document.querySelector('[data-testid="wiki-override-tag"]');
     return {
       section: t?.closest('[data-testid="wiki-section"]')?.getAttribute('data-section-name') ?? null,
-      line: (t?.closest('li')?.textContent || '').slice(0, 80),
+      line: (t?.closest('li')?.textContent || '').slice(0, 120),
     };
-  })));
-  await shot(page, 'qa2-08-dispute-1280.png');
+  });
+  console.log('DISPUTE-MARK ' + JSON.stringify(mark));
+  expect(mark.section, 'метка стоит в секции «Сводка»').toBe('Сводка');
+  expect(mark.line, 'метка стоит на строке человека').toContain(HUMAN_STATEMENT);
+  await expect(page.getByTestId('wiki-page')).toContainText(HUMAN_STATEMENT);
+  await expect(page.getByTestId('wiki-section').filter({ hasText: DISPUTE_TEXT }).getByTestId('wiki-override-tag'))
+    .toHaveCount(0);
+  await shot(page, 'qa3-01-dispute-mark-on-human-1280.png');
 
-  // «Журнал»: вид «оспорил» и действие «Открыть страницу» (не «Вернуть мою»).
-  // Заголовок строки — имя источника, страницы в тексте строки нет: мерим по виду действия
+  // П.2: карточка «ИИ оспаривает ваше утверждение» — над секциями страницы
+  const card = page.getByTestId('wiki-override-disputed');
+  await expect(card).toContainText('ИИ оспаривает ваше утверждение');
+  await expect(card).toContainText('Ваш текст на месте');
+  const cardBox = await card.boundingBox();
+  const firstSectionBox = await page.getByTestId('wiki-section').first().boundingBox();
+  expect(cardBox!.y, 'карточка спора — выше первой секции страницы').toBeLessThan(firstSectionBox!.y);
+
+  // П.5: «Журнал» — вид «оспорил», действие «Открыть страницу», не «Вернуть мою».
+  // Строки спора в журнале две (вторая — вариант п.4): проверяем каждую.
   await page.getByTestId('wiki-rail-journal').click();
-  const row = page.getByTestId('wiki-journal-row').filter({ hasText: 'оспорил' });
-  await expect(row).toHaveCount(1, { timeout: 15000 });
-  // Кнопка действия — сосед строки (не внутри неё): у спора «Открыть страницу», не «Вернуть мою»
-  await expect(page.getByTestId('wiki-journal-open-page')).toContainText('Открыть страницу');
-  await shot(page, 'qa2-09-journal-dispute-1280.png');
+  const rows = page.getByTestId('wiki-journal-row').filter({ hasText: 'оспорил' });
+  const n = await rows.count();
+  expect(n, 'в «Журнале» есть строки вида «оспорил»').toBeGreaterThanOrEqual(1);
+  for (let i = 0; i < n; i++) {
+    const wrap = rows.nth(i).locator('..');
+    await expect(wrap.getByTestId('wiki-journal-open-page')).toContainText('Открыть страницу');
+    await expect(wrap.getByTestId('wiki-journal-restore')).toHaveCount(0);
+  }
+  // «Вернуть мою» в журнале — ровно одна: у строки замены (supersede), ни у одной строки спора
+  await expect(page.getByTestId('wiki-journal-restore')).toHaveCount(1);
+  await shot(page, 'qa3-02-journal-dispute-1280.png');
+
+  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
+});
+
+// П.4: оспоренная строка осталась только в «Заметках» — «Заметки» не секция утверждений,
+// цель спора не находится: метки нигде нет (и на строке «Заметок» тоже), карточка остаётся.
+test('QA3: оспоренная строка только в «Заметках» — метки на её строке нет, карточка остаётся', async ({ page, context }) => {
+  const errors = collectConsoleErrors(page);
+  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await setFlags(true);
+  await reseed();
+  await openApp(page);
+  await openWikiPage(page, DISPUTE_NOTES_PAGE);
+
+  await expect(page.getByTestId('wiki-override-disputed')).toBeVisible();
+  await expect(page.getByTestId('wiki-notes-body')).toContainText(HUMAN_STATEMENT);
+  await expect(page.getByTestId('wiki-override-tag')).toHaveCount(0);
+  await shot(page, 'qa3-04-notes-only-no-tag-1280.png');
+
+  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
+});
+
+// П.3: человек переписал утверждение — цель спора больше не находится ни в одной секции
+// утверждений → метки на строке нет, карточка спора остаётся (ADR-038 §425: «без target запись
+// живёт, пока на странице есть previous или довод ИИ»). Последний assert — красный: карточка
+// падает, это дефект edc9fa40 (цепочка target ?? previous ?? statement в wiki.ts:1541
+// останавливается на previous из «Истории», а «История» в действующие строки не входит).
+test('QA3: человек переписал утверждение — метки на строке нет, карточка спора остаётся', async ({ page, context }) => {
+  const errors = collectConsoleErrors(page);
+  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await setFlags(true);
+  await reseed();
+  await openApp(page);
+  await openWikiPage(page, DISPUTE_PAGE);
+  await expect(page.getByTestId('wiki-override-tag')).toHaveCount(1);
+
+  const NEW_TEXT = 'Формулировка человека переписана начисто.';
+  await page.getByTestId('wiki-edit-open').click();
+  await expect(page.getByTestId('wiki-editor')).toBeVisible();
+  const field = page.getByTestId('wiki-edit-item-0').locator('textarea');
+  await expect(field, 'в редакторе первое утверждение «Сводки» — строка человека').toHaveValue(HUMAN_STATEMENT);
+  await field.fill(NEW_TEXT);
+  await page.getByTestId('wiki-edit-save').click();
+  await expect(page.getByTestId('wiki-editor')).toHaveCount(0, { timeout: 15000 });
+
+  await expect(page.getByTestId('wiki-page')).toContainText(NEW_TEXT);
+  await expect(page.getByTestId('wiki-override-tag')).toHaveCount(0);
+  await shot(page, 'qa3-03-rewritten-no-tag-1280.png');
+  await expect(page.getByTestId('wiki-override-disputed'), 'карточка спора должна остаться (дефект edc9fa40)').toBeVisible();
 
   expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
 });

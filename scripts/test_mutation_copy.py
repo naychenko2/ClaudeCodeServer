@@ -137,6 +137,48 @@ class SyntheticTests(Base):
         status = sorted(git(dst, "status", "--porcelain").splitlines())
         self.assertEqual([" D backend/App/Tracked.cs", " M backend/App/App.cs", "?? backend/App/New.cs"], status)
 
+    def stub(self, name, body):
+        """Заглушка команды в PATH на время теста."""
+        d = os.path.join(self.tmp, "stub-bin")
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, name)
+        with open(path, "w") as f:
+            f.write("#!/bin/sh\n" + body)
+        os.chmod(path, 0o755)
+        self.env["PATH"] = d + os.pathsep + self.env.get("PATH", "")
+
+    def test_create_не_падает_молча_на_проекте_без_obj_и_свежем_кеше(self):
+        # Единственный (значит, последний по порядку) .csproj — без obj; App с obj без .csproj
+        # держит пересчёт хешей включённым. Заглушка dotnet кладёт кеш, которого нет в источнике:
+        # `cond && cmd` последним в цикле давал код 1 в обоих местах prime_compile_cache.
+        self.write("backend/Lib/Lib.csproj", "<Project />\n")
+        self.env.pop("CCS_MUTATION_NO_PRIME")
+        self.stub("dotnet", "mkdir -p backend/App/obj/Debug\n"
+                            ": > backend/App/obj/Debug/Fresh.CoreCompileInputs.cache\n")
+        p = run(["create", "--from", self.src], self.env, check=False)
+        lines = p.stdout.strip().splitlines()
+        if lines:
+            self.created.append(lines[-1])
+        self.assertEqual(0, p.returncode, p.stderr)
+        dst = lines[-1]
+        self.assertTrue(os.path.exists(os.path.join(dst, "backend/App/obj/Debug/Fresh.CoreCompileInputs.cache")),
+                        "заглушка dotnet не вызвана — пересчёт хешей не шёл")
+        self.assertIn(dst, worktrees(self.src))
+
+    def test_create_при_сбое_в_середине_убирает_копию_и_пишет_причину(self):
+        # rsync тёплых obj (второй вызов) падает — после worktree add и метаданных.
+        real = shutil.which("rsync")
+        self.stub("rsync", 'case "$*" in *--prune-empty-dirs*) echo "rsync: сбой-заглушка" >&2; exit 23;; esac\n'
+                           'exec "%s" "$@"\n' % real)
+        p = run(["create", "--from", self.src], self.env, check=False)
+        self.assertNotEqual(0, p.returncode)
+        self.assertEqual("", p.stdout)
+        self.assertIn("create прерван", p.stderr)
+        self.assertIn("rsync", p.stderr)
+        self.assertEqual([".meta"], os.listdir(self.root))
+        self.assertEqual([], os.listdir(os.path.join(self.root, ".meta")))
+        self.assertEqual([os.path.realpath(self.src)], [os.path.realpath(w) for w in worktrees(self.src)])
+
     def test_remove_убирает_каталог_и_запись_worktree(self):
         dst = self.create(self.src)
         run(["remove", dst], self.env)

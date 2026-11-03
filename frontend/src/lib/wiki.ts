@@ -1536,9 +1536,10 @@ export function wikiOverridesOf(page: { overrides?: unknown; content?: unknown }
   const active = new Set(wikiActiveLines(page.content).map(normWikiStatement));
   return all.filter(o => {
     // Замена — по утверждению ИИ. Спор — по живой строке человека (target): переписал её —
-    // спор снят. Без target метки на строке нет, плашка живёт, пока довод ИИ (лежит в
-    // «Противоречиях») на странице; previous, если пришёл, важнее
-    const text = o.op === 'supersede' ? o.statement : (o.target ?? o.previous ?? o.statement);
+    // спор снят. Без target (человек переписал утверждение) карточка живёт, пока довод ИИ
+    // (statement, лежит в «Противоречиях») среди действующих строк; previous лежит в «Истории»
+    // и в проверку не входит — он нужен только «Вернуть мою»
+    const text = o.op === 'supersede' ? o.statement : (o.target ?? o.statement);
     return !!text && active.has(normWikiStatement(text));
   });
 }

@@ -33,7 +33,7 @@ import {
 } from '../../../../components/chat/__tests__/fakeDom';
 import { WikiPageView, parseWikiPage } from '../WikiPageView';
 import { ReplacementDot } from '../WikiUnifiedChrome';
-import { __test as wikiStore, loadWikiPage, wikiActiveLines, type WikiPageDto, type WikiPageAuthoredDto, type WikiOverrideDto, type WikiPageOverriddenDto } from '../../../../lib/wiki';
+import { __test as wikiStore, loadWikiPage, wikiActiveLines, wikiOverridesOf, type WikiPageDto, type WikiPageAuthoredDto, type WikiOverrideDto, type WikiPageOverriddenDto } from '../../../../lib/wiki';
 import { FOOTNOTE_TEXT, fmtDayMonth } from '../WikiFootnotePopover';
 
 // Мок с сохранением остальных экспортов: компонент берёт эти модули через кит хоста,
@@ -929,10 +929,38 @@ updated: 2026-11-02
     expect(has(c, 'ИИ оспаривает ваше утверждение')).toBe(true);
   });
 
-  it('человек переписал строку (target исчез со страницы): метка и плашка спора гаснут', async () => {
+  // Страница после переписи оспоренного утверждения (формат бэка): строка человека ушла в «Историю»
+  // со сноской, довод ИИ остался в «Противоречиях», на живых строках её нет
+  const PAGE_DISPUTE_REWRITTEN = PAGE_DISPUTE
+    .replace('Резину меняем в конце октября. [^s1]', 'Резину меняем в ноябре. [^s3]')
+    .replace('## История\n', '## История\n\nРезину меняем в конце октября. [^s1]\n');
+  const OVR_DISPUTED_REWRITTEN: WikiOverrideDto = { ...OVR_DISPUTED, target: null, previous: 'Резину меняем в конце октября. [^s1]' };
+
+  it('человек переписал оспоренное утверждение (target: null, previous в «Истории»): карточка есть, метки на строке нет', async () => {
     unifiedOn();
-    const rewritten = PAGE_DISPUTE.replace('Резину меняем в конце октября.', 'Резину меняем в ноябре.');
-    await seedPage(withOvr([OVR_DISPUTED], { content: rewritten }));
+    await seedPage(withOvr([OVR_DISPUTED_REWRITTEN], { content: PAGE_DISPUTE_REWRITTEN }));
+    const c = renderPage();
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-override-disputed')).not.toBeNull();
+    expect(tag(c)).toHaveLength(0);
+  });
+
+  it('wikiOverridesOf: переписал — запись остаётся; довод ИИ тоже убран — записи нет; спор с target — по target; замена — по утверждению ИИ', () => {
+    const rewritten = { content: PAGE_DISPUTE_REWRITTEN, overrides: [OVR_DISPUTED_REWRITTEN] };
+    expect(wikiOverridesOf(rewritten)).toHaveLength(1);
+    const noArgument = PAGE_DISPUTE_REWRITTEN.replace('Резину меняем в начале ноября. [^s2]\n', '');
+    expect(wikiOverridesOf({ ...rewritten, content: noArgument })).toHaveLength(0);
+    // с target: живая строка есть — запись есть; переписана — записи нет, хотя довод ИИ на месте
+    expect(wikiOverridesOf({ content: PAGE_DISPUTE, overrides: [OVR_DISPUTED] })).toHaveLength(1);
+    expect(wikiOverridesOf({ content: PAGE_DISPUTE_REWRITTEN, overrides: [OVR_DISPUTED] })).toHaveLength(0);
+    // supersede: без изменений — по утверждению ИИ
+    expect(wikiOverridesOf({ content: PAGE_OVR, overrides: [OVR_REPLACED] })).toHaveLength(1);
+    expect(wikiOverridesOf({ content: PAGE_RESTORED, overrides: [OVR_REPLACED] })).toHaveLength(0);
+  });
+
+  it('человек переписал строку с target (target исчез со страницы): метка и плашка спора гаснут', async () => {
+    unifiedOn();
+    await seedPage(withOvr([OVR_DISPUTED], { content: PAGE_DISPUTE_REWRITTEN }));
     const c = renderPage();
     await settle();
     expect(tag(c)).toHaveLength(0);

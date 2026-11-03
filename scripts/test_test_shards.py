@@ -1155,5 +1155,392 @@ class PregateConfigCompatTests(unittest.TestCase):
         self.assertEqual({ts.ADAPTIVE_ENV: "backend/ClaudeHomeServer.Tests=4"}, check["Env"])
 
 
+def write_trx_full(directory, name, results, stamp="20261103120000"):
+    """results: [(testName, outcome, сборка|None)] -> TRX с TestDefinitions (storage сборки), как пишет логгер VSTest."""
+    defs, rows = [], []
+    for i, (n, o, asm) in enumerate(results):
+        tid = f"id-{i}"
+        if asm:
+            defs.append(f'<UnitTest id="{tid}" name="{n}" storage="/x/bin/{asm}.dll" />')
+        rows.append(f'<UnitTestResult testId="{tid}" testName="{n}" outcome="{o}" />')
+    path = os.path.join(directory, f"{name}_net10.0_{stamp}.trx")
+    with open(path, "w", encoding="utf-8-sig") as f:
+        f.write(f'<?xml version="1.0" encoding="utf-8"?><TestRun xmlns="{TRX_NS}">'
+                f'<TestDefinitions>{"".join(defs)}</TestDefinitions><Results>{"".join(rows)}</Results></TestRun>')
+    return path
+
+
+class FakeProc:
+    def __init__(self, rc):
+        self.returncode = rc
+
+    def wait(self):
+        return self.returncode
+
+
+def filter_fqns(flt):
+    return [t[len("FullyQualifiedName="):] for t in flt.split("|")]
+
+
+class RerunTests(unittest.TestCase):
+    """Перезапуск упавших в локальных --run/--run-fast: флак зелёный, но виден; упавший дважды и аборт — красные."""
+    EXPECTED = {"App.Tests.A.One", "App.Tests.A.Two", "App.Tests.B.Three"}
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.launched = []
+        self._orig = ts.launch
+        ts.launch = self.fake_launch
+        self.second = {}  # FQN -> исход второго запуска; нет в словаре — тест во втором запуске не нашёлся
+
+    def tearDown(self):
+        ts.launch = self._orig
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def fake_launch(self, args, log_path):
+        flt = args[args.index("--filter") + 1]
+        directory = args[args.index("--results-directory") + 1]
+        prefix = next(a for a in args if a.startswith("trx;LogFilePrefix="))[len("trx;LogFilePrefix="):]
+        fqns = filter_fqns(flt)
+        self.launched.append((args[0], fqns))
+        rows = [(f, self.second[f], None) for f in fqns if f in self.second]
+        write_trx_full(directory, prefix, rows)
+        return FakeProc(1 if any(o != "Passed" for _, o, _ in rows) else 0), open(log_path, "w")
+
+    def shard(self, code, results, expected=None, target="b/App.Tests", log_text="", proof=None, name="shard1"):
+        """(процесс, доказательство, отчёт) шарда первого прогона с TRX results."""
+        run = tempfile.mkdtemp(dir=self.tmp)  # своя папка: TRX одного префикса у разных случаев не затирают друг друга
+        write_trx_full(run, name, results)
+        log = os.path.join(run, f"{name}.log")
+        with open(log, "w", encoding="utf-8") as f:
+            f.write(log_text)
+        report = lambda: {**ts.trx_report(run, name, 0), "target": target,
+                          "expected": self.EXPECTED if expected is None else expected, "log": log}
+        return (FakeProc(code), None), proof, report
+
+    def rerun(self, *shards, code=1, rerun_max=ts.RERUN_MAX, targets=None):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            got = ts.rerun_failed(code, [s[0] for s in shards], [s[1] for s in shards], [s[2] for s in shards],
+                                  self.tmp, targets or {"App.Tests": "b/App.Tests"}, rerun_max)
+        return got, out.getvalue()
+
+    def flaky_json(self):
+        with open(os.path.join(self.tmp, ts.FLAKY_FILE), encoding="utf-8") as f:
+            return json.load(f)
+
+    RED = [("App.Tests.A.One", "Failed", "App.Tests"), ("App.Tests.A.Two", "Passed", "App.Tests"),
+           ("App.Tests.B.Three", "Passed", "App.Tests")]
+
+    def test_упал_и_прошёл_со_второго_раза_зелёный_с_блоком_флаки_и_flaky_json(self):
+        self.second = {"App.Tests.A.One": "Passed"}
+        code, out = self.rerun(self.shard(1, self.RED))
+        self.assertEqual(0, code)
+        self.assertEqual([("b/App.Tests", ["App.Tests.A.One"])], self.launched)
+        self.assertIn("Флаки (прошли со второго раза): 1\n  App.Tests.A.One\n", out)
+        self.assertNotIn("Упали дважды", out)
+        data = self.flaky_json()
+        self.assertEqual([], data["failed_twice"])
+        (entry,) = data["flaky"]
+        self.assertEqual(("App.Tests.A.One", "App.Tests.A", "App.Tests"), (entry["fqn"], entry["class"], entry["assembly"]))
+        self.assertRegex(entry["time"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d")
+
+    def test_упал_дважды_красный_и_флаки_отдельно(self):
+        red = [("App.Tests.A.One", "Failed", None), ("App.Tests.A.Two", "Failed", None),
+               ("App.Tests.B.Three", "Passed", None)]
+        self.second = {"App.Tests.A.One": "Failed", "App.Tests.A.Two": "Passed"}
+        code, out = self.rerun(self.shard(1, red))
+        self.assertEqual(1, code)
+        self.assertIn("Упали дважды: 1\n  App.Tests.A.One\n", out)
+        self.assertIn("Флаки (прошли со второго раза): 1\n  App.Tests.A.Two\n", out)
+        data = self.flaky_json()
+        self.assertEqual(["App.Tests.A.One"], data["failed_twice"])
+        self.assertEqual(["App.Tests.A.Two"], [e["fqn"] for e in data["flaky"]])
+        self.assertEqual("App.Tests", data["flaky"][0]["assembly"], "сборка без storage — по проекту шарда")
+
+    def test_во_втором_запуске_теста_нет_это_не_зелёный(self):
+        self.second = {}  # фильтр не нашёл тест: прохождение не доказано
+        code, out = self.rerun(self.shard(1, self.RED))
+        self.assertEqual(1, code)
+        self.assertIn("Упали дважды: 1", out)
+
+    def test_положительный_код_второго_запуска_не_прощается(self):
+        self.second = {"App.Tests.A.One": "Passed"}
+        orig = self.fake_launch
+
+        def launch(args, log_path):
+            _, log = orig(args, log_path)
+            return FakeProc(1), log
+        ts.launch = launch
+        code, out = self.rerun(self.shard(1, self.RED))
+        self.assertEqual(1, code)
+        self.assertIn("Упали дважды: 1", out)
+
+    def test_упавших_больше_rerun_max_без_перезапуска_красный(self):
+        many = [(f"App.Tests.A.T{i:02}", "Failed", None) for i in range(ts.RERUN_MAX + 1)]
+        self.second = {f: "Passed" for f, _, _ in many}
+        code, out = self.rerun(self.shard(1, many, expected=set()))
+        self.assertEqual(1, code)
+        self.assertEqual([], self.launched)
+        self.assertIn(f"Перезапуск пропущен: упало {ts.RERUN_MAX + 1} > RERUN_MAX ({ts.RERUN_MAX})", out)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, ts.FLAKY_FILE)))
+
+    def test_ровно_rerun_max_упавших_перезапускаются(self):
+        many = [(f"App.Tests.A.T{i:02}", "Failed", None) for i in range(ts.RERUN_MAX)]
+        self.second = {f: "Passed" for f, _, _ in many}
+        code, out = self.rerun(self.shard(1, many, expected=set()))
+        self.assertEqual(0, code)
+        self.assertEqual(ts.RERUN_MAX, sum(len(f) for _, f in self.launched))
+        self.assertIn(f"Флаки (прошли со второго раза): {ts.RERUN_MAX}", out)
+
+    def test_аборт_шарда_перезапуском_не_маскируется(self):
+        self.second = {"App.Tests.A.One": "Passed"}
+        green = [(n, "Passed", None) for n in sorted(self.EXPECTED)]
+        cases = {
+            "сигнальный код": [self.shard(-6, self.RED)],
+            "TRX без провалов": [self.shard(1, green)],
+            "TRX нет": [((FakeProc(1), None), None, lambda: {**ts.trx_report(self.tmp, "нет", 0), "target": "b/App.Tests"})],
+            "TRX неполный": [self.shard(1, self.RED[:2])],
+            "обрыв в логе": [self.shard(1, self.RED, log_text="The active test run was aborted. Reason: Test host process crashed")],
+            "рядом с флаком оборванный сосед": [self.shard(1, self.RED), self.shard(-9, [], name="shard2")],
+        }
+        for label, shards in cases.items():
+            with self.subTest(label):
+                self.launched.clear()
+                code, out = self.rerun(*shards)
+                self.assertEqual(1, code)
+                self.assertEqual([], self.launched)
+                self.assertIn("Перезапуск пропущен:", out)
+                self.assertIn("не маскирует обрыв", out)
+
+    def test_прощённый_по_доказательству_шард_не_мешает_перезапуску_соседа(self):
+        self.second = {"App.Tests.A.One": "Passed"}
+        forgiven = self.shard(-6, [(n, "Passed", None) for n in sorted(self.EXPECTED)], name="shard2",
+                              proof=lambda: None)
+        code, _ = self.rerun(self.shard(1, self.RED), forgiven)
+        self.assertEqual(0, code)
+        self.assertEqual(1, len(self.launched))
+
+    def test_rest_перезапускается_в_проекте_своей_сборки(self):
+        self.second = {"Other.Tests.X.Y": "Passed"}
+        rest = self.shard(1, [("Other.Tests.X.Y", "Failed", "Other.Tests"), ("Third.Tests.Z.W", "Passed", "Third.Tests")],
+                          expected=set(), target=None, name="fast-rest")
+        code, _ = self.rerun(rest, targets={"App.Tests": "b/App.Tests", "Other.Tests": "b/Other.Tests/Other.Tests.csproj"})
+        self.assertEqual(0, code)
+        self.assertEqual([("b/Other.Tests/Other.Tests.csproj", ["Other.Tests.X.Y"])], self.launched)
+
+    def test_storage_в_нижнем_регистре_как_пишет_vstest_находит_проект_rest(self):
+        # живой прогон 03.11: storage="/…/claudehomeserver.memory.tests.dll", а пространство имён тестов
+        # (ClaudeHomeServer.Tests.Services.Memory) с именем проекта не совпадает — префикс не спасает
+        fqn = "ClaudeHomeServer.Tests.Services.Memory.ProbeTests.Флак"
+        self.second = {fqn: "Passed"}
+        rest = self.shard(1, [(fqn, "Failed", "claudehomeserver.memory.tests")], expected=set(), target=None,
+                          name="fast-rest")
+        targets = {"ClaudeHomeServer.Tests": "b/ClaudeHomeServer.Tests",
+                   "ClaudeHomeServer.Memory.Tests": "b/ClaudeHomeServer.Memory.Tests/ClaudeHomeServer.Memory.Tests.csproj"}
+        code, _ = self.rerun(rest, targets=targets)
+        self.assertEqual(0, code)
+        self.assertEqual([(targets["ClaudeHomeServer.Memory.Tests"], [fqn])], self.launched)
+        self.assertEqual("ClaudeHomeServer.Memory.Tests", self.flaky_json()["flaky"][0]["assembly"])
+
+    def test_проект_не_найден_тест_упал_дважды_без_запуска(self):
+        rest = self.shard(1, [("Nowhere.Tests.X.Y", "Failed", None)], expected=set(), target=None, name="fast-rest")
+        code, out = self.rerun(rest)
+        self.assertEqual(1, code)
+        self.assertEqual([], self.launched)
+        self.assertIn("Nowhere.Tests.X.Y (проект не найден — не перезапускался)", out)
+
+
+# 20 длинных русских имён: класс и метод — по 150+ символов кириллицы, FQN ≈ 400 символов (≈ 750 байт UTF-8)
+LONG_RU = [f"ClaudeHomeServer.Tests.Services.Длинное.Пространство.Имён.{'Очень' * 20}Класс{i:02}Tests."
+           f"{'метод_с_длинным_русским_именем_' * 7}{i:02}" for i in range(20)]
+
+
+class RerunFilterTests(unittest.TestCase):
+    def test_20_длинных_русских_имён_режутся_под_лимит_и_покрывают_всё(self):
+        chunks = ts.rerun_chunks(LONG_RU)
+        self.assertGreater(len(chunks), 1, "8000 символов на 20 имён по ≈ 400 не помещаются в один фильтр")
+        self.assertEqual(LONG_RU, [f for c in chunks for f in c])
+        for c in chunks:
+            flt = ts.fqn_filter(c)
+            self.assertLessEqual(len(flt), ts.RERUN_FILTER_CHARS)
+            # вся командная строка dotnet test укладывается в предел Windows 32 767 с запасом под путь проекта
+            cmd = ["dotnet", "test", "/" + "п" * 200 + "/ClaudeHomeServer.Tests", "--no-build", "--filter", flt,
+                   "--logger", "trx;LogFilePrefix=rerun-99", "--results-directory", "/" + "р" * 300]
+            self.assertLess(len(subprocess.list2cmdline(cmd)), 32767)
+
+    def test_фильтр_доходит_до_процесса_целиком(self):
+        for c in ts.rerun_chunks(LONG_RU):
+            flt = ts.fqn_filter(c)
+            got = subprocess.run([sys.executable, "-I", "-c", "import sys; sys.stdout.buffer.write(sys.argv[1].encode())", flt],
+                                 capture_output=True, check=True).stdout.decode("utf-8")
+            self.assertEqual(flt, got)
+            self.assertEqual(c, filter_fqns(got))
+
+    def test_фильтр_по_точному_имени_с_экранированием(self):
+        self.assertEqual("FullyQualifiedName=A.B+C.D|FullyQualifiedName=A.B.E", ts.fqn_filter(["A.B+C.D", "A.B.E"]))
+        self.assertEqual("FullyQualifiedName=A.B\\=C", ts.fqn_filter(["A.B=C"]))
+
+    def test_имя_длиннее_лимита_отдельным_куском(self):
+        self.assertEqual([["a"], ["b" * 50], ["c"]], ts.rerun_chunks(["a", "b" * 50, "c"], limit=30))
+
+
+class RerunModesTests(unittest.TestCase):
+    """Включение перезапуска: --run/--run-fast по умолчанию, --no-rerun и CCS_TEST_SHARDS_RERUN=0 выключают,
+    CI-режимы (--shard, --verify, --slnx) его не делают вовсе."""
+
+    def capture(self, argv, env=None):
+        seen = {}
+        orig = (ts.run_fast, ts.run_shards, ts.rerun_failed)
+        def stub(name):
+            def run(*a, **k):
+                seen[name] = a[6]  # rerun_max — седьмой позиционный аргумент run_fast/run_shards
+                return 0
+            return run
+        ts.run_fast, ts.run_shards = stub("run_fast"), stub("run")
+        ts.rerun_failed = lambda *a, **k: self.fail("перезапуск в CI-режиме")
+        old = os.environ.get(ts.RERUN_ENV)
+        if env is not None:
+            os.environ[ts.RERUN_ENV] = env
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                slnx = os.path.join(tmp, "x.slnx")
+                with open(slnx, "w", encoding="utf-8") as f:
+                    f.write("<Solution />")
+                argv = [slnx if a == "SLNX" else a for a in argv]
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    code = ts.main(argv)
+        finally:
+            ts.run_fast, ts.run_shards, ts.rerun_failed = orig
+            if old is None:
+                os.environ.pop(ts.RERUN_ENV, None)
+            else:
+                os.environ[ts.RERUN_ENV] = old
+        return code, seen
+
+    def test_по_умолчанию_включён_с_порогом_20(self):
+        self.assertEqual(20, ts.RERUN_MAX)
+        self.assertEqual({"run_fast": 20}, self.capture(["--run-fast", "SLNX"])[1])
+        self.assertEqual({"run": 20}, self.capture(["--run", "x.csproj", "-n", "2"])[1])
+        self.assertEqual({"run": 5}, self.capture(["--run", "x.csproj", "-n", "2", "--rerun-max", "5"])[1])
+
+    def test_no_rerun_и_переменная_выключают(self):
+        self.assertEqual({"run_fast": None}, self.capture(["--run-fast", "SLNX", "--no-rerun"])[1])
+        self.assertEqual({"run": None}, self.capture(["--run", "x.csproj", "-n", "2", "--no-rerun"])[1])
+        self.assertEqual({"run_fast": None}, self.capture(["--run-fast", "SLNX"], env="0")[1])
+        self.assertEqual({"run": None}, self.capture(["--run", "x.csproj", "-n", "2"], env="0")[1])
+        self.assertEqual({"run_fast": 20}, self.capture(["--run-fast", "SLNX"], env="1")[1])
+
+    def test_ci_режимы_перезапуск_не_делают(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lst = os.path.join(tmp, "list.txt")
+            with open(lst, "w", encoding="utf-8") as f:
+                f.write(LIST)
+            for argv in (["--list", lst, "--shard", "1/2"], ["--list", lst, "--verify"]):
+                with self.subTest(argv[2]):
+                    self.assertEqual((0, {}), self.capture(argv))
+        slnx = """<Solution>\n  <Project Path="A.Tests/A.Tests.csproj" />\n</Solution>\n"""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "s.slnx")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(slnx)
+            self.assertEqual((0, {}), self.capture(["--slnx", path, "--shard", "1/1"]))
+
+    def test_run_shards_без_порога_не_перезапускает(self):
+        orig = (ts.list_tests, ts.launch, ts.wait_all, ts.rerun_failed)
+        ts.list_tests = lambda path, flt: ([f"App.Tests.C{i}.T" for i in range(4)], None)
+        ts.launch = lambda args, log: (FakeProc(1), None)
+        ts.wait_all = lambda procs, start, proofs=None, reports=None: 1
+        calls = []
+        ts.rerun_failed = lambda *a: calls.append(a) or 0
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(1, ts.run_shards("b/App.Tests", 2, tmp, {}, None, rerun_max=None))
+                    self.assertEqual([], calls)
+                    self.assertEqual(0, ts.run_shards("b/App.Tests", 2, tmp, {}, None))
+                    self.assertEqual(1, len(calls))
+        finally:
+            ts.list_tests, ts.launch, ts.wait_all, ts.rerun_failed = orig
+
+
+class RunFastRerunTests(unittest.TestCase):
+    """Сквозной --run-fast с настоящим wait_all: процессы — python с нужным кодом, TRX пишет подменённый launch."""
+    SLNX = RunFastTests.SLNX
+    LISTING = [f"App.Tests.C{i}.T" for i in range(4)]
+
+    def run_fast(self, first, second, stale=False):
+        launched = []
+        orig = (ts.list_tests, ts.launch)
+        ts.list_tests = lambda path, flt: (self.LISTING, None)
+
+        def fake_launch(args, log_path):
+            flt = args[args.index("--filter") + 1]
+            directory = args[args.index("--results-directory") + 1]
+            prefix = next(a for a in args if a.startswith("trx;LogFilePrefix="))[len("trx;LogFilePrefix="):]
+            if prefix.startswith("rerun-"):
+                # перезапуск последовательный: предыдущий запуск обязан уже завершиться
+                self.assertTrue(all(p.poll() is not None for _, _, p in launched if _ == "rerun"))
+                rows = [(f, second.get(f, "Failed"), None) for f in filter_fqns(flt)]
+                kind = "rerun"
+            elif prefix == "fast-rest":
+                rows = [("Other.Tests.X.Y", first.get("Other.Tests.X.Y", "Passed"), "Other.Tests")]
+                kind = "rest"
+            else:
+                rows = [(t, first.get(t, "Passed"), None) for t in self.LISTING if f"~{ts.class_of(t)}." in flt]
+                kind = "shard"
+            write_trx_full(directory, prefix, rows)
+            rc = 1 if any(o != "Passed" for _, o, _ in rows) else 0
+            proc = subprocess.Popen([sys.executable, "-c", f"raise SystemExit({rc})"])
+            launched.append((kind, args[0], proc))
+            return proc, open(log_path, "w")
+        ts.launch = fake_launch
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                slnx = os.path.join(tmp, "x.slnx")
+                with open(slnx, "w", encoding="utf-8") as f:
+                    f.write(self.SLNX)
+                results = os.path.join(tmp, "r")
+                os.makedirs(results)
+                if stale:
+                    with open(os.path.join(results, ts.FLAKY_FILE), "w", encoding="utf-8") as f:
+                        f.write('{"flaky": [{"fqn": "Old.Flaky"}]}')
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                    code = ts.run_fast(slnx, [("b/App.Tests", 2)], results, {}, "F")
+                flaky_path = os.path.join(results, ts.FLAKY_FILE)
+                flaky = json.load(open(flaky_path, encoding="utf-8")) if os.path.exists(flaky_path) else None
+                reruns = [(target) for kind, target, _ in launched if kind == "rerun"]
+                return code, out.getvalue(), flaky, reruns, tmp
+        finally:
+            ts.list_tests, ts.launch = orig
+
+    def test_флаки_шарда_и_rest_прошли_со_второго_раза_exit_0(self):
+        first = {"App.Tests.C1.T": "Failed", "Other.Tests.X.Y": "Failed"}
+        second = {"App.Tests.C1.T": "Passed", "Other.Tests.X.Y": "Passed"}
+        code, out, flaky, reruns, tmp = self.run_fast(first, second)
+        self.assertEqual(0, code)
+        self.assertIn("Флаки (прошли со второго раза): 2", out)
+        self.assertEqual({"App.Tests.C1.T", "Other.Tests.X.Y"}, {e["fqn"] for e in flaky["flaky"]})
+        self.assertEqual({"App.Tests", "Other.Tests"}, {e["assembly"] for e in flaky["flaky"]})
+        self.assertEqual(sorted(["b/App.Tests", os.path.join(tmp, "Other.Tests/Other.Tests.csproj")]), sorted(reruns))
+
+    def test_упавший_дважды_красный(self):
+        first = {"App.Tests.C1.T": "Failed", "Other.Tests.X.Y": "Failed"}
+        second = {"App.Tests.C1.T": "Passed", "Other.Tests.X.Y": "Failed"}
+        code, out, flaky, _, _ = self.run_fast(first, second)
+        self.assertNotEqual(0, code)
+        self.assertIn("Упали дважды: 1\n  Other.Tests.X.Y\n", out)
+        self.assertEqual(["Other.Tests.X.Y"], flaky["failed_twice"])
+        self.assertEqual(["App.Tests.C1.T"], [e["fqn"] for e in flaky["flaky"]])
+
+    def test_зелёный_прогон_без_перезапуска_и_старый_flaky_json_удалён(self):
+        code, out, flaky, reruns, _ = self.run_fast({}, {}, stale=True)
+        self.assertEqual(0, code)
+        self.assertEqual([], reruns)
+        self.assertIsNone(flaky)
+        self.assertNotIn("Перезапуск", out)
+
+
 if __name__ == "__main__":
     unittest.main()

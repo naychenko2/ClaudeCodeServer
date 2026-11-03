@@ -81,6 +81,29 @@ public static class PrivateAttachments
         return !string.Equals(segments[2], userId, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Контейнер ли это, под которым лежит closed-поддерево private/: корень проекта (пустой путь,
+    /// «.», «docs/..»), сам .cc-attachments, .cc-attachments/private. IsForeign их не видит: у них нет
+    /// сегмента-автора (тот требует ≥3), а операция над контейнером относится ко всему поддереву
+    /// (S2d-6b-3 доработка 2, дельта-ревью 24c92aef). Формула одна для WebDAV (COPY/MOVE) и MCP
+    /// (files_rename/files_delete) — здесь. Каталоги авторов — дети private/, НЕ контейнеры: свой
+    /// private-каталог автор переносит и удаляет, как раньше; общие {guid}-каталоги — тоже.
+    /// Нормализация та же, что у IsForeign: «..», «./», %2F/%2E, слеши, двойные разделители, регистр.
+    /// Путь за пределами корня решает вызывающий (SafeJoin даёт ему свой отказ раньше этого
+    /// предиката), поэтому сюда он не доходит.
+    /// </summary>
+    public static bool IsPrivateContainerPath(string? relPath)
+    {
+        var segments = Normalize(relPath);
+        // корень — под ним лежит весь .cc-attachments: GetRelativePath корня от себя — «.»
+        if (segments.Count == 0) return true;
+        if (!string.Equals(segments[0], TreeExcludes.AttachmentsDir, StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (segments.Count == 1) return true; // .cc-attachments
+        return segments.Count == 2
+            && string.Equals(segments[1], PrivateRoot, StringComparison.OrdinalIgnoreCase);
+    }
+
     // Путь к сегментам в каноническом виде. Одно снятие %-кодирования: %2F/%2E — тот же путь,
     // записанный экранированно (двойное кодирование вне контракта: %252e остаётся сегментом
     // «%2e» — он не «.» и не «..», чужое private под ним остаётся чужим). «..» при пустом

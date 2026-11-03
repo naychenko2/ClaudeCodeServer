@@ -991,6 +991,15 @@ public sealed partial class WorkspaceToolset(
                     return Deny($"Файл не найден: {oldPath}");
                 if (IsForeignPrivate(root, newPath, actorId))
                     return Deny($"Файл не найден: {newPath}");
+                // S2d-6b-3 доработка 2 (дельта-ревью 24c92aef): и сам контейнер — ни источник, ни
+                // цель: перенос .cc-attachments или .cc-attachments/private унёс бы private ВСЕХ
+                // участников из-под путевого правила (тот же исход, что с чужим каталогом), а
+                // перенос В контейнер спрятал бы обычный материал под closed-поддеревом.
+                // Та же формула, что у WebDAV COPY/MOVE (PrivateAttachments.IsPrivateContainerPath)
+                if (IsPrivateContainer(root, oldPath))
+                    return Deny($"Файл не найден: {oldPath}");
+                if (IsPrivateContainer(root, newPath))
+                    return Deny($"Файл не найден: {newPath}");
                 try
                 {
                     files.Rename(root, oldPath, newPath);
@@ -1132,6 +1141,20 @@ public sealed partial class WorkspaceToolset(
         catch (UnauthorizedAccessException) { return false; }
         return PrivateAttachments.IsForeign(
             Path.GetRelativePath(Path.GetFullPath(root), abs).Replace('\\', '/'), actorId);
+    }
+
+    // S2d-6b-3 доработка 2 (дельта-ревью 24c92aef): контейнер, под которым лежит closed-поддерево
+    // private/ (.cc-attachments, .cc-attachments/private, корень проекта). Формула — в Core
+    // (PrivateAttachments.IsPrivateContainerPath), та же, что у WebDAV COPY/MOVE; нормализация —
+    // та же, что у IsForeignPrivate: guard судит ровно о том пути, который откроет операция.
+    // Путь за пределами корня — не контейнер (вызывающий отдаёт ему свой отказ «за пределы», как раньше).
+    private static bool IsPrivateContainer(string root, string path)
+    {
+        string abs;
+        try { abs = FileService.SafeJoinPublic(root, path); }
+        catch (UnauthorizedAccessException) { return false; }
+        return PrivateAttachments.IsPrivateContainerPath(
+            Path.GetRelativePath(Path.GetFullPath(root), abs).Replace('\\', '/'));
     }
 
     // Абсолютный путь документа с проверкой, что это просматриваемый документ
@@ -1894,6 +1917,11 @@ public sealed partial class WorkspaceToolset(
                 // каталог автора не удаляются рекурсивно: тот же отказ, что у несуществующего файла
                 var actorId = turnActors.Actor(session.Id, context.OwnerId);
                 if (IsForeignPrivate(p.RootPath, path, actorId))
+                    return Deny($"Файл не найден: {path}");
+                // S2d-6b-3 доработка 2 (дельта-ревью 24c92aef): сам контейнер не удаляется
+                // рекурсивно: под ним private всех участников (та же формула, что у WebDAV
+                // COPY/MOVE и у files_rename выше)
+                if (IsPrivateContainer(p.RootPath, path))
                     return Deny($"Файл не найден: {path}");
                 try { files.Delete(p.RootPath, path); }
                 catch (FileNotFoundException) { return Deny($"Файл не найден: {path}"); }

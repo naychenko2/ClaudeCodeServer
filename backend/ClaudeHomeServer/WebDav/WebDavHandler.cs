@@ -1064,6 +1064,9 @@ public static class WebDavHandler
     // над каталогом относится ко всему поддереву. Нормализация — та же, что у IsForeignPrivatePath
     // (SafeJoin раскрывает «..», «./», слеши так, как их раскроет операция на диске). Каталоги
     // авторов — дети private/, не контейнеры: свой private-каталог автор переносит, как раньше.
+    // Доработка 2 (дельта-ревью 24c92aef): сама формула вынесена в Core (PrivateAttachments.
+    // IsPrivateContainerPath) — одна для WebDAV и MCP; здесь остаётся только нормализация пути
+    // SafeJoin, поведение ветки не меняется.
     private static bool IsPrivateContainerPath(string root, string relPath)
     {
         string rel;
@@ -1073,14 +1076,7 @@ public static class WebDavHandler
                 relPath.Length == 0 ? Path.GetFullPath(root) : FileService.SafeJoinPublic(root, relPath));
         }
         catch (UnauthorizedAccessException) { return false; }
-        var segments = rel.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
-        // GetRelativePath корня от себя — «.»: это тоже корень, под которым лежит весь .cc-attachments
-        if (segments.Length == 0 || (segments.Length == 1 && segments[0] == ".")) return true;
-        if (!string.Equals(segments[0], TreeExcludes.AttachmentsDir, StringComparison.OrdinalIgnoreCase))
-            return false;
-        if (segments.Length == 1) return true; // .cc-attachments
-        return segments.Length == 2
-            && string.Equals(segments[1], PrivateAttachments.PrivateRoot, StringComparison.OrdinalIgnoreCase);
+        return PrivateAttachments.IsPrivateContainerPath(rel.Replace('\\', '/'));
     }
 
     private static string? ParseDestination(HttpContext ctx, string projectName)

@@ -498,6 +498,134 @@ public sealed class McpFilesPrivateAttachmentTests : IDisposable
         File.ReadAllText(AbsOf(ownNew)).Should().Be("своё");
     }
 
+    // ── доработка 2 по дельта-ревью 24c92aef: сам контейнер под private/ ────────
+
+    [Fact]
+    public async Task Rename_КонтейнераПодPrivate_Отказ_КаталогНаМесте()
+    {
+        var ownId = _ownPath.Split('/')[2];
+
+        // источник — контейнер: без гейта private ВСЕХ участников оказался бы в общем attic/
+        // и читался бы всеми (тот исход, что с чужим каталогом в тесте выше)
+        var r = await CallAsync("files_rename",
+            new JsonObject { ["projectId"] = _projectId, ["oldPath"] = ".cc-attachments", ["newPath"] = "attic" }, _ownerId);
+        r.IsError.Should().BeTrue();
+        r.Text.Should().Be("Файл не найден: .cc-attachments", "тот же отказ, что у чужого private");
+        Directory.Exists(AbsOf(".cc-attachments")).Should().BeTrue("контейнер на месте");
+        Directory.Exists(AbsOf("attic")).Should().BeFalse();
+        File.ReadAllText(AbsOf(_foreignPath)).Should().Be("чужое", "private осталось под своим корнем");
+
+        // .cc-attachments/private — под ним все авторы — тоже контейнер
+        r = await CallAsync("files_rename",
+            new JsonObject { ["projectId"] = _projectId, ["oldPath"] = ".cc-attachments/private", ["newPath"] = "attic" }, _ownerId);
+        r.IsError.Should().BeTrue();
+        r.Text.Should().Be("Файл не найден: .cc-attachments/private");
+        Directory.Exists(AbsOf(".cc-attachments/private")).Should().BeTrue();
+        Directory.Exists(AbsOf("attic")).Should().BeFalse();
+
+        // нормализация до решения: «..» в тот же контейнер — тот же отказ
+        r = await CallAsync("files_rename",
+            new JsonObject { ["projectId"] = _projectId, ["oldPath"] = "docs/../.cc-attachments", ["newPath"] = "attic" }, _ownerId);
+        r.IsError.Should().BeTrue();
+        r.Text.Should().StartWith("Файл не найден: ");
+        Directory.Exists(AbsOf(".cc-attachments")).Should().BeTrue();
+        Directory.Exists(AbsOf("attic")).Should().BeFalse();
+
+        // корень проекта — контейнер, под которым лежит всё: «.» и пустой путь
+        r = await CallAsync("files_rename",
+            new JsonObject { ["projectId"] = _projectId, ["oldPath"] = ".", ["newPath"] = "attic" }, _ownerId);
+        r.IsError.Should().BeTrue();
+        r.Text.Should().StartWith("Файл не найден: ");
+        r = await CallAsync("files_rename",
+            new JsonObject { ["projectId"] = _projectId, ["oldPath"] = "", ["newPath"] = "attic" }, _ownerId);
+        r.IsError.Should().BeTrue();
+        Directory.Exists(AbsOf("attic")).Should().BeFalse("корень проекта не переименован");
+
+        // цель — контейнер: обычный материал не переносится под closed-поддерево
+        r = await CallAsync("files_rename",
+            new JsonObject { ["projectId"] = _projectId, ["oldPath"] = PlainPath, ["newPath"] = ".cc-attachments" }, _ownerId);
+        r.IsError.Should().BeTrue();
+        r.Text.Should().Be("Файл не найден: .cc-attachments");
+        File.ReadAllText(AbsOf(PlainPath)).Should().Be("обычное");
+        r = await CallAsync("files_rename",
+            new JsonObject { ["projectId"] = _projectId, ["oldPath"] = PlainPath, ["newPath"] = ".cc-attachments/private" }, _ownerId);
+        r.IsError.Should().BeTrue();
+        r.Text.Should().StartWith("Файл не найден: ");
+        File.ReadAllText(AbsOf(PlainPath)).Should().Be("обычное");
+
+        // актор неизвестен — контейнер отказан и для него: правило о пути, не об авторе
+        r = await CallAsync("files_rename",
+            new JsonObject { ["projectId"] = _projectId, ["oldPath"] = ".cc-attachments", ["newPath"] = "attic" }, null);
+        r.IsError.Should().BeTrue();
+        Directory.Exists(AbsOf(".cc-attachments")).Should().BeTrue();
+
+        // граница правила: свой {id}-каталог — НЕ контейнер, переносится как раньше
+        r = await CallAsync("files_rename",
+            new JsonObject { ["projectId"] = _projectId, ["oldPath"] = $".cc-attachments/private/{ownId}", ["newPath"] = "myprivate" }, _ownerId);
+        r.IsError.Should().BeFalse(r.Text);
+        Directory.Exists(AbsOf($".cc-attachments/private/{ownId}")).Should().BeFalse();
+        File.ReadAllText(AbsOf($"myprivate/{_ownPath.Split('/')[3]}/own.txt")).Should().Be("своё");
+    }
+
+    [Fact]
+    public async Task Delete_КонтейнераПодPrivate_Отказ_ПоддеревоЦело()
+    {
+        var ownId = _ownPath.Split('/')[2];
+        var foreignId = _foreignPath.Split('/')[2];
+        var ownDir = $".cc-attachments/private/{ownId}";
+        var commonDir = _commonPath.Split('/')[0] + "/" + _commonPath.Split('/')[1];
+
+        // контейнер не удаляется рекурсивно: под ним private всех участников (рамка — широкая,
+        // как в Delete_ЧужогоPrivate выше: до путевого гейта там стоит свой)
+        var d = await CallAsync(OwnerPrivateChatId, "files_delete",
+            new JsonObject { ["projectId"] = _projectId, ["path"] = ".cc-attachments" }, _ownerId);
+        d.IsError.Should().BeTrue();
+        d.Text.Should().Be("Файл не найден: .cc-attachments", "тот же отказ, что у чужого private");
+        Directory.Exists(AbsOf(".cc-attachments")).Should().BeTrue();
+        File.ReadAllText(AbsOf(_foreignPath)).Should().Be("чужое");
+        File.ReadAllText(AbsOf(_ownPath)).Should().Be("своё");
+        File.ReadAllText(AbsOf(_commonPath)).Should().Be("общее");
+
+        // .cc-attachments/private — тоже контейнер
+        d = await CallAsync(OwnerPrivateChatId, "files_delete",
+            new JsonObject { ["projectId"] = _projectId, ["path"] = ".cc-attachments/private" }, _ownerId);
+        d.IsError.Should().BeTrue();
+        d.Text.Should().Be("Файл не найден: .cc-attachments/private");
+        Directory.Exists(AbsOf(".cc-attachments/private")).Should().BeTrue();
+
+        // нормализация до решения: «docs/../.cc-attachments» — тот же контейнер, тот же отказ
+        d = await CallAsync(OwnerPrivateChatId, "files_delete",
+            new JsonObject { ["projectId"] = _projectId, ["path"] = "docs/../.cc-attachments" }, _ownerId);
+        d.IsError.Should().BeTrue();
+        d.Text.Should().StartWith("Файл не найден: ");
+        Directory.Exists(AbsOf(".cc-attachments")).Should().BeTrue();
+
+        // корень проекта — «.» и пустой путь: под ним лежит всё, проект не стирается
+        d = await CallAsync(OwnerPrivateChatId, "files_delete",
+            new JsonObject { ["projectId"] = _projectId, ["path"] = "." }, _ownerId);
+        d.IsError.Should().BeTrue();
+        d.Text.Should().StartWith("Файл не найден: ");
+        d = await CallAsync(OwnerPrivateChatId, "files_delete",
+            new JsonObject { ["projectId"] = _projectId, ["path"] = "" }, _ownerId);
+        d.IsError.Should().BeTrue();
+        File.ReadAllText(AbsOf(PlainPath)).Should().Be("обычное", "проект на месте");
+
+        // границы правила: свой {id}-каталог и общий {guid} удаляются, как раньше (свой материал);
+        // чужой каталог — отказан, как раньше (IsForeign, доработка 1)
+        d = await CallAsync(OwnerPrivateChatId, "files_delete",
+            new JsonObject { ["projectId"] = _projectId, ["path"] = ownDir }, _ownerId);
+        d.IsError.Should().BeFalse(d.Text);
+        Directory.Exists(AbsOf(ownDir)).Should().BeFalse();
+        d = await CallAsync(OwnerPrivateChatId, "files_delete",
+            new JsonObject { ["projectId"] = _projectId, ["path"] = commonDir }, _ownerId);
+        d.IsError.Should().BeFalse(d.Text);
+        Directory.Exists(AbsOf(commonDir)).Should().BeFalse();
+        d = await CallAsync(OwnerPrivateChatId, "files_delete",
+            new JsonObject { ["projectId"] = _projectId, ["path"] = $".cc-attachments/private/{foreignId}" }, _ownerId);
+        d.IsError.Should().BeTrue();
+        Directory.Exists(AbsOf($".cc-attachments/private/{foreignId}")).Should().BeTrue();
+    }
+
     [Fact]
     public async Task ToMarkdown_ЦельВЧужомPrivate_ОтказДоКонвертера()
     {

@@ -283,6 +283,28 @@ public class WebDavPrivateAttachmentTests : IDisposable
         File.ReadAllText(AbsOf(_foreignPath)).Should().Be("чужое");
     }
 
+    // ── доработка 2 по дельта-ревью 24c92aef: экранированный Destination ─────────
+
+    [Fact]
+    public async Task MoveICopy_ЭкранированныйDestinationВЧужомPrivate_403_НазначениеНеСоздано()
+    {
+        var foreignId = _foreignPath.Split('/')[2];
+        var guid = _foreignPath.Split('/')[3];
+        // %2F — тот же путь, записанный экранированно: ParseDestination снимает URI-кодирование
+        // до решения (Uri.AbsolutePath → UnescapeDataString), и гейт видит канонический путь:
+        // отказ тот же, что у некодированного Destination
+        var encoded = Dest($".cc-attachments%2Fprivate%2F{foreignId}%2F{guid}%2Fforeign.txt");
+
+        var r = await RunAsync(Req("MOVE", PlainPath, destination: encoded));
+        r.Response.StatusCode.Should().Be(403, "назначение после декодирования — чужое private");
+        File.Exists(AbsOf(PlainPath)).Should().BeTrue("источник не сдвинут");
+        File.ReadAllText(AbsOf(_foreignPath)).Should().Be("чужое", "чужой путь не создан поверх своего");
+
+        r = await RunAsync(Req("COPY", PlainPath, destination: encoded));
+        r.Response.StatusCode.Should().Be(403);
+        File.ReadAllText(AbsOf(_foreignPath)).Should().Be("чужое");
+    }
+
     [Fact]
     public async Task СвойPrivateИОбщиеФайлы_ПишутсяКакПрежде()
     {

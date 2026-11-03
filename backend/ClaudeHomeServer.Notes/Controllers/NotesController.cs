@@ -483,7 +483,8 @@ public class NotesController : ControllerBase
             return BadRequest("Не задан заголовок заметки");
         try
         {
-            var note = _notes.Create(UserId, req);
+            // S3-3c1: это правка человека (REST-ручка) — в журнал правок общего проекта (S3-3)
+            var note = _notes.Create(UserId, req, byHuman: true);
             await Broadcast("created", note.Id, note.Source);
             return Ok(note);
         }
@@ -500,7 +501,9 @@ public class NotesController : ControllerBase
         var ifMatch = Request.Headers.IfMatch.ToString();
         try
         {
-            var note = _notes.Update(UserId, id, req, string.IsNullOrWhiteSpace(ifMatch) ? null : ifMatch);
+            // S3-3c1: правка человека — в журнал правок (S3-3); при 409/403/404 ниже — отказа
+            // NoteConflictException/Unauth до записи, и журнал не вызывается вовсе.
+            var note = _notes.Update(UserId, id, req, string.IsNullOrWhiteSpace(ifMatch) ? null : ifMatch, byHuman: true);
             if (note is null) return NotFound();
             // Новое состояние — новый ETag: следующая правка этого клиента идёт по нему
             Response.Headers.ETag = $"\"{NotesService.ContentSha256(note.Content)}\"";
@@ -535,7 +538,8 @@ public class NotesController : ControllerBase
     {
         try
         {
-            if (!_notes.Delete(UserId, id)) return NotFound();
+            // S3-3c1: удаление человеком — правка пути в журнал (S3-3); 404 (файла нет) — отказа нет
+            if (!_notes.Delete(UserId, id, byHuman: true)) return NotFound();
             await Broadcast("deleted", id, SourceOfId(id));
             return NoContent();
         }

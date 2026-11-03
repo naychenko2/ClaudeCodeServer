@@ -34,6 +34,11 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     private readonly IServiceProvider? _services;
     private IProjectAccess? _access;
     private readonly string _dataDir;
+    // S3-3c1: журнал правок человека (S3-3) — зовётся из *Core после УСПЕШНОЙ записи/удаления/
+    // переименования заметки общего проекта человеком (byHuman). В DI он всегда (Program.cs:621-622);
+    // опциональным оставлен как остальные необязательные зависимости: бесхостовые тесты собирают
+    // сервис напрямую и подставляют фейк.
+    private readonly Composition.IHumanEditJournal? _humanEdits;
 
     private const string PersonalKey = "personal";
     private const string PersonalLabel = "Личный";
@@ -90,12 +95,16 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     internal Action? TestProbeAfterFileExists;
 
     public NotesService(IProjectManager projects, IConfiguration config, ILogger<NotesService> logger,
-        IProjectEventLogService? events = null, IServiceProvider? services = null)
+        IProjectEventLogService? events = null, IServiceProvider? services = null,
+        // S3-3c1: журнал правок человека — опционален по той же причине, что events/services:
+        // бесхостовые тесты конструируют сервис напрямую.
+        Composition.IHumanEditJournal? humanEdits = null)
     {
         _projects = projects;
         _logger = logger;
         _events = events;
         _services = services;
+        _humanEdits = humanEdits;
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
     }
@@ -104,7 +113,8 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // internal — виден только тестовым сборкам (InternalsVisibleTo); DI выбирает публичный
     // конструктор, этот для него не кандидат.
     internal NotesService(IProjectManager projects, IConfiguration config, ILogger<NotesService> logger,
-        IProjectEventLogService? events, IProjectAccess access) : this(projects, config, logger, events)
+        IProjectEventLogService? events, IProjectAccess access,
+        Composition.IHumanEditJournal? humanEdits = null) : this(projects, config, logger, events, (IServiceProvider?)null, humanEdits)
     {
         _access = access;
     }
@@ -837,7 +847,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         return true;
     }
 
-    public NoteDetail Create(string userId, CreateNoteRequest req)
+    public NoteDetail Create(string userId, CreateNoteRequest req, bool byHuman = false)
     {
         var sourceKey = string.IsNullOrWhiteSpace(req.Source) ? PersonalKey : req.Source!;
         // S2c-11: создание — под замком источника: окно «проверить коллизию имени → записать
@@ -845,7 +855,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         // созданной заметки — ЗА замком: Append — чужой код, способный стоять на внешнем
         // барьере (в тесте гонки — подменный журнал), а под замком такой стоп не держат:
         // барьер и замок на одном источнике дают цикл ожидания.
-        var id = WithWriteGates(() => CreateCore(userId, req, sourceKey), SourceGateKey(userId, sourceKey));
+        var id = WithWriteGates(() => CreateCore(userId, req, sourceKey, byHuman), SourceGateKey(userId, sourceKey));
         // P1-4: лог note_changed в проектный лог (только для заметок проекта, не личных)
         if (sourceKey != PersonalKey)
             _events?.Append(sourceKey, userId, ProjectEventTypes.NoteChanged, "user",
@@ -856,7 +866,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
     // Файловая часть создания под замком источника: коллизия имени, запись, инвалидация.
     // Возвращает id созданной заметки.
-    private string CreateCore(string userId, CreateNoteRequest req, string sourceKey)
+    private string CreateCore(string userId, CreateNoteRequest req, string sourceKey, bool byHuman)
     {
         // S2c-7: дверь заметки — на WriteContent: редактор общего проекта создаёт заметку
         // в notes/ проекта; читатель — 403, посторонний — 404 (тот же разбор, что у ResolveRoot)
@@ -891,6 +901,9 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         if (!string.IsNullOrWhiteSpace(req.File) && sourceKey != PersonalKey)
             content = InjectFileField(content, NormalizeRel(req.File!.Trim()));
         File.WriteAllText(full, content, new UTF8Encoding(false));
+        // S3-3c1: запись состоялась — итоговый путь (после разрешения коллизии имени) в журнал
+        // правок человека, под замком источника: журнал обязан видеть тот же порядок, что файл.
+        if (byHuman) RecordHumanEdit(userId, sourceKey, full);
 
         InvalidateWrite(userId, sourceKey);
         return EncodeId(sourceKey, NormalizeRel(relPath));
@@ -1245,16 +1258,28 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // S2c-2 (К8): сохранение с If-Match — оптимистичная конкурентность. «Сравнить и записать»
     // целиком под замком на id заметки (вместе с инвалидацией кэша сводок в UpdateCore): окно
     // между проверкой хеша и записью не остаётся. Без If-Match — как раньше.
-    public NoteDetail? Update(string userId, string id, UpdateNoteRequest req, string? ifMatch = null) =>
-        WithWriteGates(() => UpdateCore(userId, id, req, ifMatch), id);
+    public NoteDetail? Update(string userId, string id, UpdateNoteRequest req, string? ifMatch = null, bool byHuman = false) =>
+        WithWriteGates(() => UpdateCore(userId, id, req, ifMatch, byHuman), id);
 
-    private NoteDetail? UpdateCore(string userId, string id, UpdateNoteRequest req, string? ifMatch)
+    private NoteDetail? UpdateCore(string userId, string id, UpdateNoteRequest req, string? ifMatch, bool byHuman)
     {
         var (sourceKey, relPath) = DecodeId(id);
         // S2c-7: правка содержимого заметки — дверь WriteContent (редактор общего проекта)
         var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
         var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return null;
+        // S3-3c1: пути, которые ЭТА правка действительно записала (для журнала правок человека):
+        // переименование даёт СТАРЫЙ и НОВЫЙ путь (старого файла больше нет — журнал обязан
+        // увидеть и его), запись содержимого/срока — текущий путь. Один вызов на путь: журнал
+        // заменяет запись по пути сам, но список вызывающей стороны не должен расти от второй
+        // записи того же файла в одной операции (содержимое + срок). Пусто — правки файла не
+        // было (no-op Update), журналу нечего сообщать.
+        List<string>? edited = null;
+        void Touched(string path)
+        {
+            edited ??= [];
+            if (!edited.Contains(path)) edited.Add(path);
+        }
         // Тестовый шов (F-6a доработка 1): под замком id, до чтения файла — см. поле.
         TestProbeAfterFileExists?.Invoke();
 
@@ -1289,7 +1314,9 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
                 if (!File.Exists(newFull))
                 {
                     File.Move(full, newFull);
+                    Touched(full);   // старый путь: его больше нет — правка удаления тоже факт
                     full = newFull;
+                    Touched(full);   // новый путь: сюда же сольётся запись содержимого ниже
                     effectiveId = EncodeId(sourceKey, newRel);
                     // Комментарии на переименованную заметку-документ следуют за ней.
                     // S2c-12: Inner — без своего замка (вложенный сломал бы порядок), под
@@ -1312,6 +1339,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
                 ParseFrontmatter(newContent, "").Annotation is null)
                 newContent = ReinjectAnnotationFields(newContent, curFm.Annotation);
             File.WriteAllText(full, newContent, new UTF8Encoding(false));
+            Touched(full);
         }
 
         // Время жизни: -1 (по умолчанию) — не менять; null — снять; N — установить
@@ -1323,6 +1351,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             else if (req.ExpiresAfterMinutes > 0)
                 current = InjectExpiresField(current, DateTime.UtcNow.AddMinutes(req.ExpiresAfterMinutes.Value).ToString("o"));
             File.WriteAllText(full, current, new UTF8Encoding(false));
+            Touched(full);
         }
 
         // Авто-обновление входящих ссылок при смене заголовка: во всех заметках,
@@ -1345,6 +1374,13 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
                 catch (Exception ex) { _logger.LogWarning(ex, "Обновление ссылок в {File}", srcNote.FullPath); }
             }
         }
+
+        // S3-3c1: запись состоялась — затронутые пути в журнал правок человека, ПОД замком id:
+        // порядок вызовов Record обязан совпадать с порядком записей файла, иначе автором
+        // последней правки журнала окажется проигравший гонку (краснеет на мутации «Record
+        // после выхода из WithWriteGates»).
+        if (byHuman && edited is not null)
+            foreach (var p in edited) RecordHumanEdit(userId, sourceKey, p);
 
         InvalidateWrite(userId, sourceKey);
         if (sourceKey != PersonalKey)
@@ -1377,10 +1413,10 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // S2c-5 (Конкурентность): удаление — под тем же замком на id заметки, что и Update (S2c-2).
     // Без него фоновая уборка истёкших и запись той же заметки переплетаются: правка
     // возрождает уже удалённый файл (File.Delete прошёл, WriteAllText создал заново).
-    public bool Delete(string userId, string id) =>
-        WithWriteGates(() => DeleteCore(userId, id), id);
+    public bool Delete(string userId, string id, bool byHuman = false) =>
+        WithWriteGates(() => DeleteCore(userId, id, byHuman), id);
 
-    private bool DeleteCore(string userId, string id)
+    private bool DeleteCore(string userId, string id, bool byHuman)
     {
         var (sourceKey, relPath) = DecodeId(id);
         // S2c-7: удаление заметки — дверь WriteContent
@@ -1388,12 +1424,25 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return false;
         File.Delete(full);
+        // S3-3c1: удаление — правка пути (журнал принимает несуществующий путь: удаление тоже
+        // правка), под замком id — тот же порядок, что у записи.
+        if (byHuman) RecordHumanEdit(userId, sourceKey, full);
         InvalidateWrite(userId, sourceKey);
         if (sourceKey != PersonalKey)
             _events?.Append(sourceKey, userId, ProjectEventTypes.NoteChanged, "user",
                 $"Удалена заметка «{Path.GetFileNameWithoutExtension(relPath)}»", id);
         return true;
     }
+
+    // Явные реализации Core-шва INoteAccessor (Create/Update): шов объявлен под прежними
+    // сигнатурами, и его вызывающие — спина и фоновые службы (PersonaMemoryService,
+    // SessionSummaryService, ChatDigestService, DailyBriefingService) — это агентский путь:
+    // он никогда не бывает правкой человека, поэтому byHuman здесь всегда false и журнал
+    // молчит. Расширять сам шов нечем: у byHuman нет потребителя за пределами вертикали
+    // (человеческий путь — NotesController, он зовёт NotesService напрямую).
+    NoteDetail INoteAccessor.Create(string ownerId, CreateNoteRequest request) => Create(ownerId, request);
+    NoteDetail? INoteAccessor.Update(string ownerId, string noteId, UpdateNoteRequest request, string? ifMatch) =>
+        Update(ownerId, noteId, request, ifMatch);
 
     // Возвращает истёкшие заметки пользователя (expiresAt в прошлом).
     // Не инвалидирует кэш — чистая проверка на скане.
@@ -1629,6 +1678,24 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         if (string.IsNullOrWhiteSpace(project.RootPath))
             throw new InvalidOperationException("У проекта нет корневой папки");
         return Path.Combine(Composition.ProjectCapabilityGuard.ServerRoot(project), "notes");
+    }
+
+    /// <summary>
+    /// S3-3c1 (по образцу S3-3b, FilesController.RecordHumanEdit): УСПЕШНАЯ правка заметки
+    /// общего проекта человеком — в журнал правок (S3-3). Корень — RootPath проекта, а не его
+    /// notes/: путь в журнале = «notes/<файл>.md», тот же, что рисует git и ключ file_uncommitted.
+    /// Личный vault — вне журнала (у него нет общего проекта и git-репозитория). Отбирать общий
+    /// проект, репозиторий и автора-участника — правило самого журнала (HumanEditCommitter.Record),
+    /// здесь не повторяем его. Вызывается ВНУТРИ замка *Core: порядок записей в журнале обязан
+    /// совпадать с порядком записей файла (иначе автором последней правки окажется проигравший).
+    /// </summary>
+    private void RecordHumanEdit(string userId, string sourceKey, string full)
+    {
+        if (_humanEdits is null || sourceKey == PersonalKey) return;
+        var project = _projects.GetById(sourceKey);
+        if (project is null || string.IsNullOrWhiteSpace(project.RootPath)) return;
+        _humanEdits.Record(sourceKey, project.RootPath,
+            Path.GetRelativePath(project.RootPath, full).Replace('\\', '/'), userId);
     }
 
     // --- Утилиты ---

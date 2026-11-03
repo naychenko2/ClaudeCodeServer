@@ -110,7 +110,9 @@ public sealed partial class NotesService
         var annotates = $"{scope}/{relPath}" + (anchor.BlockId is not null ? $"#^{anchor.BlockId}" : "");
         var content = BuildAnnotationContent(title, annotates, anchor.Quote, anchor.Heading,
             req.Tags, req.Selection.Text ?? "", req.Comment);
-        return CreateCore(userId, new CreateNoteRequest(title, content, sourceKey, Folder: AnnotationsFolder), sourceKey);
+        // S3-3c1: создание комментария — вне шага журнала правок (в нём только Create/Update/
+        // Delete заметок), поэтому byHuman=false: путь в журнал не идёт ни с какой стороны.
+        return CreateCore(userId, new CreateNoteRequest(title, content, sourceKey, Folder: AnnotationsFolder), sourceKey, byHuman: false);
     }
 
     // id заметки-документа по его области и пути — тот же ключ замка, что у Update/Delete

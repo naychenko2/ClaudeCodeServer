@@ -33,6 +33,10 @@ const SKELETON_W = [72, 55, 84, 63, 48, 77, 59, 68, 52];
 // Узел для заметок, чей источник не совпал ни с одним разделом вики
 const OTHER_KEY = '__other__';
 const PERSONAL_KEY = 'personal';
+// Служебные карточки источников лежат в «Источники/» раздела: открываются сноской, в дереве не нужны
+const SOURCE_CARD_DIR = 'Источники/';
+// Высота цели касания заголовка группы на мобиле (строки разделов — 44, заголовок не ниже 40)
+const GROUP_HEAD_MIN_TOUCH = 40;
 
 export type OriginFilter = 'all' | 'note' | 'ai' | 'together' | 'me';
 
@@ -78,6 +82,18 @@ export function noteSectionKey(note: NoteSummary, sections: readonly WikiSection
   return sections.some(s => s.key === key) ? key : null;
 }
 
+// Папка раздела в файловой раскладке вики («Проекты/{id}», «Общее», «Личное») — обратное к ключу
+function sectionFolder(key: string): string | null {
+  if (key === 'common') return 'Общее';
+  if (key === PERSONAL_KEY) return 'Личное';
+  if (key.startsWith('projects/')) return `Проекты/${key.slice('projects/'.length)}`;
+  if (key.startsWith('spheres/')) return `Сферы/${key.slice('spheres/'.length)}`;
+  return null;
+}
+
+const normPath = (p: string) => p.replace(/\\/g, '/').toLowerCase();
+const normTitle = (t: string) => t.trim().toLowerCase();
+
 /** Строки дерева: до фильтра по происхождению (по нему считаются счётчики чипов) */
 export function buildUnifiedGroups(
   sections: readonly WikiSectionDto[],
@@ -102,6 +118,7 @@ export function buildUnifiedGroups(
 
   for (const g of groups.values()) {
     for (const p of (catalogs[g.key]?.pages ?? []) as WikiPageInfoAuthoredDto[]) {
+      if (p.pageKey.startsWith(SOURCE_CARD_DIR)) continue;
       if (text && !`${p.title} ${p.summary ?? ''}`.toLowerCase().includes(text)) continue;
       const a = wikiAuthorshipOf(p);
       g.items.push({
@@ -110,8 +127,23 @@ export function buildUnifiedGroups(
       });
     }
   }
+  // Один объект — один ряд: заметку, которую вики-страница уже заменила (перенос оставляет
+  // заметку-ссылку с тем же заголовком) или чей файл лежит под вики-разделом, не показываем
+  // отдельно. Сверка идёт по всему каталогу, не по результату поиска: иначе запрос вернул бы дубль.
+  const pagePaths = new Set<string>();
+  const pageTitles = new Set<string>();
+  for (const s of order) {
+    const folder = sectionFolder(s.key);
+    for (const p of (catalogs[s.key]?.pages ?? []) as WikiPageInfoAuthoredDto[]) {
+      pageTitles.add(`${s.key}\n${normTitle(p.title)}`);
+      if (folder) pagePaths.add(normPath(`${folder}/${p.pageKey}`));
+    }
+  }
   for (const n of notes) {
     const key = noteSectionKey(n, sections);
+    const path = normPath(n.path ?? '');
+    if (key && pageTitles.has(`${key}\n${normTitle(n.title)}`)) continue;
+    if ([...pagePaths].some(pp => path === pp || path.endsWith(`/${pp}`))) continue;
     const target = (key && groups.get(key)) || other;
     target.items.push({ kind: 'note', id: n.id, sectionKey: target.key, title: n.title, origin: 'note' });
   }
@@ -254,7 +286,7 @@ export function WikiUnifiedTree({
           onClick={() => toggle(g.key)}
           style={{
             display: 'flex', alignItems: 'center', gap: SP.xs, width: '100%', textAlign: 'left', border: 'none',
-            background: 'transparent', minHeight: rowH, padding: `${SP.xs}px ${SP.sm}px`, cursor: 'pointer',
+            background: 'transparent', minHeight: isMobile ? Math.max(rowH, GROUP_HEAD_MIN_TOUCH) : rowH, padding: `${SP.xs}px ${SP.sm}px`, cursor: 'pointer',
             fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, color: g.orphan ? C.textMuted : C.textSecondary,
           }}
         >

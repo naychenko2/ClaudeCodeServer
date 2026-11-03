@@ -179,6 +179,57 @@ describe('Чистая логика дерева', () => {
   });
 });
 
+describe('Дубли и служебные карточки (F2-qa)', () => {
+  const withPages = (pages: unknown[]) => ({
+    ...CATALOGS, [PROJECT_KEY]: { key: PROJECT_KEY, name: 'AI Home', orphan: false, pages },
+  });
+
+  // Мутация: убрать continue по pageTitles/pagePaths в buildUnifiedGroups → тест краснеет
+  it('дубль: заметка, чей файл лежит под вики-разделом или заменена страницей, — один ряд, счётчики по рядам', () => {
+    const cats = withPages([page('Решения/Граф.md', 'Граф'), page('Перенесённая.md', 'Перенесённая')]);
+    const byPath = { ...note('d1', 'Граф', PROJECT_ID), path: `Проекты/${PROJECT_ID}/Решения/Граф.md` };
+    const byTitle = note('d2', 'Перенесённая', PROJECT_ID);
+    const groups = buildUnifiedGroups(SECTIONS, [byPath, byTitle, NOTES[1]], cats as never, '');
+    const g = groups.find(x => x.key === PROJECT_KEY)!;
+    expect(g.items.map(i => `${i.kind}:${i.title}`)).toEqual(['page:Граф', 'page:Перенесённая', 'note:Заметка проекта']);
+    expect(countByOrigin(groups).all).toBe(2 + 1 + 1 + 1);
+  });
+
+  it('дубль не возвращается при поиске: сверка идёт по всему каталогу', () => {
+    const cats = withPages([page('Граф.md', 'Граф')]);
+    const dup = { ...note('d1', 'Граф', PROJECT_ID), path: `Проекты/${PROJECT_ID}/Граф.md` };
+    const groups = buildUnifiedGroups(SECTIONS, [dup], cats as never, 'граф');
+    expect(groups.flatMap(x => x.items.map(i => i.kind))).toEqual(['page']);
+  });
+
+  // Мутация: убрать continue по SOURCE_CARD_DIR → тест краснеет
+  it('служебные карточки «Источники/…» скрыты и не в счётчиках; хроника и обычные остаются', () => {
+    const cats = withPages([
+      page('Источники/Чат-1.md', 'Чат-1'), page('Хроники/s1.md', 'Хроника чата'), page('a1.md', 'Обычная'),
+    ]);
+    const groups = buildUnifiedGroups(SECTIONS, [], cats as never, '');
+    const titles = groups.flatMap(x => x.items.map(i => i.title));
+    expect(titles).not.toContain('Чат-1');
+    expect(titles).toContain('Хроника чата');
+    expect(titles).toContain('Обычная');
+    expect(countByOrigin(groups).all).toBe(2 + 2);
+  });
+
+  it('заголовок группы на мобильной ширине — цель касания не ниже 40 px', async () => {
+    installFakeDom();
+    (globalThis as unknown as { window: { matchMedia: unknown } }).window.matchMedia =
+      () => ({ matches: true, addEventListener: () => {}, removeEventListener: () => {} });
+    const m = mount(createElement(WikiUnifiedTree, baseProps()));
+    roots.push(m.root);
+    await settle();
+    const heads = allByAttr(m.container, 'data-testid', 'unified-group');
+    expect(heads.length).toBeGreaterThan(0);
+    for (const h of heads) {
+      expect((reactProps(h!)?.style as { minHeight: number }).minHeight).toBeGreaterThanOrEqual(40);
+    }
+  });
+});
+
 describe('Дерево в интерфейсе', () => {
   it('строки: страницы вики и заметки со значками происхождения', async () => {
     const { container } = render(baseProps());

@@ -997,7 +997,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // Перенос заметки: в папку и/или другой источник (личный vault ↔ notes/ проекта).
     // Ссылки [[…]] не трогаем — они резолвятся по заголовку и переезд переживают;
     // меняется только id (источник + путь).
-    public NoteDetail? Move(string userId, string id, string? folder, string? targetSource = null)
+    public NoteDetail? Move(string userId, string id, string? folder, string? targetSource = null, bool byHuman = false)
     {
         var (sourceKey, relPath) = DecodeId(id);
         // S2c-11: замок на id перемещаемой заметки — тот же ключ, что у Update/Delete: гонка
@@ -1017,10 +1017,10 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         var keys = new List<string> { id, EncodeId(newSource, newRel) };
         keys.Add(SourceGateKey(userId, sourceKey));
         if (newSource != sourceKey) keys.Add(SourceGateKey(userId, newSource));
-        return WithWriteGates(() => MoveCore(userId, id, folder, targetSource), [.. keys]);
+        return WithWriteGates(() => MoveCore(userId, id, folder, targetSource, byHuman), [.. keys]);
     }
 
-    private NoteDetail? MoveCore(string userId, string id, string? folder, string? targetSource)
+    private NoteDetail? MoveCore(string userId, string id, string? folder, string? targetSource, bool byHuman)
     {
         var (sourceKey, relPath) = DecodeId(id);
         // S2c-7: перенос ВНУТРИ источника — обычная дверь заметки, WriteContent: редактор
@@ -1062,6 +1062,17 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             File.Delete(full);
         }
 
+        // S3-3c2: человеческий перенос — в журнал ОБА пути переезда: старый (его файла больше
+        // нет) и новый, каждый со root СВОЕГО источника-проекта (личный бок отсекает сам
+        // RecordHumanEdit: vault вне журнала). Вызов под замком переноса и только после
+        // состоявшегося File.Move: сюда не доходят ни отказанный перенос («уже есть», 404 —
+        // проигравший не пишет ни одного пути), ни no-op «уже там» (правки файла не было).
+        if (byHuman)
+        {
+            RecordHumanEdit(userId, sourceKey, full);
+            RecordHumanEdit(userId, newSource, newFull);
+        }
+
         // S2c-11: переезд между источниками — запись для обоих арендаторов: сбрасываются
         // исходный и целевой источники (свой ключ + ключ арендатора каждого)
         InvalidateWrite(userId, sourceKey);
@@ -1077,7 +1088,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // Переименование/перенос папки целиком (Directory.Move — атомарно, вложения
     // переезжают вместе). Ссылки [[…]] не трогаем (резолв по заголовку).
     // Возвращает маппинг id заметок старый → новый (id содержит путь).
-    public IReadOnlyList<MovedNoteId> MoveFolder(string userId, string sourceKey, string path, string newPath)
+    public IReadOnlyList<MovedNoteId> MoveFolder(string userId, string sourceKey, string path, string newPath, bool byHuman = false)
     {
         // S2c-11: перенос папки меняет id всех её заметок — под замком источника: гонка с
         // переносом отдельной заметки или созданием файла в той же папке сериализована.
@@ -1093,7 +1104,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         var noteIds = oldFolder.Length == 0
             ? []
             : FolderNoteIds(userId, sourceKey, oldFolder);
-        return WithWriteGates(() => MoveFolderCore(userId, sourceKey, path, newPath),
+        return WithWriteGates(() => MoveFolderCore(userId, sourceKey, path, newPath, byHuman),
             [SourceGateKey(userId, sourceKey), .. noteIds]);
     }
 
@@ -1121,7 +1132,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         return result;
     }
 
-    private IReadOnlyList<MovedNoteId> MoveFolderCore(string userId, string sourceKey, string path, string newPath)
+    private IReadOnlyList<MovedNoteId> MoveFolderCore(string userId, string sourceKey, string path, string newPath, bool byHuman)
     {
         // S2c-7: перенос папки — дверь содержимого заметок проекта, WriteContent
         var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
@@ -1158,6 +1169,17 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
         Directory.CreateDirectory(Path.GetDirectoryName(newFull)!);
         Directory.Move(oldFull, newFull);
+        // S3-3c2: человеческий перенос папки — старый и новый путь КАЖДОГО её файла (тот же
+        // порядок, что S3-3b в FilesController.RecordRenamedDir: путь папки в журнал не идёт —
+        // её pathspec затянул бы чужую работу). Список берётся из скана под замком источника ДО
+        // переноса; вызов — после состоявшегося Directory.Move: отказанный перенос (404 /
+        // «уже существует») сюда не доходит — проигравший не пишет ни одного пути.
+        if (byHuman)
+            foreach (var rel in before)
+            {
+                RecordHumanEdit(userId, sourceKey, SafePath.Join(rootDir, rel));
+                RecordHumanEdit(userId, sourceKey, SafePath.Join(rootDir, newFolder + rel[oldFolder.Length..]));
+            }
         // S2c-11: содержимое папки переезжает — модель арендатора источника обязана быть сброшена
         InvalidateWrite(userId, sourceKey);
         // Привязки комментариев к документам внутри перенесённой папки — по префиксу.
@@ -1224,7 +1246,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
     // Удалить физическую папку рекурсивно (пустую или с заметками/вложениями).
     // Возвращает число удалённых .md-заметок.
-    public int DeleteFolder(string userId, string sourceKey, string path)
+    public int DeleteFolder(string userId, string sourceKey, string path, bool byHuman = false)
     {
         // S2c-11: та же дверь и тот же замок источника, что у CreateFolder.
         // F-6a (хвост 565100e3 п.6): плюс замки всех заметок папки — правка/удаление заметки
@@ -1234,11 +1256,11 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         var noteIds = folder.Length == 0
             ? []
             : FolderNoteIds(userId, sourceKey, folder);
-        return WithWriteGates(() => DeleteFolderCore(userId, sourceKey, path),
+        return WithWriteGates(() => DeleteFolderCore(userId, sourceKey, path, byHuman),
             [SourceGateKey(userId, sourceKey), .. noteIds]);
     }
 
-    private int DeleteFolderCore(string userId, string sourceKey, string path)
+    private int DeleteFolderCore(string userId, string sourceKey, string path, bool byHuman)
     {
         // S2c-7: та же дверь, что у CreateFolder: WriteContent
         var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
@@ -1246,13 +1268,21 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         if (folder.Length == 0) throw new ArgumentException("Не задана папка");
         var full = SafePath.Join(rootDir, folder);
         if (!Directory.Exists(full)) throw new KeyNotFoundException("Папка не найдена");
-        int mdCount;
-        try { mdCount = Directory.EnumerateFiles(full, "*.md", SearchOption.AllDirectories).Count(); }
-        catch { mdCount = 0; }
+        // S3-3c2: список файлов папки снимается ДО удаления (после него старых путей уже нет) —
+        // тот же порядок, что S3-3b в FilesController: журналу идут ЕЁ ФАЙЛЫ, не путь папки.
+        // Скан — под замком источника: после его взятия состав папки не меняется (те же
+        // замки id, что список замков в DeleteFolder).
+        List<string> mdFiles;
+        try { mdFiles = [.. Directory.EnumerateFiles(full, "*.md", SearchOption.AllDirectories)]; }
+        catch { mdFiles = []; }
         Directory.Delete(full, recursive: true);
+        // S3-3c2: человеческий снос папки — каждый её файл своим путём, после состоявшегося
+        // Directory.Delete: отказанный снос (404) сюда не доходит — проигравший не пишет путей.
+        if (byHuman)
+            foreach (var f in mdFiles) RecordHumanEdit(userId, sourceKey, f);
         // S2c-11: вместе с папкой удалены её заметки — модель арендатора обязана быть сброшена
         InvalidateWrite(userId, sourceKey);
-        return mdCount;
+        return mdFiles.Count;
     }
 
     // S2c-2 (К8): сохранение с If-Match — оптимистичная конкурентность. «Сравнить и записать»

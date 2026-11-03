@@ -378,7 +378,7 @@ public class NotesController : ControllerBase
     {
         try
         {
-            var moved = _notes.MoveFolder(UserId, req.Source, req.Path, req.NewPath);
+            var moved = _notes.MoveFolder(UserId, req.Source, req.Path, req.NewPath, byHuman: true);
             await Broadcast("updated", null, req.Source);
             return Ok(new { notes = moved });
         }
@@ -415,7 +415,7 @@ public class NotesController : ControllerBase
     {
         try
         {
-            var removed = _notes.DeleteFolder(UserId, source, path);
+            var removed = _notes.DeleteFolder(UserId, source, path, byHuman: true);
             await Broadcast("folder_deleted", null, source);
             return Ok(new { removed });
         }
@@ -430,7 +430,7 @@ public class NotesController : ControllerBase
     {
         try
         {
-            var note = _notes.Move(UserId, id, req.Folder, req.TargetSource);
+            var note = _notes.Move(UserId, id, req.Folder, req.TargetSource, byHuman: true);
             if (note is null) return NotFound();
             await Broadcast("updated", note.Id, note.Source);
             return Ok(note);

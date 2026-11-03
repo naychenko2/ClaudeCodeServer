@@ -17,6 +17,12 @@ namespace ClaudeHomeServer.Tests.Services;
 /// до записи — молчит. Ключ журнала: root = RootPath проекта (не его notes/), rel =
 /// «notes/&lt;файл&gt;.md», автор = id вызывающего.
 ///
+/// S3-3c2: человеческие перенос заметки (Move, в т.ч. между источниками), перенос и удаление
+/// папки (MoveFolder, DeleteFolder) — тот же журнал. Move: старый и новый путь, каждый со root
+/// СВОЕГО проекта; папки — путём КАЖДОГО своего файла (путь папки в журнал не идёт, тот же
+/// порядок S3-3b в FilesController); список файлов папки снимается до операции. Отказанный
+/// перенос (403/404) — ни одного пути; агентские вызовы — молчат.
+///
 /// Фейк-журнал записывает полученные вызовы как есть: правила отбора (общий проект,
 /// git-репозиторий, автор-участник) — ответственность самого HumanEditCommitter, здесь не
 /// проверяются. Стенд — как в SharedProjectNotesWriteContentTests: границы на уровне сервиса,
@@ -29,6 +35,7 @@ public class NotesHumanEditJournalTests : IDisposable
 
     private readonly string _dir;
     private readonly string _projectRoot;
+    private readonly string _projectRoot2;
     private readonly UserStore _users;
     private readonly ProjectManager _projects;
     private readonly IConfiguration _config;
@@ -38,6 +45,7 @@ public class NotesHumanEditJournalTests : IDisposable
     private readonly string _editorBId;
     private readonly string _readerId;
     private readonly string _projectId;
+    private readonly string _projectId2;
 
     public NotesHumanEditJournalTests()
     {
@@ -61,6 +69,11 @@ public class NotesHumanEditJournalTests : IDisposable
         Directory.CreateDirectory(Path.Combine(_projectRoot, "notes"));
         File.WriteAllText(Path.Combine(_projectRoot, "notes", ProjectNote + ".md"), NoteBody);
         _projectId = _projects.Create("Проект S3-3c1", _projectRoot, _ownerId, "owner").Id;
+
+        // Второй общий проект того же владельца — для переноса между источниками (S3-3c2)
+        _projectRoot2 = Path.Combine(_dir, "project2");
+        Directory.CreateDirectory(Path.Combine(_projectRoot2, "notes"));
+        _projectId2 = _projects.Create("Проект S3-3c2", _projectRoot2, _ownerId, "owner").Id;
     }
 
     public void Dispose()
@@ -254,6 +267,237 @@ public class NotesHumanEditJournalTests : IDisposable
         var last = journal.Calls[^1];
         last.UserId.Should().Be(otherId);
         File.ReadAllText(full).Should().Contain(last.UserId == _editorAId ? "ПРАВКА_A" : "ПРАВКА_B");
+    }
+
+    // --- S3-3c2: перенос заметки (c1): старый и новый путь, каждый со root своего проекта ---
+
+    [Fact]
+    public void ПереносЗаметкиВнутриПроекта_ДваRecord_СтарыйИНовыйПуть()
+    {
+        AddMember(_editorId, ProjectRole.Editor);
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+
+        // Заметка создана агентом (без byHuman) — в журнале пусто
+        var created = sut.Create(_editorId, new CreateNoteRequest("Переносимая", "тело", _projectId, Folder: "Исходник"));
+        journal.Calls.Should().BeEmpty();
+
+        var moved = sut.Move(_editorId, created.Id, "Цель", byHuman: true);
+        moved.Should().NotBeNull();
+
+        // Оба пути переезда: старого файла больше нет — журнал обязан видеть и его удаление,
+        // и новый путь
+        journal.Calls.Should().HaveCount(2);
+        journal.Calls[0].Rel.Should().Be("notes/Исходник/Переносимая.md");
+        journal.Calls[1].Rel.Should().Be("notes/Цель/Переносимая.md");
+        journal.Calls.Should().AllSatisfy(c =>
+        {
+            c.ProjectId.Should().Be(_projectId);
+            c.Root.Should().Be(_projectRoot);
+            c.UserId.Should().Be(_editorId);
+        });
+    }
+
+    [Fact]
+    public void ПереносМеждуДвумяОбщимиПроектами_ПоОдномуВКаждый_СоСвоимRoot()
+    {
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+
+        // Перенос между источниками — решение владельца (S2c-5): оба проекта его
+        var created = sut.Create(_ownerId, new CreateNoteRequest("Межпроектная", "тело", _projectId));
+        var moved = sut.Move(_ownerId, created.Id, null, _projectId2, byHuman: true);
+        moved.Should().NotBeNull();
+
+        // По одной записи в каждый проект, каждая со root СВОЕГО проекта
+        journal.Calls.Should().HaveCount(2);
+        journal.Calls[0].Should().Be(new FakeJournal.Call(_projectId, _projectRoot, "notes/Межпроектная.md", _ownerId));
+        journal.Calls[1].Should().Be(new FakeJournal.Call(_projectId2, _projectRoot2, "notes/Межпроектная.md", _ownerId));
+    }
+
+    [Fact]
+    public void ПереносПроектаВЛичныйVault_ОдинRecord_СтарыйПуть()
+    {
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+
+        var created = sut.Create(_ownerId, new CreateNoteRequest("ВЛичный", "тело", _projectId));
+        var moved = sut.Move(_ownerId, created.Id, null, "personal", byHuman: true);
+        moved.Should().NotBeNull();
+
+        // Личная сторона — вне журнала: только старый путь проекта
+        journal.Calls.Should().ContainSingle()
+            .Which.Should().Be(new FakeJournal.Call(_projectId, _projectRoot, "notes/ВЛичный.md", _ownerId));
+    }
+
+    [Fact]
+    public void ПереносИзЛичногоВПроект_ОдинRecord_НовыйПуть()
+    {
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+
+        var created = sut.Create(_ownerId, new CreateNoteRequest("ИзЛичной", "тело"));
+        var moved = sut.Move(_ownerId, created.Id, null, _projectId, byHuman: true);
+        moved.Should().NotBeNull();
+
+        // Личная сторона — вне журнала: только новый путь проекта
+        journal.Calls.Should().ContainSingle()
+            .Which.Should().Be(new FakeJournal.Call(_projectId, _projectRoot, "notes/ИзЛичной.md", _ownerId));
+    }
+
+    // --- S3-3c2: папки (c1): путь каждого файла, путь папки — нет ---
+
+    [Fact]
+    public void ПереносПапкиСДвумяФайлами_ЧетыреRecord_БезПутиПапки()
+    {
+        AddMember(_editorId, ProjectRole.Editor);
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+        for (var i = 0; i < 2; i++)
+            sut.Create(_editorId, new CreateNoteRequest($"Файл {i}", $"# Тело {i}\n", _projectId, Folder: "Папка"));
+
+        var map = sut.MoveFolder(_editorId, _projectId, "Папка", "Папка2", byHuman: true);
+        map.Should().HaveCount(2);
+
+        // Старый и новый путь каждого файла; самого пути папки в журнале нет
+        journal.Calls.Should().HaveCount(4);
+        journal.Calls.Select(c => c.Rel).Should().BeEquivalentTo(
+            "notes/Папка/Файл 0.md", "notes/Папка2/Файл 0.md",
+            "notes/Папка/Файл 1.md", "notes/Папка2/Файл 1.md");
+        journal.Calls.Should().NotContain(c => c.Rel == "notes/Папка" || c.Rel == "notes/Папка2");
+        journal.Calls.Should().AllSatisfy(c =>
+        {
+            c.ProjectId.Should().Be(_projectId);
+            c.Root.Should().Be(_projectRoot);
+            c.UserId.Should().Be(_editorId);
+        });
+    }
+
+    [Fact]
+    public void СносПапкиСДвумяФайлами_ДваRecord_БезПутиПапки()
+    {
+        AddMember(_editorId, ProjectRole.Editor);
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+        for (var i = 0; i < 2; i++)
+            sut.Create(_editorId, new CreateNoteRequest($"Снос {i}", $"# Тело {i}\n", _projectId, Folder: "Снос"));
+
+        sut.DeleteFolder(_editorId, _projectId, "Снос", byHuman: true).Should().Be(2);
+
+        // Каждый файл — своим путём (снят до удаления); самого пути папки в журнале нет
+        journal.Calls.Should().HaveCount(2);
+        journal.Calls.Select(c => c.Rel).Should().BeEquivalentTo("notes/Снос/Снос 0.md", "notes/Снос/Снос 1.md");
+        journal.Calls.Should().NotContain(c => c.Rel == "notes/Снос");
+    }
+
+    // --- S3-3c2: агентские переносы без byHuman и отказы: журнал молчит (c2) ---
+
+    [Fact]
+    public void ПереносыБезByHuman_НиОднойЗаписиВЖурнал()
+    {
+        AddMember(_editorId, ProjectRole.Editor);
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+
+        var created = sut.Create(_editorId, new CreateNoteRequest("Агентский перенос", "тело", _projectId, Folder: "А"));
+        // Так зовёт NotesToolset (NotesToolset.cs:288) — без byHuman
+        sut.Move(_editorId, created.Id, "B").Should().NotBeNull();
+        sut.MoveFolder(_editorId, _projectId, "B", "C").Should().HaveCount(1);
+        sut.DeleteFolder(_editorId, _projectId, "C").Should().Be(1);
+
+        journal.Calls.Should().BeEmpty("журнал — только правки человека (byHuman); агентские переносы молчат");
+    }
+
+    [Fact]
+    public void Отказ403_ИОтказ404_Переносы_НиОднойЗаписиВЖурнал()
+    {
+        AddMember(_editorId, ProjectRole.Editor);
+        AddMember(_readerId, ProjectRole.Reader);
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+        var id = ProjectNoteId(sut);
+
+        // 403: читатель без WriteContent — ResolveRoot бросает до любой работы с файлами
+        Action act = () => sut.Move(_readerId, id, "Куда-то", byHuman: true);
+        act.Should().Throw<UnauthorizedAccessException>();
+        act = () => sut.MoveFolder(_readerId, _projectId, "Заметки нет", "Куда", byHuman: true);
+        act.Should().Throw<UnauthorizedAccessException>();
+        act = () => sut.DeleteFolder(_readerId, _projectId, "Заметки нет", byHuman: true);
+        act.Should().Throw<UnauthorizedAccessException>();
+
+        // 404: переносить нечего — Move даёт null, папочные операции — KeyNotFoundException
+        var gone = sut.Create(_ownerId, new CreateNoteRequest("Призрачная", "тело", _projectId));
+        sut.Delete(_ownerId, gone.Id).Should().BeTrue();
+        sut.Move(_editorId, gone.Id, "Куда-то", byHuman: true).Should().BeNull();
+        act = () => sut.MoveFolder(_editorId, _projectId, "Нет такой папки", "Куда", byHuman: true);
+        act.Should().Throw<KeyNotFoundException>();
+        act = () => sut.DeleteFolder(_editorId, _projectId, "Нет такой папки", byHuman: true);
+        act.Should().Throw<KeyNotFoundException>();
+
+        journal.Calls.Should().BeEmpty("отказанный перенос не состоялся — ни одного пути в журнале");
+    }
+
+    // --- S3-3c2: конкурентность (c3) ---
+
+    /// <summary>
+    /// Два MoveFolder одной папки параллельно в разные цели. Замки F-6a (ключ источника + id
+    /// заметок папки) сериализуют пару: ровно один успех, проигравший под тем же замком видит
+    /// уже перенесённую папку (KeyNotFoundException) и не пишет ни одного нового пути. Порядок
+    /// журнала относительно диска проверяется удержанием: первый Record победителя держится
+    /// внутри его замка, и пока он удержан, перенос уже должен быть совершён на диске (старого
+    /// места нет, папка в одной из целей). Мутация «Record новых путей до фактического
+    /// переноса»: запись приходит, когда папка ещё на старом месте, — проверка ниже краснеет.
+    /// </summary>
+    [Fact]
+    public async Task Гонка_ДваMoveFolderОднойПапки_УспехРовноОдин_ЖурналТолькоПослеФактическогоПереноса()
+    {
+        AddMember(_editorAId, ProjectRole.Editor);
+        AddMember(_editorBId, ProjectRole.Editor);
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+        for (var i = 0; i < 2; i++)
+            sut.Create(_ownerId, new CreateNoteRequest($"Гонка {i}", $"# Тело {i}\n", _projectId, Folder: "Гонка"));
+
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ma = Task.Run(async () =>
+        {
+            await start.Task;
+            try { return (Moved: (IReadOnlyList<MovedNoteId>?)sut.MoveFolder(_editorAId, _projectId, "Гонка", "ЦельА", byHuman: true), Fail: (Exception?)null); }
+            catch (Exception ex) { return (null, ex); }
+        });
+        var mb = Task.Run(async () =>
+        {
+            await start.Task;
+            try { return (Moved: (IReadOnlyList<MovedNoteId>?)sut.MoveFolder(_editorBId, _projectId, "Гонка", "ЦельБ", byHuman: true), Fail: (Exception?)null); }
+            catch (Exception ex) { return (null, ex); }
+        });
+        start.SetResult();
+
+        // Первый Record — внутри замка победителя. Пока он удержан, перенос уже обязан быть
+        // совершён на диске: старого места нет, папка в одной из целей.
+        var firstUserId = await journal.FirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        var movedBeforeRecord = !Directory.Exists(ProjectFile("Гонка")) &&
+            (Directory.Exists(ProjectFile("ЦельА")) || Directory.Exists(ProjectFile("ЦельБ")));
+        journal.ReleaseFirst();
+
+        var ra = await ma.WaitAsync(TimeSpan.FromSeconds(30));
+        var rb = await mb.WaitAsync(TimeSpan.FromSeconds(30));
+
+        movedBeforeRecord.Should().BeTrue(
+            "запись новых путей обязана идти после фактического переноса: на момент первого Record папка уже в новом месте");
+
+        // Ровно один успех: проигравший под тем же замком видит уже перенесённую папку
+        var won = ra.Moved is not null ? ra : rb;
+        var lost = ra.Moved is not null ? rb : ra;
+        won.Moved.Should().HaveCount(2, "победитель перенёс папку с обеими заметками");
+        lost.Fail.Should().BeOfType<KeyNotFoundException>("проигравший под тем же замком видит уже перенесённую папку");
+        var loserTarget = ra.Moved is not null ? "ЦельБ" : "ЦельА";
+
+        // Новых путей проигравшего в журнале 0: все записи — победителя, только перенесённые файлы
+        journal.Calls.Should().HaveCount(4);
+        journal.Calls.Should().AllSatisfy(c => c.UserId.Should().Be(firstUserId));
+        journal.Calls.Should().NotContain(c => c.Rel.StartsWith("notes/" + loserTarget + "/"));
+        journal.Calls.Should().NotContain(c => c.Rel == "notes/Гонка" || c.Rel == "notes/ЦельА" || c.Rel == "notes/ЦельБ");
     }
 
     /// <summary>

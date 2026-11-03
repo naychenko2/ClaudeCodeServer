@@ -100,9 +100,26 @@ export function buildContent(content: string, edits: ReadonlyMap<number, EditEnt
   // секции в базе нет (ИИ убрал) — дописываем её в конец текста
   const inserts = new Map<number, string[]>();
   const orphans = new Map<string, string[]>();
+  // Дубль строки секции (человек дописал то, что ИИ уже добавил) не вставляем: сервер сделал бы из
+  // него append со сноской ✎ и чужой атрибуцией. Нормализация как у бэка: без маркера и сносок,
+  // пробелы схлопнуты, регистр не трогаем
+  const norm = (s: string) => s.replace(BULLET_RX, '').replace(REF_RX, '').replace(/\s+/g, ' ').trim();
+  const present = new Map<string, Set<string>>();
+  const presentIn = (section: string) => {
+    let set = present.get(section);
+    if (!set) {
+      set = new Set(items.filter(it => it.section === section && !drop.has(it.line)).map(it => norm(it.text)));
+      present.set(section, set);
+    }
+    return set;
+  };
   for (const a of added) {
     const text = a.text.trim();
     if (!text) continue;
+    const seen = presentIn(a.section);
+    const key = norm(text);
+    if (seen.has(key)) continue;
+    seen.add(key);
     const heading = lines.indexOf(`## ${a.section}`);
     if (heading < 0) { orphans.set(a.section, [...(orphans.get(a.section) ?? []), `- ${text}`]); continue; }
     const own = items.filter(it => it.section === a.section);

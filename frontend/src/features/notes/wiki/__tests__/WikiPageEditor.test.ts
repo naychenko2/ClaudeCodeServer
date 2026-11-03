@@ -261,6 +261,55 @@ describe('Добавление утверждения (F4c)', () => {
     expect(String(posts[1].content)).toContain('ИИ поправил.');
     expect(String(posts[1].content)).toContain('- Моё новое.\n');
   });
+
+  const count = (s: string, sub: string) => s.split(sub).length - 1;
+
+  it('дубль: добавил «X» → 409, свежая версия уже содержит «X» → «Оставить моё» → в payload одна «X»', async () => {
+    unifiedOn();
+    const fresh = TEXT.replace('- Второе утверждение. [^s2]', '- Второе утверждение. [^s2]\n- Общая формулировка.');
+    let n = 0;
+    await seed(dtoOf(), async () => {
+      if (n++ === 0) return refusal(409, { code: 'wiki_page_changed', message: 'c', page: { pageKey: KEY_A, content: fresh, hash: 'h9' } });
+      return { status: 'applied', hash: 'h10', content: fresh };
+    });
+    const c = render();
+    await settle();
+    await openEditor(c);
+    click(addBtn(c), 'Добавить');
+    typeAdded(c, 0, 'Общая формулировка.');
+    click(byId(c, 'wiki-edit-save'), 'Сохранить');
+    await settle();
+    click(byId(c, 'wiki-conflict-take-mine'), 'Оставить моё');
+    await settle();
+    expect(posts).toHaveLength(2);
+    expect(count(String(posts[1].content), 'Общая формулировка.')).toBe(1);
+  });
+
+  it('дубль без конфликта: база уже содержит «X» → «Сохранить» → в payload одна «X»', async () => {
+    unifiedOn();
+    await seed(dtoOf(), async () => ({ status: 'applied', hash: 'h2', content: TEXT }));
+    const c = render();
+    await settle();
+    await openEditor(c);
+    click(addBtn(c), 'Добавить');
+    typeAdded(c, 0, 'Второе утверждение.');
+    click(byId(c, 'wiki-edit-save'), 'Сохранить');
+    await settle();
+    expect(posts).toHaveLength(1);
+    expect(count(String(posts[0].content), 'Второе утверждение.')).toBe(1);
+  });
+
+  it('buildContent: отличие только маркером, сноской, пробелами — тот же текст; регистр и другой текст — разные', () => {
+    const out = buildContent(TEXT, new Map(), undefined, [
+      { key: 0, section: 'Сводка', text: '*  Второе   утверждение. [^s7]' },
+      { key: 1, section: 'Сводка', text: 'второе утверждение.' },
+      { key: 2, section: 'Сводка', text: 'Совсем другое.' },
+      { key: 3, section: 'Сводка', text: 'Совсем другое.' },
+    ]);
+    expect(count(out, 'Второе утверждение.')).toBe(1);
+    expect(out).toContain('- второе утверждение.');
+    expect(count(out, 'Совсем другое.')).toBe(1);
+  });
 });
 
 describe('Редактор страницы (F4a)', () => {

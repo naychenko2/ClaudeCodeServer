@@ -348,13 +348,15 @@ public sealed class WikiJournalReader
     /// <summary>Метка «ИИ заменил моё» страницы: строки `apply` с overrodeHuman за окно [since, ∞)
     /// и автоприменённые операции их пакета с классом `…@human` на этой странице. Состояния у метки
     /// нет — она целиком выводится из журнала и пакетов; новые сверху.</summary>
-    public IReadOnlyList<PageOverride> PageOverrides(string ownerId, string section, string page, DateTimeOffset since)
+    public IReadOnlyList<PageOverride> PageOverrides(string ownerId, string section, string page, DateTimeOffset since,
+        string? pageContent = null)
     {
         var root = WikiPaths.Root(_dataDir, ownerId);
         var result = new List<PageOverride>();
         // Журнал читается целиком построчно, без окна выдачи MaxTake: окно меток — по времени
         // (since), а не по числу строк, и хвост в 1000 строк не должен гасить метку раньше срока.
         var hits = new List<Entry>();
+        var restores = new List<Entry>();
         try
         {
             var path = SafePath.Join(root, LogRelPath);
@@ -366,6 +368,9 @@ public sealed class WikiJournalReader
                 while ((line = reader.ReadLine()) is not null)
                 {
                     var e = ParseLine(line);
+                    if (e is not null && e.Op == WikiPackage.ActionRestore && e.Ts >= since && e.Section == section
+                        && e.Pages.Contains(page, StringComparer.Ordinal))
+                        restores.Add(e);
                     if (e is null || !e.OverrodeHuman || e.Op != "apply" || e.Ts < since || e.Section != section
                         || !e.Pages.Contains(page, StringComparer.Ordinal))
                         continue;
@@ -384,6 +389,15 @@ public sealed class WikiJournalReader
         var byId = new Dictionary<string, WikiPackage>(StringComparer.Ordinal);
         foreach (var p in WikiPackageStore.List(root).Packages)
             byId.TryAdd(p.Id, p);
+        // Формулировки ИИ, которые человек уже вернул («Вернуть мою»): обратный supersede пакета
+        // human с целью — текстом ИИ. Строка restore пакета ИИ не называет, связь — по тексту цели.
+        var returned = new List<(DateTimeOffset Ts, string Target)>();
+        foreach (var r in restores)
+            foreach (var hp in PackagesOf(r, byId))
+                foreach (var op in hp.Operations)
+                    if (op.Page == page && op.Op == WikiPackage.OpSupersede && !string.IsNullOrWhiteSpace(op.Target))
+                        returned.Add((r.Ts, StripFootnoteRefs(op.Target)!));
+        var active = pageContent is null ? null : ActiveAssertionLines(pageContent);
         foreach (var e in hits)
         {
             if (e.Op != "apply" || e.Ts < since || !e.Pages.Contains(page, StringComparer.Ordinal))
@@ -393,11 +407,33 @@ public sealed class WikiJournalReader
                 {
                     if (op.Page != page || !WikiPackage.IsAutoOverrideOfHuman(op))
                         continue;
+                    // Замена, которой уже нет: человек вернул свою формулировку (строка restore позже
+                    // применения) либо текста ИИ нет среди действующих утверждений страницы.
+                    // Спор (conflict) не трогаем: он стоит на живой строке человека.
+                    if (op.Op == WikiPackage.OpSupersede)
+                    {
+                        var statement = StripFootnoteRefs(op.Text);
+                        if (!string.IsNullOrEmpty(statement)
+                            && (returned.Any(x => x.Ts >= e.Ts && SameStatement(x.Target, statement))
+                                || (active is not null && !active.Any(l => QuoteMatcher.ContainsVerbatim(l, statement)))))
+                            continue;
+                    }
                     result.Add(new PageOverride(op.Op, StripFootnoteRefs(op.Text), StripFootnoteRefs(op.Target), e.Ts, pkg.Id));
                 }
         }
         return result;
     }
+
+    private static bool SameStatement(string a, string b) =>
+        QuoteMatcher.ContainsVerbatim(a, b) || QuoteMatcher.ContainsVerbatim(b, a);
+
+    // Действующие утверждения страницы: строки секций утверждений без «Истории»; null — страница
+    // не разбирается, тогда вычитать по тексту нечем.
+    private static List<string>? ActiveAssertionLines(string content) =>
+        WikiPage.Parse(content).Model is { } model
+            ? model.Sections.Where(s => s.Name != "История" && WikiPage.AssertionSectionNames.Contains(s.Name))
+                .SelectMany(s => s.Lines).ToList()
+            : null;
 
     private static readonly System.Text.RegularExpressions.Regex FootnoteRefRx =
         new(@"\s*\[\^[^\]\r\n]+\]", System.Text.RegularExpressions.RegexOptions.CultureInvariant);

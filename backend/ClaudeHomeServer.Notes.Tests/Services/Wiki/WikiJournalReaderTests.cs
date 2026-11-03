@@ -654,7 +654,7 @@ public class WikiJournalReaderTests : IDisposable
         // Мутация: previous = цель модели (StripFootnoteRefs(op.Target)) вместо строки «Истории» — тест краснеет.
         const string historyLine = "- **Старая** формулировка человека, подробнее цели.[^s1]";
         const string card = "---\ntype: source\nsummary: к\norigin: human\nref: x:1\nhash: h\ncaptured: 2026-11-02\nstatus: active\n---\n\n# Моя заметка\n";
-        const string body = "---\ntype: entity\nsummary: с\nstatus: active\n---\n\n# А\n\n## Сводка\n- Факт.\n\n## Хронология\n\n## Противоречия\n\n## История\n" + historyLine + "\n\n[^s1]: [[Моя заметка]] — «цитата»\n";
+        const string body = "---\ntype: entity\nsummary: с\nstatus: active\n---\n\n# А\n\n## Сводка\n- Новая формулировка.\n\n## Хронология\n\n## Противоречия\n\n## История\n" + historyLine + "\n\n[^s1]: [[Моя заметка]] — «цитата»\n";
         WritePage(OverridePage, body);
         WritePage("Общее/Источники/Моя заметка.md", card);
         var id = NewPackage("common", WikiPackage.StatusApplied, WikiGate.OriginSession, "session:h",
@@ -729,5 +729,52 @@ public class WikiJournalReaderTests : IDisposable
         var o = OverrideOf(WikiPackage.OpSupersede, "Срок сдачи — среда");
         o.GetProperty("target").ValueKind.Should().Be(JsonValueKind.Null);
         o.GetProperty("previous").GetString().Should().Be("- Срок сдачи — среда.");
+    }
+
+    private const string ReturnedBody = "---\ntype: entity\nsummary: с\nstatus: active\n---\n\n# А\n\n## Сводка\n- {0}\n\n## Хронология\n\n## Противоречия\n\n## История\n\n[^s1]: [[Нет]] — «цитата»\n";
+
+    [Fact]
+    public void Страница_Overrides_ЗамениУжеВернулиRestore_МеткиНет()
+    {
+        // Мутация: убрать вычитание по restore (условие returned.Any(...) в PageOverrides) — тест краснеет.
+        // Текст ИИ намеренно остаётся на странице: отсев должен сработать именно по строке restore.
+        WritePage(OverridePage, string.Format(ReturnedBody, "Новая формулировка ИИ.[^s1]"));
+        var ai = NewPackage("common", WikiPackage.StatusApplied, WikiGate.OriginSession, "session:h",
+            OverrideOp(WikiPackage.OpSupersede, OverridePage, true, "Новая формулировка ИИ.[^s1]", "Старая формулировка человека"));
+        WikiManifest.AppendLog(Root(), "apply", "common", [OverridePage], "session:h", "keeper", "auto", [ai], overrodeHuman: true);
+        PageOf(new FixedTime(DateTimeOffset.UtcNow.AddMinutes(1))).GetProperty("overrides").GetArrayLength()
+            .Should().Be(1, "до «Вернуть мою» метка есть");
+
+        var back = OverrideOp(WikiPackage.OpSupersede, OverridePage, false, "Старая формулировка человека", "Новая формулировка ИИ.") with
+        {
+            Class = WikiPackage.ClassKey(WikiGate.OriginHuman, WikiPackage.OpSupersede),
+        };
+        var made = WikiPackageStore.Create(Root(), new WikiPackage
+        {
+            Id = WikiPackageStore.NewId(),
+            Author = WikiPackage.AuthorHuman,
+            Action = WikiPackage.ActionRestore,
+            Section = "common",
+            Sources = [new WikiPackage.SourceRef(WikiGate.OriginHuman, "x:1")],
+            Operations = [back],
+            Status = WikiPackage.StatusChecking,
+        });
+        made.Ok.Should().BeTrue(made.Reason);
+        WikiManifest.AppendLog(Root(), "restore", "common", [OverridePage], "x:1", "user");
+
+        PageOf(new FixedTime(DateTimeOffset.UtcNow.AddMinutes(1))).GetProperty("overrides").GetArrayLength()
+            .Should().Be(0, "формулировку вернули — метка не действует");
+    }
+
+    [Fact]
+    public void Страница_Overrides_ТекстаИИНетСредиДействующих_МеткиНет()
+    {
+        // Мутация: убрать проверку active (страховку) в PageOverrides — тест краснеет.
+        WritePage(OverridePage, string.Format(ReturnedBody, "Совсем другое утверждение."));
+        var ai = NewPackage("common", WikiPackage.StatusApplied, WikiGate.OriginSession, "session:h",
+            OverrideOp(WikiPackage.OpSupersede, OverridePage, true, "Новая формулировка ИИ.[^s1]", "Старая формулировка человека"));
+        WikiManifest.AppendLog(Root(), "apply", "common", [OverridePage], "session:h", "keeper", "auto", [ai], overrodeHuman: true);
+
+        PageOf(new FixedTime(DateTimeOffset.UtcNow.AddMinutes(1))).GetProperty("overrides").GetArrayLength().Should().Be(0);
     }
 }

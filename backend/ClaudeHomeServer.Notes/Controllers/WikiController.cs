@@ -237,7 +237,7 @@ public class WikiController : ControllerBase
         var manifest = ReadManifestQuietly(root, key!);
         var content = System.IO.File.ReadAllText(full);
         var (authorship, footnotes) = ReadAuthorship(root, key!, content);
-        var overrides = _journal.PageOverrides(userId, key!, page!, _time.GetUtcNow() - OverridesWindow)
+        var overrides = _journal.PageOverrides(userId, key!, page!, _time.GetUtcNow() - OverridesWindow, content)
             .Select(o => new WikiOverrideDto(o.Op, o.Statement, ResolveHistoryLine(content, o.Previous), o.At, o.PackageId,
                 o.Op == WikiPackage.OpConflict ? ResolveLiveLine(content, o.Previous, o.Statement) : null))
             .ToList();

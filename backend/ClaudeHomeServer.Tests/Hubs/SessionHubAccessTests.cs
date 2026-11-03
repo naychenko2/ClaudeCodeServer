@@ -20,6 +20,7 @@ namespace ClaudeHomeServer.Tests.Hubs;
 ///    мёртвое соединение, а не как отсутствие в группе.
 /// Тогда единственное, чем отличается чужой от своего, — именно membership.
 /// </summary>
+[Trait("Category", "Host")]
 public class SessionHubAccessTests : IClassFixture<TestWebApplicationFactory>, IAsyncLifetime
 {
     // Событие-проба намерено вне протокола (не "message"): тест проверяет доставку в группу,

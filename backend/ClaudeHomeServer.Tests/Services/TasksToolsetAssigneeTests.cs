@@ -36,6 +36,7 @@ namespace ClaudeHomeServer.Tests.Services;
 ///   «УчастникЗатемMe» и «УчастникЗатемClaude» краснеют: участник остаётся в записи.
 /// </summary>
 [Trait("Category", "Integration")]
+[Trait("Category", "Host")]
 public class TasksToolsetAssigneeTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

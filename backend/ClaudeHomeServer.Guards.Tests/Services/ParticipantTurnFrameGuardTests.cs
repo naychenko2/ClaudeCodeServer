@@ -176,6 +176,12 @@ public class ParticipantTurnFrameGuardTests : IClassFixture<ParticipantFrameFixt
         new("notes", "notes_reply", P, "id не своего проекта → отказ (:397-399); в вызове личная заметка", "{{sc}}", "{\"id\":\"{{pn}}\",\"comment\":\"реплика {{tag}}\"}"),
         new("notes", "notes_set_status", P, "id не своего проекта → отказ (:399)", "{{sc}}", "{\"id\":\"{{pn}}\",\"status\":\"open\"}"),
         new("notes", "notes_promote_task", P, "то же", "{{sc}}", "{\"id\":\"{{pn}}\"}"),
+        // Вики (master, ADR-035/036) — личное пространство владельца data/wiki/{owner}: в узкой рамке
+        // отказ default-ветки NarrowDenied (id заметки проекта у вызова нет — источник не свой)
+        new("notes", "wiki_query", D, "вики владельца — личное пространство (NarrowDenied default)", "{{sc}}", "{\"question\":\"вопрос {{tag}}\"}"),
+        new("notes", "wiki_status", D, "то же", "{{sc}}", "{}"),
+        new("notes", "wiki_ingest", D, "то же: постановка в разбор вики владельца", "{{sc}}", "{\"source\":\"{{pn}}\"}"),
+        new("notes", "wiki_add_fact", D, "то же: запись в вики владельца", "{{sc}}", "{\"fact\":\"факт {{tag}}\",\"quote\":\"цитата для проверки {{tag}}\",\"sessionRange\":\"m1-2\"}"),
 
         // --- memory (S2a-3b + R-S2a-3b п.4; MemoryToolset :104-113 глобальная/сферная персона, :358 полка сферы) ---
         // 10 инструментов memory_* × 3 зоны персоны: глобальная — режется, сферная — режется

@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// самому владельцу. Личный проект остаётся с широкой рамкой. Вердикт читается из ITurnFrameSource по
 /// заголовку X-Caller-Session-Id; в отказе нет id и названий из личных данных (маркеры PERSONAL-*).
 /// </summary>
+[Trait("Category", "Host")]
 public class McpNarrowFrameTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

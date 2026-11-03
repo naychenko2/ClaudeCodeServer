@@ -19,6 +19,7 @@ namespace ClaudeHomeServer.Tests.Integration;
 /// открыт. Хаб (SessionHub.OwnerOrTurnAuthor) решает тем же helper'ом, что проверен здесь и на
 /// уровне стора (SessionManagerTests.TurnActor).
 /// </summary>
+[Trait("Category", "Host")]
 public class SharedChatTurnControlTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

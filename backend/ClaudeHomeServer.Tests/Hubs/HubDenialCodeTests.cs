@@ -37,6 +37,7 @@ namespace ClaudeHomeServer.Tests.Hubs;
 /// проде; точка доступа НЕ подменена — общий проект включён рубильником и флагом, как у фронта
 /// (ср. RunTurnGateTests, где IProjectAccess подменяется «чистой» ради матрицы прав).
 /// </summary>
+[Trait("Category", "Host")]
 public class HubDenialCodeTests : IAsyncDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

@@ -26,6 +26,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// чат не найден» — узкая рамка (fail-closed). В отказе нет id и названий из личных данных
 /// (маркеры PERSONAL-*). Dify здесь ФАКТИКА: свой стаб-хендлер, тесты не ходят в сеть.
 /// </summary>
+[Trait("Category", "Host")]
 public class McpNarrowFramePersonalSpaceTests : IDisposable
 {
     private readonly FrameDifyHandler Dify = new();

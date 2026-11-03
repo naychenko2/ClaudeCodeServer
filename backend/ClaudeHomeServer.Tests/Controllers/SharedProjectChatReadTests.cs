@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// рубильник — 404: существование не раскрываем. Владелец идёт прежним путём.
 /// Создание чата — право редактора с S2d-1c, здесь не проверяется: см. SharedProjectChatCreateTests.
 /// </summary>
+[Trait("Category", "Host")]
 public class SharedProjectChatReadTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

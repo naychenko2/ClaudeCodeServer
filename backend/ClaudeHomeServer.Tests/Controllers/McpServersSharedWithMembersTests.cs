@@ -20,6 +20,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// постороннему 404 (в его реестре такой записи нет). Правка самой записи пометку не сбрасывает.
 /// Старый mcp-servers.json без поля читается без миграции: SharedWithMembers=false.
 /// </summary>
+[Trait("Category", "Host")]
 public class McpServersSharedWithMembersTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {

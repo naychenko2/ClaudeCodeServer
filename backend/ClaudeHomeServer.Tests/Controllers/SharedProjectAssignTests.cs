@@ -22,6 +22,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// по умолчанию, TaskManager.ResolveMeUserId). Коды — словарь TaskManager, тот же, что
 /// поставит MCP-дверь в S2b-2b.
 /// </summary>
+[Trait("Category", "Host")]
 public class SharedProjectAssignTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

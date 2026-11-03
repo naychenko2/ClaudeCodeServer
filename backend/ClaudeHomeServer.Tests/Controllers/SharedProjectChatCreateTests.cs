@@ -18,6 +18,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// чату общего проекта не назначается и редактору — 400 global_persona_in_shared (перевод Create
 /// с Write на RunTurn её не ослабляет). Личный проект владельца и чат вне проекта — прежнее поведение.
 /// </summary>
+[Trait("Category", "Host")]
 public class SharedProjectChatCreateTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

@@ -18,6 +18,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// а глобальная персона — личное пространство арендатора. Проектная персона того же проекта,
 /// личный проект и чат вне проекта — прежнее поведение.
 /// </summary>
+[Trait("Category", "Host")]
 public class SharedProjectPersonaTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

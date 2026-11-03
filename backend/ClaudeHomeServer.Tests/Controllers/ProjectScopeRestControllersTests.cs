@@ -9,6 +9,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // S0-4b: остальные контроллеры Main на [ProjectScope] / явном IProjectAccess.Resolve.
 // Поведение «только владелец» прежнее: чужой получает тот же отказ, что и до перевода
 // (404; у CodeGraph и «Сервисов проекта» — прежний 403), свой проект отвечает как раньше.
+[Trait("Category", "Host")]
 public class ProjectScopeRestControllersTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>, IDisposable
 {

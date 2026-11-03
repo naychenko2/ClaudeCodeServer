@@ -28,6 +28,7 @@ namespace ClaudeHomeServer.Tests.Hubs;
 /// реальный поток логов идёт в ту же группу (DevServerService.LogGroup) — проверяется
 /// именно membership, не процесс.
 /// </summary>
+[Trait("Category", "Host")]
 public class ProjectMembersEventsHubTests : IClassFixture<TestWebApplicationFactory>, IAsyncLifetime
 {
     // Событие-проба вне протокола (как в RevokedMemberHubTests): проверяется доставка в группу

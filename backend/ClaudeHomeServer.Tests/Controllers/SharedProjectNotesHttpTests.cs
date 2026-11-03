@@ -23,6 +23,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// в несвежую модель участника — чтение вернуло бы пустой список по причине свежести, а не
 /// по проверяемой. Роль участника меняется PUT-ом между тестами, состав — явный в каждом.
 /// </summary>
+[Trait("Category", "Host")]
 public class SharedProjectNotesHttpTests : IClassFixture<TestWebApplicationFactory>
 {
     private const string NoteTitle = "Заметка проекта";

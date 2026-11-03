@@ -10,6 +10,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // S0-4a: ProjectsController на [ProjectScope(Key = "id")] — поведение «только владелец» прежнее:
 // свой проект — 200, чужой — 404 (не раскрываем существование), и чужой запрос ничего не меняет.
+[Trait("Category", "Host")]
 public class ProjectsControllerScopeTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>, IDisposable
 {

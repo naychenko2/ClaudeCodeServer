@@ -65,3 +65,13 @@ backend/ClaudeHomeServer/Services/Mcp/Http/WorkspaceToolset.cs|2
 backend/ClaudeHomeServer/Services/Mcp/LocalMediaProjectAccess.cs|2
 backend/ClaudeHomeServer.Spend/Controllers/SpendController.cs|1
 backend/ClaudeHomeServer.VideoEditor/Mcp/VideoEditorToolset.cs|1
+# Мерж master 03.11 (LLM-wiki, ADR-035/036): вика — личное пространство владельца
+# (data/wiki/{userId}), в общий проект не открывается. Сравнения осознанные: «раздел
+# проекта — только своего проекта», «пометка/разбор — только своего чата» (fail-closed:
+# участник общего проекта раздел чужого проекта в своей вике не получает — 403).
+backend/ClaudeHomeServer.Notes/Controllers/WikiChatsController.cs|3
+backend/ClaudeHomeServer.Notes/Controllers/WikiController.cs|2
+backend/ClaudeHomeServer.Notes/Controllers/WikiPackagesController.cs|2
+backend/ClaudeHomeServer.Notes/Controllers/WikiPagesController.cs|2
+backend/ClaudeHomeServer.Notes/Controllers/WikiSettingsController.cs|1
+backend/ClaudeHomeServer.Notes/Services/Mcp/NotesToolset.cs|1

@@ -23,6 +23,7 @@ namespace ClaudeHomeServer.Tests.Hubs;
 /// до неё не было. Завершённость самого выкидывания доказывает личное событие
 /// project_access_revoked: сервер отправляет его после снятия всех групп того же человека.
 /// </summary>
+[Trait("Category", "Host")]
 public class RevokedMemberHubTests : IClassFixture<TestWebApplicationFactory>, IAsyncLifetime
 {
     // Событие-проба вне протокола (как в SessionHubAccessTests): проверяется доставка в группу,

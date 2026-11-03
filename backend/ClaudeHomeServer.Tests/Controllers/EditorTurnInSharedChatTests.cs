@@ -20,6 +20,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// list_projects/search, notes semantic_search), проверяются как отказ — ослабление сужения в любом
 /// из тулсетов красит этот тест (проведено мутациями в отчёте задачи).
 /// </summary>
+[Trait("Category", "Host")]
 public class EditorTurnInSharedChatTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

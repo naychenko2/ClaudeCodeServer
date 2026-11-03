@@ -115,7 +115,8 @@ async function mountView(source: string, projects: Project[]) {
   const origCreate = doc.createElement.bind(doc);
   doc.createElement = (tag: string) => {
     const el = origCreate(tag);
-    if (tag === 'select') el.options = [];
+    // Свежий fakeDom (master) сам отдаёт options у select геттером — подменяем, только если его нет
+    if (tag === 'select' && !('options' in el)) el.options = [];
     return el;
   };
   vi.spyOn(api.notes, 'get').mockResolvedValue(NOTE(source) as never);

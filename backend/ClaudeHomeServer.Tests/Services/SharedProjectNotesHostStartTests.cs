@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Tests.Services;
 /// стартовать, дать авторизованного клиента и разрешить оба узла цикла — точку доступа
 /// и сервис заметок.
 /// </summary>
+[Trait("Category", "Host")]
 public class SharedProjectNotesHostStartTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

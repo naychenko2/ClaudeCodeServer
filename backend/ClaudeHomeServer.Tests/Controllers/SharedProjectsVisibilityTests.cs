@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // WebDAV, роли на запись. Участник видит проект только при рубильнике И флаге; читатель
 // пишет 403; редактор пишет содержимое с S2c-8 (WriteContent, матрица дверей —
 // FilesControllerWriteContentTests).
+[Trait("Category", "Host")]
 public class SharedProjectsVisibilityTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

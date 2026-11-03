@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// посторонний и участник с выключенным флагом получают 404 — существование не раскрываем.
 /// Полная карточка задачи (<c>GET /api/tasks/{id}</c>) участнику ещё не открыта: её перевод — S2b.
 /// </summary>
+[Trait("Category", "Host")]
 public class SharedProjectReadTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

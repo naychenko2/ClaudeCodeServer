@@ -1584,11 +1584,13 @@ public sealed class TasksToolset(
                     ["recurrence"] = RecurrenceSchema(),
                     // S2b-2b: значением может быть username участника проекта задачи — фиксированного
                     // enum здесь быть не может (списка username'ов в схеме нет); «me»/«claude» — прежние.
+                    // Описание короткое: tasks_update стоит у лимита суммы описаний параметров (1950,
+                    // McpToolsetStabilityTests); правила круга и отказы агент получает текстом отказа.
                     // Парность со stdio-веткой держит TasksToolsetParityTests (index.js правится парой)
                     ["assignee"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Исполнитель: \"me\" (пользователь), \"claude\" или username участника проекта задачи — назначить его (не участник и читатель — отказ)",
+                        ["description"] = "me, claude или username участника",
                     },
                     ["personaId"] = PersonaIdSchema(),
                     ["modelTier"] = ModelTierSchema(),
@@ -1600,7 +1602,7 @@ public sealed class TasksToolset(
                     {
                         ["type"] = "array",
                         ["items"] = new JsonObject { ["type"] = "string" },
-                        ["description"] = "Метки (заменяют список целиком)",
+                        ["description"] = "Метки (заменяют целиком)",
                     },
                     ["columnId"] = ColumnIdSchema(),
                     ["executionExpiresAfterMinutes"] = ExecutionTtlSchema(),
@@ -1625,7 +1627,7 @@ public sealed class TasksToolset(
                     ["projectId"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Перенести в другой проект (см. tasks_list_projects) или \"\" — сделать личной",
+                        ["description"] = "В другой проект (tasks_list_projects); \"\" — личная",
                     },
                 },
             });

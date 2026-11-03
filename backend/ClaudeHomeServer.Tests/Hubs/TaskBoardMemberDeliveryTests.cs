@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Tests.Hubs;
 /// Рассылка не меняет запись проекта. Отрицательные проверки без Task.Delay: проба в группу и
 /// адресная проба тому же соединению идут одним FIFO-каналом, ждём адресную через TCS.
 /// </summary>
+[Trait("Category", "Host")]
 public class TaskBoardMemberDeliveryTests : IClassFixture<TestWebApplicationFactory>, IAsyncLifetime
 {
     private const string ProbeEvent = "test_board_probe";

@@ -26,6 +26,7 @@ namespace ClaudeHomeServer.Tests.Hubs;
 /// из <c>ProjectAccessService</c>): иначе отказ редактору давал бы сам рубильник, и тест не
 /// краснел бы на подмене права в хабе.
 /// </summary>
+[Trait("Category", "Host")]
 public class RunTurnGateTests : IClassFixture<RunTurnGateTests.Fixture>, IAsyncLifetime
 {
     /// <summary>Ход-методы SessionHub: запускают ход или управляют идущим (размечены RunTurn).</summary>

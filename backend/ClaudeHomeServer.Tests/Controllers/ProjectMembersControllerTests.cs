@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // Членство в общем проекте (shared-projects, S1-2): шесть отказов с кодами и нетронутым
 // projects.json, права владельца/участника/постороннего, git init при первом приглашении.
+[Trait("Category", "Host")]
 public class ProjectMembersControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

@@ -23,6 +23,7 @@ namespace ClaudeHomeServer.Tests.Services;
 /// Личный проект и чат вне проекта — поведение прежнее: их матрица живёт в McpDeliveryTests,
 /// здесь проверяется только отсутствие изменений на этих ветках.
 /// </summary>
+[Trait("Category", "Host")]
 public class McpSharedWithMembersTurnTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

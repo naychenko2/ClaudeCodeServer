@@ -24,6 +24,7 @@ namespace ClaudeHomeServer.Tests.Integration;
 /// Каждая строка матрицы — отдельный случай теории: снятая проверка в одном эндпоинте
 /// красит только его строки.
 /// </summary>
+[Trait("Category", "Host")]
 public class SharedProjectRoleMatrixTests : IClassFixture<TestWebApplicationFactory>
 {
     private const string Owner = "owner", Editor = "editor", Reader = "reader", Outsider = "outsider";

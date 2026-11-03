@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Матрица «роль × проектное действие» (ревью S1-2, M1/M2): настройки и удаление проекта — право
 // Configure, только владелец; участник (редактор и читатель) получает 403 и ничего не меняет.
 // Рубильник и флаг встроены в точку доступа: выключены — участнику 404 на проектных эндпоинтах.
+[Trait("Category", "Host")]
 public class ProjectRolesMatrixTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

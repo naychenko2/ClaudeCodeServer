@@ -549,7 +549,23 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // десктопный режим вкладки
   const mode: Mode = isMobile ? mobileMode : (graphPanelOpen ? 'graph' : wikiOn ? 'wiki' : 'notes');
   const centerPane = mode === 'wiki'
-    ? <WikiTab unified={wikiUnified} />
+    ? <WikiTab unified={wikiUnified}
+        // На 360 шторка показывает то же единое дерево, что левая зона десктопа; поиск и фильтры — над ним
+        drawerTree={wikiUnified && isMobile ? close => (
+          <>
+            {sidebarControls({ withModeSwitch: false, listMode: true })}
+            <WikiUnifiedTree
+              sections={wikiTree?.sections ?? NO_SECTIONS} notes={listed} query={query}
+              selectedNoteId={null} selectedPage={openedWiki}
+              onSelectNote={selectNote}
+              onOpenPage={(section, page) => {
+                setOpenedWiki({ section, page });
+                requestOpenWikiPage({ section, path: page });
+                close();
+              }}
+            />
+          </>
+        ) : undefined} />
     : mode === 'graph'
     ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden',
         ...(!isMobile ? { background: C.bgMain, border: `1px solid ${ISLAND.border}`, borderRadius: ISLAND.radius, boxShadow: ISLAND.shadow } : {}) }}>

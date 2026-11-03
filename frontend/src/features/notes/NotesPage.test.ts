@@ -331,7 +331,65 @@ describe('NotesPage: вкладка «Вики» за флагом llmWiki (S5d)
     clickNode(findNodeByAttr(container, 'data-testid', 'wiki-open-tree')!);
     const drawer = findNodeByAttr(container, 'data-testid', 'wiki-drawer-left');
     expect(drawer, 'шторка дерева открыта').not.toBeNull();
-    expect(findNodeByAttr(drawer!, 'data-testid', 'wiki-tree'), 'дерево во шторке').not.toBeNull();
+    expect(findNodeByAttr(drawer!, 'data-testid', 'wiki-unified-tree'), 'единое дерево во шторке').not.toBeNull();
+    root.unmount();
+  });
+
+  // F1-qa: на 360 шторка несёт то же единое дерево. Мутации (вывод — в отчёте задачи):
+  // не передавать drawerTree в WikiTab → строк unified-row нет; не звать close() в onOpenPage →
+  // «шторка закрылась» краснеет; minHeight строки 44 → 30 → «цели касания» краснеет.
+  const unifiedRows = (c: AnyNode, kind: string) => {
+    const out: AnyNode[] = [];
+    const walk = (x: AnyNode) => {
+      if (x.nodeType === 1 && x.getAttribute('data-testid') === 'unified-row' && x.getAttribute('data-kind') === kind) out.push(x);
+      for (const ch of x.childNodes) walk(ch);
+    };
+    walk(c);
+    return out;
+  };
+
+  it('F1-qa: шторка на 360 — строки заметок и страниц вики; цели касания ≥40; в центре нет tab/navigation', async () => {
+    notesMock.push(note('n1', 'Заметка из шторки', []));
+    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+    wikiMock.tree = WIKI_TREE;
+    wikiMock.catalog = WIKI_CATALOG;
+    const { root, container } = mountNotes();
+    clickNode(findButtonByText(container, 'Вики')!);
+    await settle();
+    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-open-tree')!);
+    await settle();
+    const drawer = findNodeByAttr(container, 'data-testid', 'wiki-drawer-left')!;
+    expect(unifiedRows(drawer, 'note').length, 'строки заметок').toBeGreaterThan(0);
+    expect(unifiedRows(drawer, 'page').length, 'строки страниц вики').toBeGreaterThan(0);
+    for (const r of [...unifiedRows(drawer, 'note'), ...unifiedRows(drawer, 'page')]) {
+      const st = (reactProps(r) as { style: { minHeight: number } }).style;
+      expect(st.minHeight, 'цель касания строки').toBeGreaterThanOrEqual(40);
+    }
+    const doc = findNodeByAttr(container, 'data-testid', 'wiki-doc')!;
+    for (const role of ['tab', 'tablist', 'navigation']) expect(findNodeByAttr(doc, 'role', role), `в центре нет role=${role}`).toBeNull();
+    root.unmount();
+  });
+
+  it('F1-qa: выбор страницы закрывает шторку и открывает страницу; выбор заметки открывает заметку', async () => {
+    notesMock.push(note('n1', 'Заметка из шторки', []));
+    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+    wikiMock.tree = WIKI_TREE;
+    wikiMock.catalog = WIKI_CATALOG;
+    noteMock.detail = { ...NOTE_DETAIL, id: 'n1', title: 'Заметка из шторки' };
+    const { root, container } = mountNotes();
+    clickNode(findButtonByText(container, 'Вики')!);
+    await settle();
+    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-open-tree')!);
+    await settle();
+    clickNode(unifiedRows(findNodeByAttr(container, 'data-testid', 'wiki-drawer-left')!, 'page')[0]);
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-drawer-left'), 'шторка закрылась').toBeNull();
+    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-open-tree')!);
+    await settle();
+    clickNode(unifiedRows(findNodeByAttr(container, 'data-testid', 'wiki-drawer-left')!, 'note')[0]);
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-drawer-left'), 'шторки нет').toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-doc'), 'вики ушла, открыта заметка').toBeNull();
     root.unmount();
   });
 

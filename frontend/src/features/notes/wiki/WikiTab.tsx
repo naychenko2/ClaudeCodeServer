@@ -232,7 +232,11 @@ function PageRow({ page, onOpen }: { page: WikiPageInfoDto; onOpen: () => void }
 // Дерево разделов на десктопе стоит в ЛЕВОЙ зоне NotesPage: состояние выбора живёт здесь,
 // поэтому дерево уходит туда порталом в узел treeHost (null — левая зона закрыта, дерева
 // нет). Без unified — прежние вкладки, поведение не меняется.
-export function WikiTab({ unified = false, treeHost = null }: { unified?: boolean; treeHost?: HTMLElement | null } = {}) {
+// drawerTree — единое дерево «заметки + вики» для шторки на 360 (строит NotesPage: заметки у
+// него); не передано — прежнее дерево разделов.
+export function WikiTab({ unified = false, treeHost = null, drawerTree }: {
+  unified?: boolean; treeHost?: HTMLElement | null; drawerTree?: (close: () => void) => ReactNode;
+} = {}) {
   const enabled = useFeature(FLAGS.llmWiki);
   const isMobile = useIsMobile();
   const tree = useWikiTree();
@@ -533,7 +537,7 @@ export function WikiTab({ unified = false, treeHost = null }: { unified?: boolea
           {drawer === 'tree' && (
             <WikiDrawer side="left" label="Дерево разделов" id={DRAWER_TREE_ID} onClose={() => setDrawer(null)}>
               <PanelHead title="Разделы" onClose={() => setDrawer(null)} />
-              <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>{renderTree(() => setDrawer(null))}</div>
+              <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>{drawerTree ? drawerTree(() => setDrawer(null)) : renderTree(() => setDrawer(null))}</div>
             </WikiDrawer>
           )}
           {drawer === 'panel' && (

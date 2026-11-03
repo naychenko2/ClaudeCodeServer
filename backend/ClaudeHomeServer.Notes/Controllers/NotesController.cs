@@ -353,7 +353,7 @@ public class NotesController : ControllerBase
     [HttpPost("{id}/tasks/toggle")]
     public async Task<ActionResult<NoteDetail>> ToggleTask(string id, [FromBody] ToggleTaskRequest req)
     {
-        try { return Ok(await _noteTasks.ToggleAsync(UserId, id, req.Line, req.Done)); }
+        try { return Ok(await _noteTasks.ToggleAsync(UserId, id, req.Line, req.Done, byHuman: true)); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return Forbid(); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
@@ -366,7 +366,7 @@ public class NotesController : ControllerBase
         var due = string.IsNullOrWhiteSpace(req.Due) ? null : req.Due.Trim();
         if (due is not null && !DateOnly.TryParseExact(due, "yyyy-MM-dd", out _))
             return BadRequest(new { error = "Некорректная дата (нужен формат YYYY-MM-DD)" });
-        try { return Ok(await _noteTasks.SetDueAsync(UserId, id, req.Line, due)); }
+        try { return Ok(await _noteTasks.SetDueAsync(UserId, id, req.Line, due, byHuman: true)); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return Forbid(); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }

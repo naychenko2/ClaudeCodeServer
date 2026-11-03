@@ -74,7 +74,9 @@ public sealed class NoteTaskSyncService(
     }
 
     // Тоггл чекбокса из заметки: правит .md + синхронизирует связанную задачу.
-    public async Task<NoteDetail> ToggleAsync(string userId, string noteId, int line, bool done)
+    // S3-3c3: byHuman — явный признак человеческого пути (UI-чекбокс NotesController),
+    // проходит в Update для журнала правок; фоновые и агентские вызовы — false, журнал молчит.
+    public async Task<NoteDetail> ToggleAsync(string userId, string noteId, int line, bool done, bool byHuman = false)
     {
         var note = notes.GetDetail(userId, noteId)
             ?? throw new KeyNotFoundException("Заметка не найдена");
@@ -84,7 +86,7 @@ public sealed class NoteTaskSyncService(
         var updatedContent = NoteTaskParser.SetChecked(note.Content, line, done)
             ?? throw new InvalidOperationException("На этой строке нет задачи-чекбокса");
 
-        var saved = notes.Update(userId, noteId, new UpdateNoteRequest(Content: updatedContent))
+        var saved = notes.Update(userId, noteId, new UpdateNoteRequest(Content: updatedContent), byHuman: byHuman)
             ?? throw new InvalidOperationException("Заметка не обновилась");
         kb.QueueSync(userId);
         // S2c-5 (д, дефект 540f8158): источник заметки = id проекта → событие уходит
@@ -101,8 +103,8 @@ public sealed class NoteTaskSyncService(
 
     // Установить/убрать срок 📅 на строке-чекбоксе из UI (дейт-пикер в секции «Задачи из
     // заметки») — без ручного ввода эмодзи. Правит .md + синхронизирует срок связанной задачи.
-    // due=null/пусто — убрать срок.
-    public async Task<NoteDetail> SetDueAsync(string userId, string noteId, int line, string? due)
+    // due=null/пусто — убрать срок. S3-3c3: byHuman — тот же признак, что у ToggleAsync.
+    public async Task<NoteDetail> SetDueAsync(string userId, string noteId, int line, string? due, bool byHuman = false)
     {
         var note = notes.GetDetail(userId, noteId)
             ?? throw new KeyNotFoundException("Заметка не найдена");
@@ -111,7 +113,7 @@ public sealed class NoteTaskSyncService(
         var updatedContent = NoteTaskParser.SetDue(note.Content, line, due)
             ?? throw new InvalidOperationException("На этой строке нет задачи-чекбокса");
 
-        var saved = notes.Update(userId, noteId, new UpdateNoteRequest(Content: updatedContent))
+        var saved = notes.Update(userId, noteId, new UpdateNoteRequest(Content: updatedContent), byHuman: byHuman)
             ?? throw new InvalidOperationException("Заметка не обновилась");
         kb.QueueSync(userId);
         // S2c-5 (д, дефект 540f8158): событие — в группу проекта (см. ToggleAsync)

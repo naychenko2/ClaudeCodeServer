@@ -1371,8 +1371,15 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             if (curFm.Annotation is not null &&
                 ParseFrontmatter(newContent, "").Annotation is null)
                 newContent = ReinjectAnnotationFields(newContent, curFm.Annotation);
-            File.WriteAllText(full, newContent, new UTF8Encoding(false));
-            Touched(full);
+            // S3-3c3: тот же узор, что у no-op срока ниже: равное содержимое — не запись.
+            // No-op правки (галочка уже в нужном состоянии, тот же срок) не должна плодить
+            // запись нетронутого файла: git затем не находит изменений —
+            // «Коммит правок человека не удался» (та же причина, что у no-op срока).
+            if (!string.Equals(newContent, curText, StringComparison.Ordinal))
+            {
+                File.WriteAllText(full, newContent, new UTF8Encoding(false));
+                Touched(full);
+            }
         }
 
         // Время жизни: -1 (по умолчанию) — не менять; null — снять; N — установить

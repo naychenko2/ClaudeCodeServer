@@ -3,6 +3,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Notes;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -30,6 +31,15 @@ namespace ClaudeHomeServer.Tests.Services;
 /// (NotesToolset: Annotate/Reply/SetAnnotationStatus) — молчат; личный vault — молчит;
 /// no-op правки срока (снятие несуществующего) — молчит.
 ///
+/// S3-3c3 (хвосты дельта-ревью 5deed348, п.11): чекбокс задачи и срок в заметке — два
+/// человеческих пути NoteTaskSyncService (toggle/set-due из NotesController, byHuman: true):
+/// состоявшаяся правка — ровно один Record той же заметки; фоновая синхронизация и обратный
+/// путь «задача → заметка» (SyncTaskToNoteAsync) — молчат; no-op (галочка уже в нужном
+/// состоянии, тот же срок) — файла нет, Record нет (тот же узор, что у no-op срока); отказ
+/// 403/404 — молчит; гонка «тоггл ‖ правка» той же заметки — автор последнего Record =
+/// автор итогового файла (двух тогглов одной проектной заметки от разных людей в продукте
+/// быть не может: мост чекбокса закрыт owner-Write для не-владельца).
+///
 /// Фейк-журнал записывает полученные вызовы как есть: правила отбора (общий проект,
 /// git-репозиторий, автор-участник) — ответственность самого HumanEditCommitter, здесь не
 /// проверяются. Стенд — как в SharedProjectNotesWriteContentTests: границы на уровне сервиса,
@@ -39,6 +49,9 @@ public class NotesHumanEditJournalTests : IDisposable
 {
     private const string ProjectNote = "Заметка проекта";
     private const string NoteBody = "# Заметка проекта\n\nТекст проектной заметки.\n";
+    // S3-3c3: чанка с чекбоксом в общем проекте — путь toggle/set-due (NoteTaskSyncService)
+    private const string TodoNote = "Дела проекта";
+    private const string TodoBody = "# Дела проекта\n\n- [ ] Задача из чанки\n";
 
     private readonly string _dir;
     private readonly string _projectRoot;
@@ -75,6 +88,7 @@ public class NotesHumanEditJournalTests : IDisposable
         _projectRoot = Path.Combine(_dir, "project");
         Directory.CreateDirectory(Path.Combine(_projectRoot, "notes"));
         File.WriteAllText(Path.Combine(_projectRoot, "notes", ProjectNote + ".md"), NoteBody);
+        File.WriteAllText(Path.Combine(_projectRoot, "notes", TodoNote + ".md"), TodoBody);
         _projectId = _projects.Create("Проект S3-3c1", _projectRoot, _ownerId, "owner").Id;
 
         // Второй общий проект того же владельца — для переноса между источниками (S3-3c2)
@@ -102,6 +116,14 @@ public class NotesHumanEditJournalTests : IDisposable
             new ProjectAccessService(_projects, new NoSessions(), new SharedProjectsGate(_config, new FeatureFlagService(_users))),
             journal);
 
+    // S3-3c3: NoteTaskSyncService поверх того же NotesService с фейк-журналом: проверяется
+    // путь чекбокса/срока до Record; мост и нотификатор — заглушки (синхронизацию задач и
+    // события здесь не измеряем), индексация — NoDify (не настроена, QueueSync ничего не пишет).
+    private NoteTaskSyncService Sync(NotesService notes) =>
+        new(notes, new CapturingBridge(), _projects,
+            new NotesKnowledgeService(new NoDify(), notes, _users, _config, NullLogger<NotesKnowledgeService>.Instance),
+            new NoopNotifier(), NullLogger<NoteTaskSyncService>.Instance);
+
     private void AddMember(string userId, ProjectRole role)
     {
         var members = _projects.GetById(_projectId)!.Members?.ToList() ?? [];
@@ -109,8 +131,10 @@ public class NotesHumanEditJournalTests : IDisposable
         _projects.SetMembers(_projectId, members);
     }
 
-    private string ProjectNoteId(NotesService sut) =>
-        sut.GetSummaries(_ownerId, _projectId, null).Single(n => n.Title == ProjectNote).Id;
+    private string ProjectNoteId(NotesService sut) => ProjectNoteId(sut, ProjectNote);
+
+    private string ProjectNoteId(NotesService sut, string title) =>
+        sut.GetSummaries(_ownerId, _projectId, null).Single(n => n.Title == title).Id;
 
     private string ProjectFile(string rel) => Path.Combine(_projectRoot, "notes", rel);
 
@@ -685,6 +709,195 @@ public class NotesHumanEditJournalTests : IDisposable
         journal.Calls.Should().ContainSingle().Which.Rel.Should().Be("notes/Заметка без срока.md");
     }
 
+    // --- S3-3c3: чекбокс задачи и срок в заметке (путь NoteTaskSyncService) ---
+
+    // Вызывающий — владелец: мост чекбокса закрыт owner-Write для не-владельца
+    // (EnsureSourceWrite, NotesService.cs:1693; граница — в NotesSideWritePathsTests)
+    [Fact]
+    public async Task ТогглИСрокЧекбоксаПроектнойЗаметки_РовноОдинRecord_КаждаяПравка()
+    {
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+        var sync = Sync(sut);
+        var id = ProjectNoteId(sut, TodoNote);
+        var line = sync.ListForNote(_ownerId, id).Single().Line;
+
+        await sync.ToggleAsync(_ownerId, id, line, done: true, byHuman: true);
+        File.ReadAllText(ProjectFile(TodoNote + ".md")).Should().Contain("- [x]");
+
+        // Ровно одна запись: корень — RootPath проекта, путь — заметки, автор — вызывающий
+        journal.Calls.Should().ContainSingle()
+            .Which.Should().Be(new FakeJournal.Call(_projectId, _projectRoot, "notes/Дела проекта.md", _ownerId));
+
+        // Срок на той же строке — ровно один новый Record того же пути
+        await sync.SetDueAsync(_ownerId, id, line, "2030-01-01", byHuman: true);
+        File.ReadAllText(ProjectFile(TodoNote + ".md")).Should().Contain("📅 2030-01-01");
+        journal.Calls.Should().HaveCount(2);
+        journal.Calls[^1].Should().Be(new FakeJournal.Call(_projectId, _projectRoot, "notes/Дела проекта.md", _ownerId));
+    }
+
+    [Fact]
+    public async Task ТоглБезByHumanИОбратныйПутьЗадачи_НиОднойЗаписиВЖурнал()
+    {
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+        var sync = Sync(sut);
+        var id = ProjectNoteId(sut, TodoNote);
+        var line = sync.ListForNote(_ownerId, id).Single().Line;
+
+        // Фоновый/агентский вызов (без byHuman — так зовут не-человеческие пути) — файл
+        // изменён, журнал молчит
+        await sync.ToggleAsync(_ownerId, id, line, done: true);
+        File.ReadAllText(ProjectFile(TodoNote + ".md")).Should().Contain("- [x]");
+        await sync.SetDueAsync(_ownerId, id, line, "2030-01-01");
+        File.ReadAllText(ProjectFile(TodoNote + ".md")).Should().Contain("📅 2030-01-01");
+        journal.Calls.Should().BeEmpty();
+
+        // Обратная синхронизация «задача → заметка» (SyncTaskToNoteAsync, по инициативе
+        // системы) — правка по чужой инициативе: снятая галочка, журнала нет
+        await sync.SyncTaskToNoteAsync(_ownerId, new TaskItem
+        {
+            ProjectId = _projectId,
+            OwnerId = _ownerId,
+            Title = "Задача из чанки",
+            Status = TaskItemStatus.Todo,
+            SourceNoteId = id,
+            SourceNoteLine = line,
+        });
+        File.ReadAllText(ProjectFile(TodoNote + ".md")).Should().Contain("- [ ]");
+        journal.Calls.Should().BeEmpty("обратная запись — не правка человека");
+    }
+
+    [Fact]
+    public async Task ТоглИСрокЛичнойЧанки_НиОднойЗаписиВЖурнал()
+    {
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+        var sync = Sync(sut);
+        var personal = sut.Create(_ownerId, new CreateNoteRequest("Личная чанка", "# Личная чанка\n\n- [ ] Личная задача\n"), byHuman: true);
+        personal.Should().NotBeNull();
+        var line = sync.ListForNote(_ownerId, personal.Id).Single().Line;
+
+        await sync.ToggleAsync(_ownerId, personal.Id, line, done: true, byHuman: true);
+        await sync.SetDueAsync(_ownerId, personal.Id, line, "2030-01-01", byHuman: true);
+
+        journal.Calls.Should().BeEmpty("личный vault — вне журнала правок общего проекта");
+    }
+
+    [Fact]
+    public async Task ТоглУжеВНужномСостоянииИТотЖеСрок_НиОдногоRecord_АРеальнаяПравкаОдин()
+    {
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+        var sync = Sync(sut);
+        var id = ProjectNoteId(sut, TodoNote);
+        var line = sync.ListForNote(_ownerId, id).Single().Line;
+
+        // Галочка уже снята, просят снять — no-op: файла нет, Record нет (тот же узор, что у
+        // снятия несуществующего срока в «СнятиеОтсутствующегоСрока»)
+        await sync.ToggleAsync(_ownerId, id, line, done: false, byHuman: true);
+        journal.Calls.Should().BeEmpty("no-op чекбокса не должен плодить запись нетронутого файла");
+
+        // Настоящая правка — ровно один Record
+        await sync.ToggleAsync(_ownerId, id, line, done: true, byHuman: true);
+        journal.Calls.Should().ContainSingle().Which.Rel.Should().Be("notes/Дела проекта.md");
+
+        // Тот же срок повторно — no-op: нового Record нет
+        await sync.SetDueAsync(_ownerId, id, line, "2030-01-01", byHuman: true);
+        journal.Calls.Should().HaveCount(2);
+        await sync.SetDueAsync(_ownerId, id, line, "2030-01-01", byHuman: true);
+        journal.Calls.Should().HaveCount(2, "no-op срока не должен плодить запись нетронутого файла");
+
+        // Снятие существующего срока — реальная правка: ровно один новый Record
+        await sync.SetDueAsync(_ownerId, id, line, null, byHuman: true);
+        File.ReadAllText(ProjectFile(TodoNote + ".md")).Should().NotContain("📅");
+        journal.Calls.Should().HaveCount(3);
+    }
+
+    [Fact]
+    public async Task Отказ403_ИОтказ404_ТоглИСрок_НиОднойЗаписиВЖурнал()
+    {
+        AddMember(_editorId, ProjectRole.Editor);
+        AddMember(_readerId, ProjectRole.Reader);
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+        var sync = Sync(sut);
+        var id = ProjectNoteId(sut, TodoNote);
+        var line = sync.ListForNote(_editorId, id).Single().Line;
+
+        // 403: мост чекбокса закрыт owner-Write для не-владельца — EnsureSourceWrite бросает
+        // до любой работы с файлом
+        Func<Task> act = () => sync.ToggleAsync(_readerId, id, line, done: true, byHuman: true);
+        await act.Should().ThrowAsync<UnauthorizedAccessException>();
+        act = () => sync.SetDueAsync(_readerId, id, line, "2030-01-01", byHuman: true);
+        await act.Should().ThrowAsync<UnauthorizedAccessException>();
+
+        // 404: заметки нет — KeyNotFoundException до любой правки
+        var gone = sut.Create(_ownerId, new CreateNoteRequest("Призрачная чанка", "# Призрачная чанка\n\n- [ ] Задача\n", _projectId));
+        sut.Delete(_ownerId, gone.Id).Should().BeTrue();
+        act = () => sync.ToggleAsync(_editorId, gone.Id, 0, done: true, byHuman: true);
+        await act.Should().ThrowAsync<KeyNotFoundException>();
+
+        // 404-подобный: строка не чекбокс — InvalidOperationException (владелец: правка
+        // дошла бы до разбора строки), файл не тронут
+        act = () => sync.SetDueAsync(_ownerId, id, 0, "2030-01-01", byHuman: true);
+        await act.Should().ThrowAsync<InvalidOperationException>();
+
+        journal.Calls.Should().BeEmpty("отказанный вызов не состоялся — ни одного пути в журнале");
+        File.ReadAllText(ProjectFile(TodoNote + ".md")).Should().Be(TodoBody);
+    }
+
+    /// <summary>
+    /// S3-3c3 (c3): тоггл ‖ правка той же заметки — ровно та пара, что названа в «Двух
+    /// вызовы» задачи. Двух тогглов одной проектной заметки от разных людей в продукте быть
+    /// не может: мост чекбокса закрыт owner-Write для не-владельца (EnsureSourceWrite,
+    /// NotesService.cs:1693; граница держится NotesSideWritePathsTests «Редактор_ТогглИСрок…
+    /// Отказ»), поэтому A — владелец (тоггл), B — редактор (обычная правка через WriteContent).
+    /// Оба — человеческие правки одного id; порядок решает замок id в Update. Победитель
+    /// пишет файл и Record ВНУТРИ замка (фейк-журнал держит первый Record до ReleaseFirst
+    /// или 2 с — пока держат, проигравший не может записать файл).
+    /// Мутация «Record после выхода из WithWriteGates»: проигравший пишет файл и журнал, пока
+    /// первый удержан вне замка, — его Record доходит раньше; автором последней записи
+    /// оказывается тот, чьё содержимое стёрто (обе проверки ниже краснеют; на копии).
+    /// </summary>
+    [Fact]
+    public async Task Гонка_ТоглИПравкаОднойЗаметки_АвторПоследнегоRecordРавенАвторуИтоговогоФайла()
+    {
+        AddMember(_editorAId, ProjectRole.Editor);
+        var journal = new FakeJournal();
+        var sut = Service(journal);
+        var sync = Sync(sut);
+        var id = ProjectNoteId(sut, TodoNote);
+        var line = sync.ListForNote(_ownerId, id).Single().Line;
+        var contentB = "# Дела проекта\n\n- [ ] Задача из чанки (правка редактора)\n";
+
+        var a = Task.Run(async () => (NoteDetail?)await sync.ToggleAsync(_ownerId, id, line, done: true, byHuman: true));
+        var b = Task.Run(() => sut.Update(_editorAId, id, new UpdateNoteRequest(Content: contentB), byHuman: true));
+
+        var firstUserId = await journal.FirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var otherTask = firstUserId == _ownerId ? b : a;
+        var otherId = firstUserId == _ownerId ? _editorAId : _ownerId;
+        var otherRanWhileHeld = await Task.WhenAny(otherTask, Task.Delay(1000)) == otherTask;
+
+        journal.ReleaseFirst();
+        await a;
+        await b;
+
+        otherRanWhileHeld.Should().BeFalse(
+            "проигравший не мог записать файл и журнал, пока первый Record удержан внутри замка id");
+
+        // Ровно два Record: обе правки состоялись
+        journal.Calls.Should().HaveCount(2);
+
+        // Автор последнего Record = автор итогового содержимого: последний был владелец —
+        // файл отмечен его тогглом; последний был редактор — в файле его правка
+        var last = journal.Calls[^1];
+        last.UserId.Should().Be(otherId);
+        var text = File.ReadAllText(ProjectFile(TodoNote + ".md"));
+        if (last.UserId == _ownerId) text.Should().Contain("- [x]");
+        else text.Should().Contain("правка редактора");
+    }
+
     /// <summary>
     /// Фейк-журнал: пишет полученные вызовы как есть. Первый Record держит вызывающую сторону
     /// внутри её замка до ReleaseFirst (или 2 с) — это наблюдатель порядка, не часть продукта.
@@ -724,5 +937,44 @@ public class NotesHumanEditJournalTests : IDisposable
         public string? ResolveOwnerId(Session s) => null;
         public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
             Task.FromResult<IReadOnlyList<StoredMessage>>([]);
+    }
+
+    // Мост задач — заглушка: «задач из заметки» здесь нет (GetBySourceNote пуст),
+    // синхронизация задачи в этих тестах не проверяется
+    private sealed class CapturingBridge : INoteTaskBridge
+    {
+        public IReadOnlyList<NoteTaskRef> GetBySourceNote(string ownerId, string noteId) => [];
+        public NoteTaskRef Create(string? projectId, string ownerId, NoteTaskCreateRequest req) =>
+            new("task-1", req.Title, req.SourceNoteLine, req.DueDate, req.Status, req.Recurrence,
+                NoteTaskKind.Task, projectId);
+        public NoteTaskRef? Update(string ownerId, string taskId, NoteTaskUpdateRequest req) => null;
+        public NoteTaskRef? SpawnNextOccurrence(string ownerId, string completedTaskId) => null;
+    }
+
+    private sealed class NoopNotifier : INotesHubNotifier
+    {
+        public Task BroadcastNotesChangedAsync(string userId, string action, string noteId, string? projectId = null) => Task.CompletedTask;
+        public Task BroadcastTaskChangedAsync(string userId, string action, string taskId, string? projectId = null) => Task.CompletedTask;
+    }
+
+    // Индексация не настроена: QueueSync у неконфигурированного IKnowledgeIndex ничего не пишет
+    private sealed class NoDify : IKnowledgeIndex
+    {
+        public bool IsConfigured => false;
+
+        public Task<string> CreateDatasetAsync(string name, string permission = "only_me", string? description = null,
+            string? indexingTechnique = null) => throw new NotSupportedException();
+
+        public Task DeleteDocumentAsync(string datasetId, string documentId) => throw new NotSupportedException();
+
+        public Task DeleteDatasetAsync(string datasetId) => throw new NotSupportedException();
+
+        public Task RenameDatasetAsync(string datasetId, string newName) => throw new NotSupportedException();
+
+        public Task<DifyDocumentInfo> IndexFileByTextAsync(string datasetId, string fileName, string content,
+            List<string>? tags = null) => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<DifyRetrieveChunk>> RetrieveAsync(string datasetId, string query, int topK = 8,
+            IReadOnlyList<KnowledgeMetadataFilter>? filters = null) => throw new NotSupportedException();
     }
 }

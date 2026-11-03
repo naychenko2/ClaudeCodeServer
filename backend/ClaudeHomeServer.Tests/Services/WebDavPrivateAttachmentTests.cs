@@ -21,6 +21,11 @@ namespace ClaudeHomeServer.Tests.Services;
 /// 403 (чужой путь не создаётся и не перезаписывается). Актор — сам аутентифицированный
 /// пользователь Basic-аутентификации. Свои private, общие вложения и прочие пути — без изменений.
 ///
+/// QA-W1 (дефект 6690314e): цель MOVE/COPY — контейнер private/ (сам .cc-attachments/private,
+/// .cc-attachments, корень проекта) — тот же 403, что источник-контейнер, до любого следа на
+/// диске: каталог private/ не сносится и не сливается переносом/копированием. Каталоги авторов
+/// контейнеры не затрагивает: перенос/копия в свой private разрешены, как прежде.
+///
 /// Проверяется без хоста по образцу WebDavPutTests: HandleAsync с настоящим UserStore/ProjectManager/
 /// FileService на временном дереве (Basic-заголовок, путь запроса — как их приносит клиент).
 /// </summary>
@@ -90,7 +95,7 @@ public class WebDavPrivateAttachmentTests : IDisposable
 
     // Запрос как его приносит клиент: путь /projects/{name}/{rel}, Basic-авторизация владельца
     private DefaultHttpContext Req(string method, string relPath, string? destination = null,
-        string? depth = null, string? body = null)
+        string? depth = null, string? body = null, string? overwrite = null)
     {
         var services = new ServiceCollection();
         services.AddSingleton<IConfiguration>(_config);
@@ -105,6 +110,7 @@ public class WebDavPrivateAttachmentTests : IDisposable
             "Basic " + Convert.ToBase64String(Encoding.UTF8.GetBytes($"{Username}:{Password}"));
         if (destination is not null) ctx.Request.Headers["Destination"] = destination;
         if (depth is not null) ctx.Request.Headers["Depth"] = depth;
+        if (overwrite is not null) ctx.Request.Headers["Overwrite"] = overwrite;
         if (body is not null)
         {
             var bytes = Encoding.UTF8.GetBytes(body);
@@ -305,6 +311,96 @@ public class WebDavPrivateAttachmentTests : IDisposable
         File.ReadAllText(AbsOf(_foreignPath)).Should().Be("чужое");
     }
 
+    // ── QA-W1 (дефект 6690314e): цель-контейнер private для MOVE/COPY ──────────
+
+    [Fact]
+    public async Task Move_ЦельКонтейнерPrivate_403_ЧужиеВложенияЦелыПобайтно()
+    {
+        // В прежнем коде IsPrivateContainerPath проверялся только для источника: цель
+        // .cc-attachments/private проходила IsForeignPrivatePath (у контейнера нет сегмента-
+        // автора), затем MOVE сносил её рекурсивно (Directory.Delete(dstAbs, true)) со всеми
+        // авторами, и только потом падал или «проходил» сам rename. Теперь — 403 до следа на диске.
+        var snapshot = SnapshotPrivate();
+
+        var r = await RunAsync(Req("MOVE", PlainPath, destination: Dest(".cc-attachments/private")));
+        r.Response.StatusCode.Should().Be(403, "цель — контейнер, под которым лежит closed-поддерево private/");
+        AssertPrivateUnchanged(snapshot, "отказ до любого сноса: private/ цел побайтно");
+        File.ReadAllText(AbsOf(PlainPath)).Should().Be("обычное", "источник не сдвинут");
+
+        // вторая та же операция: две подряд операции в контейнер не оставляют частично
+        // снесённого каталога — отказ стоит до Directory.Delete
+        r = await RunAsync(Req("MOVE", PlainPath, destination: Dest(".cc-attachments/private")));
+        r.Response.StatusCode.Should().Be(403);
+        AssertPrivateUnchanged(snapshot, "после второй отказанной операции private/ цел побайтно");
+
+        // Overwrite:F — тот же 403: изоляция контейнера приоритетнее 412 (как чужой private-путь)
+        r = await RunAsync(Req("MOVE", PlainPath, destination: Dest(".cc-attachments/private"), overwrite: "F"));
+        r.Response.StatusCode.Should().Be(403);
+        AssertPrivateUnchanged(snapshot);
+
+        // .cc-attachments — тоже контейнер (под ним private/)
+        r = await RunAsync(Req("MOVE", PlainPath, destination: Dest(".cc-attachments")));
+        r.Response.StatusCode.Should().Be(403);
+        AssertPrivateUnchanged(snapshot);
+
+        // нормализация и экранирование Destination — тот же путь, тот же 403 (по образцу доработки 2)
+        r = await RunAsync(Req("MOVE", PlainPath, destination: Dest("docs/../.cc-attachments/private")));
+        r.Response.StatusCode.Should().Be(403);
+        AssertPrivateUnchanged(snapshot);
+
+        r = await RunAsync(Req("MOVE", PlainPath, destination: Dest(".cc-attachments%2Fprivate")));
+        r.Response.StatusCode.Should().Be(403);
+        AssertPrivateUnchanged(snapshot);
+
+        // граница правила: каталог автора — НЕ контейнер: перенос в свой private разрешён,
+        // как прежде; чужой автор при этом не тронут
+        r = await RunAsync(Req("MOVE", PlainPath, destination: Dest($".cc-attachments/private/{_davId}/moved")));
+        r.Response.StatusCode.Should().BeOneOf(201, 204);
+        File.ReadAllText(AbsOf($".cc-attachments/private/{_davId}/moved")).Should().Be("обычное");
+        File.ReadAllText(AbsOf(_foreignPath)).Should().Be("чужое", "чужой автор не тронут разрешённой операцией");
+    }
+
+    [Fact]
+    public async Task Copy_ЦельКонтейнерPrivate_403_СлиянияНет()
+    {
+        // В прежнем коде цель COPY не проверялась вовсе: CopyDirectory сливала поддерево
+        // источника в private/ (или File.Copy падал на каталоге-цели). Теперь — 403 до записи.
+        Write("docs/sub/nested.txt", "вложенное");
+        var snapshot = SnapshotPrivate();
+
+        var r = await RunAsync(Req("COPY", "docs", destination: Dest(".cc-attachments/private")));
+        r.Response.StatusCode.Should().Be(403, "цель — контейнер private/");
+        AssertPrivateUnchanged(snapshot, "отказ до CopyDirectory: слияния нет");
+        File.Exists(AbsOf(".cc-attachments/private/plain.txt")).Should().BeFalse();
+        File.Exists(AbsOf(".cc-attachments/private/sub")).Should().BeFalse();
+
+        // копия файла в контейнер — тот же отказ, копия не создана
+        r = await RunAsync(Req("COPY", PlainPath, destination: Dest(".cc-attachments/private")));
+        r.Response.StatusCode.Should().Be(403);
+        AssertPrivateUnchanged(snapshot);
+
+        // .cc-attachments и корень проекта — тоже контейнеры
+        r = await RunAsync(Req("COPY", PlainPath, destination: Dest(".cc-attachments")));
+        r.Response.StatusCode.Should().Be(403);
+        AssertPrivateUnchanged(snapshot);
+
+        r = await RunAsync(Req("COPY", PlainPath, destination: Dest("")));
+        r.Response.StatusCode.Should().Be(403, "корень — предок, под которым лежит весь private/");
+        AssertPrivateUnchanged(snapshot);
+        File.ReadAllText(AbsOf(PlainPath)).Should().Be("обычное", "источник не скопирован в корень");
+
+        // экранированный Destination — тот же путь, тот же 403
+        r = await RunAsync(Req("COPY", PlainPath, destination: Dest(".cc-attachments%2Fprivate")));
+        r.Response.StatusCode.Should().Be(403);
+        AssertPrivateUnchanged(snapshot);
+
+        // граница: каталог автора — не контейнер, копия в свой private разрешена; чужой не тронут
+        r = await RunAsync(Req("COPY", PlainPath, destination: Dest($".cc-attachments/private/{_davId}/copied.txt")));
+        r.Response.StatusCode.Should().BeOneOf(201, 204);
+        File.ReadAllText(AbsOf($".cc-attachments/private/{_davId}/copied.txt")).Should().Be("обычное");
+        File.ReadAllText(AbsOf(_foreignPath)).Should().Be("чужое");
+    }
+
     [Fact]
     public async Task СвойPrivateИОбщиеФайлы_ПишутсяКакПрежде()
     {
@@ -351,5 +447,23 @@ public class WebDavPrivateAttachmentTests : IDisposable
     {
         var r = await RunAsync(Req("GET", relPath));
         r.Response.StatusCode.Should().Be(404, $"путь {relPath} после нормализации — чужое private");
+    }
+
+    // Снимок всего поддерева .cc-attachments/private: относительный путь → байты содержимого.
+    private Dictionary<string, byte[]> SnapshotPrivate()
+    {
+        var map = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        var privateRoot = AbsOf(".cc-attachments/private");
+        foreach (var f in Directory.GetFiles(privateRoot, "*", SearchOption.AllDirectories))
+            map[Path.GetRelativePath(_projectRoot, f).Replace('\\', '/')] = File.ReadAllBytes(f);
+        return map;
+    }
+
+    private void AssertPrivateUnchanged(Dictionary<string, byte[]> snapshot, string because = "содержимое private/ цел побайтно")
+    {
+        var now = SnapshotPrivate();
+        now.Keys.Should().BeEquivalentTo(snapshot.Keys, $"{because}: набор файлов не изменился");
+        foreach (var (rel, bytes) in snapshot)
+            now[rel].Should().Equal(bytes, $"{because}: {rel}");
     }
 }

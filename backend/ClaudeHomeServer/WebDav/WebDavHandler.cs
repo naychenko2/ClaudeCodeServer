@@ -842,6 +842,18 @@ public static class WebDavHandler
             return;
         }
 
+        // QA-W1 (дефект 6690314e): цель-контейнер private — тот же отказ, что источник-контейнер:
+        // CopyDirectory (ниже) сливает поддерево источника в контейнер, и private/ под целью
+        // оказывается слитым с чужими файлами. Изоляция контейнера приоритетнее Overwrite:F (412):
+        // операция запрещена при любом Overwrite, как и IsForeignPrivatePath выше. Отказ — до
+        // любого следа на диске. Каталоги авторов — не контейнеры: копия в свой private разрешена.
+        if (IsPrivateContainerPath(root, destRel))
+        {
+            ctx.Response.StatusCode = 403;
+            ctx.Response.ContentLength = 0;
+            return;
+        }
+
         var overwrite = !string.Equals(ctx.Request.Headers["Overwrite"].ToString(), "F", StringComparison.OrdinalIgnoreCase);
         var srcAbs = FileService.SafeJoinPublic(root, relPath);
         var dstAbs = FileService.SafeJoinPublic(root, destRel);
@@ -914,6 +926,21 @@ public static class WebDavHandler
         // S2d-6b-3 доработка (ревью 426b21ad): источник-контейнер под private/ — 403: MOVE переносит
         // каталог целиком, и чужое private ушло бы из-под .cc-attachments/private/{id} вместе с ним
         if (IsPrivateContainerPath(root, relPath))
+        {
+            ctx.Response.StatusCode = 403;
+            ctx.Response.ContentLength = 0;
+            return;
+        }
+
+        // QA-W1 (дефект 6690314e): цель-контейнер private — тот же отказ, что источник-контейнер.
+        // MOVE сносит существующую цель до files.Rename (Directory.Delete(dstAbs, true), ниже):
+        // при Destination = .cc-attachments/private сносался весь private/ со всеми авторами,
+        // и только потом падал или «проходил» сам rename (файл становился каталогом на месте
+        // снесённого контейнера). Отказ здесь — до любого следа на диске: две подряд операции
+        // в контейнер не оставляют частично снесённого каталога. Корень проекта — тоже контейнер
+        // (тот же 403, что даёт JoinBelowRoot ниже; он остаётся для запределья). Каталоги авторов
+        // — не контейнеры: перенос в свой private разрешён, чужой отказан IsForeignPrivatePath выше.
+        if (IsPrivateContainerPath(root, destRel))
         {
             ctx.Response.StatusCode = 403;
             ctx.Response.ContentLength = 0;

@@ -36,9 +36,14 @@ public static class WikiManifest
     // Packages — id откатанных пакетов строки op=retract (мера 5, S4f-1): «Журнал» по ним
     // связывает строку откат по источнику с откатанными пакетами. Для прочих операций — null:
     // поле пустым не заменяется, «не указано» и «пустой список» — разные утверждения.
+    // OverrodeHuman — «ИИ поменял моё» (ADR-038, предохранитель 4): строка применения, где ИИ сам
+    // заменил или оспорил утверждение человека. Поле аддитивно и пишется только при true: у прочих
+    // строк его нет вовсе (старые читатели его не видят, строка не пухнет).
     private sealed record LogLine(
         DateTimeOffset Ts, string Op, string Section, IReadOnlyList<string> Pages, string? Source, string Actor, string? Policy,
-        IReadOnlyList<string>? Packages);
+        IReadOnlyList<string>? Packages,
+        [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+        bool? OverrodeHuman = null);
 
     /// <summary>Безопасная форма ключа раздела для имени файла манифеста: «/» в ключе —
     /// разделитель ключа, не папка: манифесты всех разделов лежат в одной директории.
@@ -127,15 +132,18 @@ public static class WikiManifest
     /// <summary>Дописать строку журнала. Строки не переписываются: append, не перезапись
     /// файла. ts — время сервера (ISO-8601, UTC). policy — «auto» | «inbox» для строки
     /// применения (мера 6); для системных операций — null. packages — id откатанных пакетов
-    /// строки op=retract (мера 5); для прочих операций — null.</summary>
+    /// строки op=retract (мера 5) и id применённого пакета строки op=apply (SV1-В: по нему
+    /// читатель находит пакет точно, склейка по источнику — лишь фолбэк старых строк); для
+    /// прочих операций — null.</summary>
     public static void AppendLog(
         string root, string op, string section, IReadOnlyList<string> pages, string? source, string actor,
-        string? policy = null, IReadOnlyList<string>? packages = null)
+        string? policy = null, IReadOnlyList<string>? packages = null, bool overrodeHuman = false)
     {
         var full = SafePath.Join(root, LogRelPath);
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         var line = JsonSerializer.Serialize(
-            new LogLine(DateTimeOffset.UtcNow, op, section, pages, source, actor, policy, packages), JsonOpts);
+            new LogLine(DateTimeOffset.UtcNow, op, section, pages, source, actor, policy, packages,
+                overrodeHuman ? true : null), JsonOpts);
         File.AppendAllText(full, line + "\n");
     }
 

@@ -99,6 +99,100 @@ public class WikiClassHealthTests : IDisposable
         _notifier.Sent[0].Body.Should().Contain("3 откатов за 7 дней");
     }
 
+    // ─── B4a: класс замены человека «…@human» — отдельный класс автовыключения ──
+
+    private const string HumanClassKey = "session×supersede@human";
+
+    [Fact]
+    public async Task ТриОткатаЗаСемьДнейВыключаютКлассСХвостомHuman_ДругойКлассНеТронут()
+    {
+        var old = DateTimeOffset.UtcNow - TimeSpan.FromDays(10);
+        var recent = DateTimeOffset.UtcNow - TimeSpan.FromDays(1);
+        for (var i = 0; i < 47; i++) WritePackage(old, classKey: HumanClassKey);
+        for (var i = 0; i < 3; i++) WritePackage(old, retractedAt: recent, classKey: HumanClassKey);
+        // Класс замены ИИ в тех же условиях без откатов: окна у классов свои.
+        for (var i = 0; i < 50; i++) WritePackage(old, classKey: "session×supersede");
+
+        await _sut.EvaluateAsync(User);
+
+        var settings = ReadSettings();
+        settings.IsClassDisabled(HumanClassKey).Should().BeTrue("ключ с хвостом @human разбирается и оценивается как класс");
+        settings.IsClassDisabled("session×supersede").Should().BeFalse("откаты @human не размываются в классе замен ИИ");
+    }
+
+    [Fact]
+    public async Task ТриОткатаСвоихПравокЧеловека_КлассHumanНеОцениваетсяИНеВыключается()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var recent = now - TimeSpan.FromDays(1);
+        for (var i = 0; i < 3; i++)
+            WritePackage(recent, retractedAt: recent, classKey: "human×append", author: WikiPackage.AuthorHuman);
+
+        var outcome = await _sut.EvaluateAsync(User);
+
+        outcome.Stats.Should().NotContain(s => s.Class.StartsWith("human×"));
+        ReadSettings().IsClassDisabled("human×append").Should().BeFalse();
+        _notifier.Sent.Should().BeEmpty();
+    }
+
+    private const string SharedPage = "Общее/Моя-страница.md";
+
+    private void WriteRestoreLine(string page, string actor = "user") =>
+        WikiManifest.AppendLog(Root(), "restore", Section, [page], "human:x", actor);
+
+    [Fact]
+    public async Task ТриВернутьМоюЗаСемьДнейВыключаютКлассСХвостомHuman_КлассЗаменИИНе()
+    {
+        var old = DateTimeOffset.UtcNow - TimeSpan.FromDays(10);
+        for (var i = 0; i < 3; i++) WritePackage(old, classKey: HumanClassKey, page: SharedPage);
+        for (var i = 0; i < 3; i++) WritePackage(old, classKey: "session×supersede", page: SharedPage);
+        for (var i = 0; i < 3; i++) WriteRestoreLine(SharedPage);
+
+        await _sut.EvaluateAsync(User);
+
+        var settings = ReadSettings();
+        settings.IsClassDisabled(HumanClassKey).Should().BeTrue("«Вернуть мою» — откат для класса с хвостом @human");
+        settings.IsClassDisabled("session×supersede").Should().BeFalse("замены ИИ сигналом не задеваются");
+    }
+
+    [Fact]
+    public async Task ВернутьМоюНаСтраницеБезКлассаСХвостом_НеВыключаетНиОдинКласс()
+    {
+        var old = DateTimeOffset.UtcNow - TimeSpan.FromDays(10);
+        for (var i = 0; i < 3; i++) WritePackage(old, classKey: "session×supersede", page: SharedPage);
+        for (var i = 0; i < 3; i++) WriteRestoreLine(SharedPage);
+
+        await _sut.EvaluateAsync(User);
+
+        ReadSettings().IsClassDisabled("session×supersede").Should().BeFalse();
+        ReadSettings().Classes.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ДваВернутьМою_НеДостигаютПорогаИСтрокаНеОтПользователяНеСчитается()
+    {
+        var old = DateTimeOffset.UtcNow - TimeSpan.FromDays(10);
+        for (var i = 0; i < 60; i++) WritePackage(old, classKey: HumanClassKey, page: SharedPage);
+        WriteRestoreLine(SharedPage);
+        WriteRestoreLine(SharedPage);
+        WriteRestoreLine(SharedPage, actor: "keeper");
+
+        await _sut.EvaluateAsync(User);
+
+        ReadSettings().IsClassDisabled(HumanClassKey).Should().BeFalse("два откатов из 60 < порога, чужой actor не считается");
+    }
+
+    [Theory]
+    [InlineData("session×supersede@human", true)]
+    [InlineData("note×conflict@human", true)]
+    [InlineData("session×append@human", false)]
+    [InlineData("session×supersede@ai", false)]
+    [InlineData("×supersede@human", false)]
+    [InlineData("session×@human", false)]
+    [InlineData("session×supersede@human@human", false)]
+    public void IsValidClassKey_ХвостHuman_ТолькоУSupersedeИConflict(string key, bool valid) =>
+        WikiSettingsStore.IsValidClassKey(key).Should().Be(valid);
+
     [Fact]
     public async Task ОткатРовноНаГраницеСемидневногоОкнаУчитывается()
     {
@@ -282,7 +376,7 @@ public class WikiClassHealthTests : IDisposable
     /// <summary>Пакет на диске: состояние, которое читает оценка (стор проверяет форму файла).
     /// retractedAt != null — статус «reverted» с временем отката в UpdatedAt (переход статуса
     /// ставит его в момент отката — та же форма, что в бою).</summary>
-    private string WritePackage(DateTimeOffset createdAt, DateTimeOffset? retractedAt = null, string classKey = ClassKey)
+    private string WritePackage(DateTimeOffset createdAt, DateTimeOffset? retractedAt = null, string classKey = ClassKey, string? page = null, string? author = null)
     {
         var id = Guid.NewGuid().ToString("N");
         var parts = classKey.Split('×');
@@ -290,13 +384,16 @@ public class WikiClassHealthTests : IDisposable
         {
             V = WikiPackage.ModelVersion,
             Id = id,
+            Author = author ?? WikiPackage.AuthorAi,
+            Action = author == WikiPackage.AuthorHuman ? WikiPackage.ActionEdit : null,
             Section = Section,
             Sources = [new WikiPackage.SourceRef(parts[0], SourceRef)],
             Operations = [new WikiPackage.Operation
             {
-                Op = parts[1],
-                Page = PagePath(id),
+                Op = parts[1].Replace(WikiPackage.HumanTargetSuffix, ""),
+                Page = page ?? PagePath(id),
                 Text = "утверждение из чата",
+                Target = parts[1].StartsWith("supersede") || parts[1].StartsWith("conflict") ? "заменяемое утверждение" : null,
                 Class = classKey,
                 Decision = WikiPackage.DecisionAuto,
             }],

@@ -11,6 +11,8 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // «Входящие» вики: список пакетов изменений и решение человека по их спорным операциям
 // (S4a, ADR-035, решения 4 и 12г). Образец — WikiController (S2f): [Authorize], владелец
 // только из токена, чужой раздел — 403, коды отказов — контракт для фронта (S7a).
+// Сервисный токен хода (typ=svc) — все мутирующие ручки отказаны 403 (B2a): решение по
+// пакету и откат — только действие человека (решение 5); ручки чтения отвечают под svc как раньше.
 //
 // Здесь человек решает только то, что ушло во «Входящие»: операция с решением политики
 // `auto` через REST не решается (409). Пакеты здесь читаются, решаются и откатываются (S4b-3):
@@ -53,6 +55,15 @@ public class WikiPackagesController : ControllerBase
     // без токена действие отвечает 401 (контракт), а не падает с NRE на claim.
     private string? OwnerOrNull() =>
         User.Identity?.IsAuthenticated == true ? User.FindFirstValue(JwtRegisteredClaimNames.Sub) : null;
+
+    // Сервисный JWT хода (claim typ=svc, тот же смысл, что JwtService): «Входящие» — дверь
+    // человека, svc не решает пакеты и не откатывает их (403, B2a; решение 5: у отката нет
+    // агентского инструмента). Локальные константы — как в PluginsController/TasksController.
+    private const string TokenKindClaim = "typ";
+    private const string ServiceTokenKind = "svc";
+    private bool IsServiceToken => User.FindFirstValue(TokenKindClaim) == ServiceTokenKind;
+    private IActionResult ServiceTokenRefusal() =>
+        StatusCode(403, new { error = "Сервисный токен: «Входящие» решает только пользовательский токен" });
 
     private const string CodeForeign = "wiki_foreign";
     private const string CodeRequest = "wiki_pkg_request";
@@ -105,6 +116,7 @@ public class WikiPackagesController : ControllerBase
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        if (IsServiceToken) return ServiceTokenRefusal();
         if (req?.Index is null || req.Accept is null)
             return BadRequest(new { code = CodeRequest, message = "нужны index операции и accept" });
         if (Owned(userId, id, out var root) is { } refusal) return refusal;
@@ -121,6 +133,7 @@ public class WikiPackagesController : ControllerBase
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        if (IsServiceToken) return ServiceTokenRefusal();
         if (Owned(userId, id, out var root) is { } refusal) return refusal;
         var res = WikiPackageStore.AcceptAllContested(root, id);
         if (!res.Ok) return Refusal(res);
@@ -129,7 +142,8 @@ public class WikiPackagesController : ControllerBase
 
     /// <summary>POST /api/wiki/packages/{id}/revert — «Откатить пакет» (кнопка журнала,
     /// решение 12г, мера 4). Только действие человека: ни у агента, ни у персоны такого инструмента
-    /// нет (решение 5). 404 — пакета нет; 403 — чужой раздел; 409 — пакет не применён, уже откатан,
+    /// нет (решение 5) — сервисный токен хода отказан 403 до прочих проверок (B2a).
+    /// 404 — пакета нет; 403 — чужой раздел; 409 — пакет не применён, уже откатан,
     /// или страницы изменены после применения (перечень таких страниц — в теле: человек видит, на что
     /// смотреть перед повторной попыткой). Успех — тело со списком возвращённых страниц и, отдельно,
     /// списком тех, что уже стояли в состоянии «до пакета» к началу этого вызова (W3-3: их вернул
@@ -141,6 +155,7 @@ public class WikiPackagesController : ControllerBase
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        if (IsServiceToken) return ServiceTokenRefusal();
         if (Owned(userId, id, out _) is { } refusal) return refusal;
 
         var r = await _revert.RevertAsync(userId, id).ConfigureAwait(false);
@@ -151,8 +166,10 @@ public class WikiPackagesController : ControllerBase
 
     /// <summary>POST /api/wiki/packages/retract — {sourceRef}: «Откатить всё из этого источника»
     /// (кнопка у хроники, у карточки источника и в «Журнале», мера 5; S4f-2). Только действие
-    /// человека: ни у агента, ни у персоны такого инструмента нет (решение 5, как у отката пакета).
-    /// 400 — форма sourceRef (тот же разбор, что у сервиса; проверяется ПЕРВОЙ, до владения);
+    /// человека: ни у агента, ни у персоны такого инструмента нет (решение 5, как у отката пакета) —
+    /// сервисный токен хода отказан 403 раньше этих проверок (B2a).
+    /// 400 — форма sourceRef (тот же разбор, что у сервиса; проверяется ПЕРВОЙ среди проверок
+    /// пользовательского вызова, до владения);
     /// 404 — источника нет или он чужой: один ответ на оба случая, он не выдаёт наружу,
     /// существует ли источник. Владение проверяется для КАЖДОГО origin: чат — по каталогу чатов
     /// (свой/чужой), прочие origin — наличием в вики владельца пакета с этим источником (чужого
@@ -165,6 +182,7 @@ public class WikiPackagesController : ControllerBase
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        if (IsServiceToken) return ServiceTokenRefusal();
         if (string.IsNullOrWhiteSpace(req?.SourceRef))
             return BadRequest(new { code = WikiRetractService.CodeShape, message = "нужен sourceRef" });
         // Форма — раньше владения: «session:» без id это 400, а не 404.

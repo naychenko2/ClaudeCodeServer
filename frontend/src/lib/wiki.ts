@@ -169,7 +169,16 @@ export type WikiErrorCode =
   // Настройки ночного блока (NA-2): merged-блок ночного раздела кривой — 400 с кодом, файл
   // не тронут; отказ записи файла — 500 с кодом, а не 500 без тела (WikiSettingsController.cs:160-170)
   | 'wiki_nightly'
-  | 'wiki_settings_write_failed';
+  | 'wiki_settings_write_failed'
+  // Правка страницы человеком (F4a, ADR-038): файл правили ещё раз / единые «Заметки и Вики»
+  // выключены / гейт записи отказал по существу (violations, issues)
+  | 'wiki_page_changed'
+  | 'wiki_unified_off'
+  | 'wiki_edit_invalid'
+  // Перенос заметки в вики (F5b, ADR-038): заметка уже перенесена (в ней ссылка) / target
+  // задан там, где его задать нельзя (дом страницы — дом заметки)
+  | 'wiki_note_transferred'
+  | 'wiki_transfer_target';
 
 const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'wiki_foreign', 'wiki_section_key', 'wiki_page_key', 'wiki_project_missing', 'wiki_section_off',
@@ -186,11 +195,18 @@ const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'not_found', 'task_execution', 'marked_skip', 'personal_section', 'wiki_not_initialized',
   'packages_limit', 'wiki_note_id', 'wiki_triage_invalid',
   'wiki_nightly', 'wiki_settings_write_failed',
+  'wiki_page_changed', 'wiki_unified_off', 'wiki_edit_invalid',
+  'wiki_note_transferred', 'wiki_transfer_target',
 ]);
 
 export class WikiError extends Error {
   readonly status: number;
   readonly code: WikiErrorCode | null;
+  // Поля тела отказа правки (F4a, аддитивно): свежая страница при 409 wiki_page_changed,
+  // причины гейта при 400 wiki_edit_invalid. У прочих отказов — пусто.
+  page: WikiConflictPage | null = null;
+  violations: string[] = [];
+  issues: WikiEditIssue[] = [];
 
   constructor(status: number, code: WikiErrorCode | null, message: string) {
     super(message);
@@ -216,7 +232,9 @@ function toWikiError(e: unknown): WikiError | null {
   const message = typeof body?.message === 'string' && body.message
     ? body.message
     : (e instanceof Error && e.message ? e.message : 'Не удалось прочитать вики');
-  return new WikiError(status, code, message);
+  const we = new WikiError(status, code, message);
+  readEditRefusalBody(we, body);
+  return we;
 }
 
 // Путь: передаём в request() БЕЗ /api — request() префиксует их сам (offline.ts:31,
@@ -580,18 +598,28 @@ export interface WikiJournalEntryDto {
   classes: string[];
 }
 
-export interface WikiJournalDto { entries: WikiJournalEntryDto[]; take: number; linesRead: number; invalidLines: number }
+// Записи несут признак «ИИ поменял моё» (F3b, ADR-038 предохранитель 4): overrodeHuman и
+// вид действия overrodeKind — строка журнала их читает, бэк отдаёт как есть, фронт не
+// выводит. Пары statement/previous здесь нет: она только в overrides[] страницы.
+export interface WikiJournalDto { entries: WikiJournalEntryOverrideDto[]; take: number; linesRead: number; invalidLines: number }
 
 // Фильтры окна: section — ключ из дерева своей вики, origin — значение из закрытого перечня
 // (тот же, что фильтр источников экрана), class — пара «origin × op». Пустое — без фильтра.
-// take не передаём: экран живёт в окне по умолчанию (200), потолок (1000) — дело бэка.
-export interface WikiJournalQuery { section?: string | null; origin?: string | null; class?: string | null }
+// overrodeHuman — «ИИ поменял моё» (F6b): бэк сужает окно до ответа (WikiJournalReader.cs),
+// фронт по списку не фильтрует. take не передаём: экран живёт в окне по умолчанию (200),
+// потолок (1000) — дело бэка.
+export interface WikiJournalQuery {
+  section?: string | null; origin?: string | null; class?: string | null;
+  overrodeHuman?: boolean;
+}
 
 export async function loadWikiJournal(q: WikiJournalQuery = {}): Promise<WikiJournalDto> {
   const params = new URLSearchParams();
   if (q.section) params.set('section', q.section);
   if (q.origin) params.set('origin', q.origin);
   if (q.class) params.set('class', q.class);
+  // 'true' — единственное значение фильтра: false не шлём вовсе (бэк читает отсутствие как «нет»)
+  if (q.overrodeHuman) params.set('overrodeHuman', 'true');
   const qs = params.toString();
   return wikiHttp<WikiJournalDto>(`/wiki/journal${qs ? `?${qs}` : ''}`);
 }
@@ -1319,3 +1347,297 @@ export const __test = {
     return _pageGoneKey === pageCacheKey(sectionKey, pageKey);
   },
 };
+
+// ─── Авторство страницы (ADR-038 «Контракт для фронта», SV1-В; единое дерево F2) ───
+// Бэк отдаёт authorship в строке GET /api/wiki/section; до его слияния поля нет —
+// отсутствие (и любое неизвестное значение) читаем как 'ai'. Значок «заметка» сюда не
+// входит: его фронт ставит сам по источнику строки.
+
+export type WikiAuthorship = 'ai' | 'together' | 'human';
+
+export interface WikiPageInfoAuthoredDto extends WikiPageInfoDto { authorship?: WikiAuthorship }
+
+export function wikiAuthorshipOf(page: { authorship?: unknown }): WikiAuthorship {
+  const a = page.authorship;
+  return a === 'together' || a === 'human' ? a : 'ai';
+}
+
+// ─── Сноски страницы с авторством (ADR-038 «Контракт для фронта», SV1-В; F3a) ───
+// Бэк (B7) добавит в GET /api/wiki/page поля authorship и footnotes[]; до слияния их нет —
+// страница читается по-прежнему (нет footnotes = старый вид, нет authorship = 'ai').
+
+export interface WikiFootnoteDto {
+  // Метка сноски в тексте: 's3' (допускается и форма '[^s3]' — снимаем обёртку)
+  label: string;
+  // Заголовок карточки источника (для показа)
+  card: string;
+  // Ключ страницы карточки для чтения; нет — источник не прочитать
+  cardPage?: string | null;
+  // Происхождение источника: 'human' — правка человека, прочее (session, note…) — ИИ
+  origin: string;
+  // Время записи, ISO 8601
+  captured?: string | null;
+  // Имя автора правки человека; бэк пока не отдаёт — тогда подпись «вы»
+  author?: string | null;
+}
+
+export interface WikiPageAuthoredDto extends WikiPageDto {
+  authorship?: WikiAuthorship;
+  footnotes?: WikiFootnoteDto[];
+}
+
+export function wikiFootnoteLabel(label: string): string {
+  const m = /^\[\^(.+)\]$/.exec(label.trim());
+  return m ? m[1] : label.trim();
+}
+
+// Карточка источника, прочитанная мимо слота страницы стора: loadWikiPage перезаписал бы
+// открытую страницу карточкой, а поповеру нужны лишь имя и ref шапки.
+export interface WikiSourceCardInfo { name: string | null; ref: string | null }
+
+export async function loadWikiSourceCard(sectionKey: string, cardKey: string): Promise<WikiSourceCardInfo> {
+  const page = await wikiHttp<WikiPageDto>(
+    `/wiki/page?${sectionQuery(sectionKey)}&page=${encodeURIComponent(cardKey)}`,
+  );
+  let ref: string | null = null;
+  let name: string | null = null;
+  for (const line of page.content.replace(/\r\n/g, '\n').split('\n')) {
+    if (ref === null && line.startsWith('ref: ')) ref = line.slice(5).trim() || null;
+    else if (name === null && line.startsWith('# ')) name = line.slice(2).trim() || null;
+  }
+  return { name, ref };
+}
+
+// ─── Правка страницы человеком (ADR-038 «Контракт для фронта», POST /api/wiki/pages/edit; F4a) ───
+
+// Свежая версия страницы из 409 wiki_page_changed; null в теле — страницы больше нет
+export interface WikiConflictPage { pageKey: string; content: string; hash: string }
+
+// Причина отказа гейта (SV1-Г): пока бэк поля не отдаёт, массив пуст и экран идёт по violations
+export interface WikiEditIssue { code: string; page?: string | null; link?: string | null; message: string }
+
+// GET page с хэшем: baseHash правки — хэш того текста, с которым открыт редактор
+export interface WikiPageEditableDto extends WikiPageAuthoredDto { hash?: string }
+
+export type WikiEditResult =
+  | { status: 'applied'; hash: string; content: string }
+  | { status: 'unchanged'; hash: string };
+
+function readEditRefusalBody(we: WikiError, body: unknown): void {
+  const b = body as { page?: unknown; violations?: unknown; issues?: unknown } | null | undefined;
+  if (!b || typeof b !== 'object') return;
+  const pg = b.page as { pageKey?: unknown; content?: unknown; hash?: unknown } | null | undefined;
+  if (pg && typeof pg.pageKey === 'string' && typeof pg.content === 'string' && typeof pg.hash === 'string') {
+    we.page = { pageKey: pg.pageKey, content: pg.content, hash: pg.hash };
+  }
+  if (Array.isArray(b.violations)) we.violations = b.violations.filter((v): v is string => typeof v === 'string');
+  if (Array.isArray(b.issues)) {
+    we.issues = b.issues
+      .filter((i): i is { code: string; message: string; page?: string | null; link?: string | null } =>
+        !!i && typeof (i as { code?: unknown }).code === 'string' && typeof (i as { message?: unknown }).message === 'string')
+      .map(i => ({ code: i.code, message: i.message, page: i.page ?? null, link: i.link ?? null }));
+  }
+}
+
+// Сохранить правку страницы. content — полный новый текст в форме GET page. После applied
+// слот страницы перечитывается (хэш, сноски с авторством, секции); сбой перечитки правку
+// не отменяет. Отказы — WikiError: 409 wiki_page_changed (в .page свежая версия, ничего не
+// записано), 409 wiki_unified_off, 400 wiki_edit_invalid (.violations/.issues).
+export async function editWikiPage(
+  sectionKey: string, pageKey: string, baseHash: string | null, content: string,
+): Promise<WikiEditResult> {
+  const res = await wikiHttp<{ status?: unknown; hash?: unknown; content?: unknown }>('/wiki/pages/edit', {
+    method: 'POST',
+    body: JSON.stringify({ section: sectionKey, page: pageKey, baseHash, content }),
+  });
+  const hash = typeof res?.hash === 'string' ? res.hash : '';
+  if (res?.status === 'unchanged') return { status: 'unchanged', hash };
+  if (res?.status !== 'applied') throw new WikiError(0, null, 'неожиданный ответ правки страницы');
+  await loadWikiPage(sectionKey, pageKey).catch(() => undefined);
+  return { status: 'applied', hash, content: typeof res.content === 'string' ? res.content : content };
+}
+
+// ─── Метки «ИИ заменил / оспаривает» и «Вернуть мою» (ADR-038 «Контракт для фронта», решение 4; F3b) ───
+// overrides[] в GET page выводит сервер из журнала за 14 дней — фронт окно не считает и
+// даты не сравнивает: нет в ответе — нет метки. previous — фактическая строка «Истории»
+// (сервер находит её сам); null — пары для «Вернуть мою» нет, кнопки не будет.
+
+export type WikiOverrideOp = 'supersede' | 'conflict';
+
+export interface WikiOverrideDto {
+  op: WikiOverrideOp;
+  // Текст утверждения ИИ без сносок
+  statement: string | null;
+  previous: string | null;
+  // Только у спора (op=conflict): живая строка человека из активной секции, на которой стоит
+  // метка «ИИ оспаривает»; null — строки нет (метки нет, плашка остаётся). У supersede — null
+  target?: string | null;
+  // Время замены, ISO 8601
+  at: string;
+  packageId: string;
+}
+
+export interface WikiPageOverriddenDto extends WikiPageEditableDto { overrides?: WikiOverrideDto[] }
+
+// Журнал: запись, где ИИ сам поменял утверждение человека (фильтр «ИИ поменял моё»)
+export type WikiOverrodeKind = 'replaced' | 'disputed';
+export interface WikiJournalEntryOverrideDto extends WikiJournalEntryDto {
+  overrodeHuman?: boolean;
+  overrodeKind?: WikiOverrodeKind | null;
+}
+
+// Отказы «Вернуть мою» читаются по тем же кодам WikiError, что у правки: 409 wiki_page_changed
+// (свежая страница в .page), 409 wiki_unified_off, 400 wiki_edit_invalid (.message — причина).
+
+// Сравнение утверждения из overrides[] со строкой страницы: сервер отдаёт его без сносок и
+// маркера, на странице — со сносками. Без маркера списка (он факультативен: RenderApply пишет
+// строки без него), без сносок, пробелы схлопнуты, NFC. Единственная копия — витрина берёт её же.
+export function normWikiStatement(s: string): string {
+  return s.replace(/^[-*]\s+/, '').replace(/\s*\[\^[^\]\r\n]+\]/g, '').replace(/\s+/g, ' ').trim().normalize('NFC');
+}
+
+const FN_DEF_LINE_RX = /^\[\^[^\]\r\n]+\]: .+ — «.*»$/;
+
+// Действующие строки страницы — те же, что витрина рисует в секциях (зеркало parseWikiPage):
+// содержательные строки секций кроме «Истории», с маркером или без. Пустые, шапка, заголовок,
+// определения сносок и строки вне секций не в счёте. Паритет с parseWikiPage держит тест.
+export function wikiActiveLines(content: string): string[] {
+  const lines = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+  let i = 0;
+  if (lines[0] === '---') {
+    const close = lines.indexOf('---', 1);
+    if (close > 0) i = close + 1;
+  }
+  const out: string[] = [];
+  let titled = false;
+  let section: string | null = null;
+  for (; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line || FN_DEF_LINE_RX.test(line)) continue;
+    const t = /^# (.+)$/.exec(line);
+    if (t && !titled) { titled = true; continue; }
+    const h = /^## (.+)$/.exec(line);
+    if (h) { section = h[1]; continue; }
+    if (section !== null && section !== 'История') out.push(line);
+  }
+  return out;
+}
+
+// Замены и споры страницы; чужие и неизвестные op фронт не рисует. Если в ответе есть текст
+// страницы, остаются только те, чьё утверждение ещё действует: после «Вернуть мою» бэк пакет ИИ
+// не убирает, но утверждение ИИ уходит в «Историю» — метка и точка гаснут
+export function wikiOverridesOf(page: { overrides?: unknown; content?: unknown } | null | undefined): WikiOverrideDto[] {
+  const raw = page?.overrides;
+  if (!Array.isArray(raw)) return [];
+  const all = raw.filter((o): o is WikiOverrideDto =>
+    !!o && ((o as WikiOverrideDto).op === 'supersede' || (o as WikiOverrideDto).op === 'conflict')
+    && typeof (o as WikiOverrideDto).at === 'string' && typeof (o as WikiOverrideDto).packageId === 'string');
+  if (typeof page?.content !== 'string') return all;
+  const active = new Set(wikiActiveLines(page.content).map(normWikiStatement));
+  return all.filter(o => {
+    // Замена — по утверждению ИИ. Спор — по живой строке человека (target): переписал её —
+    // спор снят. Без target (человек переписал утверждение) карточка живёт, пока довод ИИ
+    // (statement, лежит в «Противоречиях») среди действующих строк; previous лежит в «Истории»
+    // и в проверку не входит — он нужен только «Вернуть мою»
+    const text = o.op === 'supersede' ? o.statement : (o.target ?? o.statement);
+    return !!text && active.has(normWikiStatement(text));
+  });
+}
+
+// Состояние «есть замена, которую человек не вернул»: питает точку на «Журнале». Берётся из
+// открытой страницы стора; после «Вернуть мою» страница перечитывается, замены в ответе нет — точка гаснет.
+export function wikiHasReplacement(page: { overrides?: unknown; content?: unknown } | null | undefined): boolean {
+  return wikiOverridesOf(page).some(o => o.op === 'supersede');
+}
+
+export function useWikiReplacementDot(): boolean {
+  const snap = () => wikiHasReplacement(_page?.value as WikiPageOverriddenDto | undefined);
+  return useSyncExternalStore(subscribe, snap, snap);
+}
+
+// «Вернуть мою»: current — действующее утверждение ИИ (statement), restore — строка человека
+// из «Истории» (previous). Ответы — как у правки. Перечитки здесь нет намеренно: её делает
+// вызывающий, и только если страница ещё та же (ответ после смены страницы слот не трогает).
+export async function restoreWikiPage(
+  sectionKey: string, pageKey: string, baseHash: string | null, current: string, restore: string,
+): Promise<WikiEditResult> {
+  const res = await wikiHttp<{ status?: unknown; hash?: unknown; content?: unknown }>('/wiki/pages/restore', {
+    method: 'POST',
+    body: JSON.stringify({ section: sectionKey, page: pageKey, baseHash, current, restore }),
+  });
+  const hash = typeof res?.hash === 'string' ? res.hash : '';
+  if (res?.status === 'unchanged') return { status: 'unchanged', hash };
+  if (res?.status !== 'applied') throw new WikiError(0, null, 'неожиданный ответ возврата формулировки');
+  return { status: 'applied', hash, content: typeof res.content === 'string' ? res.content : '' };
+}
+
+// ─── «Перенести в вики» (F5b; POST /api/wiki/ingest/note с transfer: true, ADR-038 «Контракт для фронта») ───
+// Заметка становится страницей human в доме заметки (личный vault → «Личное», notes/ проекта →
+// раздел проекта), а сама заметка заменяется ссылкой на неё: ручка делает обе записи сразу,
+// подтверждение UI спрашивает ДО вызова. target не передаём — дом задаёт бэк (400
+// wiki_transfer_target). section/page ответа — ключи созданной страницы в той же форме, что
+// ключ раздела дерева и ключ страницы каталога, — экран открывает их requestOpenWikiPage (OPEN-1).
+// Отказы — WikiError с кодом: 404 not_found (заметки нет или чужая), 409 wiki_unified_off |
+// wiki_not_initialized | wiki_note_transferred (уже перенесена) | wiki_page_changed (имя занято:
+// «переименуйте заметку и повторите»), 400 wiki_edit_invalid (.violations/.issues) | wiki_note_id;
+// сервисному токену 403 — до ветки переноса. Повтор переноса доводит несделанную замену:
+// занятая страница этого же переноса узнаётся на бэке (WikiNoteTransfer.IsPageOfThisTransfer).
+
+export interface WikiNoteTransferDto {
+  section: string;
+  page: string;
+  packageId: string | null;
+}
+
+export async function transferWikiNote(noteId: string): Promise<WikiNoteTransferDto> {
+  const res = await wikiHttp<{ outcome?: unknown; section?: unknown; page?: unknown; packageId?: unknown }>(
+    '/wiki/ingest/note',
+    { method: 'POST', body: JSON.stringify({ noteId, transfer: true }) },
+  );
+  // 200 — всегда {outcome:"transferred", section, page}; тело вне этой формы — не HTTP-отказ,
+  // ответ вне контракта (тот же порядок, что в ingestWikiNote): вызывающий видит ошибку,
+  // а не тихую пустоту
+  if (res?.outcome !== 'transferred' || typeof res.section !== 'string' || typeof res.page !== 'string') {
+    throw new WikiError(0, null, 'неожиданный ответ переноса заметки');
+  }
+  return {
+    section: res.section,
+    page: res.page,
+    packageId: typeof res.packageId === 'string' ? res.packageId : null,
+  };
+}
+
+// ─── «Принять как мою правку» (F5c; POST /api/wiki/adopt с mode: "mine", ADR-038 «Контракт для фронта») ───
+// Внешняя правка (дрейф) становится правкой человека: бэк собирает дифф «манифест → диск»
+// в пакет human (WikiController.Adopt → AdoptMineAsync). baseHash обязателен — «хэш файла,
+// каким его видел человек»: «Здоровье» страницу не читает, поэтому хэш берётся из GET page
+// непосредственно перед запросом — единственный источник хэша на этом экране. Между чтением
+// и применением файл мог быть правлен ещё раз — это ровно 409 wiki_page_changed, бэк ничего
+// не пишет. Ответы как у edit: 200 applied/unchanged; 409 wiki_page_changed (файл правили
+// ещё раз), 409 wiki_drift (дрейф других страниц раздела), 409 wiki_unified_off (любой из
+// флагов выключен — UnifiedOffRefusal до ветки), 400 wiki_edit_invalid (.violations/.issues),
+// 400 wiki_adopt_mode. Чистый транспорт (тот же порядок, что analyzeWikiChat/transferWikiNote):
+// состояния стора не трогает, ничего не перечитывает — перечитку здоровья и отбивку ответа
+// по пути страницы делает вызывающий.
+
+export interface WikiAdoptMineResult {
+  status: 'applied' | 'unchanged';
+  hash: string;
+}
+
+export async function adoptWikiPageMine(sectionKey: string, pageKey: string): Promise<WikiAdoptMineResult> {
+  const page = await wikiHttp<WikiPageEditableDto>(
+    `/wiki/page?${sectionQuery(sectionKey)}&page=${encodeURIComponent(pageKey)}`,
+  );
+  const baseHash = typeof page?.hash === 'string' ? page.hash : '';
+  const res = await wikiHttp<{ status?: unknown; hash?: unknown }>('/wiki/adopt', {
+    method: 'POST',
+    body: JSON.stringify({ section: sectionKey, page: pageKey, mode: 'mine', baseHash }),
+  });
+  if (res?.status !== 'applied' && res?.status !== 'unchanged') {
+    // 200 — всегда {status:"applied"|"unchanged", hash}: тело вне формы — ответ вне контракта
+    // (тот же порядок, что в transferWikiNote), а не тихая пустота
+    throw new WikiError(0, null, 'неожиданный ответ принятия правки');
+  }
+  return { status: res.status, hash: typeof res.hash === 'string' ? res.hash : '' };
+}

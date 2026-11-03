@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, lazy, Suspense } from 'react';
-import { BookOpen, Check, Copy, FileText, MessageCircle, Undo2, X } from 'lucide-react';
+import { AlertTriangle, BookMarked, BookOpen, Check, CheckCircle2, Copy, FileText, MessageCircle, Undo2, X } from 'lucide-react';
 import type { NoteDetail, NoteReply, Persona } from '../../types';
 import {
   api, bumpNotes, useNotesVersion, isFavorite, withFavoriteTag, withoutFavoriteTag,
@@ -11,7 +11,7 @@ import {
   showToast, openChatById, beginAiBusy, endAiBusy,
   registerCopyDoc, copyMarkdown, copyRenderedHtml,
   ensurePersonasLoaded, personaLabel, usePersonas, NO_AUTOFILL,
-  FLAGS, useFeature,
+  FLAGS, useFeature, Notice, requestOpenWikiPage, transferWikiNote, WikiError,
 } from 'aihome_shell/kit';
 import type { NoteSource } from '../../types';
 import { NoteConnections } from './NoteConnections';
@@ -57,6 +57,9 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   // «Разобрать в базу» (S7b) — за флагом llm-wiki; requestNoteIngest никогда не бросает,
   // поэтому экрану нужен только busy для кнопки и текст для тоста
   const wikiOn = useFeature(FLAGS.llmWiki);
+  // «Перенести в вики» (F5b) — за обоими флагами: llm-wiki и «Заметки и Вики». Без любого
+  // из них кнопки нет (бэк проверяет те же флаги до ветки переноса, UnifiedOffRefusal)
+  const unifiedOn = useFeature(FLAGS.notesWikiUnified);
   const [ingestBusy, setIngestBusy] = useState(false);
   // Контейнер панели комментариев (портал из DocCommentedMarkdown). Плавающий сайдбар
   // связей справа от текста заметки — как у документов (см. docSide в FileViewer):
@@ -112,6 +115,51 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     const text = await requestNoteIngest(noteId);
     showToast('Разобрать в базу', text, 'info');
     setIngestBusy(false);
+  };
+
+  // «Перенести в вики» (F5b): подтверждение → POST переноса → заметка становится страницей
+  // в доме заметки, а сама заменяется ссылкой на неё (ручка делает обе записи сразу).
+  // Конкурентность (урок S5b/S5e, образец doRetract в WikiChatActions): пока идёт — второй
+  // клик ничего не шлёт; подтверждение закрыто по исходу. Ответ применяется только к той
+  // заметке, для которой начался: после смены заметки он отбрасывается по noteId. Отказ
+  // наружу не выходит — любой становится текстом Notice, кнопка остаётся.
+  const [transferConfirm, setTransferConfirm] = useState(false);
+  const [transferBusy, setTransferBusy] = useState(false);
+  const [transferFlash, setTransferFlash] = useState<{ ok: boolean; text: string } | null>(null);
+  const openNoteIdRef = useRef(noteId);
+  useEffect(() => {
+    // Смена заметки: прежний запрос стал чужим (его ответ отбрасывается по noteId), а его
+    // подтверждение и плашка не переходят в новую заметку
+    openNoteIdRef.current = noteId;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс состояния переноса прежней заметки при смене заметки
+    { setTransferConfirm(false); setTransferBusy(false); setTransferFlash(null); }
+  }, [noteId]);
+  const doTransfer = async () => {
+    if (transferBusy) return;
+    const forNoteId = noteId;
+    setTransferBusy(true);
+    try {
+      const res = await transferWikiNote(forNoteId);
+      // Заметка сменилась, пока запрос шёл: плашка и страница — прежней заметки,
+      // ответ отбрасывается по noteId
+      if (forNoteId !== openNoteIdRef.current) return;
+      setTransferConfirm(false);
+      setTransferFlash({ ok: true, text: TRANSFER_TEXT.done });
+      // На сервере заметка заменена ссылкой — перечитываем список и саму заметку
+      bumpNotes();
+      // Открыть созданную страницу: запрос — в стор вики (OPEN-1), смонтированный раздел
+      // «Заметки» переключится на «Вики» и откроет её; из встраивания в файлы к разделу
+      // ведёт тот же канал 'cc-open-note', что у «[[wikilink]]»
+      requestOpenWikiPage({ section: res.section, path: res.page });
+      window.dispatchEvent(new Event('cc-open-note'));
+    } catch (e) {
+      if (forNoteId !== openNoteIdRef.current) return;
+      setTransferConfirm(false);
+      setTransferFlash({ ok: false, text: transferFailText(e) });
+    } finally {
+      // Запоздалый ответ не трогает состояние новой заметки (там мог идти свой перенос)
+      if (forNoteId === openNoteIdRef.current) setTransferBusy(false);
+    }
   };
 
   useEffect(() => {
@@ -527,6 +575,13 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                   <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
                 </IconButton>
               )}
+              {/* «Перенести в вики» (F5b) — та же форма действия, что у соседних: ряд тулбара
+                  на 360 не переносится, подписанная кнопка в нём не помещается */}
+              {unifiedOn && wikiOn && (
+                <IconButton title="Перенести в вики" disabled={!online || transferBusy} onClick={() => setTransferConfirm(true)}>
+                  <BookMarked size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                </IconButton>
+              )}
               <IconButton title={online ? 'Переместить…' : 'Перенос недоступен офлайн'} onClick={openMove} disabled={!online}><IconFolderMove /></IconButton>
               <IconButton title="Удалить" tone="danger" onClick={del}><IconTrash /></IconButton>
               <button onClick={startEdit} style={{ ...tbBtnPrimary, marginLeft: 6 }}>Править</button>
@@ -552,6 +607,17 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
       // заметка лежит на фоне страницы с дудл-паттерном
       <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '10px 18px 24px',
         ...(hero ? { background: C.msgBg, borderRadius: ISLAND.radius } : {}) }}>
+        {/* Исход «Перенести в вики» (F5b): успех — плашка остаётся там, где была заметка
+            (сам экран переходит к «Вики» запросом в стор); отказ — причина по-русски,
+            кнопка тулбара на месте. Тон и икона — как у флешей правки страницы (WikiPageView) */}
+        {!editing && transferFlash && (
+          <Notice
+            tone={transferFlash.ok ? 'info' : 'danger'}
+            icon={transferFlash.ok ? CheckCircle2 : AlertTriangle}
+            title={transferFlash.text}
+            style={{ marginBottom: 12 }}
+          />
+        )}
         {/* Hero: заголовок заметки — крупно над тегами (в стиле markdown-H1);
             ведущий H1 самого контента глушится (hideLeadingH1), чтобы не дублировался */}
         {!editing && hero && (
@@ -848,8 +914,59 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           onCancel={() => setDeleteConfirm(false)}
         />
       )}
+
+      {/* Подтверждение переноса (F5b) — текст записки notes-wiki-unified-v1 дословно (§«е. Заметка»);
+          «✎ вы» вместо «✎ Андрей» из макета: сноска человека рисуется знаком «✎ вы, {дата}»
+          (ADR-038 «Авторство…»), так же делает страница (WikiPageView). Диалог открыт до
+          исхода запроса (образец doRetract): спиннер на кнопке, закрытие — по результату */}
+      {transferConfirm && (
+        <ConfirmDialog
+          title={TRANSFER_TEXT.confirmTitle}
+          subtitle={TRANSFER_TEXT.confirmBody}
+          confirmLabel={TRANSFER_TEXT.confirm}
+          onConfirm={doTransfer}
+          onCancel={() => setTransferConfirm(false)}
+        />
+      )}
     </div>
   );
+}
+
+// Тексты «Перенести в вики» (F5b). Подтверждение — из записки notes-wiki-unified-v1 (§«е.
+// Заметка»), дословно, кроме «✎ вы» вместо имени макета (см. комментарий модалки). Отказы —
+// свой текст по кодам контракта (формулировки — ADR-038); тексты фичи ведёт Софья.
+const TRANSFER_TEXT = {
+  confirmTitle: 'Перенести заметку в вики?',
+  confirmBody: 'Заметка станет страницей вики: ваш текст — вашими утверждениями «✎ вы», а ИИ сможет дописывать страницу рядом с ними. Сама заметка заменится ссылкой на страницу — копий не будет.',
+  confirm: 'Перенести',
+  done: 'Перенесено',
+  notFound: 'Заметки нет или она чужая.',
+  alreadyMoved: 'Заметка уже перенесена в вики: в ней ссылка на страницу.',
+  nameTaken: 'Страница с таким именем уже есть: переименуйте заметку и повторите перенос.',
+  off: 'Перенос в вики сейчас выключен: включите «Заметки и Вики» в настройках и повторите.',
+  notInit: 'Твоя вики ещё не заведена.',
+  refused: 'Перенос отказан. Повторите перенос — он доведёт его до конца.',
+  failed: 'Не удалось перенести заметку. Проверьте соединение и повторите.',
+} as const;
+
+// Текст отказа переноса. У именованных кодов — свой текст; у wiki_refused и wiki_edit_invalid
+// причина — в message бэка (ADR-038 «причина текстом»: «страница „X“ уже есть: переименуйте
+// заметку…», «в заметке нет текста для утверждений: переносить нечего») — показываем его с
+// большой буквы; без message — общий текст. Сетевой сбой (не WikiError) — общий текст.
+function transferFailText(e: unknown): string {
+  if (!(e instanceof WikiError)) return TRANSFER_TEXT.failed;
+  switch (e.code) {
+    case 'not_found': return TRANSFER_TEXT.notFound;
+    case 'wiki_note_transferred': return TRANSFER_TEXT.alreadyMoved;
+    case 'wiki_page_changed': return TRANSFER_TEXT.nameTaken;
+    case 'wiki_unified_off': return TRANSFER_TEXT.off;
+    case 'wiki_not_initialized': return TRANSFER_TEXT.notInit;
+    case 'wiki_refused':
+    case 'wiki_edit_invalid':
+      return e.message ? e.message.charAt(0).toUpperCase() + e.message.slice(1) : TRANSFER_TEXT.refused;
+  }
+  if (e.status === 403) return 'Нет доступа.';
+  return TRANSFER_TEXT.failed;
 }
 
 // Диалог переноса: выбор источника (личный vault / проекты) + папки выбранного

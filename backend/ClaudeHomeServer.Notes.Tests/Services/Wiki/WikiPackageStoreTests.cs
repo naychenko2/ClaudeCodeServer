@@ -401,6 +401,48 @@ public class WikiPackageStoreTests : IDisposable
             .Should().Be(WikiPackageStore.CodeInvalid);
     }
 
+    // ─── B1 (ADR-038): автор пакета ──────────────────────────────────────────
+
+    [Fact]
+    public void Автор_СтарыйJsonБезAuthor_ЧитаетсяКакAi_ИНовыйПишетсяЯвно()
+    {
+        var fresh = Pkg(AppendOp());
+        WikiPackageStore.Create(_root, fresh).Ok.Should().BeTrue("каталог пакетов создаётся записью");
+        File.ReadAllText(PackageFile(fresh.Id), new UTF8Encoding(false)).Should().Contain("\"author\":\"ai\"");
+
+        var id = WikiPackageStore.NewId();
+        WriteRawFile(id, "{\"v\":1,\"id\":\"" + id + "\",\"section\":\"common\",\"status\":\"checking\",\"sources\":[{\"origin\":\"session\",\"ref\":\"chat-1\"}],\"operations\":[{\"op\":\"append\",\"page\":\"Общее/X.md\",\"text\":\"утверждение\",\"class\":\"session×append\",\"decision\":\"auto\",\"baseHashes\":{}}]}");
+        var read = WikiPackageStore.TryRead(_root, id);
+        read.State.Should().Be(WikiPackageFileState.Valid);
+        read.Package!.Author.Should().Be(WikiPackage.AuthorAi);
+    }
+
+    [Fact]
+    public void Автор_НеизвестныйИNull_ФормаОтбита()
+    {
+        WikiPackage.ShapeErrors(Pkg(AppendOp()) with { Author = "robot" }).Should().Contain(e => e.Contains("автор пакета"));
+        WikiPackage.ShapeErrors(Pkg(AppendOp()) with { Author = null! }).Should().Contain(e => e.Contains("автор пакета"));
+    }
+
+    [Fact]
+    public void Автор_ИсточникHumanУПакетаAi_ФормаПроходит_СоздатьКарточкуОтбиваетГейт()
+    {
+        // ADR-038, §2: ai может сослаться на уже существующую карточку human — форма пакета
+        // это пропускает. Мутация «вернуть запрет формы» краснит первую проверку; мутация
+        // «снять правило гейта» — вторую (она же в WikiGateTests).
+        var humanSrc = new[] { new WikiPackage.SourceRef("human", "human:1") };
+        var ai = Pkg(AppendOp() with { Class = "human×append" }) with { Sources = humanSrc };
+        WikiPackage.ShapeErrors(ai).Should().BeEmpty();
+
+        var card = new WikiGate.Draft("Проекты/p1/Источники/Моя.md",
+            "---\ntype: source\norigin: human\nref: human:1\nhash: 0123456789012345678901234567890123456789012345678901234567890123\n" +
+            "captured: 2026-11-02\naliases: []\nowns: []\nsources: []\nstatus: active\n---\n\n# Моя\n");
+        WikiGate.Check([card], "projects/p1", [], null, WikiGate.VerbatimScope.All, WikiPackage.AuthorAi, baseState: [])
+            .Should().Contain(e => e.Contains("origin: human") && e.Contains("автора human"));
+        WikiGate.Check([card], "projects/p1", [], null, WikiGate.VerbatimScope.All, WikiPackage.AuthorAi, baseState: [card])
+            .Should().NotContain(e => e.Contains("origin: human"));
+    }
+
     // ─── 9. Повторное решение и дата создания (миноры 1 и 6, ревью S4a) ───
 
     [Fact]

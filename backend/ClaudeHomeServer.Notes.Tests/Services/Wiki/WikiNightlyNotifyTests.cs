@@ -176,6 +176,68 @@ public class WikiNightlyNotifyTests : IDisposable
         n.Kind.Should().Be("info", "обычный исход — не предупреждение");
     }
 
+    // ─── B4b (ADR-038, предохранитель 6): сводные строки о человеке — в то же уведомление ───
+
+    [Fact]
+    public async Task ЗамениИИФормулировкиЧеловекаВДвухЧатах_ВУведомленииОднаСводнаяСтрока_СЧислом()
+    {
+        // Мутация «строка на каждый чат» (дописывать строку внутри цикла разборов): две строки
+        // «ИИ заменил…» — Be(1) по числу вхождений краснеет. Мутация «не суммировать» (брать
+        // последний чат): «5 ваших формулировок» краснеет. Страница b оспорена в обоих чатах — это
+        // одна страница, не две: «на 2 страницах».
+        Configure();
+        AddChat("c1", ageMinutes: 0);
+        AddChat("c2", ageMinutes: 1);
+        var notifier = new Notifier();
+        Task<WikiChatIngestService.ChatResult> Analyze(string owner, string chat, CancellationToken ct) => chat switch
+        {
+            "c1" => Task.FromResult(new WikiChatIngestService.ChatResult(
+                WikiChatIngestService.OutcomeApplied, null, ["pkg-1"], OverrodeHuman: 2, DisputedPages: ["a.md", "b.md"])),
+            "c2" => Task.FromResult(new WikiChatIngestService.ChatResult(
+                WikiChatIngestService.OutcomeApplied, null, ["pkg-2"], OverrodeHuman: 3, DisputedPages: ["b.md"])),
+            _ => Task.FromResult(new WikiChatIngestService.ChatResult(
+                WikiChatIngestService.OutcomeNothingNew, null, [])),
+        };
+
+        await Tick(Sut(Analyze, notifier));
+
+        notifier.Sent.Should().HaveCount(1, "второго уведомления нет");
+        var body = notifier.Sent[0].Body;
+        body.Should().Contain("ИИ заменил 5 ваших формулировок.");
+        body.Should().Contain("ИИ отметил противоречие на 2 страницах.");
+        System.Text.RegularExpressions.Regex.Matches(body, "ИИ заменил").Count.Should().Be(1, "одна сводная строка за ночь");
+        Last().OverrodeHuman.Should().Be(5);
+        Last().DisputedPages.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task ЧеловекаНеТрогали_СтрокиОНёмВУведомленииНет()
+    {
+        Configure();
+        AddChat("c1");
+        var notifier = new Notifier();
+        Task<WikiChatIngestService.ChatResult> Analyze(string owner, string chat, CancellationToken ct) =>
+            Task.FromResult(new WikiChatIngestService.ChatResult(WikiChatIngestService.OutcomeApplied, null, ["pkg-1"]));
+
+        await Tick(Sut(Analyze, notifier));
+
+        notifier.Sent[0].Body.Should().NotContain("ИИ заменил").And.NotContain("противоречие");
+    }
+
+    [Theory]
+    [InlineData(1, "1 вашу формулировку", "1 странице")]
+    [InlineData(2, "2 ваши формулировки", "2 страницах")]
+    [InlineData(5, "5 ваших формулировок", "5 страницах")]
+    [InlineData(11, "11 ваших формулировок", "11 страницах")]
+    [InlineData(21, "21 вашу формулировку", "21 странице")]
+    public void NotificationBody_ЧислоСклоняется(int n, string replaced, string pages)
+    {
+        var body = WikiNightlyService.NotificationBody(null, n, n);
+
+        body.Should().Contain($"ИИ заменил {replaced}.");
+        body.Should().Contain($"ИИ отметил противоречие на {pages}.");
+    }
+
     // ─── c2: молчание ────────────────────────────────────────────────────────
 
     [Fact]

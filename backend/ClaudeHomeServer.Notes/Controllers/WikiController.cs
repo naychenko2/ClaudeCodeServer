@@ -16,7 +16,9 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // по кнопке (S3-3); журнал своей вики (S7c-0, ADR-035 §12г меры 4–6); «Разобрать заметку
 // в базу» (S7b0b). Образец — NotesController.
 //
-// Владелец — только из токена (claim sub), как во всей вертикали. Раздел — ключ,
+// Владелец — только из токена (claim sub), как во всей вертикали. Сервисный токен хода
+// (typ=svc) — все мутирующие ручки этого контроллера отказаны 403 (B2a): вику решает и
+// заводит только человек; ручки чтения отвечают под svc как раньше. Раздел — ключ,
 // составленный из проекта/сферы пользователя (WikiSections), а не путь из тела запроса:
 // чужой ключ, называющий существующий чужой проект, — 403. Человек видит ВСЮ свою вики:
 // WikiVisibility — правило сборки контекста для моделей, а не право человека
@@ -39,13 +41,24 @@ public class WikiController : ControllerBase
     // инструмента wiki_ingest (NotesToolset); регистрация — NotesSubsystem (Singleton).
     private readonly WikiSourceCapture _capture;
     private readonly WikiIngestService _ingest;
+    // B5: «Принять как мою правку» (пакет human из диффа) и «Перенести в вики» (заметка → страница).
+    private readonly WikiApplyService _apply;
+    private readonly WikiNoteTransfer _transfer;
     private readonly IFeatureFlagGate? _flags;
+    private readonly TimeProvider _time;
     private readonly string _dataDir;
+
+    // Окно метки «ИИ заменил моё» на странице (ADR-038, контракт чтения для фронта).
+    private static readonly TimeSpan OverridesWindow = TimeSpan.FromDays(14);
 
     public WikiController(WikiKeeper keeper, IProjectManager projects, ISphereDirectory spheres,
         WikiLintService lint, WikiJournalReader journal, IFeatureFlagGate? flags, IConfiguration config,
-        WikiSourceCapture capture, WikiIngestService ingest)
+        WikiSourceCapture capture, WikiIngestService ingest, WikiApplyService apply, WikiNoteTransfer transfer,
+        TimeProvider? time = null)
     {
+        _time = time ?? TimeProvider.System;
+        _apply = apply;
+        _transfer = transfer;
         _keeper = keeper;
         _projects = projects;
         _spheres = spheres;
@@ -63,6 +76,17 @@ public class WikiController : ControllerBase
     // внутри действий: без токена действие отвечает 401 (контракт), а не падает с NRE на claim.
     private string? OwnerOrNull() =>
         User.Identity?.IsAuthenticated == true ? User.FindFirstValue(JwtRegisteredClaimNames.Sub) : null;
+
+    // Сервисный JWT хода (claim typ=svc, тот же смысл, что JwtService): к вики он не адресат —
+    // «Завести», adopt, удаление раздела, разбор заметки и линт отказаны им 403 (B2a; разведка
+    // B0: легитимных svc-вызовов этих ручек нет). Локальные константы — как в PluginsController
+    // и TasksController: вертикаль не тянет ядро ради двух строк. Отказ — до разбора тела и до
+    // любых состояний: svc не доходит ни до одной записи.
+    private const string TokenKindClaim = "typ";
+    private const string ServiceTokenKind = "svc";
+    private bool IsServiceToken => User.FindFirstValue(TokenKindClaim) == ServiceTokenKind;
+    private IActionResult ServiceTokenRefusal() =>
+        StatusCode(403, new { error = "Сервисный токен: вики решает только пользовательский токен" });
 
     // Коды отказов — контракт для фронта (S5a), устойчивые строки, как wiki_readonly.
     private const string CodeSectionKey = "wiki_section_key";
@@ -82,6 +106,13 @@ public class WikiController : ControllerBase
     private const string CodePackagesLimit = "packages_limit";
     private const string CodeNotFound = "not_found";
     private const string CodeNoteId = "wiki_note_id";
+    // B5: режим adopt, серверный гейт совместной правки, исходы переноса заметки.
+    private const string CodeAdoptMode = "wiki_adopt_mode";
+    private const string CodeUnifiedOff = "wiki_unified_off";
+    private const string CodePageChanged = "wiki_page_changed";
+    private const string CodeEditInvalid = "wiki_edit_invalid";
+    private const string CodeNoteTransferred = "wiki_note_transferred";
+    private const string CodeTransferTarget = "wiki_transfer_target";
 
     // Состояния манифеста раздела в контракте (WikiCatalogDto.ManifestState / ответ
     // GET page): закрытый перечень — три состояния WikiManifestState без внутреннего имени.
@@ -149,6 +180,7 @@ public class WikiController : ControllerBase
         {
             try
             {
+                var texts = new List<(string PageKey, string Name, string Text)>();
                 foreach (var full in Directory.EnumerateFiles(dir, "*.md", SearchOption.AllDirectories))
                 {
                     var name = Path.GetFileName(full);
@@ -156,13 +188,20 @@ public class WikiController : ControllerBase
                     string text;
                     try { text = System.IO.File.ReadAllText(full); }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+                    texts.Add((Path.GetRelativePath(pagesRoot, full).Replace('\\', '/'), name, text));
+                }
+                // Авторство считает одна точка — WikiProjections.Authorship; у карточек источников его нет.
+                var authorship = WikiProjections.Authorship(
+                    texts.Select(t => new WikiGate.Draft(t.PageKey, t.Text)).ToList());
+                foreach (var (pageKey, name, text) in texts)
+                {
                     var fm = WikiFrontmatter.Parse(text).Model;
-                    var pageKey = Path.GetRelativePath(pagesRoot, full).Replace('\\', '/');
                     pages.Add(new WikiPageInfoDto(
                         pageKey,
                         TitleOf(text, name), fm?.Summary, fm?.Type, fm?.Status,
                         fm?.Sources.Count ?? 0, fm?.Updated,
-                        IsDrifted(root, pageKey, manifest)));
+                        IsDrifted(root, pageKey, manifest),
+                        authorship.GetValueOrDefault(pageKey)));
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -196,13 +235,92 @@ public class WikiController : ControllerBase
         // Дрейф этой страницы (файл против её записи в манифесте) и состояние манифеста —
         // то, чем UI рисует плашку и «Принять как есть»: до adopt человек видит их, а не 409.
         var manifest = ReadManifestQuietly(root, key!);
+        var content = System.IO.File.ReadAllText(full);
+        var (authorship, footnotes) = ReadAuthorship(root, key!, content);
+        var overrides = _journal.PageOverrides(userId, key!, page!, _time.GetUtcNow() - OverridesWindow)
+            .Select(o => new WikiOverrideDto(o.Op, o.Statement, ResolveHistoryLine(content, o.Previous), o.At, o.PackageId,
+                o.Op == WikiPackage.OpConflict ? ResolveLiveLine(content, o.Previous, o.Statement) : null))
+            .ToList();
         return Ok(new
         {
             pageKey = page,
-            content = System.IO.File.ReadAllText(full),
+            content,
+            authorship,
+            footnotes,
+            overrides,
+            // sha256 байтов страницы — baseHash редактора (B3b): сохранение сверяет его под замком раздела.
+            hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.IO.File.ReadAllBytes(full))).ToLowerInvariant(),
             drift = IsDrifted(root, page!, manifest),
             manifestState = ManifestStateOf(manifest.State),
         });
+    }
+
+    // «Вернуть мою» принимает формулировку из «Истории» страницы, а не цитату цели модели: цель
+    // бывает короче строки (буллет, разметка, сноски). Пару previous отдаём как фактическую строку
+    // «Истории», найденную терпимым поиском (как в retract); не нашли — null, метка остаётся без пары.
+    private static string? ResolveHistoryLine(string content, string? target)
+    {
+        if (string.IsNullOrWhiteSpace(target)
+            || WikiPage.Parse(content).Model?.Sections.FirstOrDefault(s => s.Name == "История") is not { } history)
+            return null;
+        foreach (var line in history.Lines)
+            if (QuoteMatcher.ContainsVerbatim(line, target))
+                return line.Trim();
+        return null;
+    }
+
+    // Спор: метка «ИИ оспаривает» стоит на живой строке человека, на которую ссылается пакет (op.Target).
+    // Ищем терпимым поиском только среди секций утверждений, кроме «Истории» (как FindStatement:
+    // «Заметки» и «Открытые вопросы» — не цель спора); строку, дословно цитирующую довод ИИ
+    // (statement), пропускаем — довод не может быть целью. Не нашли — null.
+    private static string? ResolveLiveLine(string content, string? target, string? statement)
+    {
+        if (string.IsNullOrWhiteSpace(target) || WikiPage.Parse(content).Model is not { } model)
+            return null;
+        foreach (var section in model.Sections.Where(s =>
+                     s.Name != "История" && WikiPage.AssertionSectionNames.Contains(s.Name)))
+            foreach (var line in section.Lines)
+            {
+                if (!string.IsNullOrWhiteSpace(statement) && QuoteMatcher.ContainsVerbatim(line, statement))
+                    continue;
+                if (QuoteMatcher.ContainsVerbatim(line, target))
+                    return line.Trim();
+            }
+        return null;
+    }
+
+    // Авторство и сноски страницы: карточки источников берутся из папки «Источники/» раздела
+    // (там их держит захват), счёт — WikiProjections. Неразобранная страница — без сносок и
+    // без признака: показать нечего, выдумывать нечем.
+    private static (string? Authorship, IReadOnlyList<WikiFootnoteDto> Footnotes) ReadAuthorship(
+        string root, string sectionKey, string content)
+    {
+        if (WikiPage.Parse(content).Model is not { } model)
+            return (null, []);
+        var cards = new List<WikiGate.Draft>();
+        var dir = SafePath.JoinBelowRoot(root, "pages/" + WikiSections.Folder(sectionKey)!);
+        if (Directory.Exists(dir))
+        {
+            try
+            {
+                foreach (var f in Directory.EnumerateFiles(dir, "*.md", SearchOption.AllDirectories))
+                {
+                    var rel = Path.GetRelativePath(dir, f).Replace('\\', '/');
+                    if (!rel.Split('/').SkipLast(1).Contains(WikiSourceCapture.SourceDirName)) continue;
+                    try { cards.Add(new WikiGate.Draft(WikiSections.Folder(sectionKey) + rel, System.IO.File.ReadAllText(f))); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        }
+        var index = WikiProjections.Cards(cards);
+        var authorship = model.Frontmatter.Type == WikiFrontmatter.TypeSource
+            ? null
+            : WikiProjections.PageAuthorship(model, t => index.TryGetValue(WikiGate.Norm(t), out var c) ? c.Origin : null);
+        var footnotes = WikiProjections.Footnotes(model, index)
+            .Select(f => new WikiFootnoteDto(f.Label, f.Card, f.Origin, f.Captured, f.CardPage))
+            .ToList();
+        return (authorship, footnotes);
     }
 
     // ─── «Завести вики» ─────────────────────────────────────────────────────
@@ -218,6 +336,7 @@ public class WikiController : ControllerBase
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        if (IsServiceToken) return ServiceTokenRefusal();
         if (_flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) != true)
             return StatusCode(409, new { code = CodeLlmWikiOff, message = "вики не заведена: функция выключена" });
 
@@ -245,21 +364,57 @@ public class WikiController : ControllerBase
     // ─── Adopt: «Принять как есть» ──────────────────────────────────────────
 
     /// <summary>Системная операция adopt (ADR-035, решение 6): текущий файл на диске
-    /// принимается в манифест раздела, дрейф снимается, файл не трогается.</summary>
+    /// принимается в манифест раздела, дрейф снимается, файл не трогается. Режимы (ADR-038, §6):
+    /// `as-is` (по умолчанию, без флага) — как выше; `mine` («Принять как мою правку») — дифф
+    /// «манифест → диск» собирается в пакет human, под флагами llm-wiki и notes-wiki-unified,
+    /// baseHash обязателен (sha256 файла, каким его видел человек).</summary>
     [HttpPost("adopt")]
     public async Task<IActionResult> Adopt([FromBody] WikiAdoptRequest? req)
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        if (IsServiceToken) return ServiceTokenRefusal();
         if (req is null) return BadRequest(new { code = CodeSectionKey, message = "тело запроса не задано" });
+        var mine = req.Mode == "mine";
+        if (req.Mode is not (null or "as-is" or "mine"))
+            return BadRequest(new { code = CodeAdoptMode, message = "режим adopt: as-is или mine" });
+        if (mine && !UnifiedOn(userId)) return UnifiedOffRefusal();
 
         var (key, refusal) = ResolveSection(userId, req.Section);
         if (refusal is not null) return refusal;
         if (string.IsNullOrWhiteSpace(req.Page) || WikiPaths.IsProjection(req.Page) || WikiSections.Parse(req.Page) != key)
             return BadRequest(new { code = CodePageKey, message = "страница должна принадлежать разделу" });
 
-        return OpResult(await _keeper.AdoptAsync(userId, key!, req.Page));
+        if (!mine)
+            return OpResult(await _keeper.AdoptAsync(userId, key!, req.Page));
+        return MineResult(userId, await _apply.AdoptMineAsync(userId, key!, req.Page, req.BaseHash), req.Page);
     }
+
+    // Гейт совместной правки: выключен любой из двух флагов — 409 (как в WikiPagesController).
+    private bool UnifiedOn(string userId) =>
+        _flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) == true
+        && _flags.IsEnabled(userId, FeatureFlagKeys.NotesWikiUnified);
+
+    private IActionResult UnifiedOffRefusal() =>
+        StatusCode(409, new { code = CodeUnifiedOff, message = "правка страниц выключена: функция недоступна" });
+
+    private IActionResult MineResult(string userId, WikiApplyService.HumanEditResult res, string page) => res.Outcome switch
+    {
+        WikiApplyService.HumanEditOutcome.Applied =>
+            Ok(new { status = "applied", packageId = res.PackageId, hash = res.Hash, content = res.Content }),
+        WikiApplyService.HumanEditOutcome.Unchanged => Ok(new { status = "unchanged", hash = res.Hash }),
+        WikiApplyService.HumanEditOutcome.Changed => StatusCode(409, new
+        {
+            code = CodePageChanged,
+            message = res.Reason,
+            page = res.Content is null && res.Hash is null ? null : new { pageKey = page, content = res.Content, hash = res.Hash },
+        }),
+        WikiApplyService.HumanEditOutcome.Drift => StatusCode(409, new { code = "wiki_drift", message = res.Reason }),
+        WikiApplyService.HumanEditOutcome.Invalid =>
+            BadRequest(new { code = CodeEditInvalid, message = res.Reason, violations = res.Violations,
+                issues = WikiGateIssues.Classify(res.Violations, page, k => LiveNameOrNull(userId, k)) }),
+        _ => StatusCode(409, new { code = "wiki_refused", message = res.Reason }),
+    };
 
     // ─── Удаление раздела-сироты ────────────────────────────────────────────
 
@@ -270,6 +425,7 @@ public class WikiController : ControllerBase
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        if (IsServiceToken) return ServiceTokenRefusal();
         var (key, refusal) = ResolveSection(userId, section);
         if (refusal is not null) return refusal;
         if (!WikiSections.IsOrphan(key!, userId, _spheres, _projects))
@@ -296,6 +452,10 @@ public class WikiController : ControllerBase
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        if (IsServiceToken) return ServiceTokenRefusal();
+        // «Перенести в вики» (B5) — не заявка на разбор, а правка человека: свой гейт флагов.
+        if (req?.Transfer == true)
+            return await TransferNote(userId, req);
         if (_flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) != true)
             return StatusCode(409, new { code = CodeLlmWikiOff, message = "заявка не принята: функция выключена" });
         if (req is null || string.IsNullOrWhiteSpace(req.NoteId))
@@ -315,6 +475,37 @@ public class WikiController : ControllerBase
 
         var res = await WikiCardIngest.RunAsync(_ingest, cap, root, userId, HttpContext.RequestAborted);
         return Ok(new { outcome = res.Outcome, packageId = res.PackageId, reason = res.Reason });
+    }
+
+    // «Перенести в вики»: страница human в доме заметки + замена заметки ссылкой (WikiNoteTransfer).
+    private async Task<IActionResult> TransferNote(string userId, WikiIngestNoteRequest req)
+    {
+        if (!UnifiedOn(userId)) return UnifiedOffRefusal();
+        if (string.IsNullOrWhiteSpace(req.NoteId))
+            return BadRequest(new { code = CodeNoteId, message = "нужен id заметки" });
+        if (req.Target is not null)
+            return BadRequest(new { code = CodeTransferTarget, message = "перенос идёт в раздел заметки: target не задаётся" });
+        if (!WikiPaths.IsInitialized(_dataDir, userId))
+            return StatusCode(409, new { code = CodeNotInitialized,
+                message = "вики этого владельца не заведена: перенос работает только с заведённой" });
+
+        var res = await _transfer.TransferAsync(userId, req.NoteId);
+        return res.Outcome switch
+        {
+            WikiNoteTransfer.TransferOutcome.Transferred =>
+                Ok(new { outcome = "transferred", section = res.Section, page = res.Page, packageId = res.PackageId }),
+            WikiNoteTransfer.TransferOutcome.NotFound => NotFound(new { code = CodeNotFound, message = res.Reason }),
+            WikiNoteTransfer.TransferOutcome.AlreadyTransferred =>
+                StatusCode(409, new { code = CodeNoteTransferred, message = res.Reason }),
+            WikiNoteTransfer.TransferOutcome.Exists =>
+                StatusCode(409, new { code = CodePageChanged, message = res.Reason }),
+            WikiNoteTransfer.TransferOutcome.Invalid =>
+                BadRequest(new { code = CodeEditInvalid, message = res.Reason, violations = res.Violations,
+                    issues = WikiGateIssues.Classify(res.Violations ?? [], res.Page ?? "", k => LiveNameOrNull(userId, k)) }),
+            WikiNoteTransfer.TransferOutcome.NotTransferable =>
+                BadRequest(new { code = CodeNoteId, message = res.Reason }),
+            _ => StatusCode(409, new { code = "wiki_refused", message = res.Reason }),
+        };
     }
 
     // ─── Здоровье раздела (S3-3) ─────────────────────────────────────────────
@@ -360,6 +551,7 @@ public class WikiController : ControllerBase
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        if (IsServiceToken) return ServiceTokenRefusal();
         var res = await _lint.TryRunOwnerAsync(userId);
         if (res.Outcome == WikiLintRunOutcome.FeatureOff)
             return StatusCode(409, new { code = CodeLlmWikiOff, message = "проверка не выполнена: функция выключена" });
@@ -370,7 +562,7 @@ public class WikiController : ControllerBase
 
     // ─── Журнал ─────────────────────────────────────────────────────────────
 
-    /// <summary>GET /api/wiki/journal?section=&amp;origin=&amp;class=&amp;take= — журнал своей вики:
+    /// <summary>GET /api/wiki/journal?section=&amp;origin=&amp;class=&amp;take=&amp;overrodeHuman= — журнал своей вики:
     /// записи log.jsonl, склеенные с пакетами (статус, политика «само / через Входящие», класс
     /// origin × op, страницы), с именем источника (чат — название его владельца, заметка —
     /// заголовок). Новые сверху. Только чтение: ручка ничего не пишет (S7c-0, ADR-035 §12г
@@ -383,7 +575,8 @@ public class WikiController : ControllerBase
     /// журнал пустой (раздел мог не иметь ни одной операции).</summary>
     [HttpGet("journal")]
     public IActionResult Journal(
-        [FromQuery] string? section, [FromQuery] string? origin, [FromQuery] string? @class, [FromQuery] int? take)
+        [FromQuery] string? section, [FromQuery] string? origin, [FromQuery] string? @class, [FromQuery] int? take,
+        [FromQuery] bool overrodeHuman = false)
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
@@ -402,11 +595,11 @@ public class WikiController : ControllerBase
         if (@class is not null && !WikiSettingsStore.IsValidClassKey(@class))
             return BadRequest(new { code = CodeClassKey, message = $"класс «{@class}» не пары «источник × операция»" });
 
-        var res = _journal.Read(userId, new WikiJournalReader.Query(key, origin, @class, take));
+        var res = _journal.Read(userId, new WikiJournalReader.Query(key, origin, @class, take, overrodeHuman));
         return Ok(new WikiJournalDto(
             [.. res.Entries.Select(e => new WikiJournalEntryDto(
                 e.Ts, e.Op, e.Section, e.Actor, e.Source, e.Origin, e.SourceName, e.Pages, e.Packages,
-                e.Status, e.Policy, e.Classes))],
+                e.Status, e.Policy, e.Classes, e.OverrodeHuman, e.OverrodeKind))],
             res.Take, res.LinesRead, res.InvalidLines));
     }
 
@@ -552,12 +745,22 @@ public sealed record WikiTreeDto(bool Initialized, IReadOnlyList<WikiSectionDto>
 
 /// <summary>Страница в каталоге раздела: summary/type/status — из шапки (null, если шапка
 /// не разобрана — страница остаётся видимой); sourcesCount — число источников из шапки;
-/// drift — файл страницы разошёлся с её записью в манифесте раздела (правка мимо Хранителя):
+/// authorship — "ai" | "together" | "human" по сноскам действующих утверждений (у карточек
+/// источников null); drift — файл страницы разошёлся с её записью в манифесте раздела (правка мимо Хранителя):
 /// UI рисует плашку и «Принять как есть». Ложного дрейфа нет: раздел без манифеста или с
 /// невалидным манифестом — drift=false, состояние видно в catalog.manifestState.</summary>
 public sealed record WikiPageInfoDto(
     string PageKey, string Title, string? Summary, string? Type, string? Status, int SourcesCount, string? Updated,
-    bool Drift);
+    bool Drift, string? Authorship = null);
+
+/// <summary>Сноска страницы в GET page: label — s1…sN, card — заголовок карточки, origin и
+/// captured — из шапки карточки (null, когда карточки нет).</summary>
+public sealed record WikiFootnoteDto(string Label, string Card, string? Origin, string? Captured, string? CardPage);
+
+/// <summary>Что ИИ сам сделал с утверждением человека на странице за последние 14 дней
+/// (GET page, overrides): op — supersede | conflict, statement — текст ИИ без сносок, previous —
+/// что заменялось (строка «Истории»), target — для спора живая строка человека на странице (для замены null). Выводится из журнала и пакета, своего состояния не имеет.</summary>
+public sealed record WikiOverrideDto(string Op, string? Statement, string? Previous, DateTimeOffset At, string PackageId, string? Target = null);
 
 /// <summary>Каталог страниц раздела. manifestState — состояние манифеста раздела:
 /// «ok» | «missing» | «invalid» (закрытый перечень; «missing» — норма до первого
@@ -570,13 +773,13 @@ public sealed record WikiCatalogDto(string Key, string? Name, bool Orphan, IRead
 public sealed record WikiInitRequest(string? Section);
 
 /// <summary>«Принять как есть» для страницы раздела.</summary>
-public sealed record WikiAdoptRequest(string Section, string Page);
+public sealed record WikiAdoptRequest(string Section, string Page, string? Mode = null, string? BaseHash = null);
 
 /// <summary>«Разобрать заметку в базу» (S7b0b). NoteId — id заметки: только своей, это
 /// проверяет захват. Target — необязательный явный выбор «common» для источника вне
 /// проекта (ADR-036, решение 3): его проверяет захват (WikiSourceHome), второй таблицы
 /// допустимых target здесь нет.</summary>
-public sealed record WikiIngestNoteRequest(string? NoteId, string? Target = null);
+public sealed record WikiIngestNoteRequest(string? NoteId, string? Target = null, bool Transfer = false);
 
 /// <summary>Запись журнала (S7c-0): событие строки log.jsonl и то, что о нём сказал пакет.
 /// ts/op/section/actor/source/pages — из строки журнала как они записаны; origin — префикс
@@ -586,12 +789,16 @@ public sealed record WikiIngestNoteRequest(string? NoteId, string? Target = null
 /// status/policy/classes — из склейки с пакетом: status null, когда пакетов несколько (их id в
 /// packages), classes пуст, когда пакета нет (relink, adopt). policy «auto» | «inbox» — из
 /// строки применения, иначе по пакету; packages — id, названные строкой retract. Формат добавляет
-/// поля к тому, что фронт строит на GET /api/wiki/packages, и ничего не меняет (S7c-2).</summary>
+/// поля к тому, что фронт строит на GET /api/wiki/packages, и ничего не меняет (S7c-2).
+/// overrodeHuman — ИИ сам заменил или оспорил утверждение человека (ADR-038, предохранитель 4);
+/// overrodeKind — `replaced` (supersede@human) | `disputed` (conflict@human), null без признака
+/// и у старых строк; при замене и оспаривании в одной строке — `replaced`.</summary>
 public sealed record WikiJournalEntryDto(
     DateTimeOffset Ts, string Op, string Section, string Actor,
     string? Source, string? Origin, string? SourceName,
     IReadOnlyList<string> Pages, IReadOnlyList<string> Packages,
-    string? Status, string? Policy, IReadOnlyList<string> Classes);
+    string? Status, string? Policy, IReadOnlyList<string> Classes,
+    bool OverrodeHuman = false, string? OverrodeKind = null);
 
 /// <summary>Окно журнала. take — фактическое окно после обрезки (запрошенное выше потолка
 /// урезается); linesRead — сколько строк журнала реально прочитано (мера того, что хвост

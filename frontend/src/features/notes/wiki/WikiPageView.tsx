@@ -24,14 +24,20 @@
 // (хвост S2f) — плашка общая, как в каталоге (WikiTab.OrphanNotice).
 
 import { useMemo, useState } from 'react';
+import type { MouseEvent, KeyboardEvent } from 'react';
 import type { ReactNode } from 'react';
-import { AlertTriangle, ChevronLeft, Lock, Quote, ScrollText } from 'lucide-react';
-import { C, FONT, FS, R, SP, useIsMobile, WikiError, adoptWikiPage, useWikiPage, type WikiSectionDto } from 'aihome_shell/kit';
+import { AlertTriangle, CheckCircle2, ChevronLeft, Lock, Pencil, Quote, ScrollText, Sparkles, Undo2 } from 'lucide-react';
+import { C, FONT, FS, R, SP, useIsMobile, useFeature, FLAGS, WikiError, adoptWikiPage, useWikiPage, wikiAuthorshipOf, wikiFootnoteLabel, wikiOverridesOf, normWikiStatement, type WikiAuthorship, type WikiOverrideDto, type WikiPageOverriddenDto, type WikiSectionDto } from 'aihome_shell/kit';
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
 import { Notice } from '../../../components/ui/Notice';
+import { PressableArea } from '../../../components/ui/PressableArea';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { PAGE_STATUS, PAGE_TYPE, sectionPrefix, wikiErrorText } from './wikiLabels';
+import { fmtDayMonth, WikiFootnotePopover, type FootnoteView } from './WikiFootnotePopover';
+import { WikiPageEditor, type EditDone } from './WikiPageEditor';
+import { EDIT_TEXT, NOTES_TEXT, OVERRIDE_TEXT, PAGE_STATUS, PAGE_TYPE, READONLY_TEXT, sectionPrefix, wikiErrorText } from './wikiLabels';
+import { extractNotes, WikiNotesSection } from './WikiNotesSection';
+import { useRestoreWikiStatement } from './useRestoreWikiStatement';
 
 // ─── Разбор страницы (зеркало бэкового WikiPage.Parse, терпимый) ───
 
@@ -130,7 +136,30 @@ function fmtDate(s: string): string {
 
 // Строка содержания: [^sN] → надстрочник-маркер с цитатой в title; [[X]] → текст без
 // скобок (открытие по ссылке — не этот шаг). Полный markdown-рендер — S5e
-function renderLine(line: string, quotes: Map<string, string>, keyBase: string): ReactNode[] {
+// Со включённым авторством (F3a) сноска — нажимаемая плашка: у ИИ прежний номер, у человека
+// «✎ имя, дата»; клик открывает поповер. Без fnx — прежний надстрочник.
+interface FootnoteUi { views: Map<string, FootnoteView>; onOpen: (v: FootnoteView, el: HTMLElement) => void }
+
+function FootnotePlate({ v, ui }: { v: FootnoteView; ui: FootnoteUi }) {
+  const open = (e: MouseEvent | KeyboardEvent) => ui.onOpen(v, e.currentTarget as HTMLElement);
+  return (
+    <PressableArea
+      onPress={open}
+      aria-haspopup="dialog"
+      aria-label={v.human ? `Сноска: правка человека, ${fmtDayMonth(v.captured)}` : `Сноска ${v.label}`}
+      data-testid="wiki-footnote"
+      style={{
+        display: 'inline-flex', alignItems: 'center', verticalAlign: 'baseline', minHeight: 22, padding: '0 6px',
+        margin: '0 2px', borderRadius: R.sm, fontSize: FS.xxs, fontWeight: 700, whiteSpace: 'nowrap',
+        color: v.human ? C.textSecondary : C.info, background: v.human ? C.bgSelected : C.infoBg,
+      }}
+    >
+      {v.human ? `✎ ${v.author ?? 'вы'}${v.captured ? `, ${fmtDayMonth(v.captured)}` : ''}` : v.label}
+    </PressableArea>
+  );
+}
+
+function renderLine(line: string, quotes: Map<string, string>, keyBase: string, ui?: FootnoteUi): ReactNode[] {
   const parts: ReactNode[] = [];
   let last = 0;
   let k = 0;
@@ -138,7 +167,10 @@ function renderLine(line: string, quotes: Map<string, string>, keyBase: string):
   let m: RegExpExecArray | null;
   while ((m = INLINE_RX.exec(line))) {
     if (m.index > last) parts.push(line.slice(last, m.index));
-    if (m[1] !== undefined) {
+    const view = m[1] !== undefined ? ui?.views.get(m[1]) : undefined;
+    if (view && ui) {
+      parts.push(<FootnotePlate key={`${keyBase}-fn${k++}`} v={view} ui={ui} />);
+    } else if (m[1] !== undefined) {
       parts.push(
         <sup key={`${keyBase}-fn${k++}`} title={quotes.get(m[1]) ?? m[1]} style={{ color: C.accent, fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap' }}>
           {m[1]}
@@ -153,6 +185,47 @@ function renderLine(line: string, quotes: Map<string, string>, keyBase: string):
   return parts;
 }
 
+// ─── Метки замен (F3b) ───
+
+// Сравнение строки страницы с утверждением из overrides[] — общая нормализация из kit
+export const normStatement = normWikiStatement;
+
+// Что дорисовать у строки: метка у действующего утверждения / подпись у прежней строки «Истории»
+export interface LineMarks {
+  tags: Map<string, { kind: 'replaced' | 'disputed'; at: string }>;
+  history: Set<string>;
+}
+
+function buildMarks(overrides: WikiOverrideDto[]): LineMarks | undefined {
+  if (!overrides.length) return undefined;
+  const marks: LineMarks = { tags: new Map(), history: new Set() };
+  for (const o of overrides) {
+    if (o.op === 'supersede') {
+      if (o.statement) marks.tags.set(normStatement(o.statement), { kind: 'replaced', at: o.at });
+      if (o.previous) marks.history.add(normStatement(o.previous));
+    } else if (o.target) {
+      // Спор: метка у живой строки человека (target), а не у довода ИИ в «Противоречиях»;
+      // нет target — на строках метки нет, остаётся плашка сверху
+      marks.tags.set(normStatement(o.target), { kind: 'disputed', at: o.at });
+    }
+  }
+  return marks;
+}
+
+function MarkTag({ kind, at }: { kind: 'replaced' | 'disputed'; at: string }) {
+  const replaced = kind === 'replaced';
+  return (
+    <span
+      data-testid="wiki-override-tag"
+      data-kind={kind}
+      title={replaced ? 'Метка видна 14 дней после замены' : undefined}
+      style={{ marginLeft: SP.xs, fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap', color: replaced ? C.info : C.warningText }}
+    >
+      {replaced ? `${OVERRIDE_TEXT.replacedTag} · ${fmtDayMonth(at)}` : `⚠ ${OVERRIDE_TEXT.disputedTag}`}
+    </span>
+  );
+}
+
 // ─── Куски страницы ───
 
 // Пункт строки: маркер списка («- ») за собой не повторяем
@@ -163,10 +236,12 @@ const EMPTY_HINT: Record<string, string> = {
   История: 'Ничего не замещено.',
 };
 
-function SectionBlock({ name, lines, quotes }: {
+function SectionBlock({ name, lines, quotes, ui, marks }: {
   name: string;
   lines: string[];
   quotes: Map<string, string>;
+  ui?: FootnoteUi;
+  marks?: LineMarks;
 }) {
   return (
     <section data-testid="wiki-section" data-section-name={name} style={{ marginTop: SP.lg }}>
@@ -178,7 +253,16 @@ function SectionBlock({ name, lines, quotes }: {
         <ul style={{ margin: `${SP.sm}px 0 0`, paddingLeft: SP.lg, display: 'flex', flexDirection: 'column', gap: SP.sm }}>
           {lines.map((ln, i) => (
             <li key={i} style={{ fontSize: FS.md, color: C.textPrimary, lineHeight: 1.5, overflowWrap: 'anywhere' }}>
-              {renderLine(ln.replace(BULLET_RX, ''), quotes, `s${i}`)}
+              {renderLine(ln.replace(BULLET_RX, ''), quotes, `s${i}`, ui)}
+              {marks && name !== 'История' && (() => {
+                const t = marks.tags.get(normStatement(ln));
+                return t ? <MarkTag kind={t.kind} at={t.at} /> : null;
+              })()}
+              {marks && name === 'История' && marks.history.has(normStatement(ln)) && (
+                <span data-testid="wiki-history-caption" style={{ marginLeft: SP.xs, fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>
+                  · {OVERRIDE_TEXT.historyCaption}
+                </span>
+              )}
             </li>
           ))}
         </ul>
@@ -217,6 +301,13 @@ function SourcesBlock({ footnotes }: { footnotes: ParsedWikiPage['footnotes'] })
   );
 }
 
+// Сводный бейдж авторства страницы (записка макета, §3)
+const AUTHORSHIP_BADGE: Record<WikiAuthorship, string> = {
+  ai: 'Ведёт ИИ',
+  together: 'Ведёте вместе',
+  human: 'Написали вы',
+};
+
 // ─── Страница ───
 
 interface Props {
@@ -234,6 +325,11 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
   const page = useMemo(() => parseWikiPage(content), [content]);
   const [adoptBusy, setAdoptBusy] = useState(false);
   const [adoptError, setAdoptError] = useState<unknown>(null);
+  // Авторство и поповер сносок — только с флагом единых «Заметок и Вики» и включённой вики
+  const unifiedFlag = useFeature(FLAGS.notesWikiUnified);
+  const wikiFlag = useFeature(FLAGS.llmWiki);
+  const unified = unifiedFlag && wikiFlag;
+  const [openFn, setOpenFn] = useState<{ view: FootnoteView; anchor: DOMRect | null; pageId: string } | null>(null);
 
   // Дрейф — поле ответа (его считает бэк сверкой файла с манифестом). Шапка status: drift
   // — текст модели, не сигнал: плашка и кнопка по ней не поднимаются (ревью S5b M1)
@@ -242,10 +338,55 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
   const drift = dto?.drift === true;
   const quotes = new Map(page.footnotes.map(f => [f.id, f.quote]));
 
+  // Сноски с происхождением (footnotes[] страницы, B7); нет поля — прежний вид
+  const authored = dto as WikiPageOverriddenDto | null;
+  const pageId = `${section.key}\n${pageKey}`;
+  const footnoteUi = useMemo<FootnoteUi | undefined>(() => {
+    if (!unified || !authored?.footnotes?.length) return undefined;
+    const views = new Map<string, FootnoteView>();
+    for (const f of authored.footnotes) {
+      const label = wikiFootnoteLabel(f.label);
+      views.set(label, {
+        label, card: f.card, cardPage: f.cardPage ?? null, human: f.origin === 'human', author: f.author ?? null,
+        captured: f.captured ?? null, quote: page.footnotes.find(p => p.id === label)?.quote ?? '',
+      });
+    }
+    return { views, onOpen: (view, el) => setOpenFn({ view, anchor: el.getBoundingClientRect(), pageId }) };
+  }, [unified, authored?.footnotes, page.footnotes, pageId]);
+  // Поповер принадлежит странице, на которой открыт: со сменой страницы он не показывается
+  const popFn = openFn && openFn.pageId === pageId ? openFn : null;
+  const authorship: WikiAuthorship = wikiAuthorshipOf(authored ?? {});
+  // Замены и споры за 14 дней — окно считает сервер; без флага метки не рисуем
+  const overrides = useMemo(() => (unified ? wikiOverridesOf(authored) : []), [unified, authored]);
+  const marks = useMemo(() => buildMarks(overrides), [overrides]);
+  const restorer = useRestoreWikiStatement(section.key, pageKey);
+
   // «О чём» — не секция-заголовок, а строка-описание под заголовком (макет «Хроника»)
   const aboutSection = isChronicle ? page.sections.find(s => s.name === 'О чём') : undefined;
-  const bodySections = isChronicle ? page.sections.filter(s => s.name !== 'О чём') : page.sections;
+  // С единым режимом «Заметки» — своя секция (последняя, со своими состояниями); без него — как все
+  const bodySections = page.sections.filter(s => !(isChronicle && s.name === 'О чём') && !(unified && s.name === NOTES_TEXT.section));
   const aboutText = aboutSection?.lines.map(l => l.replace(BULLET_RX, '')).join(' ') || page.summary;
+
+  // Правка (F4a): состояние привязано к странице — со сменой страницы оно сбрасывается само
+  const [editUi, setEditUi] = useState<{ id: string; editing: boolean; off: boolean; flash: 'saved' | 'unchanged' | 'restored' | null }>(
+    { id: pageId, editing: false, off: false, flash: null },
+  );
+  const ui = editUi.id === pageId ? editUi : { id: pageId, editing: false, off: false, flash: null };
+  const canEdit = unified && !ui.off && !!authored?.hash && !isChronicle && !drift && !section.orphan && !section.local && !section.sphereReserved;
+  const editing = canEdit && ui.editing;
+  const canRestore = canEdit && !editing && !!authored?.hash;
+  const runRestore = (o: WikiOverrideDto) => {
+    if (!authored?.hash) return;
+    void restorer.restore(o, authored.hash).then(r => {
+      if (r === 'done' || r === 'unchanged') {
+        setEditUi({ id: pageId, editing: false, off: false, flash: r === 'done' ? 'restored' : 'unchanged' });
+      }
+    });
+  };
+  const onEditDone = (r: EditDone) => setEditUi({
+    id: pageId, editing: false, off: r.kind === 'off',
+    flash: r.kind === 'saved' ? 'saved' : r.kind === 'unchanged' ? 'unchanged' : null,
+  });
 
   // Страницы в сторе нет — её ещё читают: родитель держит свой спиннер, здесь рендерить нечего
   if (!dto) return null;
@@ -281,6 +422,59 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
           Удалить раздел — из каталога, кнопкой «Назад».
         </Notice>
       )}
+
+      {ui.flash && (
+        <div data-testid="wiki-edit-flash" style={{ marginTop: SP.md }}>
+          <Notice tone="info" icon={CheckCircle2} title={ui.flash === 'saved' ? EDIT_TEXT.saved : ui.flash === 'restored' ? OVERRIDE_TEXT.restored : EDIT_TEXT.unchanged} />
+        </div>
+      )}
+
+      {ui.off && (
+        <div data-testid="wiki-edit-off" style={{ marginTop: SP.md }}>
+          <Notice tone="danger" icon={AlertTriangle} title={EDIT_TEXT.offTitle}>{EDIT_TEXT.offText}</Notice>
+        </div>
+      )}
+
+      {overrides.map(o => o.op === 'supersede' ? (
+        <div key={o.packageId} data-testid="wiki-override-replaced" style={{ marginTop: SP.md }}>
+          <Notice
+            tone="info"
+            icon={Sparkles}
+            title={OVERRIDE_TEXT.replacedTitle}
+            action={o.previous !== null && canRestore ? (
+              <Button
+                variant="secondary"
+                size={isMobile ? 'md' : 'sm'}
+                dataTestId="wiki-restore-btn"
+                leftIcon={<Undo2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+                loading={restorer.busy}
+                onClick={() => runRestore(o)}
+              >
+                {OVERRIDE_TEXT.restore}
+              </Button>
+            ) : undefined}
+          >
+            {fmtDayMonth(o.at)}. {OVERRIDE_TEXT.replacedText}
+          </Notice>
+        </div>
+      ) : (
+        <div key={o.packageId} data-testid="wiki-override-disputed" style={{ marginTop: SP.md }}>
+          <Notice tone="warning" icon={AlertTriangle} title={OVERRIDE_TEXT.disputedTitle}>
+            {OVERRIDE_TEXT.disputedText}
+          </Notice>
+        </div>
+      ))}
+
+      {restorer.error ? (
+        <div data-testid="wiki-restore-error" style={{ marginTop: SP.sm }}>
+          <Notice
+            tone="danger"
+            icon={AlertTriangle}
+            title={restorer.error}
+            action={<Button variant="ghost" size="sm" onClick={restorer.clearError}>Закрыть</Button>}
+          />
+        </div>
+      ) : null}
 
       {drift && (
         <Notice
@@ -362,6 +556,28 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
         </p>
       ) : null}
 
+      {unified && (
+        <div data-testid="wiki-authorship" data-authorship={authorship} style={{ marginTop: SP.xs }}>
+          <Badge tone={authorship === 'human' ? 'neutral' : 'info'} size="xs">
+            {AUTHORSHIP_BADGE[authorship]}
+          </Badge>
+        </div>
+      )}
+
+      {canEdit && !editing && (
+        <div style={{ marginTop: SP.sm }}>
+          <Button
+            variant="secondary"
+            size={isMobile ? 'md' : 'sm'}
+            dataTestId="wiki-edit-open"
+            leftIcon={<Pencil size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+            onClick={() => setEditUi({ id: pageId, editing: true, off: false, flash: null })}
+          >
+            {EDIT_TEXT.edit}
+          </Button>
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: SP.md, flexWrap: 'wrap', marginTop: SP.sm, fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
           <Quote size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
@@ -371,7 +587,25 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
         {page.aliases.length > 0 && <span>aliases: {page.aliases.join(', ')}</span>}
       </div>
 
-      {/* Плашка «только чтение» — тихая строка, не Notice (макет): правки идут через Хранителя */}
+      {editing && authored?.hash ? (
+        <WikiPageEditor
+          key={pageId}
+          section={section}
+          pageKey={pageKey}
+          content={content}
+          hash={authored.hash}
+          footnotes={authored.footnotes}
+          onDone={onEditDone}
+        />
+      ) : (
+        <>
+      {/* Плашка «только чтение» — тихая строка, не Notice (макет). При доступной правке
+          (оба флага и страница правится) её нет: она противоречила бы кнопке «Править»
+          (дефект QA a16c6167). Она остаётся без флагов (прежний вид) и там, где править
+          нельзя: хроника — свой текст; локальный раздел / сфера — «нельзя править здесь»
+          с причиной отказа (тексты — в wikiLabels); прочие случаи (дрейф, сирота, правка
+          выключена) — прежний текст про Хранителя, он там верен */}
+      {!canEdit && (
       <div data-testid="wiki-readonly" style={{ display: 'flex', gap: SP.sm, alignItems: 'flex-start', marginTop: SP.md, padding: `${SP.sm}px ${SP.md}px`, background: C.bgInset, borderRadius: R.md, fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.45 }}>
         <Lock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden style={{ flexShrink: 0, marginTop: 2, color: C.textMuted }} />
         <span>
@@ -379,6 +613,11 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
             <>
               <b style={{ color: C.textHeading }}>Хроника пишется сама</b> каждую ночь, когда в чате
               появилось новое. Неверное — откатите чат целиком: чат получит пометку «Не разбирать».
+            </>
+          ) : unified && (section.local || section.sphereReserved) ? (
+            <>
+              <b style={{ color: C.textHeading }}>{READONLY_TEXT.blockedTitle}</b> —{' '}
+              {section.local ? READONLY_TEXT.localReason : READONLY_TEXT.sphereReason}.
             </>
           ) : (
             <>
@@ -389,6 +628,7 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
           )}
         </span>
       </div>
+      )}
 
       {page.strayLines.length > 0 && (
         <div style={{ marginTop: SP.md, fontSize: FS.md, color: C.textPrimary, lineHeight: 1.5, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
@@ -397,10 +637,31 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
       )}
 
       {bodySections.map(s => (
-        <SectionBlock key={s.name} name={s.name} lines={s.lines} quotes={quotes} />
+        <SectionBlock key={s.name} name={s.name} lines={s.lines} quotes={quotes} ui={footnoteUi} marks={marks} />
       ))}
 
+      {unified && !isChronicle && (
+        <WikiNotesSection
+          text={extractNotes(content) ?? ''}
+          canWrite={canEdit}
+          isMobile={isMobile}
+          onWrite={() => setEditUi({ id: pageId, editing: true, off: false, flash: null })}
+        />
+      )}
+
       {page.footnotes.length > 0 && <SourcesBlock footnotes={page.footnotes} />}
+        </>
+      )}
+
+      {popFn && (
+        <WikiFootnotePopover
+          sectionKey={section.key}
+          pageKey={pageKey}
+          fn={popFn.view}
+          anchor={popFn.anchor}
+          onClose={() => setOpenFn(null)}
+        />
+      )}
     </div>
   );
 }

@@ -76,6 +76,28 @@ public static class WikiApplyPolicy
         /// политику не спрашивает.
         public IReadOnlyDictionary<string, DateTimeOffset> RecentlyRevertedPages { get; init; }
             = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+
+        /// <summary>Время написания источника НОВОГО утверждения (поле written его карточки,
+        /// ADR-038, решение 4). null — неизвестно: правило замены (B4c) уводит такую замену
+        /// во «Входящие». Заполняет вызывающий; в B4a поле только несётся.</summary>
+        public DateTimeOffset? NewSourceTime { get; init; }
+
+        /// <summary>Последняя правка человека по странице: путь → время (журнал: actor user,
+        /// op edit|restore; WikiJournalReader.ReadLastHumanEdits). Отдельный механизм от отката
+        /// (RecentlyRevertedPages, N7d): откат гейтит все операции на 7 дней, правка — только
+        /// замены и без срока. Пусто — правок человека нет или журнал нечитаем.</summary>
+        public IReadOnlyDictionary<string, DateTimeOffset> LastHumanEditAt { get; init; }
+            = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+
+        /// <summary>Самое новое время среди источников утверждения-цели замены: written карточки,
+        /// у карточки human — captured. null — неизвестно у хотя бы одного источника или сносок
+        /// у цели нет (fail-closed: замена без времени цели не применяется сама). Определяет
+        /// код (валидатор) по сноскам страницы СЕЙЧАС, не модель.</summary>
+        public DateTimeOffset? TargetSourceTime { get; init; }
+
+        /// <summary>Автор цели supersede/conflict по сноскам утверждения: WikiPackage.AuthorHuman |
+        /// AuthorAi; null — операция не замена. Определяет код (валидатор), не модель.</summary>
+        public string? TargetAuthor { get; init; }
     }
 
     /// Счётчики ночи для проверки лимитов (мера 3). Каждый считает текущий элемент вместе
@@ -123,10 +145,12 @@ public static class WikiApplyPolicy
             return Inbox($"страницу откатили вручную {revertedAt:yyyy-MM-dd}: автоприменение не меняет её {RevertQuarantineDays} дней");
 
         // 3. Риски — по строкам таблицы §12г.
-        if (op.Op == WikiPackage.OpSupersede)
-            return Inbox("замещение действующего утверждения: меняет то, что агенты уже считают правдой");
-        if (op.Op == WikiPackage.OpConflict)
-            return Inbox("пометка противоречия понижает доверие страницы: модель часто путает уточнение с противоречием");
+        // Замена и оспаривание (ADR-038, решение 4): само — только если новый источник новее и
+        // заменяемого утверждения, и последней правки человека на странице. Правило одно для
+        // целей ai и human: ветки по автору цели нет (автор влияет на класс, не на условия).
+        if (op.Op is WikiPackage.OpSupersede or WikiPackage.OpConflict
+            && ReplacementBlocker(op, context) is { } blocker)
+            return Inbox(blocker);
         if (op.Op == WikiPackage.OpCreate && !context.TargetIsChronicle)
         {
             if (context.PageDuplicate is { } dup)
@@ -163,6 +187,22 @@ public static class WikiApplyPolicy
         return new(true, null);
     }
 
+    // Правило замены, условия 1, 4, 2–3 (условия 5–7 — карантин N7d, класс и общие риски — стоят
+    // в Decide до и после). Первое невыполненное — причина. Строго «новее»: равные времена —
+    // не новее (half-open: источник того же момента не замещает).
+    private static string? ReplacementBlocker(WikiPackage.Operation op, ApplyContext context)
+    {
+        if (context.NewSourceTime is not { } source)
+            return "Неизвестно, когда написан источник: замена без времени источника не применяется сама";
+        if (context.LastHumanEditAt.TryGetValue(op.Page, out var editedAt) && source <= editedAt)
+            return $"Источник старше вашей правки ({editedAt:yyyy-MM-dd}): замена и оспаривание после неё идут через ревью";
+        if (context.TargetSourceTime is not { } target)
+            return "Неизвестно, когда написан источник утверждения: без этого не понять, какое из двух новее";
+        if (source <= target)
+            return "Источник не новее заменяемого утверждения: старый источник не стирает более свежее знание";
+        return null;
+    }
+
     // internal: ветка «вне известных» тестируется напрямую — Decide отсекает неизвестные
     // операции раньше, и она работает только для операции, добавленной в OpValues позже
     // (promote/graduate): молча «auto» ей быть нельзя (хвост ревью S4d).
@@ -176,6 +216,10 @@ public static class WikiApplyPolicy
             Auto("утверждение в «Сводку»/«Хронологию»: применяется само (§12г)"),
         WikiPackage.OpLink =>
             Auto("связь между страницами: применяется само (§12г)"),
+        WikiPackage.OpSupersede =>
+            Auto("замещение: источник новее заменяемого утверждения и вашей правки (ADR-038)"),
+        WikiPackage.OpConflict =>
+            Auto("оспаривание: источник новее оспариваемого утверждения и вашей правки (ADR-038)"),
         _ =>
             Inbox($"операция «{op.Op ?? "—"}» вне известных автоприменению: её риска политика не знает"),
     };
@@ -184,14 +228,10 @@ public static class WikiApplyPolicy
 
     // Класс правки — ключ «origin × op» (WikiPackage.ClassKey). Origin берётся из него же:
     // второй источник origin у операции нет. Кривой ключ (не две части, origin вне перечня,
-    // op не совпадает с операцией) — null: вызывающий решает это как fail-closed.
-    private static string? OriginOf(string classKey, string op)
-    {
-        var parts = classKey.Split('×');
-        if (parts.Length != 2 || parts[1] != op || !WikiGate.OriginValues.Contains(parts[0]))
-            return null;
-        return parts[0];
-    }
+    // op не совпадает с операцией) — null: вызывающий решает это как fail-closed. Разбор —
+    // WikiPackage.ParseClassKey, он же понимает хвост «@human» (цель — утверждение человека).
+    private static string? OriginOf(string classKey, string op) =>
+        WikiPackage.ParseClassKey(classKey) is { } parsed && parsed.Op == op ? parsed.Origin : null;
 
     private static Verdict Inbox(string reason) => new(WikiPackage.DecisionInbox, reason);
 }

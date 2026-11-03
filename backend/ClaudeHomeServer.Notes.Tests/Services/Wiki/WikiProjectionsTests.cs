@@ -194,4 +194,67 @@ public class WikiProjectionsTests : IDisposable
         entries[1].Should().Contain("Проекты/p1/A.md");
         string.Join("\n", entries).Should().NotContain("мусор");
     }
+
+    // —— B1 (ADR-038): признак авторства страницы по сноскам ——
+
+    private static string Card(string title, string origin) =>
+        $"---\ntype: source\nsummary: к\norigin: {origin}\nref: x:1\nhash: h\ncaptured: 2026-11-02\nstatus: active\n---\n\n# {title}\n";
+
+    private static string PageWith(string title, params string[] cards)
+    {
+        var swodka = string.Join("\n", cards.Select((c, i) => $"- Утверждение {i + 1}.[^s{i + 1}]"));
+        var foots = string.Join("\n", cards.Select((c, i) => $"[^s{i + 1}]: [[{c}]] — «цитата номер {i + 1} длинная»"));
+        return $"---\ntype: entity\nsummary: с\nstatus: active\n---\n\n# {title}\n\n## Сводка\n{swodka}\n\n## Хронология\n\n## Противоречия\n\n## История\n\n{foots}\n";
+    }
+
+    [Fact]
+    public void Авторство_ИИВместеЧеловек_ПоСноскам_КарточкиНеСчитаются()
+    {
+        var state = new List<WikiGate.Draft>
+        {
+            new("Общее/Источники/А.md", Card("А", "session")),
+            new("Общее/Источники/Я.md", Card("Я", "human")),
+            new("Общее/Ии.md", PageWith("Ии", "А")),
+            new("Общее/Вместе.md", PageWith("Вместе", "А", "Я")),
+            new("Общее/Чел.md", PageWith("Чел", "Я")),
+            new("Общее/Пусто.md", PageWith("Пусто")),
+        };
+        var res = WikiProjections.Authorship(state);
+        res["Общее/Ии.md"].Should().Be(WikiProjections.AuthorshipAi);
+        res["Общее/Вместе.md"].Should().Be(WikiProjections.AuthorshipTogether);
+        res["Общее/Чел.md"].Should().Be(WikiProjections.AuthorshipHuman);
+        res["Общее/Пусто.md"].Should().Be(WikiProjections.AuthorshipAi);
+        res.Keys.Should().NotContain(k => k.Contains("Источники"));
+    }
+
+    [Fact]
+    public void Авторство_СноскаТолькоВИстории_НеСчитается()
+    {
+        // Мутация «считать и «Историю»»: страница с human-сноской только в «Истории» станет
+        // together (Ии2) / human (Ист) — оба Be краснеют.
+        string History(string title, string actual, string past) =>
+            $"---\ntype: entity\nsummary: с\nstatus: active\n---\n\n# {title}\n\n## Сводка\n- Действующее.[^s1]\n\n## Хронология\n\n## Противоречия\n\n## История\n- Снято.[^s2]\n\n[^s1]: [[{actual}]] — «цитата номер один длинная»\n[^s2]: [[{past}]] — «цитата номер два длинная»\n";
+        var state = new List<WikiGate.Draft>
+        {
+            new("Общее/Источники/А.md", Card("А", "session")),
+            new("Общее/Источники/Я.md", Card("Я", "human")),
+            new("Общее/Ии2.md", History("Ии2", "А", "Я")),
+            new("Общее/Чел2.md", History("Чел2", "Я", "А")),
+        };
+        var res = WikiProjections.Authorship(state);
+        res["Общее/Ии2.md"].Should().Be(WikiProjections.AuthorshipAi);
+        res["Общее/Чел2.md"].Should().Be(WikiProjections.AuthorshipHuman, "ИИ-сноска в «Истории» не делает страницу «вместе»");
+    }
+
+    [Fact]
+    public void Footnotes_CardPage_ЭтоPageKeyКарточки_ДляНеНайденной_Null()
+    {
+        const string card = "---\ntype: source\nsummary: к\norigin: session\nref: x:1\nhash: h\ncaptured: 2026-11-02\nstatus: active\n---\n\n# Моя заметка\n";
+        const string body = "---\ntype: entity\nsummary: с\nstatus: active\n---\n\n# А\n\n## Сводка\n- Факт.[^s1] Ещё.[^s2]\n\n## Хронология\n\n## Противоречия\n\n## История\n\n[^s1]: [[Моя заметка]] — «цитата номер один»\n[^s2]: [[Нет карточки]] — «цитата номер два»\n";
+        var cards = WikiProjections.Cards([new WikiGate.Draft("Общее/Источники/Моя заметка.md", card)]);
+        var foots = WikiProjections.Footnotes(WikiPage.Parse(body).Model!, cards);
+        foots[0].Card.Should().Be("Моя заметка", "card остаётся заголовком");
+        foots[0].CardPage.Should().Be("Общее/Источники/Моя заметка.md");
+        foots[1].CardPage.Should().BeNull("карточки нет");
+    }
 }

@@ -119,6 +119,29 @@ public static class WikiPackageStore
         });
     }
 
+    /// <summary>Пакет автора human (правка человека, ADR-038): рождается сразу в `accepted` —
+    /// человек уже решил, проверять и спрашивать нечего — и вне лимита открытых: «Входящие»,
+    /// забитые ночным разбором, не должны не пускать владельца править свою вики. Форма и
+    /// уникальность id проверяются как у Create.</summary>
+    public static WikiPackageOpResult CreateHuman(string root, WikiPackage package)
+    {
+        if (package.Author != WikiPackage.AuthorHuman)
+            return Fail(CodeShape, "CreateHuman — только для пакета автора human");
+        if (!WikiPackage.IsSafeId(package.Id))
+            return Fail(CodeShape, "id пакета не GUID");
+        if (package.Status != WikiPackage.StatusAccepted)
+            return Fail(CodeShape, $"пакет human рождается в «{WikiPackage.StatusAccepted}», а не в «{package.Status}»");
+        var errors = WikiPackage.ShapeErrors(package);
+        if (errors.Count > 0)
+            return Fail(CodeShape, errors[0]);
+        if (System.IO.File.Exists(PathOf(root, package.Id)))
+            return Fail(CodeExists, "пакет с таким id уже есть");
+        var now = DateTimeOffset.UtcNow;
+        var created = package with { StatusReason = null, CreatedAt = now, UpdatedAt = now };
+        Write(root, created);
+        return Ok(created);
+    }
+
     /// <summary>Прочитать пакет. Missing — файла нет (нормально для чужого id);
     /// Valid — карточка; Invalid — файл есть, но не читается как пакет v:1: пустой, битый
     /// JSON или не прошедший проверку формы. Ничего не применяется, список не падает.</summary>

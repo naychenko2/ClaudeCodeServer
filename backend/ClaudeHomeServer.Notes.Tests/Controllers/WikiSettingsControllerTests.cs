@@ -9,6 +9,7 @@ using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Infrastructure;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -246,6 +247,43 @@ public class WikiSettingsControllerTests : IDisposable
         dto.LastNight.Should().BeNull();
     }
 
+    // ─── B2b: сервисный токен (typ=svc) — PUT 403, GET остаётся 200 ────────────
+
+    // Мутация (критерий c2): убрать проверку IsServiceToken в Put — этот тест падает
+    // (PUT дошёл бы до записи и вернул 200 с файлом).
+    [Fact]
+    public void PUT_СервисныйТокен_403_ФайлНеСоздан()
+    {
+        var put = Controller(svc: true).Put(new WikiSettingsRequest { Nightly = new() { Enabled = true } });
+
+        ((IStatusCodeActionResult)put.Result!).StatusCode.Should().Be(403);
+        File.Exists(SettingsPath()).Should().BeFalse("отказ до любой записи: ни байта на диске");
+    }
+
+    // Отказ по типу токена не зависит от состояния: он раньше флага и раньше валидации
+    // тела — при выключенной функции и при пустом теле ответ тот же 403.
+    [Fact]
+    public void PUT_СервисныйТокенПриВыключенномФлаге_403ПоТокену_АНе409()
+    {
+        _flags.Enabled = false;
+
+        var put = Controller(svc: true).Put(new WikiSettingsRequest { Nightly = new() { Enabled = true } });
+
+        ((IStatusCodeActionResult)put.Result!).StatusCode.Should().Be(403,
+            "отказ по типу токена раньше состояния: по ответу нельзя узнать, включена ли функция");
+        File.Exists(SettingsPath()).Should().BeFalse();
+    }
+
+    // Чтение под svc остаётся 200: отказ — только мутирующих ручек (контракт B2b).
+    [Fact]
+    public async Task GET_СервисныйТокен_200_НастройкиЧитаются()
+    {
+        var res = await Controller(svc: true).Get();
+
+        var dto = (WikiSettingsDto)((OkObjectResult)res.Result!).Value!;
+        dto.Nightly.InputTokenBudget.Should().Be(700_000);
+    }
+
     // ─── построение состояния ───────────────────────────────────────────────────
 
     private string Root() => WikiPaths.Root(_dir, User);
@@ -258,10 +296,14 @@ public class WikiSettingsControllerTests : IDisposable
         File.WriteAllText(LastNightPath(), json, new UTF8Encoding(false));
     }
 
-    private WikiSettingsController Controller(string user = User)
+    private WikiSettingsController Controller(string user = User, bool svc = false)
     {
         var http = new DefaultHttpContext();
-        http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", user)], "test"));
+        var identity = new ClaimsIdentity([new Claim("sub", user)], "test");
+        // Сервисный токен хода (typ=svc) — тот же claim-литерал, что выдаёт JwtService;
+        // MapInboundClaims=false оставляет raw-имена, как в бою.
+        if (svc) identity.AddClaim(new Claim("typ", "svc"));
+        http.User = new ClaimsPrincipal(identity);
         return new WikiSettingsController(_health, _flags, _config)
         {
             ControllerContext = new ControllerContext { HttpContext = http },

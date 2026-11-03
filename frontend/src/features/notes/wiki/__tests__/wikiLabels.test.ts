@@ -5,9 +5,15 @@
 // Согласование по числу (countWord, W4-3): формы для чисел с краевыми случаями
 // правил (11–14 как 5+, 21 как 1, 22 как 2).
 
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { WikiError, type WikiErrorCode } from '../../../../lib/wiki';
-import { countWord, wikiErrorText } from '../wikiLabels';
+import {
+  INBOX_REASON_TEXT, INBOX_TEXT, countWord, isHumanTargetClass,
+  wikiErrorText, wikiInboxReasonCode, wikiInboxReasonText,
+} from '../wikiLabels';
 
 describe('тексты кодов разбора по требованию (S7b-0)', () => {
   it('каждый код имеет свой русский текст, отличный от чужих, а не сырой код и не общий fallback', () => {
@@ -66,5 +72,77 @@ describe('текст wiki_triage_invalid (R-W4-1)', () => {
   it('файл разбора чатов не читается — русским текстом, не общим fallback', () => {
     const t = wikiErrorText(new WikiError(409, 'wiki_triage_invalid', 'x'));
     expect(t).toBe('Файл разбора чатов не читается');
+  });
+});
+
+// ─── Причины «Входящих» (F6a) ───
+// Таблица «Входящие: причины правила замены» читается из файла ADR-038, а не копируется
+// в тест: тест сверяет классификатор и тексты с самим ADR (постановка F6a). Строки-префиксы
+// — левая колонка таблицы (зеркало строк WikiApplyPolicy.ReplacementBlocker и Decide),
+// тексты — правая колонка, дословно.
+
+const ADR_PATH = resolve(dirname(fileURLToPath(import.meta.url)),
+  '../../../../../../docs/adr/ADR-038-notes-wiki-human-ai-coauthoring.md');
+
+function adrReasonTable(): Array<{ prefix: string; label: string }> {
+  const adr = readFileSync(ADR_PATH, 'utf8');
+  const heading = '### «Входящие»: причины правила замены';
+  const start = adr.indexOf(heading);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const rest = adr.slice(start + heading.length);
+  const end = rest.indexOf('\n### ');
+  const section = end >= 0 ? rest.slice(0, end) : rest;
+  const quoted = (c: string): string => {
+    const a = c.indexOf('«');
+    const b = c.lastIndexOf('»');
+    return b > a ? c.slice(a + 1, b) : c;
+  };
+  // строки таблицы: обе колонки в «…»; «общий риск §12г» без кавычек — не причина
+  // правила замены, её здесь нет
+  return section
+    .split('\n')
+    .map(l => l.trim())
+    .filter(l => l.startsWith('| «'))
+    .map(l => l.split('|').map(c => c.trim()))
+    .filter(cs => cs.length >= 3 && cs[1].startsWith('«') && cs[2].startsWith('«'))
+    .map(cs => ({ prefix: quoted(cs[1]), label: quoted(cs[2]) }));
+}
+
+describe('причины «Входящих»: таблица сверяется с самим ADR-038 (F6a)', () => {
+  const rows = adrReasonTable();
+  const adr = readFileSync(ADR_PATH, 'utf8');
+
+  it('таблица ADR прочитана: шесть пунктов правила замены', () => {
+    expect(rows.length).toBe(6);
+  });
+
+  it('каждый пункт: причина с началом строки ADR показывается текстом пункта; текст — из ADR', () => {
+    for (const { prefix, label } of rows) {
+      expect(wikiInboxReasonCode(prefix)).not.toBeNull();
+      expect(wikiInboxReasonText(prefix)).toBe(label);
+      expect(adr).toContain(`«${label}»`);
+    }
+  });
+
+  it('тексты пунктов различны: подмена одного текста другим — провал', () => {
+    expect(new Set(rows.map(r => r.label)).size).toBe(rows.length);
+  });
+
+  it('запасной текст: нераспознанное начало и пустая причина — нейтральный, без сырой строки', () => {
+    const raw = 'целевая страница в статусе «disputed»: там уже нужен человек';
+    expect(wikiInboxReasonCode(raw)).toBeNull();
+    expect(wikiInboxReasonText(raw)).toBe(INBOX_TEXT.unknown);
+    expect(wikiInboxReasonText(null)).toBe(INBOX_TEXT.unknown);
+    expect(INBOX_TEXT.unknown).not.toContain('disputed');
+  });
+
+  it('подпись сверху списка — дословно из ADR-038', () => {
+    expect(adr).toContain(INBOX_TEXT.caption);
+  });
+
+  it('цель человека — по хвосту класса @human (ADR-038, раздел «Входящие»)', () => {
+    expect(isHumanTargetClass('session×supersede@human')).toBe(true);
+    expect(isHumanTargetClass('session×supersede')).toBe(false);
+    expect(isHumanTargetClass('')).toBe(false);
   });
 });

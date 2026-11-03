@@ -326,6 +326,85 @@ public class WikiPlanValidatorTests
         r.Waiting.Should().BeEmpty();
     }
 
+    // ─── B4a: класс и автор цели замены — по сноскам утверждения, не по ответу модели ──
+
+    [Theory]
+    [InlineData(WikiPackage.OpSupersede)]
+    [InlineData(WikiPackage.OpConflict)]
+    public void Validate_ЦельСоСноскойHuman_КлассСХвостомHuman_АвторЦелиHuman(string op)
+    {
+        var humanCard = ForeignCardFile.Replace("origin: session", "origin: human")
+            .Replace("ref: session:s0#m1-4", "ref: human:1");
+        var snapshot = new WikiGate.Draft[]
+            { new(CardPath, CardFile), new(ForeignCardPath, humanCard), new(PagePath, PageFile) };
+
+        var r = WikiPlanValidator.Validate(
+            Plan(Op(op, "Сущность", 0, "Прежний план был остаться на Windows")),
+            Claims(GoodClaim), Src, Section, [WikiSections.Common], snapshot, new());
+
+        r.Accepted.Should().ContainSingle().Which.Class.Should().Be("session×" + op + WikiPackage.HumanTargetSuffix);
+    }
+
+    [Fact]
+    public void Validate_ЦельСоСноскойИИ_КлассБезХвоста()
+    {
+        var r = Run(Plan(Op(WikiPackage.OpSupersede, "Сущность", 0, "Прежний план был остаться на Windows")));
+
+        r.Accepted.Should().ContainSingle().Which.Class.Should().Be("session×supersede");
+    }
+
+    // ─── B4c: время цели замены — из карточек сносок утверждения ──────────────
+
+    private static WikiPlanValidator.Result RunReplacement(
+        string targetCardFile, DateTimeOffset? newSource, string op = WikiPackage.OpSupersede)
+    {
+        var snapshot = new WikiGate.Draft[]
+            { new(CardPath, CardFile), new(ForeignCardPath, targetCardFile), new(PagePath, PageFile) };
+        return WikiPlanValidator.Validate(
+            Plan(Op(op, "Сущность", 0, "Прежний план был остаться на Windows")),
+            Claims(GoodClaim), Src, Section, [WikiSections.Common], snapshot,
+            new() { NewSourceTime = newSource });
+    }
+
+    private static string WithWritten(string cardFile, string written) =>
+        cardFile.Replace("captured: 2026-10-26", $"captured: 2026-10-26\nwritten: {written}");
+
+    [Fact]
+    public void Validate_Замена_ИсточникНовееЦели_Само_ИсточникСтарше_ВоВходящих()
+    {
+        var target = WithWritten(ForeignCardFile, "2026-10-01T00:00:00+00:00");
+
+        RunReplacement(target, DateTimeOffset.Parse("2026-10-02T00:00:00+00:00"))
+            .Accepted.Should().ContainSingle().Which.Decision.Should().Be(WikiPackage.DecisionAuto);
+        var older = RunReplacement(target, DateTimeOffset.Parse("2026-09-30T00:00:00+00:00")).Accepted.Single();
+        older.Decision.Should().Be(WikiPackage.DecisionInbox);
+        older.Reason.Should().Contain("не новее заменяемого");
+    }
+
+    [Fact]
+    public void Validate_Замена_КарточкаЦелиБезWritten_ВремяНеизвестно_ВоВходящих_NotCaptured()
+    {
+        // captured карточки цели (2026-10-26) старше источника, но он НЕ время написания: подставлять нельзя.
+        var op = RunReplacement(ForeignCardFile, DateTimeOffset.Parse("2026-12-01T00:00:00+00:00")).Accepted.Single();
+
+        op.Decision.Should().Be(WikiPackage.DecisionInbox);
+        op.Reason.Should().Contain("Неизвестно, когда написан источник утверждения");
+    }
+
+    [Fact]
+    public void Validate_Замена_ЦельЧеловека_ВремяЦели_ЭтоCaptured_ТеПравилаЧтоУИИ()
+    {
+        var human = ForeignCardFile.Replace("origin: session", "origin: human")
+            .Replace("ref: session:s0#m1-4", "ref: human:1");
+
+        var later = RunReplacement(human, DateTimeOffset.Parse("2026-10-27T00:00:00+00:00")).Accepted.Single();
+        var earlier = RunReplacement(human, DateTimeOffset.Parse("2026-10-25T00:00:00+00:00")).Accepted.Single();
+
+        later.Decision.Should().Be(WikiPackage.DecisionAuto);
+        later.Class.Should().EndWith(WikiPackage.HumanTargetSuffix);
+        earlier.Decision.Should().Be(WikiPackage.DecisionInbox);
+    }
+
     // ─── M2 (ревью S6b-2): дословность — только для сносок этого пакета ───────
 
     [Fact]
@@ -396,5 +475,44 @@ public class WikiPlanValidatorTests
             [Section], Snapshot(), new());
         self.Accepted.Should().BeEmpty();
         self.Rejected.Should().ContainSingle().Which.Reason.Should().Contain("цепочка вверх");
+    }
+
+    // ─── B1 (ADR-038): «Заметки» человека не мешают ai-плану, который их не трогает ──────────
+
+    [Fact]
+    public void Validate_СтраницаСЗаметкамиПланНеТрогаетЗаметки_ОперацияПринята()
+    {
+        // Мутация «без базы» (убрать baseState из WikiGate.Check в WikiPlanValidator): «Заметки»
+        // считаются новыми, операция страницы отклонена — HaveCount(1) и Rejected.BeEmpty краснеют.
+        var withNotes = PageFile + "\n\n## Заметки\nМоя мысль.\n";
+        var snapshot = new List<WikiGate.Draft>
+        {
+            new(CardPath, CardFile), new(ForeignCardPath, ForeignCardFile), new(PagePath, withNotes),
+        };
+
+        var r = WikiPlanValidator.Validate(
+            Plan(Op(WikiPackage.OpAppend, "Сущность", 0)), Claims(GoodClaim), Src, Section,
+            [WikiSections.Common], snapshot, new());
+
+        r.Accepted.Should().ContainSingle(op => op.Text == GoodClaim.Text);
+        r.Rejected.Should().BeEmpty();
+        r.Violations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Validate_КарточкаHumanУжеВРазделе_НарушениеНеШумит()
+    {
+        var human = ForeignCardFile.Replace("origin: session", "origin: human");
+        var snapshot = new List<WikiGate.Draft>
+        {
+            new(CardPath, CardFile), new(ForeignCardPath, human), new(PagePath, PageFile),
+        };
+
+        var r = WikiPlanValidator.Validate(
+            Plan(Op(WikiPackage.OpAppend, "Сущность", 0)), Claims(GoodClaim), Src, Section,
+            [WikiSections.Common], snapshot, new());
+
+        r.Accepted.Should().ContainSingle();
+        r.Violations.Should().BeEmpty("карточка human была в разделе до плана — ai её не создавал");
     }
 }

@@ -41,18 +41,24 @@ export {
   initializeWiki, adoptWikiPage, deleteWikiSection,
   listWikiPackages, decideWikiPackage, acceptAllWikiPackage,
   loadWikiJournal, retractWikiSource, getWikiHealth, runWikiLint,
-  analyzeWikiChat, loadWikiChatAnalyzeStatus, loadWikiChats, setWikiChatMark, ingestWikiNote,
+  analyzeWikiChat, loadWikiChatAnalyzeStatus, loadWikiChats, setWikiChatMark, ingestWikiNote, transferWikiNote,
+  adoptWikiPageMine,
   useWikiTree, useWikiCatalog, useWikiPage, useWikiPageGone,
   requestOpenWikiPage, consumeOpenWikiPage, useWikiOpenRequest,
   loadWikiSettings, useWikiSettings, putWikiNightly, putWikiAutoApply, resumeWikiApplyClass,
+  wikiAuthorshipOf, editWikiPage, wikiFootnoteLabel, loadWikiSourceCard,
+  restoreWikiPage, wikiOverridesOf, wikiHasReplacement, normWikiStatement, wikiActiveLines, useWikiReplacementDot,
 } from '../wiki';
 export type {
   WikiSectionDto, WikiPageInfoDto, WikiPackageDto, WikiPackageOperationDto,
   WikiApplyOutcomeDto, WikiDecisionDto, WikiJournalDto, WikiJournalEntryDto,
-  WikiRetractDto, WikiChatAnalyzeOk, WikiNoteIngestDto, WikiOpenRequest,
+  WikiRetractDto, WikiChatAnalyzeOk, WikiNoteIngestDto, WikiNoteTransferDto, WikiOpenRequest,
   WikiChatTriage, WikiChatMark,
   WikiSettingsSnapshot, WikiApplyClassDto, WikiNightlySettings, WikiLastNight, WikiPutNightlyResult,
   WikiNightlyPatch, WikiNightlyOutcome,
+  WikiAuthorship, WikiPageInfoAuthoredDto, WikiCatalogDto, WikiSourceCardInfo, WikiPageEditableDto, WikiConflictPage, WikiFootnoteDto,
+  WikiOverrideDto, WikiOverrideOp, WikiPageOverriddenDto, WikiOverrodeKind, WikiJournalEntryOverrideDto,
+  WikiAdoptMineResult,
 } from '../wiki';
 
 // ─── subsystems ──────────────────────────────────────────────────────────────

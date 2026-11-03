@@ -778,13 +778,21 @@ public sealed class WikiRetractService
         for (var k = 0; k < kept.Count; k++)
             remap[kept[k].OldId] = $"s{k + 1}";
 
+        // Формулировка человека, которую заместил откатываемый источник, возвращается из «Истории»
+        // на место замещавшего её утверждения (ADR-038, предохранитель 5), а не снимается вместе с ним.
+        var (restoreAt, restoredHistory) = PlanHumanRestores(parsed.Model, pkg, page, dropped, state.Drafts);
+
         var newSections = new List<WikiPage.Section>(parsed.Model.Sections.Count);
         foreach (var sec in parsed.Model.Sections)
         {
             var isAssertion = WikiPage.AssertionSectionNames.Contains(sec.Name);
+            var isHistory = sec.Name == HistorySectionName;
             var lines = new List<string>(sec.Lines.Count);
-            foreach (var line in sec.Lines)
+            for (var li = 0; li < sec.Lines.Count; li++)
             {
+                if (isHistory && restoredHistory.Contains(li))
+                    continue; // строка вернулась на действующее место
+                var line = restoreAt.TryGetValue((sec.Name, li), out var human) ? human : sec.Lines[li];
                 var rewritten = RefRx.Replace(line, m =>
                 {
                     var id = m.Groups[1].Value;
@@ -816,7 +824,10 @@ public sealed class WikiRetractService
         var working = new List<WikiGate.Draft>(state.Drafts);
         working.RemoveAll(d => d.Path == page);
         working.Add(new WikiGate.Draft(page, finalText));
-        var violations = WikiGate.Check(working, section, state.UpChain);
+        // База — состояние раздела до снятия сносок: ретракт ничего не создаёт и «Заметки» не
+        // меняет, поэтому уже лежащие карточка human и «Заметки» нарушением не считаются.
+        var violations = WikiGate.Check(working, section, state.UpChain,
+            author: WikiPackage.AuthorAi, baseState: state.Drafts);
         if (violations.Count > 0)
             return (false, "результат после снятия сносок не проходит гейт: " + violations[0]);
 
@@ -906,20 +917,46 @@ public sealed class WikiRetractService
 
     private static Trace TraceOf(WikiPage.WikiFootnote fn, string sourceRef, List<WikiGate.Draft> state)
     {
+        var card = CardOf(fn, state);
+        if (card is null)
+            return Trace.Unknown; // цель не ведёт ни в одну карточку источника (закрытая форма, префикс не раздел, карточки нет)
+        // Сноски human не снимает НИКАКОЙ retract (ADR-038, предохранитель 5): карточка правки
+        // человека неизменяема, и её сноска — не след источника, который откатывают.
+        if (card.Origin == WikiGate.OriginHuman)
+            return Trace.Other;
+        var cardRef = card.Ref!;
+        if (RefMatches(cardRef, sourceRef))
+            return Trace.Source;
+        var origin = OriginOf(sourceRef);
+        // Карточка хранит ref с префиксом origin и диапазоном («session:{id}#m{a}-{b}»), поэтому
+        // сверка по чату идёт по «origin:id», а не по голому id (тот же охват «в любой части
+        // диапазонов», что у поиска пакетов); голый id — старая форма хранения.
+        if (origin is not null && card.Origin == origin &&
+            (RefMatches(cardRef, origin + ":" + IdPartOf(sourceRef)) || RefMatches(cardRef, IdPartOf(sourceRef))))
+            return Trace.Source;
+        return Trace.Other; // карточка найдена — это другой источник
+    }
+
+    /// <summary>Шапка карточки источника, в которую резолвится цель сноски (та же нормализация
+    /// заголовка, что у резолвера применения и uniqueness-гейта; с префиксом раздела — только
+    /// карточка этого раздела). null — цель ни в какую карточку не ведёт: закрытая форма цели,
+    /// префикс не раздел, пустое имя, карточки нет или у неё нет ref.</summary>
+    private static WikiFrontmatter? CardOf(WikiPage.WikiFootnote fn, List<WikiGate.Draft> state)
+    {
         if (!fn.Target.IsLink)
-            return Trace.Unknown; // закрытая форма цели: карточки с таким именем нет (тот же исход, что у гейта)
+            return null;
         var title = fn.Target.Text;
         string? sectionFilter = null;
         if (title.Contains('/'))
         {
             sectionFilter = WikiSections.Parse(title);
             if (sectionFilter is null)
-                return Trace.Unknown; // префикс не раздел: цель ни в какую карточку не ведёт
+                return null;
             title = title.Split('/')[^1];
         }
         var norm = WikiDedup.NormalizeName(title);
         if (norm.Length == 0)
-            return Trace.Unknown;
+            return null;
         foreach (var draft in state)
         {
             if (sectionFilter is not null && WikiSections.Parse(draft.Path) != sectionFilter)
@@ -929,21 +966,99 @@ public sealed class WikiRetractService
                 continue;
             if (WikiDedup.NormalizeName(card.Title) != norm)
                 continue;
-            var cardRef = card.Frontmatter.Ref;
-            if (string.IsNullOrEmpty(cardRef))
+            if (string.IsNullOrEmpty(card.Frontmatter.Ref))
                 continue;
-            if (RefMatches(cardRef, sourceRef))
-                return Trace.Source;
-            var origin = OriginOf(sourceRef);
-            // Карточка хранит ref с префиксом origin и диапазоном («session:{id}#m{a}-{b}»), поэтому
-            // сверка по чату идёт по «origin:id», а не по голому id (тот же охват «в любой части
-            // диапазонов», что у поиска пакетов); голый id — старая форма хранения.
-            if (origin is not null && card.Frontmatter.Origin == origin &&
-                (RefMatches(cardRef, origin + ":" + IdPartOf(sourceRef)) || RefMatches(cardRef, IdPartOf(sourceRef))))
-                return Trace.Source;
-            return Trace.Other; // карточка найдена — это другой источник
+            return card.Frontmatter;
         }
-        return Trace.Unknown; // карточки с такой целью в разделе и его цепочке нет
+        return null;
+    }
+
+    private const string HistorySectionName = "История";
+
+    /// <summary>Возврат формулировки человека при откате источника (ADR-038, предохранитель 5).
+    /// Для каждой операции пакета `supersede` с классом `…@human` на этой странице ищется пара:
+    /// действующая строка с текстом замены, которая при снятии сносок осталась бы без единой сноски
+    /// (то есть держалась только откатываемым источником), и строка «Истории» с текстом замещённого
+    /// утверждения, у которой ВСЕ сноски ведут в карточки human. Пара найдена — строка человека встаёт
+    /// на место действующей (её сноски те же, ни новых, ни снятых), а из «Истории» уходит. Нет пары
+    /// (замена опирается и на другие источники, строки в «Истории» нет, сноска не human) — ничего не
+    /// возвращается: действует прежнее снятие. Пары выбираются по тексту операции пакета, а не по
+    /// позиции в «Истории»: ни чужую правку человека, ни соседнюю замену это не затронет.
+    /// Возврат: куда подставить (секция, индекс строки) → строка человека; индексы строк «Истории»,
+    /// которые вернулись.</summary>
+    private static (Dictionary<(string Section, int Line), string> RestoreAt, HashSet<int> RestoredHistory)
+        PlanHumanRestores(WikiPage model, WikiPackage pkg, string page, HashSet<string> dropped, List<WikiGate.Draft> state)
+    {
+        var restoreAt = new Dictionary<(string, int), string>();
+        var restoredHistory = new HashSet<int>();
+        var history = model.Sections.FirstOrDefault(sec => sec.Name == HistorySectionName);
+        if (history is null)
+            return (restoreAt, restoredHistory);
+
+        foreach (var op in pkg.Operations)
+        {
+            if (op.Op != WikiPackage.OpSupersede || op.Page != page || string.IsNullOrWhiteSpace(op.Target)
+                || string.IsNullOrWhiteSpace(op.Text)
+                || WikiPackage.ParseClassKey(op.Class) is not { HumanTarget: true })
+                continue;
+
+            var historyIndex = -1;
+            for (var h = 0; h < history.Lines.Count && historyIndex < 0; h++)
+                if (!restoredHistory.Contains(h)
+                    && QuoteMatcher.ContainsVerbatim(history.Lines[h], op.Target)
+                    && OnlyHumanFootnotes(history.Lines[h], model, state))
+                    historyIndex = h;
+            if (historyIndex < 0)
+                continue;
+
+            foreach (var sec in model.Sections)
+            {
+                if (sec.Name == HistorySectionName || !WikiPage.AssertionSectionNames.Contains(sec.Name))
+                    continue;
+                var found = false;
+                for (var l = 0; l < sec.Lines.Count && !found; l++)
+                {
+                    if (restoreAt.ContainsKey((sec.Name, l))
+                        || !QuoteMatcher.ContainsVerbatim(sec.Lines[l], op.Text)
+                        || !LosesAllFootnotes(sec.Lines[l], dropped))
+                        continue;
+                    restoreAt[(sec.Name, l)] = history.Lines[historyIndex];
+                    restoredHistory.Add(historyIndex);
+                    found = true;
+                }
+                if (found)
+                    break;
+            }
+        }
+        return (restoreAt, restoredHistory);
+    }
+
+    // Строка с хотя бы одной сноской, и все её сноски снимаются (то же условие, по которому
+    // утверждение секции-утверждений убирается).
+    private static bool LosesAllFootnotes(string line, HashSet<string> dropped)
+    {
+        var refs = RefRx.Matches(line);
+        return refs.Count > 0 && refs.All(m => dropped.Contains(m.Groups[1].Value));
+    }
+
+    // Все сноски строки ведут в карточки origin: human (и они есть): так опознаётся «формулировка
+    // человека», а не утверждение ИИ, попавшее в «Историю».
+    private static bool OnlyHumanFootnotes(string line, WikiPage model, List<WikiGate.Draft> state)
+    {
+        var refs = RefRx.Matches(line);
+        if (refs.Count == 0)
+            return false;
+        foreach (System.Text.RegularExpressions.Match m in refs)
+        {
+            var id = m.Groups[1].Value;
+            if (!id.StartsWith('s') || !int.TryParse(id.AsSpan(1), System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out var n)
+                || n < 1 || n > model.Footnotes.Count)
+                return false;
+            if (CardOf(model.Footnotes[n - 1], state)?.Origin != WikiGate.OriginHuman)
+                return false;
+        }
+        return true;
     }
 
     /// <summary>Состояние страницы «до снятия сносок этого пакета»: рядом с прообразом применения,

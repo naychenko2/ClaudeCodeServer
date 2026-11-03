@@ -62,6 +62,9 @@ interface ButtonProps {
   // Disclosure (aria-expanded): раскрывающая кнопка (напр. «Архивные · N»). Не задан —
   // aria-expanded не выставляется.
   ariaExpanded?: boolean;
+  // id управляемого региона (aria-controls): пара к ariaExpanded у кнопки, открывающей шторку
+  // или панель. Не задан — aria-controls не выставляется.
+  ariaControls?: string;
   // Toggle (aria-pressed): переключатель (напр. чип-фильтр «все/в работе/…»). Не задан —
   // aria-pressed не выставляется.
   ariaPressed?: boolean;
@@ -76,7 +79,7 @@ interface ButtonProps {
 
 export function Button({
   variant = 'primary', size = 'md', fullWidth, loading = false,
-  disabled, glow, pill, leftIcon, onClick, type = 'button', title, ariaLabel, ariaExpanded, ariaPressed, style, dataTestId, href, children,
+  disabled, glow, pill, leftIcon, onClick, type = 'button', title, ariaLabel, ariaExpanded, ariaControls, ariaPressed, style, dataTestId, href, children,
 }: ButtonProps) {
   const isDisabled = disabled || loading;
   const baseStyle: CSSProperties = {
@@ -103,6 +106,7 @@ export function Button({
         title={title}
         aria-label={ariaLabel}
         aria-expanded={ariaExpanded}
+        aria-controls={ariaControls}
         aria-pressed={ariaPressed}
         data-testid={dataTestId}
         onClick={onClick}
@@ -119,6 +123,7 @@ export function Button({
       title={title}
       aria-label={ariaLabel}
       aria-expanded={ariaExpanded}
+      aria-controls={ariaControls}
       aria-pressed={ariaPressed}
       data-testid={dataTestId}
       disabled={isDisabled}

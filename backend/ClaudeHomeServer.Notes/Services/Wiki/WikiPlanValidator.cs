@@ -80,7 +80,7 @@ public static class WikiPlanValidator
         // ── 1. Fail-closed входа: ни null, ни кривой вход не становится исключением. ──
         if (plan is null || plan.Operations is null)
             return new([], [], rejected, [.. violations, "план null или операции плана null — проверять нечего"]);
-        if (source is null || source.Origin is not { } origin || !WikiGate.OriginValues.Contains(origin))
+        if (source is null || source.Origin is not { } origin || !WikiGate.AiOriginValues.Contains(origin))
             return new([], [], IndexAll(plan, "источник не определён: origin вне закрытого перечня или источник null"),
                 [.. violations, "план без подтверждённого источника не применяется"]);
         if (string.IsNullOrEmpty(source.Text))
@@ -277,7 +277,12 @@ public static class WikiPlanValidator
             }
 
             // Класс — по источнику этой операции (хвост S4d, г); решение — по политике S4d.
-            var opClass = WikiPackage.ClassKey(origin, op.Op);
+            // Для supersede/conflict класс и автор цели — по сноскам утверждения на странице
+            // СЕЙЧАС, а не по ответу модели (ADR-038, решение 4): цель human — свой класс «…@human».
+            var isReplacement = op.Op is WikiPackage.OpSupersede or WikiPackage.OpConflict;
+            var targetCards = isReplacement ? TargetCards(page, op.Target, pages) : [];
+            var humanTarget = targetCards.Any(c => c.Origin == WikiGate.OriginHuman);
+            var opClass = WikiPackage.ClassKey(origin, op.Op, humanTarget);
             var verdict = WikiApplyPolicy.Decide(
                 new()
                 {
@@ -293,6 +298,10 @@ public static class WikiPlanValidator
                     Counters = new(pagesCount, statementsCount, ctx.Counters.PackagesForPage),
                     PageDuplicate = duplicate,
                     TargetPageStatus = page.Model?.Frontmatter.Status,
+                    TargetSourceTime = isReplacement ? TargetSourceTimeOf(targetCards) : null,
+                    TargetAuthor = !isReplacement
+                        ? null
+                        : humanTarget ? WikiPackage.AuthorHuman : WikiPackage.AuthorAi,
                 });
 
             candidates.Add((i, new()
@@ -312,6 +321,9 @@ public static class WikiPlanValidator
 
         // ── 4. Черновой рендер, итоговое состояние и весь WikiGate. ──
         var state = new List<WikiGate.Draft>(pages.Select(p => new WikiGate.Draft(p.Path, p.Content)));
+        // База правил автора — состояние раздела ДО рендера плана: карточка human и «Заметки»,
+        // уже лежащие на страницах, нарушением ai-плана не считаются.
+        var baseState = state.ToArray();
         var touched = new Dictionary<string, List<int>>(StringComparer.Ordinal);
         foreach (var (index, op, quote, rendered) in candidates)
         {
@@ -351,7 +363,8 @@ public static class WikiPlanValidator
         // GivenOnly — потому и проверяются только сноски на неё: чужие (принятые прошлыми
         // ночами) сноски страницы не могут отвергнуть новую операцию (ревью S6b-2, M2).
         var sourceTexts = new Dictionary<string, string> { [card.Path] = source.Text };
-        foreach (var v in WikiGate.Check(state, sectionKey, chain, sourceTexts, WikiGate.VerbatimScope.GivenOnly))
+        foreach (var v in WikiGate.Check(state, sectionKey, chain, sourceTexts, WikiGate.VerbatimScope.GivenOnly,
+                     WikiPackage.AuthorAi, baseState))
         {
             var path = v.Split(':', 2)[0];
             if (touched.TryGetValue(path, out var ids))
@@ -483,13 +496,63 @@ public static class WikiPlanValidator
     // дословность. Возвращает секцию и индекс строки (Section null — цели на странице нет).
     private readonly record struct Hit(string? Section, int Line);
 
+    // Карточки источников утверждения-цели: строка с целью → её сноски [^sN] → карточки по
+    // заголовку цели сноски. Нет страницы, цели или карточки в снимке — пусто (цель ИИ по
+    // умолчанию: «автор human» утверждает только найденная карточка origin: human).
+    private static IReadOnlyList<WikiFrontmatter> TargetCards(Snap page, string? target, List<Snap> pages)
+    {
+        if (page.Model is not { } model)
+            return [];
+        var hit = FindStatement(model, target);
+        if (hit.Section is null)
+            return [];
+        var line = model.Sections.First(sec => sec.Name == hit.Section).Lines[hit.Line];
+        var cards = new List<WikiFrontmatter>();
+        foreach (System.Text.RegularExpressions.Match m in TargetFootnoteRx.Matches(line))
+        {
+            if (!int.TryParse(m.Groups[1].Value, System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out var n)
+                || n < 1 || n > model.Footnotes.Count)
+                continue;
+            var card = FindByTitle(pages, model.Footnotes[n - 1].Target.Text);
+            if (card?.Model is { } cm && cm.Frontmatter.Type == WikiFrontmatter.TypeSource)
+                cards.Add(cm.Frontmatter);
+        }
+        return cards;
+    }
+
+    // Время источника по карточке: written (когда написан источник); у карточки human — captured
+    // (правка и фиксация одно событие, WikiHumanRender). Не captured вообще: у бэклога старых чатов
+    // оно — сегодня. Самое новое среди карточек; хотя бы одна без времени (или карточек нет) — null.
+    private static DateTimeOffset? TargetSourceTimeOf(IReadOnlyList<WikiFrontmatter> cards)
+    {
+        if (cards.Count == 0)
+            return null;
+        DateTimeOffset? newest = null;
+        foreach (var card in cards)
+        {
+            var text = card.Origin == WikiGate.OriginHuman ? card.Captured : card.Written;
+            if (!DateTimeOffset.TryParse(text, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out var t))
+                return null;
+            if (newest is null || t > newest)
+                newest = t;
+        }
+        return newest;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex TargetFootnoteRx =
+        new(@"\[\^s([0-9]+)\]", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
     private static Hit FindStatement(WikiPage page, string? target)
     {
         if (string.IsNullOrWhiteSpace(target))
             return new(null, -1);
         foreach (var section in page.Sections)
         {
-            if (!WikiPage.AssertionSectionNames.Contains(section.Name))
+            // «История» хранит заменённые утверждения — целью новой замены они не бывают
+            // (иначе вторая замена той же цели нашла бы копию в «Истории», а не отклонилась).
+            if (section.Name == "История" || !WikiPage.AssertionSectionNames.Contains(section.Name))
                 continue;
             for (var l = 0; l < section.Lines.Count; l++)
                 if (QuoteMatcher.ContainsVerbatim(section.Lines[l], target))
@@ -572,7 +635,16 @@ public static class WikiPlanValidator
         var link = op.Op == WikiPackage.OpLink ? $" [[{op.Target}]]" : "";
         var line = $"{op.Text}{link} [^s{page.Footnotes.Count + 1}]";
         if (op.Op == WikiPackage.OpSupersede)
+        {
+            var old = sections[targetIdx].Lines[hit.Line];
             sections[targetIdx].Lines[hit.Line] = line;
+            // Прежняя формулировка — дословно, со своими сносками, в «Историю» (ADR-035 §3,
+            // ADR-038 предохранитель 1): по ней retract находит пару и возвращает формулировку
+            // человека. Из самой «Истории» не переносим; такая же строка там уже есть — не дублируем.
+            var historyIdx = sections.FindIndex(s => s.Name == "История");
+            if (historyIdx >= 0 && historyIdx != targetIdx && !sections[historyIdx].Lines.Contains(old))
+                sections[historyIdx].Lines.Add(old);
+        }
         else
             sections[targetIdx].Lines.Add(line);
 

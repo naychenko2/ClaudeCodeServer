@@ -328,7 +328,11 @@ public sealed class WikiApplyService
         // форма, что у Хранителя): следующая сверка сравнивает то, что реально лежит в файле.
         var applied = new Dictionary<string, string>(written.Count, StringComparer.Ordinal);
         foreach (var p in written)
-            applied[p] = Sha256OfBytes(File.ReadAllBytes(SafePath.JoinBelowRoot(root, "pages/" + p)));
+        {
+            var bytes = File.ReadAllBytes(SafePath.JoinBelowRoot(root, "pages/" + p));
+            // Основа версии — для «Принять как мою правку», если поверх неё правят мимо веб-морды.
+            applied[p] = WikiBaselines.Save(root, bytes);
+        }
 
         // Запись состояния применения (ревью S4b-3, MAJOR 1) — до манифеста: она описывает ровно то,
         // что записал этот пакет, и не зависит от того, что станет со страницей позже. Её сбой — тот
@@ -345,7 +349,13 @@ public sealed class WikiApplyService
         var policy = package.Operations.Any(o => Applies(o) && o.Decision == WikiPackage.DecisionInbox)
             ? WikiPackage.DecisionInbox
             : WikiPackage.DecisionAuto;
-        WikiManifest.AppendLog(root, LogOpApply, section, written, SourceOf(package), "keeper", policy);
+        // Правка человека — своя строка журнала: op edit|restore и actor «user» (ADR-038, решение 4):
+        // на этом стоит «Журнал» с фильтром «ИИ поменял моё» и условие «источник новее правки».
+        if (package.Author == WikiPackage.AuthorHuman)
+            WikiManifest.AppendLog(root, package.Action!, section, written, SourceOf(package), "user");
+        else
+            WikiManifest.AppendLog(root, LogOpApply, section, written, SourceOf(package), "keeper", policy,
+                packages: [packageId], overrodeHuman: package.Operations.Any(WikiPackage.IsAutoOverrideOfHuman));
 
         // Проекции — после журнала: _log.md — производная от log.jsonl и без этой строки
         // остался бы на полшага позади применения.
@@ -367,7 +377,7 @@ public sealed class WikiApplyService
         // проекта: у «Общего» и «Личного» нет адресата (тот же порядок, что у Хранителя).
         _notes.Invalidate(ownerId);
         foreach (var p in written)
-            AppendEvent(ownerId, section, p);
+            AppendEvent(ownerId, section, p, package.Author == WikiPackage.AuthorHuman);
         return new ApplyResult(true, null, null, []);
     }
 
@@ -384,11 +394,11 @@ public sealed class WikiApplyService
     private static string SourceOf(WikiPackage package) =>
         string.Join(", ", package.Sources.Select(s => s.Ref));
 
-    private void AppendEvent(string ownerId, string sectionKey, string pageKey)
+    private void AppendEvent(string ownerId, string sectionKey, string pageKey, bool byHuman = false)
     {
         if (WikiSections.TryProjectId(sectionKey, out var projectId))
-            _events?.Append(projectId, ownerId, ProjectEventTypes.WikiChanged, "keeper",
-                $"Хранитель применил страницу вики «{pageKey}»");
+            _events?.Append(projectId, ownerId, ProjectEventTypes.WikiChanged, byHuman ? "user" : "keeper",
+                byHuman ? $"Человек правит страницу вики «{pageKey}»" : $"Хранитель применил страницу вики «{pageKey}»");
     }
 
     // Отказ после начала записи: откат — только того, что записал этот вызов. Всё остальное
@@ -536,11 +546,12 @@ public sealed class WikiApplyService
     // обход каталога) и сборка модели могут бросить — наружу исключение не уходит: пакет
     // ведётся в «apply_failed» с текстом сбоя, а не остаётся в «applying» навсегда
     // (ревью S4b-1, MAJOR 2).
-    private PrepareResult PrepareUnderLock(string ownerId, string root, WikiPackage package, ApplyContext context)
+    private PrepareResult PrepareUnderLock(string ownerId, string root, WikiPackage package, ApplyContext context,
+        (string Page, string? Content)? baseOverride = null)
     {
         try
         {
-            return PrepareChecked(ownerId, root, package, context);
+            return PrepareChecked(ownerId, root, package, context, baseOverride);
         }
         catch (Exception ex)
         {
@@ -549,28 +560,17 @@ public sealed class WikiApplyService
         }
     }
 
-    private PrepareResult PrepareChecked(string ownerId, string root, WikiPackage package, ApplyContext context)
+    private PrepareResult PrepareChecked(string ownerId, string root, WikiPackage package, ApplyContext context,
+        (string Page, string? Content)? baseOverride)
     {
         var section = package.Section;
 
         // Шаг 1 решения 4: модель строится мимо кэша графа — фактическое состояние диска,
         // а не кэш с TTL 2 с. Состояние проверки: страницы раздела и цепочки «вверх»
         // (UpChain — право на ссылку даёт только цепочка, не «видимые» разделы).
-        var model = _notes.BuildFresh(ownerId);
-        var upChain = WikiSections.UpChain(section, ownerId, _spheres);
-        var allowed = new HashSet<string>(StringComparer.Ordinal) { section };
-        allowed.UnionWith(upChain);
-
-        var state = new List<WikiGate.Draft>();
-        foreach (var n in model.Notes)
-        {
-            if (n.SourceKey != NotesService.WikiKey)
-                continue;
-            var sec = WikiSections.Parse(n.RelPath);
-            if (sec is null || !allowed.Contains(sec))
-                continue;
-            state.Add(new WikiGate.Draft(n.RelPath, n.Content));
-        }
+        var (state, upChain) = BuildState(ownerId, section);
+        if (baseOverride is { } over)
+            OverrideBase(state, over.Page, over.Content);
 
         // Шаг 2: манифест раздела против диска, по sha256 байтов. Любое расхождение — дрейф:
         // стоп, ничего не применять (молчаливой перезаписи чужой правки нет, как у WritePage).
@@ -595,6 +595,11 @@ public sealed class WikiApplyService
                 // Совпала — база цела; изменилась — продолжение проверки в рендере: намерение
                 // живо, пока цела его цель (чужой append той же страницы — проверка проходит).
             }
+
+        // Пакет human (ADR-038): правку человека рендерит WikiHumanRender — карточку правки он
+        // строит сам, источника «с диска или от вызывающего» у него нет.
+        if (package.Author == WikiPackage.AuthorHuman)
+            return PrepareHuman(root, package, section, upChain, state, manifest);
 
         // Шаг 3: рендер операций в памяти и весь гейт на итоговом состоянии. Карточка
         // источника и её текст — по двум путям (S4g):
@@ -708,7 +713,8 @@ public sealed class WikiApplyService
         // Дословность — только для карточек этого пакета (GivenOnly, тот же смысл, что в
         // проверке плана S6b-2): принятые раньше чужие сноски не могут отвергнуть новую запись.
         // sourceTexts — из ветки выбора карточки выше: у пути решения человека он пустой.
-        var violations = WikiGate.Check(working, section, upChain, sourceTexts, WikiGate.VerbatimScope.GivenOnly);
+        var violations = WikiGate.Check(working, section, upChain, sourceTexts, WikiGate.VerbatimScope.GivenOnly,
+            package.Author, state);
         if (violations.Count > 0)
             return FailApply(root, package.Id, CodeGate, $"итоговое состояние не проходит гейт: {violations[0]}", violations);
 
@@ -726,6 +732,461 @@ public sealed class WikiApplyService
         // Готово к записи: пакет остаётся в «applying» — его заявка держит повторное
         // применение до конца цикла (до status «applied» или «apply_failed»).
         return new PrepareResult(true, null, null, [], rendered) { Section = section, BaseSnapshot = snapshot };
+    }
+
+    // ─── Правка человека (ADR-038, B3b) ─────────────────────────────────────────
+
+    /// <summary>Исход правки человека. Applied — пакет human применён; Unchanged — текст не
+    /// отличается от страницы, пакета нет; Changed — страница изменилась после открытия
+    /// редактора (baseHash не сошёлся): в результате её свежая версия; Drift — файл расходится
+    /// с манифестом; Invalid — правка не прошла разбор или гейт (причина для редактора);
+    /// Refused — вики не заведена, манифест невалиден, сбой.</summary>
+    public enum HumanEditOutcome { Applied, Unchanged, Changed, Drift, Invalid, Refused }
+
+    /// <summary>Hash — sha256 байтов страницы (та же форма, что в манифесте): у Applied и
+    /// Unchanged — после правки, у Changed — свежий; Content — свежий текст у Changed (null —
+    /// страницы больше нет).</summary>
+    public readonly record struct HumanEditResult(
+        HumanEditOutcome Outcome, string? Reason, IReadOnlyList<string> Violations,
+        string? PackageId = null, string? Hash = null, string? Content = null);
+
+    private readonly record struct HumanBuild(WikiPackage? Package, HumanEditResult? Early);
+
+    private readonly record struct HumanChecked(
+        IReadOnlyList<WikiGate.Draft> Rendered, string? Error, bool Stale, IReadOnlyList<string> Violations);
+
+    /// <summary>Сохранить правку страницы человеком: content — полный новый текст, baseHash —
+    /// sha256 байтов страницы, какой её видел редактор (null — страницы не было, создание).
+    /// Сверка baseHash, разбор правки в пакет human, проверки и запись — ОДНА критическая секция
+    /// блокировки раздела: два сохранения по одному baseHash дают одно применение и один Changed.
+    /// Правка не принимается молча поверх чужой: после применения пакета ИИ редактор получает
+    /// Changed со свежей версией. Исключений наружу нет.</summary>
+    public Task<HumanEditResult> EditPageAsync(string ownerId, string section, string page, string? baseHash, string? content) =>
+        RunHumanAsync(ownerId, section, page, baseHash, (was, currentHash, _) =>
+        {
+            if (string.IsNullOrWhiteSpace(content))
+                return new(null, Invalid("нет нового текста страницы"));
+            var plan = WikiHumanEditPlanner.Build(page, was, content);
+            if (!plan.Ok)
+                return new(null, Invalid(plan.Reason ?? "правка не разобрана"));
+            if (plan.Operations.Count == 0)
+                return new(null, new HumanEditResult(HumanEditOutcome.Unchanged, null, [], Hash: currentHash));
+
+            var id = WikiPackageStore.NewId();
+            var type = WikiPage.Parse(content).Model?.Frontmatter.Type;
+            var ops = plan.Operations.Select(o => new WikiPackage.Operation
+            {
+                Op = HumanOpName(o.Kind),
+                Page = o.Page,
+                PageSection = o.Section,
+                // create несёт тип страницы в цели: планировщик его не называет, он в новом тексте.
+                Target = o.Kind == WikiHumanEditPlanner.KindCreate ? type : o.Target,
+                Text = o.Text,
+                Reason = o.Reason,
+                Class = WikiPackage.ClassKey(WikiGate.OriginHuman, HumanOpName(o.Kind)),
+                Decision = WikiPackage.DecisionAuto,
+                BaseHashes = currentHash is null
+                    ? new Dictionary<string, string>()
+                    : new Dictionary<string, string> { [page] = currentHash },
+            }).ToList();
+            return new(NewHumanPackage(id, section, WikiPackage.ActionEdit, WikiGate.OriginHuman + ":" + id, ops), null);
+        });
+
+    /// <summary>«Вернуть мою»: current — действующее утверждение (его заместил ИИ), restore —
+    /// формулировка человека в «Истории». Пакет human: обратный supersede со сноской на ИСХОДНУЮ
+    /// карточку человека; новой карточки не создаёт. Конкурентность — как у EditPageAsync.</summary>
+    public Task<HumanEditResult> RestorePageAsync(
+        string ownerId, string section, string page, string? baseHash, string? current, string? restore) =>
+        RunHumanAsync(ownerId, section, page, baseHash, (was, currentHash, state) =>
+        {
+            if (was is null || currentHash is null)
+                return new(null, Invalid("страницы нет: возвращать нечего"));
+            if (string.IsNullOrWhiteSpace(current) || string.IsNullOrWhiteSpace(restore))
+                return new(null, Invalid("нужны действующее утверждение и формулировка из «Истории»"));
+            var model = WikiPage.Parse(was).Model;
+            if (model is null)
+                return new(null, Invalid("страница не разбирается — править неразобранную нельзя"));
+            var currentText = WikiHumanEditPlanner.Normalize(current);
+            var restoreText = WikiHumanEditPlanner.Normalize(restore);
+            var (cardRef, error) = WikiHumanRender.ResolveRestoreCard(state, model, restoreText);
+            if (error is not null)
+                return new(null, Invalid(error));
+            var ops = new List<WikiPackage.Operation>
+            {
+                new()
+                {
+                    Op = WikiPackage.OpSupersede,
+                    Page = page,
+                    Target = currentText,
+                    Text = restoreText,
+                    Class = WikiPackage.ClassKey(WikiGate.OriginHuman, WikiPackage.OpSupersede),
+                    Decision = WikiPackage.DecisionAuto,
+                    Reason = "возвращена формулировка человека",
+                    BaseHashes = new Dictionary<string, string> { [page] = currentHash },
+                },
+            };
+            return new(NewHumanPackage(WikiPackageStore.NewId(), section, WikiPackage.ActionRestore, cardRef!, ops), null);
+        });
+
+    /// <summary>«Принять как мою правку» (ADR-038, §6): страница расходится с манифестом, человек
+    /// объявляет расхождение своей правкой. Дифф «манифест → диск» (основа — версия из манифеста,
+    /// WikiBaselines; диск — текущий файл) разбирает тот же планировщик, что и правку в редакторе;
+    /// пакет human применяется ПОВЕРХ основы и пишет страницу со сносками human, а байты человека
+    /// остаются прообразом (откат возвращает его файл). baseHash — sha256 файла, каким его видел
+    /// человек: не сошёлся с диском (файл правили ещё раз) — Changed, ничего не записано.
+    /// Конкурентность — под замком раздела, как у EditPageAsync. Отказы: основы нет (версия из
+    /// манифеста нигде не сохранена), правка не разобрана (поля шапки, заголовок), дрейф других
+    /// страниц раздела. Правок по существу нет (только форма) — страница принимается как есть,
+    /// пакета нет. Журнал: op=adopt, actor=user, источник «human:{пакет}».</summary>
+    public async Task<HumanEditResult> AdoptMineAsync(string ownerId, string section, string page, string? baseHash)
+    {
+        if (string.IsNullOrWhiteSpace(ownerId))
+            return Refused("владелец пустой");
+        if (!WikiSections.IsWritable(section).Writable)
+            return Invalid($"раздел «{section}» не записываемый");
+        if (string.IsNullOrWhiteSpace(page) || WikiPaths.IsProjection(page) || WikiSections.Parse(page) != section
+            || !page.EndsWith(".md", StringComparison.Ordinal))
+            return Invalid("страница должна принадлежать разделу");
+        if (page.Contains("/" + WikiSourceCapture.SourceDirName + "/", StringComparison.Ordinal))
+            return Invalid("карточки источников неизменяемы: их не правят");
+        if (string.IsNullOrWhiteSpace(baseHash))
+            return Invalid("нужен хэш файла, каким его видел человек");
+        if (!WikiPaths.IsInitialized(_dataDir, ownerId))
+            return Refused("вики этого владельца не заведена");
+
+        try
+        {
+            return await _keeper.WithSectionsLockedAsync(ownerId, [section],
+                () => Task.FromResult(AdoptMineUnderLock(ownerId, section, page, baseHash.ToLowerInvariant())))
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            return Refused($"внутренний сбой принятия правки: {ex.Message}");
+        }
+    }
+
+    private HumanEditResult AdoptMineUnderLock(string ownerId, string section, string page, string baseHash)
+    {
+        var root = WikiPaths.Root(_dataDir, ownerId);
+        var mres = WikiManifest.TryRead(root, section);
+        if (mres.State == WikiManifestState.Invalid)
+            return Refused($"манифест раздела «{section}» невалиден — применение невозможно");
+        var manifest = mres.Manifest;
+
+        var full = SafePath.JoinBelowRoot(root, "pages/" + page);
+        if (!File.Exists(full))
+            return Refused($"файла «{page}» на диске нет — принимать нечего");
+        var diskBytes = File.ReadAllBytes(full);
+        var diskHash = Sha256OfBytes(diskBytes);
+        // Сверка базы — под замком, до любых записей: файл правили после того, как человек его видел.
+        if (baseHash != diskHash)
+            return Fresh(root, page, "файл изменился после открытия сравнения");
+
+        var recorded = manifest.TryGetValue(page, out var known) ? known : null;
+        if (recorded == diskHash)
+            return new(HumanEditOutcome.Unchanged, null, [], Hash: diskHash);
+
+        // Дрейф других страниц раздела блокирует применение пакета целиком — выясняем ДО записи
+        // в манифест, чтобы отказ не оставил там половину решения.
+        var withThis = new Dictionary<string, string>(manifest, StringComparer.Ordinal) { [page] = diskHash };
+        if (CheckSectionAgainstDisk(root, section, withThis) is { } other)
+            return new(HumanEditOutcome.Drift, other, [other]);
+
+        // Основа: версия, которую знал манифест. Страницы вне манифеста основы не имеют (создание).
+        string? baseText = null;
+        if (recorded is not null)
+        {
+            var baseBytes = WikiBaselines.TryLoad(root, page, recorded);
+            if (baseBytes is null)
+                return Invalid("версия страницы из манифеста не сохранена: сравнить нечем. " +
+                               "Примите расхождение как есть или верните файл из прообразов.");
+            baseText = System.Text.Encoding.UTF8.GetString(baseBytes);
+        }
+        var diskText = System.Text.Encoding.UTF8.GetString(diskBytes);
+
+        var plan = WikiHumanEditPlanner.Build(page, baseText, diskText);
+        if (!plan.Ok)
+            return Invalid(plan.Reason ?? "правка не разобрана");
+
+        if (plan.Operations.Count == 0)
+        {
+            // По существу ничего не изменилось (форма, порядок строк): сносок ставить не на что.
+            WikiManifest.RecordApplied(root, section, new Dictionary<string, string> { [page] = WikiBaselines.Save(root, diskBytes) });
+            WikiManifest.AppendLog(root, WikiPackage.ActionAdopt, section, [page], null, "user", null);
+            WikiProjections.RegenerateSection(root, section);
+            return new(HumanEditOutcome.Applied, null, [], null, diskHash, diskText);
+        }
+
+        var id = WikiPackageStore.NewId();
+        var type = WikiPage.Parse(diskText).Model?.Frontmatter.Type;
+        var ops = plan.Operations.Select(o => new WikiPackage.Operation
+        {
+            Op = HumanOpName(o.Kind),
+            Page = o.Page,
+            PageSection = o.Section,
+            Target = o.Kind == WikiHumanEditPlanner.KindCreate ? type : o.Target,
+            Text = o.Text,
+            Reason = o.Reason,
+            Class = WikiPackage.ClassKey(WikiGate.OriginHuman, HumanOpName(o.Kind)),
+            Decision = WikiPackage.DecisionAuto,
+            // База операции — файл человека: он войдёт в манифест ниже, и запись сверит именно его.
+            BaseHashes = new Dictionary<string, string> { [page] = diskHash },
+        }).ToList();
+        var package = NewHumanPackage(id, section, WikiPackage.ActionAdopt, WikiGate.OriginHuman + ":" + id, ops);
+
+        // Сухой прогон на основе до записи: отказ не должен оставить ни пакета, ни записи в манифесте.
+        var (state, upChain) = BuildState(ownerId, section);
+        OverrideBase(state, page, baseText);
+        var dry = RenderHumanChecked(state, package, section, upChain);
+        if (dry.Error is not null)
+            return dry.Stale ? Fresh(root, page, dry.Error) : Invalid(dry.Error);
+        if (dry.Violations.Count > 0)
+            return Invalid(dry.Violations[0], dry.Violations);
+
+        // Файл человека принимается в манифест (как «Принять как есть»), и сразу поверх него идёт
+        // пакет. Любой отказ дальше возвращает манифест к прежней записи: дрейф остаётся дрейфом.
+        WikiManifest.RecordApplied(root, section, new Dictionary<string, string> { [page] = WikiBaselines.Save(root, diskBytes) });
+        HumanEditResult Rollback(HumanEditResult failure)
+        {
+            WikiManifest.RollbackTo(root, section, new Dictionary<string, string?> { [page] = recorded });
+            return failure;
+        }
+
+        var created = WikiPackageStore.CreateHuman(root, package);
+        if (!created.Ok)
+            return Rollback(Refused(created.Reason ?? created.Code));
+        var saved = created.Package!;
+        var claim = WikiPackageStore.Transition(root, saved.Id, WikiPackage.StatusApplying);
+        if (!claim.Ok)
+            return Rollback(Refused(claim.Reason ?? claim.Code));
+
+        var prepared = PrepareUnderLock(ownerId, root, saved, null!, (page, baseText));
+        if (!prepared.Ready)
+            return Rollback(prepared.Code switch
+            {
+                CodeStale => Fresh(root, page, prepared.Reason ?? "правка устарела"),
+                CodeDrift => new(HumanEditOutcome.Drift, prepared.Reason, [prepared.Reason ?? ""]),
+                CodeGate => Invalid(prepared.Reason ?? "правка не проходит проверки", prepared.Violations),
+                _ => Refused(prepared.Reason ?? "применение не удалось"),
+            });
+        var written = WriteUnderLock(ownerId, root, saved.Id, prepared, null!);
+        if (!written.Applied)
+            return Rollback(written.Code == CodeDrift
+                ? Fresh(root, page, written.Reason ?? "страница изменилась")
+                : Refused(written.Reason ?? "запись не удалась"));
+
+        return new(HumanEditOutcome.Applied, null, [], saved.Id,
+            Sha256OfBytes(File.ReadAllBytes(full)), File.ReadAllText(full, System.Text.Encoding.UTF8));
+    }
+
+    // Состояние проверки «как до правки человека»: страница заменена основой (null — её не было).
+    private static void OverrideBase(List<WikiGate.Draft> state, string page, string? content)
+    {
+        state.RemoveAll(d => d.Path == page);
+        if (content is not null)
+            state.Add(new WikiGate.Draft(page, content));
+    }
+
+    // Вид операции планировщика → операция пакета.
+    private static string HumanOpName(string kind) => kind switch
+    {
+        WikiHumanEditPlanner.KindCreate => WikiPackage.OpCreate,
+        WikiHumanEditPlanner.KindAppend => WikiPackage.OpAppend,
+        WikiHumanEditPlanner.KindEdit => WikiPackage.OpEdit,
+        WikiHumanEditPlanner.KindSupersede => WikiPackage.OpSupersede,
+        WikiHumanEditPlanner.KindNotes => WikiPackage.OpNotes,
+        _ => WikiPackage.OpHeader,
+    };
+
+    private static WikiPackage NewHumanPackage(
+        string id, string section, string action, string sourceRef, IReadOnlyList<WikiPackage.Operation> ops) => new()
+    {
+        Id = id,
+        Author = WikiPackage.AuthorHuman,
+        Action = action,
+        Section = section,
+        Sources = [new WikiPackage.SourceRef(WikiGate.OriginHuman, sourceRef)],
+        Operations = ops,
+        Status = WikiPackage.StatusAccepted,
+    };
+
+    private static HumanEditResult Invalid(string reason, IReadOnlyList<string>? violations = null) =>
+        new(HumanEditOutcome.Invalid, reason, violations ?? [reason]);
+
+    private static HumanEditResult Refused(string reason) =>
+        new(HumanEditOutcome.Refused, reason, [reason]);
+
+    private async Task<HumanEditResult> RunHumanAsync(
+        string ownerId, string section, string page, string? baseHash,
+        Func<string?, string?, List<WikiGate.Draft>, HumanBuild> build)
+    {
+        if (string.IsNullOrWhiteSpace(ownerId))
+            return Refused("владелец пустой");
+        if (!WikiSections.IsWritable(section).Writable)
+            return Invalid($"раздел «{section}» не записываемый");
+        if (string.IsNullOrWhiteSpace(page) || WikiPaths.IsProjection(page) || WikiSections.Parse(page) != section
+            || !page.EndsWith(".md", StringComparison.Ordinal))
+            return Invalid("страница должна принадлежать разделу");
+        if (page.Contains("/" + WikiSourceCapture.SourceDirName + "/", StringComparison.Ordinal))
+            return Invalid("карточки источников неизменяемы: их не правят");
+        if (!WikiPaths.IsInitialized(_dataDir, ownerId))
+            return Refused("вики этого владельца не заведена");
+
+        try
+        {
+            return await _keeper.WithSectionsLockedAsync(ownerId, [section],
+                () => Task.FromResult(HumanUnderLock(ownerId, section, page, baseHash?.ToLowerInvariant(), build)))
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            return Refused($"внутренний сбой применения правки: {ex.Message}");
+        }
+    }
+
+    private HumanEditResult HumanUnderLock(
+        string ownerId, string section, string page, string? baseHash,
+        Func<string?, string?, List<WikiGate.Draft>, HumanBuild> build)
+    {
+        var root = WikiPaths.Root(_dataDir, ownerId);
+        var manifest = WikiManifest.TryRead(root, section);
+        if (manifest.State == WikiManifestState.Invalid)
+            return Refused($"манифест раздела «{section}» невалиден — применение невозможно");
+        var drift = CheckSectionAgainstDisk(root, section, manifest.Manifest);
+        if (drift is not null)
+            return new(HumanEditOutcome.Drift, drift, [drift]);
+
+        var full = SafePath.JoinBelowRoot(root, "pages/" + page);
+        var currentHash = File.Exists(full) ? Sha256OfBytes(File.ReadAllBytes(full)) : null;
+        // Сверка базы — под замком раздела, в той же секции, что и запись: ни пакет ИИ, ни второе
+        // сохранение не успеют между сверкой и записью.
+        if (baseHash != currentHash)
+            return Fresh(root, page, "страница изменилась после открытия редактора");
+
+        var was = currentHash is null ? null : File.ReadAllText(full, System.Text.Encoding.UTF8);
+        var (state, upChain) = BuildState(ownerId, section);
+        var built = build(was, currentHash, state);
+        if (built.Early is { } early)
+            return early;
+        var package = built.Package!;
+
+        // Сухой прогон до записи пакета: опечатка в ссылке не оставляет в «Входящих» отказанные пакеты.
+        var dry = RenderHumanChecked(state, package, section, upChain);
+        if (dry.Error is not null)
+            return dry.Stale ? Fresh(root, page, dry.Error) : Invalid(dry.Error);
+        if (dry.Violations.Count > 0)
+            return Invalid(dry.Violations[0], dry.Violations);
+
+        var created = WikiPackageStore.CreateHuman(root, package);
+        if (!created.Ok)
+            return Refused(created.Reason ?? created.Code);
+        var saved = created.Package!;
+        var claim = WikiPackageStore.Transition(root, saved.Id, WikiPackage.StatusApplying);
+        if (!claim.Ok)
+            return Refused(claim.Reason ?? claim.Code);
+
+        var prepared = PrepareUnderLock(ownerId, root, saved, null!);
+        if (!prepared.Ready)
+            return prepared.Code switch
+            {
+                CodeStale => Fresh(root, page, prepared.Reason ?? "правка устарела"),
+                CodeDrift => new(HumanEditOutcome.Drift, prepared.Reason, [prepared.Reason ?? ""]),
+                CodeGate => Invalid(prepared.Reason ?? "правка не проходит проверки", prepared.Violations),
+                _ => Refused(prepared.Reason ?? "применение не удалось"),
+            };
+        var written = WriteUnderLock(ownerId, root, saved.Id, prepared, null!);
+        if (!written.Applied)
+            return written.Code == CodeDrift
+                ? Fresh(root, page, written.Reason ?? "страница изменилась")
+                : Refused(written.Reason ?? "запись не удалась");
+
+        return new(HumanEditOutcome.Applied, null, [], saved.Id,
+            Sha256OfBytes(File.ReadAllBytes(full)), File.ReadAllText(full, System.Text.Encoding.UTF8));
+    }
+
+    // Свежая версия страницы для редактора: сравнение «Моё / ИИ / Было» строится по ней.
+    private static HumanEditResult Fresh(string root, string page, string reason)
+    {
+        var full = SafePath.JoinBelowRoot(root, "pages/" + page);
+        if (!File.Exists(full))
+            return new(HumanEditOutcome.Changed, reason, [reason]);
+        var bytes = File.ReadAllBytes(full);
+        return new(HumanEditOutcome.Changed, reason, [reason], Hash: Sha256OfBytes(bytes),
+            Content: System.Text.Encoding.UTF8.GetString(bytes));
+    }
+
+    private PrepareResult PrepareHuman(
+        string root, WikiPackage package, string section, IReadOnlyList<string> upChain,
+        List<WikiGate.Draft> state, IReadOnlyDictionary<string, string> manifest)
+    {
+        var res = RenderHumanChecked(state, package, section, upChain);
+        if (res.Error is not null)
+            return res.Stale
+                ? StaleResult(root, package.Id, res.Error)
+                : FailApply(root, package.Id, CodeGate, res.Error);
+        if (res.Violations.Count > 0)
+            return FailApply(root, package.Id, CodeGate,
+                $"итоговое состояние не проходит гейт: {res.Violations[0]}", res.Violations);
+
+        var snapshot = new Dictionary<string, string?>(res.Rendered.Count, StringComparer.Ordinal);
+        foreach (var draft in res.Rendered)
+            snapshot[draft.Path] = manifest.TryGetValue(draft.Path, out var h) ? h : null;
+        return new PrepareResult(true, null, null, [], res.Rendered) { Section = section, BaseSnapshot = snapshot };
+    }
+
+    // Рендер правки и весь гейт с правами автора human. Нарушения чужих страниц раздела (то, что
+    // лежало до правки и ей не принадлежит) человека не останавливают: его правка отвечает за свои
+    // страницы — иначе одна старая ошибка линта закрыла бы редактирование всего раздела.
+    private static HumanChecked RenderHumanChecked(
+        List<WikiGate.Draft> state, WikiPackage package, string section, IReadOnlyList<string> upChain)
+    {
+        var render = WikiHumanRender.Render(state, package);
+        if (render.Error is not null)
+            return new([], render.Error, render.Stale, []);
+
+        var working = new List<WikiGate.Draft>(state);
+        foreach (var draft in render.Drafts)
+        {
+            working.RemoveAll(d => d.Path == draft.Path);
+            working.Add(draft);
+        }
+        var sourceTexts = new Dictionary<string, string>(StringComparer.Ordinal);
+        var snapshot = WikiHumanRender.Snapshot(package);
+        if (snapshot.Length > 0)
+            sourceTexts[WikiHumanRender.CardPath(package)] = snapshot;
+
+        var touched = render.Drafts.Select(d => d.Path).ToHashSet(StringComparer.Ordinal);
+        var violations = WikiGate.Check(working, section, upChain, sourceTexts, WikiGate.VerbatimScope.GivenOnly,
+                WikiPackage.AuthorHuman, state)
+            .Where(v =>
+            {
+                var path = v.Split(':', 2)[0];
+                return touched.Contains(path) || !path.EndsWith(".md", StringComparison.Ordinal);
+            })
+            .ToList();
+        return new(render.Drafts, null, false, violations);
+    }
+
+    // Состояние проверки: страницы раздела и цепочки «вверх» мимо кэша графа (шаг 1 решения 4).
+    private (List<WikiGate.Draft> State, IReadOnlyList<string> UpChain) BuildState(string ownerId, string section)
+    {
+        var model = _notes.BuildFresh(ownerId);
+        var upChain = WikiSections.UpChain(section, ownerId, _spheres);
+        var allowed = new HashSet<string>(StringComparer.Ordinal) { section };
+        allowed.UnionWith(upChain);
+
+        var state = new List<WikiGate.Draft>();
+        foreach (var n in model.Notes)
+        {
+            if (n.SourceKey != NotesService.WikiKey)
+                continue;
+            var sec = WikiSections.Parse(n.RelPath);
+            if (sec is null || !allowed.Contains(sec))
+                continue;
+            state.Add(new WikiGate.Draft(n.RelPath, n.Content));
+        }
+        return (state, upChain);
     }
 
     // Манифест против диска, по байтам: каждая запись манифеста — файл с этим хэшем; каждый

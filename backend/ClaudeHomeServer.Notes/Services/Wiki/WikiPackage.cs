@@ -30,6 +30,20 @@ public sealed record WikiPackage
     public static readonly IReadOnlyList<string> OpValues =
         [OpCreate, OpAppend, OpSupersede, OpConflict, OpLink];
 
+    // Операции, которых нет у модели: правку формулировки, секцию «Заметки» и поля шапки
+    // намеревается только человек (ADR-038). Пакет ai с такой операцией — ошибка формы.
+    public const string OpEdit = "edit";
+    public const string OpNotes = "notes";
+    public const string OpHeader = "header";
+
+    public static readonly IReadOnlyList<string> HumanOnlyOpValues = [OpEdit, OpNotes, OpHeader];
+
+    // Что сделал пакет автора human — это же значение op строки журнала (actor: user).
+    public const string ActionEdit = "edit";
+    public const string ActionRestore = "restore";
+    // «Принять как мою правку» (ADR-038, §6): дифф «манифест → диск», собранный в пакет human.
+    public const string ActionAdopt = "adopt";
+
     /// <summary>Решение политики применения: `auto` — применяет код после проверок,
     /// `inbox` — ждёт решения человека («Входящие»). Ставит код (S4d), не модель.</summary>
     public const string DecisionAuto = "auto";
@@ -102,10 +116,72 @@ public sealed record WikiPackage
 
     /// <summary>Класс правки — ключ `origin × op` (единица автовыключения класса, решение
     /// 12г, мера 7). Ставится кодом из источника операции и её op.</summary>
-    public static string ClassKey(string origin, string op) => origin + "×" + op;
+    public static string ClassKey(string origin, string op, bool humanTarget = false) =>
+        origin + "×" + op + (humanTarget ? HumanTargetSuffix : "");
+
+    /// <summary>Хвост ключа класса замены, чья цель — утверждение человека (ADR-038, решение 4):
+    /// `session×supersede@human`. Замены человека считаются отдельным классом, чтобы их откаты
+    /// не размывались в окне замен ИИ. Хвост бывает только у supersede/conflict.</summary>
+    public const string HumanTargetSuffix = "@human";
+
+    /// <summary>Разбор ключа класса — ЕДИНСТВЕННАЯ точка (её зовут и WikiSettingsStore.IsValidClassKey,
+    /// и политика): два независимых разбора разошлись бы, и автовыключение класса `…@human`
+    /// молча не сработало бы — ключ отвергался бы как кривой. null — ключ не класс.</summary>
+    public static (string Origin, string Op, bool HumanTarget)? ParseClassKey(string? classKey)
+    {
+        if (classKey is null)
+            return null;
+        var parts = classKey.Split('×');
+        if (parts.Length != 2)
+            return null;
+        var op = parts[1];
+        var humanTarget = op.EndsWith(HumanTargetSuffix, StringComparison.Ordinal);
+        if (humanTarget)
+            op = op[..^HumanTargetSuffix.Length];
+        if (!WikiGate.OriginValues.Contains(parts[0]) || !OpValues.Contains(op))
+            return null;
+        if (humanTarget && op is not (OpSupersede or OpConflict))
+            return null;
+        return (parts[0], op, humanTarget);
+    }
+
+    /// <summary>Операция ИИ, применённая САМА (decision=auto) поверх утверждения человека: замена
+    /// (`supersede`) или оспаривание (`conflict`) с классом `…@human`. Принятое человеком из
+    /// «Входящих» сюда не входит: там решил человек, ИИ ничего не «переопределял». Одно правило для
+    /// признака журнала `overrodeHuman` и для строк утреннего уведомления (ADR-038, предохранители 4 и 6).</summary>
+    public static bool IsAutoOverrideOfHuman(Operation op) =>
+        op.Decision == DecisionAuto && ParseClassKey(op.Class) is { HumanTarget: true };
+
+    /// <summary>Сколько формулировок человека заменил ИИ сам (`supersede@human`) и на каких страницах
+    /// он сам оспорил утверждение человека (`conflict@human`): пакет → вклад в сводку ночи. Противоречие
+    /// между утверждениями ИИ сюда не входит (ADR-038, предохранители 2 и 6 — про формулировки человека).
+    /// Страницы — различные, в порядке операций.</summary>
+    public (int Replaced, IReadOnlyList<string> DisputedPages) NightSummary()
+    {
+        var replaced = Operations.Count(o => o.Op == OpSupersede && IsAutoOverrideOfHuman(o));
+        var pages = Operations
+            .Where(o => o.Op == OpConflict && IsAutoOverrideOfHuman(o))
+            .Select(o => o.Page)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        return (replaced, pages);
+    }
+
+    // Автор пакета (ADR-038): `ai` — пакет модели (ingest, ночной разбор, MCP), `human` — правка
+    // владельца через REST под пользовательским JWT. Карточку origin: human и секцию «Заметки»
+    // создаёт/меняет только `human` (WikiGate). Пакет без поля в JSON читается как `ai`.
+    public const string AuthorAi = "ai";
+    public const string AuthorHuman = "human";
+
+    public static readonly IReadOnlyList<string> AuthorValues = [AuthorAi, AuthorHuman];
 
     public int V { get; init; } = ModelVersion;
     public required string Id { get; init; }
+    /// <summary>Автор пакета; по умолчанию `ai` — обратная совместимость со старыми файлами.</summary>
+    public string Author { get; init; } = AuthorAi;
+    /// <summary>Что сделал пакет human: `edit` | `restore` («Вернуть мою»); у пакета ai null.
+    /// Ставит код (REST), в журнал идёт как op.</summary>
+    public string? Action { get; init; }
     public required string Section { get; init; }
     public required IReadOnlyList<SourceRef> Sources { get; init; }
     public required IReadOnlyList<Operation> Operations { get; init; }
@@ -126,6 +202,9 @@ public sealed record WikiPackage
         public required string Op { get; init; }
         /// <summary>Страница раздела, к которой идёт намерение (путь относительно pages/).</summary>
         public required string Page { get; init; }
+        /// <summary>Секция страницы, в которой идёт правка человека (append, edit, supersede):
+        /// у пакета ai null — модель пишет «Сводку»/«Противоречия» по виду операции.</summary>
+        public string? PageSection { get; init; }
         /// <summary>Что замещается/оспаривается (supersede, conflict) или цель ссылки (link).
         /// supersede называет заменяемое утверждение: без него нет проверки на stale.</summary>
         public string? Target { get; init; }
@@ -165,6 +244,13 @@ public sealed record WikiPackage
             errors.Add($"версия пакета {p.V}, ожидаемая {ModelVersion}");
         if (!IsSafeId(p.Id))
             errors.Add("id пакета не GUID");
+        if (p.Author is null || !AuthorValues.Contains(p.Author))
+            errors.Add($"автор пакета «{p.Author ?? "null"}» не из перечня {string.Join(", ", AuthorValues)}");
+        var isHuman = p.Author == AuthorHuman;
+        if (isHuman && p.Action is not (ActionEdit or ActionRestore or ActionAdopt))
+            errors.Add($"у пакета human действие «{p.Action ?? "null"}» не из перечня {ActionEdit}, {ActionRestore}, {ActionAdopt}");
+        if (!isHuman && p.Action is not null)
+            errors.Add("действие (edit/restore) бывает только у пакета human");
         // Null в поле валидного JSON (восстановленный бэкап, ручная правка, частично
         // уехавший файл) — ошибка формы, а не NRE: проверка до разбора (ревью S4a, MAJOR 2),
         // иначе один такой файл роняет «Входящие» целиком.
@@ -193,6 +279,8 @@ public sealed record WikiPackage
                 }
                 if (!WikiGate.OriginValues.Contains(s.Origin))
                     errors.Add($"origin «{s.Origin}» не из перечня");
+                // Ссылка на существующую карточку human допустима и пакету ai (ADR-038, §2);
+                // создание такой карточки отбивает гейт сравнением с состоянием раздела.
                 if (string.IsNullOrWhiteSpace(s.Ref))
                     errors.Add("источник без карточки");
             }
@@ -213,7 +301,8 @@ public sealed record WikiPackage
                     errors.Add("null в списке операций");
                     continue;
                 }
-                if (!OpValues.Contains(op.Op))
+                var knownOp = OpValues.Contains(op.Op) || (isHuman && HumanOnlyOpValues.Contains(op.Op));
+                if (!knownOp)
                     errors.Add($"операция «{op.Op}» не из перечня");
                 // Пакет — в пределах одного раздела: страница обязана принадлежать его разделу.
                 if (op.Page is null)
@@ -226,19 +315,18 @@ public sealed record WikiPackage
                     errors.Add($"операция «{op.Op}» во «Входящих» без причины");
                 // Класс ставится из источника пакета и op: своя строка класса невозможна.
                 // Для нераспознанной op про класс молчим — про неё уже сказано выше.
-                if (!OpValues.Contains(op.Op))
+                if (!knownOp)
                     continue;
-                if (p.Sources is not null && !p.Sources.Any(s => s is not null && op.Class == ClassKey(s.Origin, op.Op)))
+                if (p.Sources is not null && !p.Sources.Any(s => s is not null
+                    && (op.Class == ClassKey(s.Origin, op.Op)
+                        || (op.Class == ClassKey(s.Origin, op.Op, humanTarget: true)))))
                     errors.Add($"класс «{op.Class}» не из источников пакета и не по op «{op.Op}»");
-                switch (op.Op)
-                {
-                    case OpCreate or OpAppend or OpSupersede when string.IsNullOrWhiteSpace(op.Text):
-                        errors.Add($"операция «{op.Op}» без содержания");
-                        break;
-                    case OpSupersede or OpConflict or OpLink when string.IsNullOrWhiteSpace(op.Target):
-                        errors.Add($"операция «{op.Op}» без цели (замещаемого утверждения или ссылки)");
-                        break;
-                }
+                // supersede человека — «снято человеком»: утверждение убирают в «Историю», нового текста нет.
+                var textRequired = op.Op is OpCreate or OpAppend or OpEdit || (op.Op == OpSupersede && !isHuman);
+                if (textRequired && string.IsNullOrWhiteSpace(op.Text))
+                    errors.Add($"операция «{op.Op}» без содержания");
+                if (op.Op is OpSupersede or OpConflict or OpLink or OpEdit or OpHeader && string.IsNullOrWhiteSpace(op.Target))
+                    errors.Add($"операция «{op.Op}» без цели (замещаемого утверждения, ссылки или поля)");
                 if (op.BaseHashes is null)
                 {
                     errors.Add("baseHashes операции null");

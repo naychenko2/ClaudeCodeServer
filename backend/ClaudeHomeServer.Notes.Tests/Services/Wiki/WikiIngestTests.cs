@@ -378,6 +378,39 @@ public class WikiIngestTests : IDisposable
             .Should().ContainKey(PagePath).WhoseValue.Should().Be(ts);
     }
 
+    // ── B4a: правка человека (ADR-038) — отдельный читатель, не откат ───────────────
+
+    [Fact]
+    public void ReadLastHumanEdits_БерётПоследнююПравкуЧеловека_BezОкна_ИгнорируетАвтоматикуИОткаты()
+    {
+        var t1 = new DateTimeOffset(2026, 1, 5, 9, 0, 0, TimeSpan.Zero);
+        var t2 = t1.AddDays(300); // «без окна»: правка почти годичной давности всё равно видна
+        LogLine(t1.ToString("O"), "edit", "user", PagePath);
+        LogLine(t2.ToString("O"), "restore", "user", PagePath);
+        LogLine(t2.AddDays(1).ToString("O"), "edit", "keeper", PagePath);   // автоматика — не человек
+        LogLine(t2.AddDays(2).ToString("O"), "revert", "user", PagePath);   // откат — механизм N7d
+        LogLine(t2.AddDays(3).ToString("O"), "adopt", "user", PagePath);    // «Принять как есть» — не правка
+        LogLine(t1.ToString("O"), "edit", "user", "Проекты/p1/Другая.md");
+
+        var edits = WikiJournalReader.ReadLastHumanEdits(Root);
+
+        edits[PagePath].Should().Be(t2, "последняя правка человека — restore, позже неё только не-правки");
+        edits["Проекты/p1/Другая.md"].Should().Be(t1);
+        WikiJournalReader.ReadRecentHumanReverts(Root, t1).Should().ContainKey(PagePath, "откат читает прежний читатель");
+    }
+
+    [Fact]
+    public void ReadLastHumanEdits_НетЖурналаИБитыеСтроки_ПустоБезИсключения()
+    {
+        WikiJournalReader.ReadLastHumanEdits(Root).Should().BeEmpty("журнала ещё нет");
+
+        var path = Path.Combine(Root, "keeper", "log.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.AppendAllText(path, "{обрыв\n[1,2]\n");
+
+        WikiJournalReader.ReadLastHumanEdits(Root).Should().BeEmpty();
+    }
+
     // ── M1 (доработка ревью S6b-3): подтверждённая цитата доходит до пакета и сноски ──
     // Модель отвечает как просит промпт: пересказ в text, дословная выдержка в quote
     // (WikiKeeperPrompts.cs:126). В пакет идёт цитата: применение рендерит строку

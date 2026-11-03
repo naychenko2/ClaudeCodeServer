@@ -492,7 +492,8 @@ public sealed class WikiPackageRevert
         var cutoff = now.ToUniversalTime() - PreimageRetention;
         return PurgeOldDir(SafePath.Join(root, "keeper/preimages"), cutoff)
             + PurgeOldDir(SafePath.Join(root, "keeper/retract"), cutoff)
-            + PurgeOldApplied(root, cutoff);
+            + PurgeOldApplied(root, cutoff)
+            + WikiBaselines.Purge(root, cutoff);
     }
 
     /// <summary>Запись состояния применения (keeper/applied/{pkgId}.json) держит ровно то, чем

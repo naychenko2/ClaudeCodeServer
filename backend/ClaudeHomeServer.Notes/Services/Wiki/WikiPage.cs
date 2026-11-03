@@ -19,6 +19,12 @@ public sealed class WikiPage
     public static readonly IReadOnlyList<string> ChronicleSectionNames =
         ["О чём", "Что решили", "Что выяснили", "Открытые вопросы"];
 
+    // Необязательная последняя секция «Заметки» (ADR-038, решение Андрея 1): свободный markdown
+    // человека без сносок и цитат. Идёт после последней канонической секции и у обычной
+    // страницы, и у chronicle. Пишет только пакет автора human (WikiGate); ИИ читает её
+    // через карточку origin: human и не меняет. Утверждением не считается.
+    public const string NotesSectionName = "Заметки";
+
     // Секции, чьё утверждение обязано заканчиваться сноской (ADR-035, решение 3:
     // утверждение — абзац или пункт «Сводки» и «Противоречий»; у хроники — решения и
     // находки, решение 12б). «Хронология» принимает утверждения по append (решение 12г),
@@ -44,6 +50,9 @@ public sealed class WikiPage
     // Секции в фиксированном для типа порядке; ссылки сносок в строках уже канонические (s1…sN).
     public required IReadOnlyList<Section> Sections { get; init; }
     public IReadOnlyList<WikiFootnote> Footnotes { get; init; } = [];
+
+    /// <summary>Секция «Заметки» (null — её на странице нет).</summary>
+    public Section? Notes => Sections.FirstOrDefault(s => s.Name == NotesSectionName);
 
     public readonly record struct Result(WikiPage? Model, IReadOnlyList<string> Errors);
 
@@ -133,9 +142,13 @@ public sealed class WikiPage
                     continue;
                 }
                 var expectedIndex = sections.Count;
-                if (expectedIndex >= canonical.Count || name != canonical[expectedIndex])
+                // «Заметки» допустимы только сразу после полного канонического набора.
+                var fits = expectedIndex < canonical.Count
+                    ? name == canonical[expectedIndex]
+                    : expectedIndex == canonical.Count && name == NotesSectionName;
+                if (!fits)
                 {
-                    errors.Add($"секция '{name}' не в фиксированном порядке {string.Join(" → ", canonical)}");
+                    errors.Add($"секция '{name}' не в фиксированном порядке {string.Join(" → ", canonical)} [→ {NotesSectionName}]");
                     continue;
                 }
                 sections.Add(new Section { Name = name, Lines = new List<string>() });

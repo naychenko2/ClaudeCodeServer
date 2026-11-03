@@ -228,7 +228,7 @@ public class WikiRetractFootnoteTests : IDisposable
         {
             Id = WikiPackageStore.NewId(),
             Section = WikiSections.Common,
-            Sources = [new WikiPackage.SourceRef("session", sourceRef[(sourceRef.IndexOf(':') + 1)..])],
+            Sources = [new WikiPackage.SourceRef(sourceRef[..sourceRef.IndexOf(':')], sourceRef[(sourceRef.IndexOf(':') + 1)..])],
             Operations = ops,
             Status = WikiPackage.StatusChecking,
         };
@@ -288,6 +288,31 @@ public class WikiRetractFootnoteTests : IDisposable
         model.Should().NotBeNull("страница после снятия сносок обязана оставаться валидной");
         model!.Footnotes.Should().HaveCount(2);
         model.Footnotes.Should().OnlyContain(f => f.Target.Text == CardTitleB);
+    }
+
+    // ─── B1 (ADR-038): уже лежащие карточка human и «Заметки» не мешают снятию сносок ──────────
+
+    [Fact]
+    public async Task Retract_ВРазделеЕстьКарточкаHumanИЗаметки_СнятиеПроходит()
+    {
+        // Мутация «без базы» (убрать baseState из WikiGate.Check в WikiRetractService): гейт
+        // видит карточку human и «Заметки» как новые — страница названа в Failed, Ok-проверка
+        // и NotContain(ClaimA2) краснеют. Карточка и «Заметки» лежат на диске ДО снятия.
+        await WriteCardsAndPage();
+        await ApplyAThenB();
+        var humanCard = CardFile("Моя карточка", "human-1").Replace("origin: session", "origin: human");
+        File.WriteAllText(PageFull("Общее/Моя-карточка.md"), humanCard, new UTF8Encoding(false));
+        const string notesPage = "---\ntype: topic\naliases: []\nowns: []\nsources: []\nstatus: active\n---\n\n" +
+            "# Страница с заметками\n\n## Сводка\n\n## Хронология\n\n## Противоречия\n\n## История\n\n" +
+            "## Заметки\nМоя мысль.\n";
+        File.WriteAllText(PageFull("Общее/Страница-с-заметками.md"), notesPage, new UTF8Encoding(false));
+
+        var r = await _sut.RetractAsync(User, RefA);
+
+        r.Ok.Should().BeTrue(r.Reason);
+        r.Failed.Should().BeEmpty("карточка human и «Заметки» уже были в разделе — ретракт их не создаёт");
+        File.ReadAllText(PageFull(PagePath)).Should().NotContain(ClaimA2);
+        File.ReadAllText(PageFull("Общее/Страница-с-заметками.md")).Should().Contain("Моя мысль.");
     }
 
     // ─── 2. c2: на странице после retract — ни одной сноски на источник A ──────────────────────
@@ -564,5 +589,253 @@ public class WikiRetractFootnoteTests : IDisposable
         File.ReadAllText(PageFull(PagePath)).Should().NotContain(CardTitleA);
         File.ReadAllText(PageFull(Page2Path)).Should().Be(before2);
         LogLines("retract").Should().HaveCount(linesBefore, "повтор не дописывает строку");
+    }
+
+    // ─── B4b (ADR-038, предохранитель 5): retract возвращает формулировку человека ─────────────
+
+    private const string HumanCardTitle = "Моя правка";
+    private const string HumanCardPath = "Общее/Моя-правка.md";
+    private const string HumanClaim = "Для черновиков снимаем автоматическую проверку";
+
+    private static string HumanCardFile => CardFile(HumanCardTitle, "edit-1")
+        .Replace("origin: session", "origin: human").Replace("ref: session:edit-1#m1-9", "ref: human:edit-1");
+
+    // Страница после замены ИИ формулировки человека: в «Сводке» стоит утверждение чата A, а
+    // прежняя формулировка человека лежит в «Истории» со своей сноской на карточку human. Так
+    // выглядит страница после применения `supersede@human` (предохранитель 1); сам пакет ниже
+    // применяется поверх страницы, где человеческая строка стоит и в «Сводке», и в «Истории»:
+    // рендер заменяет первую (в «Сводке»), копия в «Истории» остаётся.
+    private static readonly string PageHumanBase = $$"""
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # Сущность
+
+        ## Сводка
+        {{HumanClaim}} [^s1]
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
+        {{HumanClaim}} [^s1]
+
+        [^s1]: [[{{HumanCardTitle}}]] — «{{HumanClaim}}»
+        """;
+
+    private static WikiPackage.Operation SupersedeHuman(string text) => new()
+    {
+        Op = WikiPackage.OpSupersede,
+        Page = PagePath,
+        Text = text,
+        Target = HumanClaim,
+        Class = WikiPackage.ClassKey("session", WikiPackage.OpSupersede, humanTarget: true),
+        Decision = WikiPackage.DecisionAuto,
+        BaseHashes = new Dictionary<string, string>(),
+    };
+
+    private async Task WriteHumanCardsAndPage()
+    {
+        await WriteViaKeeper(WikiSections.Common, CardPathA, CardFile(CardTitleA, ChatA));
+        await WriteViaKeeper(WikiSections.Common, CardPathB, CardFile(CardTitleB, ChatB));
+        // Карточку human кладёт пакет human (B3), здесь — прямой записью с записью в манифест: так её
+        // видит проверка применения (файл «не Хранителя» иначе отказывает пакету).
+        File.WriteAllText(PageFull(HumanCardPath), HumanCardFile, new UTF8Encoding(false));
+        WikiManifest.RecordApplied(Root, WikiSections.Common,
+            new Dictionary<string, string> { [HumanCardPath] = WikiManifest.Sha256Hex(HumanCardFile) });
+        await WriteViaKeeper(WikiSections.Common, PagePath, PageHumanBase);
+    }
+
+    [Fact]
+    public async Task Retract_ИсточникЗаменилФормулировкуЧеловека_ФормулировкаВозвращаетсяИзИстории()
+    {
+        // Мутация «без возврата» (PlanHumanRestores отдаёт пустой план): человеческая строка не
+        // возвращается, утверждение A просто снимается — Contain(HumanClaim в «Сводке») краснеет.
+        // Мутация «не убирать строку из «Истории»» (пропустить restoredHistory): формулировка
+        // стоит дважды — Be(1) по числу вхождений краснеет.
+        await WriteHumanCardsAndPage();
+        await Applied(RefA, CtxA, SupersedeHuman(ClaimAOnly));
+        await Applied(RefB, CtxB, Op(WikiPackage.OpAppend, PagePath, ClaimBOnly)); // окно: побайтный откат A невозможен
+
+        File.ReadAllText(PageFull(PagePath)).Should().Contain(ClaimAOnly + " [^s2]", "замена применилась");
+
+        var r = await _sut.RetractAsync(User, RefA);
+
+        r.Ok.Should().BeTrue(r.Reason);
+        r.Failed.Should().BeEmpty();
+        var pageText = File.ReadAllText(PageFull(PagePath));
+        pageText.Should().NotContain(ClaimAOnly, "утверждение откатанного источника снято");
+        var model = WikiPage.Parse(pageText).Model;
+        model.Should().NotBeNull("страница после возврата читается и проходит гейт");
+        model!.Sections.Single(sec => sec.Name == "Сводка").Lines
+            .Should().Contain(l => l.StartsWith(HumanClaim), "формулировка человека вернулась на место замены");
+        model.Sections.Single(sec => sec.Name == "История").Lines
+            .Should().NotContain(l => l.Contains(HumanClaim), "из «Истории» она ушла — действующая строка одна");
+        System.Text.RegularExpressions.Regex.Matches(pageText, HumanClaim).Count.Should().Be(2, "строка + цитата сноски");
+        // Сноска human цела, сноски на A нет, утверждение B не тронуто.
+        model.Footnotes.Should().Contain(f => f.Target.Text == HumanCardTitle);
+        model.Footnotes.Should().NotContain(f => f.Target.Text == CardTitleA);
+        pageText.Should().Contain(ClaimBOnly);
+    }
+
+    // Страница человека БЕЗ строки в «Истории»: перенос туда должен сделать само применение
+    // `supersede@human`, а не ручная фикстура (B6, находка В3).
+    private static readonly string PageHumanNoHistory = $$"""
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # Сущность
+
+        ## Сводка
+        {{HumanClaim}} [^s1]
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
+
+        [^s1]: [[{{HumanCardTitle}}]] — «{{HumanClaim}}»
+        """;
+
+    private async Task WriteHumanCardsAndPageNoHistory()
+    {
+        await WriteHumanCardsAndPage();
+        await WriteViaKeeper(WikiSections.Common, PagePath, PageHumanNoHistory);
+    }
+
+    [Fact]
+    public async Task Supersede_ЖивойПоток_ПрежняяФормулировкаЧеловекаУходитВИсториюДословно()
+    {
+        // Мутация «не писать в Историю» (убрать Add в WikiPlanValidator.RenderApply): в «Истории»
+        // пусто — Be(1) краснеет, а следом краснеет и возврат формулировки при retract.
+        await WriteHumanCardsAndPageNoHistory();
+        await Applied(RefA, CtxA, SupersedeHuman(ClaimAOnly));
+
+        var model = WikiPage.Parse(File.ReadAllText(PageFull(PagePath))).Model!;
+        model.Sections.Single(sec => sec.Name == "Сводка").Lines
+            .Should().Contain(l => l.StartsWith(ClaimAOnly)).And.NotContain(l => l.Contains(HumanClaim));
+        var history = model.Sections.Single(sec => sec.Name == "История").Lines;
+        history.Should().ContainSingle(l => l.StartsWith(HumanClaim), "прежняя строка — ровно одна, со своей сноской");
+        history.Single().Should().MatchRegex(@"\[\^s1\]$", "сноска на карточку человека не потеряна");
+
+        // Retract источника ИИ по живому потоку возвращает формулировку человека.
+        await Applied(RefB, CtxB, Op(WikiPackage.OpAppend, PagePath, ClaimBOnly)); // окно: побайтного отката нет
+        var r = await _sut.RetractAsync(User, RefA);
+        r.Ok.Should().BeTrue(r.Reason);
+        var after = WikiPage.Parse(File.ReadAllText(PageFull(PagePath))).Model!;
+        after.Sections.Single(sec => sec.Name == "Сводка").Lines
+            .Should().Contain(l => l.StartsWith(HumanClaim), "формулировка человека вернулась на место замены");
+        after.Sections.Single(sec => sec.Name == "История").Lines
+            .Should().NotContain(l => l.Contains(HumanClaim));
+    }
+
+    [Fact]
+    public async Task Supersede_ЖивойПоток_ВернутьМою_НаходитСтрокуВИстории()
+    {
+        // RenderRestore (путь «Вернуть мою») ищет формулировку в «Истории» по нормализованному
+        // тексту — без переноса из RenderApply он отвечает «в «Истории» нет такой формулировки».
+        await WriteHumanCardsAndPageNoHistory();
+        await Applied(RefA, CtxA, SupersedeHuman(ClaimAOnly));
+
+        var state = new List<WikiGate.Draft>
+        {
+            new(PagePath, File.ReadAllText(PageFull(PagePath))),
+            new(HumanCardPath, File.ReadAllText(PageFull(HumanCardPath))),
+            new(CardPathA, File.ReadAllText(PageFull(CardPathA))),
+        };
+        var restore = new WikiPackage
+        {
+            Id = WikiPackageStore.NewId(),
+            Section = WikiSections.Common,
+            Author = WikiPackage.AuthorHuman,
+            Action = WikiPackage.ActionRestore,
+            Sources = [new WikiPackage.SourceRef("human", "restore-1")],
+            Operations = [new WikiPackage.Operation
+            {
+                Op = WikiPackage.OpEdit, Page = PagePath, Text = HumanClaim, Target = ClaimAOnly,
+                Class = WikiPackage.ClassKey("human", WikiPackage.OpEdit),
+                Decision = WikiPackage.DecisionAuto, BaseHashes = new Dictionary<string, string>(),
+            }],
+            Status = WikiPackage.StatusChecking,
+        };
+
+        var res = WikiHumanRender.Render(state, restore);
+
+        res.Error.Should().BeNull();
+        res.Drafts.Single(d => d.Path == PagePath).Content.Should().Contain(HumanClaim + " [^s1]");
+    }
+
+    [Fact]
+    public void RenderApply_Supersede_СтрокаУжеВИстории_НеДублируется()
+    {
+        var state = new List<WikiGate.Draft> { new(PagePath, PageHumanBase) };
+        var op = SupersedeHuman(ClaimAOnly);
+
+        var draft = WikiPlanValidator.RenderApply(state, op, ClaimAOnly, CardTitleA);
+
+        draft.Should().NotBeNull();
+        var history = WikiPage.Parse(draft!.Value.Content).Model!.Sections.Single(sec => sec.Name == "История").Lines;
+        history.Count(l => l.StartsWith(HumanClaim)).Should().Be(1, "такая строка в «Истории» уже была");
+    }
+
+    [Fact]
+    public async Task Retract_ЗаменаОпираласьИНаДругойИсточник_ФормулировкаЧеловекаНеВозвращается()
+    {
+        // Замена, которую подтверждает ещё и чат B, не пропадает целиком: снимается только сноска A,
+        // утверждение остаётся с другим источником — и человеческую строку из «Истории» никто не
+        // зовёт. Мутация «возвращать безусловно» (убрать LosesAllFootnotes) краснеет: утверждение
+        // A-B подменилось бы человеческой строкой.
+        await WriteHumanCardsAndPage();
+        await Applied(RefA, CtxA, SupersedeHuman(ClaimAOnly));
+        // Правка страницы после пакета (она же — окно, где побайтный откат A невозможен): утверждение
+        // замены получило ещё и сноску на карточку B.
+        var text = File.ReadAllText(PageFull(PagePath));
+        text.Should().Contain(ClaimAOnly + " [^s2]");
+        var edited = text.Replace(ClaimAOnly + " [^s2]", ClaimAOnly + " [^s2][^s3]").TrimEnd() +
+            $"\n[^s3]: [[{CardTitleB}]] — «{ClaimAOnly}»\n";
+        await WriteViaKeeper(WikiSections.Common, PagePath, edited);
+
+        var r = await _sut.RetractAsync(User, RefA);
+
+        r.Ok.Should().BeTrue(r.Reason);
+        var model = WikiPage.Parse(File.ReadAllText(PageFull(PagePath))).Model!;
+        var summary = model.Sections.Single(sec => sec.Name == "Сводка").Lines;
+        summary.Should().Contain(l => l.StartsWith(ClaimAOnly), "утверждение осталось: его подтверждает B");
+        summary.Should().NotContain(l => l.StartsWith(HumanClaim), "человеческую строку не воскрешали");
+        model.Sections.Single(sec => sec.Name == "История").Lines
+            .Should().Contain(l => l.StartsWith(HumanClaim), "в «Истории» она как была");
+    }
+
+    [Fact]
+    public async Task Retract_ИсточникЧеловека_СноскиHumanНеСнимаются()
+    {
+        // Мутация «human — такой же источник» (убрать ветку Origin == OriginHuman в TraceOf):
+        // сноска на карточку human снимается вместе с утверждением — Contain(HumanClaim) краснеет.
+        await WriteHumanCardsAndPage();
+        var human = new WikiApplyService.ApplyContext(HumanCardTitle, HumanClaim + ". " + ClaimA2 + ".");
+        await Applied("human:edit-1", human, Op(WikiPackage.OpAppend, PagePath, ClaimA2)
+            with { Class = WikiPackage.ClassKey("human", WikiPackage.OpAppend) });
+        await Applied(RefB, CtxB, Op(WikiPackage.OpAppend, PagePath, ClaimBOnly)); // окно: побайтного отката нет
+
+        var r = await _sut.RetractAsync(User, "human:edit-1");
+
+        r.Ok.Should().BeTrue(r.Reason);
+        var pageText = File.ReadAllText(PageFull(PagePath));
+        var model = WikiPage.Parse(pageText).Model;
+        model.Should().NotBeNull();
+        pageText.Should().Contain(ClaimA2, "утверждение, подтверждённое только карточкой human, на месте");
+        model!.Footnotes.Should().Contain(f => f.Target.Text == HumanCardTitle, "сноски human retract не снимает никогда");
     }
 }

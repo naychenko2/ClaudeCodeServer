@@ -94,6 +94,12 @@ export const personalSectionRefusalText = 'Личный раздел пока н
 // кодом. Без контекста — нейтральный текст: вызывающий не знает, какой отказ перед ним.
 export type NotFoundContext = 'chat' | 'note';
 
+// Отказы «правка недоступна по устройству раздела» (локальный проект, раздел сферы) —
+// одна формулировка на оба места: её даёт и отказ контракта (коды ниже), и плашка
+// нечитаемой страницы (READONLY_TEXT, F3a-qa) — второй копии текста в фиче нет
+export const SECTION_OFF_TEXT = 'Вики локальных проектов — отдельной фичей';
+export const SPHERE_RESERVED_TEXT = 'Раздел сферы — следующая фича';
+
 // Отказы контракта (WikiErrorCode, S2f) — понятным русским текстом; 401/404 приходят без
 // тела и без кода, их отличаем по статусу. Формулировки — черновые (тексты фичи ведёт Софья).
 export function wikiErrorText(e: WikiError, ctx?: NotFoundContext): string {
@@ -102,8 +108,8 @@ export function wikiErrorText(e: WikiError, ctx?: NotFoundContext): string {
     case 'wiki_section_key': return 'Раздел не найден';
     case 'wiki_page_key': return 'Страница не найдена';
     case 'wiki_project_missing': return 'Проект не найден';
-    case 'wiki_section_off': return 'Вики локальных проектов — отдельной фичей';
-    case 'wiki_sphere_reserved': return 'Раздел сферы — следующая фича';
+    case 'wiki_section_off': return SECTION_OFF_TEXT;
+    case 'wiki_sphere_reserved': return SPHERE_RESERVED_TEXT;
     case 'wiki_refused': return 'Правку нельзя применить к этому состоянию страницы';
     case 'wiki_drift': return 'Страницу изменили мимо Хранителя — сначала разберите дрейф';
     case 'wiki_not_orphan': return 'Удалить можно только раздел удалённого проекта';
@@ -129,6 +135,10 @@ export function wikiErrorText(e: WikiError, ctx?: NotFoundContext): string {
     case 'wiki_class_key': return 'Неизвестный класс';
     // Список чатов разбора (GET /wiki/chats): файл разбора чатов не читается (R-W4-1)
     case 'wiki_triage_invalid': return 'Файл разбора чатов не читается';
+    // Правка страницы человеком (F4a)
+    case 'wiki_page_changed': return 'Страница изменилась, пока вы правили';
+    case 'wiki_unified_off': return 'Правка страниц сейчас выключена';
+    case 'wiki_edit_invalid': return 'Страницу нельзя сохранить в таком виде';
   }
   if (e.status === 401 || e.status === 403) return 'Нет доступа';
   if (e.status === 404) return 'Не найдено';
@@ -230,3 +240,192 @@ export function sectionPrefix(s: WikiSectionDto): string {
   if (ref.kind === 'sphere') return `Сферы / ${s.name ?? ''}`;
   return `Проекты / ${s.name ?? '—'}`;
 }
+
+// ─── Правка страницы (F4a) ───
+
+// Заголовки причин отказа гейта по кодам issues[] (ADR-038, SV1-Г); неизвестный код — без
+// заголовка, остаётся текст бэка
+export const EDIT_ISSUE_TITLE: Record<string, string> = {
+  wiki_link_sideways: 'Ссылка ведёт в соседний раздел',
+  wiki_link_unknown: 'Ссылка на страницу, которой нет',
+  wiki_link_prefix: 'Ссылка с неверным префиксом раздела',
+  wiki_header_field: 'В шапке правятся только summary, aliases и owns',
+  wiki_title_change: 'Заголовок страницы не правится',
+  wiki_notes_footnote: 'В секции «Заметки» не бывает сносок',
+  wiki_parse: 'Текст не удалось разобрать как страницу',
+};
+
+// Строка violations начинается с «путь»: — префикс человеку не нужен
+export function stripViolationPrefix(v: string): string {
+  return v.replace(/^«[^»]*»:\s*/, '');
+}
+
+export const EDIT_TEXT = {
+  edit: 'Править',
+  save: 'Сохранить',
+  cancel: 'Отмена',
+  remove: 'Убрать',
+  restore: 'Вернуть',
+  saved: 'Сохранено',
+  unchanged: 'Ничего не изменилось',
+  removeAsk: 'Убрать утверждение?',
+  removeHistory: 'Оно уйдёт в «Историю» страницы, удалено не будет.',
+  aiWarn: 'Это формулировка ИИ. После сохранения прежняя уйдёт в «Историю» страницы, а утверждение станет вашим.',
+  add: 'Добавить утверждение',
+  addPlaceholder: 'Новое утверждение',
+  addRemove: 'Убрать новое утверждение',
+  blank: 'Пустое утверждение не сохранить — уберите его кнопкой «Убрать».',
+  offTitle: 'Правка страниц выключена',
+  offText: 'Ваши изменения не сохранены. Включите «Заметки и Вики» в настройках и повторите.',
+  conflictTitle: 'Страница изменилась, пока вы правили',
+  conflictText: 'ИИ дописал её, пока вы правили. Ваш текст не потерян и ничего не перезаписано: выберите, что оставить.',
+  conflictBadge: 'Нужно решить',
+  conflictBoth: 'изменили и вы, и ИИ',
+  conflictOnlyMine: 'правили только вы',
+  conflictOnlyAi: 'правил только ИИ',
+  conflictSame: 'вы и ИИ написали одно и то же',
+  conflictMine: 'Моё',
+  conflictAi: 'ИИ',
+  conflictWas: 'Было, когда вы начали',
+  conflictRemoved: 'раздела здесь нет',
+  conflictMineRemoved: 'вы убрали это утверждение',
+  takeMine: 'Оставить моё',
+  takeAi: 'Взять их',
+  keepEditing: 'Слить вручную',
+  closeNoSave: 'Закрыть без сохранения',
+  conflictGone: 'Страницы больше нет — сохранить правку некуда.',
+  invalidTitle: 'Страницу нельзя сохранить',
+  invalidKeep: 'Ваша правка осталась в редакторе — поправьте и сохраните ещё раз.',
+  failTitle: 'Не удалось сохранить',
+  failText: 'Ваша правка осталась в редакторе. Проверьте соединение и повторите.',
+} as const;
+
+// ─── Плашка «только чтение» / «нельзя править здесь» (F3a-qa, дефект QA a16c6167) ───
+
+// Где правка недоступна по устройству раздела (локальный проект, раздел сферы), формулировка
+// про Хранителя неверна: причина другая. Заголовок — смысл, данный в дефекте; причины —
+// существующие тексты отказа (SECTION_OFF_TEXT / SPHERE_RESERVED_TEXT), не новая выдумка.
+// Для прочих случаев (без флагов, дрейф, сирота, правка выключена) текст плашки прежний —
+// он там верен и остаётся в компоненте.
+export const READONLY_TEXT = {
+  blockedTitle: 'Эту страницу нельзя править здесь',
+  localReason: SECTION_OFF_TEXT,
+  sphereReason: SPHERE_RESERVED_TEXT,
+} as const;
+
+// ─── Метки «ИИ заменил / оспаривает» и «Вернуть мою» (F3b; тексты — записка notes-wiki-unified-v1) ───
+
+export const OVERRIDE_TEXT = {
+  replacedTitle: 'ИИ заменил вашу формулировку',
+  replacedText: 'Прежняя — в «Истории».',
+  replacedTag: 'ИИ заменил вашу формулировку',
+  disputedTitle: 'ИИ оспаривает ваше утверждение',
+  disputedText: 'Ваш текст на месте. Довод ИИ — в «Противоречиях»: пока вы не решите, автоматика страницу не трогает.',
+  disputedTag: 'ИИ оспаривает',
+  restore: 'Вернуть мою',
+  // «Журнал» (F6b, записка notes-wiki-unified-v1 §«Журнал»): фильтр и короткий вид действия
+  // в строке; «Открыть страницу» — действие спора: вернуть нечего, текст человека на месте
+  filter: 'ИИ поменял моё',
+  kindReplaced: 'заменил',
+  kindDisputed: 'оспорил',
+  openPage: 'Открыть страницу',
+  restored: 'Вернули вашу формулировку. 7 дней ИИ не меняет ваше на этой странице сам.',
+  historyCaption: 'Ваша формулировка, заменена ИИ',
+  changed: 'Страница изменилась, пока вы возвращали. Показали свежую: проверьте и повторите.',
+  failed: 'Не удалось вернуть формулировку. Страница осталась как есть — повторите.',
+  dotTitle: 'ИИ заменил ваши формулировки',
+} as const;
+
+// ─── Причины «Входящих» (F6a; ADR-038 «Входящие»: причины правила замены») ───
+// Цель предложения — утверждение человека, если class операции оканчивается на @human
+// (ADR-038, раздел «Входящие»). Причина такой операции приходит текстом бэка; фронт узнаёт
+// случай по устойчивому началу строки (таблица ADR — зеркало строк WikiApplyPolicy) и
+// показывает короткий текст пункта дословно; нераспознанное начало — нейтральный текст,
+// сырая строка в строку списка не выходит (экран пакета показывает причину как есть).
+// Причины операций не-человеческих целей показываются как есть (их тексты — не таблица ADR).
+
+// Коды причин — чисто фронтовые: бэк причин-кодов не отдаёт вовсе (ADR-038:424
+// «Устойчивого кода нет»), в DTO приходит только текст reason. Фронт узнаёт случай по
+// устойчивому началу строки и присваивает свой код; тип живёт здесь, в единственном
+// потребителе, а не в wire-контракте (R-F6a).
+export type WikiInboxReasonCode =
+  | 'source_time_unknown'
+  | 'source_older_than_edit'
+  | 'target_time_unknown'
+  | 'source_not_newer'
+  | 'recently_reverted'
+  | 'class_disabled';
+
+// Две «Неизвестно…» причины: длинный префикс стоит первым, первый записан с двоеточием,
+// как в таблице ADR. Каждой из этих мер по отдельности достаточно, чтобы их различить; без обеих
+// вторая причина показала бы текст первой — тест-таблица ADR на этом краснеет.
+// Третья часть пары — обязательное слово в строке: префикс «класс правки» короткий
+// (имя класса в строке бэка динамическое), «выключен» есть и в строке ADR, и в строке
+// бэка (WikiApplyPolicy.cs:140); будущая строка с этим началом, но не о выключении
+// класса, в этот код не попадёт.
+const INBOX_REASON_PREFIXES: Array<[string, WikiInboxReasonCode, string?]> = [
+  ['Неизвестно, когда написан источник утверждения', 'target_time_unknown'],
+  ['Неизвестно, когда написан источник:', 'source_time_unknown'],
+  ['Источник старше вашей правки', 'source_older_than_edit'],
+  ['Источник не новее заменяемого утверждения', 'source_not_newer'],
+  ['страницу откатили вручную', 'recently_reverted'],
+  ['класс правки', 'class_disabled', 'выключен'],
+];
+
+// Короткие тексты пунктов — правая колонка таблицы ADR-038, дословно.
+export const INBOX_REASON_TEXT: Record<WikiInboxReasonCode, string> = {
+  source_time_unknown: 'Неизвестно, когда написан источник',
+  source_older_than_edit: 'Источник старше вашей правки',
+  target_time_unknown: 'Неизвестно, когда написан источник утверждения',
+  source_not_newer: 'Источник не новее заменяемого утверждения',
+  recently_reverted: 'Вы недавно откатывали эту страницу',
+  class_disabled: 'Класс выключен',
+};
+
+export const INBOX_TEXT = {
+  // Подпись сверху списка — ADR-038 («Что поменять в макете», п. 4), дословно
+  caption: 'Остальное, включая замену ваших формулировок новыми источниками, ИИ применил сам — это видно в «Журнале».',
+  // Запасной текст для нераспознанного начала причины: нейтральный, без сырой строки
+  unknown: 'ИИ не смог применить это сам',
+} as const;
+
+export function isHumanTargetClass(classKey: string): boolean {
+  return classKey.endsWith('@human');
+}
+
+export function wikiInboxReasonCode(reason: string | null | undefined): WikiInboxReasonCode | null {
+  if (!reason) return null;
+  for (const [prefix, code, mustContain] of INBOX_REASON_PREFIXES) {
+    if (reason.startsWith(prefix) && (!mustContain || reason.includes(mustContain))) return code;
+  }
+  return null;
+}
+
+export function wikiInboxReasonText(reason: string | null | undefined): string {
+  const code = wikiInboxReasonCode(reason);
+  return code ? INBOX_REASON_TEXT[code] : INBOX_TEXT.unknown;
+}
+
+// ─── Класс «Замена ваших формулировок» в «Настройках» (F6c; ADR-038 «Класс @human в „Настройках“») ───
+
+// Бэк отдаёт класс замены формулировок человека сырыми ключами `…@human` (по одному на
+// origin × supersede/conflict). Строка «Замена ваших формулировок» — агрегат этих записей
+// (ADR-038:440); имя и описание — дословно из ADR-038 (решение 4, «Настройки») и макета
+// notes-wiki-unified-v1-proposal («Применение»). Случай класса — та же проверка хвоста
+// ключа, что во «Входящих» (F6a), а не таблица классов: бэк добавит origin — строка
+// останется одной.
+export const HUMAN_CLASS_TITLE = 'Замена ваших формулировок';
+export const HUMAN_CLASS_DESC = 'ИИ меняет ваше сам, если источник новее вашей правки. Прежняя — в «Истории», на странице — «Вернуть мою».';
+
+// ─── Секция «Заметки» страницы (F5a; подпись — макет и записка notes-wiki-unified-v1, §6) ───
+
+export const NOTES_TEXT = {
+  section: 'Заметки',
+  caption: 'свободный текст · ИИ его не меняет, но читает',
+  captionEdit: 'свободный текст, без сносок · последняя секция',
+  emptyTitle: 'Здесь можно оставить заметку для себя и ИИ',
+  emptyText: 'Свободный текст: ИИ его не меняет, но читает и может на него сослаться.',
+  write: 'Записать заметку',
+  placeholder: 'Текст заметки',
+  aria: 'Секция «Заметки»',
+} as const;

@@ -224,6 +224,53 @@ public class WikiSourceCaptureTests : IDisposable
         ReadCard(r2).Should().Be(first);
     }
 
+    // B4a: время написания источника — в карточке (written), не captured.
+    [Fact]
+    public async Task ЗахватЗаметки_КарточкаНесётWritten_ВремяПравкиЗаметки()
+    {
+        var project = NewProject("ПWritten");
+        var note = _notes.Create(User, new CreateNoteRequest("Со временем", "содержание", project.Id));
+
+        var r = await _sut.CaptureNote(User, note.Id);
+
+        var card = WikiFrontmatter.Parse(ReadCard(r)).Model!;
+        card.Written.Should().NotBeNullOrEmpty();
+        DateTimeOffset.Parse(card.Written!).Should().Be(DateTimeOffset.Parse(note.UpdatedAt).ToUniversalTime());
+    }
+
+    [Fact]
+    public void Frontmatter_Written_КруговойРазбор_БезПоляКарточкаВалидна()
+    {
+        const string head = "---\ntype: source\norigin: note\nref: note:1\nhash: h\ncaptured: 2026-10-27T10:00:00.0000000+00:00\n";
+        const string tail = "aliases: []\nowns: []\nsources: []\nstatus: active\n---\n\n# К\n";
+
+        var with = WikiFrontmatter.Parse(head + "written: 2026-10-01T08:00:00.0000000+00:00\n" + tail).Model!;
+        var without = WikiFrontmatter.Parse(head + tail).Model!;
+
+        with.Written.Should().Be("2026-10-01T08:00:00.0000000+00:00");
+        WikiFrontmatter.Parse(with.Render()).Model.Should().Be(with);
+        without.Written.Should().BeNull("старые карточки без поля — время неизвестно, не ошибка");
+        without.Render().Should().NotContain("written:");
+    }
+
+    [Fact]
+    public void LastMessageAt_СамоеПозднееВДиапазоне_ГраницыВключены_БезМеток_Null()
+    {
+        var history = new List<StoredMessage>
+        {
+            new StoredUserMessage("a", timestamp: 1000),
+            new StoredTextMessage("b", timestamp: 5000),
+            new StoredTextMessage("c", timestamp: 9000),
+            new StoredTextMessage("без метки"),
+        };
+
+        WikiSourceCapture.LastMessageAt(history, 1, 2)!.Value.ToUnixTimeMilliseconds().Should().Be(5000);
+        WikiSourceCapture.LastMessageAt(history, 3, 3)!.Value.ToUnixTimeMilliseconds().Should().Be(9000, "m3 включено");
+        WikiSourceCapture.LastMessageAt(history, 4, 4).Should().BeNull("сообщение без метки времени");
+        WikiSourceCapture.LastMessageAt(history, 1, 99)!.Value.ToUnixTimeMilliseconds().Should().Be(9000, "верх обрезается длиной истории");
+        WikiSourceCapture.LastMessageAt([], 1, 1).Should().BeNull();
+    }
+
     // Дом вне проекта: по умолчанию «Личное»; с явным target — «Общее» (решение 3).
     [Fact]
     public async Task ЗахватЛичнойЗаметки_личныйРаздел_аСTargetCommon_общее()

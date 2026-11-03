@@ -202,16 +202,10 @@ public static class WikiSettingsStore
 
     /// <summary>Класс правки — составление, тем же и проверяемое, чем оно ставится
     /// (WikiPackage.ClassKey): «origin×op», origin из закрытого перечня (WikiGate.OriginValues),
-    /// op из перечня операций (WikiPackage.OpValues). Кривой ключ в настройках невозможен:
+    /// op из перечня операций (WikiPackage.OpValues), у supersede/conflict допустим хвост «@human»
+    /// (разбор — WikiPackage.ParseClassKey, единственная точка). Кривой ключ в настройках невозможен:
     /// политике о нём не вынести решения, и автовыключение не назовёт его в уведомлении.</summary>
-    internal static bool IsValidClassKey(string? classKey)
-    {
-        if (classKey is null) return false;
-        var parts = classKey.Split('×');
-        return parts.Length == 2
-            && WikiGate.OriginValues.Contains(parts[0])
-            && WikiPackage.OpValues.Contains(parts[1]);
-    }
+    internal static bool IsValidClassKey(string? classKey) => WikiPackage.ParseClassKey(classKey) is not null;
 
     /// <summary>Ночной блок целый (валидация входа, как у ключа класса): часы настоящие (0..23)
     /// и границы окна не совпадают — окно half-open [start,end), пустое окно не имеет смысла

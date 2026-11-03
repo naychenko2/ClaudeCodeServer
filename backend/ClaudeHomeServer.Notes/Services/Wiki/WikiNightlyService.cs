@@ -92,9 +92,12 @@ public sealed class WikiNightlyService : BackgroundService
     /// <summary>Итог прохода — то, что лежит в keeper/nightly-last.json. Date — дата начала окна
     /// (yyyy-MM-dd); Selected — чатов, прошедших отбор и дельту; Analyzed — разборов, вернувших
     /// исход; Applied — применённых пакетов; ToInbox — чатов с пакетами во «Входящих»; EstTokens —
-    /// оценка расхода (см. шапку).</summary>
+    /// оценка расхода (см. шапку). OverrodeHuman — формулировок человека, которые ИИ заменил за ночь
+    /// сам; DisputedPages — страниц, где он сам оспорил утверждение человека (conflict@human, ADR-038, предохранитель 6);
+    /// в файле итога поля аддитивны: старый итог читается нулями.</summary>
     public sealed record NightResult(
-        string Date, int Selected, int Analyzed, int Applied, int ToInbox, long EstTokens, string Outcome);
+        string Date, int Selected, int Analyzed, int Applied, int ToInbox, long EstTokens, string Outcome,
+        int OverrodeHuman = 0, int DisputedPages = 0);
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -309,7 +312,8 @@ public sealed class WikiNightlyService : BackgroundService
 
     private async Task<NightResult> RunPassAsync(string ownerId, string root, DateOnly date, CancellationToken ct)
     {
-        int selected = 0, analyzed = 0, applied = 0, toInbox = 0, packagesNight = 0;
+        int selected = 0, analyzed = 0, applied = 0, toInbox = 0, packagesNight = 0, overrodeHuman = 0;
+        var disputedPages = new HashSet<string>(StringComparer.Ordinal);
         long est = 0;
         var outcome = OutcomeCompleted;
         try
@@ -397,7 +401,13 @@ public sealed class WikiNightlyService : BackgroundService
                     WikiChatIngestService.OutcomeAwaitingHuman => 1, // число неизвестно: нижняя граница
                     _ => 0,
                 };
-                if (r.Outcome == WikiChatIngestService.OutcomeApplied) applied += made;
+                if (r.Outcome == WikiChatIngestService.OutcomeApplied)
+                {
+                    applied += made;
+                    overrodeHuman += r.OverrodeHuman;
+                    // Страница, оспоренная в двух чатах за ночь, — одна страница: счёт по множеству путей.
+                    foreach (var p in r.DisputedPages ?? []) disputedPages.Add(p);
+                }
                 else if (r.Outcome == WikiChatIngestService.OutcomeAwaitingHuman) toInbox++;
                 packagesNight += made;
                 packagesBySection[c.Home] = packagesBySection.GetValueOrDefault(c.Home) + made;
@@ -417,7 +427,8 @@ public sealed class WikiNightlyService : BackgroundService
         }
         return Result(outcome);
 
-        NightResult Result(string o) => new(FormatDate(date), selected, analyzed, applied, toInbox, est, o);
+        NightResult Result(string o) => new(FormatDate(date), selected, analyzed, applied, toInbox, est, o,
+            overrodeHuman, disputedPages.Count);
     }
 
     // Что мешает продолжать ПЕРЕД чатом: тумблер/флаг сняли (disabled_midway), окно закрылось
@@ -514,6 +525,30 @@ public sealed class WikiNightlyService : BackgroundService
         _ => null,
     };
 
+    /// <summary>Текст тела утреннего уведомления — ЕДИНСТВЕННАЯ точка сборки (ADR-038, предохранитель 6):
+    /// причина необычного исхода, затем по одной сводной строке за ночь («ИИ заменил N ваших
+    /// формулировок», «ИИ отметил противоречие на N страницах»; нулевая строка не пишется, строки на
+    /// каждую замену нет) и путь к «Журналу». Второго уведомления нет.</summary>
+    internal static string NotificationBody(string? reason, int overrodeHuman, int disputedPages)
+    {
+        var parts = new List<string>();
+        if (reason is not null) parts.Add(reason);
+        if (overrodeHuman > 0)
+            parts.Add($"ИИ заменил {overrodeHuman} {Plural(overrodeHuman, "вашу формулировку", "ваши формулировки", "ваших формулировок")}.");
+        if (disputedPages > 0)
+            parts.Add($"ИИ отметил противоречие на {disputedPages} {Plural(disputedPages, "странице", "страницах", "страницах")}.");
+        parts.Add("Подробности — во вкладке «Вики» → «Журнал».");
+        return string.Join(' ', parts);
+    }
+
+    // Русское число: 1 — one, 2–4 — few, остальное (5–20, 0) — many; 11–14 всегда many.
+    private static string Plural(int n, string one, string few, string many)
+    {
+        var tail = n % 100;
+        if (tail is >= 11 and <= 14) return many;
+        return (n % 10) switch { 1 => one, 2 or 3 or 4 => few, _ => many };
+    }
+
     /// <summary>Сообщение владельцу об итоге ночи — ровно одно на проход, после записи итога.
     /// Молчание: диспетчера нет в составе; или «ничего не разобрано, и ночь обычная» (сказать
     /// нечего). Иной исход — с причиной из OutcomeReason. Сбой доставки — предупреждение в
@@ -531,7 +566,7 @@ public sealed class WikiNightlyService : BackgroundService
                 Kind = result.Outcome == OutcomeCompleted ? "info" : "warning",
                 Type = "wiki_nightly",
                 Title = $"Ночной разбор: применено {result.Applied}, во «Входящих» {result.ToInbox}",
-                Body = (reason is not null ? reason + " " : "") + "Подробности — во вкладке «Вики» → «Журнал».",
+                Body = NotificationBody(reason, result.OverrodeHuman, result.DisputedPages),
                 // Url открывает вкладку «Вики» на её подкладке по умолчанию («Страницы»): deep-link на
                 // подвкладку «Журнал» во фронте не предусмотрен (WikiTab держит подвкладку локально),
                 // поэтому текст называет путь, а не обещает переход.

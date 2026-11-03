@@ -31,13 +31,13 @@ public sealed class WikiFrontmatter
         [StatusActive, StatusDisputed, StatusStale, StatusDrift];
 
     // Поля модели: type, kind, summary, aliases, owns. Поля кода: sources, updated, status.
-    // Поля карточки (только type: source): origin, ref, hash, captured, signal.
+    // Поля карточки (только type: source): origin, ref, hash, captured, signal, written.
     private const string Fence = "---";
 
     // Поля, запрещённые на страницах вики (ADR-035, решение 3).
     private static readonly string[] ForbiddenKeys = ["expires", "annotates", "file"];
     // Поля карточки источника: разрешены только у type: source; origin/ref/hash/captured обязательны.
-    private static readonly string[] CardKeys = ["origin", "ref", "hash", "captured", "signal"];
+    private static readonly string[] CardKeys = ["origin", "ref", "hash", "captured", "signal", "written"];
     private static readonly string[] RequiredCardKeys = ["origin", "ref", "hash", "captured"];
     // Поля списочной формы [a, b]; прочие — скаляр на одной строке.
     private static readonly string[] ListKeys = ["aliases", "owns", "sources"];
@@ -57,6 +57,10 @@ public sealed class WikiFrontmatter
     public string? Hash { get; init; }
     public string? Captured { get; init; }
     public string? Signal { get; init; }
+    // Когда написан сам источник (ISO 8601): время последнего сообщения диапазона чата, правки
+    // заметки, записи файла. Не captured (момент фиксации): бэклог старых чатов фиксируется
+    // сегодняшним числом (ADR-038, решение 4). Необязательно: карточка без него — «время неизвестно».
+    public string? Written { get; init; }
 
     public readonly record struct Result(WikiFrontmatter? Model, IReadOnlyList<string> Errors, int CloseLineIndex);
 
@@ -140,7 +144,7 @@ public sealed class WikiFrontmatter
                 if (!raw.ContainsKey(key))
                     errors.Add($"карточка источника: нет поля '{key}'");
 
-        string? origin = null, ref_ = null, hash = null, captured = null, signal = null;
+        string? origin = null, ref_ = null, hash = null, captured = null, signal = null, written = null;
         if (isSource)
         {
             if (raw.TryGetValue("origin", out var originRaw) && ScalarValue(originRaw, "origin", errors)) origin = originRaw;
@@ -148,6 +152,7 @@ public sealed class WikiFrontmatter
             if (raw.TryGetValue("hash", out var hashRaw) && ScalarValue(hashRaw, "hash", errors)) hash = hashRaw;
             if (raw.TryGetValue("captured", out var capturedRaw) && ScalarValue(capturedRaw, "captured", errors)) captured = capturedRaw;
             if (raw.TryGetValue("signal", out var signalRaw) && ScalarValue(signalRaw, "signal", errors)) signal = signalRaw;
+            if (raw.TryGetValue("written", out var writtenRaw) && ScalarValue(writtenRaw, "written", errors)) written = writtenRaw;
         }
         foreach (var key in CardKeys)
             raw.Remove(key);
@@ -194,6 +199,7 @@ public sealed class WikiFrontmatter
                 Hash = hash,
                 Captured = captured,
                 Signal = signal,
+                Written = written,
             };
     }
 
@@ -213,6 +219,7 @@ public sealed class WikiFrontmatter
             sb.Append("hash: ").Append(Hash).Append('\n');
             sb.Append("captured: ").Append(Captured).Append('\n');
             if (Signal is { Length: > 0 }) sb.Append("signal: ").Append(Signal).Append('\n');
+            if (Written is { Length: > 0 }) sb.Append("written: ").Append(Written).Append('\n');
         }
         sb.Append("aliases: ").Append(RenderList(Aliases)).Append('\n');
         sb.Append("owns: ").Append(RenderList(Owns)).Append('\n');
@@ -296,13 +303,14 @@ public sealed class WikiFrontmatter
         && Aliases.SequenceEqual(other.Aliases) && Owns.SequenceEqual(other.Owns)
         && Sources.SequenceEqual(other.Sources) && Updated == other.Updated
         && Status == other.Status && Origin == other.Origin && Ref == other.Ref
-        && Hash == other.Hash && Captured == other.Captured && Signal == other.Signal;
+        && Hash == other.Hash && Captured == other.Captured && Signal == other.Signal
+        && Written == other.Written;
 
     public override bool Equals(object? obj) => Equals(obj as WikiFrontmatter);
 
     public override int GetHashCode() =>
         HashCode.Combine(
             HashCode.Combine(Type, Kind, Summary, Status, Updated, Origin, Ref, Hash),
-            HashCode.Combine(Captured, Signal,
+            HashCode.Combine(Captured, Signal, Written,
                 string.Join(",", Aliases), string.Join(",", Owns), string.Join(",", Sources)));
 }

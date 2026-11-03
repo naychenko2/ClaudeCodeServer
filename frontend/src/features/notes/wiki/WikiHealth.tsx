@@ -12,15 +12,28 @@
 //
 // Повышение знания (ADR-036 §5): здесь только предложение. Решает человек и только кнопкой,
 // а кнопки нет: повышение отложено в Ф2.
+//
+// «Принять как мою правку» (F5c, ADR-038 «Контракт для фронта», §adopt): у страницы с дрейфом
+// на строке находки — действие человека: внешняя правка становится его правкой (пакет автора
+// human). Только под обоими флагами (llm-wiki и «Заметки и Вики»), только после подтверждения.
+// Конкурентность — тот же узор, что у «Вернуть мою» (useRestoreWikiStatement): замок в ref на
+// двойной клик; ответ, пришедший после смены страницы, отбрасывается по ключу «раздел + путь».
+// Честность исхода (вердикт R-F5c): «Здоровье» — отчёт ПОСЛЕДНЕГО прогона линта: GET health
+// отдаёт _health.md как есть (WikiController.cs:492-512); пишет его служба линта
+// (WikiLintService.cs:251,274,281 → WikiKeeper.cs:391) — в пути применения его не пишет никто.
+// Поэтому после принятия строка «дрейфа» остаётся в отчёте до следующей проверки; тексты
+// плашки ведут к «Проверить сейчас», а не обещают снятие строки.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, ArrowUpCircle, HeartPulse, RefreshCw } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { AlertTriangle, ArrowUpCircle, CheckCircle2, HeartPulse, RefreshCw } from 'lucide-react';
 import {
   C, FONT, FS, R, SP, useIsMobile,
-  WikiError, getWikiHealth, runWikiLint, useWikiTree,
+  FLAGS, useFeature, WikiError, adoptWikiPageMine, getWikiHealth, runWikiLint, useWikiTree,
 } from 'aihome_shell/kit';
 import { Badge, type BadgeTone } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
+import { ConfirmDialog } from '../../../components/ui/ConfirmDialog';
 import { EmptyState } from '../../../components/ui/EmptyState';
 import { Notice } from '../../../components/ui/Notice';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
@@ -235,9 +248,31 @@ export function healthErrorText(e: WikiError): string {
   return wikiErrorText(e);
 }
 
+// ─── «Принять как мою правку» (F5c) ───
+
+type MineNotice = { tone: 'info' | 'warning' | 'danger'; title: string; text?: string };
+
+// Отказы «Принять как мою правку» — русским текстом по коду (тот же приём, что healthErrorText):
+// 409 wiki_page_changed — «перечитай дрейф, не перезаписывай»; 409 wiki_unified_off и прочие
+// коды — общий текст по коду; 400 wiki_edit_invalid — причины гейта (issues), без них — message
+// бэка как есть. Сырого кода на экране нет.
+function mineErrorNotice(e: unknown): MineNotice {
+  if (e instanceof WikiError && e.code === 'wiki_page_changed') {
+    return { tone: 'warning', title: ADOPT_MINE.changedTitle, text: ADOPT_MINE.changedText };
+  }
+  if (e instanceof WikiError && e.code === 'wiki_edit_invalid') {
+    const detail = e.issues.length ? e.issues.map(i => i.message).join(' ') : e.message;
+    return { tone: 'danger', title: ADOPT_MINE.invalidTitle, text: detail || ADOPT_MINE.invalidText };
+  }
+  if (e instanceof WikiError) return { tone: 'danger', title: wikiErrorText(e) };
+  return { tone: 'danger', title: ADOPT_MINE.failTitle, text: ADOPT_MINE.failText };
+}
+
 // ─── Строки ───
 
-function FindingRow({ f }: { f: HealthFinding }) {
+// adopt — действие над этой страницей (для «дрейфа» — «Принять как мою правку», F5c);
+// для прочих видов его нет
+function FindingRow({ f, adopt }: { f: HealthFinding; adopt?: ReactNode }) {
   const meta = f.kind === 'unknown' ? null : KIND_META[f.kind];
   const countLabel = f.count !== null ? countText(f.kind, f.count) : null;
   return (
@@ -270,6 +305,7 @@ function FindingRow({ f }: { f: HealthFinding }) {
         <span style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textMuted }}>{countLabel}</span>
       )}
       {meta?.title && !f.message && <span style={{ fontSize: FS.sm, color: C.textMuted }}>{meta.title}</span>}
+      {adopt}
     </div>
   );
 }
@@ -344,6 +380,68 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
     })();
   }, [busy, selectedKey]);
 
+  // ─── «Принять как мою правку» (F5c) ───
+  // Действие есть только под обоими флагами: бэк проверяет те же два до ветки mode:mine
+  // (UnifiedOffRefusal), без них запрос не начать.
+  // Оба useFeature — безусловные (F5c-rw2, образец WikiPageView.tsx:328-330): при «&&» прямо
+  // второй вызов пропускается при выключенном первом, и переключение флага при открытом
+  // «Здоровье» меняло бы число хуков между рендерами (rules-of-hooks).
+  const wikiFlag = useFeature(FLAGS.llmWiki);
+  const unifiedFlag = useFeature(FLAGS.notesWikiUnified);
+  const canAdoptMine = wikiFlag && unifiedFlag;
+  const [mineAsk, setMineAsk] = useState<string | null>(null); // путь страницы под подтверждением
+  const [mineUi, setMineUi] = useState<{ id: string; busy: boolean; notice: MineNotice | null } | null>(null);
+  // Текущий ключ действия «раздел\nпуть»: ref пишется в эффектах и обработчиках, не во время
+  // рендера (урок F4a-rw; образец useRestoreWikiStatement). Ответ, пришедший после смены
+  // страницы (другой раздел или другое действие), отбрасывается по этому ключу.
+  const activeRef = useRef<string | null>(null);
+  const inFlightRef = useRef<string | null>(null); // замок на двойной клик: state не успевает
+  useEffect(() => {
+    // Смена раздела: действие прежнего стало чужим — его подтверждение и плашка не переходят
+    // в новый раздел (тот же порядок, что сброс F5b при смене заметки)
+    activeRef.current = selectedKey !== null ? `${selectedKey}\n` : null;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс состояния действия прежнего раздела при смене раздела
+    { setMineAsk(null); setMineUi(null); }
+  }, [selectedKey]);
+  useEffect(() => () => { activeRef.current = null; }, []);
+
+  const runAdoptMine = useCallback(async (pageKey: string) => {
+    if (!selectedKey) return;
+    const key = `${selectedKey}\n${pageKey}`;
+    if (inFlightRef.current === key) return; // второй клик по подтверждению ничего не шлёт
+    inFlightRef.current = key;
+    activeRef.current = key;
+    setMineUi({ id: key, busy: true, notice: null });
+    try {
+      const res = await adoptWikiPageMine(selectedKey, pageKey);
+      // Страница сменилась, пока запрос шёл: ответ отбрасывается по пути — ни плашки, ни
+      // перечитки. Мутация «снять эту проверку» — красный тест «ответ после смены страницы»
+      if (activeRef.current !== key) return;
+      setMineAsk(null); // подтверждение закрыто исходом
+      setMineUi({
+        id: key, busy: false,
+        notice: res.status === 'applied'
+          ? { tone: 'info', title: ADOPT_MINE.doneTitle, text: ADOPT_MINE.doneText }
+          : { tone: 'info', title: ADOPT_MINE.unchangedTitle, text: ADOPT_MINE.unchangedText },
+      });
+      // Перечитать здоровье: GET health отдаёт _health.md как есть — его пишет служба линта,
+      // в пути применения его не пишет никто, поэтому строка «дрейфа» в перечитанном отчёте
+      // остаётся до следующей проверки; обещать её снятие здесь нельзя (текст плашки — ADOPT_MINE.doneText)
+      load();
+    } catch (e) {
+      if (activeRef.current !== key) return;
+      setMineAsk(null);
+      setMineUi({ id: key, busy: false, notice: mineErrorNotice(e) });
+      // «файл правили ещё раз»: ничего не перезаписано; перечитка даёт тот же отчёт
+      // последнего прогона — строка «дрейфа» в нём остаётся до следующей проверки
+      if (e instanceof WikiError && e.code === 'wiki_page_changed') load();
+    } finally {
+      if (inFlightRef.current === key) inFlightRef.current = null;
+      // запоздалый ответ не оставляет у страницы вечного «занято»
+      setMineUi(st => (st && st.id === key && st.busy ? { ...st, busy: false } : st));
+    }
+  }, [selectedKey, load]);
+
   const section = selectedKey ? tree?.sections.find(s => s.key === selectedKey) ?? null : null;
   // Имя раздела — из дерева (его дал бэк как данные); ключ из props — только когда дерева нет
   const prefix = section ? sectionPrefix(section) : selectedKey ?? '';
@@ -386,6 +484,24 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
   // сетка из нулей — шум
   const hasFindings = !!report && report.findings.length > 0;
 
+  // Действие на строке «дрейфа» (F5c): только у находки с путём страницы и только под обоими
+  // флагами; прочие виды действия не имеют. Кнопка выключена на время своего запроса (тестовый
+  // помощник click() disabled не кликает — повторный клик не пройдёт и до замка в ref)
+  const adoptForFinding = (kind: HealthKind, f: HealthFinding): ReactNode => {
+    const page = f.page;
+    if (!canAdoptMine || kind !== 'drift' || !page) return undefined;
+    return (
+      <Button
+        variant="primary" size={isMobile ? 'md' : 'xs'} dataTestId="wiki-health-adopt-mine"
+        title="Изменённые места станут вашими (✎ вы); сам текст страницы при этом не меняется"
+        disabled={!!mineUi && mineUi.id === `${selectedKey}\n${page}` && mineUi.busy}
+        onClick={() => setMineAsk(page)}
+      >
+        {ADOPT_MINE.label}
+      </Button>
+    );
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, paddingBottom: SP.md }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', padding: `${SP.sm}px ${SP.md}px 0` }}>
@@ -414,6 +530,22 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
             title={loadError instanceof WikiError ? healthErrorText(loadError) : 'Не удалось прочитать здоровье раздела'}
             action={<Button variant="ghost" size="sm" onClick={load}>Повторить</Button>}
           />
+        </div>
+      ) : null}
+
+      {/* Исход «Принять как мою правку» (F5c): успех и отказ — плашка над отчётом. Отчёт
+          под плашкой — последнего прогона линта: строка «дрейфа» в нём остаётся до
+          следующей проверки (вердикт R-F5c), поэтому тексты плашки ведут к «Проверить сейчас» */}
+      {mineUi?.notice ? (
+        <div data-testid="wiki-health-adopt-mine-flash" style={{ padding: `0 ${SP.md}px` }}>
+          <Notice
+            tone={mineUi.notice.tone}
+            icon={mineUi.notice.tone === 'info' ? CheckCircle2 : AlertTriangle}
+            title={mineUi.notice.title}
+            action={<Button variant="ghost" size="sm" onClick={() => setMineUi(null)}>Закрыть</Button>}
+          >
+            {mineUi.notice.text}
+          </Notice>
         </div>
       ) : null}
 
@@ -489,7 +621,7 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
                     <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>{g.items.length}</span>
                   </div>
                   <div>
-                    {g.items.map((f, i) => <div key={i}><FindingRow f={f} /></div>)}
+                    {g.items.map((f, i) => <div key={i}><FindingRow f={f} adopt={adoptForFinding(g.kind, f)} /></div>)}
                   </div>
                 </div>
               ))}
@@ -517,6 +649,43 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
           )}
         </>
       )}
+
+      {/* Подтверждение (F5c) — текст записки notes-wiki-unified-v1 дословно (§«д. Изменили
+          снаружи»), кроме «✎ вы» вместо имени макета: сноска человека рисуется знаком «✎ вы»
+          (ADR-038 «Авторство…»), так же делает F5b. Диалог открыт до исхода запроса: спиннер
+          на кнопке, закрытие — по результату */}
+      {mineAsk !== null && (
+        <ConfirmDialog
+          title={ADOPT_MINE.confirmTitle}
+          subtitle={ADOPT_MINE.confirmBody}
+          confirmLabel={ADOPT_MINE.confirm}
+          onConfirm={() => runAdoptMine(mineAsk)}
+          onCancel={() => setMineAsk(null)}
+        />
+      )}
     </div>
   );
 }
+
+// Тексты «Принять как мою правку» (F5c). Подпись и подтверждение — из записки
+// notes-wiki-unified-v1 (§«д. Изменили снаружи»), дословно, кроме «✎ вы» вместо имени
+// макета (тот же приём, что TRANSFER_TEXT в F5b). Исход и отказы — свои формулировки по
+// кодам контракта (ADR-038 «Контракт для фронта», §adopt); тексты фичи ведёт Софья.
+const ADOPT_MINE = {
+  label: 'Принять как мою правку',
+  confirmTitle: 'Принять как мою правку?',
+  confirmBody: 'Как мою правку — изменённые места станут вашими (✎ вы). Как есть — текст останется, а у этих мест будет пометка «изменено снаружи».',
+  confirm: 'Принять как мою правку',
+  doneTitle: 'Принято как ваша правка',
+  // Честный исход (вердикт R-F5c): «Здоровье» — отчёт последнего прогона линта, его после
+  // принятия бэк не пересчитывает — строка «дрейфа» остаётся в нём до следующей проверки
+  doneText: 'Строка «дрейфа» останется в отчёте до следующей проверки — нажмите «Проверить сейчас».',
+  unchangedTitle: 'Ничего не изменилось',
+  unchangedText: 'Файл уже совпадает с журналом Хранителя: принимать нечего.',
+  changedTitle: 'Страницу поправили ещё раз',
+  changedText: 'Страница изменилась. Отчёт устарел — нажмите «Проверить сейчас».',
+  invalidTitle: 'Не удалось принять правку',
+  invalidText: 'Страницу нельзя принять в таком виде.',
+  failTitle: 'Не удалось принять правку',
+  failText: 'Страница осталась как есть. Проверьте соединение и повторите.',
+} as const;

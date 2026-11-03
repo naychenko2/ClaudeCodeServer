@@ -61,6 +61,15 @@ public class WikiChatsController : ControllerBase
     private string? OwnerOrNull() =>
         User.Identity?.IsAuthenticated == true ? User.FindFirstValue(JwtRegisteredClaimNames.Sub) : null;
 
+    // Признак сервисного токена (B2b, Ф2): тот же claim-литерал, что в PluginsController/
+    // TasksController (MapInboundClaims=false оставляет raw-имена — см. PluginsController:39-44).
+    // Пересчёт, пометка и разбор — действия человека: сервисный токен (MCP-обвязка хода)
+    // на всех трёх мутирующих ручках отказывается 403 — до флага, до чата и до любой записи;
+    // GET списка и analyze-status остаются читающими.
+    private const string TokenKindClaim = "typ";
+    private const string ServiceTokenKind = "svc";
+    private bool IsServiceToken => User.FindFirstValue(TokenKindClaim) == ServiceTokenKind;
+
     // Порядок зон в списке — тот, что в интерфейсе отбора (ADR-035:217): сначала то, что
     // разбирается; неизвестная зона (стор будущего шага) — в конец, она не должна терять
     // запись из списка.
@@ -168,6 +177,10 @@ public class WikiChatsController : ControllerBase
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        // B2b: пересчёт по кнопке — действие человека; отказ по типу токена раньше
+        // обращения к службе (стор не будет ни прочитан, ни записан).
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Сервисный JWT: пересчёт запускает только пользовательский токен" });
 
         var res = await _recalc.RecalculateAsync(userId);
         if (!res.Ok)
@@ -182,7 +195,8 @@ public class WikiChatsController : ControllerBase
     /// «важный» (WikiMarks.Important — разбирается всегда, минуя ступени 1–2 отбора), «не
     /// разбирать» (WikiMarks.Skip — никогда; ту же пометку ставит откат по источнику, §12г мера 5)
     /// или null — снять. Тело — {mark: "important"|"skip"|null}; пустое тело — 400 (намерения нет).
-    /// Порядок проверок — как у analyze: токен → флаг llm-wiki (409, при отказе пометка не
+    /// Порядок проверок — как у analyze: токен → сервисный токен (403, B2b: пометку ставит
+    /// только человек) → флаг llm-wiki (409, при отказе пометка не
     /// меняется) → свой чат (чужой и несуществующий — один 404 с одним текстом, как у
     /// analyze-status) → значение из WikiMarks (иначе 400). Пометка живёт на чате
     /// (ISessionDirectory.SetWikiMark → Session.WikiMark), не в сторе: список показывает её
@@ -197,6 +211,9 @@ public class WikiChatsController : ControllerBase
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        // B2b: пометку ставит только человек — отказ по типу токена раньше флага и чата.
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Сервисный JWT: пометку чата ставит только пользовательский токен" });
         if (_flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) != true)
             return StatusCode(409, new { code = CodeLlmWikiOff, message = "пометка не сохранена: функция выключена" });
 
@@ -233,6 +250,10 @@ public class WikiChatsController : ControllerBase
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        // B2b: «разобрать этот чат» — кнопка человека; отказ по типу токена раньше
+        // флага и обращения к модели.
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Сервисный JWT: разбор чата запускает только пользовательский токен" });
         // Разбор тратит модель: при выключенном llm-wiki не стартует. Флаг может смениться
         // между этой проверкой и ходом модели — допустимо; уже идущий разбор не прерывается.
         if (_flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) != true)

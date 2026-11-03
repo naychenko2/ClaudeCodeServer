@@ -16,22 +16,31 @@
 // если его поколение последнее. Фильтры живут в запросе (бэк сужает окно сам): ответ прежнего
 // фильтра не затеряет новый. Кнопки действий заблокированы на время запроса. Недоверенный
 // контент (имена источников, карточки, страницы) — только текстом. Отказ бэка показывается как есть.
+//
+// «ИИ поменял моё» (F6b, ADR-038 предохранитель 4): чип-переключатель — серверный фильтр
+// overrodeHuman=true (бэк сужает окно сам, фронт по списку не фильтрует); у таких записей в
+// строке — вид действия («заменил» / «оспорил») и кнопка. Пары «вернуть моё» (statement/previous)
+// строка журнала не несёт: она только в overrides[] страницы — поэтому «Вернуть мою» ведёт на
+// страницу существующим каналом requestOpenWikiPage (стор держит один запрос: двойной клик не
+// откроет второго), где хук возврата уже подключён (useRestoreWikiStatement, F3b). Спора
+// возвращать нечего — текст человека на месте, его действие — «Открыть страницу».
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, History } from 'lucide-react';
 import {
-  C, FONT, FS, R, SHADOW, SP, useIsMobile, openChatById, showToast,
+  C, FONT, FS, R, SHADOW, SP, useIsMobile, openChatById, requestOpenWikiPage, showToast,
   WikiError, loadWikiJournal, retractWikiSource, useWikiTree,
-  type WikiJournalDto, type WikiJournalEntryDto,
+  type WikiJournalDto, type WikiJournalEntryOverrideDto,
 } from 'aihome_shell/kit';
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
+import { Chip } from '../../../components/ui/Chip';
 import { ConfirmDialog } from '../../../components/ui/ConfirmDialog';
 import { EmptyState } from '../../../components/ui/EmptyState';
 import { Notice } from '../../../components/ui/Notice';
 import { Select } from '../../../components/ui/Select';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { ORIGIN_META, countWord, retractResultText, sectionPrefix, wikiErrorText } from './wikiLabels';
+import { OVERRIDE_TEXT, ORIGIN_META, countWord, retractResultText, sectionPrefix, wikiErrorText } from './wikiLabels';
 
 // ─── Словари подписей ───
 
@@ -53,7 +62,7 @@ const UNKNOWN_OP_TEXT = 'другое событие';
 // записи — политику («через Входящие» — там был человек); откатанный после применения пакет
 // виден на записи применения; «отбит проверками» — отдельный исход. Для записей
 // revert/retract/relink/adopt событие уже названо op — бейдж только повторил бы его.
-function entryBadge(e: WikiJournalEntryDto): { tone: 'success' | 'warning' | 'danger' | 'neutral'; text: string } | null {
+function entryBadge(e: WikiJournalEntryOverrideDto): { tone: 'success' | 'warning' | 'danger' | 'neutral'; text: string } | null {
   if (e.op !== 'apply') return null;
   if (e.status === 'applied') {
     return e.policy === 'inbox'
@@ -62,6 +71,16 @@ function entryBadge(e: WikiJournalEntryDto): { tone: 'success' | 'warning' | 'da
   }
   if (e.status === 'rejected_by_checks') return { tone: 'danger', text: 'отбит проверками' };
   if (e.status === 'reverted') return { tone: 'neutral', text: 'откатано' };
+  return null;
+}
+
+// Вид «ИИ поменял моё» (F6b): «заменил» — ИИ заменил формулировку человека (replaced),
+// «оспорил» — оспорил, не переписывая (disputed). Нераспознанный вид остаётся без метки:
+// словарь не выдумывает смысл незнакомому слову (тот же приём, что UNKNOWN_OP_TEXT).
+function kindBadge(e: WikiJournalEntryOverrideDto): { tone: 'info' | 'warning'; text: string } | null {
+  if (!e.overrodeHuman) return null;
+  if (e.overrodeKind === 'replaced') return { tone: 'info', text: OVERRIDE_TEXT.kindReplaced };
+  if (e.overrodeKind === 'disputed') return { tone: 'warning', text: OVERRIDE_TEXT.kindDisputed };
   return null;
 }
 
@@ -109,7 +128,7 @@ const uniq = (xs: string[]) => [...new Set(xs)];
 // 1 вместо реального числа окон одного чата. Строка может нести несколько карточек через «, »
 // (так их пишет SourceOf пакета) — берётся первая, тот же приём, что бэкового FirstSourcePart:
 // отдельного поля под множество стрика не несёт.
-function entrySourceRef(e: WikiJournalEntryDto): string | null {
+function entrySourceRef(e: WikiJournalEntryOverrideDto): string | null {
   if (!e.source || !e.origin) return null;
   const first = e.source.split(', ')[0];
   const rest = first.startsWith(`${e.origin}:`) ? first.slice(e.origin.length + 1) : first;
@@ -118,19 +137,19 @@ function entrySourceRef(e: WikiJournalEntryDto): string | null {
 }
 
 // Id чата для перехода: та же граница, что у бэкового IdPartOf (без суффикса диапазона).
-function entryChatId(e: WikiJournalEntryDto): string | null {
+function entryChatId(e: WikiJournalEntryOverrideDto): string | null {
   if (e.origin !== 'session') return null;
   const id = entrySourceRef(e)?.slice('session:'.length) ?? '';
   return id || null;
 }
 
-const originMeta = (e: WikiJournalEntryDto) => (e.origin ? ORIGIN_META[e.origin] : undefined);
-const opText = (e: WikiJournalEntryDto) => OP_TEXT[e.op] ?? UNKNOWN_OP_TEXT;
+const originMeta = (e: WikiJournalEntryOverrideDto) => (e.origin ? ORIGIN_META[e.origin] : undefined);
+const opText = (e: WikiJournalEntryOverrideDto) => OP_TEXT[e.op] ?? UNKNOWN_OP_TEXT;
 
 // Название записи: имя источника (название чата, заголовок заметки) — то, что человек узнаёт;
 // без имени (чужой или несуществующий чат, origin без имени) — карточка; записи без источника
 // (relink, adopt) — само событие.
-function entryTitle(e: WikiJournalEntryDto): string {
+function entryTitle(e: WikiJournalEntryOverrideDto): string {
   return e.sourceName ?? e.source ?? opText(e);
 }
 
@@ -143,41 +162,63 @@ function LoadingSkeleton() {
 
 // ─── Строка списка ───
 
-function JournalRow({ entry, onOpen }: { entry: WikiJournalEntryDto; onOpen: () => void }) {
+// Действие строки «ИИ поменял моё» (F6b): вести на страницу существующим каналом открытия
+// (requestOpenWikiPage) — там «Вернуть мою» уже подключена к хуку, а стор держит один запрос:
+// двойной клик не откроет второго. Записи без страниц вести некуда — кнопки нет.
+function rowOpenPage(e: WikiJournalEntryOverrideDto): (() => void) | null {
+  if (e.pages.length === 0) return null;
+  return () => requestOpenWikiPage({ section: e.section, path: e.pages[0] });
+}
+
+function JournalRow({ entry, onOpen }: { entry: WikiJournalEntryOverrideDto; onOpen: () => void }) {
   const isMobile = useIsMobile();
   const tree = useWikiTree();
   const meta = originMeta(entry);
   const Icon = meta?.icon ?? History;
   const section = tree?.sections.find(s => s.key === entry.section);
   const badge = entryBadge(entry);
+  const kind = kindBadge(entry);
+  const openPage = rowOpenPage(entry);
   return (
-    <button
-      type="button"
-      data-testid="wiki-journal-row"
-      onClick={onOpen}
-      style={{
-        display: 'flex', gap: SP.sm, padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.md,
-        border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left',
-        width: '100%', fontFamily: FONT.sans, color: C.textPrimary,
-      }}
-    >
-      <span style={{ flexShrink: 0, color: C.textMuted, paddingTop: 2 }}><Icon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /></span>
-      <span style={{ minWidth: 0, flex: 1 }}>
-        <span style={{ display: 'block', fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>
-          {section ? sectionPrefix(section) : entry.section}{meta ? ` · ${meta.label}` : ''}
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, alignItems: 'center' }}>
+      <button
+        type="button"
+        data-testid="wiki-journal-row"
+        onClick={onOpen}
+        style={{
+          display: 'flex', gap: SP.sm, padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.md,
+          border: 'none', background: 'transparent', cursor: 'pointer', textAlign: 'left',
+          flex: '1 1 0', minWidth: 0, fontFamily: FONT.sans, color: C.textPrimary,
+        }}
+      >
+        <span style={{ flexShrink: 0, color: C.textMuted, paddingTop: 2 }}><Icon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /></span>
+        <span style={{ minWidth: 0, flex: 1 }}>
+          <span style={{ display: 'block', fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>
+            {section ? sectionPrefix(section) : entry.section}{meta ? ` · ${meta.label}` : ''}
+          </span>
+          <span style={{ display: 'block', fontSize: FS.base, fontWeight: 500, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {entryTitle(entry)}
+          </span>
+          <span style={{ display: 'block', fontSize: FS.sm, color: C.textMuted, marginTop: 2 }}>
+            {opText(entry)} · {entry.pages.length} стр.
+          </span>
+          {(badge || kind) && (
+            <span style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, marginTop: 3 }}>
+              {badge && <Badge tone={badge.tone}>{badge.text}</Badge>}
+              {kind && <Badge tone={kind.tone}>{kind.text}</Badge>}
+            </span>
+          )}
         </span>
-        <span style={{ display: 'block', fontSize: FS.base, fontWeight: 500, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {entryTitle(entry)}
-        </span>
-        <span style={{ display: 'block', fontSize: FS.sm, color: C.textMuted, marginTop: 2 }}>
-          {opText(entry)} · {entry.pages.length} стр.
-        </span>
-        {badge && <span style={{ display: 'block', marginTop: 3 }}><Badge tone={badge.tone}>{badge.text}</Badge></span>}
-      </span>
-      {!isMobile && (
-        <span style={{ flexShrink: 0, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>{timeText(entry.ts)}</span>
-      )}
-    </button>
+        {!isMobile && (
+          <span style={{ flexShrink: 0, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>{timeText(entry.ts)}</span>
+        )}
+      </button>
+      {entry.overrodeHuman && openPage && (entry.overrodeKind === 'replaced' ? (
+        <Button variant="secondary" size="sm" dataTestId="wiki-journal-restore" onClick={openPage}>{OVERRIDE_TEXT.restore}</Button>
+      ) : entry.overrodeKind === 'disputed' ? (
+        <Button variant="ghost" size="sm" dataTestId="wiki-journal-open-page" onClick={openPage}>{OVERRIDE_TEXT.openPage}</Button>
+      ) : null)}
+    </div>
   );
 }
 
@@ -186,7 +227,7 @@ function JournalRow({ entry, onOpen }: { entry: WikiJournalEntryDto; onOpen: () 
 function JournalEntry({
   entry, busy, actionError, onBack, onRetract,
 }: {
-  entry: WikiJournalEntryDto;
+  entry: WikiJournalEntryOverrideDto;
   busy: boolean;
   actionError: string | null;
   onBack: () => void;
@@ -195,6 +236,7 @@ function JournalEntry({
   const tree = useWikiTree();
   const meta = originMeta(entry);
   const badge = entryBadge(entry);
+  const kind = kindBadge(entry);
   const section = tree?.sections.find(s => s.key === entry.section);
   const sourceRef = entrySourceRef(entry);
   const chatId = entryChatId(entry);
@@ -212,6 +254,7 @@ function JournalEntry({
       </h2>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, alignItems: 'center', marginTop: SP.sm }}>
         {badge && <Badge tone={badge.tone}>{badge.text}</Badge>}
+        {kind && <Badge tone={kind.tone}>{kind.text}</Badge>}
         <span style={{ fontSize: FS.sm, color: C.textSecondary }}>{opText(entry)}</span>
         {sourceRef && <span style={{ fontSize: FS.xs, fontFamily: FONT.mono, color: C.textMuted, overflowWrap: 'anywhere' }}>{sourceRef}</span>}
         <span style={{ fontSize: FS.xs, color: C.textMuted }}>{entry.pages.length} стр.</span>
@@ -275,8 +318,10 @@ export function WikiJournal() {
   // '' — все разделы / все источники (пункт-заглушка Select)
   const [sectionFilter, setSectionFilter] = useState('');
   const [originFilter, setOriginFilter] = useState('');
-  const [opened, setOpened] = useState<WikiJournalEntryDto | null>(null);
-  const [confirm, setConfirm] = useState<WikiJournalEntryDto | null>(null);
+  // «ИИ поменял моё» (F6b): чип-переключатель — живой, пока не снят; фильтр — серверный
+  const [overrodeOnly, setOverrodeOnly] = useState(false);
+  const [opened, setOpened] = useState<WikiJournalEntryOverrideDto | null>(null);
+  const [confirm, setConfirm] = useState<WikiJournalEntryOverrideDto | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // Поколение загрузок (урок S5b/S5e, образец — loadSeq в WikiInbox): только последний запрос
@@ -286,10 +331,10 @@ export function WikiJournal() {
   const load = useCallback(() => {
     const mine = ++loadSeq.current;
     setLoadError(null);
-    loadWikiJournal({ section: sectionFilter || null, origin: originFilter || null })
+    loadWikiJournal({ section: sectionFilter || null, origin: originFilter || null, overrodeHuman: overrodeOnly })
       .then(d => { if (loadSeq.current === mine) setData(d); })
       .catch(e => { if (loadSeq.current === mine) setLoadError(e); });
-  }, [sectionFilter, originFilter]);
+  }, [sectionFilter, originFilter, overrodeOnly]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- старт загрузки при монтировании подвкладки и при смене фильтра: другого места старта нет, список живёт в компоненте
@@ -298,7 +343,7 @@ export function WikiJournal() {
 
   const entries = data?.entries ?? [];
 
-  const open = (entry: WikiJournalEntryDto) => {
+  const open = (entry: WikiJournalEntryOverrideDto) => {
     setActionError(null);
     setOpened(entry);
   };
@@ -309,7 +354,7 @@ export function WikiJournal() {
     load();
   };
 
-  const doRetract = async (entry: WikiJournalEntryDto) => {
+  const doRetract = async (entry: WikiJournalEntryOverrideDto) => {
     const sourceRef = entrySourceRef(entry);
     if (!sourceRef || busy) return;
     setBusy(true);
@@ -370,12 +415,19 @@ export function WikiJournal() {
   }
   const sectionOptions = (tree?.sections ?? []).map(s => ({ value: s.key, label: sectionPrefix(s) }));
   const originOptions = Object.entries(ORIGIN_META).map(([value, m]) => ({ value, label: m.label }));
+  // Число на чипе — записи «ИИ поменял моё» в текущем окне: окно читается то же с фильтром и
+  // без него (бэк сужает тот же хвост), поэтому число не «прыгает» при включении фильтра
+  const overrodeCount = entries.filter(e => e.overrodeHuman).length;
   // Фильтры на экране и во время первой загрузки: сменить фильтр «во время загрузки» —
   // ровно тот сценарий, ради которого держится поколение запросов
   const filterRow = (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, padding: `${SP.sm}px ${SP.md}px 0` }}>
       <Select value={sectionFilter} onChange={setSectionFilter} placeholder="Все разделы" options={sectionOptions} />
       <Select value={originFilter} onChange={setOriginFilter} placeholder="Все источники" options={originOptions} />
+      <Chip variant="toggle" selected={overrodeOnly} onClick={() => setOverrodeOnly(v => !v)}>
+        {OVERRIDE_TEXT.filter}
+        {data ? <span style={{ fontWeight: 700 }}>{overrodeCount}</span> : null}
+      </Chip>
     </div>
   );
 
@@ -414,7 +466,7 @@ export function WikiJournal() {
           subtitle={
             <span style={{ maxWidth: 360 }}>
               Здесь появятся события вашей вики: применения, откаты, системные операции.
-              {' '}{sectionFilter || originFilter ? 'Под выбранный фильтр ничего нет.' : ''}
+              {' '}{sectionFilter || originFilter || overrodeOnly ? 'Под выбранный фильтр ничего нет.' : ''}
             </span>
           }
         />

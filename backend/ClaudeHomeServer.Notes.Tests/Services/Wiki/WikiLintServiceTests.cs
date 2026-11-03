@@ -651,7 +651,7 @@ public class WikiLintServiceTests : IDisposable
         var apply = new WikiApplyService(_notes, _keeper, _spheres, _config);
         var capture = new WikiSourceCapture(_notes, _projects, new NoSessions(), _config, _keeper);
         var ingest = new WikiIngestService(new NoopCheapRunner(), _spheres, apply, _config);
-        return new WikiController(_keeper, _projects, _spheres, _sut, journal, _flags, _config, capture, ingest)
+        return new WikiController(_keeper, _projects, _spheres, _sut, journal, _flags, _config, capture, ingest, null!, null!)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

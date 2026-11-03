@@ -10,6 +10,8 @@
 //
 // Мокан только транспорт (offline.request) и signalr — тот же приём, что в WikiInbox.test.
 //
+// Блок F5c («Принять как мою правку»): его мутации перечислены в шапке своего describe.
+//
 // Мутации этого прогона (вывод — в отчёте задачи):
 //  (1) убрать «предложение повышения» из таблицы видов → «каждый вид своей строкой»
 //      краснеет (10 строк не хватает);
@@ -47,6 +49,22 @@ vi.mock('../../../../lib/offline', async (orig) => ({
   request: vi.fn(),
   readStoredUserId: vi.fn(() => 'u1'),
 }));
+
+// Флаги управляются тестом: по умолчанию выключены — прежние тесты видят прежний вид;
+// блок F5c включает llm-wiki и notes-wiki-unified (тот же приём, что в WikiPageView.test).
+// useFeature — хук, и мок зовёт настоящий хук при каждом вызове (F5c-rw2): если второй
+// useFeature вызывается условно, при перерисовке с другим флагом число хуков меняется и
+// React падает — тест «переключение флага при открытом Здоровье» краснеет. При безусловных
+// вызовах число хуков постоянно в любом порядке флагов, и остальные тесты это не задевает:
+// в их пределах флаг на одном экземпляре не меняется.
+const flags = vi.hoisted(() => ({ on: new Set<string>() }));
+vi.mock('../../../../lib/featureFlags', async (orig) => {
+  const { useState } = await import('react');
+  return {
+    ...await orig<typeof import('../../../../lib/featureFlags')>(),
+    useFeature: (k: string) => { useState(0); return flags.on.has(k); },
+  };
+});
 
 import { request } from '../../../../lib/offline';
 
@@ -146,7 +164,78 @@ function mockHealth(content: string) {
   });
 }
 
+// ─── Помощники блока F5c ───
+
+const bothFlags = () => { flags.on.add('llm-wiki'); flags.on.add('notes-wiki-unified'); };
+
+const docBody = (): AnyNode => (globalThis as { document: { body: AnyNode } }).document.body;
+const docText = (): string => textNodes(docBody()).map(t => t.trim()).filter(Boolean).join(' ');
+
+function allNodes(root: AnyNode, out: AnyNode[] = []): AnyNode[] {
+  out.push(root);
+  for (const c of root.childNodes) allNodes(c, out);
+  return out;
+}
+
+function buttonByText(root: AnyNode, text: string): AnyNode | null {
+  return allNodes(root).find(n => n.nodeName === 'BUTTON' && textNodes(n).join('').trim() === text) ?? null;
+}
+
+// помощник клика НЕ кликает disabled-кнопку (тот же, что в WikiPageEditor.test):
+// выключенная на время запроса кнопка не принимает повторный клик
+function click(node: AnyNode | null, what: string) {
+  if (!node) throw new Error(`нет узла: ${what}`);
+  const p = reactProps(node) as { onClick?: (e: unknown) => void; disabled?: boolean } | null;
+  if (!p?.onClick) throw new Error(`у «${what}» нет onClick`);
+  if (p.disabled) return;
+  act(() => { p.onClick!(undefined); });
+}
+
+// атрибуты узла: disabled у выключенной кнопки — '' (React), у активной — атрибута нет
+const attrs = (n: AnyNode | null): Record<string, string> =>
+  ((n as { attributes?: Record<string, string> } | null)?.attributes) ?? {};
+
+const adoptBtn = (root: AnyNode) => buttonByText(root, 'Принять как мою правку');
+const confirmBtn = () => buttonByText(docBody(), 'Принять как мою правку');
+
+// плашка исхода (Notice) под своим testid — узел с заголовком и текстом
+const notice = (root: AnyNode) => findNodeByAttr(root, 'data-testid', 'wiki-health-adopt-mine-flash');
+
+// строка «дрейфа» из HEALTH — единственная страница с дрейфом в моканом отчёте
+const driftRow = (c: Cont) => rows(c).find(r => textNodes(r).join(' ').includes('файл изменён')) ?? null;
+
+// Весь поток F5c: здоровье (каждый ответ — firstContent: GET health отдаёт _health.md как
+// есть, бэк его не пересчитывает — второй ответ = тот же контент, вердикт R-F5c),
+// GET page с хэшем, POST /wiki/adopt — отложенным промисом, чтобы тест держал запрос
+// открытым (гонка). health/post — счётчики и тела вызовов (url — чтобы отличать разделы).
+function mockAdoptFlow(firstContent: string, secondContent?: string) {
+  const health: { url: string }[] = [];
+  const post: { body: unknown }[] = [];
+  const ctl: { resolve?: (v: unknown) => void; reject?: (e: unknown) => void } = {};
+  req.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
+    if (String(url).startsWith('/wiki/health/')) {
+      health.push({ url: String(url) });
+      const content = health.length === 1 || !secondContent ? firstContent : secondContent;
+      return Promise.resolve({ section: 'projects/p1', content });
+    }
+    if (String(url).startsWith('/wiki/page?')) {
+      return Promise.resolve({ pageKey: 'Проекты/p1/Д.md', content: 'текст страницы', hash: 'h-base' });
+    }
+    if ((init?.method ?? '') === 'POST' && String(url).endsWith('/wiki/adopt')) {
+      post.push({ body: JSON.parse(String(init!.body)) });
+      return new Promise<unknown>((r, j) => { ctl.resolve = r; ctl.reject = j; });
+    }
+    return Promise.resolve(null);
+  });
+  return {
+    health, post,
+    resolve: (v: unknown) => { ctl.resolve!(v); },
+    reject: (e: unknown) => { ctl.reject!(e); },
+  };
+}
+
 beforeEach(() => {
+  flags.on.clear();
   req.mockReset();
   req.mockImplementation(() => Promise.resolve(null));
 });
@@ -512,5 +601,246 @@ describe('«Здоровье» раздела (S5f)', () => {
     expect(r.total).toBe(10);
     expect(r.findings).toHaveLength(10);
     expect(r.failure).toBeNull();
+  });
+});
+
+// ─── «Принять как мою правку» на строке дрейфа (F5c, ADR-038 «Контракт для фронта», §adopt;
+// доработка F5c-rw по вердикту R-F5c: без ложных обещаний свежести) ───
+// Кнопка — только на строке «дрейфа» с путём страницы и только при обоих флагах; клик —
+// подтверждение текстом записки notes-wiki-unified-v1 (§«д. Изменили снаружи», дословно,
+// кроме «✎ вы» вместо имени макета); до подтверждения — ни одного запроса. Подтверждение →
+// GET page (хэш) → POST /wiki/adopt {section, page, mode:"mine", baseHash}. «Здоровье» —
+// отчёт ПОСЛЕДНЕГО прогона линта (бэк его не пересчитывает), поэтому после 200 и после 409
+// wiki_page_changed второй ответ здоровья = ТОТ ЖЕ контент: строка «дрейфа» остаётся на
+// экране, а текст плашки ведёт к «Проверить сейчас». Страницы фронт нигде не записывает
+// (ни одного PUT/PATCH): ровно один POST /wiki/adopt и одна плашка исхода. Отказы — Notice
+// русским текстом по коду: 409 wiki_page_changed (ничего не перезаписано), 409 wiki_unified_off,
+// 400 wiki_edit_invalid (issues, без них — message бэка). Конкурентность: двойной клик —
+// один запрос (замок в ref); ответ после смены страницы отбрасывается по ключу «раздел + путь».
+//
+// Мутации этого блока (вывод — в отчёте задачи):
+//  (F1) рендерить кнопку без условия флагов (убрать canAdoptMine) → «только при обоих
+//      флагах» краснеет;
+//  (F2) убрать подтверждение (звать runAdoptMine прямо из кнопки строки) → «до подтверждения
+//      ни одного запроса» краснеет;
+//  (F3) снять перечитку здоровья после 200 (load() в успехе) → «200 → …» краснеет
+//      (проверка f.health.length 2);
+//  (F4) не перечитывать здоровье при 409 wiki_page_changed → «409 …» краснеет (та же проверка);
+//  (F5) снять замок inFlightRef в начале runAdoptMine → «двойной клик — один запрос»
+//      краснеет;
+//  (F6) снять проверку ключа пути после await (activeRef в успехе) → «ответ после смены
+//      страницы отбрасывается по пути» краснеет;
+//  (F7) вернуть обещание свежести в текст плашки (например, «Решение применено.» вместо
+//      «Отчёт устарел…») → «409 …» краснеет (проверка точного текста);
+//  (F8) вернуть условный вызов флагов — `useFeature(llmWiki) && useFeature(notesWikiUnified)`
+//      одной строкой → «переключение флага при открытом „Здоровье“» краснеет: при выключенном
+//      первом флага второй хук не вызван, при включении число хуков растёт и React падает
+//      («Should have a queue. You are likely calling Hooks conditionally»).
+
+describe('«Принять как мою правку» на строке дрейфа (F5c)', () => {
+  it('кнопка — только на строке «дрейфа» и только при обоих флагах', async () => {
+    mockHealth(HEALTH);
+    const c0 = render();
+    await settle();
+    expect(adoptBtn(c0), 'при выключенных флагах').toBeNull();
+    flags.on.add('llm-wiki');
+    const c1 = render();
+    await settle();
+    expect(adoptBtn(c1), 'при одном llm-wiki').toBeNull();
+    bothFlags();
+    const c2 = render();
+    await settle();
+    // ровно одна кнопка на всём экране: в моканом отчёте одна страница с дрейфом,
+    // прочие виды находок действия не получают
+    const btns = allNodes(c2).filter(n => n.nodeName === 'BUTTON' && textNodes(n).join('').trim() === 'Принять как мою правку');
+    expect(btns).toHaveLength(1);
+    const row = driftRow(c2);
+    expect(row, 'строка дрейфа на экране').not.toBeNull();
+    expect(allNodes(row!).some(n => n === btns[0]), 'кнопка — на строке дрейфа').toBe(true);
+  });
+
+  it('клик — подтверждение текстом записки; до подтверждения ни одного запроса', async () => {
+    bothFlags();
+    mockHealth(HEALTH);
+    const c = render();
+    await settle();
+    click(adoptBtn(c), 'Принять как мою правку');
+    const body = docText();
+    expect(body).toContain('Принять как мою правку?');
+    expect(body).toContain('Как мою правку — изменённые места станут вашими (✎ вы). Как есть — текст останется, а у этих мест будет пометка «изменено снаружи».');
+    expect(confirmBtn(), 'кнопка подтверждения').not.toBeNull();
+    // страница не читана и ничего не послано: сначала подтверждение
+    expect(req.mock.calls.filter(([u]) => String(u).startsWith('/wiki/page?'))).toHaveLength(0);
+    expect(req.mock.calls.filter(([, init]) => (init as { method?: string } | undefined)?.method === 'POST')).toHaveLength(0);
+  });
+
+  it('200 → одна плашка с честным текстом; строка «дрейфа» остаётся (бэк отчёт не пересчитывает), страница не записана', async () => {
+    bothFlags();
+    // второй ответ здоровья = ТОТ ЖЕ контент: GET health отдаёт _health.md как есть
+    const f = mockAdoptFlow(HEALTH);
+    const c = render();
+    await settle();
+    click(adoptBtn(c), 'кнопка строки');
+    click(confirmBtn(), 'подтверждение');
+    // поток двухшаговый: сначала GET page (хэш), и только после него POST adopt — до
+    // разрешения/отказа надо довести микротaskи до начала POST
+    await settle();
+    f.resolve({ status: 'applied', hash: 'h-new' });
+    await settle();
+    // тело запроса: раздел и путь страницы, режим mine, baseHash — хэш только что прочитанного
+    // файла (единственный источник хэша на этом экране)
+    expect(f.post).toHaveLength(1);
+    expect(f.post[0].body).toEqual({ section: 'projects/p1', page: 'Проекты/p1/Д.md', mode: 'mine', baseHash: 'h-base' });
+    // страница нигде не записана: ни одного PUT/PATCH — единственный запрос на запись это POST adopt
+    expect(req.mock.calls.filter(([, init]) => {
+      const m = (init as { method?: string } | undefined)?.method ?? '';
+      return m === 'PUT' || m === 'PATCH';
+    }), 'записи страницы').toHaveLength(0);
+    const view = texts(c);
+    expect(view).toContain('Принято как ваша правка');
+    expect(view).toContain('Строка «дрейфа» останется в отчёте до следующей проверки — нажмите «Проверить сейчас».');
+    // ровно одна плашка исхода
+    expect(notice(c), 'плашка исхода').not.toBeNull();
+    expect(allNodes(c).filter(n => n.getAttribute('data-testid') === 'wiki-health-adopt-mine-flash')).toHaveLength(1);
+    // здоровье перечитано (разрешено задачей), но перечитан = то же: бэк не пересчитывает
+    // отчёт последнего прогона — строка «дрейфа» остаётся на экране до следующей проверки
+    expect(f.health).toHaveLength(2);
+    expect(view).toContain('файл изменён · сверка с манифестом не сошлась');
+    // подтверждение закрыто исходом
+    expect(docText()).not.toContain('Принять как мою правку?');
+  });
+
+  it('409 wiki_page_changed — русский текст без обещаний, ничего не перезаписано; строка «дрейфа» остаётся (тот же отчёт)', async () => {
+    bothFlags();
+    const f = mockAdoptFlow(HEALTH);
+    const c = render();
+    await settle();
+    click(adoptBtn(c), 'кнопка строки');
+    click(confirmBtn(), 'подтверждение');
+    await settle(); // двухшаговый поток: дождаться начала POST
+    // «файл изменился после открытия сравнения»: бэк ничего не написал и вернул свежую версию
+    f.reject({ status: 409, body: { code: 'wiki_page_changed', message: 'файл изменился после открытия сравнения', page: { pageKey: 'Проекты/p1/Д.md', content: 'СВЕЖАЯ-ВЕРСИЯ', hash: 'h-new' } } });
+    await settle();
+    const view = texts(c);
+    expect(view).toContain('Страницу поправили ещё раз');
+    expect(view).toContain('Страница изменилась. Отчёт устарел — нажмите «Проверить сейчас».');
+    expect(view).not.toContain('wiki_page_changed');
+    expect(view).not.toContain('Принято как ваша правка');
+    // ровно одна плашка исхода
+    expect(notice(c), 'плашка исхода').not.toBeNull();
+    expect(allNodes(c).filter(n => n.getAttribute('data-testid') === 'wiki-health-adopt-mine-flash')).toHaveLength(1);
+    // свежая страница из ответа никуда не вставлена: ничего не перезаписано
+    expect(view).not.toContain('СВЕЖАЯ-ВЕРСИЯ');
+    expect(req.mock.calls.filter(([, init]) => {
+      const m = (init as { method?: string } | undefined)?.method ?? '';
+      return m === 'PUT' || m === 'PATCH';
+    }), 'записи страницы').toHaveLength(0);
+    // здоровье перечитано (разрешено задачей), но перечитан = то же: строка «дрейфа»
+    // остаётся на экране до следующей проверки — обещать её снятие здесь нельзя
+    expect(f.health).toHaveLength(2);
+    expect(view).toContain('файл изменён · сверка с манифестом не сошлась');
+  });
+
+  it('409 wiki_unified_off — русский текст по коду, без сырого кода; здоровье не перечитано', async () => {
+    bothFlags();
+    const f = mockAdoptFlow(HEALTH);
+    const c = render();
+    await settle();
+    click(adoptBtn(c), 'кнопка строки');
+    click(confirmBtn(), 'подтверждение');
+    await settle(); // двухшаговый поток: дождаться начала POST
+    f.reject({ status: 409, body: { code: 'wiki_unified_off', message: 'правка страниц выключена: функция недоступна' } });
+    await settle();
+    expect(texts(c)).toContain('Правка страниц сейчас выключена');
+    expect(texts(c)).not.toContain('wiki_unified_off');
+    // этот отказ — не про изменённый файл: своей плашки-текста про «отчёт устарел» нет
+    expect(texts(c)).not.toContain('Отчёт устарел');
+    expect(f.health, 'этот отказ — не про изменённый файл: перечитки нет').toHaveLength(1);
+  });
+
+  it('400 wiki_edit_invalid — причины (issues), а без них — message бэка', async () => {
+    bothFlags();
+    const f1 = mockAdoptFlow(HEALTH);
+    const c1 = render();
+    await settle();
+    click(adoptBtn(c1), 'кнопка строки');
+    click(confirmBtn(), 'подтверждение');
+    await settle(); // двухшаговый поток: дождаться начала POST
+    f1.reject({ status: 400, body: { code: 'wiki_edit_invalid', message: 'версия страницы из манифеста не сохранена: сравнить нечем. Примите расхождение как есть…', issues: [{ code: 'wiki_parse', message: 'текст не удалось разобрать как страницу' }] } });
+    await settle();
+    expect(texts(c1)).toContain('текст не удалось разобрать как страницу');
+    expect(texts(c1)).not.toContain('wiki_edit_invalid');
+
+    // без issues (старый бэк) — message как есть
+    const f2 = mockAdoptFlow(HEALTH);
+    const c2 = render();
+    await settle();
+    click(adoptBtn(c2), 'кнопка строки');
+    click(confirmBtn(), 'подтверждение');
+    await settle(); // двухшаговый поток: дождаться начала POST
+    f2.reject({ status: 400, body: { code: 'wiki_edit_invalid', message: 'версия страницы из манифеста не сохранена: сравнить нечем. Примите расхождение как есть…', issues: [] } });
+    await settle();
+    expect(texts(c2)).toContain('версия страницы из манифеста не сохранена: сравнить нечем. Примите расхождение как есть…');
+  });
+
+  it('двойной клик по подтверждению — один запрос', async () => {
+    bothFlags();
+    const f = mockAdoptFlow(HEALTH);
+    const c = render();
+    await settle();
+    click(adoptBtn(c), 'кнопка строки');
+    const confirm = confirmBtn();
+    // настоящий двойной клик — два клика ДО перерисовки: помощник click() disabled-кнопку
+    // не кликает, поэтому пара вызовов — одним act(), а не два click() подряд
+    const p = reactProps(confirm) as { onClick?: (e: unknown) => void };
+    act(() => { p.onClick!(undefined); p.onClick!(undefined); });
+    await settle(); // двухшаговый поток: GET page → POST — первый запрос реально начался
+    expect(f.post, 'второй клик заблокирован замком в ref').toHaveLength(1);
+    // пока запрос идёт, кнопка строки выключена (DOM-атрибут)
+    expect(attrs(adoptBtn(c)).disabled, 'на время запроса').not.toBeUndefined();
+    f.resolve({ status: 'applied', hash: 'h-new' });
+    await settle();
+    expect(f.post).toHaveLength(1);
+  });
+
+  it('ответ после смены страницы отбрасывается по пути: ни плашки, ни перечитки прежнего раздела', async () => {
+    bothFlags();
+    const f = mockAdoptFlow(HEALTH);
+    const { root, container: c } = mountAt('projects/p1');
+    await settle();
+    click(adoptBtn(c), 'кнопка строки');
+    click(confirmBtn(), 'подтверждение');
+    await settle(); // двухшаговый поток: дождаться начала POST
+    // пока запрос шёл, пользователь переключился на другой раздел (так же, что делает wikiTabs)
+    selectSection(root, 'projects/p2');
+    await settle();
+    f.resolve({ status: 'applied', hash: 'h-new' });
+    await settle();
+    const view = texts(c);
+    expect(view, 'ответ чужой страницы не показал плашки').not.toContain('Принято как ваша правка');
+    // здоровья раздела A перечитано не было: отброшенный ответ не вызвал перечитки
+    expect(f.health.filter(h => h.url.includes('/wiki/health/projects/p1')), 'перечитки прежнего раздела').toHaveLength(1);
+    // подтверждение прежней страницы не перешло в новый раздел
+    expect(docText()).not.toContain('Принять как мою правку?');
+  });
+
+  it('переключение флага при открытом «Здоровье» не роняет экран: оба useFeature безусловны (F5c-rw2)', async () => {
+    mockHealth(HEALTH);
+    const { root, container: c } = mountAt('projects/p1');
+    await settle();
+    // старт с выключенными флагами: действия нет, экран живой
+    expect(adoptBtn(c), 'при выключенных флагах').toBeNull();
+    // пользователь включает оба флага при открытом «Здоровье»: перерисовка того же
+    // экземпляра с теми же props (тот же путь, что делает родитель при ререндере)
+    bothFlags();
+    act(() => { root.render(createElement(WikiHealth, { selectedKey: 'projects/p1' })); });
+    await settle();
+    // экран не упал (число хуков не изменилось) и действие появилось
+    expect(adoptBtn(c), 'после включения флагов').not.toBeNull();
+    // и обратно: выключение флага на том же экземпляре — тоже без падения, действие исчезло
+    flags.on.clear();
+    act(() => { root.render(createElement(WikiHealth, { selectedKey: 'projects/p1' })); });
+    await settle();
+    expect(adoptBtn(c), 'после выключения флагов').toBeNull();
   });
 });

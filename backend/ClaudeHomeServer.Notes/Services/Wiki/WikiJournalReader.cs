@@ -51,7 +51,8 @@ public sealed class WikiJournalReader
 
     /// <summary>Фильтры окна: раздел (ключ, проверенный контроллером), источник (origin из
     /// закрытого перечня), класс пары «источник × операция». Пустое — без фильтра.</summary>
-    public readonly record struct Query(string? Section, string? Origin, string? Class, int? Take);
+    public readonly record struct Query(
+        string? Section, string? Origin, string? Class, int? Take, bool OverrodeHuman = false);
 
     /// <summary>Запись журнала: событие строки log.jsonl и то, что о нём известно по пакету.
     /// Status/Policy/Classes пустые там, где пакета нет (relink, adopt — системные операции
@@ -68,7 +69,15 @@ public sealed class WikiJournalReader
         IReadOnlyList<string> Packages,
         string? Status,
         string? Policy,
-        IReadOnlyList<string> Classes);
+        IReadOnlyList<string> Classes,
+        bool OverrodeHuman = false,
+        string? OverrodeKind = null);
+
+    /// <summary>Вид действия ИИ над утверждением человека в строке `overrodeHuman` (ADR-038,
+    /// предохранители 1 и 6): ИИ заменил формулировку (`supersede@human`).</summary>
+    public const string KindReplaced = "replaced";
+    /// <summary>ИИ не заменил, а оспорил утверждение человека (`conflict@human`).</summary>
+    public const string KindDisputed = "disputed";
 
     /// <summary>Результат чтения. Take — фактическое окно после обрезки (клиентский take выше
     /// потолка урезается, и ответ должен показывать, какое окно читалось). LinesRead — сколько
@@ -135,6 +144,8 @@ public sealed class WikiJournalReader
             if (query.Section is not null && e.Section != query.Section) continue;
             if (query.Origin is not null && !OriginsOf(e.Source).Contains(query.Origin, StringComparer.Ordinal)) continue;
             if (query.Class is not null && !e.Classes.Contains(query.Class, StringComparer.Ordinal)) continue;
+            // «ИИ поменял моё» (ADR-038, предохранитель 4): строки, где ИИ сам заменил или оспорил утверждение человека.
+            if (query.OverrodeHuman && !e.OverrodeHuman) continue;
             shown.Add(e);
         }
         return new Result(shown, take, linesRead, invalidLines);
@@ -170,6 +181,57 @@ public sealed class WikiJournalReader
         catch (IOException)
         {
             // Нечитаемый журнал не роняет разбор: правило не сработает на этот проход.
+        }
+        return result;
+    }
+
+    /// <summary>Операции журнала, считающиеся правкой человека (ADR-038, решение 4): `edit` пакета
+    /// human и `restore` («Вернуть мою»). `adopt` — только «как мою правку» (B5): его строка несёт
+    /// источник «human:{id пакета}», у «Принять как есть» источника нет и правкой он не считается
+    /// (см. IsHumanEdit).
+    /// Откат (`revert`, `retract`) — другой механизм (N7d), его читает ReadRecentHumanReverts.</summary>
+    internal static readonly IReadOnlySet<string> HumanEditOps =
+        new HashSet<string>(StringComparer.Ordinal) { "edit", "restore" };
+
+    // Строка журнала — правка человека: actor=user и либо op из HumanEditOps, либо `adopt` «как
+    // мою» (источник «human:…» — карточка пакета). Голый `adopt` («Принять как есть») без
+    // источника — не правка: человек принял чужие байты, а не написал утверждения.
+    private static bool IsHumanEdit(Entry e) =>
+        e.Actor == "user"
+        && (HumanEditOps.Contains(e.Op)
+            || (e.Op == "adopt" && e.Source is { } src && src.StartsWith("human:", StringComparison.Ordinal)));
+
+    /// <summary>Правка человека: путь страницы → время ПОСЛЕДНЕЙ его правки (ADR-038, решение 4,
+    /// условие «источник новее правки»). Весь журнал, без окна: правка защищает формулировку,
+    /// пока её не заместит источник новее. Строки с actor=user и op из HumanEditOps; автоматика
+    /// (keeper и прочие) правкой человека не считается. Читает так же, как ReadRecentHumanReverts:
+    /// без блокировки, битая строка и нечитаемый файл — пропуск без исключения (пусто — условие
+    /// «источник новее правки» не срабатывает от журнала, а условие «новее цели» держится на
+    /// неизменяемых карточках: вторая независимая опора).</summary>
+    public static IReadOnlyDictionary<string, DateTimeOffset> ReadLastHumanEdits(string root)
+    {
+        var result = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        try
+        {
+            var path = SafePath.Join(root, LogRelPath);
+            if (!File.Exists(path))
+                return result;
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: false);
+            string? line;
+            while ((line = reader.ReadLine()) is not null)
+            {
+                var e = ParseLine(line);
+                if (e is null || !IsHumanEdit(e))
+                    continue;
+                foreach (var page in e.Pages)
+                    if (!result.TryGetValue(page, out var seen) || e.Ts > seen)
+                        result[page] = e.Ts;
+            }
+        }
+        catch (IOException)
+        {
+            // Нечитаемый журнал: пусто (см. шапку метода).
         }
         return result;
     }
@@ -240,7 +302,8 @@ public sealed class WikiJournalReader
             return new Entry(
                 ts, op, section, actor, NullIfEmpty(source), OriginOf(source), null,
                 StrArray(obj, "pages"), StrArray(obj, "packages"),
-                null, NullIfEmpty(policy), []);
+                null, NullIfEmpty(policy), [],
+                obj.TryGetProperty("overrodeHuman", out var oh) && oh.ValueKind == JsonValueKind.True);
         }
         catch (JsonException)
         {
@@ -250,14 +313,9 @@ public sealed class WikiJournalReader
 
     // ─── Склейка с пакетами ─────────────────────────────────────────────────
 
-    // Строка журнала называет пакет по-разному: retract перечисляет его id прямо (мера 5),
-    // apply/revert не называет id, но несёт ровно тот источник, который пишет о пакете
-    // SourceOf, и его раздел. Этого достаточно, чтобы взять ОДИН пакет: тот, что создан не
-    // позже строки и самый свежий из таких — применить дважды один пакет нельзя (таблица
-    // переходов), а второй пакет того же источника имеет свою строку позже. Пакет, созданный
-    // позже строки, — не этот: он ещё не применялся.
-    private Entry JoinWithPackages(Entry e, Dictionary<string, WikiPackage> byId, string ownerId,
-        Dictionary<string, string?> names)
+    // Пакеты строки: названные ею (retract, а с SV1-В и apply — поле packages) или, для старых
+    // строк apply/revert без id, — склейкой по источнику и разделу (см. выше).
+    private static List<WikiPackage> PackagesOf(Entry e, Dictionary<string, WikiPackage> byId)
     {
         var joined = new List<WikiPackage>();
         if (e.Packages.Count > 0)
@@ -280,6 +338,82 @@ public sealed class WikiJournalReader
             if (best is not null)
                 joined.Add(best);
         }
+        return joined;
+    }
+
+    /// <summary>Что ИИ сам сделал с утверждением человека на странице: op — supersede | conflict,
+    /// statement — текст ИИ без ссылок на сноски, previous — что заменялось или оспаривалось.</summary>
+    public sealed record PageOverride(string Op, string? Statement, string? Previous, DateTimeOffset At, string PackageId);
+
+    /// <summary>Метка «ИИ заменил моё» страницы: строки `apply` с overrodeHuman за окно [since, ∞)
+    /// и автоприменённые операции их пакета с классом `…@human` на этой странице. Состояния у метки
+    /// нет — она целиком выводится из журнала и пакетов; новые сверху.</summary>
+    public IReadOnlyList<PageOverride> PageOverrides(string ownerId, string section, string page, DateTimeOffset since)
+    {
+        var root = WikiPaths.Root(_dataDir, ownerId);
+        var result = new List<PageOverride>();
+        // Журнал читается целиком построчно, без окна выдачи MaxTake: окно меток — по времени
+        // (since), а не по числу строк, и хвост в 1000 строк не должен гасить метку раньше срока.
+        var hits = new List<Entry>();
+        try
+        {
+            var path = SafePath.Join(root, LogRelPath);
+            if (File.Exists(path))
+            {
+                using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(fs, Encoding.UTF8, detectEncodingFromByteOrderMarks: false);
+                string? line;
+                while ((line = reader.ReadLine()) is not null)
+                {
+                    var e = ParseLine(line);
+                    if (e is null || !e.OverrodeHuman || e.Op != "apply" || e.Ts < since || e.Section != section
+                        || !e.Pages.Contains(page, StringComparer.Ordinal))
+                        continue;
+                    hits.Add(e);
+                }
+            }
+        }
+        catch (IOException)
+        {
+            // Нечитаемый журнал — без меток, страница от этого не падает.
+        }
+        if (hits.Count == 0)
+            return result;
+        // Новые сверху — как у Read.
+        hits.Reverse();
+        var byId = new Dictionary<string, WikiPackage>(StringComparer.Ordinal);
+        foreach (var p in WikiPackageStore.List(root).Packages)
+            byId.TryAdd(p.Id, p);
+        foreach (var e in hits)
+        {
+            if (e.Op != "apply" || e.Ts < since || !e.Pages.Contains(page, StringComparer.Ordinal))
+                continue;
+            foreach (var pkg in PackagesOf(e, byId))
+                foreach (var op in pkg.Operations)
+                {
+                    if (op.Page != page || !WikiPackage.IsAutoOverrideOfHuman(op))
+                        continue;
+                    result.Add(new PageOverride(op.Op, StripFootnoteRefs(op.Text), StripFootnoteRefs(op.Target), e.Ts, pkg.Id));
+                }
+        }
+        return result;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex FootnoteRefRx =
+        new(@"\s*\[\^[^\]\r\n]+\]", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    private static string? StripFootnoteRefs(string? text) => text is null ? null : FootnoteRefRx.Replace(text, "").Trim();
+
+    // Строка журнала называет пакет по-разному: retract перечисляет его id прямо (мера 5),
+    // apply/revert не называет id, но несёт ровно тот источник, который пишет о пакете
+    // SourceOf, и его раздел. Этого достаточно, чтобы взять ОДИН пакет: тот, что создан не
+    // позже строки и самый свежий из таких — применить дважды один пакет нельзя (таблица
+    // переходов), а второй пакет того же источника имеет свою строку позже. Пакет, созданный
+    // позже строки, — не этот: он ещё не применялся.
+    private Entry JoinWithPackages(Entry e, Dictionary<string, WikiPackage> byId, string ownerId,
+        Dictionary<string, string?> names)
+    {
+        var joined = PackagesOf(e, byId);
 
         var classes = new SortedSet<string>(StringComparer.Ordinal);
         foreach (var p in joined)
@@ -295,8 +429,21 @@ public sealed class WikiJournalReader
                 ? WikiPackage.DecisionInbox
                 : WikiPackage.DecisionAuto);
 
+        // Вид действия — по автоприменённым операциям пакета с классом `…@human`. Пакет не найден
+        // или строка без признака — вида нет (старые строки, системные операции). Замена и
+        // оспаривание в одной строке — «replaced»: замена весомее.
+        string? kind = null;
+        if (e.OverrodeHuman)
+        {
+            var overrides = joined.SelectMany(p => p.Operations).Where(WikiPackage.IsAutoOverrideOfHuman).ToList();
+            kind = overrides.Any(o => o.Op == WikiPackage.OpSupersede) ? KindReplaced
+                : overrides.Any(o => o.Op == WikiPackage.OpConflict) ? KindDisputed
+                : null;
+        }
+
         return e with
         {
+            OverrodeKind = kind,
             // Статус — только когда пакет один: строка retract могла откатать несколько, и
             // одного статуса у них нет — их id лежат в поле packages, их видно по ним.
             Status = joined.Count == 1 ? joined[0].Status : null,

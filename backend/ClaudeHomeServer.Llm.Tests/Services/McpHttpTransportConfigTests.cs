@@ -612,6 +612,45 @@ public class McpHttpTransportConfigTests : IDisposable
         else keys.Should().NotContain("personas:t:http");
     }
 
+    /// <summary>Кладёт заглушку personas-server/index.js рядом с exe, чтобы stdio-ветка персон реально собиралась.</summary>
+    private static IDisposable FakePersonasServer()
+    {
+        var dir = Path.Combine(AppContext.BaseDirectory, "mcp", "personas-server");
+        var file = Path.Combine(dir, "index.js");
+        var existed = File.Exists(file);
+        Directory.CreateDirectory(dir);
+        if (!existed) File.WriteAllText(file, "// заглушка для теста");
+        return new FakeServerScope(existed ? null : file);
+    }
+
+    /// <summary>
+    /// Приватный чат + откатный stdio: замороженный node-сервер персон ходит в REST persona_ask
+    /// без гейта приватной сессии, поэтому приватному чату он не объявляется (как memory).
+    /// </summary>
+    [Fact]
+    public void Personas_ПриватныйЧат_Откат_СерверНеОбъявляется()
+    {
+        using var _ = FakePersonasServer();
+        var (servers, keys) = BuildConfig(
+            personas: new PersonasMcpContext("https://naychenko.me", () => "tok", "proj-1", UseHttp: false),
+            privateToUserId: "author-1");
+
+        servers.ContainsKey("personas").Should().BeFalse("stdio-персоны ходят в REST мимо гейта приватности");
+        keys.Should().NotContain("personas:");
+    }
+
+    /// <summary>Контроль: общий чат на откате объявляет stdio-персон как раньше (иначе тест выше вакуумен).</summary>
+    [Fact]
+    public void Personas_ОбщийЧат_Откат_КакРаньше()
+    {
+        using var _ = FakePersonasServer();
+        var (servers, keys) = BuildConfig(
+            personas: new PersonasMcpContext("https://naychenko.me", () => "tok", "proj-1", UseHttp: false));
+
+        servers.ContainsKey("personas").Should().BeTrue();
+        keys.Should().Contain("personas:").And.Contain(":t:stdio");
+    }
+
     /// <summary>
     /// Волна 3 (wsp/notifications/codegraph): три сервера объявляются http-эндпоинтом с
     /// хвостом-сессией, без единого процесса node, а транспорт входит в сигнатуру запуска.

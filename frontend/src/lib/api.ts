@@ -1029,6 +1029,8 @@ export const CHAT_VISIBILITY_TEXTS = {
   chat_has_messages: 'В чате уже есть сообщения — приватным его не сделать',
   reader: 'Читатель проекта не меняет видимость чата',
   not_chat_author: 'Только автор чата',
+  // S2d-6b-4: бэк не смог перенести вложения чата при смене видимости — видимость не изменена
+  attachments_move_failed: 'Не удалось перенести вложения чата — видимость не изменена',
 } as const;
 
 export class ChatVisibilityError extends Error {
@@ -1042,6 +1044,11 @@ export class ChatVisibilityError extends Error {
     this.code = body?.code ?? null;
   }
 }
+
+// Ответ тумблера видимости (S2d-6b-4): поля Session + карта переноса вложений
+// {старый путь: новый путь} — бэк переносит файлы чата при смене видимости; карта
+// есть только когда перенос был. Вызывающий применяет её к ленте (remapSessionAttachedPaths).
+export type ChatVisibilityResponse = Session & { attachmentMoves?: Record<string, string> };
 
 // Заметка + тег прочитанной версии (S2c-F3): etag есть только у сетевых get/update;
 // офлайн-доставка из кэша и локальный черновик тега не имеют — версии, по которой можно
@@ -2773,9 +2780,10 @@ export const api = {
     // проекта, только пока в нём нет сообщений), false — снова общий (в любой момент;
     // после этого приватность уже не вернуть — бэк 409 chat_has_messages). Отказы 409/403
     // с body.code оборачиваются в ChatVisibilityError — с человеческим текстом, не кодом.
-    setChatVisibility: async (id: string, isPrivate: boolean): Promise<Session> => {
+    // Успешный ответ может нести attachmentMoves (S2d-6b-4) — карта переноса вложений чата.
+    setChatVisibility: async (id: string, isPrivate: boolean): Promise<ChatVisibilityResponse> => {
       try {
-        return await request<Session>(`/chats/${encodeURIComponent(id)}/visibility`, {
+        return await request<ChatVisibilityResponse>(`/chats/${encodeURIComponent(id)}/visibility`, {
           method: 'PUT', body: JSON.stringify({ private: isPrivate }),
         });
       } catch (e) {

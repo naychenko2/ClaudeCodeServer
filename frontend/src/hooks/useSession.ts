@@ -201,6 +201,30 @@ function updateItems(sid: string, fn: (items: ChatItem[]) => ChatItem[]) {
   setState(sid, prev => ({ ...prev, items: fn(prev.items) }));
 }
 
+// Карта переноса вложений (S2d-6b-4): бэк при смене видимости чата переносит его файлы и
+// возвращает {старый путь: новый путь}. Здесь — замена пути из карты, остальные как есть,
+// порядок тот же. Идемпотентна: повторный вызов с той же картой ничего не меняет (новые
+// пути в карте не встречаются). Позже пришедший loadHistory заменит items — это нормально:
+// бэк уже переписал history.json, повторный перенос на фронте не нужен.
+export function remapPaths(paths: string[], moves: Record<string, string>): string[] {
+  return paths.map(p => moves[p] ?? p);
+}
+
+// Применить карту переноса к ленте ОДНОЙ сессии: attachedPaths у user_message (единственный
+// элемент ленты, несущий пути). Нет сессии в сторе — ничего не делать: запись не заводим
+// (getState её бы завёл), LRU не трогаем. Чужие сессии не затрагиваем.
+export function remapSessionAttachedPaths(sid: string, moves: Record<string, string>) {
+  if (!_store.has(sid)) return;
+  setState(sid, prev => ({
+    ...prev,
+    items: prev.items.map(it =>
+      it.kind === 'user_message' && it.attachedPaths
+        ? { ...it, attachedPaths: remapPaths(it.attachedPaths, moves) }
+        : it
+    ),
+  }));
+}
+
 // --- Реконсиляция isWaiting с серверным статусом ---
 // Клиентский флаг чисто событийный: любое пропущенное событие (разрыв сети, вкладка вне
 // группы, гонка) оставляет его врущим до следующего события. Лечение — повторный

@@ -2544,8 +2544,10 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     }
 
     // Тумблер видимости чата (S2d-7a, PUT /api/chats/{id}/visibility). Вызывающий уже прошёл
-    // CanSee (404) и отказ читателю (403) в контроллере; здесь — автор, общий проект и «сообщений
-    // нет» атомарно под VisibilityLock. true: только автор, только общий проект (есть участники),
+    // CanSee (404) и отказ читателю (403) в контроллере; здесь — общий проект, режим чата, автор
+    // и «сообщений нет» атомарно под VisibilityLock. Порядок отказов: режим (TeamOrGroup) идёт
+    // раньше авторского (QA-D45) — у штаба и группы нет автора, которого касалась бы эта
+    // операция. true: только автор, только общий проект (есть участники),
     // только пока в чате нет сообщений; ExcludeFromDossiers = true. false: только автор, в любой
     // момент и после этого вернуть приватность нельзя (chat_has_messages); ExcludeFromDossiers
     // остаётся true — прошлое приватного периода не раскрываем.
@@ -2554,13 +2556,14 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         if (!_sessions.TryGetValue(sessionId, out var entry))
             return new(ChatVisibilityOutcome.NotFound, null);
         var info = entry.Info;
-        if (string.IsNullOrEmpty(userId) || info.CreatedByUserId != userId)
-            return new(ChatVisibilityOutcome.NotAuthor, null);
+        var notAuthor = string.IsNullOrEmpty(userId) || info.CreatedByUserId != userId;
 
         // Чат, уже входящий в фичу, приватным не делается (S2d-7b-2). Шов берётся лениво (не из
         // конструктора: ядро не зависит от Tasks) и считается ДО замка видимости — чтобы не брать
         // замки задач под ним; привязать приватный чат к фиче потом не даёт дверь привязки.
-        var boundToFeature = makePrivate && info.PrivateToUserId != userId
+        // !notAuthor: за пределами авторского пути ниже результат не читается, чужой вызов
+        // не должен платить за счёт по задачам.
+        var boundToFeature = makePrivate && !notAuthor && info.PrivateToUserId != userId
             && _services is not null
             && ResolveOwnerId(info) is { } chatOwner
             && _services.GetRequiredService<IFeatureChatLinks>().IsBoundToFeature(chatOwner, info.Id);
@@ -2573,11 +2576,17 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
                 var project = info.ProjectId is not null ? _projects.GetById(info.ProjectId) : null;
                 if (project?.Members is not { Count: > 0 })
                     return new(ChatVisibilityOutcome.NotSharedProject, null);
-                if (boundToFeature)
-                    return new(ChatVisibilityOutcome.BoundToFeature, null);
                 // Штаб «Командной реализации» и групповой чат — режимы общего контура (S2d-7b-3).
+                // QA-D45 (D4): отказ режима идёт раньше авторского — у штаба и группы нет автора,
+                // которого касалась бы эта операция, и участник своего группового чата получал 403
+                // not_chat_author вместо 409 private_chat_mode. Существование не утекает:
+                // вызывающий уже прошёл CanSee в контроллере (постороннему — 404).
                 if (info.PrivateToUserId != userId && IsTeamOrGroup(info))
                     return new(ChatVisibilityOutcome.TeamOrGroup, null);
+                if (notAuthor)
+                    return new(ChatVisibilityOutcome.NotAuthor, null);
+                if (boundToFeature)
+                    return new(ChatVisibilityOutcome.BoundToFeature, null);
                 // Уже приватный — идемпотентно: повторный true не должен падать на «сообщениях»
                 if (info.PrivateToUserId != userId)
                 {
@@ -2598,6 +2607,10 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             }
             else
             {
+                // Снять приватность — по-прежнему только автор: здесь отказа режима нет
+                // (приватный чат не бывает штабом/группой), поэтому авторский остаётся первым.
+                if (notAuthor)
+                    return new(ChatVisibilityOutcome.NotAuthor, null);
                 // Чат побывал общим (или остаётся им): вернуть приватность нельзя — его могли
                 // видеть другие участники. Метка та же, что у первого сообщения: единый отказ
                 // chat_has_messages на повторном true.
@@ -2797,6 +2810,16 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         s.LastReadAt = DateTime.UtcNow;
         ScheduleDebouncedSave();
         return true;
+    }
+
+    // Признак «чат приватный» (QA-D45): нужен контроллеру для ПОРЯДКА отказов — 409 режима
+    // (private_chat_dossiers) идёт раньше авторского 403, ничего не записывая. Читается под тем
+    // же VisibilityLock, что TrySetExcludeFromDossiers и SetChatVisibility: чтение до замка
+    // прочитало бы «не приватный» в запись, уже сделанную тумблером из соседней вкладки.
+    public bool IsPrivateChat(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
+        lock (entry.VisibilityLock) return entry.Info.PrivateToUserId is not null;
     }
 
     // Opt-out «Истории решений» (ADR-004 §6): тумблер «Не сохранять решения из этого чата».

@@ -28,6 +28,9 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// S2d-7a: PUT /api/chats/{id}/visibility. Контроллер: видимость чата (404 неотличим для зрителя,
 /// которому чат не виден), читатель — 403 reader, не автор — 403 not_chat_author, остальное
 /// решает SessionManager.SetChatVisibility (409 not_shared_project / chat_has_messages).
+/// QA-D45: порядок отказов — режим чата (409 private_chat_mode / private_chat_dossiers) идёт
+/// раньше авторского 403: у штаба и группы нет автора, которого касалась бы эта операция, а
+/// участник своего приватного чата не является арендатором проектного чата.
 /// Автор-редактор проходит: это писатель для АВТОРА чата, а не арендатора (GetOwnedVisible
 /// редактора не пустил бы). Стенд — как у GetOwnedVisibleTests: контроллер напрямую, стор
 /// сессий сидируется sessions.json, в корне DI — настоящая точка доступа.
@@ -41,6 +44,7 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
     private readonly string _ownerId;
     private readonly string _editorId;
     private readonly string _readerId;
+    private readonly string _outsideId;
     private readonly string _projectId;
     private readonly string _personalProjectId;
     private readonly ChatHistoryService _history;
@@ -79,6 +83,9 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
         _ownerId = userStore.GetFirst()!.Id;
         _editorId = userStore.Add("kuzma-editor", "pwd", "user").Id;
         _readerId = userStore.Add("some-reader", "pwd", "user").Id;
+        // Посторонний: не участник общего проекта и без флага shared-projects — для него чат
+        // проекта неотличим от несуществующего (QA-D45, c3)
+        _outsideId = userStore.Add("outside-user", "pwd", "user").Id;
         foreach (var id in new[] { _editorId, _readerId })
             userStore.SetFeatureFlag(id, FeatureFlagKeys.SharedProjects, true);
 
@@ -412,6 +419,62 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
         Read(c.UpdateSync(_projectId, OwnerChatId, new UpdateSessionRequest(ExcludeFromDossiers: false))).Status.Should().Be(200);
         s.ExcludeFromDossiers.Should().BeFalse("общий чат: owner сам решает");
         s.PrivateToUserId.Should().BeNull("opt-out не трогает приватность");
+    }
+
+    // QA-D45 (D4): режим общего контура отвечает раньше авторского отказа — групповой чат и штаб
+    // приватными не делает НИКТО, не только автор. Участник (не автор этих чатов) получает тот же
+    // 409 private_chat_mode, что и владелец; флаг и opt-out не трогаются.
+    [Fact]
+    public void ГрупповойЧатИШтабНеАвтор_409privateChatMode_ФлагНеСтавится()
+    {
+        var c = ChatsAs(_editorId);
+
+        Read(c.SetVisibilitySync(GroupChatId, new SetVisibilityRequest(true))).Should().Be((409, "private_chat_mode"));
+        Read(c.SetVisibilitySync(TeamChatId, new SetVisibilityRequest(true))).Should().Be((409, "private_chat_mode"));
+
+        var group = _sessions.GetById(GroupChatId)!;
+        var team = _sessions.GetById(TeamChatId)!;
+        group.PrivateToUserId.Should().BeNull("отказ не делает чат приватным");
+        team.PrivateToUserId.Should().BeNull();
+        group.ExcludeFromDossiers.Should().BeFalse("отказ не трогает opt-out");
+        group.Participants.Should().BeEquivalentTo(["p1", "p2"], "отказ не меняет состав");
+    }
+
+    // QA-D45 (D5): «Не сохранять решения» на СВОЁМ приватном чате участника: для него чат виден
+    // (CanSee), но он не арендатор (владелец проектного чата — владелец проекта) — был 403
+    // not_chat_author, теперь 409 private_chat_dossiers. Отказ ничего не применяет: флаг,
+    // приватность и имя целы.
+    [Fact]
+    public void СвойПриватныйЧатУчастника_ВыключитьOptOut_409privateChatDossiers()
+    {
+        var s = _sessions.GetById(EditorPrivateId)!;
+        s.ExcludeFromDossiers.Should().BeTrue("приватный чат по тумблеру уже вне «Истории решений»");
+
+        Read(SessionsAs(_editorId).UpdateSync(_projectId, EditorPrivateId,
+            new UpdateSessionRequest(Name: "новое имя", ExcludeFromDossiers: false)))
+            .Should().Be((409, "private_chat_dossiers"));
+
+        s.ExcludeFromDossiers.Should().BeTrue("отказ не меняет флаг");
+        s.PrivateToUserId.Should().Be(_editorId, "отказ не трогает приватность");
+        s.Name.Should().BeNull("отказ 409: прочие поля запроса не применяются");
+    }
+
+    // QA-D45 (c3): новый порядок отказов ничего не выдаёт лишнего. Постороннему (не участнику
+    // проекта) приватный чат — прежний 404, неотличимый от несуществующего; читателю — прежний
+    // 403 (reader на тумблере, not_chat_author на правке), 409 режима его не касается.
+    [Fact]
+    public void ПостороннийИЧитатель_ПрежниеОтказы_СуществованиеНеРаскрывается()
+    {
+        var req = new UpdateSessionRequest(ExcludeFromDossiers: false);
+
+        Read(SessionsAs(_outsideId).UpdateSync(_projectId, EditorPrivateId, req)).Should().Be((404, null));
+        Read(SessionsAs(_outsideId).UpdateSync(_projectId, "no-such-session", req)).Should().Be((404, null));
+        Read(ChatsAs(_outsideId).SetVisibilitySync(EditorPrivateId, new SetVisibilityRequest(false))).Status.Should().Be(404);
+        _sessions.GetById(EditorPrivateId)!.PrivateToUserId.Should().Be(_editorId, "чужая попытка ничего не изменила");
+
+        Read(ChatsAs(_readerId).SetVisibilitySync(GroupChatId, new SetVisibilityRequest(true))).Should().Be((403, "reader"));
+        Read(SessionsAs(_readerId).UpdateSync(_projectId, OwnerChatId, req)).Should().Be((403, "not_chat_author"));
+        _sessions.GetById(OwnerChatId)!.ExcludeFromDossiers.Should().BeFalse("отказ не пишет флаг чужому чату");
     }
 }
 

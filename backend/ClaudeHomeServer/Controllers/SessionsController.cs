@@ -5,6 +5,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using ClaudeHomeServer.Services.Composition;
 
@@ -114,16 +115,24 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         if ((req.Model is not null || req.Effort is not null) && sessions.DenyOwnerTurn(sessionId, UserId) is { } denied)
             return denied;
         // S2d-3f.1 (R-S2d-3f §1): постороннему (чат не виден по CanSee) — то же, что на несуществующем,
-        // существование не выдаётся кодом; участнику, которому чат виден, — прежний 403 по контракту
-        // ChatAuthorGate. Приём тот же, что у DenyTurnAuthor (TurnRightExtensions.cs:38-39): гейт
-        // видимости GetAccessible, авторский — после него.
-        if (sessions.GetOwnedVisible(sessionId, UserId) is null)
-            return sessions.GetAccessible(sessionId, UserId) is null ? NotFound() : ChatAuthorGate.Denied();
+        // существование не выдаётся кодом. Приём тот же, что у DenyTurnAuthor (TurnRightExtensions.cs:38-39):
+        // сначала гейт видимости GetAccessible, авторский — после него.
+        if (sessions.GetAccessible(sessionId, UserId) is null) return NotFound();
+        // QA-D45 (D5): отказ режима идёт раньше авторского 403. На своём приватном чате участник —
+        // не арендатор (владелец проектного чата — владелец проекта, GetOwnedVisible для него null),
+        // и «Не сохранять решения» он получал 403 not_chat_author вместо 409 private_chat_dossiers.
+        // Порядок безопасен по видимости: приватный чат виден только автору (CanSee), поэтому 409
+        // не выдаёт существование постороннему; не-автору на общем чате остаётся прежний 403, и
+        // флаг он не пишет — запись ниже идёт после авторского гейта.
+        if (req.ExcludeFromDossiers is false && sessions.IsPrivateChat(sessionId))
+            return PrivateChatDossiersDenied();
+        if (sessions.GetOwnedVisible(sessionId, UserId) is null) return ChatAuthorGate.Denied();
         // S2d-6c: «Не сохранять решения» нельзя выключить, пока чат приватный. Зовётся раньше
         // остальных Set*: отказ 409 не должен применять половину запроса (остальные поля —
-        // mute/озвучка/срок/имя — тогда не трогаются вовсе). true принимается всегда.
+        // mute/озвучка/срок/имя — тогда не трогаются вовсе). true принимается всегда. Ниже это
+        // тот же отказ на гонке с тумблером: приватность встала после проверки выше.
         if (req.ExcludeFromDossiers is { } optOut && !sessions.TrySetExcludeFromDossiers(sessionId, optOut))
-            return Conflict(new { error = "Пока чат приватный, «Не сохранять решения» нельзя выключить", code = "private_chat_dossiers" });
+            return PrivateChatDossiersDenied();
         if (req.NotificationsMuted is bool muted) sessions.SetNotificationsMuted(sessionId, muted);
         // Хотя бы одно из двух — см. тот же блок в ChatsController.Update
         if (req.VoiceStyle is not null && !VoiceStyles.IsKnown(req.VoiceStyle))
@@ -143,6 +152,13 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         catch (KeyNotFoundException) { return NotFound(); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
+
+    // Отказ режима «приватный чат + «Не сохранять решения» выкл» (S2d-6c, QA-D45): один текст и код
+    // для обеих точек Update — проверки порядка и записи флага (тот же контракт формы отказа, что у
+    // ChatAuthorGate.Denied: ObjectResult с code).
+    private static ObjectResult PrivateChatDossiersDenied() =>
+        new(new { error = "Пока чат приватный, «Не сохранять решения» нельзя выключить", code = "private_chat_dossiers" })
+            { StatusCode = StatusCodes.Status409Conflict };
 
     // Назначить/сменить/снять собеседника (персону или .md-агента) у проектной сессии — в т.ч. по ходу разговора.
     // Гейт — GetOwnedVisible (S2d-3e): чужой приватный чат неотличим от «нет такого» (решение 28.10).

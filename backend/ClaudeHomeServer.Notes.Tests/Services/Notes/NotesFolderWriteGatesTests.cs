@@ -26,9 +26,12 @@ namespace ClaudeHomeServer.Tests.Services;
 ///
 /// Тесты бесхостовые: NotesService строится напрямую с точкой доступа (тот же приём, что у
 /// SharedProjectNotesWriteContentTests). Гонки — две параллельные операции с одним барьером
-/// старта (TaskCompletionSource), ни Task.Delay, ни Thread.Sleep; окно гонки расширяется
-/// детерминированно (большое тело правки, скан холодной модели, mkdir глубокой цели),
-/// повторы убирают случайность.
+/// старта (TaskCompletionSource); старт гонки — никогда через паузу (Task.Delay/Thread.Sleep),
+/// пауза допускается только как таймаут наблюдения: взаимная блокировка или зависание даёт
+/// красный тест (TaskCanceledException), а не вис.
+/// Гонка «перенос ↔ правка» ставится детерминированно через шов TestProbeAfterFileExists:
+/// правка стоит под своим id-замком до чтения файла, перенос поднимается ровно в это окно —
+/// исход определяет порядок замка, а не тайминг (F-6a доработка 1).
 /// </summary>
 public class NotesFolderWriteGatesTests : IDisposable
 {
@@ -119,8 +122,8 @@ public class NotesFolderWriteGatesTests : IDisposable
             var mv = Task.Run(async () => { await start.Task; return sut.MoveFolder(_ownerId, _projectId, oldFolder, newFolder); });
             var up = Task.Run(async () => { await start.Task; return sut.Update(_editorId, created.Id, new UpdateNoteRequest(Content: newBody)); });
             start.SetResult();
-            var moved = await mv;
-            var updated = await up;
+            var moved = await mv.WaitAsync(TimeSpan.FromSeconds(30));
+            var updated = await up.WaitAsync(TimeSpan.FromSeconds(30));
 
             // Маппинг переноса всегда настоящий: новый id читается и ведёт в новое место.
             var mapping = moved.Single(m => m.OldId == created.Id);
@@ -174,8 +177,8 @@ public class NotesFolderWriteGatesTests : IDisposable
             var dl = Task.Run(async () => { await start.Task; return sut.DeleteFolder(_ownerId, _projectId, "Снос"); });
             var up = Task.Run(async () => { await start.Task; return sut.Update(_editorId, created.Id, new UpdateNoteRequest(Content: newBody)); });
             start.SetResult();
-            var removed = await dl;
-            var updated = await up;
+            var removed = await dl.WaitAsync(TimeSpan.FromSeconds(30));
+            var updated = await up.WaitAsync(TimeSpan.FromSeconds(30));
 
             removed.Should().Be(1, $"«{title}»: папка с одной заметкой удалена");
             // Полуреального состояния нет: снос сказал «удалена» — правка не возрождает файл
@@ -231,15 +234,15 @@ public class NotesFolderWriteGatesTests : IDisposable
     // ─── Гонка «перенос заметки ↔ правка той же заметки» (id-замок Move) ───
 
     /// <summary>
-    /// id-замок в Move — тот же ключ, что у Update/Delete (S2c-11). Окно правки длинное: после
-    /// проверки файла UpdateCore строит модель вызывающего (свой предыдущий Update её сбросил —
-    /// холодная; проект на 500 заметок — скан milliseconds), и только потом читает и пишет файл.
-    /// Окно переноса (mkdir 10-уровневой цели ≈ 0,1-0,3 мс) целиком лежит внутри скана модели
-    /// (5-25 мс, запас 10-50×): без id-замка перенос успевает переместить файл, а правка после
-    /// него читает старый путь — FileNotFoundException вместо честного null; либо, читай она
-    /// раньше, запись подняла бы старый путь из-под переноса — заметка в двух местах. С id-замком
-    /// операции сериализованы: ровно один исход — файл в единственном месте (новом), с прежним
-    /// или новым содержимым. Гонка «перенос ↔ удаление» той же заметки — в
+    /// id-замок в Move — тот же ключ, что у Update/Delete (S2c-11). Гонка ставится через шов
+    /// TestProbeAfterFileExists (NotesService.cs): правка сообщает «файл проверен» и стоит под
+    /// своим id-замком до его чтения; тест поднимает перенос ровно в это окно и отпускает
+    /// правку, когда перенос завершился (id-замка Move нет → перенос успевает, и правка падает
+    /// FileNotFoundException на исчезнувшем пути — полуреальное состояние «файл перенесён под
+    /// живой правкой») — или когда за 2 с перенос не завершился, то есть ждёт id-замок правки
+    /// (с замком → исход ровно один: файл в единственном месте, новом, со своим содержимым).
+    /// Порядок замка определяет исход, а не тайминг: мутация «снять id из ключей Move» краснит
+    /// тест каждый прогон (F-6a доработка 1). Гонка «перенос ↔ удаление» той же заметки — в
     /// SharedProjectNotesWriteContentTests (её исход не изменился).
     /// </summary>
     [Fact]
@@ -247,10 +250,6 @@ public class NotesFolderWriteGatesTests : IDisposable
     {
         AddMember(_editorId, ProjectRole.Editor);
         var sut = Service();
-        // Фон для скана модели: 500 заметок — холодная модель редактора внутри UpdateCore
-        // стоит milliseconds; это и есть окно, внутри которого обязан уместиться перенос.
-        for (var n = 0; n < 500; n++)
-            sut.Create(_ownerId, new CreateNoteRequest($"Фон{n}", "# Фон\n", _projectId, Folder: "Фон"));
 
         const int attempts = 3;
         for (var i = 0; i < attempts; i++)
@@ -261,20 +260,83 @@ public class NotesFolderWriteGatesTests : IDisposable
             var oldFull = ProjectFile($"Живые/{title}.md");
             var newFull = ProjectFile($"{newFolder}/{title}.md");
 
-            var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var mv = Task.Run(async () => { await start.Task; return sut.Move(_editorId, created.Id, newFolder); });
-            var up = Task.Run(async () => { await start.Task; return sut.Update(_editorId, created.Id, new UpdateNoteRequest(Content: "# Новая правка\n")); });
-            start.SetResult();
-            var moved = await mv;
-            var updated = await up;
+            var atExists = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            sut.TestProbeAfterFileExists = () =>
+            {
+                atExists.SetResult();
+                // правка стоит под своим id-замком до чтения файла; отпускает её тест —
+                // по завершении переноса или когда ясно, что перенос ждёт этот замок
+                try { release.Task.Wait(TimeSpan.FromSeconds(10)); } catch (TimeoutException) { }
+            };
+
+            var up = Task.Run(() => sut.Update(_editorId, created.Id, new UpdateNoteRequest(Content: "# Новая правка\n")));
+            await atExists.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            var mv = Task.Run(() => sut.Move(_editorId, created.Id, newFolder));
+            // перенос завершился → отпускаем правку: без id-замка она читает уже чужой путь
+            // (полуреальное состояние), с id-замком её окно закрыло весь перенос;
+            // за 2 с не завершился → он ждёт id-замок правки → отпускаем правку, перенос пойдёт после
+            await Task.WhenAny(mv, Task.Delay(TimeSpan.FromSeconds(2)));
+            release.SetResult();
+            var updated = await up.WaitAsync(TimeSpan.FromSeconds(30));
+            var moved = await mv.WaitAsync(TimeSpan.FromSeconds(30));
 
             // Полуреального состояния нет ни при каком исходе гонки: старый путь пуст,
             // заметка ровно в одном месте — новом.
+            updated.Should().NotBeNull($"«{title}»: правка под своим id-замком завершилась до переноса");
             File.Exists(oldFull).Should().BeFalse($"«{title}»: старый путь после гонки пуст (правка не подняла его из-под переноса)");
             File.Exists(newFull).Should().BeTrue($"«{title}»: заметка целиком в новом месте");
-            if (updated is not null)
-                File.ReadAllText(newFull).Should().Contain("Новая правка", $"«{title}»: выигравшая правка переехала вместе с заметкой");
+            moved.Should().NotBeNull($"«{title}»: перенос после сериализованной правки состоялся");
+            File.ReadAllText(newFull).Should().Contain("Новая правка", $"«{title}»: выигравшая правка переехала вместе с заметкой");
         }
+    }
+
+    // ─── Два переноса разных заметок с одним именем в одну папку (M2) ───
+
+    /// <summary>
+    /// Инвариант: два переноса в одну цель не затирают файл. Сериализацию пары держит замок
+    /// источника: Move берёт его безусловно и, при смене источника, ключ целевого источника
+    /// (NotesService.cs:997-998) — любой перенос в папку проекта держит её ключ, поэтому
+    /// второй перенос видит цель занятой и получает «уже есть» (InvalidOperationException,
+    /// NotesService.cs:1033-1034), а файл выигравшего цел. Мутация «снять целевой путь из
+    /// ключей Move» (NotesService.cs:996) этот тест не краснит: при одном источнике пару
+    /// сериализует ключ источника и без него — факт приложен в отчёте доработки.
+    /// </summary>
+    [Fact]
+    public async Task ДваПереносаОдногоИмениВОднуПапку_ОдинУспешенВторойУжеЕсть_ФайлНеЗатёрт()
+    {
+        AddMember(_editorId, ProjectRole.Editor);
+        var sut = Service();
+
+        var a = sut.Create(_ownerId, new CreateNoteRequest("Однако", "# Тело А\n", _projectId, Folder: "Исходники"));
+        var b = sut.Create(_ownerId, new CreateNoteRequest("Однако", "# Тело Б\n", _projectId, Folder: "Другие"));
+
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ma = Task.Run(async () => { await start.Task; return sut.Move(_editorId, a.Id, "Цель"); });
+        var mb = Task.Run(async () => { await start.Task; return sut.Move(_editorId, b.Id, "Цель"); });
+        start.SetResult();
+
+        // Обе операции уже запущены параллельно; сбор результатов по очереди ничего не
+        // сериализует — отказ одной из двух ловится отдельно, а не тонет в aggregate.
+        NoteDetail? movedA = null, movedB = null;
+        Exception? failA = null, failB = null;
+        try { movedA = await ma.WaitAsync(TimeSpan.FromSeconds(30)); } catch (Exception ex) { failA = ex; }
+        try { movedB = await mb.WaitAsync(TimeSpan.FromSeconds(30)); } catch (Exception ex) { failB = ex; }
+
+        var outcomes = new[]
+        {
+            (Moved: movedA, Fail: failA, Old: "Исходники/Однако.md", Body: "Тело А"),
+            (Moved: movedB, Fail: failB, Old: "Другие/Однако.md", Body: "Тело Б"),
+        };
+        var won = outcomes.Single(o => o.Moved is not null);
+        var lost = outcomes.Single(o => o.Fail is not null);
+
+        lost.Fail.Should().BeOfType<InvalidOperationException>("второй перенос в занятую цель — «уже есть», по текущей семантике Move");
+        won.Moved!.Path.Should().Be("Цель/Однако.md", "выигравший перенос привёл заметку в цель");
+        File.Exists(ProjectFile(won.Old)).Should().BeFalse("выигравший перенос оставил свой старый путь пустым");
+        File.Exists(ProjectFile(lost.Old)).Should().BeTrue("проигравшая заметка осталась на своём пути, не перенесена");
+        Directory.GetFiles(ProjectFile("Цель"), "*.md").Length.Should().Be(1, "в цели ровно один файл");
+        File.ReadAllText(ProjectFile("Цель/Однако.md")).Should().Contain(won.Body, "файл цели — содержимое выигравшего переноса, не затёрт");
     }
 
     // ─── Гонка «create ↔ create» одного пути: оба успешны, пути разные, перезаписи нет ───

@@ -81,6 +81,14 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // (сам id исчезает вместе со старым файлом).
     private readonly ConcurrentDictionary<string, object> _writeGates = new();
 
+    /// <summary>
+    /// Тестовый шов (F-6a доработка 1): вызывается под замком id сразу после проверки файла,
+    /// до его чтения и записи — точка, в которую тест ставит гонку «перенос ↔ правка»
+    /// детерминированно (NotesFolderWriteGatesTests). null — обычного пути нет: поле читается
+    /// один раз на правку; в проде (через DI) не выставляется никогда.
+    /// </summary>
+    internal Action? TestProbeAfterFileExists;
+
     public NotesService(IProjectManager projects, IConfiguration config, ILogger<NotesService> logger,
         IProjectEventLogService? events = null, IServiceProvider? services = null)
     {
@@ -1247,6 +1255,8 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
         var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return null;
+        // Тестовый шов (F-6a доработка 1): под замком id, до чтения файла — см. поле.
+        TestProbeAfterFileExists?.Invoke();
 
         // If-Match сверяется с фактическим хешом содержимого до любой правки (в т.ч. до
         // переименования файла): расхождение — NoteConflictException, заметка на диске не тронута.

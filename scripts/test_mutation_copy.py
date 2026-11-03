@@ -5,6 +5,7 @@
 # сборки берёт ЭТО дерево и требует, чтобы оно было собрано (есть obj/ у
 # ClaudeHomeServer.Memory.Tests): иначе он пропускается с причиной, а не собирает решение с нуля.
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -35,6 +36,17 @@ def worktrees(repo):
     return [l[len("worktree "):] for l in out.splitlines() if l.startswith("worktree ")]
 
 
+def built_commit(project_dir):
+    """Коммит, на котором собран obj проекта (из AssemblyInformationalVersion), или None."""
+    d = os.path.join(project_dir, "obj", "Debug", "net10.0")
+    for name in os.listdir(d) if os.path.isdir(d) else []:
+        if name.endswith(".AssemblyInfo.cs"):
+            m = re.search(r'AssemblyInformationalVersionAttribute\("[^"+]*\+([0-9a-f]{7,})"\)',
+                          open(os.path.join(d, name)).read())
+            return m.group(1) if m else None
+    return None
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         os.makedirs(CACHE, exist_ok=True)
@@ -42,16 +54,22 @@ class Base(unittest.TestCase):
         self.root = os.path.join(self.tmp, "root")
         self.env = dict(os.environ, CCS_MUTATION_ROOT=self.root)
         self.procs = []
+        self.created = []
 
     def tearDown(self):
         for p in self.procs:
             p.kill()
             p.wait()
+        # Упавший тест не должен оставлять запись worktree в общем репозитории.
+        for dst in self.created:
+            if os.path.exists(dst):
+                run(["remove", dst], self.env, check=False)
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def create(self, src, extra_env=None):
         env = dict(self.env, **(extra_env or {}))
         out = run(["create", "--from", src], env).stdout.strip().splitlines()
+        self.created.append(out[-1])
         return out[-1]
 
 
@@ -191,6 +209,11 @@ class WarmBuildTests(Base):
         for name in (self.PROJ,) + self.DEPS:
             if not os.path.exists(os.path.join(REPO, "backend", name, "obj", "Debug", "net10.0", name + ".dll")):
                 self.skipTest("дерево не собрано: нет obj у %s — сначала соберите решение" % name)
+        built = built_commit(os.path.join(REPO, "backend", self.PROJ))
+        head = git(REPO, "rev-parse", "HEAD").strip()
+        if built and not head.startswith(built):
+            self.skipTest("obj собран на коммите %s, HEAD %s: хеш коммита в AssemblyInformationalVersion "
+                          "пересоберёт всё и без копии — сначала соберите решение" % (built[:9], head[:9]))
         dst = self.create(REPO)
         self.assertIn(dst, worktrees(REPO))
         with open(os.path.join(dst, "backend", self.PROJ, "GlobalUsings.cs"), "a") as f:

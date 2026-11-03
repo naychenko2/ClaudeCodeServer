@@ -118,6 +118,23 @@ prime_compile_cache() {
   done < <(find "$dst/backend" -path '*/obj/*' -type f -name '*.CoreCompileInputs.cache' -print0)
 }
 
+# Хеш коммита входит в AssemblyInformationalVersion каждого проекта (SourceRevisionId):
+# obj, собранный на другом коммите, пересоберёт в копии ВСЁ — так же, как и в самом
+# источнике после коммита. Копия тут не поможет, поэтому только предупреждаем.
+warn_stale_obj() {
+  local src="$1" head="$2" info built
+  info="$(find "$src/backend" -path '*/obj/*' -name '*.AssemblyInfo.cs' -print -quit 2>/dev/null || true)"
+  [ -n "$info" ] || return 0
+  built="$(sed -n 's/.*AssemblyInformationalVersionAttribute("[^"+]*+\([0-9a-f]\{7,\}\)").*/\1/p' "$info" | head -1)"
+  [ -n "$built" ] || return 0
+  case "$head" in
+    "$built"*) ;;
+    *) log "предупреждение: obj источника собран на коммите ${built:0:9}, а HEAD — ${head:0:9}:"
+       log "  хеш коммита входит в AssemblyInformationalVersion, первая сборка в копии пересоберёт всё."
+       log "  Соберите источник на текущем коммите (mcp__dev__build) до create." ;;
+  esac
+}
+
 cmd_create() {
   local from=""
   while [ $# -gt 0 ]; do
@@ -156,6 +173,7 @@ cmd_create() {
     printf '%s\n' "$dirs" | sed 's#$#/***#' \
       | rsync -a --include='*/' --include-from=- --exclude='*' --prune-empty-dirs "$src/" "$dst/"
     fix_obj_paths "$src" "$dst"
+    warn_stale_obj "$src" "$head"
   fi
 
   # Индекс копии = HEAD; рабочие файлы не трогаются, правки источника видны как diff.

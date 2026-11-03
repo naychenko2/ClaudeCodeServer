@@ -498,6 +498,7 @@ Dark launch: фича коммитится выключенной и включ�
   класс с `TestWebApplicationFactory` — `[Trait("Category","Host")]` (сторож), медленный метод без
   хоста — `Slow`; монолит режется по классам (CI, `run_tests` с `TestRuns:MonolithShards`), коллекции
   xunit определяются в самой тестовой сборке. Устройство и пределы — [testing.md](docs/operations/testing.md).
+- **Мутацию доказывай в копии `scripts/mutation-copy.sh create`, по окончании — `remove`**; дерево руками в `/tmp` не копировать (холодная сборка мимо гейта и мусор) — [testing.md](docs/operations/testing.md#мутации-в-копии).
 - **Одна папка — один проект на владельца** (`ProjectManager.EnsureRootFree`, 400 при повторе):
   датасет Dify ключуется по `RootPath`. У разных владельцев общая папка допустима.
 - **Удаление чата уносит и транскрипт claude CLI** во всех профилях. Инвариант: только файл с

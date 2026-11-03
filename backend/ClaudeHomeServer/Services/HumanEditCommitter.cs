@@ -252,18 +252,17 @@ public sealed class HumanEditCommitter(
         // потеря названа в логе ДО коммита; -f не ставим намеренно: игнор в файле
         // пользователя — его правило, журнал его не отменяет (свои .gitignore остались,
         // их снимает Ensure только с нашим точным блоком).
-        // Сбой самой проверки не уносит группу правок (возврат ревью bc33193f, п.3):
-        // проверка защитная, коммит — первичный. GitCommandException — Warning и дальше
-        // как обычно: путь под игнором status в индекс не пустит (он и без проверки его не
-        // показывает), остальные пути будут взяты как обычно.
-        List<string> ignored;
-        try
+        // Сбой самой проверки не уносит группу правок (возврат ревью bc33193f, п.3, и
+        // доработка QA-D1): проверка защитная, коммит — первичный. try/catch на тип
+        // вертикали здесь не нужен: TryIgnoredPathsAsync гасит сбой git внутри вертикали
+        // (там же Warning с текстом stderr) и возвращает null как признак несостоявшейся
+        // проверки — журнал отвечает своим Warning и идёт дальше как обычно: путь под
+        // игнором status в индекс не пустит (он и без проверки его не показывает),
+        // остальные пути будут взяты как обычно.
+        var ignored = await git.TryIgnoredPathsAsync(project.OwnerId, root, paths);
+        if (ignored is null)
         {
-            ignored = await git.IgnoredPathsAsync(project.OwnerId, root, paths);
-        }
-        catch (GitCommandException ex)
-        {
-            logger.LogWarning(ex, "Проверка .gitignore для журнала правок в проекте {ProjectId} ({Root}) не удалась: коммит продолжается", projectId, root);
+            logger.LogWarning("Проверка .gitignore для журнала правок в проекте {ProjectId} ({Root}) не удалась: коммит продолжается", projectId, root);
             ignored = [];
         }
         if (ignored.Count > 0)

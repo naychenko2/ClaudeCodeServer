@@ -1590,7 +1590,13 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     // отслеживаемые пути не возвращаются (их git коммитит и под маской): тихая потеря
     // журнала — ровно не-отслеживаемый случай. Коды возврата check-ignore: 0 — хотя бы
     // один путь игнорируется, 1 — ни одного (не ошибка), прочее — ошибка git.
-    public async Task<List<string>> IgnoredPathsAsync(
+    // Проверка защитная (её зовёт журнал правок человека): сбой git — НЕ исключение
+    // вертикали наружу, а признак: null = проверка не состоялась (сбой назван Warning
+    // здесь, с текстом stderr), [] = проверено, ничего не игнорируется. Вызывающий сам
+    // решает, что значит сбой (для журнала — Warning и обычный коммит). Так корень не
+    // ссылается на GitCommandException (сторож RootSubsystemBoundary, доработка QA-D1);
+    // тот же образец, что у RefExists в этом классе: защитная проверка гасится внутри вертикали.
+    public async Task<List<string>?> TryIgnoredPathsAsync(
         string? ownerId, string root, IReadOnlyList<string> relPaths, CancellationToken ct = default)
     {
         if (relPaths.Count == 0 || !IsGitRepo(root)) return [];
@@ -1598,7 +1604,12 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         var stdin = string.Join('\0', specs) + '\0';
         var r = await RunReadAsync(ownerId, root, ["check-ignore", "-z", "--stdin"], stdin: stdin, ct: ct);
         if (r.ExitCode == 1) return [];
-        if (!r.Ok) throw new GitCommandException(FirstLine(r.Stderr) ?? "git check-ignore завершился с ошибкой");
+        if (!r.Ok)
+        {
+            logger?.LogWarning("git check-ignore для {Root} завершился с ошибкой: {Error}",
+                root, FirstLine(r.Stderr) ?? "текста в stderr нет");
+            return null;
+        }
         return r.Stdout.Split('\0', StringSplitOptions.RemoveEmptyEntries)
             .Select(p => p.Trim()).Where(p => p.Length > 0).ToList();
     }

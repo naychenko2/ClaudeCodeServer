@@ -6,6 +6,7 @@ using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
 using FluentAssertions;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -1566,5 +1567,56 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         numstat.Should().NotBeNullOrEmpty();
         numstat.Should().Contain("-\t-\tblob.bin",
             "git numstat для бинарного файла обязан вернуть прочерк-прочерк-путь");
+    }
+
+    // Доработка QA-D1: check-ignore — защитная проверка, её зовёт корневой журнал правок
+    // (HumanEditCommitter), и сбой git не должен приносить GitCommandException в корень
+    // (сторож RootSubsystemBoundary). TryIgnoredPathsAsync гасит сбой внутри вертикали:
+    // null + Warning с текстом stderr в логе вертикали.
+    [Fact]
+    public async Task TryIgnoredPathsAsync_СбойGit_ВозвращаетNull_IWarningВЛоге()
+    {
+        var log = new List<(LogLevel Level, string Message)>();
+        var git = new GitService(new FailingCheckIgnoreFactory(), new RecordingLogger<GitService>(log));
+
+        (await git.TryIgnoredPathsAsync(null, _repo, ["a.txt"])).Should().BeNull(
+            "сбой check-ignore — признак несостоявшейся проверки, не исключение наружу");
+
+        log.Should().Contain(l => l.Level == LogLevel.Warning && l.Message.Contains("check-ignore"),
+            "сбой назван в логе вертикали — вызывающий его не теряет");
+    }
+
+    // Лончер, который роняет ТОЛЬКО check-ignore: тот же git, но с core.excludesFile,
+    // указывающим на каталог, — «fatal: cannot use … as an exclude file», exit 128
+    // (тот же аранжмен, что в HumanEditCommitterTests: status/add/commit не тронуты).
+    private sealed class FailingCheckIgnoreFactory : ILauncherFactory
+    {
+        private sealed class Wrapping : IProcessLauncher
+        {
+            private static readonly IProcessLauncher Inner = LocalProcessRunner.Instance;
+            public bool IsSandboxed => Inner.IsSandboxed;
+            public bool TargetIsWindows => Inner.TargetIsWindows;
+            public IPathMapper Paths => Inner.Paths;
+            public string ClaudeCliCommand => Inner.ClaudeCliCommand;
+            public string HostTempDir => Inner.HostTempDir;
+            public string? McpApiUrlOverride => Inner.McpApiUrlOverride;
+            public Process Start(ProcessSpec spec) => Inner.Start(spec.Args.Contains("check-ignore")
+                ? spec with { Args = ["-c", $"core.excludesFile={spec.WorkingDirectory}", ..spec.Args] }
+                : spec);
+            public void Kill(Process process, string? turnId) => Inner.Kill(process, turnId);
+            public int EstimateCommandLineLength(ProcessSpec spec) => Inner.EstimateCommandLineLength(spec);
+        }
+
+        public IProcessLauncher Local { get; } = new Wrapping();
+        public IProcessLauncher ForOwner(string? ownerId) => Local;
+        public IProcessLauncher ForProject(ClaudeHomeServer.Models.Project project) => Local;
+    }
+
+    private sealed class RecordingLogger<T>(List<(LogLevel Level, string Message)> sink) : ILogger<T>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => sink.Add((logLevel, formatter(state, exception)));
     }
 }

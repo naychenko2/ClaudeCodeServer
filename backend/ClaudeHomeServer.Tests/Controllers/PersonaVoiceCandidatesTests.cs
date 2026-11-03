@@ -12,26 +12,33 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Кнопка «Подобрать под персону»: три обычных голоса плюс отдельный живой (LiveTTS),
 // «Подобрать ещё» без уже показанных. Автоподбор при создании при этом живого голоса
 // не подставляет никогда — он по-прежнему ходит через PickVoiceAsync.
-public class PersonaVoiceCandidatesTests : IDisposable
+[Trait("Category", "Host")]
+public class PersonaVoiceCandidatesTests : IClassFixture<PersonaVoiceCandidatesTests.Hosts>
 {
-    private readonly VoiceCheap _cheap = new();
+    private readonly VoiceCheap _cheap;
     private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
 
-    public PersonaVoiceCandidatesTests()
+    // Хост на КЛАСС: конфигурация одна — заглушка one-shot. Её состояние каждый тест
+    // начинает заново (тесты класса xunit гонит последовательно)
+    public sealed class Hosts : TestWebApplicationFactory
     {
-        _factory = new TestWebApplicationFactory
-        {
-            ExtraServices = s => s.AddSingleton<ICheapTextRunner>(_cheap),
-        };
+        public VoiceCheap Cheap { get; } = new();
+        public Hosts() => ExtraServices = s => s.AddSingleton<ICheapTextRunner>(Cheap);
+    }
+
+    public PersonaVoiceCandidatesTests(Hosts hosts)
+    {
+        _factory = hosts;
+        _cheap = hosts.Cheap;
+        _cheap.Reset();
         _client = _factory.CreateAuthenticatedClient();
     }
 
-    public void Dispose() => _factory.Dispose();
-
     // Заглушка one-shot: на подбор голоса — управляемый ответ, промпт запоминается
-    private sealed class VoiceCheap : ICheapTextRunner
+    public sealed class VoiceCheap : ICheapTextRunner
     {
+        public void Reset() { VoiceAnswer = ""; VoiceFails = false; LastPrompt = null; VoiceCalls = 0; }
         public string VoiceAnswer { get; set; } = "";
         public bool VoiceFails { get; set; }
         public string? LastPrompt;

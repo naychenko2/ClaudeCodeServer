@@ -12,27 +12,34 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Агент в обычном проектном чате: меняет голос персоны (валидация как у PUT /voice),
 // получает подобранный голос у новой персоны без явного voice и назначает руководителя
 // СВОЕГО проекта. Личный дефолт и руководитель чужого проекта из обычного чата — отказ.
-public class PersonasToolsetVoiceAndLeaderTests : IDisposable
+[Trait("Category", "Host")]
+public class PersonasToolsetVoiceAndLeaderTests : IClassFixture<PersonasToolsetVoiceAndLeaderTests.Hosts>
 {
-    private readonly VoiceCheap _cheap = new();
+    private readonly VoiceCheap _cheap;
     private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
 
-    public PersonasToolsetVoiceAndLeaderTests()
+    // Хост на КЛАСС: конфигурация одна — заглушка one-shot. Её состояние каждый тест
+    // начинает заново (тесты класса xunit гонит последовательно)
+    public sealed class Hosts : TestWebApplicationFactory
     {
-        _factory = new TestWebApplicationFactory
-        {
-            ExtraServices = s => s.AddSingleton<ICheapTextRunner>(_cheap),
-        };
+        public VoiceCheap Cheap { get; } = new();
+        public Hosts() => ExtraServices = s => s.AddSingleton<ICheapTextRunner>(Cheap);
+    }
+
+    public PersonasToolsetVoiceAndLeaderTests(Hosts hosts)
+    {
+        _factory = hosts;
+        _cheap = hosts.Cheap;
+        _cheap.Reset();
         _client = _factory.CreateAuthenticatedClient();
     }
 
-    public void Dispose() => _factory.Dispose();
-
     // Заглушка one-shot: на подбор голоса — управляемый ответ (или сбой), на прочие
     // действия создания — «ничего не подошло»
-    private sealed class VoiceCheap : ICheapTextRunner
+    public sealed class VoiceCheap : ICheapTextRunner
     {
+        public void Reset() { VoiceAnswer = "julia strict"; VoiceFails = false; VoiceCalls = 0; }
         public string VoiceAnswer { get; set; } = "julia strict";
         public bool VoiceFails { get; set; }
         public int VoiceCalls;

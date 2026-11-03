@@ -1,6 +1,7 @@
 // S2d-F2: тумблер «Приватный чат» — НАСТОЯЩИЙ компонент в fake-DOM (паттерн RingPillBadge).
 // Проверяется граница показа (зеркало бэкового гейта ChatsController.SetVisibility),
-// неактивность после первого сообщения и человеческие тексты отказов 409/403.
+// неактивность после первого сообщения, человеческие тексты отказов 409/403
+// и поведение карты переноса вложений (S2d-6b-4F2: remap ленты + отдача наверх).
 // Мутация «показывать тумблер читателю» (убрать гейт myRole==='reader') → кейс
 // «читателю нет» красный; «показывать при сообщениях» → кейс «неактивен» красный.
 import { createElement } from 'react';
@@ -28,11 +29,15 @@ const sstore = new Map<string, string>([['cc_token', 't'], ['cc_user_id', ME]]);
 // тексты отказов живут в api и проверяются как есть)
 const apiMock = vi.hoisted(() => ({ setChatVisibility: vi.fn<(id: string, p: boolean) => Promise<Session>>() }));
 const toastMock = vi.hoisted(() => vi.fn());
+// remap ленты по карте переноса (S2d-6b-4F2): сам стор в этом файле не нужен —
+// проверяется только факт и аргументы вызова
+const remapMock = vi.hoisted(() => vi.fn());
 vi.mock('../../../lib/api', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../../lib/api')>();
   return { ...orig, api: { ...orig.api, chats: { ...orig.api.chats, setChatVisibility: apiMock.setChatVisibility } } };
 });
 vi.mock('../../../lib/toast', () => ({ showToast: toastMock }));
+vi.mock('../../../hooks/useSession', () => ({ remapSessionAttachedPaths: remapMock }));
 
 import { ChatVisibilityError } from '../../../lib/api';
 import { PrivateChatToggle } from '../PrivateChatToggle';
@@ -51,6 +56,7 @@ const chat = (over: Partial<Session> = {}): Session => ({
 let current: { root: ReturnType<typeof mount>['root'] } | null = null;
 function render(opts: { session?: Session; project?: Project | null; hasMessages?: boolean } = {}) {
   const onSessionUpdated = vi.fn();
+  const onAttachmentMoves = vi.fn();
   const m = mount(createElement(PrivateChatToggle, {
     session: opts.session ?? chat(),
     project: opts.project !== undefined ? opts.project : sharedProject,
@@ -58,9 +64,10 @@ function render(opts: { session?: Session; project?: Project | null; hasMessages
     online: true,
     isMobile: false,
     onSessionUpdated,
+    onAttachmentMoves,
   }));
   current = m;
-  return { ...m, onSessionUpdated };
+  return { ...m, onSessionUpdated, onAttachmentMoves };
 }
 
 // Кнопка тумблера — единственная кнопка компонента (её title меняется с состоянием,
@@ -85,6 +92,7 @@ const switchNode = () => findNodeByAttr(body(), 'aria-label', 'Приватны�
 beforeEach(() => {
   apiMock.setChatVisibility.mockReset();
   toastMock.mockReset();
+  remapMock.mockReset();
 });
 afterEach(() => {
   const c = current;
@@ -185,6 +193,22 @@ describe('PrivateChatToggle: отказ бэка — человек читает
     const [, text] = toastMock.mock.calls[0] as [string, string];
     expect(text).toBe('Приватным можно сделать только чат общего проекта');
   });
+
+  it('409 attachments_move_failed → тост с текстом, ни лента, ни вызывающий не тронуты (тумблер остаётся в прежнем положении)', async () => {
+    apiMock.setChatVisibility.mockRejectedValue(new ChatVisibilityError(409, { code: 'attachments_move_failed' }));
+    const m = render();
+    openMenu(m);
+    await act(async () => { (reactProps(switchNode() as never)!.onClick as () => void)(); });
+    expect(toastMock).toHaveBeenCalledTimes(1);
+    const [, text] = toastMock.mock.calls[0] as [string, string];
+    expect(text).toBe('Не удалось перенести вложения чата — видимость не изменена');
+    expect(text).not.toContain('409');
+    expect(text).not.toContain('attachments_move_failed');
+    // Отказ: ни onSessionUpdated, ни перестановки ленты, ни карты наверх
+    expect(m.onSessionUpdated).not.toHaveBeenCalled();
+    expect(remapMock).not.toHaveBeenCalled();
+    expect(m.onAttachmentMoves).not.toHaveBeenCalled();
+  });
 });
 
 describe('PrivateChatToggle: успех — ответ бэка становится истиной вызывающего', () => {
@@ -197,5 +221,45 @@ describe('PrivateChatToggle: успех — ответ бэка становит
     expect(apiMock.setChatVisibility).toHaveBeenCalledWith('c1', true);
     expect(m.onSessionUpdated).toHaveBeenCalledWith(updated);
     expect(toastMock).not.toHaveBeenCalled();
+  });
+
+  it('ответ с attachmentMoves: лента переставляется, карта уходит наверх; onSessionUpdated — без поля карты', async () => {
+    const moves = { 'attachments/c1/a.png': 'attachments-private/c1/a.png' };
+    const updated = { ...chat({ privateToUserId: ME }), attachmentMoves: moves } as Session;
+    apiMock.setChatVisibility.mockResolvedValue(updated);
+    const m = render();
+    openMenu(m);
+    await act(async () => { (reactProps(switchNode() as never)!.onClick as () => void)(); });
+    // Лента этой же сессии переставляется по карте, карта целиком — вызывающему (F3)
+    expect(remapMock).toHaveBeenCalledTimes(1);
+    expect(remapMock).toHaveBeenCalledWith('c1', moves);
+    expect(m.onAttachmentMoves).toHaveBeenCalledTimes(1);
+    expect(m.onAttachmentMoves).toHaveBeenCalledWith(moves);
+    // В onSessionUpdated карта не попадает: шапка получает чистый Session
+    const passed = m.onSessionUpdated.mock.calls[0]?.[0];
+    expect(passed).toBeDefined();
+    expect(passed.privateToUserId).toBe(ME);
+    expect(passed).not.toHaveProperty('attachmentMoves');
+    expect(toastMock).not.toHaveBeenCalled();
+  });
+
+  it('ответ без attachmentMoves: ни перестановки ленты, ни карты наверх', async () => {
+    apiMock.setChatVisibility.mockResolvedValue(chat({ privateToUserId: ME }));
+    const m = render();
+    openMenu(m);
+    await act(async () => { (reactProps(switchNode() as never)!.onClick as () => void)(); });
+    expect(m.onSessionUpdated).toHaveBeenCalledTimes(1);
+    expect(remapMock).not.toHaveBeenCalled();
+    expect(m.onAttachmentMoves).not.toHaveBeenCalled();
+  });
+
+  it('пустая карта {} — тот же no-op: перестановка только при непустой карте', async () => {
+    apiMock.setChatVisibility.mockResolvedValue({ ...chat({ privateToUserId: ME }), attachmentMoves: {} } as Session);
+    const m = render();
+    openMenu(m);
+    await act(async () => { (reactProps(switchNode() as never)!.onClick as () => void)(); });
+    expect(m.onSessionUpdated).toHaveBeenCalledTimes(1);
+    expect(remapMock).not.toHaveBeenCalled();
+    expect(m.onAttachmentMoves).not.toHaveBeenCalled();
   });
 });

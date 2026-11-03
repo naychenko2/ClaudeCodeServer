@@ -7,6 +7,7 @@ import { Menu, Toggle } from '../ui';
 import { api, ChatVisibilityError } from '../../lib/api';
 import { readStoredUserId } from '../../lib/offline';
 import { isSharedProject } from '../../features/projects/members/messageAuthor';
+import { remapSessionAttachedPaths } from '../../hooks/useSession';
 import { showToast } from '../../lib/toast';
 
 // Тумблер «Приватный чат» (S2d-F2): чат общего проекта можно закрыть от участников —
@@ -48,7 +49,7 @@ export function isPrivateChatTo(session: Pick<Session, 'privateToUserId'>, myUse
   return !!myUserId && !!session.privateToUserId && session.privateToUserId === myUserId;
 }
 
-export function PrivateChatToggle({ session, project, hasMessages, online, isMobile, onSessionUpdated }: {
+export function PrivateChatToggle({ session, project, hasMessages, online, isMobile, onSessionUpdated, onAttachmentMoves }: {
   session: Session;
   project: Project | null | undefined;
   // Есть ли переписка (из ленты, как в ChatHeaderBar) — плюс запасные поля чата
@@ -56,6 +57,9 @@ export function PrivateChatToggle({ session, project, hasMessages, online, isMob
   online: boolean;
   isMobile?: boolean;
   onSessionUpdated?: (s: Session) => void;
+  // Карта переноса вложений (S2d-6b-4F2): {старый путь: новый} — наверх, к черновику
+  // композера (F3). Вызывается только когда в карте есть хоть один ключ
+  onAttachmentMoves?: (moves: Record<string, string>) => void;
 }) {
   const myUserId = readStoredUserId();
   // Якорь поповера — rect кнопки, снятый в момент клика (общая идиома Menu в проекте)
@@ -72,8 +76,15 @@ export function PrivateChatToggle({ session, project, hasMessages, online, isMob
     if (next === privateOn || saving) return;
     setSaving(true);
     try {
-      // Ответ бэка — полный Session с новой видимостью: он и становится истиной шапки
-      onSessionUpdated?.(await api.chats.setChatVisibility(session.id, next));
+      // Ответ бэка — полный Session с новой видимостью: он и становится истиной шапки.
+      // Карта переноса вложений (S2d-6b-4) отделена от него: в onSessionUpdated она не
+      // идёт (шапке не нужна), лента переставляется по ней здесь, сама карта — наверх.
+      const { attachmentMoves, ...updated } = await api.chats.setChatVisibility(session.id, next);
+      onSessionUpdated?.(updated);
+      if (attachmentMoves && Object.keys(attachmentMoves).length > 0) {
+        remapSessionAttachedPaths(session.id, attachmentMoves);
+        onAttachmentMoves?.(attachmentMoves);
+      }
     } catch (e) {
       // 409/403 разобраны в api (ChatVisibilityError) — человек читает текст, не код
       showToast('Приватный чат',

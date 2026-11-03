@@ -484,4 +484,12 @@ public sealed record LlmSessionContext(
     // рамка входит в сигнатуру запуска (доработка по ревью R-S2a-4 Major 2) — пока она
     // не менялась, живой процесс постоялен, смена рамки поднимает новый процесс с
     // подборкой новой рамки. null (тесты без SessionManager) — рамка не применяется.
-    ClaudeHomeServer.Services.Access.ITurnFrameSource? FrameSource = null);
+    ClaudeHomeServer.Services.Access.ITurnFrameSource? FrameSource = null,
+    // Корень data/ из конфигурации сервера (тот же резолв, что у sessions.json в SessionManager).
+    // Нужен встроенному deny {data}/wiki/** для CLI-агента (ADR-035 §2): предикату WikiPaths в
+    // DecidePermissionAsync и статическому deny в настройках запуска CLI (ClaudeRuntimeSettings).
+    // Свойство инстанса, не сессии и не хода: состав deny-правил от хода не зависит — иначе
+    // путь --settings мерцал бы в сигнатуре прогона и живой CLI перезапускался бы между ходами.
+    // null — тесты/старый контракт: deny нет (у container-владельцев data/ в песочницу не
+    // монтируется, отказ там выполнен построением).
+    string? DataDir = null);

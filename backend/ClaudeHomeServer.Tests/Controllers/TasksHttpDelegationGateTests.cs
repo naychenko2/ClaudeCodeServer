@@ -22,12 +22,13 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// fail-closed проверяется и с другой стороны: гейт идёт по сессии из ХВОСТА маршрута
 /// (изолирована GetOwned по владельцу токена), а не по заголовку от клиента.
 /// </summary>
-public class TasksHttpDelegationGateTests : IDisposable
+[Trait("Category", "Host")]
+public class TasksHttpDelegationGateTests : IClassFixture<TasksHttpDelegationGateTests.Host>, IDisposable
 {
     // Фабрика адаптеров с настраиваемой глубиной хода: GetActiveTurnDelegation спрашивает
     // ЖИВОЙ адаптер (env и заголовки протухают), поэтому глубину меняем на лету — один
     // и тот же чат то обычный, то делегированный
-    private sealed class DepthAdapterFactory : ILlmSessionAdapterFactory
+    internal sealed class DepthAdapterFactory : ILlmSessionAdapterFactory
     {
         public volatile int AgentDepth;
         public volatile bool SuppressTasksExecute;
@@ -63,20 +64,37 @@ public class TasksHttpDelegationGateTests : IDisposable
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
-    private readonly DepthAdapterFactory _adapters = new();
-    private readonly TestWebApplicationFactory _factory;
-
-    public TasksHttpDelegationGateTests()
+    /// <summary>
+    /// Хост на весь класс (IClassFixture), а не на тест: фабрика адаптеров с настраиваемой
+    /// глубиной хода зарегистрирована один раз; её mutable-состояние поднимается заново в
+    /// конструкторе класса перед каждым тестом — xUnit создаёт экземпляр класса на каждый тест.
+    /// </summary>
+    public sealed class Host : TestWebApplicationFactory
     {
-        _factory = new TestWebApplicationFactory
-        {
-            ExtraServices = services => services.AddSingleton<ILlmSessionAdapterFactory>(_adapters),
-        };
+        internal readonly DepthAdapterFactory Adapters = new();
+
+        public Host() =>
+            ExtraServices = services => services.AddSingleton<ILlmSessionAdapterFactory>(Adapters);
     }
 
-    public void Dispose() => _factory.Dispose();
+    private readonly DepthAdapterFactory _adapters;
+    private readonly TestWebApplicationFactory _factory;
 
-    private HttpClient Client => _factory.CreateAuthenticatedClient();
+    public TasksHttpDelegationGateTests(Host host)
+    {
+        _factory = host;
+        _adapters = host.Adapters;
+        // Глубина и подавление — то, что тесты меняют в общем хосте: сбрасываются перед каждым
+        // тестом, чтобы он не зависел от того, что оставил предыдущий
+        _adapters.AgentDepth = 0;
+        _adapters.SuppressTasksExecute = false;
+    }
+
+    // Один клиент на тест, гасится в Dispose (раньше свойство создавало нового на каждое обращение)
+    private HttpClient? _client;
+    private HttpClient Client => _client ??= _factory.CreateAuthenticatedClient();
+
+    public void Dispose() => _client?.Dispose();
 
     private async Task<(string ProjectId, string SessionId)> CreateProjectWithSessionAsync()
     {

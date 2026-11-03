@@ -3,16 +3,16 @@ import type { ReactNode } from 'react';
 import { AlertTriangle, Inbox, RotateCw } from 'lucide-react';
 import { C, R, FS, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { useFeaturePage, refetchFeaturePage, useFeaturePageTab, setFeaturePageTab } from '../../lib/featurePage';
+import { useFeaturePage, refetchFeaturePage, useFeaturePageTab, setFeaturePageTab, stepsTabCount, type FeatureBrief } from '../../lib/featurePage';
 import { useMe } from '../../lib/defaultPersona';
 import { buildNavMarks } from '../../lib/featureNavMarks';
 import { getBackNav, clearBackNav, registerFeaturePage, recordFeatureReturn } from '../../lib/featureBackNav';
 import { useFeaturesIndex } from '../../lib/featuresIndex';
 import { api } from '../../lib/api';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
-import { featureStatusTag, featureDisplayState, STAGE_NAME } from '../../lib/chatGroups';
+import { featureStatusTag, featureDisplayState } from '../../lib/chatGroups';
 import { openChatById } from '../../lib/openChat';
-import { taskCounters } from './featurePageBody';
+import { openTaskInSection } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
 import { FeatureMergeDialog } from './FeatureMergeDialog';
 import { CenterViewShell } from '../CenterViewShell';
@@ -24,15 +24,16 @@ import { Button } from '../ui/Button';
 import { FeatureTimelineTab } from './FeatureTimelineTab';
 import { FeaturePlansTab, plansTabCount } from './FeaturePlansTab';
 import { FeatureChatsTab } from './FeatureChatsTab';
-import { FeatureTasksTab } from './FeatureTasksTab';
+import { FeatureTasksTab, allFeatureTasks } from './FeatureTasksTab';
 import { FeatureEventsTab } from './FeatureEventsTab';
 import { FeatureStatsTab } from './FeatureStatsTab';
 import { FeatureBriefBlock, type FeatureBriefBlockProps } from './FeatureBriefBlock';
-import { type PersonaNameResolver } from './FeatureBriefModel';
+import { stageLabel } from './FeatureStatsBits';
+import { type PersonaGenderResolver, type PersonaNameResolver } from './FeatureBriefModel';
 import { ensurePersonasLoaded, getPersonaById, usePersonasVersion } from '../../lib/personas';
 import {
-  FeaturePageHeader, FeaturePageToolbar, FeaturePageAlert,
-  featureRunStatusTag, toRunTag, type FeatureRunTag,
+  FeaturePageToolbar, FeaturePageAlert,
+  featurePageStatusTag, toRunTag, type FeatureRunTag,
 } from './FeaturePageHeader';
 import { FeaturePageTabs } from './FeaturePageTabs';
 import type { FeatureRun } from '../../types/featureRun';
@@ -56,7 +57,7 @@ export interface FeaturePageProps {
   isMobile?: boolean;
   // Исполнитель закрытия: закрывает страницу и ведёт в target.
   onBack: (target: FeaturePageBackTarget) => void;
-  // Открыть файл проекта (существующий просмотр; «Открыть макет» в «Планы и макеты»).
+  // Открыть файл проекта (существующий просмотр; «Открыть макет» в «Материалы»).
   onOpenFile?: (path: string) => void;
 }
 
@@ -91,10 +92,13 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-feature-page
   document.head.appendChild(el);
 }
 
-// Имя активной стадии для тега «идёт · {этап}»: первая active-стадия run.
-function activeStageName(run: FeatureRun): string | null {
-  const stage = (run.stages ?? []).find(s => s.state === 'active');
-  return stage ? STAGE_NAME[stage.key] : null;
+// Имя активной стадии для тега «идёт · {этап}»: brief.now.stage — тот же источник,
+// что у сводки (FeatureBriefBlock.tsx:75), а не первая active-стадия run: тег тулбара
+// и сводка не должны показывать разные этапы (Ш2). Пустой/отсутствующий stage — null
+// (тега этапа нет); неизвестный ключ — как есть (stageLabel).
+function activeStageName(brief: FeatureBrief | null | undefined): string | null {
+  const stage = brief?.now?.stage;
+  return stage ? stageLabel(stage) : null;
 }
 
 // Блок «Сводка» + имена персон (волна 6, Ф6): getPersonaById сам по себе не реактивен
@@ -102,11 +106,15 @@ function activeStageName(run: FeatureRun): string | null {
 // (тот же приём, что LeadChip): после догрузки стора имена в подписи голоса и в «Дальше»
 // появляются. Подписка на обёртке, не на странице: подъём стора персон не должен
 // перерисовывать всю страницу.
-function FeatureBriefWithNames(props: Omit<FeatureBriefBlockProps, 'nameOf'>) {
+function FeatureBriefWithNames(props: Omit<FeatureBriefBlockProps, 'nameOf' | 'genderOf'>) {
   usePersonasVersion();
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   const nameOf: PersonaNameResolver = (id) => getPersonaById(id)?.name ?? null;
-  return <FeatureBriefBlock {...props} nameOf={nameOf} />;
+  const genderOf: PersonaGenderResolver = (id) => {
+    const g = getPersonaById(id)?.gender;
+    return g === 'female' || g === 'male' ? g : null;
+  };
+  return <FeatureBriefBlock {...props} nameOf={nameOf} genderOf={genderOf} />;
 }
 
 // Страница фичи (волна 3, Ф1 — каркас). Оболочка — «как файл» (CenterViewShell):
@@ -124,7 +132,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
   const featuresOn = useFeature(FLAGS.featuresOverview);
   const index = useFeaturesIndex(projectId, featuresOn);
   const feature = index.features.find(f => f.featureId === featureId) ?? null;
-  // «Открыть ключевой чат» (общее пустое «Планы и макеты»): тот же переход, что в шапке.
+  // «Открыть ключевой чат» (общее пустое «Материалы»): тот же переход, что в шапке.
   const keyChat = feature?.keySessionId ?? null;
   const onOpenKeyChat = keyChat ? () => { void openChatById(keyChat); } : undefined;
   // Корень «просмотра» — для правила «скрытый центр не перехватывает Esc» (useEscapeClose):
@@ -148,7 +156,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
   const glyph: GlyphKind = display ? display.kind : 'run';
   let tag: FeatureRunTag | null = null;
   if (page.status === 'ok' && page.page.run.state) {
-    tag = featureRunStatusTag(page.page.run.state, activeStageName(page.page.run), {
+    tag = featurePageStatusTag(page.page.run.state, activeStageName(page.page.brief), {
       holdReason: page.page.run.hold?.reason, queue: page.page.run.queue,
     });
   } else if (feature) {
@@ -310,13 +318,24 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
           void openChatById(finalChat);
         }
       : undefined;
+    // Строки «Сейчас»: переход в задачу и «Ответить» (чат задачи; чата нет — сама задача).
+    const openActiveTask = (taskId: string) => {
+      const task = allFeatureTasks(okRun).find(t => t.id === taskId);
+      recordFeatureReturn(featureId, { kind: 'task', id: taskId }, title);
+      openTaskInSection({ id: taskId, projectId: task?.projectId ?? undefined });
+    };
+    const answerActive = (taskId: string) => {
+      const chat = allFeatureTasks(okRun).find(t => t.id === taskId)?.linkedSessionId ?? null;
+      if (!chat) { openActiveTask(taskId); return; }
+      recordFeatureReturn(featureId, { kind: 'chat', id: chat }, title);
+      void openChatById(chat);
+    };
     const chatsCount = (page.page.chats ?? []).filter(c => !c.archived).length;
     // Пометки «в архиве»/«задача закрыта» — из данных страницы (задачи run + чаты): одни
     // на все вкладки, шапку и тревогу.
     const marks = buildNavMarks(okRun, page.page.chats);
     body = (
       <>
-        <FeaturePageHeader run={okRun} feature={feature} isMobile={isMobile} tag={tag} />
         <FeaturePageAlert run={okRun} feature={feature} isMobile={isMobile} onMerge={openMergeDialog} marks={marks} />
         <FeaturePageTabs
           value={tab}
@@ -324,29 +343,38 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
           isMobile={isMobile}
           plansCount={plansTabCount(page.page)}
           chatsCount={chatsCount}
-          // «Задачи N» — ОДИН источник со строками вкладки: число задач из run
-          // (taskCounters), не taskCount из индекса (индекс может расходиться с run).
-          tasksCount={taskCounters(okRun).total}
-          // «События N» — что реально загружено/доступно (events.length), не eventsTotal
-          // (общее до обрезки бэком): лента приходит по eventsLimit (100), eventsTotal —
-          // всего. «Показать все» догружает всю ленту, и счётчик становится честным.
-          eventsCount={page.page.events.length}
+          // «Шаги N» — знаменатель трекера (stepProgress.total), как на полосе готовности:
+          // строки вкладки по корзинам дают ту же сумму.
+          tasksCount={stepsTabCount(okRun)}
+          // «История N» — разворот решения (Ш1b): счётчик вкладки — общее число
+          // (eventsTotal), лента грузится частями (по eventsLimit, «Показать все» догружает
+          // всё). Раньше счётчик брал events.length (загружено) — теперь он говорит о всей
+          // истории фичи, а не о загруженной части ленты.
+          eventsCount={page.page.eventsTotal}
           waitingDot={okRun.attention?.kind === 'wait'}
         />
         <div data-testid="feature-page-body" style={{ marginTop: SP.md }}>
           {tab === 'timeline' ? (
             <>
               {/* Блок «Сводка» (волна 6, Ф6): brief/stats/mergedAt — из ответа страницы,
-                  фронт ничего не пересчитывает; «Повторить» — перезапрос страницы. */}
+                  фронт ничего не пересчитывает; «Повторить» — перезапрос страницы.
+                  inMaster (F1) — ортогональный счётчик бэка из stepProgress, не корзина. */}
               <FeatureBriefWithNames
                 brief={page.page.brief ?? null}
                 stats={page.page.stats ?? null}
                 mergedAt={okRun.summary?.mergedAt ?? null}
+                inMaster={okRun.stepProgress?.inMaster ?? null}
+                stepProgress={okRun.stepProgress ?? null}
+                leadPersonaId={feature?.orchestratorPersonaId ?? null}
+                branch={feature?.branch ?? null}
                 isMobile={isMobile}
                 onOpenStats={() => setFeaturePageTab('stats')}
                 onRetry={() => refetchFeaturePage(featureId)}
                 onMerge={openMergeDialog}
                 onOpenFinal={openFinalChat}
+                onOpenTask={openActiveTask}
+                onAnswer={answerActive}
+                onOpenTasks={() => setFeaturePageTab('tasks')}
               />
               {/* stats — таймлайн фичи: из него дорожки этапов и ось времени (GC-F5c). */}
               <FeatureTimelineTab run={okRun} marks={marks} isMobile={isMobile} stats={page.page.stats ?? null} />
@@ -415,6 +443,10 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
             branch={feature?.branch ?? null}
             pending={mergePending}
             error={mergeError}
+            // Риски мержа (Ш8-wire): из attention последнего снимка страницы, а не из
+            // момента открытия — при перезапросе страницы диалог перерисовывается с
+            // новыми рисками (исчезли — блока нет). Отсутствия поля UI обязан пережить.
+            risks={run?.attention?.mergeRisks}
             onCancel={closeMergeDialog}
             onConfirm={confirmMerge}
           />

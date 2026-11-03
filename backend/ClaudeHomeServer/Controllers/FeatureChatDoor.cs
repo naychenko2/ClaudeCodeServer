@@ -48,7 +48,8 @@ public static class FeatureChatDoor
     public static List<FeatureIndexSession> Snapshot(SessionManager sessions, string ownerId) =>
         sessions.GetAllOwnedBy(ownerId)
             .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived, s.Model, s.PersonaId,
-                s.Status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting))
+                s.Status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting,
+                s.ContinuedInSessionId))
             .ToList();
 
     // Тот же снимок для ЧЕЛОВЕЧЕСКИХ проекций (страница фичи, индекс, список фич: ChatIds, чаты,

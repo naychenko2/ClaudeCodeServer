@@ -7,21 +7,23 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Cloud } from 'lucide-react';
-import { Button, ConfirmDialog, C, FS, SP, ICON_SIZE, ICON_STROKE, showToast } from 'aihome_shell/kit';
+import {
+  Button, ConfirmDialog, C, FS, SP, ICON_SIZE, ICON_STROKE, showToast,
+  LocalGpuQueueLine, makeLaunchGuard, isStandDown, CLOUD_DIALOG_TITLE, cloudDialogSubtitle, cloudButtonLabel,
+  cloudCandidate as pickCloudCandidate,
+} from 'aihome_shell/kit';
 import { videoApi, type VideoCatalog, type VideoProvider, type VideoQuote, type VideoQuoteRequest } from '../api';
 import { LOCAL_PROVIDER, plural } from '../scene/model';
 import { getCatalog, useVideoStoreVersion } from '../store/videoStore';
-import { LocalGpuQueueLine } from '../../../components/LocalGpuQueueLine';
 import { useBoxWidth } from '../useBoxWidth';
 import type { LocalGpuQueueInfo } from '../../../types/localGpuQueue';
-import { makeLaunchGuard, isStandDown, CLOUD_DIALOG_TITLE, cloudDialogSubtitle, cloudButtonLabel, cloudCandidate as pickCloudCandidate } from '../../../lib/cloudRescue';
 
 const ic = (I: typeof Cloud, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
 // ── Чистая логика видимости (тестится отдельно) ──
 
-// isStandDown — общий модуль cloudRescue (экспортируется для тестов)
-export { isStandDown } from '../../../lib/cloudRescue';
+// isStandDown — общий модуль cloudRescue через кит (экспортируется для тестов)
+export { isStandDown } from 'aihome_shell/kit';
 
 // Облачный исполнитель: первый в порядке «Авто» (catalog.autoProviders) доступный поставщик,
 // не локальные модели, с моделями. Нет каталога или облачные все недоступны/пусты —
@@ -78,8 +80,8 @@ export function priceLabel(q: VideoQuote | null): string | null {
   return `${p.approx ? '≈ ' : ''}$${p.amount.toFixed(2)}`;
 }
 
-// makeLaunchGuard — общий модуль cloudRescue (экспортируется для тестов)
-export { makeLaunchGuard } from '../../../lib/cloudRescue';
+// makeLaunchGuard — общий модуль cloudRescue через кит (экспортируется для тестов)
+export { makeLaunchGuard } from 'aihome_shell/kit';
 
 // ── Хук: котировка облачного исполнителя, пока стенд лежит ──
 

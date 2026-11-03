@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 //  • условный GET: ETag считается по готовому телу, совпавший If-None-Match даёт 304, а любое
 //    изменение поля, включая updatedAt, даёт новый тег — устаревший список клиент не получит
 //    (на updatedAt держатся непрочитанность и пропуск повторной загрузки истории).
+[Trait("Category", "Host")]
 public class SessionListWireTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {

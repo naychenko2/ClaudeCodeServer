@@ -118,21 +118,21 @@ describe('dutyReasonsSummary: несколько причин', () => {
 });
 
 describe('цепочка: текущее звено', () => {
-  it('модель активна — на Bonsai; уступила или недоступна — на страховку', () => {
-    expect(currentChainLink('working')).toBe('bonsai');
-    expect(currentChainLink('busy')).toBe('bonsai');
+  it('модель активна — на второй движок; уступила или недоступна — на страховку', () => {
+    expect(currentChainLink('working')).toBe('engine');
+    expect(currentChainLink('busy')).toBe('engine');
     expect(currentChainLink('yielded')).toBe('insurance');
     expect(currentChainLink('down')).toBe('insurance');
   });
   it('подпись следующего вызова — по текущему звену', () => {
-    expect(nextChainHint('bonsai')).toBe('Следующий вызов места пойдёт на Bonsai');
+    expect(nextChainHint('engine')).toBe('Следующий вызов места пойдёт на локальную модель');
     expect(nextChainHint('insurance')).toBe('Следующий вызов места пойдёт на MiniMax');
   });
 });
 
 describe('ответы мест за час', () => {
   const NOW = new Date(2026, 9, 13, 14, 9, 0).getTime();
-  const fullHour: LocalModelDutyAnswers = { bonsai: 212, insurance: 31, claude: 2, missed: 1, sinceAt: NOW - 60 * 60_000 };
+  const fullHour: LocalModelDutyAnswers = { engine: 212, insurance: 31, claude: 2, missed: 1, sinceAt: NOW - 60 * 60_000 };
 
   it('доля считается от сумм answersLastHour окна', () => {
     const s = answersSummary(fullHour);
@@ -142,7 +142,7 @@ describe('ответы мест за час', () => {
     expect(s.segments[3].label).toBe('без ответа');
   });
   it('нулевой сегмент полосой не рисуется, но остаётся в легенде с числом 0', () => {
-    const s = answersSummary({ bonsai: 10, insurance: 0, claude: 5, missed: 0, sinceAt: NOW });
+    const s = answersSummary({ engine: 10, insurance: 0, claude: 5, missed: 0, sinceAt: NOW });
     expect(s.segments[1].widthPerc).toBeNull();
     expect(s.segments[1].count).toBe(0);
     expect(s.segments[3].widthPerc).toBeNull();
@@ -150,8 +150,8 @@ describe('ответы мест за час', () => {
     expect(s.segments[0].widthPerc).toBeCloseTo((10 / 15) * 100, 6);
   });
   it('0 ответов — «—», а не NaN', () => {
-    expect(answersDash({ bonsai: 0, insurance: 0, claude: 0, missed: 0, sinceAt: NOW })).toBe('—');
-    const s = answersSummary({ bonsai: 0, insurance: 0, claude: 0, missed: 0, sinceAt: NOW });
+    expect(answersDash({ engine: 0, insurance: 0, claude: 0, missed: 0, sinceAt: NOW })).toBe('—');
+    const s = answersSummary({ engine: 0, insurance: 0, claude: 0, missed: 0, sinceAt: NOW });
     expect(s.total).toBe(0);
     for (const seg of s.segments) {
       expect(seg.widthPerc).toBeNull();
@@ -217,14 +217,14 @@ describe('dutySwitchTimes: «Уступает · возвращается»', ()
   });
 });
 
-describe('dutyWhoRows: строки «Кто сейчас» для Bonsai', () => {
+describe('dutyWhoRows: строки «Кто сейчас» для второго движка', () => {
   it('зеновое имя и длительность; очередь — «ждёт в очереди»', () => {
     const rows = dutyWhoRows([
-      { place: 'Заголовок чата', link: 'bonsai', durationS: 1.4 },
+      { place: 'Заголовок чата', link: 'engine', durationS: 1.4 },
       { place: 'Классификация задачи', link: 'insurance', durationS: 2.1 },
       { place: 'Сводка хода', link: null, durationS: 0.3 },
     ]);
-    expect(rows[0]).toEqual({ key: 'call-0', place: 'Заголовок чата', linkText: 'Bonsai', queued: false, duration: '1,4 с' });
+    expect(rows[0]).toEqual({ key: 'call-0', place: 'Заголовок чата', linkText: 'локальная', queued: false, duration: '1,4 с' });
     expect(rows[1].linkText).toBe('MiniMax · страховка');
     expect(rows[2]).toEqual({ key: 'call-2', place: 'Сводка хода', linkText: 'ждёт в очереди', queued: true, duration: '0,3 с' });
   });

@@ -23,24 +23,49 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 // правка без ИИ — шаг текущей версии, «продолжить от версии», сохранение уводит нить на новый
 // файл, чужая сессия и чужая нить изолированы, ветвление и удаление чата доходят до нитей через
 // шину. Стопки («Взять», откат со старой стопкой) проверяются на нити в формате до 27.09.
-public class ThreadFlowEndpointTests : IDisposable
+[Trait("Category", "Host")]
+public class ThreadFlowEndpointTests : IClassFixture<ThreadFlowEndpointTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
-    private readonly ThreadJobs _jobs = new();
-    private readonly RecordingBroadcaster _broadcaster = new();
+    /// <summary>
+    /// Хост на весь класс (IClassFixture), а не на тест: подмена исполнителя задач, широки и
+    /// поставщика зарегистрирована один раз. Состояние фейков (последний вход задачи, счётчик
+    /// запусков, журнал задач и финалов, рассылки широки) поднимает заново конструктор класса
+    /// перед каждым тестом — тест проверяет абсолютные числа («задача не стартует» = 0).
+    /// Нити, шаги, версии и файлы ключены чатом/проектом, а проект и чат каждый
+    /// тест-экземпляр заводит свои (CreateProject и Chat() — уникальные GUID).
+    /// </summary>
+    public sealed class Hosts : TestWebApplicationFactory
+    {
+        internal readonly ThreadJobs Jobs = new();
+        internal readonly RecordingBroadcaster Broadcaster = new();
+
+        public Hosts()
+        {
+            ExtraServices = services =>
+            {
+                services.AddSingleton<IImageEditJobs>(Jobs);
+                services.AddSingleton<ISessionBroadcaster>(Broadcaster);
+                services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
+            };
+        }
+    }
+
+    private readonly TestWebApplicationFactory _factory;
+    private readonly ThreadJobs _jobs;
+    private readonly RecordingBroadcaster _broadcaster;
     private readonly HttpClient _client;
     private readonly string _ownerId;
     private readonly string _projectId;
     private readonly string _root;
 
-    public ThreadFlowEndpointTests()
+    public ThreadFlowEndpointTests(Hosts hosts)
     {
-        _factory.ExtraServices = services =>
-        {
-            services.AddSingleton<IImageEditJobs>(_jobs);
-            services.AddSingleton<ISessionBroadcaster>(_broadcaster);
-            services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
-        };
+        _factory = hosts;
+        _jobs = hosts.Jobs;
+        _broadcaster = hosts.Broadcaster;
+        _jobs.Reset();
+        // Сброс перед каждым тестом: общий хост помнит рассылки чужих мутаций
+        while (_broadcaster.ToOwnerCalls.TryDequeue(out _)) { }
         (_projectId, _root) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.TestUsername);
         _ownerId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         _client = _factory.CreateAuthenticatedClient();
@@ -48,20 +73,27 @@ public class ThreadFlowEndpointTests : IDisposable
         File.WriteAllBytes(Path.Combine(_root, "images", "hero.png"), Png(40, 20));
     }
 
-    public void Dispose()
-    {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
-    }
-
     // Задачи в памяти: запоминают вход и отдают DTO с его чатом и нитью; у каждой вариант 1. Задача
     // идёт, пока тест не завершит её (Finish): иначе сборщик запуска догнал бы финал сразу
-    private sealed class ThreadJobs : IImageEditJobs
+    internal sealed class ThreadJobs : IImageEditJobs
     {
         public ImageEditJobInput? LastInput;
         public int Started;
         private readonly Dictionary<string, (string Owner, string Project, ImageEditJobInput Input)> _jobs = [];
         private readonly HashSet<string> _finished = [];
+
+        // Сброс перед каждым тестом: общий хост помнит запуски и финалы чужих тестов,
+        // а «задача не стартует» проверяется абсолютным нулём
+        public void Reset()
+        {
+            LastInput = null;
+            Started = 0;
+            lock (_jobs)
+            {
+                _jobs.Clear();
+                _finished.Clear();
+            }
+        }
 
         public void Finish(string jobId)
         {

@@ -1,8 +1,9 @@
-// Тег статуса фичи: глиф очереди и моно-цифры «N из M» (макет feature-queue-1.md, «Тег и глиф»).
+// Тег статуса фичи: глиф очереди и моно-цифры «N из M» (макет feature-queue-1.md, «Тег и
+// глиф»); подпись закрытия — «закрыта без мержа» (Ш1c, единая подпись, решена с Майей).
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, it, expect } from 'vitest';
-import { StatusTag, featureRunStatusTag } from './FeatureStatusTag';
+import { StatusTag, featureRunStatusTag, featurePageStatusTag } from './FeatureStatusTag';
 import { featureDisplayState } from '../../lib/chatGroups';
 import { FONT } from '../../lib/design';
 import type { FeatureIndexFeature } from '../../types/featureIndex';
@@ -75,5 +76,27 @@ describe('queueLabel: единый источник подписи (тег = с�
     const tag = featureRunStatusTag('paused', null, { holdReason: 'queue' });
     expect(tag.label).toBe('в очереди');
     expect(featureDisplayState(queuedFeature({ queue: null })).status).toBe(tag.label);
+  });
+});
+
+// Ш1c: одна подпись закрытия — «закрыта без мержа» (с маленькой буквы), решена с Майей.
+describe('закрытие фичи', () => {
+  it('тег closed — «закрыта без мержа», тон closed, без точки', () => {
+    const tag = featureRunStatusTag('closed');
+    expect(tag.label).toBe('закрыта без мержа');
+    expect(tag.tone).toBe('closed');
+    expect(tag.dot).toBeUndefined();
+    // И в рендере — та же строка, целиком.
+    expect(html(tag).replace(/<[^>]+>/g, '')).toBe('закрыта без мержа');
+  });
+});
+
+describe('featurePageStatusTag: тег страницы без «ждёт вас» (Ш4)', () => {
+  it('waiting — стадия или «в работе», тон wait; остальные состояния как у featureRunStatusTag; общий тег прежний', () => {
+    expect(featurePageStatusTag('waiting', 'ревью').label).toBe('в работе · ревью');
+    expect(featurePageStatusTag('waiting').label).toBe('в работе');
+    expect(featurePageStatusTag('waiting').tone).toBe('wait');
+    expect(featurePageStatusTag('stopped')).toEqual(featureRunStatusTag('stopped'));
+    expect(featureRunStatusTag('waiting').label).toBe('ждёт вас');
   });
 });

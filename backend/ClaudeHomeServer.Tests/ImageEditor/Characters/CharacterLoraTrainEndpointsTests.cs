@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -12,23 +13,84 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace ClaudeHomeServer.Tests.ImageEditor.Characters;
 
 // Ручки обучающих фото и обучения LoRA персонажа (ADR-026-contracts §7.1, §7.2, §7.4)
-public class CharacterLoraTrainEndpointsTests : IDisposable
+[Trait("Category", "Host")]
+public class CharacterLoraTrainEndpointsTests : IClassFixture<CharacterLoraTrainEndpointsTests.Hosts>
 {
-    private readonly List<TestWebApplicationFactory> _factories = [];
+    private readonly Hosts _hosts;
 
-    public void Dispose()
+    public CharacterLoraTrainEndpointsTests(Hosts hosts) => _hosts = hosts;
+
+    // Хост на КОНФИГУРАЦИЮ, а не на тест: объекты фабрик создаются сразу, ASP.NET-хост внутри каждой
+    // стартует лениво; гасятся вместе с фикстурой. Состояние каждый тест заводит сам: фейк тренера
+    // сбрасывает Use() хоста TrainerHost (в самом Hosts метода нет), проект с персонажем —
+    // ProjectWithCharacter с уникальным именем и каталогом
+    public sealed class Hosts : IDisposable
     {
-        foreach (var f in _factories) f.Dispose();
-        GC.SuppressFinalize(this);
+        // Шов обучения есть
+        public TrainerHost Trainer { get; } = new();
+        // Шва нет вовсе (подсистема images выключена)
+        public NoSeamHost NoSeam { get; } = new();
+
+        public void Dispose()
+        {
+            Trainer.Dispose();
+            NoSeam.Dispose();
+        }
     }
 
-    private sealed class FakeTrainer : ILocalLoraTrainer
+    public sealed class TrainerHost : TestWebApplicationFactory
     {
+        public FakeTrainer Trainer { get; } = new();
+
+        public TrainerHost()
+        {
+            ExtraServices = services =>
+            {
+                services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
+                services.RemoveAll<ILocalLoraTrainer>();
+                services.AddSingleton<ILocalLoraTrainer>(Trainer);
+            };
+        }
+
+        // Чистый тренер на начало теста
+        public TrainerHost Use()
+        {
+            Trainer.Reset();
+            return this;
+        }
+    }
+
+    public sealed class NoSeamHost : TestWebApplicationFactory
+    {
+        public NoSeamHost()
+        {
+            ExtraServices = services =>
+            {
+                services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
+                services.RemoveAll<ILocalLoraTrainer>();
+            };
+        }
+    }
+
+    public sealed class FakeTrainer : ILocalLoraTrainer
+    {
+        public void Reset()
+        {
+            Enabled = true;
+            BusyNow = null;
+            StartResult = new("lm_job1", 0, 4850);
+            CancelResult = LoraCancelResult.Cancelled;
+            StartDelay = TimeSpan.Zero;
+            Starts.Clear();
+            Cancels.Clear();
+        }
+
+
         public bool Enabled { get; set; } = true;
         public LoraTrainBusy? BusyNow { get; set; }
         public LoraTrainStartResult StartResult { get; set; } = new("lm_job1", 0, 4850);
         public LoraCancelResult CancelResult { get; set; } = LoraCancelResult.Cancelled;
-        public List<LoraTrainStart> Starts { get; } = [];
+        public ConcurrentQueue<LoraTrainStart> Starts { get; } = new();
         public List<(string Owner, string Job, bool Admin)> Cancels { get; } = [];
 
         public LoraTrainBusy? Busy(string ownerId) =>
@@ -38,7 +100,7 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
 
         public async Task<LoraTrainStartResult> StartAsync(LoraTrainStart request, CancellationToken ct)
         {
-            Starts.Add(request);
+            Starts.Enqueue(request);
             if (StartDelay > TimeSpan.Zero) await Task.Delay(StartDelay, ct);
             return StartResult;
         }
@@ -57,20 +119,6 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
 
         public Task<LoraDeleteState> DeleteRunAsync(string ownerId, string projectId, string slug, string runId, CancellationToken ct) =>
             Task.FromResult(LoraDeleteState.Deleted);
-    }
-
-    // trainer == null — шва нет вовсе (подсистема images выключена)
-    private TestWebApplicationFactory Factory(FakeTrainer? trainer)
-    {
-        var factory = new TestWebApplicationFactory();
-        factory.ExtraServices = services =>
-        {
-            services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
-            services.RemoveAll<ILocalLoraTrainer>();
-            if (trainer is not null) services.AddSingleton<ILocalLoraTrainer>(trainer);
-        };
-        _factories.Add(factory);
-        return factory;
     }
 
     private static string Api(string projectId) => $"/api/projects/{projectId}/image-editor";
@@ -138,7 +186,7 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
     [Fact]
     public async Task Фото_добавляются_читаются_и_удаляются()
     {
-        var factory = Factory(new FakeTrainer());
+        var factory = _hosts.Trainer.Use();
         var (id, _) = await ProjectWithCharacter(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
 
@@ -168,7 +216,7 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
     [Fact]
     public async Task Фото_отказ_по_одному_не_роняет_запрос_а_пустой_и_большой_запрос_это_400()
     {
-        var factory = Factory(new FakeTrainer());
+        var factory = _hosts.Trainer.Use();
         var (id, _) = await ProjectWithCharacter(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
 
@@ -190,7 +238,7 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
     [Fact]
     public async Task Нет_персонажа_или_кривой_slug_это_404_character_not_found()
     {
-        var factory = Factory(new FakeTrainer());
+        var factory = _hosts.Trainer.Use();
         var (id, _) = CharacterEndpointsTests.CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
 
@@ -207,8 +255,8 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
     [Fact]
     public async Task Чужой_владелец_не_видит_и_не_трогает_фото_и_обучение()
     {
-        var trainer = new FakeTrainer();
-        var factory = Factory(trainer);
+        var factory = _hosts.Trainer.Use();
+        var trainer = factory.Trainer;
         var (id, _) = await ProjectWithCharacter(factory, TestWebApplicationFactory.TestUsername);
         var owner = factory.CreateAuthenticatedClient();
         await UploadAsync(owner, id, 20);
@@ -230,7 +278,7 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
     [Fact]
     public async Task Без_шва_ручки_обучения_отвечают_503_no_seam_а_фото_работают()
     {
-        var factory = Factory(null);
+        var factory = _hosts.NoSeam;
         var (id, _) = await ProjectWithCharacter(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
 
@@ -253,8 +301,8 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
     public async Task Состояние_отдаёт_занятость_карты_пресеты_и_триггер_по_умолчанию()
     {
         var until = new DateTime(2026, 10, 10, 10, 5, 0, DateTimeKind.Utc);
-        var trainer = new FakeTrainer { BusyNow = new LoraTrainBusy(until, false, "lm_other") };
-        var factory = Factory(trainer);
+        var factory = _hosts.Trainer.Use();
+        factory.Trainer.BusyNow = new LoraTrainBusy(until, false, "lm_other");
         var (id, _) = await ProjectWithCharacter(factory, TestWebApplicationFactory.TestUsername);
 
         var state = await Json(await factory.CreateAuthenticatedClient().GetAsync($"{Api(id)}/{Train}"));
@@ -272,8 +320,8 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
     [Fact]
     public async Task Старт_успешный_создаёт_версию_training_с_хешем_и_триггером()
     {
-        var trainer = new FakeTrainer();
-        var factory = Factory(trainer);
+        var factory = _hosts.Trainer.Use();
+        var trainer = factory.Trainer;
         var (id, root) = await ProjectWithCharacter(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
         await UploadAsync(client, id, 20);
@@ -303,8 +351,8 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
     [Fact]
     public async Task Старт_без_триггера_берёт_автотриггер()
     {
-        var trainer = new FakeTrainer();
-        var factory = Factory(trainer);
+        var factory = _hosts.Trainer.Use();
+        var trainer = factory.Trainer;
         var (id, _) = await ProjectWithCharacter(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
         await UploadAsync(client, id, 20);
@@ -316,8 +364,8 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
     [Fact]
     public async Task Старт_проверки_до_сервиса_дают_400_и_403_и_не_ставят_задачу()
     {
-        var trainer = new FakeTrainer();
-        var factory = Factory(trainer);
+        var factory = _hosts.Trainer.Use();
+        var trainer = factory.Trainer;
         var (id, _) = await ProjectWithCharacter(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
 
@@ -341,8 +389,8 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
     [Fact]
     public async Task Старт_предел_пяти_версий_это_409_version_limit()
     {
-        var trainer = new FakeTrainer();
-        var factory = Factory(trainer);
+        var factory = _hosts.Trainer.Use();
+        var trainer = factory.Trainer;
         var (id, root) = await ProjectWithCharacter(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
         await UploadAsync(client, id, 20);
@@ -368,11 +416,8 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
         LoraTrainErrorCode error, HttpStatusCode status, string code)
     {
         var until = new DateTime(2026, 10, 10, 10, 5, 0, DateTimeKind.Utc);
-        var trainer = new FakeTrainer
-        {
-            StartResult = new LoraTrainStartResult(null, null, null, error, null, new LoraTrainBusy(until, false, "lm_x")),
-        };
-        var factory = Factory(trainer);
+        var factory = _hosts.Trainer.Use();
+        factory.Trainer.StartResult = new LoraTrainStartResult(null, null, null, error, null, new LoraTrainBusy(until, false, "lm_x"));
         var (id, root) = await ProjectWithCharacter(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
         await UploadAsync(client, id, 20);
@@ -388,8 +433,8 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
     [Fact]
     public async Task Отмена_своего_обучения_204_а_без_обучения_404_not_training()
     {
-        var trainer = new FakeTrainer();
-        var factory = Factory(trainer);
+        var factory = _hosts.Trainer.Use();
+        var trainer = factory.Trainer;
         var (id, _) = await ProjectWithCharacter(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
         await UploadAsync(client, id, 20);
@@ -407,8 +452,9 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
     [Fact]
     public async Task Уровень_инстанса_не_админ_получает_403_на_отмену_чужого_и_не_видит_jobId()
     {
-        var trainer = new FakeTrainer { BusyNow = new LoraTrainBusy(DateTime.UtcNow.AddHours(1), false, "lm_other") };
-        var factory = Factory(trainer);
+        var factory = _hosts.Trainer.Use();
+        var trainer = factory.Trainer;
+        trainer.BusyNow = new LoraTrainBusy(DateTime.UtcNow.AddHours(1), false, "lm_other");
         var admin = factory.CreateAuthenticatedClient();
         var user = factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
@@ -435,8 +481,9 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
     [Fact]
     public async Task Два_параллельных_старта_одного_персонажа_дают_одну_запись_training()
     {
-        var trainer = new FakeTrainer { StartDelay = TimeSpan.FromMilliseconds(300) };
-        var factory = Factory(trainer);
+        var factory = _hosts.Trainer.Use();
+        var trainer = factory.Trainer;
+        trainer.StartDelay = TimeSpan.FromMilliseconds(300);
         var (id, root) = await ProjectWithCharacter(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
         await UploadAsync(client, id, 20);
@@ -455,8 +502,8 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
     [Fact]
     public async Task Отмена_уже_завершённого_обучения_идемпотентна_204()
     {
-        var trainer = new FakeTrainer { CancelResult = LoraCancelResult.AlreadyFinished };
-        var factory = Factory(trainer);
+        var factory = _hosts.Trainer.Use();
+        factory.Trainer.CancelResult = LoraCancelResult.AlreadyFinished;
         var (id, _) = await ProjectWithCharacter(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
         await UploadAsync(client, id, 20);
@@ -468,7 +515,7 @@ public class CharacterLoraTrainEndpointsTests : IDisposable
     [Fact]
     public async Task Фото_крупнее_восьми_мегабайт_отклоняется_как_too_big()
     {
-        var factory = Factory(new FakeTrainer());
+        var factory = _hosts.Trainer.Use();
         var (id, _) = await ProjectWithCharacter(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
         var form = new MultipartFormDataContent();

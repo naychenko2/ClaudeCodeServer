@@ -105,10 +105,12 @@ public sealed partial class NpmBuildProgress
 
     // Флаг до имени — `-x…` или `--x…`, второй символ флага не «-»: так у флага ровно один разбор.
     // Прежнее `-{1,2}\S+` читало `--a` и как `-`+`-a`, и как `--`+`a` — 2^k вариантов на этапе из
-    // k флагов без имени (ReDoS, ревью этапа 3)
+    // k флагов без имени (ReDoS, ревью этапа 3). Шаблон internal для ReDoS-стража (NpmBuildServiceTests):
+    // тот сверяет с ним этап напрямую — внутри NestedScript таймаут глушится в null, и различить
+    // линейный и взорванный шаблон можно только по неглушённому RegexMatchTimeoutException.
     [GeneratedRegex(@"^(?:npm\s+(?:run|run-script)|pnpm(?:\s+run)?|yarn(?:\s+run)?)(?:\s+--?[^\s-]\S*)*\s+(?<name>[^\s-]\S*)",
         RegexOptions.None, VsTestConsoleParser.RegexTimeoutMs)]
-    private static partial Regex NestedScriptCommand();
+    internal static partial Regex NestedScriptCommand();
 
     // Этап запускает `vite … build`: слово vite, где-то после него слово build. Разбор по словам —
     // линейный, без регулярки (прежний ленивый шаблон был квадратичным по длине этапа)

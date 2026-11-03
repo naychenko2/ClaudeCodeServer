@@ -144,6 +144,13 @@ public sealed class NoteTaskSyncService(
         var note = notes.GetDetail(userId, task.SourceNoteId);
         if (note is null) return;
 
+        // Побочный писатель пропускает источник wiki (ADR-035, решение 2): галочку в страницу
+        // вики ставит только Хранитель. Здесь именно пропуск, а не отказ: это обратная запись
+        // уже совершившейся смены статуса задачи, она не должна ни ронять тот запрос, ни
+        // писать в вику. Прямые действия пользователя (toggle/set-due страницы вики) отказа
+        // не избегают: их правка идёт через NotesService.Update и режется EnsureNotWiki.
+        if (note.Source == NotesService.WikiKey) return;
+
         var done = task.Status == TaskItemStatus.Done;
         var updatedContent = NoteTaskParser.SetChecked(note.Content, task.SourceNoteLine.Value, done);
         if (updatedContent is null || updatedContent == note.Content) return; // строка сдвинулась/совпадает

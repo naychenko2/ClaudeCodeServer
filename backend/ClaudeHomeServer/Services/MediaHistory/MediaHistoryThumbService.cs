@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 
 namespace ClaudeHomeServer.Services.MediaHistory;
@@ -15,6 +16,10 @@ public sealed class MediaHistoryThumbService
 
     // Семафор на 2 процесса ffmpeg: не больше двух генераций одновременно
     private readonly SemaphoreSlim _gate = new(2, 2);
+    // Single-flight (дефект 8fccc75f, п.3): одна запись — один ffmpeg. Кто первый — генерит
+    // и пишет результат в tcs; остальные ждут его итог, не занимая слот семафора. Без этого
+    // два запроса одной записи писали бы в один и тот же .tmp (гонка → битый webp)
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<bool>> _inFlight = new();
     private readonly ILogger<MediaHistoryThumbService> _log;
     private readonly string _dir;
     private readonly string _ffmpeg;
@@ -32,6 +37,12 @@ public sealed class MediaHistoryThumbService
         _time = time ?? TimeProvider.System;
     }
 
+    // Тестовый шов (R-F3-a): подмена генерации миниатюры. Нужен, чтобы смоделировать падение
+    // лидера single-flight исключением: у настоящей генерации такого пути нет (каждый отказ
+    // перехвачен и возвращает false), а без падения лидера страховка finally ниже непроверяема.
+    // В проде не выставляется (null) — путь тот же, что был.
+    internal Func<string, string, CancellationToken, Task<bool>>? GenerateOverride { get; set; }
+
     // Путь к миниатюре или null (звук, ffmpeg не готов, отказ). Кэшированную отдаёт сразу
     public async Task<string?> GetThumbAsync(string recordId, int variant, string sourcePath, string contentType, CancellationToken ct)
     {
@@ -45,25 +56,58 @@ public sealed class MediaHistoryThumbService
 
         // Отмена (закрытая вкладка, медленная сеть) — не 500: миниатюра не готова, фронт рисует
         // плитку. Gate ещё не занят, Release не нужен
+        // Single-flight: лидирование определяется до семафора — ждущий не держит слот
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_inFlight.TryAdd(thumb, tcs))
+        {
+            // лидер закончил между TryAdd и чтением — его итог уже на диске или его нет
+            if (!_inFlight.TryGetValue(thumb, out var pending))
+                return File.Exists(thumb) ? thumb : null;
+            try
+            {
+                return await pending.Task.WaitAsync(ct) ? thumb : null;
+            }
+            catch (OperationCanceledException)
+            {
+                return null; // отмена этого запроса — плитка, не 500
+            }
+        }
         try
         {
-            await _gate.WaitAsync(ct);
-        }
-        catch (OperationCanceledException)
-        {
-            return null;
-        }
-        try
-        {
-            if (File.Exists(thumb)) return thumb; // соседний запрос успел
-            var ok = contentType.StartsWith("video/", StringComparison.Ordinal)
-                ? await GenerateVideoThumbAsync(sourcePath, thumb, ct)
-                : await GenerateImageThumbAsync(sourcePath, thumb, ct);
-            return ok ? thumb : null;
+            try
+            {
+                await _gate.WaitAsync(ct);
+            }
+            catch (OperationCanceledException)
+            {
+                tcs.TrySetResult(false); // ждущие получают ответ: генерации нет
+                return null;
+            }
+            try
+            {
+                if (File.Exists(thumb))
+                {
+                    tcs.TrySetResult(true); // соседний запрос успел
+                    return thumb;
+                }
+                var ok = GenerateOverride is { } gen
+                    ? await gen(sourcePath, thumb, ct)
+                    : contentType.StartsWith("video/", StringComparison.Ordinal)
+                        ? await GenerateVideoThumbAsync(sourcePath, thumb, ct)
+                        : await GenerateImageThumbAsync(sourcePath, thumb, ct);
+                tcs.TrySetResult(ok);
+                return ok ? thumb : null;
+            }
+            finally
+            {
+                _gate.Release();
+            }
         }
         finally
         {
-            _gate.Release();
+            // страховка: любой выход лидера даёт ждущим ответ (TrySetResult не перезаписывает)
+            _inFlight.TryRemove(thumb, out _);
+            tcs.TrySetResult(false);
         }
     }
 
@@ -102,12 +146,14 @@ public sealed class MediaHistoryThumbService
     }
 
     // Запуск ffmpeg: true — файл создан, false — отказ (фронт рисует плитку).
-    // Атомарная запись: ffmpeg пишет в .tmp, при успехе — rename на целевой путь;
-    // при таймауте/сбое — .tmp удаляется, целевой файл не тронут
+    // Атомарная запись: ffmpeg пишет во временный файл, при успехе — rename на целевой путь;
+    // при таймауте/сбое — временный файл удаляется, целевой не тронут.
+    // .tmp — ПЕРЕД расширением ({id}-{n}.tmp.webp): ffmpeg выбирает муксер по расширению,
+    // «.webp.tmp» он не знает (дефект 8fccc75f: exit 234 «Unable to choose an output format»)
     private async Task<bool> RunAsync(IReadOnlyList<string> args, CancellationToken ct)
     {
         var finalPath = args[^1];
-        var tmpPath = finalPath + ".tmp";
+        var tmpPath = Path.ChangeExtension(finalPath, null) + ".tmp" + Path.GetExtension(finalPath);
         var tmpArgs = args.ToList();
         tmpArgs[^1] = tmpPath;
 

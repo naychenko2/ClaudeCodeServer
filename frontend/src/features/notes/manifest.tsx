@@ -22,6 +22,7 @@ import { NotesWidget } from './NotesWidget';
 import { QuickNoteAction } from './QuickNoteAction';
 import { ChatSaveNoteAction } from './ChatSaveNoteAction';
 import { SessionSummaryAction, ChatSummaryMenuItem } from './SessionSummaryAction';
+import { WikiChatActions } from './WikiChatActions';
 import { PlanSaveChip, PlanSaveButton } from './PlanNoteActions';
 import { IconNotes } from './shared';
 import { openNoteById } from './saveToNote';
@@ -143,6 +144,14 @@ export const manifest: SubsystemManifest = {
       {
         name: 'summary-menu-item', order: 20,
         render: (ctx: ChatHeaderMenuItemCtx) => <ChatSummaryMenuItem run={ctx.run} />,
+      },
+      // Действия «Вики» в шапке чата (S7b, за флагом llm-wiki): «Разобрать этот чат»,
+      // «Открыть хронику», «Откатить всё из этого чата». Гейт флага — внутри компонента
+      {
+        name: 'wiki-chat-actions', order: 30,
+        render: (ctx: ChatHeaderSummaryCtx) => (
+          <WikiChatActions session={ctx.session} hasMessages={ctx.hasMessages} online={ctx.online} compact={ctx.compact} />
+        ),
       },
     ],
 

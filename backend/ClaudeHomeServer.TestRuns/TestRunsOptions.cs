@@ -20,6 +20,19 @@ public sealed class TestRunsOptions
     // Сколько последних строк вывода отдать в черновом итоге
     public int TailLines { get; init; } = 40;
 
+    // Монолит без filter идёт N процессами параллельно (TestShards); 1 — одним. При AdaptiveShards
+    // это ПОТОЛОК: N выбирает AdaptiveShards.Choose по load1 и запасу памяти (MemAvailable и slice) на каждый прогон; без него —
+    // само N, как раньше. Слот BuildConcurrencyGate у прогона всё равно один: рост N — это рост пика RSS
+    public const int DefaultMonolithShards = TestRuns.AdaptiveShards.DefaultMax;
+    public int MonolithShards { get; init; } = DefaultMonolithShards;
+
+    // false — фиксированное N = MonolithShards (откат без пересборки: false и MonolithShards 3)
+    public bool AdaptiveShards { get; init; } = true;
+
+    // Цель монолита относительно корня дерева (каталог проекта; его .csproj — тоже он)
+    public const string DefaultMonolithTarget = "backend/ClaudeHomeServer.Tests";
+    public string? MonolithTarget { get; init; } = DefaultMonolithTarget;
+
     // Каталог памяти прошлых сборок (BuildRunMemory) — в data сервера, вне рабочих деревьев
     // агентов; null — память не ведётся (сборка идёт с оценкой по XML). Из конфига не читается
     public string? MemoryDirectory { get; init; }
@@ -36,6 +49,9 @@ public sealed class TestRunsOptions
                 ? options.CeilingSeconds : DefaultCeilingSeconds,
             MaxResultBytes = options.MaxResultBytes > 0 ? options.MaxResultBytes : DefaultMaxResultBytes,
             TailLines = options.TailLines > 0 ? options.TailLines : 40,
+            MonolithShards = Math.Clamp(options.MonolithShards, 1, TestShards.MaxShards),
+            AdaptiveShards = options.AdaptiveShards,
+            MonolithTarget = options.MonolithTarget,
             MemoryDirectory = Path.Combine(dataDir, BuildRunMemory.DirName),
         };
     }

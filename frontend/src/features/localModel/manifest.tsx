@@ -3,7 +3,7 @@
 // (core), доступность решает isLocalModelPanelVisible: admin — флаг + configured,
 // не-админ — только configured (isAvailable) и сама панель (то же условие внутри).
 // «configured» — одно выражение на значок и панель: основной/медиа ИЛИ последний
-// снимок второй дорожки (isLocalModelConfiguredAny, «Bonsai без vLLM тоже
+// снимок второй дорожки (isLocalModelConfiguredAny, «движок без vLLM тоже
 // configured»). Плюс Ф6: геттер indicator — точка состояния на значке рельса.
 
 import { Cpu } from 'lucide-react';
@@ -14,7 +14,7 @@ import { FLAGS, getFlag } from '../../lib/featureFlags';
 import { C, ISLAND } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { getLocalModelAdmin, isLocalModelPanelVisible } from './useLocalModelStats';
-import { getLocalModelBonsai, isLocalModelConfiguredAny } from './useLocalModelWatcher';
+import { getLocalModelEngineStats, isLocalModelConfiguredAny } from './useLocalModelWatcher';
 import { standDot, standHint } from './format';
 import { lazy, Suspense } from 'react';
 const LocalModelPanel = lazy(() => import('./LocalModelPanel').then(m => ({ default: m.LocalModelPanel })));
@@ -58,10 +58,10 @@ export const manifest: SubsystemManifest = {
           title: 'Локальные модели',
           icon: <Cpu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
           // Геттеры вне React: isAvailable вызывается из рендера страницы.
-          // «Bonsai без vLLM тоже configured» (макет §8.6, разрез принял «да»): когда
+          // «движок без vLLM тоже configured» (макет §8.6, разрез принял «да»): когда
           // основная дорожка не настроена, значим и configured из лёгкого опроса второй
-          // дорожки — значок есть вход в стенд Bonsai. Для не-админа и админа без флага
-          // опроса Bonsai нет вовсе — здесь по-прежнему только настроенный ComfyUI.
+          // дорожки — значок есть вход в стенд на Video. Для не-админа и админа без флага
+          // опроса второй движок нет вовсе — здесь по-прежнему только настроенный ComfyUI.
           isAvailable: (_projectId: string | null) => isLocalModelPanelVisible({
             flag: getFlag(FLAGS.localModelStats),
             isAdmin: getLocalModelAdmin(),
@@ -74,7 +74,7 @@ export const manifest: SubsystemManifest = {
           // для остальных точки нет; формата состояния нет (опрос ещё не ответил) — тоже нет.
           indicator: () => {
             if (!getLocalModelAdmin() || !getFlag(FLAGS.localModelStats)) return null;
-            const data = getLocalModelBonsai();
+            const data = getLocalModelEngineStats();
             if (!data) return null;
             const dot = standDot(data);
             if (!dot) return null;

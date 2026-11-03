@@ -493,7 +493,12 @@ Dark launch: фича коммитится выключенной и включ�
 - **ВАЖНО: CI гоняет тесты на Linux** (`ubuntu-latest`), а разработка идёт на Windows — тесты
   обязаны быть платформонезависимыми: пути от `Path.GetTempPath()` + `Path.Combine`, ожидание
   **события** через `TaskCompletionSource`, а не `Task.Delay`. На итеративную правку —
-  `dotnet test --filter "FullyQualifiedName~<Набор>"`, полный прогон перед коммитом/PR.
+  `dotnet test --filter "FullyQualifiedName~<Набор>"`, полный прогон — CI и гейт мержа (`docs/operations/testing.md`).
+- **Тесты — наборы и шарды:** Fast = исключение категорий `Host`/`Slow`/`Integration`/`Node`/`Bench`;
+  класс с `TestWebApplicationFactory` — `[Trait("Category","Host")]` (сторож), медленный метод без
+  хоста — `Slow`; монолит режется по классам (CI, `run_tests` с `TestRuns:MonolithShards`), коллекции
+  xunit определяются в самой тестовой сборке. Устройство и пределы — [testing.md](docs/operations/testing.md).
+- **Мутацию доказывай в копии `scripts/mutation-copy.sh create`, по окончании — `remove`**; дерево руками в `/tmp` не копировать (холодная сборка мимо гейта и мусор) — [testing.md](docs/operations/testing.md#мутации-в-копии).
 - **Одна папка — один проект на владельца** (`ProjectManager.EnsureRootFree`, 400 при повторе):
   датасет Dify ключуется по `RootPath`. У разных владельцев общая папка допустима.
 - **Удаление чата уносит и транскрипт claude CLI** во всех профилях. Инвариант: только файл с

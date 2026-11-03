@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // Загрузка аватара персоны с кропом: multipart-валидация (ContentType + magic bytes),
 // сохранение файлов, перекроп, изоляция по владельцу.
+[Trait("Category", "Host")]
 public class PersonasControllerAvatarTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;
@@ -322,6 +323,7 @@ public class NoImageProvidersFactory : TestWebApplicationFactory
 
 // Аватар персоны при выключенной генерации: caps честно говорит «нельзя», а сам аватар
 // не теряется — заявка уходит в очередь догоняющей генерации.
+[Trait("Category", "Host")]
 public class PersonasAvatarCapsTests : IClassFixture<NoImageProvidersFactory>
 {
     private readonly NoImageProvidersFactory _factory;

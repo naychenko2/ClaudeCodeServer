@@ -42,7 +42,9 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         services.AddSingleton<IImageEditor>(sp => sp.GetRequiredService<HiggsfieldImageEditor>());
         // Локальные модели (ComfyUI): шов ILocalImageMedia регистрирует Images. Нет Images — шва нет,
         // драйвер получает null и скрыт в каталоге, а не роняет резолв
-        services.AddSingleton(sp => new LocalImageEditor(sp.GetService<ILocalImageMedia>()));
+        // Шлюз IMediaGpuYieldGate регистрирует Llm: нет вертикали — null, задания уходят сразу
+        services.AddSingleton(sp => new LocalImageEditor(sp.GetService<ILocalImageMedia>(),
+            sp.GetService<ClaudeHomeServer.Services.Llm.IMediaGpuYieldGate>()));
         services.AddSingleton<IImageEditor>(sp => sp.GetRequiredService<LocalImageEditor>());
 
         // Фоновая разметка ракурса и эмоции фото персонажей (ADR-027 §9); нет шва IImageLabeler или флага —
@@ -140,5 +142,7 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
 
         public Task<IReadOnlyList<ClaudeHomeServer.Protocol.StoredMessage>> GetHistoryAsync(string sessionId) =>
             Inner.GetHistoryAsync(sessionId);
+
+        public bool SetWikiMark(string sessionId, string? mark) => Inner.SetWikiMark(sessionId, mark);
     }
 }

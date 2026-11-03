@@ -11,6 +11,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // Облегчённый список задач: GET /api/tasks и GET /api/projects/{id}/tasks не отдают
 // Description/ResultMarkdown, полная карточка — GET /api/tasks/{id}.
+[Trait("Category", "Host")]
 public class TaskListItemTests : IClassFixture<TestWebApplicationFactory>
 {
     private static readonly string[] HeavyAndListOnly =
@@ -156,7 +157,7 @@ public class TaskListItemTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task РазмерОтвета_ПадаетМинимумВДесятьРаз()
     {
-        const int count = 200;
+        const int count = 30; // отношение размеров от числа задач не зависит
         const int textLength = 20_000;
         var prefix = $"перф{Guid.NewGuid():N}";
         for (var i = 0; i < count; i++)

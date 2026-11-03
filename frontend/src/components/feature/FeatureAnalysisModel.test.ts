@@ -90,7 +90,7 @@ describe('analysisLineState — состояния', () => {
   it('done — закрыта без итога: только бейдж, фразы нет', () => {
     const st = analysisLineState(mkRun({ state: 'closed' }), NOW);
     expect(st.key).toBe('done');
-    expect(st.badge?.text).toBe('закрыта');
+    expect(st.badge?.text).toBe('закрыта без мержа');
     expect(st.strong).toBe('');
     expect(st.tail).toBe('');
   });

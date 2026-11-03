@@ -5,10 +5,10 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  agoText, briefDoneText, briefEstimateText, briefNextText, briefNowText, briefSubText, briefUpdatedText, genitiveName,
-  voiceRoleText, voiceStaleLabel, voiceWhenText,
+  agoText, briefActiveTagLabel, briefActiveView, briefWaitTagLabel, briefDoneText, briefElapsedFact, briefEstimateText, briefNextText, briefNowText, briefReadinessText, briefSubText, briefUpdatedText, genitiveName, dativeName,
+  voiceRoleText, voiceSignature, leadNoNoteText, voiceStaleLabel, voiceWhenText,
 } from './FeatureBriefModel';
-import type { FeatureBrief, FeatureBriefKind } from '../../lib/featurePage';
+import type { FeatureBrief, FeatureBriefActive, FeatureBriefKind } from '../../lib/featurePage';
 
 // «Сейчас» по часам макета: 25.10.2026 14:10 (локальное).
 const NOW = new Date(2026, 9, 25, 14, 10).getTime();
@@ -53,14 +53,14 @@ describe('Сейчас: строки восьми kind', () => {
     expect(briefNowText(b, { nameOf })).toBe('Ревью шага 3 (бэк)');
   });
 
-  it('waiting_you с тревогой «мерж» — «Ждёт вашего согласия на мерж в master» (макет wait)', () => {
+  it('waiting_you с тревогой «мерж» — «Нужно согласие на мерж в master» (Ш4: без «ждёт вас»)', () => {
     const b = brief({ kind: 'waiting_you', reason: 'мерж' });
-    expect(briefNowText(b, { nameOf })).toBe('Ждёт вашего согласия на мерж в master');
+    expect(briefNowText(b, { nameOf })).toBe('Нужно согласие на мерж в master');
   });
 
   it('waiting_you со своей причиной — текст причины', () => {
     const b = brief({ kind: 'waiting_you', reason: 'нужен твой ответ по макету' });
-    expect(briefNowText(b, { nameOf })).toBe('Ждёт вашего ответа: нужен твой ответ по макету');
+    expect(briefNowText(b, { nameOf })).toBe('Нужен ответ: нужен твой ответ по макету');
   });
 
   // Дефект c79050aa: у kind 'error' причина — машинный код бэка (ExecutorStopClassifier →
@@ -135,8 +135,9 @@ describe('Сейчас: строки восьми kind', () => {
       .toBe('Смержена в master 24.10 в 18:05');
   });
 
-  it('closed без даты — «Закрыта» (разрез п. 4)', () => {
-    expect(briefNowText(brief({ kind: 'closed' }), { nameOf })).toBe('Закрыта');
+  it('closed без даты — строки нет: закрытие говорит один тег (f100335b)', () => {
+    expect(briefNowText(brief({ kind: 'closed' }), { nameOf })).toBeNull();
+    expect(briefNowText(brief({ kind: 'merged' }), { nameOf })).toBeNull();
   });
 
   it('running без now — строки нет (макет: поля нет — строку не рисуем)', () => {
@@ -170,9 +171,9 @@ describe('Подстрока «Сейчас»', () => {
     expect(briefSubText(b, NOW)).toBe('с 13:58 · 12 мин');
   });
 
-  it('waiting_you — «ждёт N · без вас фича стоит»', () => {
+  it('waiting_you — «N · фича стоит» (Ш4: «ждёт вас» говорит тревога страницы)', () => {
     const b = brief({ kind: 'waiting_you', now: { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 13, 40) } });
-    expect(briefSubText(b, NOW)).toBe('ждёт 30 мин · без вас фича стоит');
+    expect(briefSubText(b, NOW)).toBe('30 мин · фича стоит');
   });
 
   it('paused — «на паузе N · исполнители не запускаются»', () => {
@@ -185,15 +186,22 @@ describe('Подстрока «Сейчас»', () => {
     const run = brief({ kind: 'running', now: { stage: 'prod', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 10) } });
     expect(briefSubText(run, NOW)).toBe('с 14:10');
     const wait = brief({ kind: 'waiting_you', now: { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 10) } });
-    expect(briefSubText(wait, NOW)).toBe('без вас фича стоит');
+    expect(briefSubText(wait, NOW)).toBe('фича стоит');
     const hold = brief({ kind: 'paused', reason: 'manual', now: { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 10) } });
     expect(briefSubText(hold, NOW)).toBe('исполнители не запускаются');
     const short = brief({ kind: 'waiting_you', now: { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 14, 9, 40) } });
-    expect(briefSubText(short, NOW)).toBe('без вас фича стоит');
+    expect(briefSubText(short, NOW)).toBe('фича стоит');
   });
 
-  it('closed — «фича закрыта»', () => {
-    expect(briefSubText(brief({ kind: 'closed' }), NOW)).toBe('фича закрыта');
+  it('waiting_you про мерж — «ждёт ответа», без «фича стоит» и без слов тревоги (e55194ed)', () => {
+    const since = { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 13, 40) };
+    expect(briefSubText(brief({ kind: 'waiting_you', reason: 'мерж', now: since }), NOW)).toBe('30 мин · ждёт ответа');
+    expect(briefSubText(brief({ kind: 'waiting_you', reason: 'мерж' }), NOW)).toBeNull();
+  });
+
+  it('closed/merged — подстроки нет (f100335b)', () => {
+    expect(briefSubText(brief({ kind: 'closed' }), NOW)).toBeNull();
+    expect(briefSubText(brief({ kind: 'merged' }), NOW)).toBeNull();
   });
 
   it('нет since (running/waiting_you) и kinds без подстроки — null', () => {
@@ -208,21 +216,21 @@ describe('Подстрока «Сейчас»', () => {
 describe('Сделано', () => {
   const textOf = (b: FeatureBrief) => briefDoneText(b).map(p => p.text).join('');
 
-  it('«2 из 5 шагов приняты · 1 виток правок»: числа — mono-части, связный текст — обычные', () => {
+  it('«2 из 5 шагов приняты · 1 возврат»: числа — mono-части, связный текст — обычные', () => {
     const parts = briefDoneText(brief({ done: { stepsAccepted: 2, stepsTotal: 5, loops: 1, planState: 'cut' } }));
-    expect(parts.map(p => p.text).join('')).toBe('2 из 5 шагов приняты · 1 виток правок');
+    expect(parts.map(p => p.text).join('')).toBe('2 из 5 шагов приняты · 1 возврат');
     expect(parts.map(p => p.mono)).toEqual([true, false, true, false]);
   });
 
-  it('loops = 0 — хвоста про витки нет', () => {
+  it('loops = 0 — хвоста про возвраты нет', () => {
     expect(textOf(brief({ done: { stepsAccepted: 5, stepsTotal: 5, loops: 0, planState: 'cut' } }))).toBe('5 из 5 шагов приняты');
   });
 
-  it('склонение разряда: 1 виток / 2 витка / 5 витков / 11 витков', () => {
-    expect(textOf(brief({ done: { stepsAccepted: 1, stepsTotal: 5, loops: 1, planState: 'cut' } }))).toContain('1 виток правок');
-    expect(textOf(brief({ done: { stepsAccepted: 1, stepsTotal: 5, loops: 2, planState: 'cut' } }))).toContain('2 витка правок');
-    expect(textOf(brief({ done: { stepsAccepted: 1, stepsTotal: 5, loops: 5, planState: 'cut' } }))).toContain('5 витков правок');
-    expect(textOf(brief({ done: { stepsAccepted: 1, stepsTotal: 5, loops: 11, planState: 'cut' } }))).toContain('11 витков правок');
+  it('склонение разряда: 1 возврат / 2 возврата / 5 возвратов / 11 возвратов (Ш3: словарь «возвратов»)', () => {
+    expect(textOf(brief({ done: { stepsAccepted: 1, stepsTotal: 5, loops: 1, planState: 'cut' } }))).toContain('1 возврат');
+    expect(textOf(brief({ done: { stepsAccepted: 1, stepsTotal: 5, loops: 2, planState: 'cut' } }))).toContain('2 возврата');
+    expect(textOf(brief({ done: { stepsAccepted: 1, stepsTotal: 5, loops: 5, planState: 'cut' } }))).toContain('5 возвратов');
+    expect(textOf(brief({ done: { stepsAccepted: 1, stepsTotal: 5, loops: 11, planState: 'cut' } }))).toContain('11 возвратов');
   });
 
   it('queued с нарезанным планом — «План готов · 0 из 4 шагов» (макет queue, R-F8)', () => {
@@ -316,104 +324,303 @@ describe('Дальше: строка из next', () => {
   });
 });
 
-// ── 3. «Оценка» ─────────────────────────────────────────────────────────────────────
+// ── 3. «Срок» (правило двух оценок, макет feature-summary-2) ──────────────────────────
 
-describe('Оценка', () => {
-  it('running с оценкой — «≈ 2 ч 30 мин осталось» + «идёт 1 ч 10 мин» (макет run)', () => {
-    const b = brief({
-      elapsedMinutes: 70,
-      estimate: { remainingMinutes: 150, p25: 120, p75: 180, source: 'history', sampleSize: 4 },
-    });
-    expect(briefEstimateText(b)).toEqual({
-      header: 'Оценка', main: '≈ 2 ч 30 мин осталось', mainMuted: false, fact: 'идёт 1 ч 10 мин',
-    });
+const HIST = { remainingMinutes: 150, p25: 110, p75: 220, source: 'history' as const, sampleSize: 14 };
+const OPTS = { nameOf, nowMs: NOW };
+
+function noteWith(est: Partial<NonNullable<FeatureBrief['note']>['estimate'] & object> | null, over: Partial<NonNullable<FeatureBrief['note']>> = {}): FeatureBrief['note'] {
+  return {
+    text: 'голос', at: at(25, 13, 56), byPersonaId: 'p-sofya', byUser: false, stageAtWrite: 'prod', stale: false,
+    estimate: est === null ? null : {
+      done: 4, total: 9, percent: 45, inProgress: 0, remaining: ['проверка · Вера', 'финал'], etaMinutes: 160,
+      why: null, agreement: 'within', etaEndsAt: at(25, 16, 50), ...est,
+    },
+    ...over,
+  };
+}
+
+describe('Срок', () => {
+  it('свежая оценка внутри разброса — её число, «к 16:50» от etaEndsAt, источник и «сходится»', () => {
+    const v = briefEstimateText(brief({ estimate: HIST, note: noteWith({}) }), OPTS);
+    expect(v.header).toBe('Срок');
+    expect(v.main).toBe('≈ 2 ч 40 мин');
+    expect(v.tail).toBe('· к 16:50');
+    expect(v.source).toBe('по оценке Софьи · 14 мин назад');
+    expect(v.alt).toBe('по истории ≈ 2 ч 30 мин (1 ч 50 мин – 3 ч 40 мин)');
+    expect(v.verdict).toEqual({ text: 'сходится', tone: 'ok' });
+    expect(v.why).toBeNull();
   });
 
-  it('waiting_you с оценкой — «Осталось — за вами» (макет wait)', () => {
-    const b = brief({
-      kind: 'waiting_you', elapsedMinutes: 260,
-      estimate: { remainingMinutes: 5, p25: 3, p75: 9, source: 'history', sampleSize: 4 },
-    });
-    expect(briefEstimateText(b).main).toBe('Осталось — за вами');
-    expect(briefEstimateText(b).fact).toBe('идёт 4 ч 20 мин');
+  it('свежая вне разброса — метка «дольше» / «быстрее, чем по истории» и «почему» оркестратора', () => {
+    const above = briefEstimateText(brief({ estimate: HIST, note: noteWith({ etaMinutes: 360, agreement: 'above', why: 'добавился шаг 4б' }) }), OPTS);
+    expect(above.verdict).toEqual({ text: 'дольше, чем по истории', tone: 'warn' });
+    expect(above.why).toBe('добавился шаг 4б');
+    const below = briefEstimateText(brief({ estimate: HIST, note: noteWith({ etaMinutes: 60, agreement: 'below', why: 'всё параллельно' }) }), OPTS);
+    expect(below.verdict).toEqual({ text: 'быстрее, чем по истории', tone: 'warn' });
   });
 
-  it('estimate = null — «Оценки пока нет» во всех не-закрытых kind, кроме queued; «≈ 0» нигде (критерий c3)', () => {
-    const kinds: FeatureBriefKind[] = ['running', 'waiting_you', 'error', 'paused', 'draft', 'idle'];
+  it('«почему» при «сходится» не показывается; agreement = null — строки истории нет', () => {
+    expect(briefEstimateText(brief({ estimate: HIST, note: noteWith({ why: 'лишнее' }) }), OPTS).why).toBeNull();
+    const v = briefEstimateText(brief({ estimate: HIST, note: noteWith({ agreement: null }) }), OPTS);
+    expect(v.alt).toBeNull();
+    expect(v.verdict).toBeNull();
+  });
+
+  it('устаревшая оценка — главное число по истории с временем от computedAt, оценка оркестратора строкой с меткой', () => {
+    const v = briefEstimateText(brief({ estimate: HIST, note: noteWith({}, { stale: true, at: at(25, 12, 10) }) }), OPTS);
+    expect(v.main).toBe('≈ 2 ч 30 мин');
+    expect(v.tail).toBe('· к 16:38'); // 14:08 + 150 мин
+    expect(v.source).toBe('разброс 1 ч 50 мин – 3 ч 40 мин · по 14 прошлым фичам');
+    expect(v.alt).toBe('Софья: ≈ 2 ч 40 мин · 2 ч назад');
+    expect(v.verdict).toEqual({ text: 'до смены этапа', tone: 'warn' });
+  });
+
+  it('устаревшая на паузе — метка «до паузы», время готовности заменено словами', () => {
+    const v = briefEstimateText(brief({ kind: 'paused', estimate: HIST, note: noteWith({ etaEndsAt: null }, { stale: true }) }), OPTS);
+    expect(v.tail).toBe('после снятия паузы');
+    expect(v.verdict?.text).toBe('до паузы');
+  });
+
+  it('нет оценки оркестратора — по истории с разбросом; об оркестраторе ни слова', () => {
+    const v = briefEstimateText(brief({ estimate: HIST }), OPTS);
+    expect(v.main).toBe('≈ 2 ч 30 мин');
+    expect(v.tail).toBe('· к 16:38');
+    expect(v.source).toBe('разброс 1 ч 50 мин – 3 ч 40 мин · по 14 прошлым фичам');
+    expect(v.alt).toBeNull();
+    expect(v.verdict).toBeNull();
+  });
+
+  it('оценка есть, но срок null — как будто оценки оркестратора нет', () => {
+    const v = briefEstimateText(brief({ estimate: HIST, note: noteWith({ etaMinutes: null, etaEndsAt: null, agreement: null }) }), OPTS);
+    expect(v.main).toBe('≈ 2 ч 30 мин');
+    expect(v.alt).toBeNull();
+  });
+
+  it('нет никакой оценки — «Оценки пока нет» приглушённо и «прошлых фич … мало»; «≈ 0» нигде', () => {
+    const kinds: FeatureBriefKind[] = ['running', 'error', 'paused', 'draft', 'idle'];
     for (const kind of kinds) {
-      const v = briefEstimateText(brief({ kind, elapsedMinutes: 70 }));
+      const v = briefEstimateText(brief({ kind, elapsedMinutes: 70 }), OPTS);
       expect(v.main, kind).toBe('Оценки пока нет');
-      expect(v.main, kind).not.toMatch(/≈\s*0/);
+      expect(v.mainMuted, kind).toBe(true);
+      expect(v.source, kind).toBe('прошлых фич для сравнения мало');
     }
   });
 
-  it('queued — «Оценка — после старта» (приглушённая) + «в очереди 25 мин» только по полю queueWaitMinutes (макет queue, R-F8)', () => {
-    const v = briefEstimateText(brief({ kind: 'queued', queueWaitMinutes: 25 }));
-    expect(v).toEqual({ header: 'Оценка', main: 'Оценка — после старта', mainMuted: true, fact: 'в очереди 25 мин' });
+  it('время готовности только в «идёт»: пауза, очередь, error — без «к HH:MM»', () => {
+    expect(briefEstimateText(brief({ kind: 'paused', estimate: HIST }), OPTS).tail).toBe('после снятия паузы');
+    expect(briefEstimateText(brief({ kind: 'queued', estimate: HIST }), OPTS).tail).toBe('после старта');
+    expect(briefEstimateText(brief({ kind: 'error', estimate: HIST }), OPTS).tail).toBeNull();
   });
 
-  it('queued с пришедшей оценкой — всё равно «после старта»: фича не началась (решение продукта)', () => {
-    const v = briefEstimateText(brief({
-      kind: 'queued', elapsedMinutes: 25,
-      estimate: { remainingMinutes: 40, p25: 30, p75: 50, source: 'history', sampleSize: 4 },
-    }));
-    expect(v.main).toBe('Оценка — после старта');
-    expect(v.main).not.toMatch(/≈/);
+  it('больше 12 ч — дата: «завтра к 10:30», «к 31.10»', () => {
+    const tomorrow = briefEstimateText(brief({ estimate: HIST, note: noteWith({ etaMinutes: 1200, etaEndsAt: at(26, 10, 30) }) }), OPTS);
+    expect(tomorrow.tail).toBe('· завтра к 10:30');
+    const far = briefEstimateText(brief({ estimate: HIST, note: noteWith({ etaMinutes: 9000, etaEndsAt: at(31, 10, 30) }) }), OPTS);
+    expect(far.tail).toBe('· к 31.10');
   });
 
-  it('queued без queueWaitMinutes — факта «в очереди» нет, числа из elapsedMinutes никогда (R-F8, дефект «в очереди 0 мин»)', () => {
-    expect(briefEstimateText(brief({ kind: 'queued' })).fact).toBeNull();
-    // work-интервалов у queued нет → WorkWallMinutes = 0: «в очереди 0 мин» быть не может.
-    expect(briefEstimateText(brief({ kind: 'queued', elapsedMinutes: 0 })).fact).toBeNull();
-    // любое другое число из elapsed (иной источник данных) в строку очереди не превращается.
-    expect(briefEstimateText(brief({ kind: 'queued', elapsedMinutes: 25 })).fact).toBeNull();
+  it('при тревоге срок — дата как была и пояснение «пока ждёт вас, срок стоит» (Ш4); «за вами» нет', () => {
+    const v = briefEstimateText(brief({ kind: 'waiting_you', estimate: HIST, note: noteWith({ etaMinutes: 5, etaEndsAt: at(25, 14, 15) }) }), OPTS);
+    expect(v.main).toBe('≈ 5 мин');
+    expect(v.tail).toBe('· к 14:15');
+    expect(v.note).toBe('пока ждёт вас, срок стоит');
+    // Пояснение — только при тревоге: у идущей фичи его нет.
+    expect(briefEstimateText(brief({ kind: 'running', estimate: HIST, note: noteWith({ etaMinutes: 5, etaEndsAt: at(25, 14, 15) }) }), OPTS).note).toBeNull();
+    // Без оценки числа нет — стоять нечему, пояснения нет.
+    const none = briefEstimateText(brief({ kind: 'waiting_you' }), OPTS);
+    expect(none.mainMuted).toBe(true);
+    expect(none.note).toBeNull();
   });
 
-  it('queueWaitMinutes = 0 — факта «в очереди 0 мин» нет (F12: бэк отдаёт 0 сознательно, та же болезнь нуля, что «идёт 0 мин»)', () => {
-    expect(briefEstimateText(brief({ kind: 'queued', queueWaitMinutes: 0 })).fact).toBeNull();
-    // меньше округляемой минуты — тоже не число (бэк режет целой частью, float не должен просачиваться)
-    expect(briefEstimateText(brief({ kind: 'queued', queueWaitMinutes: 0.4 })).fact).toBeNull();
-    // настоящая минута — настоящее число
-    expect(briefEstimateText(brief({ kind: 'queued', queueWaitMinutes: 1 })).fact).toBe('в очереди 1 мин');
-  });
-
-  it('estimate с нулевым остатком — «≈ 0» не печатается', () => {
-    const b = brief({ estimate: { remainingMinutes: 0, p25: 0, p75: 1, source: 'history', sampleSize: 4 } });
-    const v = briefEstimateText(b);
-    expect(v.main).toBe('меньше минуты осталось');
-    expect(`${v.main} ${v.fact ?? ''}`).not.toMatch(/≈\s*0/);
-  });
-
-  it('closed — подпись меняется на «Итог»: «шла 6 ч 40 мин» (макет closed)', () => {
-    const b = brief({ kind: 'closed', elapsedMinutes: 400 });
-    expect(briefEstimateText(b)).toEqual({ header: 'Итог', main: 'шла 6 ч 40 мин', mainMuted: false, fact: null });
-  });
-
-  it('closed без длительности — «Оценки пока нет»', () => {
-    const b = brief({ kind: 'closed' });
-    expect(briefEstimateText(b).main).toBe('Оценки пока нет');
-  });
-
-  it('elapsed = null — факта «идёт» нет', () => {
-    expect(briefEstimateText(brief({})).fact).toBeNull();
-  });
-
-  it('elapsed = 0 — факта «идёт 0 мин» нет (R-F8, та же болезнь, что «в очереди 0 мин»)', () => {
-    const b = brief({
-      elapsedMinutes: 0,
-      estimate: { remainingMinutes: 150, p25: 120, p75: 180, source: 'history', sampleSize: 4 },
+  it('Ш4: «ждёт вас»/«за вами» в сводке не звучат — только пояснение срока', () => {
+    const waiting = brief({
+      kind: 'waiting_you', reason: 'мерж', estimate: HIST,
+      now: { stage: '', taskId: null, personaId: null, stepRef: null, lane: null, since: at(25, 13, 40) },
+      done: { stepsAccepted: 8, stepsTotal: 9, loops: 0, planState: 'done' },
+      note: noteWith({ etaMinutes: 5, etaEndsAt: at(25, 14, 15) }),
+      active: [act({ state: 'waiting_you', since: at(25, 14, 2) }), act({ taskId: 't2', personaId: 'p-gleb' })],
     });
-    expect(briefEstimateText(b).fact).toBeNull();
-    // меньше округляемой минуты — тоже не число «идёт» (formatDuration дал бы «0 мин»)
-    expect(briefEstimateText(brief({ elapsedMinutes: 0.4 })).fact).toBeNull();
-    // настоящая минута — настоящее число
-    expect(briefEstimateText(brief({ elapsedMinutes: 1 })).fact).toBe('идёт 1 мин');
+    const est = briefEstimateText(waiting, OPTS);
+    const chips = briefReadinessText(waiting, { nameOf });
+    const av = briefActiveView(waiting, AOPTS)!;
+    const texts = [
+      briefNowText(waiting, { nameOf }), briefSubText(waiting, NOW), est.main, est.tail, est.alt, est.source, est.verdict?.text,
+      ...chips.chips.map(c => c.text), chips.chipsLabel, av.heading, av.sub, briefActiveTagLabel(waiting), briefWaitTagLabel(waiting),
+    ].filter(Boolean).join(' | ');
+    expect(texts).not.toMatch(/ждёт вас|за вами|ждёт ваш|без вас/i);
+    expect(est.note).toBe('пока ждёт вас, срок стоит');
   });
 
-  it('closed с elapsed = 0 — «Оценки пока нет», «шла 0 мин» нет', () => {
-    const v = briefEstimateText(brief({ kind: 'closed', elapsedMinutes: 0 }));
-    expect(v.main).toBe('Оценки пока нет');
-    expect(`${v.main} ${v.fact ?? ''}`).not.toContain('0 мин');
+  it('briefWaitTagLabel: вопрос — «нужен ответ», мерж-вопрос — тега-слова нет (тег «к мержу» из статуса)', () => {
+    expect(briefWaitTagLabel(brief({ kind: 'waiting_you', reason: 'уточни' }))).toBe('нужен ответ');
+    expect(briefWaitTagLabel(brief({ kind: 'waiting_you', reason: 'мерж' }))).toBeNull();
+  });
+
+  it('очередь: оценка оркестратора — «после старта» и «старт ≈ 15:00»; без оценки — «Оценка — после старта»', () => {
+    const q = at(25, 15, 0);
+    const withEst = briefEstimateText(brief({ kind: 'queued', queueStartEstimate: q, note: noteWith({ etaMinutes: 240, etaEndsAt: null, agreement: null }) }), OPTS);
+    expect(withEst.main).toBe('≈ 4 ч');
+    expect(withEst.tail).toBe('после старта');
+    expect(withEst.alt).toBe('старт ≈ 15:00');
+    const none = briefEstimateText(brief({ kind: 'queued' }), OPTS);
+    expect(none.main).toBe('Оценка — после старта');
+    expect(none.mainMuted).toBe(true);
+  });
+
+  it('оценка с нулевым остатком — «≈ 0» не печатается', () => {
+    const v = briefEstimateText(brief({ estimate: { ...HIST, remainingMinutes: 0 }, note: noteWith({ etaMinutes: 0, etaEndsAt: null, agreement: null }) }), OPTS);
+    expect(v.main).toBe('меньше минуты');
+    const hist0 = briefEstimateText(brief({ estimate: { ...HIST, remainingMinutes: 0 } }), OPTS);
+    expect(`${hist0.main} ${hist0.alt ?? ''}`).not.toMatch(/≈\s*0/);
+  });
+
+  it('closed — «Итог»: «шла 6 ч 40 мин» + «на старте Софья обещала ≈ 5 ч · по истории ≈ 4 ч 30 мин»', () => {
+    const b = brief({ kind: 'closed', elapsedMinutes: 400, initialEtaMinutes: 300, estimate: { ...HIST, remainingMinutes: 270 }, note: noteWith({}) });
+    const v = briefEstimateText(b, OPTS);
+    expect(v.header).toBe('Итог');
+    expect(v.main).toBe('шла 6 ч 40 мин');
+    expect(v.alt).toBe('на старте Софья обещала ≈ 5 ч · по истории ≈ 4 ч 30 мин');
+    expect(briefEstimateText(brief({ kind: 'closed', elapsedMinutes: 400 }), OPTS).alt).toBeNull();
+  });
+
+  it('closed без длительности или с нулём — «Оценки пока нет», «шла 0 мин» нет', () => {
+    expect(briefEstimateText(brief({ kind: 'closed' }), OPTS).main).toBe('Оценки пока нет');
+    expect(briefEstimateText(brief({ kind: 'closed', elapsedMinutes: 0 }), OPTS).main).toBe('Оценки пока нет');
+  });
+});
+
+describe('Первый факт строки итогов', () => {
+  it('«идёт N» по brief.elapsedMinutes убрано (П3): «с начала» строка итогов берёт из totals статов', () => {
+    expect(briefElapsedFact(brief({ elapsedMinutes: 70 }))).toBeNull();
+    expect(briefElapsedFact(brief({}))).toBeNull();
+  });
+
+  it('очередь — «в очереди N» только по queueWaitMinutes, числа из elapsedMinutes никогда', () => {
+    expect(briefElapsedFact(brief({ kind: 'queued', queueWaitMinutes: 25 }))).toEqual({ label: 'в очереди', value: '25 мин' });
+    expect(briefElapsedFact(brief({ kind: 'queued', elapsedMinutes: 25 }))).toBeNull();
+    expect(briefElapsedFact(brief({ kind: 'queued', queueWaitMinutes: 0 }))).toBeNull();
+  });
+
+  it('у закрытой фактов «идёт» нет: длительность уже в «Итог»', () => {
+    expect(briefElapsedFact(brief({ kind: 'closed', elapsedMinutes: 400 }))).toBeNull();
+  });
+});
+
+// ── «Готовность» ────────────────────────────────────────────────────────────────────
+
+const text = (parts: { text: string }[]): string => parts.map(p => p.text).join('');
+
+// Ш3: процент и полоса — только по трекеру (тот же trackerPercent, что у полос В2/С1/П2).
+// note.estimate в готовность не входит ни числом, ни чипами, ни тускнением — она живёт
+// только в «Срок» (тесты ниже не тронуты).
+describe('Готовность', () => {
+  const D98 = { stepsAccepted: 26, stepsTotal: 98, loops: 0, planState: 'cut' as const };
+
+  it('при оценке оркестратора процент всё равно по трекеру: 26/98 → «27 %», без «по оценке»', () => {
+    const v = briefReadinessText(brief({
+      done: D98,
+      note: noteWith({ done: 26, total: 98, percent: 100, inProgress: 30, remaining: ['что-то'] }),
+    }), { nameOf });
+    expect(v.percent).toBe(27);
+    expect(v.label).toBe('Готовность · по трекеру');
+    expect(text(v.caption)).toBe('26 из 98 шагов · 27 %');
+    expect(text(v.caption)).not.toContain('по оценке');
+    expect(v.ariaLabel).toBe('Готовность 27 %');
+  });
+
+  it('без оценки — те же «27 %»: оценка не влияет на готовность', () => {
+    const v = briefReadinessText(brief({ done: D98 }), { nameOf });
+    expect(v.percent).toBe(27);
+    expect(text(v.caption)).toBe('26 из 98 шагов · 27 %');
+  });
+
+  it('факт трекера и чипы из next (до трёх), «Осталось:» — и при оценке', () => {
+    const v = briefReadinessText(brief({
+      note: noteWith({}),
+      next: [{ stage: 'qa', personaId: 'p-vera' }, { stage: 'final', personaId: null }, { stage: 'merge', personaId: null }, { stage: 'x', personaId: null }],
+    }), { nameOf });
+    expect(text(v.tracker)).toBe('по трекеру: 2 из 5 шагов приняты · 1 возврат');
+    expect(v.chipsLabel).toBe('Осталось:');
+    expect(v.chips.map(c => c.text)).toEqual(['следом · проверка · Вера', 'финальное ревью', 'мерж']);
+  });
+
+  it('без оценки — по трекеру: «2 из 5 шагов · 40 %», чипы из next (до трёх)', () => {
+    const v = briefReadinessText(brief({
+      next: [{ stage: 'qa', personaId: 'p-vera' }, { stage: 'final', personaId: null }, { stage: 'merge', personaId: null }, { stage: 'x', personaId: null }],
+    }), { nameOf });
+    expect(v.label).toBe('Готовность · по трекеру');
+    expect(text(v.caption)).toBe('2 из 5 шагов · 40 %');
+    expect(v.chipsLabel).toBe('Осталось:');
+    expect(v.chips.map(c => c.text)).toEqual(['следом · проверка · Вера', 'финальное ревью', 'мерж']);
+  });
+
+  it('ждёт мержа — один чип «мерж», процент по трекеру', () => {
+    const v = briefReadinessText(brief({ kind: 'waiting_you', reason: 'мерж', done: { stepsAccepted: 8, stepsTotal: 9, loops: 0, planState: 'done' }, note: noteWith({}) }), { nameOf });
+    expect(v.chips).toEqual([{ text: 'мерж', tone: 'you' }]);
+    expect(text(v.caption)).toBe('8 из 9 шагов · 89 %');
+  });
+
+  it('закрытая — «всё сделано», флаг closed, процент по трекеру', () => {
+    const v = briefReadinessText(brief({ kind: 'closed', done: { stepsAccepted: 9, stepsTotal: 9, loops: 0, planState: 'done' }, note: noteWith({}) }), { nameOf });
+    expect(v.closed).toBe(true);
+    expect(v.chipsEmpty).toBe('ничего — всё сделано');
+    expect(v.chips).toEqual([]);
+    const withNext = briefReadinessText(brief({ kind: 'merged', next: [{ stage: 'qa', personaId: null }, { stage: 'merge', personaId: null }] }), { nameOf });
+    expect(withNext.chips, 'next закрытой чипов не даёт (2b18fd89)').toEqual([]);
+    expect(text(v.caption)).toBe('9 из 9 шагов · 100 %');
+  });
+
+  it('очередь с нарезанным планом — без «по трекеру:» перед «План готов»', () => {
+    const v = briefReadinessText(brief({ kind: 'queued', done: { stepsAccepted: 0, stepsTotal: 4, loops: 0, planState: 'cut' } }), { nameOf });
+    expect(text(v.tracker)).toBe('План готов · 0 из 4 шагов');
+  });
+
+  it('знаменателя нет — 0 %', () => {
+    const empty = briefReadinessText(brief({ done: { stepsAccepted: 0, stepsTotal: 0, loops: 0, planState: 'pending' } }), { nameOf });
+    expect(empty.percent).toBe(0);
+  });
+});
+
+// ── «Готовность»: пометка «в master» (F1) ───────────────────────────────────────────
+
+describe('Готовность: пометка «в master» (F1)', () => {
+  const D5 = { stepsAccepted: 4, stepsTotal: 5, loops: 0, planState: 'cut' as const };
+
+  it('по трекеру: пометка ОДНА — в подписи (не в факте)', () => {
+    const v = briefReadinessText(brief({ done: D5 }), { nameOf, inMaster: 3 });
+    expect(v.inMaster).toBe(3);
+    expect(text(v.caption)).toBe('4 из 5 шагов · 80 % · 3 в master');
+    // Ревю 07eee660 минор 3: «N в master» в одном блоке печаталось дважды (подпись + факт).
+    expect(text(v.tracker)).toBe('по трекеру: 4 из 5 шагов приняты');
+    expect(v.ariaLabel).toBe('Готовность 80 %, 3 в master');
+  });
+
+  it('нет поля / 0 / битые числа — поведение прежнее: пометки нет', () => {
+    for (const opts of [{}, { inMaster: 0 }, { inMaster: -3 }, { inMaster: Number.NaN }, { inMaster: null }]) {
+      const v = briefReadinessText(brief({ done: D5 }), { nameOf, ...opts });
+      expect(v.inMaster).toBe(0);
+      expect(text(v.caption)).toBe('4 из 5 шагов · 80 %');
+      expect(text(v.tracker)).toBe('по трекеру: 4 из 5 шагов приняты');
+      expect(v.ariaLabel).toBe('Готовность 80 %');
+    }
+  });
+
+  it('при оценке оркестратора готовность всё равно трекерная: пометка на месте (Ш3)', () => {
+    const v = briefReadinessText(brief({ note: noteWith({}) }), { nameOf, inMaster: 2 });
+    expect(v.inMaster).toBe(2);
+    expect(text(v.caption)).toBe('2 из 5 шагов · 40 % · 2 в master');
+    expect(text(v.tracker)).toBe('по трекеру: 2 из 5 шагов приняты · 1 возврат');
+    expect(v.ariaLabel).toBe('Готовность 40 %, 2 в master');
+  });
+
+  it('закрытая очередь с планом: без inMaster — «План готов» без хвоста; с inMaster — хвост есть', () => {
+    const plain = briefReadinessText(brief({ kind: 'queued', done: { stepsAccepted: 0, stepsTotal: 4, loops: 0, planState: 'cut' } }), { nameOf });
+    expect(text(plain.tracker)).toBe('План готов · 0 из 4 шагов');
+    // С inMaster — хвост в подписи полоски (одна пометка), не в строке «План готов».
+    const withMaster = briefReadinessText(brief({ kind: 'queued', done: { stepsAccepted: 0, stepsTotal: 4, loops: 0, planState: 'cut' } }), { nameOf, inMaster: 1 });
+    expect(text(withMaster.tracker)).toBe('План готов · 0 из 4 шагов');
+    expect(text(withMaster.caption)).toContain('1 в master');
   });
 });
 
@@ -493,6 +700,15 @@ describe('Голос оркестратора', () => {
     expect(voiceWhenText({ ...stale, at: 'не дата' }, 'paused', NOW)).toBe('до паузы');
   });
 
+  it('подпись заметки: «— Имя, ведущая · время»; male — «ведущий»; без имени — прежняя', () => {
+    const n = { text: 'x', at: '2026-10-19T11:36:00Z', byPersonaId: 'p', byUser: false, stageAtWrite: 'prod', stale: false } as never;
+    const now = Date.parse('2026-10-19T11:50:00Z');
+    expect(voiceSignature(n, 'running', 'Софья', now)).toBe('— Софья, ведущая · 14 мин назад');
+    expect(voiceSignature(n, 'running', 'Егор', now, 'male')).toBe('— Егор, ведущий · 14 мин назад');
+    expect(voiceSignature(n, 'running', null, now)).toBe('ведёт фичу · 14 мин назад');
+    expect(leadNoNoteText('Софья')).toBe('Ведёт Софья · заметки пока нет');
+  });
+
   it('роль: «ведёт фичу», у закрытой — «вела фичу» (макет closed)', () => {
     expect(voiceRoleText('running')).toBe('ведёт фичу');
     expect(voiceRoleText('closed')).toBe('вела фичу');
@@ -516,5 +732,106 @@ describe('genitiveName', () => {
   });
   it('некириллическое окончание — как есть', () => {
     expect(genitiveName('Alex')).toBe('Alex');
+  });
+});
+
+// ── Задачи в работе: заголовок, строки, тег (макет 2, «Итерация 2») ────────────────────
+
+const act = (over: Partial<FeatureBriefActive> = {}): FeatureBriefActive => ({
+  taskId: 't1', stage: 'prod', stepRef: '4', lane: 'front', personaId: 'p-kira', state: 'working',
+  since: at(25, 14, 5), reason: null, ...over,
+});
+const AOPTS = { nameOf, nowMs: NOW };
+
+describe('Задачи в работе: briefActiveView', () => {
+  it('поля active нет / пусто / эпик ждёт мержа / одна задача без ожидания — null (прежняя строка)', () => {
+    expect(briefActiveView(brief(), AOPTS)).toBeNull();
+    expect(briefActiveView(brief({ active: [] }), AOPTS)).toBeNull();
+    expect(briefActiveView(brief({ active: [act()] }), AOPTS)).toBeNull();
+    expect(briefActiveView(brief({ kind: 'waiting_you', active: [act({ stage: 'feature', state: 'waiting_you' })] }), AOPTS)).toBeNull();
+  });
+
+  it('несколько задач, никто не ждёт — «3 задачи в работе», подстрока по полосам, строки и время', () => {
+    const v = briefActiveView(brief({ active: [
+      act(), act({ taskId: 't2', stage: 'review', stepRef: '3', lane: 'back', personaId: 'p-gleb', state: 'review', since: at(25, 13, 58) }),
+      act({ taskId: 't3', stage: 'qa', stepRef: null, lane: null, personaId: null }),
+    ] }), AOPTS)!;
+    expect(v.heading).toBe('3 задачи в работе');
+    expect(v.sub).toBe('параллельно: фронт и бэк');
+    expect(v.answer).toBeNull();
+    expect(v.rows.map(r => r.title)).toEqual(['Шаг 4 (фронт)', 'Ревью шага 3 (бэк)', 'Проверка']);
+    expect(v.rows[0].time).toBe('с 14:05 · 5 мин');
+    expect(v.rows[1].time).toBe('с 13:58 · 12 мин');
+    expect(v.rows[0].ariaLabel).toBe('Шаг 4 (фронт) — Кира, открыть задачу');
+    expect(v.rows[2].ariaLabel).toBe('Проверка, открыть задачу');
+    expect(v.tail).toBeNull();
+  });
+
+  it('одна линия — «линия: бэк»; линий нет — подстроки нет', () => {
+    const two = [act({ lane: 'back' }), act({ taskId: 't2', lane: 'back' })];
+    expect(briefActiveView(brief({ active: two }), AOPTS)!.sub).toBe('линия: бэк');
+    expect(briefActiveView(brief({ active: two.map(a => ({ ...a, lane: null })) }), AOPTS)!.sub).toBeNull();
+  });
+
+  it('ждёт человека — заголовок про задачу, «Ответить Кире», рамка-ромб; остальные считаются в подстроке', () => {
+    const v = briefActiveView(brief({ kind: 'waiting_you', active: [
+      act({ state: 'waiting_you', since: at(25, 14, 2) }), act({ taskId: 't2', personaId: 'p-gleb' }), act({ taskId: 't3', personaId: 'p-vera' }),
+    ] }), AOPTS)!;
+    expect(v.heading).toBe('Кира задаёт вопрос по шагу 4');
+    expect(v.sub).toBe('8 мин · шаг 4 стоит, 2 другие задачи идут');
+    expect(v.answer).toEqual({ taskId: 't1', label: 'Ответить Кире' });
+    expect(v.rows).toHaveLength(3);
+  });
+
+  it('ждёт человека и задача одна — заголовок и кнопка есть, списка нет; имени нет — «Ответить»', () => {
+    const v = briefActiveView(brief({ kind: 'waiting_you', active: [act({ state: 'waiting_you', personaId: null })] }), AOPTS)!;
+    expect(v.heading).toBe('Задача задаёт вопрос по шагу 4');
+    expect(v.answer?.label).toBe('Ответить');
+    expect(v.rows).toEqual([]);
+    expect(v.sub).toBe('5 мин · шаг 4 стоит');
+  });
+
+  it('пауза — заголовок прежний (null), в списке остановленные, даже если задача одна', () => {
+    const v = briefActiveView(brief({ kind: 'paused', active: [act({ state: 'held', since: at(25, 13, 40) })] }), AOPTS)!;
+    expect(v.heading).toBeNull();
+    expect(v.answer).toBeNull();
+    expect(v.rows).toHaveLength(1);
+    expect(v.rows[0].time).toBe('остановлен в 13:40');
+    expect(v.rows[0].state).toBe('held');
+  });
+
+  it('ошибка — «· стоит» у строки и время старта состояния', () => {
+    const v = briefActiveView(brief({ active: [act({ state: 'error', since: at(25, 14, 0) }), act({ taskId: 't2' })] }), AOPTS)!;
+    expect(v.rows[0].stopped).toBe('· стоит');
+    expect(v.rows[0].time).toBe('с 14:00');
+    expect(v.rows[1].stopped).toBeNull();
+  });
+
+  it('больше четырёх — видно 4, хвост «ещё N в работе — во вкладке «Шаги» ›»', () => {
+    const six = Array.from({ length: 6 }, (_, i) => act({ taskId: `t${i}` }));
+    const v = briefActiveView(brief({ active: six }), AOPTS)!;
+    expect(v.rows).toHaveLength(4);
+    expect(v.tail).toBe('ещё 2 в работе — во вкладке «Шаги» ›');
+    expect(v.heading).toBe('6 задач в работе');
+  });
+
+  it('название без шага: стадия одним словом; prod без шага — «Производство»', () => {
+    const v = briefActiveView(brief({ active: [act({ stage: 'prod', stepRef: null, lane: null }), act({ taskId: 't2', stage: 'final', stepRef: null, lane: null })] }), AOPTS)!;
+    expect(v.rows.map(r => r.title)).toEqual(['Производство', 'Финальное ревью']);
+  });
+});
+
+describe('Задачи в работе: тег со счётом и падеж', () => {
+  it('«идёт · 3 в работе» и «нужен ответ · 1 из 3»; одна задача и прочие kind — тег прежний', () => {
+    const three = [act(), act({ taskId: 't2' }), act({ taskId: 't3', state: 'waiting_you' })];
+    expect(briefActiveTagLabel(brief({ kind: 'running', active: three }))).toBe('идёт · 3 в работе');
+    expect(briefActiveTagLabel(brief({ kind: 'waiting_you', active: three }))).toBe('нужен ответ · 1 из 3');
+    expect(briefActiveTagLabel(brief({ kind: 'running', active: [act()] }))).toBeNull();
+    expect(briefActiveTagLabel(brief({ kind: 'paused', active: three }))).toBeNull();
+    expect(briefActiveTagLabel(brief({ kind: 'running' }))).toBeNull();
+  });
+
+  it('дательный падеж имени', () => {
+    expect([ 'Кира', 'Глеб', 'Софья', 'Игорь', 'Дмитрий' ].map(dativeName)).toEqual(['Кире', 'Глебу', 'Софье', 'Игорю', 'Дмитрию']);
   });
 });

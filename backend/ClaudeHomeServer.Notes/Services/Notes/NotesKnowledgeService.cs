@@ -3,6 +3,8 @@ using System.Security.Cryptography;
 using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.Notes.Wiki;
+using ClaudeHomeServer.Services.Spheres;
 
 namespace ClaudeHomeServer.Services.Notes;
 
@@ -10,6 +12,9 @@ namespace ClaudeHomeServer.Services.Notes;
 // («{username}:notes», permission only_me). Синхронизация — полный дифф по хешам
 // содержимого (устойчив к переименованиям/массовым правкам), с дебаунсом на мутации.
 // Без настроенного Dify всё тихо выключено (graceful degradation).
+// Страницы вики — в отдельный датасет «{username}:wiki» с метаданными wiki_section
+// (ADR-035, решение 8; ADR-036, решение 6): в :notes вики не попадает, проекции _*
+// не индексируются нигде (предикат WikiPaths.IsProjection + пропуск Scan).
 public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant, INoteSemanticIndex
 {
     // userId → { datasetId, noteId → { difyDocId, contentHash } }
@@ -17,6 +22,10 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
     {
         public string? DatasetId { get; set; }
         public Dictionary<string, DocRef> Docs { get; set; } = new();
+        // Датасет вики и его документы (S2c): ключ записи — тот же noteId (id страницы
+        // графа). Аддитивно к прежней форме: в старых файлах полей нет → null/пусто.
+        public string? WikiDatasetId { get; set; }
+        public Dictionary<string, DocRef> WikiDocs { get; set; } = new();
     }
     private sealed class DocRef
     {
@@ -31,21 +40,31 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
     private readonly IUserStore _users;
     private readonly ILogger<NotesKnowledgeService> _logger;
     private readonly string _storePath;
+    private readonly string _dataDir;
     private readonly Dictionary<string, Entry> _store;
     private readonly Lock _saveLock = new();
     private readonly SemaphoreSlim _syncLock = new(1, 1);
     private readonly ConcurrentDictionary<string, Timer> _debounce = new();
+    // Горизонтали видимости (S6g-1): нужны только scoped-поиску модели — набор разделов
+    // считает WikiVisibility.SectionsFor (ADR-036, решение 2), здесь он лишь запрашивается.
+    // Опциональны, как у NotesToolset: тестовая обвязка без горизонталей обязана собираться.
+    private readonly ISphereDirectory? _spheres;
+    private readonly IProjectManager? _projects;
 
     public NotesKnowledgeService(IKnowledgeIndex knowledge, NotesService notes, IUserStore users,
-        IConfiguration config, ILogger<NotesKnowledgeService> logger)
+        IConfiguration config, ILogger<NotesKnowledgeService> logger,
+        ISphereDirectory? spheres = null, IProjectManager? projects = null)
     {
         _knowledge = knowledge;
         _notes = notes;
         _users = users;
         _logger = logger;
+        _spheres = spheres;
+        _projects = projects;
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))!;
         _storePath = Path.Combine(dataDir, "notes-knowledge.json");
+        _dataDir = dataDir; // каскад удаления владельца трогает data/wiki/{userId}/ (ADR-035, реш. 13)
         _store = JsonFileStore.Load<Dictionary<string, Entry>>(_storePath) ?? new();
     }
 
@@ -115,8 +134,14 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
 
             // Комментарии к документам в семантический индекс не попадают (шум: цитаты
             // дублируют сами документы); исчезнувшие из выборки чистятся штатной веткой ниже.
-            var summaries = _notes.GetSummaries(userId, null, null)
+            // Вики — не в :notes (ADR-035, решение 8): страницы и карточки источников
+            // идут в отдельный датасет :wiki ниже. Проекции _* исключены ещё Scan'ом
+            // графа (тот же предикат WikiPaths.IsProjection); двойной guard ниже — страховка
+            // контракта, а не второй путь фильтрации.
+            var all = _notes.GetSummaries(userId, null, null)
                 .Where(s => s.Annotation is null).ToList();
+            var summaries = all.Where(s => s.Source != NotesService.WikiKey).ToList();
+            var wikiSummaries = all.Where(s => s.Source == NotesService.WikiKey).ToList();
             var alive = new HashSet<string>(summaries.Select(s => s.Id));
             var changed = 0;
 
@@ -147,23 +172,140 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
                 changed++;
             }
 
+            // ─── Вики: отдельный датасет «{username}:wiki» (ADR-035, решение 8; ADR-036, решение 6) ───
+            // Датасет заводится лениво — по первой индексированной странице: пустой :wiki
+            // на каждого владельца не нужен; чистка исчезнувших страниц идёт и когда
+            // страниц уже нет (раздел удалён Хранителем) — иначе их документы осиротели бы
+            // в индексе. Ключ и значение wiki_section — из WikiSections.Parse: единственный
+            // разбор разделов; путь, не разбираемый в раздел, не индексируется (fail-closed,
+            // та же семантика, что у видимости ADR-036). Проекции _* — не страницы: не уходят
+            // ни в один датасет (Scan графа их уже исключил, этот guard — страхование контракта).
+            if (wikiSummaries.Count > 0 || !string.IsNullOrEmpty(entry.WikiDatasetId))
+            {
+                if (string.IsNullOrEmpty(entry.WikiDatasetId))
+                {
+                    var username = _users.GetById(userId)?.Username ?? userId;
+                    entry.WikiDatasetId = await _knowledge.CreateDatasetAsync($"{username}:wiki");
+                    Save();
+                }
+
+                var aliveWiki = new HashSet<string>();
+                foreach (var s in wikiSummaries)
+                {
+                    if (WikiPaths.IsProjection(s.Path)) continue;
+                    var section = WikiSections.Parse(s.Path);
+                    if (section is null) continue;
+                    var detail = _notes.GetDetail(userId, s.Id);
+                    if (detail is null) continue;
+                    aliveWiki.Add(s.Id);
+
+                    var hash = Hash($"{detail.Title}\n{detail.Content}\n{string.Join(',', detail.Tags)}");
+                    if (entry.WikiDocs.TryGetValue(s.Id, out var wdoc) && wdoc.Hash == hash) continue;
+
+                    if (wdoc is not null)
+                        try { await _knowledge.DeleteDocumentAsync(entry.WikiDatasetId!, wdoc.DocId); }
+                        catch (Exception ex) { _logger.LogDebug(ex, "Удаление старого документа вики {Page}", s.Id); }
+
+                    var info = await _knowledge.IndexFileByTextAsync(
+                        entry.WikiDatasetId!, detail.Title, detail.Content, detail.Tags.ToList(),
+                        metadata: new Dictionary<string, string> { ["wiki_section"] = section });
+                    entry.WikiDocs[s.Id] = new DocRef { DocId = info.Id, Hash = hash };
+                    changed++;
+                }
+
+                foreach (var stale in entry.WikiDocs.Keys.Where(k => !aliveWiki.Contains(k)).ToList())
+                {
+                    try { await _knowledge.DeleteDocumentAsync(entry.WikiDatasetId!, entry.WikiDocs[stale].DocId); }
+                    catch (Exception ex) { _logger.LogDebug(ex, "Удаление документа исчезнувшей страницы вики"); }
+                    entry.WikiDocs.Remove(stale);
+                    changed++;
+                }
+            }
+
             if (changed > 0) Save();
             return changed;
         }
         finally { _syncLock.Release(); }
     }
 
-    // Семантический поиск: чанки Dify → заметки пользователя (по маппингу docId → noteId)
+    // Семантический поиск: чанки Dify → заметки пользователя (по маппингу docId → noteId).
+    // Без видимости разделов: это путь человека (REST UI — «человек в UI видит всю вики»,
+    // ADR-036, решение 2) и не затронутые S6g-1 потребители. Путь модели — scoped-перегрузка
+    // ниже: она обязана фильтровать, и отсутствие контекста здесь — не «забыли», а другой путь.
     public async Task<IReadOnlyList<NoteSemanticHit>> SearchAsync(string userId, string query, int topK = 8)
     {
         if (!Available) return [];
         var entry = GetEntry(userId);
         if (string.IsNullOrEmpty(entry.DatasetId)) return [];
 
-        var byDocId = entry.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
         var chunks = await _knowledge.RetrieveAsync(entry.DatasetId!, query, topK);
-        var summaries = _notes.GetSummaries(userId, null, null).ToDictionary(s => s.Id);
+        return MapHits(chunks, entry.Docs, _notes.GetSummaries(userId, null, null));
+    }
 
+    // Семантический поиск для пути модели (auto-recall и notes_semantic_search — один и тот
+    // же путь, ADR-036, решение 6): с набором видимых разделов хода.
+    //   - запрос к :wiki — фильтр «wiki_section ∈ набор» (OR по ключам) и top-k с запасом ×3:
+    //     фильтр снижает шум в запросе Dify, но гарантией не является;
+    //   - запрос к :notes — без метаданных (дом заметки уже в хите, второй копии в датасете
+    //     не нужно);
+    //   - гарантия — пост-фильтр WikiVisibility.Filter по каждому хиту обоих датасетов:
+    //     дом хита :notes — источник (личный vault → personal, проект Q → projects/Q —
+    //     PersonalKey и ключ личного раздела — одна строка, см. WikiSourceCapture.CaptureNote),
+    //     дом хита :wiki — раздел пути (единственный разбор — WikiSections.Parse).
+    // Чистая функция над хитами: общего состояния не трогает, кроме чтения реестра и графа.
+    public async Task<IReadOnlyList<NoteSemanticHit>> SearchAsync(
+        string userId, string query, int topK, WikiVisibility.CallContext context)
+    {
+        if (!Available) return [];
+        // Горизонталей нет — набора нет: fail-closed, ничего не добавляем (тот же смысл,
+        // что у отказа NotesToolset «Горизонталь вики не собрана»).
+        if (_spheres is null || _projects is null) return [];
+        var entry = GetEntry(userId);
+        var visible = WikiVisibility.SectionsFor(userId, context, _spheres, _projects);
+        var summaries = _notes.GetSummaries(userId, null, null);
+
+        var hits = new List<NoteSemanticHit>();
+        if (!string.IsNullOrEmpty(entry.DatasetId))
+        {
+            // Запрос к :notes — тоже с запасом ×3: пост-фильтр так же режет :notes-хиты
+            // (их дом — источник), и без запаса топ-k, целиком состоящий из отбрасываемых
+            // домов, даёт пустую выдачу при релевантных заметках P ниже по выдаче
+            // (ADR-036, решение 6 — запас у обоих фильтруемых датасетов; усечение
+            // выдачи до topK — ниже, после пост-фильтра).
+            var chunks = await _knowledge.RetrieveAsync(entry.DatasetId!, query, topK * 3);
+            hits.AddRange(MapHits(chunks, entry.Docs, summaries));
+        }
+        if (!string.IsNullOrEmpty(entry.WikiDatasetId))
+        {
+            var filters = visible
+                .Select(k => new KnowledgeMetadataFilter("wiki_section", "is", k))
+                .ToList();
+            var chunks = await _knowledge.RetrieveAsync(
+                entry.WikiDatasetId!, query, topK * 3, filters, logic: "or");
+            hits.AddRange(MapHits(chunks, entry.WikiDocs, summaries));
+        }
+
+        // Сниппет видимой страницы может содержать ссылку на раздел вне набора (чанк Dify
+        // берётся из содержимого): её заголовок — тоже текст, и он заменяется [скрыто] тем же
+        // правилом, что в выдаче инструментов (ADR-036, решение 2). Ссылка, рассечённая
+        // усечением чанка, — предел метода: не ловится.
+        var kept = WikiVisibility.Filter(hits, visible, h => SectionKeyOf(h, summaries))
+            .Select(h => h with { Snippet = WikiVisibility.RedactLinks(h.Snippet, visible) });
+        return kept
+            .OrderByDescending(h => h.Score)
+            .ThenBy(h => h.Id, StringComparer.Ordinal)   // равный score — детерминированный порядок
+            .Take(topK)
+            .ToList();
+    }
+
+    // Чанки Dify → хиты заметок: маппинг docId → id записи реестра → summary; одна заметка —
+    // лучший чанк. Общий для обоих путей: второй копии маппинга в файле быть не должно.
+    private static List<NoteSemanticHit> MapHits(
+        IReadOnlyList<DifyRetrieveChunk> chunks, Dictionary<string, DocRef> docs,
+        IReadOnlyList<NoteSummary> allSummaries)
+    {
+        var byDocId = docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
+        var summaries = allSummaries.ToDictionary(s => s.Id);
         var hits = new List<NoteSemanticHit>();
         var seen = new HashSet<string>();
         foreach (var ch in chunks)
@@ -176,6 +318,80 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
                 Math.Round(ch.Score, 3), snippet.Replace('\n', ' ')));
         }
         return hits;
+    }
+
+    // Дом хита для пост-фильтра: :notes — по источнику (личный vault «personal» — он же ключ
+    // личного раздела; проект Q → projects/Q, невалидный id источника — null, fail-closed);
+    // :wiki — по пути (WikiSections.Parse: неразобранный путь не видим нигде).
+    private static string? SectionKeyOf(NoteSemanticHit hit, IReadOnlyList<NoteSummary> allSummaries)
+    {
+        var s = allSummaries.FirstOrDefault(n => n.Id == hit.Id);
+        if (s is null) return null;
+        return s.Source switch
+        {
+            // NotesService.PersonalKey == WikiSections.Personal == "personal"
+            // (сквозной инвариант, зафиксирован в комментарии WikiSourceCapture.CaptureNote).
+            WikiSections.Personal => WikiSections.Personal,
+            NotesService.WikiKey => WikiSections.Parse(s.Path),
+            _ => WikiSections.TryProjectId(WikiSections.ProjectsPrefix + s.Source, out _)
+                ? WikiSections.ProjectsPrefix + s.Source
+                : null,
+        };
+    }
+
+    // Id обычных заметок, которые цитирует хит вики (для правила «при странице и цитируемой
+    // ею заметке остаётся страница», ADR-035, решение 8):
+    //   - карточка источника — ссылка в шапке: origin «note» + ref «note:{id}» (форма —
+    //     WikiSourceCapture.CaptureNote);
+    //   - страница — сносками на карточки (цель сноска — заголовок карточки,
+    //     WikiPlanValidator.RenderApply); карточка того же раздела, что и страница, ищется
+    //     по заголовку среди её страниц, её ref даёт id заметки (одноимённая карточка
+    //     чужого раздела — другая карточка: цель сноски — голая ссылка, она
+    //     внутрираздельная (ADR-035, решение 1).
+    // Чтение — по графу NotesService (GetDetail/GetSummaries), без нового состояния.
+    public IReadOnlyList<string> CitedNoteIds(string userId, NoteSemanticHit wikiHit)
+    {
+        var detail = _notes.GetDetail(userId, wikiHit.Id);
+        if (detail is null) return [];
+        var fm = WikiFrontmatter.Parse(detail.Content).Model;
+        if (fm is null) return [];
+        if (fm.Type == WikiFrontmatter.TypeSource)
+            return fm.Origin == WikiGate.OriginNote && fm.Ref is { } r
+                && r.StartsWith("note:", StringComparison.Ordinal)
+                ? [r["note:".Length..]]
+                : [];
+
+        var page = WikiPage.Parse(detail.Content).Model;
+        if (page is null) return [];
+        var cardTitles = page.Footnotes
+            .Where(f => f.Target.IsLink)
+            .Select(f => f.Target.Text)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        if (cardTitles.Count == 0) return [];
+
+        var ids = new List<string>();
+        // Карточка ищется в том же разделе, что и страница: цель сноски — голая
+        // внутрираздельная ссылка (ADR-035, решение 1), а одноимённая карточка чужого
+        // раздела — другая карточка; выбор по заголовку среди всех разделов подставил бы
+        // id чужого раздела и в cited попала бы заметка вне набора (MINOR 5, ревью R-S6g-1).
+        var pageSection = WikiSections.Parse(detail.Path);
+        if (pageSection is null) return [];   // страница вне раздела: «того же раздела» нет — цитаты нет
+        var cards = _notes.GetSummaries(userId, NotesService.WikiKey, null);
+        foreach (var title in cardTitles)
+        {
+            var card = cards.FirstOrDefault(c => c.Title == title
+                && WikiSections.Parse(c.Path) == pageSection);
+            if (card is null) continue;   // карточки этого раздела в графе нет — цитаты нет
+            var cardFm = _notes.GetDetail(userId, card.Id) is { } cd
+                ? WikiFrontmatter.Parse(cd.Content).Model : null;
+            if (cardFm is null || cardFm.Type != WikiFrontmatter.TypeSource
+                || cardFm.Origin != WikiGate.OriginNote || cardFm.Ref is not { } cr
+                || !cr.StartsWith("note:", StringComparison.Ordinal))
+                continue;
+            ids.Add(cr["note:".Length..]);
+        }
+        return ids;
     }
 
     // --- Участник реконсайлера error-документов (Knowledge.IKnowledgeSyncParticipant) ---
@@ -240,14 +456,26 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
         finally { _syncLock.Release(); }
     }
 
-    // Уборка локальной записи индекса заметок пользователя — каскад удаления пользователя.
-    // Dify-датасет удаляет вызывающий (общий проход по префиксу имени датасета).
+    // Уборка локальной записи индекса заметок и вики пользователя — каскад удаления
+    // пользователя. Dify-датасеты (:notes и :wiki) удаляет вызывающий (общий проход по
+    // префиксу имени «{username}:» в UserKnowledgeCascade): :wiki назван тем же шаблоном,
+    // поэтому попадает в тот же проход без отдельного шага (ADR-035, решение 13).
+    // Каталог data/wiki/{userId}/ — здесь: он принадлежит вертикали Notes, и другой
+    // участник каскада про него не знает. Best-effort: сбой диска не роняет удаление
+    // учётной записи (тот же приём, что у шагов самого каскада).
     public void DeleteUser(string userId)
     {
         lock (_saveLock)
         {
-            if (_store.Remove(userId)) JsonFileStore.Save(_storePath, _store);
+            _store.Remove(userId);
+            JsonFileStore.Save(_storePath, _store);
         }
+        try
+        {
+            var wikiRoot = WikiPaths.Root(_dataDir, userId);
+            if (Directory.Exists(wikiRoot)) Directory.Delete(wikiRoot, recursive: true);
+        }
+        catch (Exception ex) { _logger.LogWarning(ex, "Каскад юзера {User}: каталог вики", userId); }
     }
 
     // Каскадное удаление знаний владельца через участник синка — обёртка над DeleteUser.

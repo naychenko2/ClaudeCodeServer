@@ -8,11 +8,12 @@
 //   3. Мутация: сломанный фильтр/дебаунс красит тест.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { __test } from './featurePage';
+import { __test, FEATURE_TAB_LABEL, stepsTabCount } from './featurePage';
 import { api } from './api';
 import { setAllFlags } from './featureFlags';
 import type { Task } from '../types';
 import type { FeaturePage } from '../types/featureIndex';
+import type { FeatureRun } from '../types/featureRun';
 import { BRIEF } from './featurePage.contract';
 
 // showToast диспатчит window-событие, в node-окружении его нет — no-op-мок на случай
@@ -320,3 +321,26 @@ describe('brief: ответ страницы с brief и без него', () =>
 
 // p.15/p.16 («Показать все») — замороженный блок: функция refetchFeaturePageAll убрана,
 // её тесты (персист режима + тост при сбое) — с ней.
+
+// ── 6. Названия вкладок (Ш1b) ──────────────────────────────────────────────────
+describe('названия вкладок (Ш1b, разрез упрощения страницы)', () => {
+  // Разворот словаря по разрезу: лента событий — «История» фичи, планы и макеты —
+  // «Материалы». Мутация: вернуть старое имя → red.
+  it('events → «История», plans → «Материалы»', () => {
+    expect(FEATURE_TAB_LABEL.events).toBe('История');
+    expect(FEATURE_TAB_LABEL.plans).toBe('Материалы');
+  });
+
+  // Ш7: вкладка «Шаги» (бывшая «Задачи»), счётчик — знаменатель трекера.
+  it('tasks → «Шаги»', () => {
+    expect(FEATURE_TAB_LABEL.tasks).toBe('Шаги');
+  });
+
+  it('stepsTabCount: stepProgress.total, а не число задач; без прогресса — число цепочек', () => {
+    const chains = [{ stepRef: 'A' }, { stepRef: 'B' }] as FeatureRun['stepChains'];
+    const withProgress = { stepProgress: { total: 98 }, stepChains: chains, steps: [{}, {}, {}] } as unknown as FeatureRun;
+    expect(stepsTabCount(withProgress)).toBe(98);
+    expect(stepsTabCount({ stepChains: chains } as unknown as FeatureRun)).toBe(2);
+    expect(stepsTabCount({} as unknown as FeatureRun)).toBe(0);
+  });
+});

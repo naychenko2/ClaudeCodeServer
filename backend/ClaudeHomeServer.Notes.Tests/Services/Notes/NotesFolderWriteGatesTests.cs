@@ -383,5 +383,6 @@ public class NotesFolderWriteGatesTests : IDisposable
         public string? ResolveOwnerId(Session s) => null;
         public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
             Task.FromResult<IReadOnlyList<StoredMessage>>([]);
+        public bool SetWikiMark(string sessionId, string? mark) => false;
     }
 }

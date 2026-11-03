@@ -623,6 +623,7 @@ public sealed class BrowserSessionTests : IAsyncLifetime
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task Hanging_script_is_abandoned_after_the_ceiling()
     {
         var session = new BrowserSession(_source, TimeSpan.FromMilliseconds(300));

@@ -77,6 +77,13 @@ public static class LocalActionCatalog
     public const string NoteTitle = "note-title";
     public const string NoteToc = "note-toc";
     public const string NoteTranslate = "note-translate";
+    // LLM-wiki (ADR-035 §7; Ф2 — решения 12, 12а): места Хранителя — ingest источника
+    // (два прохода: утверждения, затем план), одиночный факт по заявке агента и ночная
+    // работа: отбор чатов для разбора (wiki-triage) и разбор отобранных чатов (wiki-nightly).
+    public const string WikiIngest = "wiki-ingest";
+    public const string WikiFact = "wiki-fact";
+    public const string WikiNightly = "wiki-nightly";
+    public const string WikiTriage = "wiki-triage";
     public const string ChatTitle = "chat-title";
     public const string ChatRetitle = "chat-retitle";
     public const string ChatExtractTasks = "chat-extract-tasks";
@@ -204,6 +211,29 @@ public static class LocalActionCatalog
         new(NoteTitle, "Заголовок заметки", "Заметки", CheapProfile.Small, DefaultLocal: true),
         new(NoteToc, "Оглавление заметки", "Заметки", CheapProfile.Text, DefaultLocal: true),
         new(NoteTranslate, "Перевод заметки", "Заметки", CheapProfile.Large, DefaultLocal: true),
+        // LLM-wiki (ADR-035 §7): Хранитель, два прохода по выдержке источника (утверждения,
+        // затем план). Large: в промпт идут выдержка источника и каталог раздела — на Text
+        // num_ctx молча обрезал бы хвост выдержки, и модель не увидела бы того, что должна
+        // была назвать. Слот medium — явный, как задано в ADR-035 §7 (не из профиля).
+        // DefaultLocal: true — ночной и явный разбор начинается с локали (политика A),
+        // облако — только с согласия человека (решение 9).
+        new(WikiIngest, "Разбор источника в вики", "Заметки", CheapProfile.Large,
+            DefaultLocal: true, Tier: ModelTier.Medium),
+        // Факт по заявке агента (wiki_add_fact): одно утверждение с дословной цитатой.
+        // Text, а не Small: на Small num_ctx обрезал бы выдержку источника, и цитата
+        // не сверялась бы QuoteMatcher-ом в отсечённой части. Слот weak — явный (ADR-035 §7).
+        new(WikiFact, "Факт для вики", "Заметки", CheapProfile.Text,
+            DefaultLocal: true, Tier: ModelTier.Weak),
+        // Ночной разбор чатов (Ф2, ADR-035 решение 12): ночь разбирает дельту чата тем же
+        // путём, что и кнопка «Разобрать». Large: на вход идёт дельта реплик человека —
+        // меньший профиль молча обрезал бы хвост (num_ctx Ollama). Слот medium — явный.
+        new(WikiNightly, "Ночной разбор вики", "Заметки", CheapProfile.Large,
+            DefaultLocal: true, Tier: ModelTier.Medium),
+        // Ступень 2 отбора чатов для вики (Ф2, ADR-035 решение 12а): вердикт «есть ли в чате
+        // что-то стоящее» — вход готовит вызывающий (обрезанный отрезок чата), ответ —
+        // маленький JSON. Слот weak — явный.
+        new(WikiTriage, "Отбор чатов для вики", "Заметки", CheapProfile.Small,
+            DefaultLocal: true, Tier: ModelTier.Weak),
         new(ChatTitle, "Заголовок чата", "Чаты", CheapProfile.Small, DefaultLocal: true),
         new(ChatRetitle, "Обновление названия чата", "Чаты", CheapProfile.Text, DefaultLocal: true),
         new(ChatExtractTasks, "Извлечение задач из чата", "Задачи", CheapProfile.Large, DefaultLocal: true),

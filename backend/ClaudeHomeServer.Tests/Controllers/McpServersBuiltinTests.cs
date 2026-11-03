@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Экран «MCP-серверы» разносит наблюдаемые серверы по группам (кто подключил и кто
 // управляет): сервисы продукта, интеграции, память персон и наследство CLI. Плюс
 // гигиена: наблюдения pmem_* по исчезнувшим персонам не должны пугать человека.
+[Trait("Category", "Host")]
 public class McpServersBuiltinTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

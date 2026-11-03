@@ -11,9 +11,11 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // Busy — чат занят: ход исполнителя идёт (Starting/Working) или ждёт ответа человека (Waiting) —
 // то же условие, что у сторожа зависания ClassifyStall (TR-B1b). null — у составившего снимок
 // признака нет: reported_open при отсутствии признака не выдаётся (fail-closed).
+// ContinuedInSessionId — Session.ContinuedInSessionId: ключевой чат переходит к последнему живому
+// продолжению (FeatureKeyChain.FirstLive).
 public sealed record FeatureIndexSession(
     string Id, string? TaskId, string? ProjectId, bool Archived, string? Model = null, string? PersonaId = null,
-    bool? Busy = null);
+    bool? Busy = null, string? ContinuedInSessionId = null);
 
 // Чат фичи (GET /api/tasks/features/{id}, chats[]; Б4 + W4-CHT-B): один чат из снимка
 // владельца, состоящий в фиче по ЕДИНОМУ правилу FeatureChatMembership. kind: curator |

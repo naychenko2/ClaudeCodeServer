@@ -7,7 +7,9 @@
 // Фронт НЕ пересчитывает конвейер и пороги: «стоит» — только из run.attention (stopped),
 // «ждёт» — только из timeline.current (waiting); интервалы — только с бэка. Единственная
 // арифметика модели — геометрия над данными бэка: минуты и паузы по границам интервалов
-// (тот же spanMinutes, что у Ганта) и обрезка интервалов по границе окна.
+// (тот же spanMinutes, что у Ганта) и обрезка интервалов по границе окна. Слово о состоянии
+// стадии модель тоже не выводит: зовёт единый источник (stageStatusLabel) и несёт его пару
+// в lane.status как есть (доработка Ш2b) — гант и строка стадии говорят одно слово.
 //
 // Обрезка по окну (находка GC-R-B): бэк НЕ клипит интервалы — живой хвост идущей задачи
 // дотянут до «сейчас» (FeatureStageIntervals.cs), а у смерженной фичи окно кончается
@@ -23,6 +25,12 @@ import type { FeatureRun, FeatureRound, FeatureStageExecutor, StageKey } from '.
 import type { FeatureStats } from '../../types/featureStats';
 import type { StepProgress } from '../../lib/featureProgress';
 import { minutesSince } from './FeatureStatsBits';
+// Слово о состоянии стадии модель не выводит сама: оно живёт в одном месте
+// (stageStatusLabel, FeatureTimelineBits — доработка Ш2b по ревью c51cd49c) и до
+// рендера доходит через эту модель как есть. Кольцо импорта (модель → FeatureTimelineBits
+// → FeatureStepDetails → axisFrac модели) безвредно: все его участники — объявления
+// функций, и никто не зовёт чужие связки на верхнем уровне модуля.
+import { stageStatusLabel, type StageStatus } from './FeatureTimelineBits';
 
 // Ключи стадии в порядке жизненного цикла (бэк: FeatureStage.Key).
 const STAGE_KEYS: readonly StageKey[] = ['cut', 'design', 'plan', 'prod', 'review', 'qa', 'final', 'merge'];
@@ -98,11 +106,25 @@ export interface StageLane {
   totalMinutes: number;
   // Этапа не было (state 'skipped', W4-DES-B): строка «этапа не было», без данных.
   skipped: boolean;
+  // Слово и тон состояния стадии — из единого источника (stageStatusLabel, FeatureTimelineBits;
+  // доработка Ш2b по ревью c51cd49c): модель зовёт его по стадии и несёт пару как есть,
+  // своей семантики состояния не заводит (порядок «тон → runningSince → state» живёт там).
+  // null — слова нет (done). Показывать ли слово вообще (пустая дорожка живой фичи,
+  // skipped/approx/закрытая ось) — решает рендер (FeatureStageLane).
+  status: StageStatus | null;
   // approx — журнала нет (intervalsByStage null/отсутствует): интервалов нет, потому что
   // они не считались. Пустой словарь журнала — НЕ approx (замечание GC-R-F1).
   approx: boolean;
   // Флажки возвратов — только у «Производства» (туда возвращается работа), у прочих [].
   returns: GanttReturnFlag[];
+}
+
+// Метка мержа на ганте (F1): данные run.merges (бэк: `FeatureMergeMark`, FeatureRun.cs:118).
+// Позицию на оси рисует рендер через axisFrac — здесь только данные и порядок по времени.
+export interface GanttMergeMark {
+  taskId: string;
+  at: string;
+  stepRefs: string[];
 }
 
 export interface StageLanesModel {
@@ -111,6 +133,13 @@ export interface StageLanesModel {
   // Дорожки по стадиям из run.stages, кроме absent (этой стадии в конвейере нет —
   // дорожки нет). Ключ — StageKey: индексация lanes[key] типизирована.
   lanes: Partial<Record<StageKey, StageLane>>;
+  // Все метки мержей по времени (F1, run.merges): вертикальные метки с датой на ганте.
+  // Пусто — мержей не было (и старые ответы без поля): поведение прежнее.
+  mergeMarks: GanttMergeMark[];
+  // Начало «новой волны» (F1): момент последнего мержа, если бэк сказал waveAfterMerge
+  // (после него заведена новая работа) — правее этой границы рендерит отдельную группу.
+  // null — волны нет (в т.ч. waveAfterMerge без мержей: отмечать нечего).
+  waveFrom: string | null;
 }
 
 // Длительность интервала в минуты (0, если невалидно/отрицательно). Та же арифметика,
@@ -254,6 +283,22 @@ export function buildStageLanes(run: FeatureRun, stats: FeatureStats | null, now
   const returnsByStage = collectReturnFlags(run);
   const nowIso = new Date(now).toISOString();
 
+  // Метки мержей (F1): только данные с читаемой датой (битая дата — не метка: линия без
+  // позиции была бы ложью). Порядок — по времени: бэк отдаёт отсортированным, сортируем
+  // и здесь, чтобы waveFrom (последний мерж) не зависел от порядка ответа.
+  const mergeMarks: GanttMergeMark[] = (run.merges ?? [])
+    .filter(m => !!m && !!m.at && !Number.isNaN(new Date(m.at).getTime()))
+    .map(m => ({ taskId: m.taskId, at: m.at, stepRefs: m.stepRefs ?? [] }))
+    .sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+  // Волна после мержа — только когда её сказал бэк и есть что отмечать (без мержей волны
+  // не бывает: waveAfterMerge без метки — противоречие контракта, не рисуем). У закрытой
+  // фичи (closed/merged — finished выше) волны нет: бэк оставляет waveAfterMerge и при
+  // закрытом состоянии (эпик Done перекрывает её только в TerminalState, FeatureProjector.cs),
+  // а «новая волна» после закрытой фичи — ложь истории (ревю 07eee660 минор 4).
+  const waveFrom = run.waveAfterMerge === true && !finished && mergeMarks.length > 0
+    ? mergeMarks[mergeMarks.length - 1]!.at
+    : null;
+
   const lanes: Partial<Record<StageKey, StageLane>> = {};
   for (const stage of run.stages ?? []) {
     // absent — стадии нет в конвейере этой фичи: дорожки нет (строку рисует рендер по
@@ -307,10 +352,13 @@ export function buildStageLanes(run: FeatureRun, stats: FeatureStats | null, now
       count: intervals.length,
       totalMinutes: intervals.reduce((a, iv) => a + spanMinutes(iv.from, iv.to), 0),
       skipped,
+      // Слово и тон — из единого источника, пара как есть: модель не интерпретирует
+      // состояние стадии (доработка Ш2b).
+      status: stageStatusLabel(stage),
       approx,
       returns: stage.key === 'prod' ? returnsByStage : [],
     };
   }
 
-  return { axis, lanes };
+  return { axis, lanes, mergeMarks, waveFrom };
 }

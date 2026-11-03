@@ -233,6 +233,8 @@ export function ToolbarOverflowMenu({
         {typeof indicator === 'number' && indicator > 0 && (
           <span style={countBadgeInline}>{indicator}</span>
         )}
+        {indicator === true && <span style={dotBadge} />}
+        {nodeIndicator(indicator)}
       </button>
     );
   } else {
@@ -291,6 +293,19 @@ export function ToolbarOverflowMenu({
       )}
     </div>
   );
+}
+
+// === Индикатор-ReactNode на триггере ===
+// Контракт prop `indicator`: number>0 — счётчик-бейдж, true — точка, ReactNode — как есть.
+// Число и булев рисуют сами ветки триггера: в иконочной — absolute-бейдж/точка по углу
+// обёртки кнопки, в подписанной — inline-бейдж в строке и точка по углу кнопки. Здесь
+// только последняя ветка: всё, что не число/булево/пусто, отдаём как есть; positioning
+// несёт вызывающий (оба пути триггера — position:relative, точка-спан — absolute).
+// number/boolean здесь null — иначе тот же индикатор рисовался бы дважды.
+function nodeIndicator(indicator: number | boolean | ReactNode | undefined): ReactNode {
+  if (indicator == null) return null;
+  if (typeof indicator === 'boolean' || typeof indicator === 'number') return null;
+  return indicator;
 }
 
 // === Строка меню/шита ===

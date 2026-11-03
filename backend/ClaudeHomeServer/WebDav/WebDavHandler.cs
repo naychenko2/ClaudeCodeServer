@@ -8,7 +8,11 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http.Features;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Files;
+// Гейт «в вики пишет только Хранитель» на путях PUT/COPY: предикат — тип сборки Core.dll
+// в namespace Services.Notes (тот же порядок, что в FileService и FilesController).
+using ClaudeHomeServer.Services.Notes;
 
 namespace ClaudeHomeServer.WebDav;
 
@@ -626,6 +630,36 @@ public static class WebDavHandler
 
     private sealed class PutBodyTooLargeException : Exception;
 
+    // Гейт «в вики пишет только Хранитель» для PUT, COPY и MOVE: они пишут или сносят на диск
+    // мимо FileService (FileStream + File.Move / File.Copy; MOVE сносит существующую цель до
+    // files.Rename), поэтому путь проверяют сами — тем же data-корнем из конфига, что у
+    // FileService и FilesController (ADR-035, решение 2; ревью S1b, MAJOR 1). Предикат — по
+    // операции: одиночная запись (PUT/COPY) проверяется IsWikiPath; рекурсивный снос (MOVE:
+    // снос цели + Directory.Move в files.Rename) — обоими направлениями, как GuardNotWikiSubtree
+    // в FileService (хвост ревью S1b). Отказ — 403 здесь же, до любого следа на диске: для
+    // MOVE это обязано быть явным гейтом — отказ exception'ом из files.Rename пришёл бы уже
+    // после сноса существующей цели, и данные были бы потеряны. У DELETE/MKCOL (снос идёт
+    // целиком через files.*) тот же отказ приходит exception'ом и переводится в 403
+    // диспетчером. Без конфига data-корня нет и проверить нечем — тот же контракт, что у
+    // GuardNotWiki.
+    private static bool IsUnderDataWiki(HttpContext ctx, string absPath)
+    {
+        var config = ctx.RequestServices.GetService<IConfiguration>();
+        return config is not null && WikiPaths.IsWikiPath(absPath, SubsystemHostingExtensions.ResolveDataDir(config));
+    }
+
+    // Предикат MOVE — как GuardNotWikiSubtree в FileService.Rename: операция действует над
+    // поддеревом (снос цели рекурсивный, Directory.Move в files.Rename), поэтому на каждой
+    // стороне проверяются оба направления: путь под вики и путь-предок вики (data/, корень).
+    // Снос предка снёс бы вику целиком, обойдя IsWikiPath (хвост ревью S1b).
+    private static bool IsDataWikiOrAncestor(HttpContext ctx, string absPath)
+    {
+        var config = ctx.RequestServices.GetService<IConfiguration>();
+        if (config is null) return false;
+        var dataDir = SubsystemHostingExtensions.ResolveDataDir(config);
+        return WikiPaths.IsWikiPath(absPath, dataDir) || WikiPaths.IsWikiAncestor(absPath, dataDir);
+    }
+
     internal static async Task HandlePutAsync(HttpContext ctx, string root, string relPath)
     {
         if (string.IsNullOrEmpty(relPath))
@@ -652,6 +686,14 @@ public static class WebDavHandler
             bodySize.MaxRequestBodySize = maxBytes;
 
         var absPath = FileService.SafeJoinPublic(root, relPath);
+        // Отказ стоит до создания папки и до чтения тела: под data/wiki/ не должно остаться
+        // ни файла, ни каталога, ни временного .davput-файла
+        if (IsUnderDataWiki(ctx, absPath))
+        {
+            ctx.Response.StatusCode = 403; // в вики пишет только Хранитель
+            return;
+        }
+
         var existed = File.Exists(absPath);
 
         // Тело пишется во временный файл рядом с целью (одна ФС — атомарный rename):
@@ -769,7 +811,8 @@ public static class WebDavHandler
     // COPY
     // ────────────────────────────────────────────────────────────────────────
 
-    private static async Task HandleCopyAsync(HttpContext ctx, FileService files, string root, string relPath, string projectName, string davUserId)
+    // internal — тестам гейта нужен сам COPY (по образцу internal HandlePutAsync)
+    internal static async Task HandleCopyAsync(HttpContext ctx, FileService files, string root, string relPath, string projectName, string davUserId)
     {
         var destRel = ParseDestination(ctx, projectName);
         if (destRel is null)
@@ -802,6 +845,14 @@ public static class WebDavHandler
         var overwrite = !string.Equals(ctx.Request.Headers["Overwrite"].ToString(), "F", StringComparison.OrdinalIgnoreCase);
         var srcAbs = FileService.SafeJoinPublic(root, relPath);
         var dstAbs = FileService.SafeJoinPublic(root, destRel);
+
+        // COPY пишет на диск мимо FileService (File.Copy/CopyDirectory) — поэтому обе стороны
+        // проверяются здесь: внести в вику нельзя так же, как вынести из неё (ревью S1b, MAJOR 1)
+        if (IsUnderDataWiki(ctx, srcAbs) || IsUnderDataWiki(ctx, dstAbs))
+        {
+            ctx.Response.StatusCode = 403; // в вики пишет только Хранитель
+            return;
+        }
 
         if (!overwrite && (File.Exists(dstAbs) || Directory.Exists(dstAbs)))
         {
@@ -841,7 +892,8 @@ public static class WebDavHandler
     // MOVE
     // ────────────────────────────────────────────────────────────────────────
 
-    private static void HandleMove(HttpContext ctx, FileService files, string root, string relPath, string projectName, string davUserId)
+    // internal — тестам гейта нужен сам MOVE (по образцу internal HandleCopyAsync)
+    internal static void HandleMove(HttpContext ctx, FileService files, string root, string relPath, string projectName, string davUserId)
     {
         var destRel = ParseDestination(ctx, projectName);
         if (destRel is null)
@@ -868,7 +920,92 @@ public static class WebDavHandler
             return;
         }
 
-        var dstAbs = FileService.SafeJoinPublic(root, destRel);
+        // Корень не переносится и не сносится ни при какой записи Destination — отказ стоит
+        // на разрешённом пути, а не на пустоте строки (вердикт dd6ec8ba, ревью W3-0b):
+        // "", ".", "%2E", "docs/.." — Uri сносит точечные сегменты и остаётся пустой путь;
+        // "docs%2F.." — %2F для Uri не разделитель, после UnescapeDataString остаётся
+        // "docs/.." — непустая строка, которую нормализация резолвит в корень. Снос такой
+        // цели сносил весь проект рекурсивно, а files.Rename падал FileNotFoundException
+        // → 404 (дефект e69f9de1, ревью W3-0). JoinBelowRoot отвергает корень и запределье
+        // — тот же примитив, что в FileService.GetDiffAsync/RevertFile; статус 403, как
+        // catch диспетчера для запредельных путей. Отказ — до любого следа на диске.
+        // Гейт вики здесь не помощник: корень проекта — предок вики только в
+        // раскладке «проект = домашний каталог с data/», в обычной — нет.
+        string srcAbs, dstAbs;
+        try
+        {
+            srcAbs = SafePath.JoinBelowRoot(root, relPath);
+            dstAbs = SafePath.JoinBelowRoot(root, destRel);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            ctx.Response.StatusCode = 403;
+            return;
+        }
+
+        // MOVE сносит существующую цель до files.Rename (ниже) — поэтому обе стороны
+        // проверяются здесь, до любого следа на диске и обоими направлениями, как
+        // GuardNotWikiSubtree в files.Rename: путь под вики и путь-предок вики (data/,
+        // корень). Иначе отказ от files.Rename пришёл бы уже после сноса цели: MOVE на data
+        // сносил data/wiki целиком до 403 (хвост ревью S1b).
+        if (IsDataWikiOrAncestor(ctx, srcAbs) || IsDataWikiOrAncestor(ctx, dstAbs))
+        {
+            ctx.Response.StatusCode = 403; // в вики пишет только Хранитель
+            return;
+        }
+
+        // MOVE «сам в себя»: RFC 4918 §9.9.4 для случая «source and destination resources
+        // are the same» рекомендует 403 (не MUST, но это и образец соседних отказов этой
+        // ручки — корень, вики; диск при этом не тронут, т.е. no-op). Без этой проверки URI-
+        // нормализация делает из «docs/../docs/a.txt» тот же путь, что источник: existed=true,
+        // Overwrite:T сносит цель, то есть сам источник, files.Rename следом падает
+        // FileNotFoundException → 404, файл потерян (дефект 0e766a8a, ревью W3-0b). Проверка
+        // — по разрешённым абсолютным путям, до любого сноса; сравнение — по правилам регистра
+        // ФС хоста, тем же ComparisonFor, что в SafePath (SafePath.cs:54): на Windows
+        // «docs/A.txt» и «docs/a.txt» — один файл, на Linux — разные. Несуществующий источник
+        // здесь не проверяется: для него, как прежде, 404 от files.Rename.
+        var comparison = SafePath.ComparisonFor(OperatingSystem.IsWindows());
+
+        // Сравнение — по РАЗЫМЕНОВАННЫМ путям, не по текстовым: одно и то же имя через
+        // симлинк-каталог — тот же ресурс на диске (link → docs: «link/a.txt» и «docs/a.txt»
+        // — один файл). Текстовое сравнение здесь молчит: existed=true, Overwrite:T сносит
+        // реальный источник (File.Delete по пути через ссылку сносит цель ссылки), а
+        // files.Rename следом падает FileNotFoundException → 404, файл потерян (вердикт
+        // ac807e61, доработка W3-0c; проба Глеба: srcAlive=False). Разыменование —
+        // SafePath.Canonical, тот же сегментный обход, что у гейта вики. Разобрать не
+        // удалось (цикл ссылок, бюджет) — fail-closed 403: отказ возможного переноса
+        // безопаснее потери файла; диск при этом не тронут. Canonical нормализует
+        // разделители в «/» — префикс «внутри» строится тем же разделителем, не
+        // хостовым (на Windows Path.DirectorySeparatorChar это «\»).
+        var srcCanonical = SafePath.Canonical(srcAbs);
+        var dstCanonical = SafePath.Canonical(dstAbs);
+        if (srcCanonical is null || dstCanonical is null)
+        {
+            ctx.Response.StatusCode = 403; // путь неразрешим (цикл ссылок, бюджет): следа на диске нет
+            return;
+        }
+        // Корневая форма Canonical отдаёт с завершающим разделителем — нормализуем,
+        // чтобы равенство и префикс его не сдваивали.
+        srcCanonical = srcCanonical.TrimEnd('/');
+
+        if ((File.Exists(srcAbs) || Directory.Exists(srcAbs)) && dstCanonical.TrimEnd('/').Equals(srcCanonical, comparison))
+        {
+            ctx.Response.StatusCode = 403; // источник и цель — один ресурс: файл цел, следа на диске нет
+            return;
+        }
+
+        // Перенос каталога внутрь самого себя — явного запрета в RFC 4918 нет, но операция
+        // невозможна: rename каталога в его собственный потомок падает на уровне ФС (EINVAL
+        // на Linux), а снос существующей цели до rename снёс бы поддерево источника
+        // рекурсивно. Отказ 403 до сноса — как в случае выше. «Внутри» — тоже по
+        // разыменованным путям: симлинк «other» на «docs» — тот же каталог, и «other/x»
+        // внутри «docs».
+        if (Directory.Exists(srcAbs) && dstCanonical.StartsWith(srcCanonical + "/", comparison))
+        {
+            ctx.Response.StatusCode = 403; // цель внутри источника-каталога: каталог цел
+            return;
+        }
+
         var existed = File.Exists(dstAbs) || Directory.Exists(dstAbs);
 
         var overwrite = !string.Equals(ctx.Request.Headers["Overwrite"].ToString(), "F", StringComparison.OrdinalIgnoreCase);

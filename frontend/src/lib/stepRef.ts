@@ -7,7 +7,10 @@ export function stripStepRefPrefix(title: string, stepRef: string | null | undef
   if (!ref) return title;
   const prefix = `${ref}:`;
   if (title.startsWith(prefix)) return title.slice(prefix.length).replace(/^\s+/, '');
-  return title;
+  // Код после разделителя «·» («LLM-wiki · S4b-3: разбор…») — та же двойная печать рядом
+  // с моно-номером (дизайн-ревью F2, п. 6): срезается, разделитель остаётся.
+  const mid = new RegExp(`·\\s*${ref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:`, 'g');
+  return title.replace(mid, '·').replace(/\s+·\s*$/, '');
 }
 
 // n-4/r-2: название шага для строки, где рядом уже моно-номер (stepRef): ведущий «{stepRef}:»

@@ -8,6 +8,7 @@ import { defineConfig, devices } from '@playwright/test';
 // E2E_PASS реального admin (случайный пароль печатается в лог при первом старте).
 export default defineConfig({
   testDir: './e2e',
+  testIgnore: ['**/qa/**'], // QA-спеки гоняются отдельным конфигом e2e/qa/playwright.config.ts
   timeout: 90_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,

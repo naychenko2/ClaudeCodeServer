@@ -38,11 +38,12 @@ describe('HTML в markdown — что проходит', () => {
   });
 
   it('внутренние схемы ссылок продукта переживают санитайз', () => {
-    // Их подставляет препроцессинг заметок; вырезанный href убил бы вики-переходы
-    const html = render('[к заметке](wikilink:%D0%90) и ![вложение](noteatt:img.png)');
+    // Их подставляет препроцессинг заметок; вырезанный href убил бы вики-переходы и маркеры сносок
+    const html = render('[к заметке](wikilink:%D0%90) и ![вложение](noteatt:img.png) и [s1](fnref:s1)');
 
     expect(html).toContain('href="wikilink:%D0%90"');
     expect(html).toContain('src="noteatt:img.png"');
+    expect(html).toContain('href="fnref:s1"');
   });
 });
 

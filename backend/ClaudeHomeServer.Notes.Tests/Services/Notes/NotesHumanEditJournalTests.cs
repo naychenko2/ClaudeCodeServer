@@ -937,6 +937,7 @@ public class NotesHumanEditJournalTests : IDisposable
         public string? ResolveOwnerId(Session s) => null;
         public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
             Task.FromResult<IReadOnlyList<StoredMessage>>([]);
+        public bool SetWikiMark(string sessionId, string? mark) => false;
     }
 
     // Мост задач — заглушка: «задач из заметки» здесь нет (GetBySourceNote пуст),
@@ -972,9 +973,9 @@ public class NotesHumanEditJournalTests : IDisposable
         public Task RenameDatasetAsync(string datasetId, string newName) => throw new NotSupportedException();
 
         public Task<DifyDocumentInfo> IndexFileByTextAsync(string datasetId, string fileName, string content,
-            List<string>? tags = null) => throw new NotSupportedException();
+            List<string>? tags = null, IReadOnlyDictionary<string, string>? metadata = null) => throw new NotSupportedException();
 
         public Task<IReadOnlyList<DifyRetrieveChunk>> RetrieveAsync(string datasetId, string query, int topK = 8,
-            IReadOnlyList<KnowledgeMetadataFilter>? filters = null) => throw new NotSupportedException();
+            IReadOnlyList<KnowledgeMetadataFilter>? filters = null, string logic = "and") => throw new NotSupportedException();
     }
 }

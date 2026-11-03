@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Models;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
 
@@ -49,14 +50,18 @@ public class UpstreamSelector(
         // Шлюз выключен — его маршруты отвечают 404, и CLI упал бы посреди хода без объяснений.
         if (!options.CurrentValue.Enabled)
             return new(null, TurnFailureText.GatewayDisabled);
-        if (providers.ResolveByModel(model) is { } p)
+        // Выключенный провайдер (нет ключа) модель не перехватывает: иначе его префикс «claude-»
+        // уводит родные модели Claude в 503, хотя их обслуживает подписка.
+        if (ResolveEnabled(model) is { } p)
         {
-            if (!p.Enabled) return new(null, TurnFailureText.GatewayProviderNotConfigured);
             var main = string.IsNullOrWhiteSpace(model) ? p.Models.FirstOrDefault()?.Id ?? "" : model!;
             return new(new GatewayRoute(GatewayUpstreamKind.Provider, main, ProviderKey: p.Key), null);
         }
+        // Модель выключенного стороннего провайдера — причина «не настроен», а не «не найдена».
         if (!LlmProviderRegistry.IsNativeClaudeModel(model))
-            return new(null, $"Модель «{model}» не найдена ни у одного провайдера сервера.");
+            return providers.ResolveByModel(model) is not null
+                ? new(null, TurnFailureText.GatewayProviderNotConfigured)
+                : new(null, $"Модель «{model}» не найдена ни у одного провайдера сервера.");
 
         if (!options.CurrentValue.AllowSubscriptions)
             return new(null, TurnFailureText.GatewaySubscriptionsDisabled);
@@ -65,6 +70,9 @@ public class UpstreamSelector(
             ? new(null, TurnFailureText.LocalProjectsNeedSetupToken)
             : new(new GatewayRoute(GatewayUpstreamKind.Subscription, model ?? "", SubscriptionKey: key), null);
     }
+
+    private LlmProviderConfig? ResolveEnabled(string? model) =>
+        providers.ResolveByModel(model) is { Enabled: true } p ? p : null;
 
     // Точка входа старта хода через шлюз: маршрут решается и привязывается к токену ДО запуска
     // CLI. Подходящего маршрута нет — токена нет, ход не стартует.
@@ -127,7 +135,7 @@ public class UpstreamSelector(
         if (route.Kind == GatewayUpstreamKind.Subscription)
         {
             // Родные id Claude (в т.ч. фоновый haiku) у Anthropic валидны — оставляем.
-            if (!string.IsNullOrWhiteSpace(requested) && providers.ResolveByModel(requested) is null
+            if (!string.IsNullOrWhiteSpace(requested) && ResolveEnabled(requested) is null
                 && LlmProviderRegistry.IsNativeClaudeModel(requested))
                 return requested!;
             return string.IsNullOrWhiteSpace(route.Model) ? requested ?? "" : route.Model;

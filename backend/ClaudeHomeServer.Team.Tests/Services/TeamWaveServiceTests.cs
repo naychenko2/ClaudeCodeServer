@@ -22,8 +22,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // ждёт, пока закроются задачи предыдущей.
 // TaskExecutionService в тестах не передаём — запуск claude.exe здесь не гоняется, проверяем
 // раздачу: карточки задач, состояние режима и счётчики бюджета.
-public class TeamWaveServiceTests : IDisposable
+public class TeamWaveServiceTests : IClassFixture<TeamWaveServiceTests.Fixture>
 {
+    private readonly Fixture _fx;
     private readonly string _dir;
     private readonly TaskManager _tasks;
     private readonly ProjectManager _projects;
@@ -31,91 +32,179 @@ public class TeamWaveServiceTests : IDisposable
     private readonly SessionManager _sessions;
     private readonly TeamPlanningService _teamPlanning;
     private readonly TeamWaveService _sut;
-    private string _plannerAnswer = "{}";
     private const string UserId = "user-1";
     private const string Username = "tester";
     // TestSessionBroadcaster разделяет по каналам: Owner — уведомления штаба,
     // Session — пульсы/прочее в группу конкретного чата-штаба
-    private readonly TestSessionBroadcaster _broadcaster = new();
+    private readonly TestSessionBroadcaster _broadcaster;
     // Лог службы копится в список: тесты снятия проверяют предупреждение о том, что
     // исполнитель не встал за отведённый срок (фикс-волна 4 team-blocker-honest)
-    private readonly List<string> _logLines = [];
+    private readonly List<string> _logLines;
 
-    public TeamWaveServiceTests()
+    public TeamWaveServiceTests(Fixture fx)
     {
-        _dir = Path.Combine(Path.GetTempPath(), "team_wave_tests_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_dir);
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["DataPath"] = Path.Combine(_dir, "projects.json"),
-            })
-            .Build();
-
-        var userStore = new UserStore(config, new Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
-        var appSettings = new AppSettingsService(config);
-        _projects = new ProjectManager(config, userStore, appSettings);
-        _personas = new PersonaManager(config);
-        _tasks = new TaskManager(config, personas: _personas);
-
-        _teamPlanning = new TeamPlanningService(_personas, new StubPlanner(() => _plannerAnswer));
-        _sessions = CreateSessionManager(config, userStore, appSettings, _broadcaster);
-        // Явный per-инстансный lookup задач. Раньше вычисляемый Session.ParentSessionId
-        // (дерево чатов-исполнителей) закрывалась статикой Session.TaskSourceSessionResolver,
-        // которую тестовый TaskManager (_tasks) ставил в ctor; теперь lookup явный. В проде
-        // DI пробрасывает TaskManager в SessionManager (см. его ctor), в этом тесте SessionManager
-        // создан без него → подменяем lookup, иначе родительство ребёнка-исполнителя не резолвится.
-        _sessions.SetTaskLookupForTests(new TaskLookupAdapter(_tasks));
-        // Реальный NotificationService с дисковым стором (паттерн TaskExecutionServiceDelegationReportTests):
-        // напоминания о карточках проверяем по broadcast-снимку выше
-        var notif = new NotificationService(
-            new NotificationStore(config, NullLogger<NotificationStore>.Instance),
-            _broadcaster,
-            new PushService(config, new PushSubscriptionStore(config),
-                new JwtService(config, userStore, NullLogger<JwtService>.Instance),
-                NullLogger<PushService>.Instance),
-            _personas, _projects, NullLogger<NotificationService>.Instance);
-        _sut = new TeamWaveService(_sessions, _tasks, _projects, _broadcaster,
-            new CollectingLogger<TeamWaveService>(_logLines), _personas, notif: notif);
+        _fx = fx;
+        // Явный сброс состояния между тестами: общий граф помнит за предыдущим тестом
+        // его сессии и задачи, снимки рассылки, строки лога, ответ планировщика и тестовые
+        // хуки на _sut/SessionManager (интейк, таймаут простоя, холд рестарта,
+        // HasLiveDelegatedTasks). Каждый тест начинает с чистых снимков и дефолтов службы —
+        // как начинал со свежего графа на тест.
+        fx.ResetTestState();
+        _dir = fx.Dir;
+        _tasks = fx.Tasks;
+        _projects = fx.Projects;
+        _personas = fx.Personas;
+        _sessions = fx.Sessions;
+        _teamPlanning = fx.TeamPlanning;
+        _sut = fx.Sut;
+        _broadcaster = fx.Broadcaster;
+        _logLines = fx.LogLines;
     }
 
-    public void Dispose()
+    /// <summary>
+    /// Граф на класс: SessionManager, TaskManager и волновая служба поднимаются один раз на
+    /// весь класс, а не на экземпляр теста (~0,13–0,25 с на тест уходило на конструктор).
+    /// Состояние между тестами разделяет ResetTestState (её зовёт ctor теста); сами тестовые
+    /// данные — штабы, задачи, чаты — названы уникально на тест, через общий граф чужой
+    /// тест в ассерты не попадает (задачи — только по GetByProject своего штаба, рассылка —
+    /// по Clear()).
+    /// Инвариант для новых тестов: глобальные сторожа волны (CheckStalledWaves, SendWavePulses,
+    /// CheckAwaitingEscalations) обходят ВСЕ штабы стора, а не свои. Тест, публикующий
+    /// «состаренную» карточку, обязан либо получить напоминание по ней сам, либо закрыть её
+    /// внутри себя: незакрытая карточка живёт в сторе до следующих вызовов сторожа ЭТОГО же
+    /// теста (лишний NotificationMessage ломает его ContainSingle/HaveCount), а в чужой тест
+    /// она не доезжает — с W1c её сессия сносится в ResetTestState.
+    /// </summary>
+    public sealed class Fixture : IDisposable
     {
-        _sessions.KillAllProcesses();
-        // Устойчиво к гонке с фоновой записью истории чата (см. TestFs)
-        Helpers.TestFs.DeleteDirectoryResilient(_dir);
-        GC.SuppressFinalize(this);
-    }
+        public readonly string Dir;
+        public readonly TaskManager Tasks;
+        public readonly ProjectManager Projects;
+        public readonly PersonaManager Personas;
+        public readonly SessionManager Sessions;
+        public readonly TeamPlanningService TeamPlanning;
+        public readonly TeamWaveService Sut;
+        public readonly TestSessionBroadcaster Broadcaster = new();
+        public readonly List<string> LogLines = [];
+        // Ответ планировщика mutable: StubPlanner читает текущий по замыканию; тест задаёт
+        // его перед своим вызовом, ResetTestState возвращает к пустому плану.
+        public string PlannerAnswer = "{}";
+        // Дефолты снятого с freshly built службы: в них ResetTestState возвращает тестовые
+        // хуки, которые тесты меняют на своих заглушках (ExecutorIdleTimeout — см.
+        // тест дефолта в restart-task-hung).
+        private readonly TimeSpan _defaultExecutorIdleTimeout;
 
-    private SessionManager CreateSessionManager(IConfiguration config, UserStore userStore,
-        AppSettingsService appSettings, TestSessionBroadcaster broadcaster)
-    {
-        var llmProviders = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(config);
-        var subPool = new ClaudeSubscriptionPool(config);
-        var adapters = new ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory(
-            config, new AgentPromptSourceAdapter(new SkillsService()), new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)), llmProviders, subPool);
-        var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
-        var usage = new UsageService(config);
-        var jwt = new JwtService(config, userStore, NullLogger<JwtService>.Instance);
-        var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
-        server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
-        var flags = new FeatureFlagService(userStore);
-        var wkStore = new WorkspaceKnowledgeStore(config);
-        var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
-            Microsoft.Extensions.Options.Options.Create(new DifyOptions()), wkStore);
-        var notesSvc = new NotesService(_projects, config, NullLogger<NotesService>.Instance);
-        var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
-            NullLogger<NotesKnowledgeService>.Instance);
-        var bindings = new PersonaBindingsService(_personas, _projects, wkStore,
-            knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
-        var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
-            NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
-        var history = new ChatHistoryService(config);
-        return new SessionManager(_projects, history, config, adapters, falCost, usage,
-            appSettings, userStore, jwt, server.Object, llmProviders, flags, _personas,
-            bindings, subPool, NullLogger<SessionManager>.Instance,
-            TestLauncherFactory.Instance, sandbox, teamPlanning: _teamPlanning,
-            broadcaster: broadcaster);
+        public Fixture()
+        {
+            Dir = Path.Combine(Path.GetTempPath(), "team_wave_tests_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Dir);
+            var config = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["DataPath"] = Path.Combine(Dir, "projects.json"),
+                })
+                .Build();
+
+            var userStore = new UserStore(config, new Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+            var appSettings = new AppSettingsService(config);
+            Projects = new ProjectManager(config, userStore, appSettings);
+            Personas = new PersonaManager(config);
+            Tasks = new TaskManager(config, personas: Personas);
+
+            TeamPlanning = new TeamPlanningService(Personas, new StubPlanner(() => PlannerAnswer));
+            Sessions = CreateSessionManager(config, userStore, appSettings);
+            // Явный per-классный lookup задач. Раньше вычисляемый Session.ParentSessionId
+            // (дерево чатов-исполнителей) закрывалась статикой Session.TaskSourceSessionResolver,
+            // которую тестовый TaskManager (Tasks) ставил в ctor; теперь lookup явный. В проде
+            // DI пробрасывает TaskManager в SessionManager (см. его ctor), в этом тесте SessionManager
+            // создан без него → подменяем lookup, иначе родительство ребёнка-исполнителя не резолвится.
+            Sessions.SetTaskLookupForTests(new TaskLookupAdapter(Tasks));
+            // Реальный NotificationService с дисковым стором (паттерн TaskExecutionServiceDelegationReportTests):
+            // напоминания о карточках проверяем по broadcast-снимку выше
+            var notif = new NotificationService(
+                new NotificationStore(config, NullLogger<NotificationStore>.Instance),
+                Broadcaster,
+                new PushService(config, new PushSubscriptionStore(config),
+                    new JwtService(config, userStore, NullLogger<JwtService>.Instance),
+                    NullLogger<PushService>.Instance),
+                Personas, Projects, NullLogger<NotificationService>.Instance);
+            Sut = new TeamWaveService(Sessions, Tasks, Projects, Broadcaster,
+                new CollectingLogger<TeamWaveService>(LogLines), Personas, notif: notif);
+            _defaultExecutorIdleTimeout = Sut.ExecutorIdleTimeout;
+        }
+
+        /// <summary>
+        /// Сброс всего, что тесты меняют в общем графе: снимки рассылки, строки лога,
+        /// ответ планировщика и тестовые хуки на _sut/SessionManager — к дефолтам службы.
+        /// Плюс данные предыдущего теста: его сессии и задачи его проекта (W1c).
+        /// </summary>
+        public void ResetTestState()
+        {
+            // W1c: сессии и задачи предыдущего теста сносятся здесь: в сторе класса больше нет
+            // чужих штабов и задач, и глобальные сторожа волны (CheckStalledWaves, SendWavePulses,
+            // CheckAwaitingEscalations) не видят чужих штабов — класс перестаёт зависеть от
+            // порядка тестов. Замерено (W1c): на время класса это не влияет — 11,7 с против
+            // 11,9 с с закомментированными циклами (в пределах шума), и рост длительности к
+            // концу класса остаётся в обоих вариантах: в сторе после этой чистки растёт только
+            // Projects/Personas, а их Create пишет весь стор на каждую вставку
+            // (ProjectManager.cs:205, PersonaManager.cs:422) — вот он и есть оставшийся
+            // квадратичный член.
+            // Порядок: сессии — ДО снимков рассылки: DeleteAsync сам вещает «чат удалён»
+            // (SessionManager.cs:9844), и этот шум не должен попасть в снимки следующего теста.
+            foreach (var session in Sessions.GetAll())
+                Sessions.DeleteAsync(session.Id).GetAwaiter().GetResult();
+            foreach (var project in Projects.GetAll())
+                Tasks.DeleteByProject(project.Id);
+            Broadcaster.Clear();
+            // CollectingLogger пишет под тем же lock, под которым чистим
+            lock (LogLines) LogLines.Clear();
+            PlannerAnswer = "{}";
+            Sut.IntakeForTestOverride = null;
+            Sut.TestHoldRestart = null;
+            // Мутация (W1b): убрать эту строку — «ПрерываетХодИЖдётПростоя» краснеет:
+            // таймаут 100 мс от теста «ИсполнительНеВсталЗаТаймаут» доезжает до него,
+            // и пометка снятия встает раньше простоя исполнителя.
+            Sut.ExecutorIdleTimeout = _defaultExecutorIdleTimeout;
+            Sessions.HasLiveDelegatedTasks = null;
+        }
+
+        public void Dispose()
+        {
+            Sessions.KillAllProcesses();
+            // Устойчиво к гонке с фоновой записью истории чата (см. TestFs)
+            Helpers.TestFs.DeleteDirectoryResilient(Dir);
+        }
+
+        private SessionManager CreateSessionManager(IConfiguration config, UserStore userStore,
+            AppSettingsService appSettings)
+        {
+            var llmProviders = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(config);
+            var subPool = new ClaudeSubscriptionPool(config);
+            var adapters = new ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory(
+                config, new AgentPromptSourceAdapter(new SkillsService()), new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)), llmProviders, subPool);
+            var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
+            var usage = new UsageService(config);
+            var jwt = new JwtService(config, userStore, NullLogger<JwtService>.Instance);
+            var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
+            server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
+            var flags = new FeatureFlagService(userStore);
+            var wkStore = new WorkspaceKnowledgeStore(config);
+            var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
+                Microsoft.Extensions.Options.Options.Create(new DifyOptions()), wkStore);
+            var notesSvc = new NotesService(Projects, config, NullLogger<NotesService>.Instance);
+            var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, config,
+                NullLogger<NotesKnowledgeService>.Instance);
+            var bindings = new PersonaBindingsService(Personas, Projects, wkStore,
+                knowledge, new SkillsService(), userStore, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
+            var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
+                NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
+            var history = new ChatHistoryService(config);
+            return new SessionManager(Projects, history, config, adapters, falCost, usage,
+                appSettings, userStore, jwt, server.Object, llmProviders, flags, Personas,
+                bindings, subPool, NullLogger<SessionManager>.Instance,
+                TestLauncherFactory.Instance, sandbox, teamPlanning: TeamPlanning,
+                broadcaster: Broadcaster);
+        }
     }
 
     // Чат-штаб с включённым режимом и командой из двух персон. resumeSessionId — задать
@@ -184,7 +273,7 @@ public class TeamWaveServiceTests : IDisposable
     private async Task<(Session Session, TeamImplementPlan Plan)> MakeRestartedRunningStabAsync(string name)
     {
         var (session, backend, frontend) = await MakeStabAsync(name, resumeSessionId: "csid-" + name);
-        _plannerAnswer = $$"""
+        _fx.PlannerAnswer = $$"""
             {"summary":"Экспорт задач в CSV","subtasks":[
               {"title":"Эндпоинт экспорта","goal":"GET /api/tasks/export",
                "executorPersonaId":"{{backend.Id}}","executorRationale":"Серверная часть — его зона",
@@ -499,7 +588,7 @@ public class TeamWaveServiceTests : IDisposable
     {
         var (session, backend, frontend) = await MakeStabAsync(name);
         await _sessions.SetTeamImplementAutoAsync(session.Id, autoWaves, UserId);
-        _plannerAnswer = $$"""
+        _fx.PlannerAnswer = $$"""
             {"summary":"Экспорт задач в CSV","subtasks":[
               {"title":"Эндпоинт экспорта","goal":"GET /api/tasks/export",
                "executorPersonaId":"{{backend.Id}}","executorRationale":"Серверная часть — его зона",
@@ -1541,10 +1630,16 @@ public class TeamWaveServiceTests : IDisposable
 
         await _sut.SendWavePulsesAsync();
 
+        // Общий граф помнит идущие волны штабов соседних тестов — сирень пульсов покрывает
+        // все штабы класса. Проверяемое свойство — адрес пульса и его отсутствие у штаба
+        // без волны: считаем пульсы по своим штабам (A и B — с волной, C — без), чужие
+        // карточки здесь ни при чём.
         var pulses = HubSends()
-            .Where(s => s.Message is ClaudeHomeServer.Protocol.TeamWavePulseMessage)
+            .Where(s => s.Message is ClaudeHomeServer.Protocol.TeamWavePulseMessage pulse
+                && (pulse.SessionId == sessionA.Id || pulse.SessionId == sessionB.Id
+                    || pulse.SessionId == sessionC.Id))
             .ToList();
-        pulses.Should().HaveCount(2, "по одному пульсу на штаб с идущей волной");
+        pulses.Should().HaveCount(2, "по одному пульсу на свой штаб с идущей волной");
         pulses.Should().OnlyContain(p => p.Group == sessionA.Id || p.Group == sessionB.Id,
             "пульс — в группу сессии-штаба, не в user_/project_-группы");
         pulses.Select(p => p.Message.SessionId).Should()
@@ -2312,7 +2407,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task НоваяВводная_ПослеЗавершённойИтерации_РазворачиваетВолнуИБюджетСНуля()
     {
         var (session, backend, frontend) = await MakeStabAsync("continuous");
-        _plannerAnswer = $$"""
+        _fx.PlannerAnswer = $$"""
             {"summary":"Экспорт задач в CSV","subtasks":[
               {"title":"Эндпоинт экспорта","goal":"GET /api/tasks/export",
                "executorPersonaId":"{{backend.Id}}","executorRationale":"Серверная часть — его зона",
@@ -2346,7 +2441,7 @@ public class TeamWaveServiceTests : IDisposable
         _sessions.GetById(session.Id)!.Status = SessionStatus.Working;
         await _sessions.SendMessageAsync(session.Id, "теперь добавь выгрузку в XLSX", []);
         SetTeamTurnFromHuman(GetEntry(session.Id), true);
-        _plannerAnswer = $$"""
+        _fx.PlannerAnswer = $$"""
             {"summary":"Выгрузка в XLSX","subtasks":[
               {"title":"XLSX-выгрузка","goal":"Формат xlsx в экспорте",
                "executorPersonaId":"{{backend.Id}}","executorRationale":"Серверная часть — его зона",
@@ -2381,7 +2476,7 @@ public class TeamWaveServiceTests : IDisposable
     {
         var (session, backend, frontend) = await MakeStabAsync(name);
         await _sessions.SetTeamImplementAutoAsync(session.Id, true, UserId);
-        _plannerAnswer = $$"""
+        _fx.PlannerAnswer = $$"""
             {"summary":"Экспорт","subtasks":[
               {"title":"Эндпоинт экспорта","goal":"GET /api/tasks/export",
                "executorPersonaId":"{{backend.Id}}","executorRationale":"Серверная часть — его зона",
@@ -2459,12 +2554,78 @@ public class TeamWaveServiceTests : IDisposable
         _tasks.GetById(a.Id)!.UpdatedAt = DateTime.UtcNow.AddMinutes(-45);
         child.UpdatedAt = DateTime.UtcNow.AddMinutes(-45);
 
+        // Сигнал простоя отдаёт тест: в проде статус снимает финализация остановленного
+        // прогона — асинхронно, не в момент прерывания. Здесь это делает фейк-интейк с
+        // задержкой 250 мс (приём ClearBusyAfter, тот же, что в DropSubtaskAsync-тестах).
+        // Мгновенное снятие (вердикт R-W1) делало ожидание ненаблюдаемым:
+        // WaitExecutorIdleAsync выходил true с первой проверки, и мутация «убрать await»
+        // не краснила ничего. С задержкой перевыдача без ожидания случается раньше
+        // простоя — ассерт порядка ниже краснеет; без сигнала тест платил бы полным
+        // ExecutorIdleTimeout (10 с).
+        var idleAt = new TaskCompletionSource<DateTime>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var intake = new FakeTurnIntake { OnInterrupt = ClearBusyAfter(TimeSpan.FromMilliseconds(250), idleAt) };
+        _sut.IntakeForTestOverride = intake;
+
         var result = await _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id);
 
         result.Outcome.Should().Be("reissued");
         result.Message.Should().Contain("попытка 2", "повторная попытка той же под-задачи");
         _tasks.GetById(a.Id)!.Description.Should().Contain("не подавало признаков жизни",
             "зависшему исполнителю объясняем причину перезапуска, а не провала");
+        // Порядок «остановить → дождаться простоя → перевыдать», тот же инвариант, что у
+        // DropSubtaskAsync: перевыдача поверх занятого исполнения упёрлась бы в гейт задачи.
+        // Ожидание — событие с потолком, таймаут красный (паттерн Э4).
+        intake.InterruptCount(child.Id).Should().Be(1,
+            "зависшее исполнение перед перевыдачей останавливается");
+        var idleMoment = await idleAt.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        // Перевыдача не раньше простоя: UpdatedAt задачи выставляет сама перевыдача
+        // (LaunchReissueAsync → Update). Мутация M1 (заменить await WaitExecutorIdleAsync
+        // на Task.CompletedTask): перевыдача идёт сразу после прерывания — за 250 мс до
+        // простоя, этот ассерт краснеет.
+        _tasks.GetById(a.Id)!.UpdatedAt.Should().BeOnOrAfter(idleMoment,
+            "перевыдача идёт после простоя исполнения, а не поверх него");
+        _logLines.Should().NotContain(l => l.Contains("не встал за"),
+            "исполнитель встал штатно — выхода по таймауту здесь быть не должно");
+    }
+
+    // Обратный случай к предыдущему тесту: прерывание послано, а занятость так и не
+    // снялась (зависший Working без процесса, который не реанимируется). Перезапуск не
+    // имеет права висеть вечно: по истечении ExecutorIdleTimeout он идёт дальше и
+    // перевыдаёт — но молчать здесь не должен: без записи в логе про то, что «исполнитель
+    // не встал», узнать об этом неоткуда (тот же инвариант, что у
+    // DropSubtaskAsync_ИсполнительНеВсталЗаТаймаут). Таймаут — поле, а не литерал 10 с:
+    // иначе кейс стоил бы десять секунд прогона. Мутация «бросать на false в
+    // WaitExecutorIdleAsync» краснит весь тест: до перевыдачи дело не доходит.
+    [Fact]
+    public async Task ПерезапускЗадачи_ИсполнительНеВсталЗаТаймаут_ПеревыдаётСПредупреждениемВЛоге()
+    {
+        var (session, a, _) = await MakeStalledWaveAsync("restart-task-notidle");
+        var intake = new FakeTurnIntake(); // OnInterrupt пуст — занятость не снимается никогда
+        _sut.IntakeForTestOverride = intake;
+        _sut.ExecutorIdleTimeout = TimeSpan.FromMilliseconds(100);
+        var child = await AttachExecutorAsync(a, session, busyStatus: true);
+
+        var result = await _sut.RestartWaveTaskAsync(_sessions.GetById(session.Id)!, a.Id);
+
+        intake.InterruptCount(child.Id).Should().Be(1,
+            "зависшее исполнение перед перевыдачей останавливается");
+        _sessions.GetById(child.Id)!.Status.Should().Be(SessionStatus.Working,
+            "исполнитель так и не встал — это и есть проверяемый случай");
+        result.Outcome.Should().Be("reissued",
+            "таймаут ожидания не отменяет перевыдачу: штаб идёт дальше, а не виснет");
+        _logLines.Should().Contain(l => l.Contains("не встал за") && l.Contains(a.Id),
+            "выход по таймауту обязан оставить след в логе — иначе про несостоявшейся реанимации не узнать");
+    }
+
+    // Продуктовые дефолты ожидания простоя исполнителя — те же, что до превращения их в
+    // настройки (паттерн Э4): тесты меняют их только в своих кейсах, прод — нет.
+    [Fact]
+    public void ДефолтыОжиданияПростояИсполнителяПрежние()
+    {
+        _sut.ExecutorIdleTimeout.Should().Be(TimeSpan.FromSeconds(10),
+            "потолок ожидания — 10 с, как был: он страхует настоящий зависший прогон");
+        _sut.ExecutorIdlePollInterval.Should().Be(TimeSpan.FromMilliseconds(200),
+            "интервал опроса статуса — 200 мс, как был");
     }
 
     [Fact]
@@ -2926,7 +3087,7 @@ public class TeamWaveServiceTests : IDisposable
     {
         var (session, backend, frontend) = await MakeStabAsync(name);
         await _sessions.SetTeamImplementAutoAsync(session.Id, true, UserId);
-        _plannerAnswer = $$"""
+        _fx.PlannerAnswer = $$"""
             {"summary":"Экспорт задач в CSV","subtasks":[
               {"title":"Эндпоинт экспорта","goal":"GET /api/tasks/export",
                "executorPersonaId":"{{backend.Id}}","executorRationale":"Серверная часть — его зона",

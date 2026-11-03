@@ -19,6 +19,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 //
 // Проверяем РЕГИСТРАЦИЮ через `services.Any(...)`, а не резолв: резолв потребовал бы
 // поднимать HTTP-инфраструктуру, это не задача стража.
+[Trait("Category", "Host")]
 public class YandexSubsystemRegistrationTests
 {
     private static IConfiguration BuildConfig() =>

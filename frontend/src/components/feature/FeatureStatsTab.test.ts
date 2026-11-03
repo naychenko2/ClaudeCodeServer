@@ -1,11 +1,9 @@
 // Вкладка «Статистика» (волна 3, Ф7a, макет features-overview-3-final §«Статистика»;
 // сборка «Пульса» — ST-F14a по макету feature-stats-5, вариант A).
-// GC-F12: «Статистика» БЕЗ Ганта и без ленты времени — осталась сводка этапов
-// (имя · слово состояния · «N/M» у «Производства» · длительность) и ссылка на
-// «Хронологию». Рендер-тесты сводки — в блоке «сводка этапов (GC-F12)».
+// «Статистика» БЕЗ Ганта, ленты времени, героя, «Сейчас работают» и таблицы этапов (Ш6).
 //
 // Чистые функции (FeatureStatsBits) — в node, без DOM. Рендер-тесты (fakeDom):
-// точность, «задача», пустые состояния, сводка этапов.
+// точность, «задача», пустые состояния, отсутствие дублей.
 //
 // Мутации (в отчёте): (1) порог 2 ч → 20 ч → «сжатие паузы» краснеет;
 // (2) потерять track=review → «дорожка ревью» краснеет; (3) подменить цель клика
@@ -128,7 +126,9 @@ function mkStats(over: Partial<FeatureStats> = {}): FeatureStats {
 
 describe('formatDuration', () => {
   it('минуты / часы / часы+минуты (минуты с ведущим 0)', () => {
-    expect(formatDuration(0)).toBe('0 мин');
+    // 0 — не «0 мин»: единая нижняя граница формата (Ш1a, chatGroups) — «1 мин»;
+    // нули в строке итогов дополнительно гейтит потребитель (FeatureBriefTimeline.tsx:24).
+    expect(formatDuration(0)).toBe('1 мин');
     expect(formatDuration(35)).toBe('35 мин');
     expect(formatDuration(60)).toBe('1 ч');
     expect(formatDuration(90)).toBe('1 ч 30 мин');
@@ -508,26 +508,10 @@ describe('FeatureStatsTab: рендер', () => {
     const all = textNodes(c).join('');
     expect(all).toContain('Считать пока нечего');
   });
-
-  // === 9. 360: тач-цель строки сводки ≥ 40 ===
-  it('на 360 строка сводки этапа — minHeight 40', () => {
-    const c = renderTab(mkGanttStats(), true, mkGanttRun());
-    const row = findNodeByAttr(c, 'data-testid', 'stats-stage-prod')!;
-    const st = (row as unknown as { style: Record<string, string> }).style;
-    expect(st.minHeight).toBe('40px');
-  });
 });
 
-// === Сводка этапов (GC-F12) ===
-// run с 8 этапами: design — skipped («этапа не было»), prod — принятые шаги плана
-// («N/M»), merge — текущий этап («идёт»). Ганта и ленты на вкладке больше нет:
-// осталась сводка строк и ссылка на «Хронологию».
-//
-// Мутации (в отчёте): (1) убрать строку этапа из рендера → «каждый этап — своя
-// строка» краснеет; (2) не обнулять минуты при skipped → «этапа не было»
-// краснеет (минуты появились бы справа); (3) показать «N/M» у всех стадий →
-// «счётчик только у prod» краснеет; (4) убрать ссылку → «ссылка на „Хронологию“»
-// краснеет; (5) не отрисовать слово состояния → «слово состояния» краснеет.
+// === Фикстуры конвейера из 8 этапов (раньше — для сводки этапов GC-F12, убрана в Ш6) ===
+// run: design — skipped, prod — принятые шаги, merge — текущий этап.
 
 function mkGanttStage(key: StageKey, state: StageState, minutes: number, over: Partial<FeatureStage> = {}): FeatureStage {
   return {
@@ -596,164 +580,26 @@ function mkGanttStats(): FeatureStats {
   };
 }
 
-// Тот же stats, но с журналом интервалов (intervalsByStage): «Хронология» при нём
-// рисует дорожку и её счётчик (не approx) — нужен для сравнения двух вкладок (GC-F12R).
-function mkLanedStats(): FeatureStats {
-  const s = mkGanttStats();
-  const prodInterval: StageInterval = {
-    from: '2026-10-20T10:05:00Z', to: '2026-10-20T14:15:00Z', minutes: 250,
-    live: false, lastOutcome: null, taskIds: ['t-prod'], turns: [],
-  };
-  s.timeline = { ...s.timeline, intervalsByStage: { prod: [prodInterval] } };
-  return s;
-}
-
-describe('FeatureStatsTab: сводка этапов (GC-F12)', () => {
-  beforeEach(() => {
-    mockOpenTask.calls = [];
-    clearFeatureStageFocus();
-    // Вкладка «Статистика» — как в жизни: тест перехода должен видеть смену
-    // вкладки, а не дефолт страницы.
-    setFeaturePageTab('stats');
-  });
+// Ш6: герой «прошло с начала», «Сейчас работают» и таблицы этапов в DOM вкладки нет:
+// первое и второе — в сводке страницы, третье — в Ганте «Хронологии».
+// Мутация: вернуть рендер любого из трёх блоков в FeatureStatsTab → тест краснеет.
+describe('FeatureStatsTab: без дублей (Ш6)', () => {
+  beforeEach(() => { setFeaturePageTab('stats'); });
   afterEach(() => {
     uninstallFakeDom();
     vi.restoreAllMocks();
   });
 
-  // === 1. Строка на каждый этап: имя · слово состояния · длительность ===
-  it('каждый этап — своя строка; длительность — из approxMinutes', () => {
-    const c = renderSummary();
-    for (const key of ['cut', 'design', 'plan', 'prod', 'review', 'qa', 'final', 'merge']) {
-      expect(findNodeByAttr(c, 'data-testid', `stats-stage-${key}`), `строка этапа ${key}`).not.toBeNull();
-    }
-    // prod: 370 мин → «6 ч 10 мин».
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'stats-stage-minutes-prod')!).join('')).toBe('6 ч 10 мин');
-    // Мерж (4 мин) — тоже строка с минутами.
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'stats-stage-minutes-merge')!).join('')).toBe('4 мин');
-    // Пропущенный этап: минут нет (этапа не было — считать нечего).
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'stats-stage-minutes-design')!).join('')).toBe('');
-  });
-
-  // === 2. Слово состояния: готов · этапа не было · идёт ===
-  it('слово состояния: готов · этапа не было · идёт', () => {
-    const c = renderSummary();
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'stats-stage-state-cut')!).join('')).toBe('готов');
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'stats-stage-state-design')!).join('')).toBe('этапа не было');
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'stats-stage-state-merge')!).join('')).toBe('идёт');
-  });
-
-  // === 2b. Остановленный этап — «стоит» ===
-  it('остановленный этап (tone=stopped) — слово «стоит»', () => {
-    const base = mkSummaryRun();
-    const run: FeatureRun = {
-      ...base,
-      stages: base.stages!.map(s => s.key === 'prod' ? { ...s, state: 'active' as const, tone: 'stopped' as const } : s),
-    };
-    const c = renderSummary(run);
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'stats-stage-state-prod')!).join('')).toBe('стоит');
-  });
-
-  // === 2c. Не начатый этап — «впереди» ===
-  it('не начатый этап (state=pending) — слово «впереди»', () => {
-    const base = mkSummaryRun();
-    const run: FeatureRun = {
-      ...base,
-      stages: base.stages!.map(s => s.key === 'qa' ? { ...s, state: 'pending' as const, tone: null } : s),
-    };
-    const c = renderSummary(run);
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'stats-stage-state-qa')!).join('')).toBe('впереди');
-  });
-
-  // === 3. «N/M» — только у «Производства» (решение m1 ревью GC-R-F2) ===
-  it('«N/M» — только у prod: у прочих стадий счётчика нет (одна цифра не дублируется)', () => {
-    const c = renderSummary();
-    // plan у prod: принято 8, в работе 2 (work+review), впереди 1 → «8/11».
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'stats-stage-plan-prod')!).join('')).toBe('8/11');
-    for (const key of ['cut', 'design', 'plan', 'review', 'qa', 'final', 'merge']) {
-      expect(findNodeByAttr(c, 'data-testid', `stats-stage-plan-${key}`), `у ${key} счётчика нет`).toBeNull();
-    }
-  });
-
-  // === 3b. GC-F12R: тот же «N/M» на обеих вкладках ===
-  // Те же run и те же stats (с журналом интервалов — чтобы «Хронология» рисовала
-  // дорожку): строка сводки и строка дорожки печатают ОДИН счётчик. Разные числа
-  // («8/11» против «10/11») — дефект возврата GC-R-F12, этот тест его не пропускает.
-  it('«N/M» совпадает на обеих вкладках на тех же данных (тот же текст)', () => {
-    const run = mkSummaryRun();
-    const stats = mkLanedStats();
+  it('hero, «Сейчас работают» и таблицы этапов в DOM нет, плитки и потери — есть', () => {
     installFakeDom();
-    const { container: cs } = mount(createElement(FeatureStatsTab, { stats, run, isMobile: false }));
-    const statsCounter = textNodes(findNodeByAttr(cs, 'data-testid', 'stats-stage-plan-prod')!).join('');
-    const { container: ct } = mount(createElement(FeatureTimelineTab, { run, stats, isMobile: false }));
-    const stage = findNodeByAttr(ct, 'data-testid', 'timeline-stage-prod')!;
-    const tlNode = findNodeByAttr(stage as never, 'data-testid', 'timeline-stage-counter');
-    const tlCounter = tlNode ? textNodes(tlNode).join('') : '';
-    expect(statsCounter, 'сводка: N = принято').toBe('8/11');
-    expect(tlCounter, 'та же строка на дорожке').toBe(statsCounter);
-  });
-
-  // === 3c. GC-F12R: источник счётчика — модель, а не stepProgress сама по себе ===
-  // prod skipped: у модели плана нет (считать нечего), но stepProgress есть. Если сводка
-  // начнёт считать «N/M» прямо из run.stepProgress в обход buildStageLanes — здесь
-  // появится «8/11» и тест краснеет: значение берут только из lanes модели.
-  it('счётчик берётся из модели: skipped prod с stepProgress — счётчика нет', () => {
-    const base = mkSummaryRun();
-    const run: FeatureRun = {
-      ...base,
-      stages: base.stages!.map(s => s.key === 'prod' ? { ...s, state: 'skipped' as const } : s),
-    };
-    const c = renderSummary(run);
-    expect(findNodeByAttr(c, 'data-testid', 'stats-stage-plan-prod'), 'счётчика у skipped prod').toBeNull();
-  });
-
-  // === 4. Ссылка на «Хронологию» ===
-  it('ссылка «Дорожки времени — на „Хронологии“» переключает вкладку на «Хронологию»', () => {
-    const c = renderSummary();
-    const link = findNodeByAttr(c, 'data-testid', 'stats-stages-timeline-link')!;
-    expect(textNodes(link).join('')).toContain('Дорожки времени — на „Хронологии“');
-    act(() => { (reactProps(link)!.onClick as () => void)(); });
-    expect(__test.tab(), 'вкладка сменилась на «Хронологию»').toBe('timeline');
-  });
-
-  // === 5. В сводке нет интерактивных строк — только ссылка ===
-  it('в сводке единственная кнопка — ссылка на «Хронологию» (строки не интерактивны)', () => {
-    const c = renderSummary();
-    const box = findNodeByAttr(c, 'data-testid', 'stats-stages')!;
-    const buttons: FNodeLike[] = [];
-    const walk = (n: FNodeLike) => {
-      if (n.nodeName === 'BUTTON') buttons.push(n);
-      for (const ch of n.childNodes) walk(ch);
-    };
-    walk(box);
-    expect(buttons.length, 'кнопок в сводке').toBe(1);
-  });
-
-  // === 6. Без run (старые ответы) — сводки нет ===
-  it('без run — сводки нет', () => {
-    const c = renderTab(mkGanttStats());
-    expect(findNodeByAttr(c, 'data-testid', 'stats-stages'), 'сводки без run').toBeNull();
+    const { container } = mount(createElement(FeatureStatsTab, { stats: mkGanttStats(), run: mkGanttRun(), isMobile: false }));
+    const ids = testIdsInOrder(container);
+    expect(ids.some(id => id.startsWith('hero-')), 'hero').toBe(false);
+    expect(ids, '«Сейчас работают»').not.toContain('stats-now');
+    expect(ids.some(id => id.startsWith('stats-stage')), 'таблица этапов').toBe(false);
+    expect(ids, 'плитки').toContain('stats-tiles');
   });
 });
-
-// === Фикстуры сводки этапов (GC-F12) ===
-// Тот же конвейер, но с честным прогрессом плана: сводка берёт «N/M» из
-// buildStageLanes().lanes['prod'].plan, а plan у prod считается из run.stepProgress.
-function mkSummaryRun(): FeatureRun {
-  return {
-    ...mkGanttRun(),
-    stepProgress: {
-      planState: 'cut', total: 11, accepted: 8, review: 1, work: 1, notCreated: 1,
-      withdrawn: 0, unlinkedReworks: 0,
-    },
-  };
-}
-
-function renderSummary(run: FeatureRun = mkSummaryRun(), isMobile = false) {
-  installFakeDom();
-  const { container } = mount(createElement(FeatureStatsTab, { stats: mkGanttStats(), run, isMobile }));
-  return container;
-}
 
 // data-testid в порядке документа — проверить место строки (после этапов, до оси).
 function testIdsInOrder(n: FNodeLike): string[] {
@@ -776,15 +622,18 @@ describe('FeatureStatsTab: «тихо» без Ганта (GC-F12)', () => {
     vi.restoreAllMocks();
   });
 
-  // Строки «тихо» на Ганте больше нет (GC-F12) — сигнал несёт строка анализа.
-  it('без stats — сводки нет; сигнал «тихо» несёт строка анализа', () => {
+  // Строки «тихо» на Ганте больше нет (GC-F12); с Ш4 сигнал несёт тревога страницы
+  // (FeaturePageAlert), а строка анализа остаётся с одним «Анализ моделью» — без фразы.
+  it('без stats — сводки нет; сигнал «тихо» в строке не повторяется (его говорит тревога страницы)', () => {
     installFakeDom();
     const run: FeatureRun = { ...mkGanttRun(), quiet: true, lastActivityAt: '2026-10-20T17:10:00Z' };
     const { container } = mount(createElement(FeatureStatsTab, { stats: null, run, isMobile: false }));
     expect(findNodeByAttr(container, 'data-testid', 'stats-stages'), 'сводки без stats').toBeNull();
     const line = findNodeByAttr(container, 'data-testid', 'feature-analysis-line');
     expect(line, 'строка анализа на месте').not.toBeNull();
-    expect(textNodes(line as never).join(''), 'сигнал «тихо» — в строке анализа').toContain('тихо');
+    const lineText = textNodes(line as never).join('');
+    expect(lineText, 'сигнал «тихо» — не в строке').not.toContain('тихо');
+    expect(lineText, 'у строки остаётся «Анализ моделью»').toContain('Анализ моделью');
   });
 });
 
@@ -896,10 +745,8 @@ function mkFullStats(over: Partial<FeatureStats> = {}): FeatureStats {
 }
 
 // === Сборка «Пульса» (ST-F14a, вариант A макета feature-stats-5) ===
-// Порядок на вкладке: строка анализа → значки точности → герой → плитки →
-// «Сейчас работают» → «Главные потери» → сводка этапов → «Кто и на чём работал» →
-// свёрнутый «Подробнее». Без run (старые ответы) — пульс-блоков и сводки нет:
-// и то и другое требует конвейера. «Подробнее» — только то, что новые блоки не покрывают.
+// Порядок на вкладке: строка анализа → значки точности → плитки → «Главные потери» →
+// «Кто и на чём работал» → свёрнутый «Подробнее». Без run (старые ответы) — пульс-блоков нет. «Подробнее» — только то, что новые блоки не покрывают.
 //
 // Мутации (проверены прогоном): (1) убрать FeatureStatsLosses из рендера → тест
 // порядка краснеет (stats-losses выпадает из цепочки); (2) renderTab без run →
@@ -918,12 +765,11 @@ describe('FeatureStatsTab: сборка «Пульса» (ST-F14a)', () => {
 
   // Фикстура НЕ в порядке выдачи: run — этапы cut→design→plan→… (порядок данных
   // не равен порядку блоков), а проверяется именно порядок блоков в DOM.
-  it('порядок блоков: точность → герой → плитки → «Сейчас» → потери → сводка → разрез → «Подробнее»', () => {
+  it('порядок блоков: точность → плитки → потери → разрез → «Подробнее»', () => {
     const c = renderTab(mkFullStats(), false, mkGanttRun());
     const seq = testIdsInOrder(c);
     const want = [
-      'stats-accuracy', 'hero-running', 'stats-tiles', 'stats-now', 'stats-losses',
-      'stats-stages', 'feature-breakdown-block', 'stats-more',
+      'stats-accuracy', 'stats-tiles', 'stats-losses', 'feature-breakdown-block', 'stats-more',
     ];
     let prev = -1;
     for (const id of want) {
@@ -934,18 +780,10 @@ describe('FeatureStatsTab: сборка «Пульса» (ST-F14a)', () => {
     }
   });
 
-  // Мутация (1): без FeatureStatsLosses в рендере — 'stats-losses' не находится.
-  it('«Главные потери» стоят между «Сейчас работают» и сводкой этапов', () => {
-    const c = renderTab(mkFullStats(), false, mkGanttRun());
-    const seq = testIdsInOrder(c);
-    expect(seq.indexOf('stats-now'), '«Сейчас» до потерь').toBeLessThan(seq.indexOf('stats-losses'));
-    expect(seq.indexOf('stats-losses'), 'потери до сводки').toBeLessThan(seq.indexOf('stats-stages'));
-  });
-
   // Мутация (2): без run — пульс-блоков и сводки нет.
-  it('без run — нет героя, плиток, «Сейчас», потерь, разреза и сводки', () => {
+  it('без run — нет плиток, потерь и разреза', () => {
     const c = renderTab(mkFullStats());
-    for (const id of ['hero-running', 'stats-tiles', 'stats-now', 'stats-losses', 'feature-breakdown-block', 'stats-stages']) {
+    for (const id of ['stats-tiles', 'stats-losses', 'feature-breakdown-block']) {
       expect(findNodeByAttr(c, 'data-testid', id), `${id} без run`).toBeNull();
     }
   });

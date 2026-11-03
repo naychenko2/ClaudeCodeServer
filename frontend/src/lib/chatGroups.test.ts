@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { queueLabel, queueLabelParts, queueOrdinalWord, queueCountWord, queuePhraseParts } from './chatGroups';
+import {
+  queueLabel, queueLabelParts, queueOrdinalWord, queueCountWord, queuePhraseParts,
+  featureDisplayState, featureStatusTag, CLOSED_NO_MERGE_STATUS,
+} from './chatGroups';
+import type { FeatureIndexFeature } from '../types/featureIndex';
 
 // R-Q5D-D (ревью RV-K-Q5D-B, миноры 2–4): подпись очереди — структура, а не строка.
 // Потребители (пилюля, плашка, рельса) берут поля, а не разбирают строку по ' · '.
@@ -107,5 +111,46 @@ describe('queuePhraseParts: фраза блока — структура, а н�
   it('числовая подпись не тронута: «в очереди · 2 из 3» живёт своим форматом', () => {
     // Q5I-1 не переводит плашку/пилюлю/рельсу на слова — это отдельное решение.
     expect(queueLabel({ position: 2, length: 3 })).toBe('в очереди · 2 из 3');
+  });
+});
+
+// Ш1d (замена дефекта dac211b4): одна подпись закрытия «закрыта без мержа» (с маленькой
+// буквы, решена с Майей) — строка индекса (featureDisplayState) и фолбэк страницы
+// (featureStatusTag); тег страницы (FeatureStatusTag.tsx) даёт побайтно ту же
+// (её тест — FeatureStatusTag.test.ts). Короткая строка индекса («закрыта», «Без мержа»)
+// не аргумент: две подписи разъезжались. Мутация CLOSED_NO_MERGE_STATUS краснит здесь.
+function closedFeature(over: Partial<FeatureIndexFeature> = {}): FeatureIndexFeature {
+  return {
+    featureId: 'f1', title: 'Фича', projectId: 'p1',
+    bucket: 'closed', attention: null, state: 'closed',
+    rail: [], chips: ['closed'],
+    stepsAccepted: 0, stepsTotal: 0, loops: 0,
+    now0: null, lastActivityAt: null, summary: null,
+    keySessionId: null, keyArchived: false, keyProjectId: null, chatCount: 0,
+    ...over,
+  };
+}
+
+describe('закрытие фичи: одна подпись (индекс = фолбэк страницы)', () => {
+  it('featureDisplayState closed без мержа — «закрыта без мержа»', () => {
+    expect(featureDisplayState(closedFeature())).toEqual({
+      kind: 'closed', alarm: null, status: 'закрыта без мержа',
+    });
+  });
+
+  it('featureStatusTag closed без мержа — «закрыта без мержа», тон closed', () => {
+    expect(featureStatusTag(closedFeature())).toEqual({ label: 'закрыта без мержа', tone: 'closed' });
+  });
+
+  it('индекс и фолбэк дают побайтно одну строку (один источник — CLOSED_NO_MERGE_STATUS)', () => {
+    const f = closedFeature();
+    expect(featureDisplayState(f).status).toBe(featureStatusTag(f).label);
+    expect(featureDisplayState(f).status).toBe(CLOSED_NO_MERGE_STATUS);
+  });
+
+  it('смержена (mergedAt) не затронута: «смержена» / «Смержена»', () => {
+    const f = closedFeature({ summary: { mergedAt: '2026-10-18T12:00:00Z', durationMinutes: 30 } });
+    expect(featureDisplayState(f).status).toBe('смержена');
+    expect(featureStatusTag(f)).toEqual({ label: 'Смержена', tone: 'merged' });
   });
 });

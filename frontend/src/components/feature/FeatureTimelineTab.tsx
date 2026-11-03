@@ -4,8 +4,8 @@ import { Info } from 'lucide-react';
 import { useFeatureStageFocus, clearFeatureStageFocus, focusFeatureStage } from '../../lib/featurePage';
 import { EMPTY_NAV_MARKS, buildNavMarks, type NavMarks } from '../../lib/featureNavMarks';
 import { C, R, FS, SP, FONT } from '../../lib/design';
-import { stepProgressFromRun, formatStepProgress } from '../../lib/featureProgress';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
+import { stepProgressFromRun } from '../../lib/featureProgress';
 import { Tooltip } from '../ui/Tooltip';
 import { Button } from '../ui/Button';
 import { getPersonaById } from '../../lib/personas';
@@ -28,7 +28,7 @@ import {
 } from './FeatureLanePopover';
 import { buildStageLanes, axisFrac, planCounterText, type StageLane, type LaneAxis } from './FeatureLaneModel';
 import { foldLast } from './featureListFold';
-import { formatDuration, formatDateTime } from './FeatureStatsBits';
+import { formatDuration, formatDate, formatDateTime } from './FeatureStatsBits';
 import type { FeatureStats, StageTurn } from '../../types/featureStats';
 import { FeatureProdCardsView } from './FeatureProdCardsView';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor, StageKey } from '../../types/featureRun';
@@ -108,22 +108,20 @@ function spanMinutes(from: string, to: string): number {
 // и возврат фокуса при закрытии).
 interface LanePick { stage: StageKey; index: number; el: HTMLElement | null }
 
-// Поясняющая строка (макет §5): Info 13, 11 textSecondary, bgCard, borderLight, R.md, поля 6 10.
+// Пояснение к этапам (Ш5): значок «i» справа, текст — в title (строки-плашки над лентой нет).
+export const TIMELINE_NOTE_TEXT = 'Порядок этапов, их состояние и кто работал — точные. Длительность со знаком «≈» — по задачам этапа. Ревью идёт по шагам, поэтому пересекается с производством.';
+
 function TimelineNote() {
   return (
-    <div
-      data-testid="timeline-note"
-      style={{
-        display: 'flex', gap: SP.sm, alignItems: 'flex-start',
-        background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.md,
-        padding: `${SP.xs}px ${SP.sm}px`, marginBottom: SP.md, fontFamily: FONT.sans,
-        fontSize: FS.xs, color: C.textSecondary, lineHeight: 1.45,
-      }}
-    >
-      <Info size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} aria-hidden style={{ flexShrink: 0, marginTop: SP.xxs }} />
-      <span>
-        Порядок этапов, их состояние и кто работал — точные. Длительность со знаком «≈» — по
-        задачам этапа. Ревью идёт по шагам, поэтому пересекается с производством.
+    <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: SP.xs }}>
+      <span
+        data-testid="timeline-note"
+        role="img"
+        aria-label={TIMELINE_NOTE_TEXT}
+        title={TIMELINE_NOTE_TEXT}
+        style={{ display: 'inline-flex', color: C.textMuted, cursor: 'help' }}
+      >
+        <Info size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} aria-hidden />
       </span>
     </div>
   );
@@ -760,6 +758,11 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
   // Отступы шкалы — те же, что у колонки дорожек (GC-F5cR): ось лежит ровно над ней.
   const axisInsets = useMemo(() => laneAxisInsets(isMobile), [isMobile]);
 
+  // Метки мержей и волна после мержа (F1): данные модели (run.merges / waveAfterMerge) —
+  // своей арифметики нет; позиция на той же шкале, что у дорожек (axisFrac).
+  const mergeMarks = lanesModel.mergeMarks;
+  const waveFrom = lanesModel.waveFrom;
+
   // Перевод фокуса на соседний интервал: ←→ — по этапу, ↑↓ — ближайший по x интервал
   // соседнего этапа, Home/End — первый/последний интервал этапа (макет feature-gantt-6).
   const moveFocus = useCallback((key: string): LaneFocus | null => {
@@ -1014,14 +1017,6 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
       style={{ fontFamily: FONT.sans }}
     >
       <TimelineNote />
-      {progress && (
-        <div
-          data-testid="timeline-progress"
-          style={{ fontSize: FS.sm, color: C.textSecondary, marginBottom: SP.sm }}
-        >
-          {formatStepProgress(progress)}
-        </div>
-      )}
       {/* Ось времени над лентой: подписи встают ровно над дорожкой (отступы под колонки сетки) */}
       {hasLanes && axis && (
         <FeatureLaneAxis
@@ -1035,43 +1030,92 @@ export function FeatureTimelineTab({ run, marks: marksProp, isMobile = false, st
           insetRight={axisInsets.right}
         />
       )}
-      {stages.map((stage, i) => (
-        <StageRow
-          key={stage.key}
-          stage={stage}
-          isLast={i === stages.length - 1}
-          expanded={expanded === stage.key}
-          onToggle={() => { toggle(stage.key); setSelectedStage(stage.key); }}
-          taskMap={taskMap}
-          now={now}
-          featureId={run.featureId}
-          featureTitle={featureTitle}
-          run={run}
-          showProd={stage.key === 'prod'}
-          marks={marks}
-          isMobile={isMobile}
-          execIndex={execIndex}
-          progress={progress}
-          lane={laneOf(stage.key)}
-          axis={rowAxis}
-          tabIndexAt={focus?.stage === stage.key ? focus.index : -1}
-          expandedAt={pinned?.stage === stage.key ? pinned.index : null}
-          hoverAt={hover?.stage === stage.key ? hover.index : null}
-          laneSelected={selectedStage === stage.key}
-          flash={flashStage === stage.key}
-          tailIds={tailIds}
-          turnsByTask={turnsByTask}
-          prodInitialKey={prodInitialKey}
-          prodExpandedKeyRef={prodExpandedKeyRef}
-          // Флаг «меньше движения» — уже посчитанный здесь: при prefers-reduced-motion
-          // затемнение без перехода (подсветка есть и снимается — тот же таймер).
-          highlight={highlight && highlight.stage === stage.key ? { at: highlight.at, animate: !reducedMotion } : null}
-          onIntervalSelect={(idx, el) => onIntervalSelect(stage.key, idx, el)}
-          onIntervalHover={(idx, el) => onIntervalHover(stage.key, idx, el)}
-          onOpenSheet={isMobile ? () => openSheet(stage.key) : undefined}
-          onShowIntervals={(taskIds) => showIntervals(stage.key, taskIds)}
-        />
-      ))}
+      {/* Строки этапов в одном position:relative контейнере (F1): метки мержей и полоса
+          волны — слой над колонкой дорожек, на той же шкале, что дорожки (отступы
+          axisInsets + доли axisFrac), и идут по всем дорожкам сразу. Слой не интерактивен
+          и рисуется до строк: строки красятся поверх него, полоса волны — фон. Данных
+          вкладка не считает: marks и waveFrom — из модели (run.merges / waveAfterMerge). */}
+      <div data-testid="feature-gantt-rows" style={{ position: 'relative' }}>
+        {hasLanes && axis && (mergeMarks.length > 0 || waveFrom !== null) && (
+          <div
+            data-testid="gantt-merge-overlay"
+            style={{ position: 'absolute', left: axisInsets.left, right: axisInsets.right, top: 0, bottom: 0, pointerEvents: 'none' }}
+          >
+            {/* «Новая волна» после последнего мержа (F1): приглушённая колонка от метки до
+                правого края — работа, начатая после мержа, визуально отдельная группа. */}
+            {waveFrom !== null && (
+              <div
+                data-testid="gantt-wave-band"
+                aria-hidden="true"
+                style={{
+                  position: 'absolute', left: `${axisFrac(waveFrom, axis) * 100}%`, right: 0, top: 0, bottom: 0,
+                  background: C.bgSelected, opacity: 0.35,
+                }}
+              />
+            )}
+            {mergeMarks.map((m, i) => {
+              const leftPct = axisFrac(m.at, axis) * 100;
+              // Подпись даты не выходит за край шкалы (тот же приём, что у подписей оси).
+              const align = leftPct < 10 ? 'start' : leftPct > 90 ? 'end' : 'center';
+              return (
+                <div
+                  key={m.taskId}
+                  data-testid={`gantt-merge-mark-${i}`}
+                  style={{ position: 'absolute', left: `${leftPct}%`, top: 0, bottom: 0, borderLeft: `1px dashed ${C.accentMuted}` }}
+                >
+                  <span
+                    data-testid={`gantt-merge-label-${i}`}
+                    style={{
+                      position: 'absolute', top: 0, left: 0, whiteSpace: 'nowrap',
+                      transform: align === 'start' ? undefined : align === 'end' ? 'translateX(-100%)' : 'translateX(-50%)',
+                      fontFamily: FONT.mono, fontSize: FS.xxs, fontWeight: 600, color: C.accentMuted,
+                    }}
+                  >
+                    {`мерж ${formatDate(m.at)}`}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {stages.map((stage, i) => (
+          <StageRow
+            key={stage.key}
+            stage={stage}
+            isLast={i === stages.length - 1}
+            expanded={expanded === stage.key}
+            onToggle={() => { toggle(stage.key); setSelectedStage(stage.key); }}
+            taskMap={taskMap}
+            now={now}
+            featureId={run.featureId}
+            featureTitle={featureTitle}
+            run={run}
+            showProd={stage.key === 'prod'}
+            marks={marks}
+            isMobile={isMobile}
+            execIndex={execIndex}
+            progress={progress}
+            lane={laneOf(stage.key)}
+            axis={rowAxis}
+            tabIndexAt={focus?.stage === stage.key ? focus.index : -1}
+            expandedAt={pinned?.stage === stage.key ? pinned.index : null}
+            hoverAt={hover?.stage === stage.key ? hover.index : null}
+            laneSelected={selectedStage === stage.key}
+            flash={flashStage === stage.key}
+            tailIds={tailIds}
+            turnsByTask={turnsByTask}
+            prodInitialKey={prodInitialKey}
+            prodExpandedKeyRef={prodExpandedKeyRef}
+            // Флаг «меньше движения» — уже посчитанный здесь: при prefers-reduced-motion
+            // затемнение без перехода (подсветка есть и снимается — тот же таймер).
+            highlight={highlight && highlight.stage === stage.key ? { at: highlight.at, animate: !reducedMotion } : null}
+            onIntervalSelect={(idx, el) => onIntervalSelect(stage.key, idx, el)}
+            onIntervalHover={(idx, el) => onIntervalHover(stage.key, idx, el)}
+            onOpenSheet={isMobile ? () => openSheet(stage.key) : undefined}
+            onShowIntervals={(taskIds) => showIntervals(stage.key, taskIds)}
+          />
+        ))}
+      </div>
       {/* «Хвосты после мержа · N» (GC-F10a): после ленты этапов («Мерж» — последний
           этап жизненного цикла, строка стоит за ним). Только сводка: id хвостов не
           перечисляются — они уже в списках этапов с маркером «· хвост после мержа».

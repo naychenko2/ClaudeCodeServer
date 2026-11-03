@@ -663,7 +663,7 @@ const CHATS = [
   { id:'c2', t:'Ревью звука', d:'22.10', z:'work', sc:22, r:'правки направления: 3 · ушло в задачи: 2', cur:'разобран до m41 · хроника', chr:true },
   { id:'c3', t:'Анализ КД по архитектуре', d:'21.10', z:'work', sc:9, r:'обход по документам: разобрано 4 файла · модель: «есть знание — разбор КД»' },
   { id:'c4', t:'Почему стенд :5000 уходит на :80', d:'26.10', z:'gray', sc:11, r:'балл 11 · модель решит этой ночью' },
-  { id:'c5', t:'Ночной разбор 25.10 — замер', d:'25.10', z:'gray', sc:8, r:'ошибка ступени 2 — повторим следующей ночью', warn:true },
+  { id:'c5', t:'Ночной разбор 25.10 — замер', d:'25.10', z:'gray', sc:8, r:'модель не ответила — спросим следующей ночью', warn:true },
   { id:'c6', t:'Починка теста бэкапа', d:'24.10', z:'skip', sc:7, r:'модель: «знание уже в коммите и досье»' },
   { id:'c7', t:'Проверка доступа к доске Miro', d:'23.10', z:'excl', sc:0, r:'короткий: 900 символов диалога' },
   { id:'c8', t:'LLM-wiki · M2: макет', d:'27.10', z:'excl', sc:0, r:'чат исполнителя задачи — знание придёт итогом задачи', task:true },
@@ -681,11 +681,18 @@ const SCREENS = [
 const ALL = SCREENS.flatMap(g => g[1].map(s => s[0]));
 const S = { screen:'catalog', dark:false, m:false, nonew:false, admin:true, pk:'sup', dec:{}, tip:null, srcOpen:false, driftDiff:true,
   scope:'sec', retract:false, toast:false, tri:'list', tf:'all', thr:15, bl:'idle', ble:'local', consent:false, cdlg:false, odlg:false,
-  night:true, applyAll:true, clsOff:{ 'chat × create':'auto', 'file × create':'manual' }, marks:{}, jf:'all', chatMenu:true, itog:'done' };
+  night:true, applyAll:true, clsOff:{ 'chat × create':'auto', 'file × create':'manual' }, marks:{}, jf:'all', chatMenu:true, itog:'done',
+  // Срез Ф2 02.11: cut — урезанный объём; ln — итог прошлой ночи; cmark — пометка чата в меню
+  cut:false, ln:'completed', cmark:'important' };
 for (const c of CHATS) if (c.mark) S.marks[c.id] = c.mark;
 (function readHash(){
-  for (const p of location.hash.slice(1).split('&')) {
+  const ps = location.hash.slice(1).split('&');
+  // В срезе ночной разбор по умолчанию выключен: включённый — только явным &on
+  if (ps.includes('cut')) { S.cut = true; S.night = ps.includes('on'); }
+  for (const p of ps) {
     const [k, v] = p.split('=');
+    if (k === 'cut' || k === 'on') continue;
+    if (k === 'ln') { S.ln = v; continue; }
     if (k === 'dark') S.dark = true; else if (k === 'm') S.m = true; else if (k === 'calm') S.nonew = true;
     else if (k === 'user') S.admin = false; else if (k === 'retract') S.retract = true; else if (k === 'cdlg') S.cdlg = true;
     else if (k === 'odlg') S.odlg = true; else if (k === 'consent') S.consent = true; else if (k === 'off') S.night = false;
@@ -837,6 +844,10 @@ function settingsNav() {
   const on = S.m ? '' : (S.screen === 'settings' ? 'night' : S.screen);
   const it = (k, icon, t, s, b) => `<button class="row ${on===k?'on':''}" data-go="${k}"><span class="ic">${I(ic[icon],14)}</span><span class="w"><span class="t"><span class="x">${t}</span>${b||''}</span><span class="s" style="display:block;white-space:normal">${s}</span></span>${S.m?I(ic.right,16):''}</button>`;
   const off = Object.keys(S.clsOff).length;
+  if (S.cut) return `<div class="scroll new"><div class="sech">Настройки вики</div>
+    ${it('night','clock','Ночной разбор', S.night ? '03:00–06:00 · до 700 000 токенов за ночь' : 'выключен — разбор только по кнопкам', S.night ? badge('success','включён') : badge('neutral','выключен'))}
+    ${it('triage','chat','Отбор чатов', '152 разбирается · 177 серая зона · 43 пропущено')}
+    </div><div class="foot">${I(ic.shield,14)}<span>Настройки — только вашей вики. Какой моделью разбирать, назначает администратор.</span></div>`;
   return `<div class="scroll new"><div class="sech">Настройки вики</div>
     ${it('night','clock','Ночной разбор', S.night ? '03:00–06:00 · 700k токенов · локальная модель' : 'выключен — разбор только по кнопкам', S.night ? badge('success','включён') : badge('neutral','выключен'))}
     ${it('apply','check','Применение', 'спорное — во «Входящие», остальное само', off ? badge('warning', off === 1 ? '1 класс выключен' : off + ' класса выключены') : '')}
@@ -1130,8 +1141,47 @@ function toast() {
 const setHead = (icon, t, s) => `<div class="kicker">${I(ic.gear,13)} Настройки вики</div><h2 class="pt" style="font-size:24px;display:flex;gap:8px;align-items:center">${t}</h2><p class="summary">${s}</p>`;
 const field = (label, ctl, hint) => `<div class="fld"><span class="flbl">${label}</span>${ctl}${hint ? `<span class="hint">${hint}</span>` : ''}</div>`;
 
+// Срез Ф2 02.11: без доли «% на чаты», без селектора движка, итог ночи в четырёх состояниях
+function nightCut() {
+  const eng = (place, val) => field(place, `<div class="ro" style="width:fit-content">${I(ic.lock,14)}<span><b>${val}</b></span></div>`);
+  const kv = (sel, an, ap, inb) => `<div class="kv"><div><b>${sel}</b><span>чатов отобрано</span></div><div><b>${an}</b><span>разобрано</span></div>
+      <div><b>${ap}</b><span>пакетов применено само</span></div><div><b>${inb}</b><span>ждут вас во «Входящих»</span></div></div>`;
+  const tok = (pct, txt) => `<div style="display:flex;gap:10px;align-items:center;margin-top:12px;font-size:12px;color:var(--c-text-secondary)"><span style="flex:1"><span class="bar"><i style="width:${pct}%"></i></span></span><span class="mono">${txt}</span></div>`;
+  const LN = {
+    none: `<div class="card" style="margin-top:0"><div class="ct">Ночного разбора ещё не было</div>
+      <div class="cs">${S.night ? 'Первый пройдёт сегодня с 03:00 до 06:00. Утром придёт уведомление: что применилось само и что ждёт вас.' : 'Включите разбор — первая ночь пройдёт в ближайшее окно, утром придёт уведомление с итогом.'}</div></div>`,
+    completed: `<div class="card" style="margin-top:0">${kv(7, 7, 11, 2)}${tok(73, '≈ 512 000 из 700 000')}
+      <div class="hint" style="margin-top:6px">Закончилась в 05:12 — разобрано всё отобранное. <button class="lnk" data-go="journal" style="padding:0">Открыть «Журнал»</button></div></div>`,
+    budget: `<div class="ntc warning" style="margin-bottom:10px">${I(ic.clock,16)}<div style="flex:1"><div class="nt">Не хватило бюджета на всё</div>
+      Разобрали 9 чатов из 14 отобранных. Остальные 5 разберём следующей ночью — сначала они. Если так каждую ночь, поднимите бюджет.</div></div>
+      <div class="card" style="margin-top:0">${kv(14, 9, 13, 3)}${tok(100, '≈ 700 000 из 700 000')}
+      <div class="hint" style="margin-top:6px">Остановилась в 04:38. <button class="lnk" data-go="journal" style="padding:0">Открыть «Журнал»</button></div></div>`,
+    open_limit: `<div class="ntc warning" style="margin-bottom:10px">${I(ic.inbox,16)}<div style="flex:1"><div class="nt">Остановились: во «Входящих» 20 пакетов ждут вашего решения</div>
+      Больше 20 спорных пакетов сразу Хранитель не копит — иначе их не разобрать. Решите часть, и следующая ночь продолжит с того же места.
+      <div class="na">${btn('sec','sm','Открыть «Входящие»','','data-go="inbox"')}</div></div></div>
+      <div class="card" style="margin-top:0">${kv(12, 4, 5, 6)}${tok(31, '≈ 218 000 из 700 000')}
+      <div class="hint" style="margin-top:6px">Остановилась в 03:41. <button class="lnk" data-go="journal" style="padding:0">Открыть «Журнал»</button></div></div>`,
+  };
+  return `<div class="doc"><div class="docin new" style="max-width:820px">
+    ${setHead('clock','Ночной разбор','Раз в ночь Хранитель разбирает новое в ваших разговорах. Неспорное применяется само, спорное ждёт вас во «Входящих». Утром — уведомление с итогом.')}
+    <div class="card"><div class="ch"><div class="w"><div class="ct">Разбирать по ночам</div><div class="cs">По умолчанию выключено — включите, когда будете готовы. Без него вики пополняется только кнопкой «Разобрать этот чат».</div></div>${tgl(S.night,'night','Разбирать по ночам')}</div></div>
+    ${S.night ? '' : `<div class="ntc info" style="margin-top:12px">${I(ic.clock,16)}<div>Ночью ничего не разбирается. Отбор чатов всё равно считается — его видно в «Отборе чатов».</div></div>`}
+    <div class="grid2" style="${S.night ? '' : 'opacity:.6'}">
+      ${field('Окно', `<div class="frow">${sel('03:00','sm')}<span class="muted">—</span>${sel('06:00','sm')}</div>`, 'Время сервера (MSK). У вас то же: 03:00–06:00. Не успели к концу окна — остальное следующей ночью.')}
+      ${field('Бюджет за ночь', `<div class="frow"><span class="inp">700 000<span class="u">токенов</span></span></div>`, 'Примерно 20–30 длинных разговоров. Кончился — остальное следующей ночью.')}
+      ${field('Пакетов за ночь', `<div class="frow"><span class="inp">20<span class="u">на всю вики</span></span><span class="inp">6<span class="u">на раздел</span></span></div>`, 'Чтобы один шумный проект не занял всю ночь. Чатов — до 10 на раздел, хроники в лимит не входят.')}
+    </div>
+    <h3 class="sh">Чем разбирать</h3>
+    <div class="grid2" style="margin-top:4px">${eng('Разбор','Локальная модель · Qwen3.8-27B')}${eng('Отбор спорных чатов','Локальная модель · малая')}</div>
+    <div class="hint" style="margin-top:6px">${I(ic.lock,12)} Назначает администратор в «Поставщиках моделей». Локальная модель работает на нашей видеокарте — текст не покидает сервер.</div>
+    <h3 class="sh">Прошлая ночь${S.ln === 'none' ? '' : ' · 26 → 27.10'}</h3>
+    ${LN[S.ln] || LN.completed}
+  </div></div>`;
+}
+
 function night() {
-  const eng = (place, val, prof) => S.admin
+  if (S.cut) return nightCut();
+  const eng =(place, val, prof) => S.admin
     ? field(place, `<div class="frow">${sel(val, '', 'style="min-width:240px"')}</div>`, `Место <span class="mono">${prof}</span> — общее на сервер: смена задевает ночной разбор всех пользователей. Пишет в тот же маршрут, что «Поставщики моделей».`)
     : field(place, `<div class="ro" style="width:fit-content">${I(ic.lock,14)}<span><b>${val}</b> · назначает администратор</span></div>`);
   return `<div class="doc"><div class="docin new" style="max-width:820px">
@@ -1258,7 +1308,7 @@ function triage() {
   return `<div class="doc"><div class="docin new" style="max-width:860px">${head}
     ${run ? `<div class="ntc info" style="margin-bottom:10px">${I(ic.refresh,16)}<div style="flex:1"><div class="nt"><span class="spin"></span> Первичный отбор идёт — 312 из 638 чатов</div>Балл считает код, бесплатно. Серую зону модель разберёт ночью. Список заполняется по мере подсчёта.
       <div style="margin-top:8px"><span class="bar" style="display:block"><i style="width:49%"></i></span></div></div></div>` : ''}
-    ${ctl}${run ? '' : thr}
+    ${ctl}${run || S.cut ? '' : thr}
     <div class="listbox"><div class="lhd"><b style="color:var(--c-text-heading);font-size:13px;flex:1">${run ? 'Подсчитано 312' : 'Чаты раздела'}</b><span class="hint">балл · состояние · причина · пометка</span></div>${list}</div>
     <div class="hint" style="margin-top:8px">«Важный» минует балл и модель, но не исключение чатов исполнителя задач. Закреплённый чат и чат с «Итогом» считаются важными.</div>
   </div></div>`;
@@ -1309,12 +1359,12 @@ function chatScreen() {
       <button class="mi" data-go="chron">${I(ic.scroll,15)}<span>Открыть хронику<span class="h">Проекты / AI Home / Хроники</span></span></button>
       <button class="mi">${I(ic.book,15)}<span>Разобрать этот чат<span class="h">сейчас, не дожидаясь ночи</span></span></button>
       <div class="msep"></div>
-      <button class="mi">${I(ic.star,15)}<span style="flex:1">Важный<span class="h">разбирать всегда</span></span>${I(ic.check,14)}</button>
-      <button class="mi">${I(ic.ban,15)}<span>Не разбирать<span class="h">никогда, и бэклогом тоже</span></span></button>
+      <button class="mi" role="menuitemcheckbox" aria-checked="${S.cmark==='important'}" data-act="cmark" data-v="important">${I(ic.star,15)}<span style="flex:1">Важный<span class="h">${S.cut ? 'ночью — в первую очередь, минуя отбор' : 'разбирать всегда'}</span></span>${S.cmark==='important' ? I(ic.check,14) : ''}</button>
+      <button class="mi" role="menuitemcheckbox" aria-checked="${S.cmark==='skip'}" data-act="cmark" data-v="skip">${I(ic.ban,15)}<span style="flex:1">Не разбирать<span class="h">${S.cut ? 'ни ночью, ни кнопкой' : 'никогда, и бэклогом тоже'}</span></span>${S.cmark==='skip' ? I(ic.check,14) : ''}</button>
       <div class="msep"></div>
       <button class="mi" data-act="retract" style="color:var(--c-danger-text)">${I(ic.undo,15)}<span>Откатить всё из этого чата<span class="h">хроника и знания из него</span></span></button></div>`;
   const card = (t, tm, b, on) => `<div class="row ${on?'on':''}" style="align-items:center"><span class="ic">${I(ic.chat,14)}</span><span class="w"><span class="t"><span class="x">${t}</span></span><span class="m chg">${b}</span></span><span class="tm">${tm}</span>${on ? `<button class="ib">${I(ic.more,15)}</button>` : ''}</div>`;
-  const cols = S.m ? '1fr' : '1fr 1fr 1fr';
+  const cols = S.m ? '1fr' : S.cut ? '1fr 1fr' : '1fr 1fr 1fr';
   const itog = S.itog === 'run'
     ? `<div class="toast new">${I(ic.refresh,15)}<span class="spin"></span><span style="flex:1">Разбираю чат в хронику… обычно 1–2 минуты. Можно закрыть — придёт уведомление.</span></div>`
     : S.itog === 'fallback'
@@ -1328,7 +1378,7 @@ function chatScreen() {
         <div class="phd"><b style="flex:1">Чаты · AI Home</b></div>
         <div style="padding:4px 6px;position:relative">
           ${card('План шагов LLM-wiki','12:40', badge('accent', I(ic.star,10)+' важный') + '<span>хроника</span>')}
-          ${card('Ревью звука','вчера', badge('success','разбирается') + '<span>до m41</span>', true)}
+          ${card('Ревью звука','вчера', S.cmark==='important' ? badge('accent', I(ic.star,10)+' важный') : S.cmark==='skip' ? badge('neutral', I(ic.ban,10)+' не разбирать') : badge('success','разбирается') + '<span>до m41</span>', true)}
           ${card('Проверка доступа к Miro','23.10', badge('neutral','пропущено'))}
           ${card('Вечерний разговор про модели','19.10', badge('neutral', I(ic.ban,10)+' не разбирать'))}
           ${S.chatMenu ? menu.replace('top:40px','top:98px') : ''}
@@ -1343,12 +1393,12 @@ function chatScreen() {
           <button class="mi dis">${I(ic.book,15)}<span>Разобрать этот чат<span class="h">Стоит «Не разбирать» — снимите пометку</span></span></button>
           <button class="mi dis">${I(ic.book,15)}<span>Разобрать этот чат<span class="h">Локальный проект — вики для серверных проектов</span></span></button>
           <button class="mi dis">${I(ic.scroll,15)}<span>Открыть хронику<span class="h">Хроники ещё нет — чат не разбирался</span></span></button></div></div></div>
-      <div><div class="cap">Кнопка «Итог» → хроника</div><div class="panel" style="min-height:330px">
+      ${S.cut ? '' : `<div><div class="cap">Кнопка «Итог» → хроника</div><div class="panel" style="min-height:330px">
         <div class="phd"><b style="flex:1">Ревью звука</b>${btn('gh','xs',I(ic.scroll,13)+'Итог')}</div>
         <div style="padding:10px 12px;font-size:12.5px;color:var(--c-text-secondary)">…Тогда Веру ставлю на QA редактора видео.</div>
         <div style="padding:0 12px 12px">${itog}</div>
         <div class="pills" style="margin:0 12px 12px">${[['done','готово'],['run','идёт'],['fallback','вики нет']].map(([k,t]) => `<button class="${S.itog===k?'on':''}" data-act="itog" data-v="${k}">${t}</button>`).join('')}</div></div>
-        <div class="hint" style="margin-top:6px">«Итог» больше не пишет заметку в «Сессии»: он разбирает чат сейчас и отвечает ссылкой на хронику. Без вики — как раньше.</div></div>
+        <div class="hint" style="margin-top:6px">«Итог» больше не пишет заметку в «Сессии»: он разбирает чат сейчас и отвечает ссылкой на хронику. Без вики — как раньше.</div></div>`}
     </div></div></div>`;
 }
 
@@ -1469,17 +1519,19 @@ function mk() {
   if (['inbox','pkg'].includes(S.screen)) sub.push(['Пакет', PKORDER.map(k => [k, {sup:'замещение',drift:'дрейф',pub:'личное→общее',url:'ссылка',dup:'дубль',cls:'класс выключен',rep:'ремонт'}[k]]), 'pk', S.pk]);
   if (S.screen === 'triage') sub.push(['Отбор', [['list','список'],['running','первичный отбор идёт'],['empty','пусто']], 'tri', S.tri]);
   if (S.screen === 'backlog') sub.push(['Бэклог', [['idle','не запущен'],['run','идёт'],['pause','на паузе'],['done','завершён']], 'bl', S.bl]);
-  if (['night','settings'].includes(S.screen)) sub.push(['Роль', [['1','администратор'],['0','не админ']], 'admin', S.admin ? '1' : '0']);
+  if (['night','settings'].includes(S.screen) && S.cut) sub.push(['Прошлая ночь', [['none','ещё не было'],['completed','completed'],['budget','budget'],['open_limit','open_limit']], 'ln', S.ln]);
+  if (['night','settings'].includes(S.screen) && !S.cut) sub.push(['Роль', [['1','администратор'],['0','не админ']], 'admin', S.admin ? '1' : '0']);
   if (['jentry','journal','chron','page'].includes(S.screen)) sub.push(['Откат', [['0','закрыт'],['1','подтверждение']], 'retractmk', S.retract ? '1' : '0']);
   if (S.screen === 'personal') sub.push(['Облако', [['0','запрещено'],['1','разрешено'],['dlg','диалог']], 'consentmk', S.cdlg ? 'dlg' : S.consent ? '1' : '0']);
   if (S.screen === 'orphan') sub.push(['Диалог', [['0','закрыт'],['1','удалить раздел']], 'odlgmk', S.odlg ? '1' : '0']);
   document.getElementById('mk').innerHTML = `<h1>LLM-wiki · v2</h1>
+    <div class="grp"><span class="lbl">Объём</span><div class="pills"><button class="${!S.cut?'on':''}" data-act="cut" data-v="0">v2 целиком</button><button class="${S.cut?'on':''}" data-act="cut" data-v="1">Срез Ф2 02.11</button></div></div>
     ${SCREENS.map(([g, list]) => `<div class="grp"><span class="lbl">${g}</span><div class="pills">${list.map(([k,t]) => `<button class="${S.screen===k?'on':''}" data-go="${k}">${t}</button>`).join('')}</div></div>`).join('')}
     ${sub.map(([l, opts, act, cur]) => `<div class="grp"><span class="lbl">${l}</span><div class="pills">${opts.map(([k,t]) => `<button class="${cur===k?'on':''}" data-act="${act}" data-v="${k}">${t}</button>`).join('')}</div></div>`).join('')}
     <div class="grp"><div class="pills"><button class="${!S.dark?'on':''}" data-act="theme" data-v="0">Светлая</button><button class="${S.dark?'on':''}" data-act="theme" data-v="1">Тёмная</button></div>
       <div class="pills"><button class="${!S.m?'on':''}" data-act="w" data-v="0">1240</button><button class="${S.m?'on':''}" data-act="w" data-v="1">360</button></div>
       <label><input type="checkbox" data-act="calm" ${S.nonew?'checked':''}> без пометок</label></div>`;
-  document.getElementById('note').innerHTML = `Пунктир <b>C.accentMuted</b> — нового в продукте; пунктир <b>C.planBorder</b> — изменено против v1; серый пунктир — следующая фича. На 360 «Здоровье» и «Настройки» — иконки в шапке. Диплинки: <span class="mono">#pkg&amp;pk=pub&amp;dark&amp;m</span>, <span class="mono">#jentry&amp;retract</span>, <span class="mono">#backlog&amp;bl=run</span>.`;
+  document.getElementById('note').innerHTML = `Пунктир <b>C.accentMuted</b> — нового в продукте; пунктир <b>C.planBorder</b> — изменено против v1; серый пунктир — следующая фича. На 360 «Здоровье» и «Настройки» — иконки в шапке. Диплинки: <span class="mono">#pkg&amp;pk=pub&amp;dark&amp;m</span>, <span class="mono">#jentry&amp;retract</span>, <span class="mono">#backlog&amp;bl=run</span>; срез Ф2: <span class="mono">#night&amp;cut&amp;on&amp;ln=open_limit</span>, <span class="mono">#triage&amp;cut</span>, <span class="mono">#chat&amp;cut</span>.`;
 }
 function render() {
   document.documentElement.dataset.theme = S.dark ? 'dark' : 'light';
@@ -1493,7 +1545,9 @@ function render() {
   if (S.screen === 'triage' && S.tri !== 'list') parts.push('tri=' + S.tri);
   if (S.screen === 'backlog' && S.bl !== 'idle') parts.push('bl=' + S.bl);
   if (S.retract) parts.push('retract'); if (S.cdlg) parts.push('cdlg'); if (S.odlg) parts.push('odlg');
-  if (S.consent) parts.push('consent'); if (!S.admin) parts.push('user'); if (!S.night) parts.push('off');
+  if (S.consent) parts.push('consent'); if (!S.admin) parts.push('user');
+  if (S.cut) { parts.push('cut'); if (S.night) parts.push('on'); if (S.ln !== 'completed') parts.push('ln=' + S.ln); }
+  else if (!S.night) parts.push('off');
   if (S.dark) parts.push('dark'); if (S.m) parts.push('m'); if (S.nonew) parts.push('calm');
   history.replaceState(null, '', '#' + parts.join('&'));
 }
@@ -1550,6 +1604,9 @@ document.addEventListener('click', e => {
   else if (k === 'blpause') S.bl = 'pause';
   else if (k === 'bldone') S.bl = 'done';
   else if (k === 'itog') S.itog = v;
+  else if (k === 'cut') { S.cut = v === '1'; S.night = !S.cut; if (S.cut && !['night','triage','chat','settings','catalog','inbox','journal'].includes(S.screen)) S.screen = 'night'; }
+  else if (k === 'ln') S.ln = v;
+  else if (k === 'cmark') S.cmark = S.cmark === v ? null : v;
   else return;
   render();
 });

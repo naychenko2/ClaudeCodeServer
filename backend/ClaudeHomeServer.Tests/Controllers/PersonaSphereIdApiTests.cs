@@ -10,20 +10,25 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // Стык бэкенд↔фронт: REST создания/правки персоны обязан принимать sphereId у scope=Sphere.
 // Раньше DTO его не содержали — персона создавалась сферной, но без сферы и не попадала в команду.
-public class PersonaSphereIdApiTests : IDisposable
+[Trait("Category", "Host")]
+public class PersonaSphereIdApiTests : IClassFixture<PersonaSphereIdApiTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    // Хост на КЛАСС, а не на тест. Сферы и персоны каждый тест заводит свои (новые id), команду
+    // читают только своей свежей сферы. Флаг spheres каждый тест выставляет сам (EnableFlagAsync),
+    // ни один не зависит от начального состояния — общего сброса не нужно.
+    public sealed class Hosts : TestWebApplicationFactory;
+
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
     private readonly HttpClient _stranger;
 
-    public PersonaSphereIdApiTests()
+    public PersonaSphereIdApiTests(Hosts hosts)
     {
+        _factory = hosts;
         _client = _factory.CreateAuthenticatedClient();
         _stranger = _factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
     }
-
-    public void Dispose() => _factory.Dispose();
 
     private static async Task<string> IdOf(HttpResponseMessage resp)
     {

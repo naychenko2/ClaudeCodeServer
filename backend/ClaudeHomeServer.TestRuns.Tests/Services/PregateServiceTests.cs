@@ -102,6 +102,26 @@ public class PregateServiceTests : IDisposable
 
     private FakeLauncher Launcher(Func<ProcessSpec, (string, int)> behave) => new(_processes, _root, behave);
 
+    // Env проверки доезжает до процесса; служебные ключи разбора вывода конфиг не перебивает
+    [Fact]
+    public async Task Env_ИзКонфигаВПроцесс_СлужебныеКлючиПоверх()
+    {
+        var launcher = Launcher(_ => ("ok", 0));
+        var check = Check("быстрые тесты") with
+        {
+            Env = new() { ["CCS_TEST_SHARDS_ADAPTIVE"] = "backend/ClaudeHomeServer.Tests=4", ["DOTNET_CLI_UI_LANGUAGE"] = "ru" },
+        };
+
+        var verdict = await Service(launcher, check).RunAsync(Request(), CancellationToken.None);
+
+        verdict.IsGreen.Should().BeTrue();
+        var env = launcher.Specs.Single().Env!;
+        env["CCS_TEST_SHARDS_ADAPTIVE"].Should().Be("backend/ClaudeHomeServer.Tests=4");
+        env["DOTNET_CLI_UI_LANGUAGE"].Should().Be("en", "разбор «error CS…» держится на английском выводе");
+        env["DOTNET_NOLOGO"].Should().Be("1");
+        PregateService.ProcessEnv(Check("build")).Keys.Should().BeEquivalentTo(["DOTNET_CLI_UI_LANGUAGE", "DOTNET_NOLOGO"]);
+    }
+
     [Fact]
     public async Task AllChecksExitZero_VerdictGreen()
     {
@@ -158,6 +178,64 @@ public class PregateServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessCheckScriptMissingInTree_NotRunWithoutLaunching_AndVerdictIsUnmeasured()
+    {
+        var launcher = Launcher(_ => ("can't open file", 2));
+        var service = Service(launcher, Check("быстрые тесты", "python3", ["-I", "scripts/test-shards.py", "--run-fast"]));
+
+        var verdict = await service.RunAsync(Request(), CancellationToken.None);
+
+        var check = verdict.Checks.Should().ContainSingle().Subject;
+        check.Status.Should().Be(PregateStatus.NotRun);
+        check.Detail.Should().Be("нет файла scripts/test-shards.py в этом дереве");
+        launcher.Specs.Should().BeEmpty("процесс не стартует, красного нет");
+        verdict.IsGreen.Should().BeTrue();
+        verdict.Unmeasured.Should().NotBeNull("вердикт не записывается ни зелёным, ни красным — серия не растёт");
+    }
+
+    [Fact]
+    public async Task ProcessCheckScriptPresentInTree_Runs()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "scripts"));
+        File.WriteAllText(Path.Combine(_root, "scripts", "test-shards.py"), "");
+        var launcher = Launcher(_ => ("", 0));
+        var service = Service(launcher, Check("быстрые тесты", "python3", ["-I", "scripts/test-shards.py"]));
+
+        var verdict = await service.RunAsync(Request(), CancellationToken.None);
+
+        verdict.Checks.Should().ContainSingle().Which.Status.Should().Be(PregateStatus.Green);
+        launcher.Specs.Should().ContainSingle();
+    }
+
+    [Theory]
+    [InlineData("https://example.com/lint")]
+    [InlineData("/opt/ci/lint.sh")]
+    [InlineData("echo a/b c")]
+    public async Task ProcessCheckArgIsNotRelativePath_Runs(string arg)
+    {
+        var launcher = Launcher(_ => ("", 0));
+        var service = Service(launcher, Check("проверка", "python3", [arg]));
+
+        var verdict = await service.RunAsync(Request(), CancellationToken.None);
+
+        verdict.Checks.Should().ContainSingle().Which.Status.Should().NotBe(PregateStatus.NotRun);
+        launcher.Specs.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ProcessCheckArgIsExistingDirectory_Runs()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "scripts", "sub"));
+        var launcher = Launcher(_ => ("", 0));
+        var service = Service(launcher, Check("проверка", "python3", ["scripts/sub"]));
+
+        var verdict = await service.RunAsync(Request(), CancellationToken.None);
+
+        verdict.Checks.Should().ContainSingle().Which.Status.Should().Be(PregateStatus.Green);
+        launcher.Specs.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task NoChecksConfigured_GreenWithoutLaunching()
     {
         var launcher = Launcher(_ => ("", 1));
@@ -182,6 +260,7 @@ public class PregateServiceTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task СуммаПроверокДлиннееПотолка_ОдинПотолокНаПрогон_RefusedСВыполненными()
     {
         // Потолок 4 с, каждая проверка 1,5 с: первая укладывается с запасом 2,5 с даже под нагрузкой, а четыре вместе

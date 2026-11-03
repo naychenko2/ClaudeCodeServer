@@ -40,7 +40,7 @@ public sealed record ExecutorLauncher(string? SessionId, string? PersonaId);
 // Claude-исполнитель задач: запускает отдельную чат-сессию по задаче (кнопкой или
 // автозапуском по сроку), следит за её ходом через SessionManager.OnSessionMessage
 // и уведомляет пользователя (тост + push) о завершении и запросах разрешений.
-public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHoldReleaser
+public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHoldReleaser, IKeyChatCardSender
 {
     private readonly TaskManager _tasks;
     private readonly SessionManager _sessions;
@@ -1569,7 +1569,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         // Общий путь карточки (п.4, дефект bec00347): любое снятие будит оркестратора в ключевом
         // чате. Берётся первое живое звено цепочки, как в KeySession (чужой/удалённый чат
         // пропускается).
-        var key = keyChain.FirstOrDefault(id => _sessions.GetById(id) is not null);
+        var key = FeatureKeyChain.FirstLive(keyChain, _sessions, ownerId);
         if (key is null) return resumed;
         // W4-HOLD-N (хвост R-N п.2): карточка «пауза снята» не уходит, если за время
         // продолжений пауза встала заново: она противоречила бы состоянию фичи.
@@ -1696,16 +1696,22 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
     // W4-HOLD-N (хвост R-N): причина карточки — HoldCard, не HoldResume: карточка — сама
     // нотификация снятия паузы, а не продолжение прерванного хода (у черновика прерванных
     // ходов не бывает вовсе). HoldResume остаётся честным для продолжений в чаты шагов.
-    private async Task DeliverKeyChatCardAsync(string sessionId, string text)
+    private async Task DeliverKeyChatCardAsync(string sessionId, string text) =>
+        await ((IKeyChatCardSender)this).TrySendAsync(sessionId, text);
+
+    // Шов IKeyChatCardSender (Core): та же доставка для серверного пинка простоя (вертикаль Tasks).
+    async Task<bool> IKeyChatCardSender.TrySendAsync(string sessionId, string text)
     {
         try
         {
             await _sessions.SendMessageAsync(sessionId, text, [], auto: true,
                 cause: SessionManager.DeliveryCause.HoldCard);
+            return true;
         }
         catch (Exception ex)
         {
             _log.LogWarning("Карточка в ключевой чат {Session} не доставлена: {Message}", sessionId, ex.Message);
+            return false;
         }
     }
 
@@ -2320,6 +2326,25 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
 
     private const int MaxReportChainDepth = 5;
 
+    // Запустивший — координатор, который сам ждёт доклад (keepAwaitingStart на глубине 0): его
+    // собственная задача ещё открыта. null — такого нет.
+    private Session? AwaitingCoordinator(string? launchedBySessionId, string? ownerId) =>
+        OwnedSession(launchedBySessionId, ownerId) is { } s
+        && _tasks.GetBySession(s.Id) is { } t && t.Status != TaskItemStatus.Done ? s : null;
+
+    // Ключевой чат фичи для задачи фичи (не эпика): первое живое звено FeatureKeyChain с переходом
+    // по продолжениям (Core, единая точка правды). null — задача вне фичи, она эпик, ключевого чата
+    // нет или это сам чат-исполнитель задачи (докладывать себе незачем) — остаётся прежняя цепочка.
+    private Session? ResolveFeatureKeyChat(TaskItem task)
+    {
+        if (task.FeatureId is null || task.Role == TaskRoles.Feature || task.OwnerId is null) return null;
+        var epic = _tasks.GetById(task.FeatureId);
+        if (epic is null || epic.OwnerId != task.OwnerId) return null;
+        var featureTasks = _tasks.GetByOwner(task.OwnerId).Where(t => t.FeatureId == epic.Id).ToList();
+        var key = FeatureKeyChain.FirstLive(FeatureKeyChain.Of(epic, featureTasks), _sessions, task.OwnerId);
+        return key is null || key == task.LinkedSessionId ? null : _sessions.GetById(key);
+    }
+
     // Модель Z: активный доклад о завершении делегированной задачи — в отличие от L0-тоста
     // (NotifyDelegatorAsync) кладёт репорт прямо в чат постановщика. ШАГ 1 — гостевая реплика
     // исполнителя B с готовым resultMarkdown (0 токенов, без агентского хода); ШАГ 2 — сразу
@@ -2347,7 +2372,12 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
             _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — чат-исполнитель явно вынесен в корень (ParentDetached)", task.Id);
             return;
         }
-        var addressee = ResolveAddressee(task.ExecutorLaunchedBySessionId, task.OwnerId, keepAwaitingStart: true)
+        // Порядок выбора адресата: (1) вынос в корень — выше; (2) запустивший — координатор, который
+        // сам ждёт (его задача открыта): подзадачи внутри шага и team-implement; (3) задача фичи (не
+        // эпик) — ключевой чат фичи; (4) прежняя цепочка (запустивший → ReportToSessionId → создатель).
+        var addressee = AwaitingCoordinator(task.ExecutorLaunchedBySessionId, task.OwnerId)
+            ?? ResolveFeatureKeyChat(task)
+            ?? ResolveAddressee(task.ExecutorLaunchedBySessionId, task.OwnerId, keepAwaitingStart: true)
             ?? ResolveAddressee(task.ReportToSessionId, task.OwnerId);
         // Персона авто-хода — персона сессии-адресата, а не создателя карточки
         var delegatorPersonaId = addressee is not null ? addressee.PersonaId : task.CreatedByPersonaId;

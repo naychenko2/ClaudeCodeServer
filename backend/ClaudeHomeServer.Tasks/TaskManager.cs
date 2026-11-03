@@ -332,6 +332,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     public IReadOnlyCollection<TaskItem> GetBySourceSession(string sourceSessionId) =>
         _tasks.Values.Where(t => t.SourceSessionId == sourceSessionId).ToList();
 
+    // Все задачи всех владельцев — для фоновых сверок (пинок простоя локальных исполнителей).
+    public IReadOnlyList<TaskItem> GetAll() => _tasks.Values.ToList();
+
     public IReadOnlyCollection<TaskItem> GetByOwner(string userId) =>
         _tasks.Values.Where(t => t.OwnerId == userId)
             .OrderBy(t => t.DueDate ?? "9999").ThenBy(t => t.CreatedAt).ToList();
@@ -479,7 +482,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             task.Verification = null;
             task.Outcome = null;
         }
-        _tasks[task.Id] = task;
+        InsertWithPlanReplacement(task, ownerId);
         // created: эпик фичи — первая запись её журнала (журнал точный, только если
         // начинается с created; дочерние задачи фичи created не пишут).
         if (task.Role == TaskRoles.Feature)
@@ -494,6 +497,76 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         ScheduleSave();
         LogTask(task, ProjectEventTypes.TaskCreated, $"Создана задача «{task.Title}»");
         return task;
+    }
+
+    // Локи по FeatureId (не по экземпляру менеджера и не глобальный): сериализуют только создание
+    // планов ОДНОЙ фичи. Записи в словаре на фичу не чистятся — их число ограничено числом фич.
+    private readonly ConcurrentDictionary<string, object> _planLocks = new(StringComparer.Ordinal);
+
+    // Тестовый шов: вызывается внутри лока между поиском пересекающихся планов и вставкой
+    // нового — детерминированная точка интерливинга для теста гонки.
+    internal Action? PlanReplaceInterleaveHook { get; set; }
+
+    // Вставка задачи в стор. Для плана с шагами (B3, «последний план вместо объединения»):
+    // планы того же владельца и FeatureId с пересекающимися ключами шагов снимаются
+    // (withdrawn, «заменён планом {id}») — секция «найти → снять → вставить» под локом фичи, иначе
+    // два одновременных Create оставили бы оба плана живыми. Победитель — поздний по
+    // (CreatedAt, Id), как в проекции: если под локом нашёлся более поздний пересекающийся план
+    // (гонка: объект создан раньше, а в стор попал позже), снимается сам новый. Снятие — гигиена
+    // данных: проекция (FeatureStepAccounting.ActivePlans) от исхода гонки не зависит. План с уже
+    // существующим вердиктом не трогаем. Вердикт бывает только у закрытой задачи (инвариант
+    // Create/Update), поэтому снимаемый незакрытый план заодно закрывается.
+    private void InsertWithPlanReplacement(TaskItem task, string ownerId)
+    {
+        var keys = task.Role == TaskRoles.Plan && task.FeatureId is not null
+            ? FeatureStepAccounting.PlanStepKeys(task)
+            : null;
+        if (keys is not { Count: > 0 })
+        {
+            _tasks[task.Id] = task;
+            return;
+        }
+
+        bool changedOthers = false;
+        lock (_planLocks.GetOrAdd(task.FeatureId!, _ => new object()))
+        {
+            var overlapping = _tasks.Values
+                .Where(t => t.Role == TaskRoles.Plan && t.OwnerId == ownerId
+                    && string.Equals(t.FeatureId, task.FeatureId, StringComparison.Ordinal)
+                    && t.Verification is null
+                    && FeatureStepAccounting.PlanStepKeys(t).Overlaps(keys))
+                .ToList();
+            PlanReplaceInterleaveHook?.Invoke();
+            var newer = overlapping.FirstOrDefault(t => IsLaterPlan(t, task));
+            if (newer is not null)
+                WithdrawPlan(task, newer.Id);
+            foreach (var old in overlapping.Where(t => !IsLaterPlan(t, task)))
+            {
+                WithdrawPlan(old, task.Id);
+                changedOthers = true;
+            }
+            _tasks[task.Id] = task;
+        }
+        if (changedOthers) ScheduleSave();
+    }
+
+    private static bool IsLaterPlan(TaskItem a, TaskItem b) =>
+        a.CreatedAt != b.CreatedAt ? a.CreatedAt > b.CreatedAt : string.CompareOrdinal(a.Id, b.Id) > 0;
+
+    private static void WithdrawPlan(TaskItem plan, string replacedBy)
+    {
+        var now = DateTime.UtcNow;
+        if (plan.Status != TaskItemStatus.Done)
+        {
+            plan.Status = TaskItemStatus.Done;
+            plan.CompletedAt = now;
+        }
+        plan.Verification = new TaskVerification
+        {
+            VerifiedAt = now,
+            Verdict = TaskVerdicts.Withdrawn,
+            Notes = $"заменён планом {replacedBy}",
+        };
     }
 
     // Персона-исполнитель имеет смысл только у Claude-исполнения: если задаче назначена
@@ -533,6 +606,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // и «Б1»/«б1» — один шаг; Ordinal (не culture) — детерминизм и скорость.
     // null в StepRef/Title оставляем null (не «»): валидатор их ловит (пустой stepRef, null
     // title → 400, а не NRE). null — «не задано» (не менять); пустой список — «снять список».
+    private static readonly System.Text.RegularExpressions.Regex ReviewLikeStepRef =
+        new("^(R-|QA|FINAL|REV)", System.Text.RegularExpressions.RegexOptions.IgnoreCase
+            | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
     private static List<PlannedStep>? NormalizePlanSteps(List<PlannedStep>? steps)
     {
         if (steps is null) return null;
@@ -547,6 +624,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 StepRef = s.StepRef?.Trim()!,
                 Title = s.Title?.Trim()!,
                 Lane = s.Lane,
+                Kind = string.IsNullOrWhiteSpace(s.Kind) ? null : s.Kind.Trim(),
             });
         }
         return copy;
@@ -586,7 +664,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         string? featureId, string? role, string? verdict,
         List<string>? reviewOf, string? personaId, string ownerId,
         List<PlannedStep>? planSteps = null, bool enforceReworkReviewOf = false,
-        string? roleBefore = null, string? featureIdBefore = null)
+        string? roleBefore = null, string? featureIdBefore = null, bool checkReviewPrefix = true,
+        HashSet<string>? legacyStepRefs = null)
     {
         // role — только из списка TaskRoles
         if (role is not null && !TaskRoles.All.Contains(role))
@@ -696,6 +775,17 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                         $"Название шага плана «{step.StepRef}» длиннее {PlannedStep.MaxTitleLength} символов.");
                 if (!seen.Add(step.StepRef.Trim()))
                     throw new InvalidOperationException($"Дублируется код шага плана «{step.StepRef}».");
+                if (step.Kind is not null && !PlannedStep.Kinds.Contains(step.Kind, StringComparer.Ordinal))
+                    throw new InvalidOperationException(
+                        $"Недопустимый kind «{step.Kind}» у шага плана «{step.StepRef}»: step|review|qa|final.");
+                // Ревью/проверка/финал не шаг плана: иначе раздувают знаменатель процента.
+                // Префикс проверяем только у вновь присланных шагов (checkReviewPrefix): сохранённый
+                // легаси-план без kind не должен становиться нередактируемым и незакрываемым.
+                // Шаг, чей stepRef уже был в прежнем плане без kind, при перезаписи остаётся легаси.
+                if (checkReviewPrefix && step.IsStep && ReviewLikeStepRef.IsMatch(step.StepRef)
+                    && legacyStepRefs?.Contains(step.StepRef.Trim()) != true)
+                    throw new InvalidOperationException(
+                        $"«{step.StepRef}»: ревью не шаг плана: укажи kind (review|qa|final) или переименуй.");
             }
         }
 
@@ -947,7 +1037,11 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var enforceReworkReviewOf = req.ReviewOf is not null
             || (effRole == TaskRoles.Rework && task.Role != TaskRoles.Rework);
         ValidateFeatureFields(effFeatureId, effRole, effVerdict, effReviewOf, effPersonaId, task.OwnerId ?? "",
-            planSteps: effPlanSteps, enforceReworkReviewOf, roleBefore: task.Role, featureIdBefore: task.FeatureId);
+            planSteps: effPlanSteps, enforceReworkReviewOf, roleBefore: task.Role, featureIdBefore: task.FeatureId,
+            checkReviewPrefix: req.PlanSteps is not null,
+            legacyStepRefs: req.PlanSteps is null || task.PlanSteps is null ? null
+                : task.PlanSteps.Where(s => s.IsStep && !string.IsNullOrWhiteSpace(s.StepRef))
+                    .Select(s => s.StepRef.Trim()).ToHashSet(FeatureStepAccounting.StepKeyComparer));
         EnsureReturnReason(req.Verification);
 
         // Человек-исполнитель (S2b-2a): задача с персоной-исполнителем человеку не отдаётся.
@@ -1588,11 +1682,17 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         finally { _holdLock.Exit(); }
     }
 
+    private static readonly HashSet<string> StartedKinds =
+        ["running", "waiting_you", "error", "paused"];
+
     // Голос фичи (волна 6, B3): только эпик (role=feature), иначе null. Пустой текст (после Trim)
     // снимает голос; длиннее FeatureNote.MaxTextLength обрезается. At штампуем здесь, этап и
     // состояние на момент записи передаёт вызывающий из проекции (клиентских значений нет).
+    // estimate (макет 2) пишется только вместе с голосом: пустой текст снимает и голос, и оценку.
+    // InitialEtaMinutes — один раз, из первой оценки со сроком, записанной после старта фичи
+    // (категории draft/queued/idle — до старта).
     public TaskItem? SetFeatureNote(string id, string? text, string? bySessionId, bool byUser,
-        string stageAtWrite, string stateAtWrite)
+        string stageAtWrite, string stateAtWrite, FeatureEstimate? estimate = null)
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null || task.Role != TaskRoles.Feature) return null;
@@ -1601,7 +1701,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         var now = DateTime.UtcNow;
         task.Note = trimmed.Length == 0
             ? null
-            : new FeatureNote(trimmed, now, bySessionId, byUser, stageAtWrite, stateAtWrite);
+            : new FeatureNote(trimmed, now, bySessionId, byUser, stageAtWrite, stateAtWrite, estimate);
+        if (task.Note is not null && task.InitialEtaMinutes is null && estimate?.EtaMinutes is { } eta
+            && StartedKinds.Contains(stateAtWrite))
+            task.InitialEtaMinutes = eta;
         task.UpdatedAt = now;
         ScheduleSave();
         return task;

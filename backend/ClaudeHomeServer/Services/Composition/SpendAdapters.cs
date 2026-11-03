@@ -30,6 +30,8 @@ public sealed class SessionDirectoryAdapter(SessionManager sessions) : ISessionD
 
     public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
         sessions.GetHistoryAsync(sessionId);
+
+    public bool SetWikiMark(string sessionId, string? mark) => sessions.SetWikiMark(sessionId, mark);
 }
 
 public sealed class PersonaLookupAdapter(PersonaManager personas) : IPersonaLookup

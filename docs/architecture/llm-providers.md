@@ -508,7 +508,9 @@ SHA-256 и сравнивается с `ClaudeSession._lastTurnRecallHash`; со
 это цена за отсутствие ещё одного стора, а не дефект.
 
 **Сторож — `ClaudeSessionPromptSectionsOrderTests`**
-([тесты](../../backend/ClaudeHomeServer.Tests/Services/ClaudeSessionPromptSectionsOrderTests.cs)):
+([тесты](../../backend/ClaudeHomeServer.Llm.Tests/Services/ClaudeSessionPromptSectionsOrderTests.cs); исходный
+класс разрезан по темам на четыре с общей фикстурой — хвост хода и состояния редакторов в `…TailTests`,
+подсказки `run_tests`/`build` в `…HintsTests`, правило local-media в `…LocalMediaTests`):
 один тест держит порядок секций в системном блоке и пустой хвост после слоя персоны, второй —
 `[Theory]` по включённой и выключенной ручке: при включённой маркеры нестабильных секций
 обязаны отсутствовать в фактическом аргументе `--append-system-prompt`, при выключенной —
@@ -1072,12 +1074,12 @@ CLI сам переждал 429/529 внутри процесса (событи�
   начать некому.
 - **Именованные локальные движки** — [NamedLocalEngines.cs](../../backend/ClaudeHomeServer.Llm/NamedLocalEngines.cs):
   второй и далее llama-server рядом с основным `LocalLlm` (тот один на инстанс и делит GPU с
-  ходами). Зачем: дежурная модель на другой машине (Bonsai 2 9B на «Video»,
-  [deploy/video/bonsai](../../deploy/video/bonsai/README.md)) живёт под арбитром GPU и в любой
+  ходами). Зачем: дежурная модель на другой машине (Gemma 4 26B-A4B на «Video»,
+  [deploy/video/local-llm](../../deploy/video/local-llm/README.md)) живёт под арбитром GPU и в любой
   момент бывает выгружена ради медиазадачи. Конфиг — `LocalEngines:{name}`: транспорт как у
   `LocalLlm` (`BaseUrl`, `Model`, `TextModel`, `TimeoutMs`, `DisableThinking`), `ReadyUrl` (GET,
   200 = готов; проба кэшируется 1 с — отказ мгновенный, а не таймаутом), `FallbackRoute`
-  (только `direct:<model>` — страховка движка перед claude), `NumCtx` (окно слота движка —
+  (только `direct:<model>` — страховка движка перед claude), `Title` (короткое название модели на вкладке панели «Локальные модели»), `NumCtx` (окно слота движка —
   потолок обрезки промпта поверх профиля места), `Actions` (ключи мест каталога). Маршрут:
   `ActionRoute.Engine` при `Kind=Local`, источник `Config`, приоритет ниже выбора админа и
   `Ollama:Actions`, выше дефолта каталога. Цепочка места с движком: **движок (если готов) →

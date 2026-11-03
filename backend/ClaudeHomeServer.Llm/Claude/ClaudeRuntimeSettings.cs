@@ -1,5 +1,8 @@
 using System.Text.Json;
 using ClaudeHomeServer.Services.Execution;
+// Шов к Core-предикату путей вики (ADR-035 §2): алиасом, не using — тот же namespace
+// ClaudeHomeServer.Services.Notes живёт ещё и в вертикали Notes, граница держится на типе.
+using WikiPaths = ClaudeHomeServer.Services.Notes.WikiPaths;
 
 namespace ClaudeHomeServer.Services.Llm.Claude;
 
@@ -60,6 +63,17 @@ namespace ClaudeHomeServer.Services.Llm.Claude;
 // ставит ClaudeSession; токен — тот же сервисный JWT, что в заголовках MCP-конфига хода).
 // Признак «файл уже правили» — файл <префикс проекта>_<session_id> в каталоге hook-state рядом со скриптом (0700, файлы 0600); пометка — только когда контекст реально отдан (200 с непустым списком; файл вне графа не помечается).
 // В песочнице и на Windows-хосте хука нет по построению (см. ниже) — для них отдельный шаг.
+//
+// Седьмая обязанность файла — статический deny Edit/Write/NotebookEdit по абсолютному
+// {data}/wiki/** (ADR-035 §2, S1c): единственный писатель вики — Хранитель, и CLI-агент
+// не должен писать в неё ни в каком режиме прав. deny-правила CLI
+// вычисляет раньше allow и раньше режимов прав: в acceptEdits он правку файла вообще не
+// выносит на карточку — без этого deny отказ до агента не дошёл бы вовсе. Тот же отказ
+// продублирован серверным backstop'ом в DecidePermissionAsync (обычный режим, пути вне
+// корня сессии, исполнитель задачи). Состав правил постоянен в рамках инстанса (data-корень
+// — свойство конфигурации, не хода): путь --settings входит в сигнатуру прогона, мерцание
+// состава перезапускало бы живой CLI со всеми MCP. Для container-владельцев --settings не
+// передаётся, и data/ в песочницу не монтируется — отказ там выполнен построением.
 //
 // Только для local-среды: в песочнице (Linux) окон нет, а путь к хостовому файлу
 // внутри контейнера недоступен — там --settings не добавляем (и гейт браузера
@@ -301,48 +315,72 @@ public static class ClaudeRuntimeSettings
     // Хук потребителей реально запускается: не песочница (--settings там не передаётся) и хост не гасит хуки.
     public static bool ConsumersHookRuns(IProcessLauncher launcher) => !launcher.IsSandboxed && !HostRequiresHooksOff;
 
-    // Ключ кэша — (temp-каталог среды, режим, гасить ли хуки): temp у драйверов запуска
-    // разный, одного флага мало — первый владелец «застолбил» бы путь в своей папке для
-    // всех остальных; добавляем измерение платформы хоста, иначе при смене режима хуков
-    // (Windows-процесс vs Linux-процесс с одним TempDir) первый запуск отдаст файл
-    // неправильного состава.
-    private static readonly Dictionary<(string TempDir, bool Browser, bool DisableHooks), string> _cachedPaths = [];
+    // Ключ кэша — (temp-каталог среды, режим, гасить ли хуки, data-корень deny): temp у
+    // драйверов запуска разный, одного флага мало — первый владелец «застолбил» бы путь в
+    // своей папке для всех остальных; добавляем измерение платформы хоста, иначе при смене
+    // режима хуков (Windows-процесс vs Linux-процесс с одним TempDir) первый запуск отдаст
+    // файл неправильного состава; data-корень — потому что два инстанса на одной машине с
+    // разными DataPath иначе перезаписывали бы файл друг друга (тот же урок, что у состава
+    // хуков в имени каталога ниже).
+    private static readonly Dictionary<(string TempDir, bool Browser, bool DisableHooks, string? WikiDenyDataDir), string> _cachedPaths = [];
     private static readonly Lock _lock = new();
 
     // Аргументы --settings для запуска claude; пусто для песочницы.
     // browserEnabled: false — вдобавок к хукам гасит плагин браузера.
+    // wikiDenyDataDir: не-null — в файл ставится статический deny {data}/wiki/** (ADR-035 §2);
+    // null — без deny (old callers: one-shot прогоны и пробы, правок вики у них нет).
     // Путь файла входит в сигнатуру прогона, поэтому решение обязано быть
-    // детерминировано по сессии (оно и есть — считается по персоне и платформе,
-    // не по ходу), иначе живой процесс перезапускался бы между ходами.
-    public static IEnumerable<string> HooksOffArgs(IProcessLauncher launcher, bool browserEnabled = true) =>
-        launcher.IsSandboxed ? [] : ["--settings", EnsureFile(launcher.HostTempDir, browserEnabled)];
+    // детерминировано по инстансу (оно и есть — считается по персоне, платформе и
+    // конфигурации, не по ходу), иначе живой процесс перезапускался бы между ходами.
+    public static IEnumerable<string> HooksOffArgs(IProcessLauncher launcher, bool browserEnabled = true, string? wikiDenyDataDir = null) =>
+        launcher.IsSandboxed ? [] : ["--settings", EnsureFile(launcher.HostTempDir, browserEnabled, wikiDenyDataDir)];
+
+    // deny-правило вики для settings CLI: Edit по всему поддереву {dataDir}/wiki/ — ОДНО, а не
+    // три (ревью S1c, Н1): CLI 2.1.310 матчит файловые проверки только по Edit(path), правила
+    // Write/NotebookEdit инертны и дают в снимке настроек securityNotice «never matches».
+    // Все три инструмента по-прежнему закрывает серверный backstop
+    // (ClaudeSession.DecidePermissionAsync) — он ниже по коду и в тестах.
+    // Форма — «//» + абсолютный корень без своего ведущего слеша, ровно «Edit(//<корень>/wiki/**)»:
+    // «//» — абсолютный путь в синтаксисе правил CLI (одинарная «/» резолвится относительно
+    // файла настроек — другая семантика), «/**» — всё поддерево; лишний слеш на стыке давал бы
+    // «///…». Путь пишется слэшами: боевой сервер на Linux; формат правила для Windows-хоста не
+    // проверялся (TrimStart('/') на «C:/…» не действует — Windows-корень остаётся как был).
+    // Имя папки — та же константа WikiPaths.DirName, что у предиката: две копии «wiki»
+    // разошлись бы молчанием CLI при переименовании.
+    internal static IReadOnlyList<string> WikiDenyRules(string dataDir)
+    {
+        var root = dataDir.Replace('\\', '/').TrimEnd('/').TrimStart('/');
+        return [$"Edit(//{root}/{WikiPaths.DirName}/**)"];
+    }
 
     // Ленивая запись файла настроек; путь кэшируется по режиму. Файл эфемерный
     // (служебный конфиг, не стор данных) — пересоздаётся при отсутствии.
-    private static string EnsureFile(string hostTempDir, bool browserEnabled)
+    private static string EnsureFile(string hostTempDir, bool browserEnabled, string? wikiDenyDataDir)
     {
         lock (_lock)
         {
             var disableHooks = HostRequiresHooksOff;
-            var cacheKey = (hostTempDir, browserEnabled, disableHooks);
+            var cacheKey = (hostTempDir, browserEnabled, disableHooks, wikiDenyDataDir);
             if (_cachedPaths.TryGetValue(cacheKey, out var cached) && File.Exists(cached)) return cached;
-            var path = WriteSettings(hostTempDir, browserEnabled, disableHooks, BlockKillScript, ConsumersHookScript);
+            var path = WriteSettings(hostTempDir, browserEnabled, disableHooks, BlockKillScript, ConsumersHookScript, wikiDenyDataDir);
             _cachedPaths[cacheKey] = path;
             return path;
         }
     }
 
     // Запись набора файлов настроек в каталог, имя которого — отпечаток состава хуков (тексты скриптов,
-    // режим, пользователь ОС). Инстансы с разной сборкой на одной машине делят temp, и общее имя по
+    // режим, пользователь ОС, data-корень deny). Инстансы с разной сборкой на одной машине делят temp, и общее имя по
     // (disableHooks, browserEnabled) давало им перезаписывать файл друг друга: у работающего CLI хук
     // Edit|Write или Bash (гейт безопасности) молча исчезал. Теперь разный состав — разный каталог, одинаковый —
-    // тот же файл с тем же содержимым. consumersScript = null — сборка без хука потребителей.
+    // тот же файл с тем же содержимым. consumersScript = null — сборка без хука потребителей;
+    // wikiDenyDataDir = null — без deny-правил вики (состав файла от хода не зависит — отпечаток
+    // стабилен, живой CLI не перезапускается между ходами).
     internal static string WriteSettings(string hostTempDir, bool browserEnabled, bool disableHooks,
-        string blockKillScript, string? consumersScript)
+        string blockKillScript, string? consumersScript, string? wikiDenyDataDir = null)
     {
         var fingerprint = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(string.Join('\u0001',
-                disableHooks, Environment.UserName, blockKillScript, consumersScript ?? "-"))))[..12].ToLowerInvariant();
+                disableHooks, Environment.UserName, blockKillScript, consumersScript ?? "-", wikiDenyDataDir ?? "-"))))[..12].ToLowerInvariant();
         var dir = Path.Combine(hostTempDir, RuntimeDirName, fingerprint);
         if (OperatingSystem.IsWindows()) Directory.CreateDirectory(dir);
         else Directory.CreateDirectory(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -367,8 +405,13 @@ public static class ClaudeRuntimeSettings
             }
         }
         var hooksJson = hooks.Count == 0 ? "" : $",\"hooks\":{{\"PreToolUse\":[{string.Join(',', hooks)}]}}";
+        // deny раньше allow и раньше режимов прав (docs/en/permissions): правку в вику CLI
+        // отсекает сам, не спрашивая нас — включая acceptEdits, где правки файла на карточку
+        // не выносятся вовсе
+        var permissionsJson = wikiDenyDataDir is null ? "" :
+            ",\"permissions\":{\"deny\":[" + string.Join(',', WikiDenyRules(wikiDenyDataDir).Select(r => JsonSerializer.Serialize(r))) + "]}";
         File.WriteAllText(path,
-            $"{{\"disableAllHooks\":{(disableHooks ? "true" : "false")},\"enabledPlugins\":{{\"{BrowserPluginKey}\":{(browserEnabled ? "true" : "false")}}},\"cleanupPeriodDays\":{TranscriptRetentionDays},\"syncClaudeAiSkills\":false,\"syncClaudeAiPlugins\":false{hooksJson}}}");
+            $"{{\"disableAllHooks\":{(disableHooks ? "true" : "false")},\"enabledPlugins\":{{\"{BrowserPluginKey}\":{(browserEnabled ? "true" : "false")}}},\"cleanupPeriodDays\":{TranscriptRetentionDays},\"syncClaudeAiSkills\":false,\"syncClaudeAiPlugins\":false{hooksJson}{permissionsJson}}}");
         return path;
     }
 

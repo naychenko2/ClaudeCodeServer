@@ -18,32 +18,99 @@ namespace ClaudeHomeServer.Tests.Services.Gateway;
 /// открытый прокси. Вход только с токеном хода и учёткой его устройства, SSRF-граница после
 /// разрешения имени, порты из конфига, тумблер выключен — честный 403.
 /// </summary>
-public sealed class EgressGatewayTests : IDisposable
+[Trait("Category", "Host")]
+public sealed class EgressGatewayTests : IDisposable,
+    IClassFixture<EgressGatewayTests.SinkHost>,
+    IClassFixture<EgressGatewayTests.OffHost>,
+    IClassFixture<EgressGatewayTests.InactivityHost>,
+    IClassFixture<EgressGatewayTests.LifetimeHost>,
+    IClassFixture<EgressGatewayTests.BytesHost>,
+    IClassFixture<EgressGatewayTests.ProxyHost>
 {
+    /// <summary>
+    /// Хосты на КЛАСС, по одному на уникальную конфигурацию шлюза (раньше — фабрика на каждый
+    /// тест). Состояния, которое тесты оставляли бы в общем хосте, нет: каждый тест заводит своё
+    /// устройство и свой токен хода (Turn), а счётчики потолков ключуются по ним. Исключение —
+    /// ProxyHost: прокси принимает одно соединение, им пользуется ровно один тест.
+    /// </summary>
+    public abstract class GatewayHost : TestWebApplicationFactory
+    {
+        protected GatewayHost(bool egress = true, EgressConnector? connector = null,
+            Dictionary<string, string>? limits = null)
+        {
+            ExtraConfig["LlmGateway:Enabled"] = "true";
+            ExtraConfig["LlmGateway:Egress:Enabled"] = egress ? "true" : "false";
+            foreach (var (key, value) in limits ?? []) ExtraConfig["LlmGateway:Egress:" + key] = value;
+            if (connector is not null) ExtraServices = s => s.AddSingleton(connector);
+        }
+    }
+
+    // Соединение наружу заглушено, потолки по умолчанию: проверки входа, SSRF-границы и лимитов числа туннелей
+    public sealed class SinkHost() : GatewayHost(connector: new SinkConnector());
+
+    public sealed class OffHost() : GatewayHost(egress: false);
+
+    public sealed class InactivityHost() : GatewayHost(connector: new SinkConnector(),
+        limits: new() { ["InactivityTimeout"] = "00:00:00.500" });
+
+    public sealed class LifetimeHost() : GatewayHost(connector: new SinkConnector(),
+        limits: new() { ["InactivityTimeout"] = "00:00:05", ["MaxLifetime"] = "00:00:01" });
+
+    public sealed class BytesHost() : GatewayHost(connector: new SinkConnector(),
+        limits: new() { ["MaxBytesPerTunnel"] = "1024" });
+
+    public sealed class ProxyHost : GatewayHost
+    {
+        internal FakeHttpProxy Proxy { get; }
+
+        public ProxyHost() : this(new FakeHttpProxy("HTTP/1.1 200 Connection established")) { }
+
+        private ProxyHost(FakeHttpProxy proxy)
+            : base(connector: new EgressConnector(new Uri($"http://127.0.0.1:{proxy.Port}"), new EgressAddressPolicy()))
+        {
+            Proxy = proxy;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) Proxy.Dispose();
+            base.Dispose(disposing);
+        }
+    }
+
+    private readonly SinkHost _sink;
+    private readonly OffHost _off;
+    private readonly InactivityHost _inactivity;
+    private readonly LifetimeHost _lifetime;
+    private readonly BytesHost _bytes;
+    private readonly ProxyHost _proxy;
     private readonly List<IDisposable> _cleanup = [];
+
+    // Владелец на тест: реестр устройств общий на хост, а устройство ищется по (владелец, имя) —
+    // с общим владельцем все тесты получили бы ОДНО устройство и общий счётчик туннелей на него
+    private readonly string _owner = "owner-" + Guid.NewGuid().ToString("N")[..8];
+
+    public EgressGatewayTests(SinkHost sink, OffHost off, InactivityHost inactivity, LifetimeHost lifetime,
+        BytesHost bytes, ProxyHost proxy)
+    {
+        _sink = sink;
+        _off = off;
+        _inactivity = inactivity;
+        _lifetime = lifetime;
+        _bytes = bytes;
+        _proxy = proxy;
+    }
 
     public void Dispose()
     {
         foreach (var d in _cleanup) d.Dispose();
     }
 
-    private TestWebApplicationFactory Factory(bool egress = true, EgressConnector? connector = null,
-        Dictionary<string, string>? limits = null)
-    {
-        var factory = new TestWebApplicationFactory();
-        factory.ExtraConfig["LlmGateway:Enabled"] = "true";
-        factory.ExtraConfig["LlmGateway:Egress:Enabled"] = egress ? "true" : "false";
-        foreach (var (key, value) in limits ?? []) factory.ExtraConfig["LlmGateway:Egress:" + key] = value;
-        if (connector is not null) factory.ExtraServices = s => s.AddSingleton(connector);
-        _cleanup.Add(factory);
-        return factory;
-    }
-
     private (GatewayTestDevice Device, IssuedTurnToken Turn) Turn(TestWebApplicationFactory factory)
     {
-        var device = new GatewayTestDevice("owner-1", factory.Services.GetRequiredService<DeviceRegistry>());
+        var device = new GatewayTestDevice(_owner, factory.Services.GetRequiredService<DeviceRegistry>());
         _cleanup.Add(device);
-        return (device, factory.Services.GetRequiredService<TurnTokenService>().Issue("owner-1", "chat-1", device.Id));
+        return (device, factory.Services.GetRequiredService<TurnTokenService>().Issue(_owner, "chat-1", device.Id));
     }
 
     private static HttpRequestMessage Request(IssuedTurnToken turn, string host, int port, GatewayTestDevice? device)
@@ -106,7 +173,7 @@ public sealed class EgressGatewayTests : IDisposable
     [Fact]
     public async Task Тумблер_выключен_честный_отказ_403_с_причиной()
     {
-        var factory = Factory(egress: false);
+        var factory = _off;
         var (device, turn) = Turn(factory);
 
         var response = await factory.CreateClient().SendAsync(Request(turn, "example.com", 443, device));
@@ -120,8 +187,8 @@ public sealed class EgressGatewayTests : IDisposable
     [Fact]
     public async Task Токен_серверного_хода_провайдера_401()
     {
-        var factory = Factory();
-        var server = factory.Services.GetRequiredService<TurnTokenService>().Issue("owner-1", "chat-1", null,
+        var factory = _sink;
+        var server = factory.Services.GetRequiredService<TurnTokenService>().Issue(_owner, "chat-1", null,
             new GatewayRoute(GatewayUpstreamKind.Provider, "m", ProviderKey: "minimax"), TurnTokenLifetime.Process);
 
         (await factory.CreateClient().SendAsync(Request(server, "example.com", 443, null)))
@@ -131,13 +198,13 @@ public sealed class EgressGatewayTests : IDisposable
     [Fact]
     public async Task Без_учётки_устройства_или_с_чужим_устройством_401()
     {
-        var factory = Factory();
+        var factory = _sink;
         var (device, turn) = Turn(factory);
         var client = factory.CreateClient();
 
         (await client.SendAsync(Request(turn, "example.com", 443, null))).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
 
-        var (_, foreignToken) = device.Register("owner-1", "other", new string('f', 64));
+        var (_, foreignToken) = device.Register(_owner, "other", new string('f', 64));
         var foreign = Request(turn, "example.com", 443, null);
         GatewayTestDevice.Sign(foreign, foreignToken, new string('f', 64));
         (await client.SendAsync(foreign)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
@@ -151,7 +218,7 @@ public sealed class EgressGatewayTests : IDisposable
     [InlineData("8.8.8.8", 22)]
     public async Task Запрещённый_адрес_или_порт_403_до_соединения(string host, int port)
     {
-        var factory = Factory();
+        var factory = _sink;
         var (device, turn) = Turn(factory);
 
         var response = await factory.CreateClient().SendAsync(Request(turn, host, port, device));
@@ -162,8 +229,8 @@ public sealed class EgressGatewayTests : IDisposable
     [Fact]
     public async Task Туннель_идёт_через_прокси_сервера_на_проверенный_IP_и_несёт_байты()
     {
-        using var proxy = new FakeHttpProxy("HTTP/1.1 200 Connection established");
-        var factory = Factory(connector: new EgressConnector(new Uri($"http://127.0.0.1:{proxy.Port}"), new EgressAddressPolicy()));
+        var factory = _proxy;
+        var proxy = _proxy.Proxy;
         var (device, turn) = Turn(factory);
 
         var ws = ((TestServer)factory.Server).CreateWebSocketClient();
@@ -184,6 +251,7 @@ public sealed class EgressGatewayTests : IDisposable
 
         Encoding.ASCII.GetString(buffer, 0, got.Count).Should().Be("proxy:ping");
         (await proxy.Head.Task.WaitAsync(TimeSpan.FromSeconds(10))).Should().StartWith("CONNECT 93.184.216.34:443 HTTP/1.1");
+        proxy.Connections.Should().Be(1, "заглушка прокси рассчитана на одно соединение; второму тесту нужен свой ProxyHost");
     }
 
     [Fact]
@@ -204,7 +272,7 @@ public sealed class EgressGatewayTests : IDisposable
     [Fact]
     public async Task G12_Туннель_без_активности_закрывается_по_бездействию()
     {
-        var factory = Factory(connector: new SinkConnector(), limits: new() { ["InactivityTimeout"] = "00:00:00.500" });
+        var factory = _inactivity;
         var (device, turn) = Turn(factory);
         using var socket = await OpenTunnelAsync(factory, device, turn);
 
@@ -214,11 +282,7 @@ public sealed class EgressGatewayTests : IDisposable
     [Fact]
     public async Task G12_Туннель_с_потоком_данных_закрывается_по_потолку_жизни()
     {
-        var factory = Factory(connector: new SinkConnector(), limits: new()
-        {
-            ["InactivityTimeout"] = "00:00:05",
-            ["MaxLifetime"] = "00:00:01",
-        });
+        var factory = _lifetime;
         var (device, turn) = Turn(factory);
         using var socket = await OpenTunnelAsync(factory, device, turn);
         using var stop = new CancellationTokenSource();
@@ -244,7 +308,7 @@ public sealed class EgressGatewayTests : IDisposable
     [Fact]
     public async Task G12_Туннель_закрывается_по_потолку_байтов()
     {
-        var factory = Factory(connector: new SinkConnector(), limits: new() { ["MaxBytesPerTunnel"] = "1024" });
+        var factory = _bytes;
         var (device, turn) = Turn(factory);
         using var socket = await OpenTunnelAsync(factory, device, turn);
 
@@ -256,7 +320,7 @@ public sealed class EgressGatewayTests : IDisposable
     [Fact]
     public async Task G12_Девятый_одновременный_туннель_хода_429()
     {
-        var factory = Factory(connector: new SinkConnector());
+        var factory = _sink;
         var (device, turn) = Turn(factory);
         var open = new List<WebSocket>();
         for (var i = 0; i < 8; i++) open.Add(await OpenTunnelAsync(factory, device, turn));
@@ -270,11 +334,11 @@ public sealed class EgressGatewayTests : IDisposable
     [Fact]
     public async Task G12_Семнадцатый_одновременный_туннель_устройства_429()
     {
-        var factory = Factory(connector: new SinkConnector());
+        var factory = _sink;
         var (device, first) = Turn(factory);
         var tokens = factory.Services.GetRequiredService<TurnTokenService>();
-        var second = tokens.Issue("owner-1", "chat-2", device.Id);
-        var third = tokens.Issue("owner-1", "chat-3", device.Id);
+        var second = tokens.Issue(_owner, "chat-2", device.Id);
+        var third = tokens.Issue(_owner, "chat-3", device.Id);
         var open = new List<WebSocket>();
         for (var i = 0; i < 8; i++) open.Add(await OpenTunnelAsync(factory, device, first));
         for (var i = 0; i < 8; i++) open.Add(await OpenTunnelAsync(factory, device, second));
@@ -360,12 +424,18 @@ public sealed class EgressGatewayTests : IDisposable
 
     // HTTP-прокси на loopback: запоминает заголовок CONNECT, отвечает заданной строкой и при
     // успехе отдаёт эхо с префиксом
-    private sealed class FakeHttpProxy : IDisposable
+    internal sealed class FakeHttpProxy : IDisposable
     {
         private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
 
+        private int _connections;
+
         public TaskCompletionSource<string> Head { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int Port { get; }
+
+        // Сколько соединений принято за жизнь прокси: заглушка обслуживает ровно одно, лишние
+        // закрываются сразу, чтобы второй пользователь хоста падал быстро, а не висел до таймаута
+        public int Connections => Volatile.Read(ref _connections);
 
         public FakeHttpProxy(string statusLine)
         {
@@ -376,6 +446,20 @@ public sealed class EgressGatewayTests : IDisposable
                 try
                 {
                     using var client = await _listener.AcceptTcpClientAsync();
+                    Interlocked.Increment(ref _connections);
+                    // Лишние соединения (второй тест на том же хосте) принимаем и сразу закрываем
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            while (true)
+                            {
+                                using var extra = await _listener.AcceptTcpClientAsync();
+                                Interlocked.Increment(ref _connections);
+                            }
+                        }
+                        catch (Exception) { /* прокси остановлен */ }
+                    });
                     var stream = client.GetStream();
                     var head = new StringBuilder();
                     var one = new byte[1];

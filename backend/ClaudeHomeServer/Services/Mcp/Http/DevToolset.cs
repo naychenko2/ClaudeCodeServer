@@ -64,6 +64,10 @@ public sealed class DevToolset(
     private readonly DevStand _stand = new(new ProjectRunCaller(sessions, projects, personas, broadcaster),
         devServer, discovery, dotnet, npm, (options ?? new TestRunsOptions()).CeilingSeconds);
 
+    // Стенд этого тулсета: тесту короткого потолка нужен порог «остатка на запуск» на этом
+    // экземпляре; дефолт продукта при этом не меняется (DevStand.DefaultMinReadyBudget)
+    internal DevStand Stand => _stand;
+
     public string Name => ServerName;
     public string Version => "1.0.0";
 

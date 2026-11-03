@@ -9,6 +9,7 @@
 // Никаких выдуманных данных: всё — из `from`/`to`/`segments`/`current`/`source`/`truncated`.
 
 import { C } from '../../lib/design';
+import { formatDuration, STAGE_NAME } from '../../lib/chatGroups';
 import type { FeatureTimeline } from '../../types/featureStats';
 
 // Порог сжатия паузы (минуты): длиннее — схлопывается в «разрыв · N ч».
@@ -74,15 +75,10 @@ export function formatDateTime(iso: string): string {
   return `${dt} · ${tm}`.replace(' · ', ' · ');
 }
 
-// Длительность: «N мин» / «N ч» / «N ч MM мин» (как fmt в макете: минуты с ведущим 0, если есть часы).
-export function formatDuration(minutes: number): string {
-  const m = Math.max(0, Math.round(minutes));
-  const h = Math.floor(m / 60);
-  const r = m % 60;
-  if (h === 0) return `${r} мин`;
-  if (r === 0) return `${h} ч`;
-  return `${h} ч ${String(r).padStart(2, '0')} мин`;
-}
+// Длительность — не своя: единственная реализация в lib/chatGroups (формат Майи:
+// «45 мин», «1 ч 05 мин», ровные часы — «2 ч»). Ш1a: здесь реэкспорт, не вторая копия
+// (свою держала бы — формат разъезжался бы с индексом, противоречие П11).
+export { formatDuration };
 
 // Минуты от ISO-момента до `nowMs` (округление, min 0); null — даты нет или она нечитаемая.
 // ОБЩИЙ помощник длительности (W5-R-F3b): бейдж строки анализа и правая колонка Ганта
@@ -110,7 +106,7 @@ export function kindLabel(kind: SegmentKind): string {
 // Цвет вида — ТОЛЬКО токены C.* (макет: work=accent, waiting=info, idle=progress-track,
 // error=danger, notWorking=штриховка bgSelected/bgInset). Возвращает CSS-подложку.
 // 'queued' — не вид сегмента (их у бэка нет): доля состава «стояла в очереди» из
-// compositionRows (Q5F) — самостоятельный пятый вид разряды (R-Q3B-2, ADR-031
+// плитки/«Подробнее» (Q5F) — самостоятельный пятый вид разряды (R-Q3B-2, ADR-031
 // §«Время в очереди (queued)»), окрашивается дымком ожидания (C.smoke) — тот же язык,
 // что у кольца индикатора ожидания (WaitingIndicator).
 export function kindBackground(kind: SegmentKind | 'queued'): string {
@@ -139,13 +135,10 @@ export function kindTextColor(kind: SegmentKind): string {
   }
 }
 
-// Имя этапа по ключу (макет: cut→Разрез, …, merge→Мерж). Неизвестный ключ — как есть.
+// Имя этапа по ключу — из STAGE_NAME (lib/chatGroups): своей таблицы имён страница не
+// держит (Ш1a). Неизвестный ключ — как есть (новая стадия на бэке не должна терять подпись).
 export function stageLabel(key: string): string {
-  const names: Record<string, string> = {
-    cut: 'Разрез', design: 'Дизайн', plan: 'План', prod: 'Производство', review: 'Ревью',
-    qa: 'Проверка', final: 'Финальное ревью', merge: 'Мерж',
-  };
-  return names[key] ?? key;
+  return STAGE_NAME[key as keyof typeof STAGE_NAME] ?? key;
 }
 
 // === Чистая функция: модель ленты из stats.timeline ===

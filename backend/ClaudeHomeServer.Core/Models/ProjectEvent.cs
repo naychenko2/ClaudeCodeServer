@@ -36,6 +36,7 @@ public static class ProjectEventTypes
     public const string MemoryLearned = "memory_learned";    // персона запомнил факт (autolearn)
     public const string KnowledgeChanged = "knowledge_changed"; // изменение в базе знаний проекта
     public const string NoteChanged = "note_changed";        // заметка проекта создана/изменена
+    public const string WikiChanged = "wiki_changed";        // страница вики записана Хранителем или принята человеком
     public const string TeamJoined = "team_joined";          // член команды добавлен (проектная персона)
     public const string TeamLeft = "team_left";              // член команды удалён
 }

@@ -25,7 +25,9 @@ namespace ClaudeHomeServer.Services.TestRuns;
 //
 // Инварианты:
 //  • dotnet: все spec Heavy, и прогон держит ОДИН слот BuildConcurrencyGate на весь конвейер:
-//    отдать слот между фазами — значит пустить чужую сборку в середину прогона. vitest встаёт в
+//    отдать слот между фазами — значит пустить чужую сборку в середину прогона. Монолит без
+//    filter идёт фазой прогона N процессами (TestShards, TestRuns:MonolithShards) под ТЕМ ЖЕ
+//    слотом: второго семафора нет, классы шардов — из того же --list-tests. vitest встаёт в
 //    гейт только прогоном и только когда файлов много (VitestHeavyFiles): воркеров у него по
 //    числу файлов, до ядер−1. Playwright вне гейта (workers: 1, один браузер);
 //  • свой TurnId на каждый процесс из единственного генератора (ProcessTurnIds): без метки
@@ -72,9 +74,9 @@ public sealed partial class TestRunService
     // Общий конвейер фаз: блокировка дерева, гейт, потолок, процесс фазы
     private readonly PhasePipeline _pipeline;
     private readonly TimeSpan _progressInterval;
-    // Отпечатки исходников последних успешных сборок (только память процесса)
-    private readonly BuildFingerprintStore _fingerprints = new();
     private readonly Func<Uri, CancellationToken, Task<bool>> _standProbe;
+    // Снимок машины для числа шардов (AdaptiveShards); тесты подменяют чтение /proc
+    private readonly Func<MachineSnapshot?> _machine;
 
     public TestRunService(ILauncherFactory launchers, TestRunsOptions options)
         : this(launchers, options, new PhasePipeline()) { }
@@ -87,17 +89,31 @@ public sealed partial class TestRunService
     // свой шаг прогресса (по умолчанию — не чаще раза в секунду) и своя проверка стенда
     internal TestRunService(ILauncherFactory launchers, TestRunsOptions options,
         BuildConcurrencyGate? gate, TimeSpan exitGrace, TimeSpan? progressInterval = null,
-        Func<Uri, CancellationToken, Task<bool>>? standProbe = null)
-        : this(launchers, options, new PhasePipeline(gate, exitGrace), progressInterval, standProbe) { }
+        Func<Uri, CancellationToken, Task<bool>>? standProbe = null, Func<MachineSnapshot?>? machine = null)
+        : this(launchers, options, new PhasePipeline(gate, exitGrace), progressInterval, standProbe, machine) { }
 
-    private TestRunService(ILauncherFactory launchers, TestRunsOptions options, PhasePipeline pipeline,
-        TimeSpan? progressInterval, Func<Uri, CancellationToken, Task<bool>>? standProbe)
+    // Для тестов: общий конвейер с движком сборки (отпечатки сборок — его) и свой снимок машины
+    internal TestRunService(ILauncherFactory launchers, TestRunsOptions options, PhasePipeline pipeline,
+        TimeSpan? progressInterval, Func<Uri, CancellationToken, Task<bool>>? standProbe,
+        Func<MachineSnapshot?>? machine = null)
     {
         _launchers = launchers;
         _options = options;
         _pipeline = pipeline;
         _progressInterval = progressInterval ?? TimeSpan.FromSeconds(1);
         _standProbe = standProbe ?? ProbeStandAsync;
+        // Шарды идут в scope под Execution:Isolation:Slice — его запас памяти и меряем, а не только хост
+        _machine = machine ?? (() => AdaptiveShards.Read(slice: IsolationOptions.Instance.Enabled
+            ? IsolationOptions.Instance.Slice : null));
+    }
+
+    // Число шардов монолита: по нагрузке машины под потолком MonolithShards или само MonolithShards
+    internal (int Shards, string? Reason) ShardCount()
+    {
+        if (!_options.AdaptiveShards) return (_options.MonolithShards, null);
+        var (n, reason) = AdaptiveShards.Choose(_machine(), _options.MonolithShards,
+            ShardPeakMemory.Load(_options.MemoryDirectory));
+        return (n, reason);
     }
 
     public TestRunsOptions Options => _options;
@@ -140,11 +156,11 @@ public sealed partial class TestRunService
     // склейки строки нет. Папка результатов — ОТНОСИТЕЛЬНО каталога процесса: путь одинаково
     // верен на хосте и в песочнице (без маппинга путей)
     internal static ProcessSpec BuildSpec(TestRunPhase phase, TestRunRequest request, string turnId,
-        string resultsDirectory, bool heavy = true) => request.Kind switch
+        string resultsDirectory, bool heavy = true, string trxPrefix = "results") => request.Kind switch
     {
         TestRunKind.Vitest => VitestSpec(phase, request, turnId, resultsDirectory, heavy),
         TestRunKind.Playwright => PlaywrightSpec(request, turnId, resultsDirectory),
-        _ => DotnetSpec(phase, request, turnId, resultsDirectory),
+        _ => DotnetSpec(phase, request, turnId, resultsDirectory, trxPrefix),
     };
 
     // Потолок параллельных проектов MSBuild — а значит, и одновременных testhost при прогоне
@@ -155,7 +171,7 @@ public sealed partial class TestRunService
     internal const string MaxCpuCountArg = "-m:6";
 
     private static ProcessSpec DotnetSpec(TestRunPhase phase, TestRunRequest request, string turnId,
-        string resultsDirectory)
+        string resultsDirectory, string trxPrefix)
     {
         var args = new List<string> { phase == TestRunPhase.Build ? "build" : "test" };
         if (!string.IsNullOrWhiteSpace(request.Target)) args.Add(request.Target);
@@ -176,7 +192,8 @@ public sealed partial class TestRunService
             args.AddRange(["--logger", "console;verbosity=normal",
                 // Префикс, а не LogFileName: у решения с несколькими тестовыми проектами одно
                 // имя файла перезаписалось бы, префикс даёт по файлу на сборку
-                "--logger", "trx;LogFilePrefix=results",
+                // Шарды пишут одновременно: у каждого свой префикс, иначе имена по секундам совпали бы
+                "--logger", $"trx;LogFilePrefix={trxPrefix}",
                 "--results-directory", resultsDirectory]);
         }
         return Spec("dotnet", args, request, turnId, heavy: true, new Dictionary<string, string>
@@ -595,22 +612,31 @@ public sealed partial class TestRunService
 
         // Явный no_build — пропуск без проверки; иначе сверяем отпечаток исходников дерева с тем,
         // что был при последней успешной сборке: совпал — сборка была бы холостой
-        var tree = Path.GetFullPath(request.WorkingDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        // Отпечатки общие с инструментом build (PhasePipeline.Fingerprints): «build → run_tests»
+        // без правок не собирает дважды, сборка решения .slnx покрывает его проекты
+        var fingerprints = _pipeline.Fingerprints;
+        var tree = BuildFingerprintStore.TreeKey(request.WorkingDirectory);
         string? fingerprint = null;
         var skipBuild = request.NoBuild;
+        var skippedByFingerprint = false;
         if (request.NoBuild) timings.BuildSkipped = "no_build";
         else
         {
             fingerprint = BuildFingerprint.Compute(tree);
-            if (_fingerprints.Matches(tree, request.Target, fingerprint))
+            if (fingerprints.Covers(tree, request.Target, fingerprint) is { } reason)
             {
-                skipBuild = true;
-                timings.BuildSkipped = "дерево не менялось";
+                skipBuild = skippedByFingerprint = true;
+                timings.BuildSkipped = reason;
             }
         }
         // Подсчёт нужен ради процента всего прогона; при filter тестов единицы — лишний запуск хоста
         var skipList = !string.IsNullOrWhiteSpace(request.Filter);
         if (skipList) timings.ListSkipped = "задан filter";
+        // Монолит без filter идёт шардами: их классы берутся из этого же подсчёта, второго нет
+        var shardable = !skipList && _options.MonolithShards > 1
+            && TestShards.IsMonolith(request.Target, _options.MonolithTarget);
+        if (shardable) run.CollectListedNames();
+        IReadOnlyList<string>? shardFilters = null;
 
         var firstPhase = skipBuild ? (skipList ? TestRunPhase.Test : TestRunPhase.List) : TestRunPhase.Build;
         var (slot, queued) = await AcquireAsync(BuildSpec(firstPhase, request, "", run.Results), firstPhase, run,
@@ -634,17 +660,24 @@ public sealed partial class TestRunService
                 if (list.Aborted) return Done(Aborted(run, list, TestRunPhase.List, ct));
                 // Подсчёт не удался — прогон всё равно идёт, просто без процента
                 run.Total = list.ExitCode == 0 ? run.ListedCount : null;
+                // Самопроверка не сошлась или список пуст — одним процессом, как раньше
+                if (shardable && list.ExitCode == 0)
+                {
+                    var (n, why) = ShardCount();
+                    shardFilters = TestShards.Plan(run.ListedNames(), n);
+                    timings.ShardsReason = why;
+                }
             }
 
             var test = await TestAsync();
             // Сборку пропустили по отпечатку, а раннер её не нашёл или не загрузил — отпечаток соврал
             // (файл вне перечня расширений, сборка удалена): один повтор со сборкой
-            if (!test.Aborted && test.ExitCode != 0 && timings.BuildSkipped == "дерево не менялось"
-                && run.TakeStaleBuildSignal())
+            if (!test.Aborted && test.ExitCode != 0 && skippedByFingerprint && run.TakeStaleBuildSignal())
             {
-                _fingerprints.Forget(tree, request.Target);
+                fingerprints.Forget(tree, request.Target);
                 fingerprint = BuildFingerprint.Compute(tree);
                 timings.BuildSkipped = null;
+                skippedByFingerprint = false;
                 var failed = await BuildAsync();
                 if (failed is not null) return failed;
                 test = await TestAsync();
@@ -668,7 +701,7 @@ public sealed partial class TestRunService
                     BuildErrors = VsTestConsoleParser.BuildErrors(run.BuildErrorCandidates()),
                 });
             // Отпечаток снят ДО сборки: правка во время неё не должна сойти за собранную
-            _fingerprints.Remember(tree, request.Target, fingerprint!);
+            fingerprints.Remember(tree, request.Target, fingerprint!);
             return null;
         }
 
@@ -676,7 +709,26 @@ public sealed partial class TestRunService
         {
             run.StartTesting();
             var testWatch = Stopwatch.StartNew();
-            var outcome = await RunPhaseAsync(launcher, TestRunPhase.Test, request, run, limit.Token);
+            PhaseOutcome outcome;
+            if (shardFilters is null)
+                outcome = await RunPhaseAsync(launcher, TestRunPhase.Test, request, run, limit.Token);
+            else
+            {
+                // Шарды — параллельно под уже взятым слотом; у каждого свой TurnId и свой TRX
+                timings.Shards = shardFilters.Count;
+                // Пик RSS дерева шардов — для оценки памяти на шард следующего выбора N (AdaptiveShards).
+                // В песочнице PID — docker-клиента, дерево в контейнере отсюда не видно: не меряем
+                var pids = new System.Collections.Concurrent.ConcurrentBag<int>();
+                using var sampling = new CancellationTokenSource();
+                var sampler = launcher.IsSandboxed ? Task.FromResult(0L) : SamplePeakAsync(pids, sampling.Token);
+                var outcomes = await Task.WhenAll(shardFilters.Select((filter, i) =>
+                    RunPhaseAsync(launcher, TestRunPhase.Test, request with { Filter = filter }, run, limit.Token,
+                        trxPrefix: $"results-shard{i + 1}", started: p => pids.Add(p.Id))));
+                await sampling.CancelAsync();
+                var peak = await sampler;
+                outcome = CombineShards(outcomes);
+                if (!outcome.Aborted) ShardPeakMemory.Save(_options.MemoryDirectory, peak, shardFilters.Count);
+            }
             timings.Test += testWatch.Elapsed;
             return outcome;
         }
@@ -727,6 +779,15 @@ public sealed partial class TestRunService
         return run.Result(test.ExitCode, TestRunPhase.Test) with { Reports = reports, OversizedReports = oversized };
     }
 
+    // Итог шардов: оборван любой — оборван прогон; код — первый ненулевой (неизвестный — null)
+    internal static PhaseOutcome CombineShards(IReadOnlyList<PhaseOutcome> outcomes)
+    {
+        var aborted = outcomes.Any(o => o.Aborted);
+        int? exit = outcomes.Any(o => o.ExitCode is null) ? null
+            : outcomes.Select(o => o.ExitCode!.Value).FirstOrDefault(c => c != 0);
+        return new PhaseOutcome(exit, aborted);
+    }
+
     private static TestRunResult Aborted(RunState run, PhaseOutcome phase, TestRunPhase where, CancellationToken callerCt)
     {
         var cancelled = callerCt.IsCancellationRequested;
@@ -737,12 +798,31 @@ public sealed partial class TestRunService
     // вычитка и гашение — в конвейере. Сбой Start уходит наверх: слот освободит using,
     // блокировку дерева — using в RunAsync
     private Task<PhaseOutcome> RunPhaseAsync(IProcessLauncher launcher, TestRunPhase phase,
-        TestRunRequest request, RunState run, CancellationToken limit, bool heavy = true)
+        TestRunRequest request, RunState run, CancellationToken limit, bool heavy = true, string trxPrefix = "results",
+        Action<Process>? started = null)
     {
         var turnId = ProcessTurnIds.New();
-        var spec = BuildSpec(phase, request, turnId, run.Results, heavy);
+        var spec = BuildSpec(phase, request, turnId, run.Results, heavy, trxPrefix);
         run.BeginPhase(phase, spec, turnId);
-        return _pipeline.RunProcessAsync(launcher, spec, run.OnLine, limit);
+        return _pipeline.RunProcessAsync(launcher, spec, run.OnLine, limit, started);
+    }
+
+    // Пик суммы RSS деревьев шардов раз в полсекунды до отмены; тесты подменяют чтение /proc
+    internal Func<IReadOnlyCollection<int>, long> TreeRss { get; init; } = roots => ProcessTreeRss.SumBytes(roots);
+
+    private async Task<long> SamplePeakAsync(System.Collections.Concurrent.ConcurrentBag<int> pids, CancellationToken ct)
+    {
+        long peak = 0;
+        while (true)
+        {
+            if (!pids.IsEmpty) peak = Math.Max(peak, TreeRss([.. pids]));
+            try { await Task.Delay(TimeSpan.FromMilliseconds(500), ct); }
+            catch (OperationCanceledException) { break; }
+        }
+        // Замыкающий замер: у настоящих шардов дерево уже пусто и пика он не поднимет, а подменённое
+        // чтение в тестах иначе не застало бы ни одного PID
+        if (!pids.IsEmpty) peak = Math.Max(peak, TreeRss([.. pids]));
+        return peak;
     }
 
     // Сводки всех TRX прогона; битый файл пропускается — остальные сборки важнее, огромный —
@@ -877,6 +957,9 @@ public sealed partial class TestRunService
         private readonly TextWriter _log;
         private readonly List<string> _buildErrors = [];
         private readonly VsTestConsoleParser.ListCounter _listCounter = new();
+        // Имена из --list-tests — только когда прогон пойдёт шардами (null — не копим)
+        private List<string>? _listedNames;
+        private bool _seenListHeader;
         private readonly List<string> _failedNames = [];
         // Playwright: исход по названию теста — повтор (retry) перезаписывает, а не добавляет
         private readonly Dictionary<string, TestLineOutcome> _byTitle = new(StringComparer.Ordinal);
@@ -922,6 +1005,30 @@ public sealed partial class TestRunService
         }
 
         public void Report(TestRunProgress progress) => _progress?.Invoke(progress);
+
+        public void CollectListedNames()
+        {
+            lock (_gate) _listedNames ??= [];
+        }
+
+        public IReadOnlyList<string> ListedNames()
+        {
+            lock (_gate) return [.. _listedNames ?? []];
+        }
+
+        // Та же форма, что у ListCounter: строки с отступом в 4 пробела после шапки
+        private void CollectName(string raw)
+        {
+            var line = raw.TrimEnd('\r');
+            if (line.Trim() == VsTestConsoleParser.ListHeader)
+            {
+                _seenListHeader = true;
+                return;
+            }
+            if (_seenListHeader && line.StartsWith("    ", StringComparison.Ordinal) && line.Trim().Length > 0
+                && _listedNames!.Count < TestShards.MaxListedTests)
+                _listedNames.Add(line.Trim());
+        }
 
         public void BeginPhase(TestRunPhase phase, ProcessSpec spec, string turnId)
         {
@@ -986,6 +1093,7 @@ public sealed partial class TestRunService
                         break;
                     case TestRunPhase.List:
                         _listCounter.Feed(line);
+                        if (_listedNames is not null) CollectName(line);
                         break;
                     case TestRunPhase.Test:
                         if (_kind == TestRunKind.Dotnet && StaleBuildMarkers.Any(m => line.Contains(m, StringComparison.OrdinalIgnoreCase)))

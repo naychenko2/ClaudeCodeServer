@@ -15,6 +15,7 @@ import { C, FONT, FS, ICON_SIZE, ICON_STROKE, MODAL_W, R, SP } from 'aihome_shel
 import { IconButton, ImageLightbox, Modal, WaitingIndicator } from '../../components/ui';
 import { readStoredToken } from '../../lib/offline';
 import type { MediaHistoryRecord } from './api';
+import { HistoryThumb } from './HistoryThumb';
 import {
   formatDayTimeFromIso, goneReasonText, historyParamsRows,
   historyRowTitle, historyTimeRows, humanErrorPhrase, historyVariantCount,
@@ -256,14 +257,14 @@ function Variants({ record, selected, onPick }: {
           style={{
             width: 40, height: 40, borderRadius: R.sm, overflow: 'hidden', padding: 0,
             border: 'none', cursor: 'pointer', flexShrink: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
             boxShadow: i === selected ? `0 0 0 2px ${C.accent}` : 'none',
             background: C.bgInset,
           }}
         >
-          <img
+          <HistoryThumb
             src={historyFileUrl(record.id, i, 'thumb')}
-            alt=""
-            loading="lazy"
+            fallback={<ImageIcon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ color: C.textSecondary }} />}
             style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
           />
         </button>
@@ -300,7 +301,9 @@ export function MediaHistoryCard({ record, isMobile, meUsername, onPrev, onNext,
       return;
     }
     setPreview({ phase: 'loading' });
-    fetch(historyFileUrl(record.id, variant, 'full'))
+    // Запрос принадлежит карточке: её закрытие/перелистывание гасит его (тело не доезжает).
+    const ac = new AbortController();
+    fetch(historyFileUrl(record.id, variant, 'full'), { signal: ac.signal })
       .then(async res => {
         if (cancelled) return;
         if (res.status === 410) {
@@ -310,15 +313,21 @@ export function MediaHistoryCard({ record, isMobile, meUsername, onPrev, onNext,
           setPreview({ phase: 'noresult' });
         } else if (res.ok) {
           const blob = await res.blob();
+          // Тело доехало уже после закрытия/перелистывания: blob-URL не создаём вовсе —
+          // на мёртвой карточке отзывать его нечем, и он висел бы в памяти рендерера
+          // до перезагрузки страницы (дефект 58c0c13b).
+          if (cancelled) return;
           objectUrl = URL.createObjectURL(blob);
           setPreview({ phase: 'ready', url: objectUrl });
         } else {
           setPreview({ phase: 'error' });
         }
       })
+      // AbortError от cleanup — не сбой: карточки уже нет, показывать нечего.
       .catch(() => { if (!cancelled) setPreview({ phase: 'error' }); });
     return () => {
       cancelled = true;
+      ac.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [record.id, variant, record.status]);

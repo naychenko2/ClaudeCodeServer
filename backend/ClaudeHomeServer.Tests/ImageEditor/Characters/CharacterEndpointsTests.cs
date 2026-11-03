@@ -14,20 +14,88 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Characters;
 // Ручки персонажей api/projects/{id}/image-editor/characters* (ADR-017, разделы 1 и 10):
 // флаг гейтит сервер, фото видит только владелец проекта, slug с обходом пути — 404,
 // выбранный персонаж уходит в запуск генерации.
-public class CharacterEndpointsTests : IDisposable
+[Trait("Category", "Host")]
+public class CharacterEndpointsTests : IClassFixture<CharacterEndpointsTests.Hosts>
 {
-    private readonly List<TestWebApplicationFactory> _factories = [];
+    private readonly Hosts _hosts;
 
-    public void Dispose()
+    public CharacterEndpointsTests(Hosts hosts) => _hosts = hosts;
+
+    // Хост на КОНФИГУРАЦИЮ, а не на тест: объекты фабрик создаются сразу, ASP.NET-хост внутри каждой
+    // стартует лениво; гасятся вместе с фикстурой. Состояние каждый тест заводит сам: фейки сбрасывает
+    // Use() хостов JobsHost и MediaHost (в самом Hosts метода нет), проект и персонажей — CreateProject
+    // с уникальным именем и каталогом
+    public sealed class Hosts : IDisposable
     {
-        foreach (var f in _factories) f.Dispose();
-        GC.SuppressFinalize(this);
+        // Только фейковый fal-драйвер, швы штатные
+        public PlainHost Plain { get; } = new();
+        // Исполнитель задач запоминает запуск
+        public JobsHost Jobs { get; } = new();
+        // Список LoRA отдаёт шов ComfyUI
+        public MediaHost Media { get; } = new();
+
+        public void Dispose()
+        {
+            Plain.Dispose();
+            Jobs.Dispose();
+            Media.Dispose();
+        }
+    }
+
+    public sealed class PlainHost : TestWebApplicationFactory
+    {
+        public PlainHost() =>
+            ExtraServices = services =>
+                services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
+    }
+
+    public sealed class JobsHost : TestWebApplicationFactory
+    {
+        public CapturingJobs Jobs { get; } = new();
+
+        public JobsHost()
+        {
+            ExtraServices = services =>
+            {
+                services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
+                services.AddSingleton<IImageEditJobs>(Jobs);
+            };
+        }
+
+        public JobsHost Use()
+        {
+            Jobs.Reset();
+            return this;
+        }
+    }
+
+    public sealed class MediaHost : TestWebApplicationFactory
+    {
+        public LoraMedia Media { get; } = new();
+
+        public MediaHost()
+        {
+            ExtraServices = services =>
+            {
+                services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
+                services.AddSingleton<ILocalImageMedia>(Media);
+            };
+        }
+
+        // Список LoRA на тест задаёт сам тест (префикс зависит от id пользователя хоста)
+        public MediaHost Use(IReadOnlyList<string>? loras)
+        {
+            Media.Loras = loras;
+            return this;
+        }
     }
 
     // Запоминает, что контроллер собрал для исполнителя задач
-    private sealed class CapturingJobs : IImageEditJobs
+    public sealed class CapturingJobs : IImageEditJobs
     {
         public readonly ConcurrentQueue<ImageEditJobInput> Started = new();
+
+        public void Reset() => Started.Clear();
 
         public Task<ImageEditCallResult<ImageEditQuoteDto>> QuoteAsync(
             string ownerId, string projectId, ImageEditQuoteRequest request, CancellationToken ct) =>
@@ -49,29 +117,17 @@ public class CharacterEndpointsTests : IDisposable
     }
 
     // Только список LoRA: остальное шва ручкам персонажей не нужно
-    private sealed class LoraMedia(IReadOnlyList<string>? loras) : ILocalImageMedia
+    public sealed class LoraMedia : ILocalImageMedia
     {
+        public IReadOnlyList<string>? Loras { get; set; }
         public bool Available => true;
         public bool Configured => true;
         public Task<int?> QueueLengthAsync(CancellationToken ct) => throw new NotSupportedException();
-        public Task<IReadOnlyList<string>?> ListLorasAsync(CancellationToken ct) => Task.FromResult(loras);
+        public Task<IReadOnlyList<string>?> ListLorasAsync(CancellationToken ct) => Task.FromResult(Loras);
         public int? EtaSeconds(LocalImageOp op, int count, int images) => throw new NotSupportedException();
         public Task<LocalImageSubmitted> SubmitAsync(LocalImageRequest request, CancellationToken ct) => throw new NotSupportedException();
         public Task<LocalImagePoll> PollAsync(string ticket, CancellationToken ct) => throw new NotSupportedException();
         public Task<bool> CancelAsync(string ticket, CancellationToken ct) => throw new NotSupportedException();
-    }
-
-    private TestWebApplicationFactory Factory(CapturingJobs? jobs = null, ILocalImageMedia? media = null)
-    {
-        var factory = new TestWebApplicationFactory();
-        factory.ExtraServices = services =>
-        {
-            services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
-            if (jobs is not null) services.AddSingleton<IImageEditJobs>(jobs);
-            if (media is not null) services.AddSingleton(media);
-        };
-        _factories.Add(factory);
-        return factory;
     }
 
     internal static (string Id, string Root) CreateProject(TestWebApplicationFactory factory, string username)
@@ -108,15 +164,18 @@ public class CharacterEndpointsTests : IDisposable
     [Fact]
     public async Task Ручка_loras_отдаёт_список_или_available_false()
     {
-        var all = new List<string> { "ccs/чужой/c.safetensors", "bare.safetensors" };
-        var withList = Factory(media: new LoraMedia(all));
-        all.InsertRange(0, [Own(withList, "a.safetensors"), Own(withList, "b.safetensors")]);
+        var withList = _hosts.Media.Use(null);
+        withList.Media.Loras = new List<string>
+        {
+            Own(withList, "a.safetensors"), Own(withList, "b.safetensors"), "ccs/чужой/c.safetensors", "bare.safetensors",
+        };
         var (id, _) = CreateProject(withList, TestWebApplicationFactory.TestUsername);
         var body = await Json(await withList.CreateAuthenticatedClient().GetAsync($"/api/projects/{id}/image-editor/loras"));
         body.GetProperty("available").GetBoolean().Should().BeTrue();
         body.GetProperty("items").EnumerateArray().Select(e => e.GetString()).Should().Equal(Own(withList, "a.safetensors"), Own(withList, "b.safetensors"));
 
-        foreach (var factory in new[] { Factory(media: new LoraMedia(null)), Factory() })
+        var downHosts = new[] { (TestWebApplicationFactory)_hosts.Media.Use(null), _hosts.Plain };
+        foreach (var factory in downHosts)
         {
             var (pid, _) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
             var resp = await factory.CreateAuthenticatedClient().GetAsync($"/api/projects/{pid}/image-editor/loras");
@@ -130,10 +189,9 @@ public class CharacterEndpointsTests : IDisposable
     [Fact]
     public async Task Ручка_loras_отдаёт_даты_только_обученных_и_только_видимых()
     {
-        var all = new List<string> { "ccs/чужой/c.safetensors" };
-        var factory = Factory(media: new LoraMedia(all));
+        var factory = _hosts.Media.Use(null);
         var trainedFile = Own(factory, "trained.safetensors");
-        all.InsertRange(0, [trainedFile, Own(factory, "manual.safetensors")]);
+        factory.Media.Loras = new List<string> { trainedFile, Own(factory, "manual.safetensors"), "ccs/чужой/c.safetensors" };
         var (id, root) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
         (await client.PostAsync($"/api/projects/{id}/image-editor/characters", CharacterForm("Аня")))
@@ -154,9 +212,8 @@ public class CharacterEndpointsTests : IDisposable
     [Fact]
     public async Task Создание_с_LoRA_пишет_манифест_а_неизвестное_имя_не_создаёт_персонажа()
     {
-        var known = new List<string>();
-        var factory = Factory(media: new LoraMedia(known));
-        known.Add(Own(factory, "anya.safetensors"));
+        var factory = _hosts.Media.Use(null);
+        factory.Media.Loras = new List<string> { Own(factory, "anya.safetensors") };
         var (id, root) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var anya = Own(factory, "anya.safetensors");
         var client = factory.CreateAuthenticatedClient();
@@ -195,7 +252,7 @@ public class CharacterEndpointsTests : IDisposable
     [Fact]
     public async Task Чужая_или_голая_LoRA_в_патче_отвечает_403_и_персонаж_не_создаётся()
     {
-        var factory = Factory(media: new LoraMedia(["ccs/00000000000000000000000000000000/x.safetensors", "bare.safetensors"]));
+        var factory = _hosts.Media.Use(["ccs/00000000000000000000000000000000/x.safetensors", "bare.safetensors"]);
         var (id, root) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         foreach (var name in new[] { "ccs/00000000000000000000000000000000/x.safetensors", "bare.safetensors" })
         {
@@ -212,7 +269,7 @@ public class CharacterEndpointsTests : IDisposable
     [Fact]
     public async Task Недоступный_ComfyUI_при_задании_LoRA_отвечает_503()
     {
-        var factory = Factory(media: new LoraMedia(null));
+        var factory = _hosts.Media.Use(null);
         var (id, root) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var form = CharacterForm("Аня");
         form.Add(new StringContent(Own(factory, "a.safetensors")), "loraName");
@@ -227,7 +284,7 @@ public class CharacterEndpointsTests : IDisposable
     [Fact]
     public async Task Пустое_описание_в_PUT_стирает_а_отсутствующее_не_меняет()
     {
-        var factory = Factory();
+        var factory = _hosts.Plain;
         var (id, _) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
         var api = $"/api/projects/{id}/image-editor";
@@ -252,7 +309,7 @@ public class CharacterEndpointsTests : IDisposable
     [Fact]
     public async Task Создание_список_и_фото_у_владельца()
     {
-        var factory = Factory();
+        var factory = _hosts.Plain;
         var (projectId, root) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
         var api = $"/api/projects/{projectId}/image-editor";
@@ -286,7 +343,7 @@ public class CharacterEndpointsTests : IDisposable
     [Fact]
     public async Task Чужой_пользователь_не_читает_фото_персонажа()
     {
-        var factory = Factory();
+        var factory = _hosts.Plain;
         var (projectId, _) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var owner = factory.CreateAuthenticatedClient();
         var api = $"/api/projects/{projectId}/image-editor";
@@ -306,8 +363,8 @@ public class CharacterEndpointsTests : IDisposable
     [Fact]
     public async Task Выбранный_персонаж_уходит_в_запуск_генерации()
     {
-        var jobs = new CapturingJobs();
-        var factory = Factory(jobs);
+        var factory = _hosts.Jobs.Use();
+        var jobs = factory.Jobs;
         var (projectId, _) = CreateProject(factory, TestWebApplicationFactory.TestUsername);
         var client = factory.CreateAuthenticatedClient();
         var api = $"/api/projects/{projectId}/image-editor";

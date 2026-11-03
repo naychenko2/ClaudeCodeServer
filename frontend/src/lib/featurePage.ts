@@ -26,6 +26,7 @@ import { api } from './api';
 import { onMessage } from './signalr';
 import { getFlag, FLAGS } from './featureFlags';
 import type { FeaturePage } from '../types/featureIndex';
+import type { FeatureRun } from '../types/featureRun';
 import type { ServerMessage } from '../types';
 import type { PlanState } from './featureProgress';
 
@@ -90,6 +91,22 @@ export interface FeatureBriefQueue {
   total: number;
 }
 
+// Согласие двух оценок срока (макет feature-summary-2, «Правило двух оценок»): считает бэк —
+// оценка оркестратора против [p25, p75] истории и порога 30 мин; null — сравнивать не с чем.
+export type FeatureBriefAgreement = 'within' | 'above' | 'below';
+
+// Оценка оркестратора: пишется одним вызовом с голосом, стареет вместе с ним (`note.stale`).
+// Процента и счётчиков в оценке нет; etaEndsAt = `note.at + etaMinutes` (null на паузе,
+// в очереди, в «ждёт вас»).
+export interface FeatureBriefNoteEstimate {
+  // Ещё не начатое: первый пункт — «следом».
+  remaining: string[];
+  etaMinutes: number | null;
+  why: string | null;
+  agreement: FeatureBriefAgreement | null;
+  etaEndsAt: string | null;
+}
+
 // Голос оркестратора (п. 1–2): `text` наружу только владельцу; `stale` считает бэк.
 export interface FeatureBriefNote {
   text: string;
@@ -99,6 +116,25 @@ export interface FeatureBriefNote {
   byUser: boolean;
   stageAtWrite: string;
   stale: boolean;
+  // Оценка оркестратора; нет — null или поля нет (старый ответ).
+  estimate?: FeatureBriefNoteEstimate | null;
+}
+
+// Строка «Сейчас» (brief.active[], макет 2): активная задача фичи. Порядок задаёт бэк:
+// ждёт человека → ошибка/стоит → остальные по времени. Текст строки собирает фронт по
+// stage/stepRef/lane; у эпика, ждущего человека, stage = 'feature'.
+export type FeatureBriefActiveState = 'working' | 'review' | 'waiting_you' | 'error' | 'held';
+
+export interface FeatureBriefActive {
+  taskId: string;
+  stage: string;
+  stepRef: string | null;
+  lane: string | null;
+  personaId: string | null;
+  state: FeatureBriefActiveState;
+  since: string;
+  // waiting_you — причина ожидания, error — причина остановки.
+  reason: string | null;
 }
 
 // Блок «Сводка» страницы фичи: аддитивное поле `brief` ответа
@@ -117,6 +153,12 @@ export interface FeatureBrief {
   estimate: FeatureBriefEstimate | null;
   queue: FeatureBriefQueue | null;
   note: FeatureBriefNote | null;
+  // Срок из первой оценки оркестратора после старта: «на старте обещала ≈ N» в итоге закрытой.
+  initialEtaMinutes?: number | null;
+  // Оценка старта по впереди стоящим фичам очереди: «старт ≈ 15:00».
+  queueStartEstimate?: string | null;
+  // Все активные задачи фичи; brief.now — его первая строка. Старый бэк поля не несёт.
+  active?: FeatureBriefActive[];
   // Время последнего ЗАПИСАННОГО события состояния (бэк B6, дефект f2da9354); снятие
   // паузы/ожидания значение откатывает (см. ADR-031 §2). Отдельное от computedAt — момента
   // этого ответа: computedAt — «насколько свеж снимок», updatedAt — «насколько old показано».
@@ -148,7 +190,7 @@ let _fid: string | null = null;
 // Лимит ленты событий (GET features/{fid}?eventsLimit=…): undefined → дефолт бэка
 // (100), 'all' → вся лента (после «Показать все»). Сбрасывается при смене fid.
 let _eventsLimit: string | undefined = undefined;
-// Лента «События» раскрыта (показаны все события, не только 8): UI-состояние вкладки.
+// Лента «История» раскрыта (показаны все события, не только 8): UI-состояние вкладки.
 // Живёт в сторе (уровень модуля, не в компоненте): переживает уход на другую вкладку
 // и возврат (локальный useState сбрасывался при перемонтировании вкладки).
 let _eventsExpanded = false;
@@ -235,16 +277,24 @@ let _tab: FeaturePageTab = DEFAULT_TAB;
 // Названия вкладок: ОДИН словарь (minor 1, ревью Ф9b) — единый источник для полосы
 // вкладок (FeaturePageTabs) И для чипа возврата «← к фиче · {вкладка}» в шапке чата (Ф9b):
 // названия не разъезжаются (раньше у чипа был отдельный короткий словарь, «Планы»).
-// Вкладка «Планы и макеты» в чипе недостижима (из неё перехода в чат нет — только в задачу,
-// а чип рисуется на chat-переходе), но запись НЕ мёртвая: её использует полоса вкладок.
+// Ш1b (разрез упрощения страницы фичи): «События» → «История», «Планы и макеты» →
+// «Материалы». Вкладка «Материалы» в чипе недостижима (из неё перехода в чат нет — только
+// в задачу, а чип рисуется на chat-переходе), но запись НЕ мёртвая: её использует полоса
+// вкладок.
 export const FEATURE_TAB_LABEL: Record<FeaturePageTab, string> = {
   timeline: 'Хронология',
-  plans: 'Планы и макеты',
+  plans: 'Материалы',
   chats: 'Чаты',
-  tasks: 'Задачи',
-  events: 'События',
+  tasks: 'Шаги',
+  events: 'История',
   stats: 'Статистика',
 };
+
+// Счётчик вкладки «Шаги»: знаменатель трекера (stepProgress.total — тот же, что на полосе
+// готовности), а не число задач. Нет агрегата прогресса (старый ответ) — число цепочек.
+export function stepsTabCount(run: FeatureRun): number {
+  return run.stepProgress?.total ?? run.stepChains?.length ?? 0;
+}
 
 // Текущая вкладка без подписки: recordFeatureReturn запоминает её в момент перехода.
 export function getFeaturePageTab(): FeaturePageTab {
@@ -338,7 +388,7 @@ export function refetchFeaturePage(fid: string) {
   fetchPage(fid, true);
 }
 
-// «Показать все» (вкладка «События»): догрузить ВСЮ ленту (eventsLimit=all). Бэк
+// «Показать все» (вкладка «История»): догрузить ВСЮ ленту (eventsLimit=all). Бэк
 // по умолчанию режет ленту до 100 (eventsLimit), а eventsTotal — общее число до
 // обрезки; без догрузки «Показать все · 1000» раскрывало бы только 100. После
 // раскрытия лимит остаётся 'all' — live-перезапросы тоже тянут всю ленту (иначе
@@ -365,7 +415,7 @@ export function expandFeaturePageEvents(fid: string) {
   fetchPage(fid, false, undefined, true);
 }
 
-// «Свернуть» (вкладка «События»): обратно к 8 последним. Данные (лента) не меняются —
+// «Свернуть» (вкладка «История»): обратно к 8 последним. Данные (лента) не меняются —
 // меняется только видимое раскрытие (UI-состояние в сторе, переживает смену вкладки).
 export function collapseFeaturePageEvents(fid: string) {
   if (_fid !== fid || !_eventsExpanded) return;
@@ -373,7 +423,7 @@ export function collapseFeaturePageEvents(fid: string) {
   emit();
 }
 
-// Хуки UI-состояния вкладки «События» (тот же стор, что и данные): раскрытие ленты
+// Хуки UI-состояния вкладки «История» (тот же стор, что и данные): раскрытие ленты
 // (показаны все события, не только 8) и локальная ошибка догрузки.
 export function useFeaturePageEventsExpanded(): boolean {
   return useSyncExternalStore(subscribe, () => _eventsExpanded, () => _eventsExpanded);

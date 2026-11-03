@@ -2,6 +2,7 @@ using ClaudeHomeServer.Services.AudioEditor;
 using ClaudeHomeServer.Services.VideoEditor;
 using ClaudeHomeServer.Services.Backup;
 using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Spend;
 using FluentAssertions;
 
@@ -231,6 +232,19 @@ public class BackupPathsTests
     {
         // А вот сам graph.json невосстановим без перестроения Roslyn — его бэкапим
         BackupPaths.ShouldInclude("code-graphs/ab12cd/graph.json").Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("pages/Общее/X.md")] // страница раздела
+    [InlineData("keeper/manifest/common.json")] // манифест: без него сверка после restore даёт ложный drift
+    [InlineData("keeper/log.jsonl")] // журнал: единственный носитель отката между бэкапами
+    public void Вики_СтраницыИХранительПопадаютВАрхив(string underOwner)
+    {
+        // Сторож ADR-035 §13: корень «wiki» в BackupPaths не исключён — и не должен
+        // стать исключением незаметно. Имя корня — из константы WikiPaths.DirName,
+        // её же читает гейт записи: переименование корня покраснило бы и гейт, и этот тест.
+        var path = $"{WikiPaths.DirName}/user-1/{underOwner}";
+        BackupPaths.ShouldInclude(path).Should().BeTrue();
     }
 
     [Theory]

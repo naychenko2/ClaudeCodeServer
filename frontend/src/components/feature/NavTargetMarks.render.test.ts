@@ -9,9 +9,9 @@
 // Разведённые строки ловят оба дефекта по отдельности (A/B/C не дают «всё или ничего»).
 //
 // Места: Хронология (исполнители этапов · меню карточек «Производства», W4-2F3),
-// Чаты (живые · архивные), Задачи, События,
+// Чаты (живые · архивные), Шаги, События,
 // Статистика (кнопки задач · «Дольше всех» · разрез), Планы (читалка · макет), тревога
-// страницы (FeaturePageAlert), попап/панель (FeatureRunView), шторка (FeatureBannerSheet).
+// страницы (FeaturePageAlert). (F2: попап/панель и шторка из чата убраны.)
 //
 // Мутации (в отчёте):
 //   (1) taskClosed не заполнен в месте X → строка C этого места краснеет;
@@ -30,8 +30,6 @@ import { FeatureStatsTab } from './FeatureStatsTab';
 import { FeaturePlanReader } from './FeaturePlanReader';
 import { MockupCard } from './FeatureMockups';
 import { FeaturePageAlert } from './FeaturePageHeader';
-import { FeatureRunView } from '../chat/feature/FeatureRunView';
-import { FeatureBannerSheet } from '../chat/feature/FeatureBannerSheet';
 import { buildNavMarks } from '../../lib/featureNavMarks';
 import { __test as backNav } from '../../lib/featureBackNav';
 import { __test as pageStore, setFeaturePageTab } from '../../lib/featurePage';
@@ -281,12 +279,12 @@ describe('пометки: Чаты', () => {
 });
 
 // ═══ Задачи ══════════════════════════════════════════════════════════════════
-describe('пометки: Задачи', () => {
-  it('строки задач: A / B / C (чат — linkedSessionId, задача — по status)', () => {
+describe('пометки: Шаги', () => {
+  it('строки шагов: A / B / C (чат — chain.chatId, задача — по status головы цепочки)', () => {
     const c = render(createElement(FeatureTasksTab, { run: mkRun(), featureId: 'f1' }));
-    expectFlags(byId(c, 'task-row-t-a')[0], A, 'задача A');
-    expectFlags(byId(c, 'task-row-t-b')[0], B, 'задача B');
-    expectFlags(byId(c, 'task-row-t-c')[0], C, 'задача C');
+    expectFlags(byId(c, 'step-row-Ш1')[0], A, 'шаг A');
+    expectFlags(byId(c, 'step-row-Ш2')[0], B, 'шаг B');
+    expectFlags(byId(c, 'step-row-Ш3')[0], C, 'шаг C');
   });
 });
 
@@ -344,7 +342,7 @@ describe('пометки: Статистика', () => {
     expect(btns.map(b => attr(b, 'aria-label').includes('(задача закрыта)'))).toEqual([false, true]);
   });
 
-  // Вкладка «Пульс» (ST-F14a) рисуется только с run: блоки «Сейчас работают»,
+  // Вкладка «Пульс» (ST-F14a) рисуется только с run: блоки
   // «Главные потери» и разрез «Кто и на чём работал» получают пометки и контекст возврата.
   const NOW_ROW = { taskId: 't-b', stage: 'prod', personaId: null, stepRef: 'Ш2', title: 't-b', startedAt: '2026-10-20T10:00:00Z', linkedSessionId: 'c-arch' };
   const pulseStats = (): FeatureStats => {
@@ -377,19 +375,6 @@ describe('пометки: Статистика', () => {
     backNav.reset();
     click(byId(nav, 'nav-target-task')[0]);
     expectBack({ kind: 'task', id: 't-b' });
-  });
-
-  it('«Сейчас работают»: чат c-arch помечен «в архиве»', () => {
-    const c = renderTab();
-    expectFlags(byId(c, 'now-row-t-b')[0], { chat: 'archived', task: 'none' }, 'сейчас работают');
-  });
-
-  it('«Сейчас работают»: клик по чату пишет точку возврата с вкладкой «Статистика»', () => {
-    pageStore.reset(); backNav.reset();
-    setFeaturePageTab('stats');
-    const c = renderTab();
-    click(byId(byId(c, 'now-row-t-b')[0], 'nav-target-chat')[0]);
-    expectBack({ kind: 'chat', id: 'c-arch' });
   });
 
   it('разрез (чаты группы): c-live живой, c-arch в архиве', () => {
@@ -476,35 +461,5 @@ describe('пометки: тревога страницы (FeaturePageAlert)', (
   });
 });
 
-describe('пометки: попап и панель (FeatureRunView)', () => {
-  it('«мерж ждёт согласия»: пара финала + исполнители этапа в порядке DOM', () => {
-    const run = mkRun({ state: 'merge_pending' });
-    const html = renderToStaticMarkup(createElement(FeatureRunView, { run }));
-    const f = navFlagsFromHtml(html);
-    // Порядок: пара финала (c-arch · t-fin), затем исполнители A, B, C.
-    expect(f.chats).toEqual([true, false, true, false]);
-    expect(f.tasks).toEqual([true, false, false, true]);
-  });
-
-  it('тревога «ждёт вас»: кнопка задачи тревоги помечена закрытой', () => {
-    const run = mkRun({
-      state: 'waiting',
-      attention: { kind: 'wait', taskId: 't-c', since: null, reason: null, personaId: null, linkedSessionId: 'c-live' },
-    });
-    const html = renderToStaticMarkup(createElement(FeatureRunView, { run }));
-    // Тревога (первая задача в разметке) → t-c закрыта; далее исполнители A, B, C.
-    expect(navFlagsFromHtml(html).tasks).toEqual([true, false, false, true]);
-  });
-});
-
-describe('пометки: шторка (FeatureBannerSheet)', () => {
-  it('исполнители текущего этапа: A / B / C', async () => {
-    const c = render(createElement(FeatureBannerSheet, { runs: [mkRun()], isMobile: false, onClose: () => {} }));
-    await act(async () => { await new Promise(r => setTimeout(r, 0)); });
-    const rows = byId(c, 'feature-sheet-executor');
-    expect(rows.length).toBe(3);
-    expectFlags(rows[0], A, 'шторка A');
-    expectFlags(rows[1], B, 'шторка B');
-    expectFlags(rows[2], C, 'шторка C');
-  });
-});
+// (F2: «попап/панель» (FeatureRunView) и «шторка» (FeatureBannerSheet) из чата убраны;
+// переходы «чат/задача» остались на страницах фичи — их места проверяются тестами выше.)

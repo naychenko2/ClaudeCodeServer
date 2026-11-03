@@ -1330,7 +1330,8 @@ public class SubsystemBoundaryTests
         // мост чекбоксов заметок ↔ задач (`NoteTaskSyncService`), авто-истечение
         // заметок (`NoteExpiryService`). `UnifiedSearchService` остаётся в корне —
         // он фасад поперёк Notes+Task, отдельная задача на разрез.
-        // **Допусков нет вовсе — ни префиксов, ни точечных типов.** Пустой
+        // **Точечных допусков нет.** Один префикс-шов добавлен S6b-3 (Prompts —
+        // промпты Хранителя для WikiIngestService, по образцу Team→Prompts). Пустой
         // `AllowedExactNamespaces` здесь не забытая строка, а результат Этапа 5: после
         // выноса в `ClaudeHomeServer.Notes.csproj` вертикаль физически не может сослаться
         // на Main (нет `ProjectReference`), и весь прежний список швов закрыт контрактами
@@ -1350,6 +1351,10 @@ public class SubsystemBoundaryTests
         // и с ними, но был ШИРЕ реальной поверхности зависимостей — то есть пропустил бы
         // повторную прямую связь Notes с `TaskManager`/`FileService`/`Hubs` в обход
         // интерфейсов. Ровно та декоративность, ради проверки которой волна и делалась.
+        // Под корнем `ClaudeHomeServer.Services.Notes.` живёт и namespace `…Notes.Wiki`
+        // (разделы и видимость LLM-wiki, папка Services/Wiki этой сборки): его типы
+        // проверяет этот сторож по префиксу, отдельной строки в таблице нет (ревью S2d,
+        // минор 4: своя строка «Services.Wiki» создавала бы мину на связи Notes → Wiki).
         new object[]
         {
             new VerticalBoundary(
@@ -1359,6 +1364,11 @@ public class SubsystemBoundaryTests
                     .Concat(new[]
                     {
                         "ClaudeHomeServer.Services.Notes",
+                        // Префикс-шов по факту ссылок (S6b-3, по образцу Team→Prompts):
+                        // WikiIngestService строит промпты двух проходов разбора из
+                        // WikiKeeperPrompts (S6b-1). Промпт-материал Хранителя живёт в
+                        // Prompts; копия в Notes была бы второй точкой правды.
+                        "ClaudeHomeServer.Services.Prompts",
                     })
                     .ToArray(),
                 Array.Empty<string>()),
@@ -2040,8 +2050,14 @@ public class SubsystemBoundaryTests
             .FirstOrDefault(a => a.GetName().Name == CoreAssemblyName);
         Assert.NotNull(asm);
 
+        // Compiler-generated типы (имя с «<» — async state-машины, лямбды, генератор
+        // [GeneratedRegex] кладёт свой помощник в namespace System.Text.RegularExpressions.Generated)
+        // — не типы вертикали, а machinery файла, и здесь тот же отказ, что в
+        // SubsystemBoundaryCoverageTests («мусорные имена» не заводят строк в таблицах):
+        // первый GeneratedRegex в Core (SecretRedactor, S6j) дал бы ложный «stray» namespace.
         var types = asm!.GetTypes()
             .Where(t => !t.IsNested && t.Namespace is not null)
+            .Where(t => !(t.Name?.Contains('<') ?? false))
             .ToArray();
         Assert.NotEmpty(types); // защита от вакуумного прохода: пустой набор зеленит что угодно
 

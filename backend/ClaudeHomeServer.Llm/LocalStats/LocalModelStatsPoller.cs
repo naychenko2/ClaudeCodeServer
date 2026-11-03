@@ -248,7 +248,9 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     {
         if (SourceFactoryOverride is { } f)
             return f();
-        var local = _providers.All.FirstOrDefault(p => p.IsLocal);
+        // Первый IsLocal СО Stats: реестр идёт по алфавиту ключей, провайдер без Stats не должен
+        // перехватывать основную дорожку (01.11.2026: local-gemma раньше local-qwen спрятал панель).
+        var local = _providers.All.Where(p => p.IsLocal).OrderBy(p => p.Stats is null).FirstOrDefault();
         if (local is null || local.Stats is null)
             return (new NullEngineMetricsSource(), null, FirstModel(local), null, false);
 

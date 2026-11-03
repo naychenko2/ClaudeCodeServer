@@ -31,6 +31,36 @@ export {
   getNoteForView, saveNoteOffline, createNoteOffline, deleteNoteOffline, offlineResolve,
 } from '../notesOffline';
 
+// ─── wiki (LLM-wiki: стор + операции) ────────────────────────────────────────
+// Единственный стор — хостовый: MF-модуль «Заметки» берёт стор вики, флаги и WikiError
+// через кит — своя копия относительных импортов дублировала бы состояние стора и давала
+// отдельный экземпляр WikiError (QA P1, дефект B1).
+export {
+  parseSectionKey, groupSectionsByKind, WikiError,
+  ensureWikiLoaded, loadWikiCatalog, loadWikiPage,
+  initializeWiki, adoptWikiPage, deleteWikiSection,
+  listWikiPackages, decideWikiPackage, acceptAllWikiPackage,
+  loadWikiJournal, retractWikiSource, getWikiHealth, runWikiLint,
+  analyzeWikiChat, loadWikiChatAnalyzeStatus, loadWikiChats, setWikiChatMark, ingestWikiNote, transferWikiNote,
+  adoptWikiPageMine,
+  useWikiTree, useWikiCatalog, useWikiPage, useWikiPageGone,
+  requestOpenWikiPage, consumeOpenWikiPage, useWikiOpenRequest,
+  loadWikiSettings, useWikiSettings, putWikiNightly, putWikiAutoApply, resumeWikiApplyClass,
+  wikiAuthorshipOf, editWikiPage, wikiFootnoteLabel, loadWikiSourceCard,
+  restoreWikiPage, wikiOverridesOf, wikiHasReplacement, normWikiStatement, wikiActiveLines, useWikiReplacementDot,
+} from '../wiki';
+export type {
+  WikiSectionDto, WikiPageInfoDto, WikiPackageDto, WikiPackageOperationDto,
+  WikiApplyOutcomeDto, WikiDecisionDto, WikiJournalDto, WikiJournalEntryDto,
+  WikiRetractDto, WikiChatAnalyzeOk, WikiNoteIngestDto, WikiNoteTransferDto, WikiOpenRequest,
+  WikiChatTriage, WikiChatMark,
+  WikiSettingsSnapshot, WikiApplyClassDto, WikiNightlySettings, WikiLastNight, WikiPutNightlyResult,
+  WikiNightlyPatch, WikiNightlyOutcome,
+  WikiAuthorship, WikiPageInfoAuthoredDto, WikiCatalogDto, WikiSourceCardInfo, WikiPageEditableDto, WikiConflictPage, WikiFootnoteDto,
+  WikiOverrideDto, WikiOverrideOp, WikiPageOverriddenDto, WikiOverrodeKind, WikiJournalEntryOverrideDto,
+  WikiAdoptMineResult,
+} from '../wiki';
+
 // ─── subsystems ──────────────────────────────────────────────────────────────
 export { useSubsystem, isSubsystemEnabled } from '../subsystems';
 
@@ -93,7 +123,7 @@ export { showToast } from '../toast';
 export { ensurePersonasLoaded, usePersonas, personaLabel } from '../personas';
 
 // ─── breakpoints ─────────────────────────────────────────────────────────────
-export { useIsMobile, useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../breakpoints';
+export { useIsMobile, useWindowWidth, MOBILE_MAX, TABLET_MAX, TABLET_WIDE_MIN } from '../breakpoints';
 
 // ─── noAutofill ──────────────────────────────────────────────────────────────
 export { NO_AUTOFILL } from '../noAutofill';
@@ -185,6 +215,19 @@ export { HubHeader } from '../../components/HubHeader';
 
 // ─── components/chat/contexts ────────────────────────────────────────────────
 export { ChatProjectContext } from '../../components/chat/contexts';
+
+// ─── components/LocalGpuQueueLine ──────────────────────────────────────────────
+// Строка ожидания локальной GPU-очереди в карточках трёх редакторов (ADR-029 §8):
+// относительный импорт из features/ собрал бы вторую копию компонента в remote.
+export { LocalGpuQueueLine } from '../../components/LocalGpuQueueLine';
+
+// ─── cloudRescue ───────────────────────────────────────────────────────────────
+// Общая логика «Сделать в облаке» трёх редакторов (ADR-029 §8): guard двойного клика,
+// «стенд лежит», выбор облачного исполнителя, текст диалога и подпись кнопки.
+export {
+  makeLaunchGuard, isStandDown, cloudCandidate,
+  CLOUD_DIALOG_TITLE, cloudDialogSubtitle, cloudButtonLabel,
+} from '../cloudRescue';
 
 // ─── features/personas/PersonaAvatar ─────────────────────────────────────────
 export { PersonaAvatar } from '../../features/personas/PersonaAvatar';

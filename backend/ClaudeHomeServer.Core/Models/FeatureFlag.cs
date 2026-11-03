@@ -76,6 +76,15 @@ public static class FeatureFlagKeys
     // SharedProjects:Enabled, читается только через SharedProjectsGate.
     // Dark launch, выключено по умолчанию.
     public const string SharedProjects = "shared-projects";
+
+    // LLM-wiki (ADR-035/036): база знаний, которую ведёт Хранитель. Флаг прячет UI (вкладку
+    // «Вики») и источник wiki от агентов; гейт записи в заведённую вику от него не зависит.
+    // Dark launch, выключено по умолчанию.
+    public const string LlmWiki = "llm-wiki";
+
+    // «Заметки и вики вместе» (вложен в llm-wiki): один раздел для заметок и вики.
+    // Работает только при включённом llm-wiki. Dark launch, выключено по умолчанию.
+    public const string NotesWikiUnified = "notes-wiki-unified";
 }
 
 /// <summary>
@@ -200,6 +209,25 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.SharedProjects,
             Title: "Общие проекты",
             Description: "Можно открыть свой проект другому человеку: пригласить его по имени учётной записи редактором или читателем, и проект появится у него в списке. Чтобы вас пригласили, флаг должен быть включён и у вас.",
+            Default: false,
+            Stage: "dev"),
+
+        // LLM-wiki (ADR-035/036): страница с цитатами, которую ведёт Хранитель. Флаг прячет
+        // вкладку «Вики» и источник wiki от агентов; в заведённую вику пишет только Хранитель
+        // независимо от флага (fail-closed). Dark launch, выключено по умолчанию.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.LlmWiki,
+            Title: "LLM-wiki: база знаний",
+            Description: "ИИ ведёт вашу базу знаний: раскладывает новое по страницам с цитатами, замещает устаревшее, отмечает противоречия и проверяет здоровье базы. До включения вкладка «Вики» и страницы вики в работе агентов не участвуют.",
+            Default: false,
+            Stage: "dev"),
+
+        // «Заметки и вики вместе» (вложен в llm-wiki): один раздел для заметок и вики.
+        // Dark launch, выключено по умолчанию.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.NotesWikiUnified,
+            Title: "Заметки и вики вместе",
+            Description: "Один раздел для заметок и вики: навигация в боковых панелях, правка страниц вики человеком вместе с ИИ. Работает при включённом llm-wiki.",
             Default: false,
             Stage: "dev"),
     ];

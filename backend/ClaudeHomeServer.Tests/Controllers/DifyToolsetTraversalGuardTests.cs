@@ -24,6 +24,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// тесты не ходят в сеть и не зависят от настроенной секции (в отличие от
 /// DifyHttpOwnerIsolationTests). Заодно — лимит имени публичной базы (неблокирующее №4).
 /// </summary>
+[Trait("Category", "Host")]
 public class DifyToolsetTraversalGuardTests : IClassFixture<DifyToolsetTraversalGuardTests.Host>, IDisposable
 {
     /// <summary>

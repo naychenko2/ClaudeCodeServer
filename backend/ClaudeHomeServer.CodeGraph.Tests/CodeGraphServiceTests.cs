@@ -9,6 +9,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // CodeGraphService: дебаунс и отмена фоновых перестроений.
 // Фабрика ставит CodeGraph:RebuildDebounceMs=50 — окно дебаунса короткое,
 // ожидание в сотни миллисекунд надёжно его перекрывает.
+[Trait("Category", "Host")]
 public class CodeGraphServiceTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

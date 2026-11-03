@@ -13,6 +13,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// ни состава, ни вызова: персона из чужого воркспейса не то что не редактируется —
 /// её существование не подтверждается.
 /// </summary>
+[Trait("Category", "Host")]
 public class PersonasHttpOwnerIsolationTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

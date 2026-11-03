@@ -17,11 +17,11 @@ import { defaultSchema } from 'rehype-sanitize';
 export const HTML_SCHEMA = {
   ...defaultSchema,
   tagNames: [...(defaultSchema.tagNames ?? []), 'details', 'summary', 'sub', 'sup', 'picture', 'source'],
-  // Внутренние схемы ссылок продукта (вики-переходы, embed, вложения заметок) —
+  // Внутренние схемы ссылок продукта (вики-переходы, embed, вложения заметок, маркеры сносок) —
   // иначе санитайз вырезал бы href/src у всего, что рендерит режим заметок
   protocols: {
     ...defaultSchema.protocols,
-    href: [...(defaultSchema.protocols?.href ?? []), 'wikilink', 'noteembed', 'noteatt'],
+    href: [...(defaultSchema.protocols?.href ?? []), 'wikilink', 'noteembed', 'noteatt', 'fnref'],
     src: [...(defaultSchema.protocols?.src ?? []), 'noteatt', 'data'],
   },
   attributes: {

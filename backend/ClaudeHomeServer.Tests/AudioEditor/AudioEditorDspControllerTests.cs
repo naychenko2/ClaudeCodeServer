@@ -14,32 +14,53 @@ namespace ClaudeHomeServer.Tests.AudioEditor;
 
 // Ручки «Без ИИ» на собранном приложении: правка и склейка её версии, пики, нет шва — 503
 // dsp_unavailable, а не 500. Шов IAudioDsp — подставной (регистрация позже боевой побеждает)
-public class AudioEditorDspControllerTests : IDisposable
+[Trait("Category", "Host")]
+public class AudioEditorDspControllerTests : IClassFixture<AudioEditorDspControllerTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
-    private readonly FakeDsp _dsp = new();
-    private HttpClient? _client;
-    private string _projectId = "";
+    private readonly Hosts _hosts;
 
-    public void Dispose()
+    public AudioEditorDspControllerTests(Hosts hosts) => _hosts = hosts;
+
+    // Хост на КЛАСС: конфигурация одна — фейковый шов вместо боевого. «Без ffmpeg» — не отдельный
+    // хост: модуль читает Available на каждом запросе (DspAudioEngine.cs:86), поэтому это флаг
+    // фейка, который тест выставляет сам через Use(). Проект, чат и файл каждый тест заводит свои
+    public sealed class Hosts : IDisposable
     {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
+        public DspHost Dsp { get; } = new();
+
+        public void Dispose() => Dsp.Dispose();
     }
+
+    public sealed class DspHost : TestWebApplicationFactory
+    {
+        public FakeDsp Fake { get; } = new();
+
+        public DspHost() => ExtraServices = services => services.AddSingleton<IAudioDsp>(Fake);
+
+        // Чистое состояние фейка на начало теста: флаг и записанные входы
+        public DspHost Use(bool available = true)
+        {
+            Fake.Reset();
+            Fake.Available = available;
+            return this;
+        }
+    }
+
+    private HttpClient _client = null!;
+    private string _projectId = "";
 
     private async Task<string> Start(bool available = true)
     {
-        _dsp.Available = available;
-        _factory.ExtraServices = services => services.AddSingleton<IAudioDsp>(_dsp);
-        var users = _factory.Services.GetRequiredService<UserStore>();
+        var factory = _hosts.Dsp.Use(available);
+        var users = factory.Services.GetRequiredService<UserStore>();
         var user = users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
-        var dir = Path.Combine(_factory.TempDir, "dsp_" + Guid.NewGuid().ToString("N")[..8]);
+        var dir = Path.Combine(factory.TempDir, "dsp_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         File.WriteAllBytes(Path.Combine(dir, "intro.mp3"), "INTRO"u8.ToArray());
-        _projectId = _factory.Services.GetRequiredService<ProjectManager>()
+        _projectId = factory.Services.GetRequiredService<ProjectManager>()
             .Create("dsp-" + Guid.NewGuid().ToString("N")[..6], dir, user.Id, TestWebApplicationFactory.TestUsername).Id;
-        _client = _factory.CreateAuthenticatedClient();
-        var chatId = (await _factory.Services.GetRequiredService<SessionManager>()
+        _client = factory.CreateAuthenticatedClient();
+        var chatId = (await factory.Services.GetRequiredService<SessionManager>()
             .CreateAsync(_projectId, ClaudeMode.AcceptEdits, name: "Звук")).Id;
         return $"/api/projects/{_projectId}/audio-editor/sessions/{chatId}";
     }
@@ -70,7 +91,7 @@ public class AudioEditorDspControllerTests : IDisposable
         var peaks = await _client!.GetAsync($"{chat}/threads/{threadId}/versions/{versionId}/peaks?points=3");
         peaks.StatusCode.Should().Be(HttpStatusCode.OK, await peaks.Content.ReadAsStringAsync());
         (await Json(peaks)).GetProperty("peaks").GetArrayLength().Should().Be(3);
-        _dsp.PeaksInput.Should().Be("TRIM:INTRO");
+        _hosts.Dsp.Fake.PeaksInput.Should().Be("TRIM:INTRO");
 
         var concat = await _client!.PostAsJsonAsync($"{chat}/concat", new
         {
@@ -79,8 +100,8 @@ public class AudioEditorDspControllerTests : IDisposable
             name = "full.wav",
         });
         concat.StatusCode.Should().Be(HttpStatusCode.OK, await concat.Content.ReadAsStringAsync());
-        _dsp.ConcatPieces.Select(p => Encoding.UTF8.GetString(p)).Should().Equal("TRIM:INTRO", "INTRO");
-        _dsp.Joints.Should().Equal(AudioJoint.Pause(0.5));
+        _hosts.Dsp.Fake.ConcatPieces.Select(p => Encoding.UTF8.GetString(p)).Should().Equal("TRIM:INTRO", "INTRO");
+        _hosts.Dsp.Fake.Joints.Should().Equal(AudioJoint.Pause(0.5));
     }
 
     [Fact]
@@ -120,12 +141,36 @@ public class AudioEditorDspControllerTests : IDisposable
         (await Json(stale)).GetProperty("code").GetString().Should().Be(AudioEditErrorCodes.RevisionConflict);
     }
 
-    private sealed class FakeDsp : IAudioDsp
+    [Fact]
+    public async Task Use_сбрасывает_состояние_фейка()
+    {
+        var fake = _hosts.Dsp.Fake;
+        await fake.PeaksAsync("DIRTY"u8.ToArray(), 1, CancellationToken.None);
+        await fake.ConcatAsync([[1]], [AudioJoint.Pause(1)], null, default, CancellationToken.None);
+        fake.PeaksInput.Should().Be("DIRTY");
+
+        _hosts.Dsp.Use();
+
+        fake.PeaksInput.Should().BeNull();
+        fake.ConcatPieces.Should().BeEmpty();
+        fake.Joints.Should().BeEmpty();
+        fake.Available.Should().BeTrue();
+    }
+
+    public sealed class FakeDsp : IAudioDsp
     {
         public bool Available { get; set; } = true;
         public string? PeaksInput { get; private set; }
         public IReadOnlyList<byte[]> ConcatPieces { get; private set; } = [];
         public IReadOnlyList<AudioJoint> Joints { get; private set; } = [];
+
+        public void Reset()
+        {
+            Available = true;
+            PeaksInput = null;
+            ConcatPieces = [];
+            Joints = [];
+        }
 
         private static AudioDspOutput Out(string op, byte[] input, AudioFormat format) =>
             new(Encoding.UTF8.GetBytes(op + ":" + Encoding.UTF8.GetString(input)), format, null);

@@ -118,6 +118,7 @@ public class LauncherProjectContextGuardTests(ITestOutputHelper output)
            && typeof(ILauncherFactory).IsAssignableFrom(t);
 
     [Fact]
+    [Trait("Category", "Slow")]
     public void ForOwner_ТолькоВМестахБезПроекта()
     {
         foreach (var (key, n) in Hits.Value.OrderBy(h => h.Key)) output.WriteLine($"{key}: {n}");
@@ -133,6 +134,7 @@ public class LauncherProjectContextGuardTests(ITestOutputHelper output)
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public void AllowList_НеПротух()
     {
         // Разрешение, под которым вызовов стало меньше, — дыра: туда молча встанет новый

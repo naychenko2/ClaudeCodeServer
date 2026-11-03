@@ -146,9 +146,11 @@ public class LocalTurnGateTests
         return new Turn { Inner = inner, Sut = sut, Out = outList };
     }
 
+    // Состояние гейта и очереди продукт сигналом не отдаёт — опрашиваем его; потолок 30 с —
+    // страховка от зависания под нагрузкой шарда, а не проверяемая скорость (прежние 5 с краснели)
     private static async Task WaitForAsync(Func<bool> condition, string what)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(5);
+        var deadline = DateTime.UtcNow.AddSeconds(30);
         while (DateTime.UtcNow < deadline)
         {
             if (condition()) return;
@@ -410,6 +412,7 @@ public class LocalTurnGateTests
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task ПоздниеСдвигиПозиции_ПослеСнятияСтроки_НеВоскрешаютЕё()
     {
         var gate = new LocalEngineBusyTracker(_clock);
@@ -433,7 +436,7 @@ public class LocalTurnGateTests
         await WaitForAsync(() => c.Downstream().OfType<LocalTurnQueueMessage>().Any(m => m.Position == 2), "C в очереди вторым");
 
         var finishA = Task.Run(a.FinishOk);   // Release сдвигает C на позицию 1 и зависает в доставке
-        shiftEntered.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue("сдвиг дошёл до доставки");
+        shiftEntered.Wait(TimeSpan.FromSeconds(30)).Should().BeTrue("сдвиг дошёл до доставки");
         c.Sut.Interrupt();
         await Task.Delay(100);                // даём «Стопу» дойти до снятия строки
         releaseShift.Set();

@@ -304,9 +304,81 @@ public class TurnExecutorUnixTests
         h.Logs.Should().NotContain(l => l.Contains(TurnHarness.TurnToken));
     }
 
+    /// <summary>
+    /// Гонка остановки (дефект 888c7c67): <c>KillAll</c> по живым ходам догоняет ход, уже
+    /// освобождённый своим <c>using (process)</c> — обрывался на обращении к освобождённому
+    /// компоненту (<c>Process.Id</c>, <c>Process.HasExited</c>: «No process is associated with
+    /// this object») и не доходил до остальных.
+    /// Барьер без стены времени: конец вывода не подтверждён сервером (обрыв связи на кадре
+    /// Exit, переподключение заперто) — в этом окне процесс хода ещё в списке живых, и тест
+    /// освобождает его сам, ровно как Dispose конца хода.
+    /// </summary>
+    [SkippableFact]
+    public async Task Остановка_агента_не_обрывается_на_уже_освобождённом_процессе_хода()
+    {
+        var cliDir = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "fake-cli-" + Guid.NewGuid().ToString("N")[..8]));
+        UnixGroupProcess? released = null, alive = null;
+        var starts = 0;
+        await using var h = new TurnHarness(FakeUnixCli.Write(cliDir.FullName),
+            drainTimeout: TimeSpan.FromSeconds(30),
+            launcher: launch =>
+            {
+                var real = UnixGroupProcess.Start(launch);
+                // первый ход — «освобождённый»: его процесс освобождает тест
+                if (++starts == 1) released = real; else alive = real;
+                return real;
+            });
+
+        // Ход A дошёл до конца вывода, подтверждения нет: агент стоит в ожидании связи,
+        // его запись ещё в списке живых
+        h.Server.ReconnectGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        h.Server.BreakAfterFrames = 3; // Info, Stdout(«init»), Exit — обрыв ДО подтверждения Exit
+        await h.StartAsync(h.Spawn(), turnId: "turn-released");
+        await h.WaitStdoutAsync("\"init\"", new StringBuilder(), Wait);
+        await h.SendStdinAsync("exit\n");
+        await h.Server.ReadUntilExitAsync(Wait);
+        await h.Server.ReconnectAttempted.Task.WaitAsync(Wait);
+
+        // Живой ход B — на своей связи: обход обязан догнать до него, несмотря на A
+        await using var serverB = new ExecTestServer();
+        var linkB = new ExecLink("exec-turn-alive", serverB, TimeSpan.FromSeconds(20));
+        await linkB.StartAsync(CancellationToken.None);
+        var runB = h.Executor.RunAsync(linkB, CancellationToken.None);
+        await serverB.SendControlAsync(new DeviceExecControl(DeviceExecControlOps.Spawn, "turn-alive",
+            h.Spawn(), new DeviceExecGateway("gw-alive", TurnHarness.TurnToken)));
+        (await serverB.Received.ReadAsync().AsTask().WaitAsync(Wait)).Channel
+            .Should().Be(DeviceExecFrameChannel.Info, "ход B в списке живых");
+        // pid живого хода — до гашения: по конце своего хода он освободит компонент сам
+        var alivePid = alive!.Id;
+
+        // Барьер: процесс A освобождён — то же, что делает using (process) по конце хода
+        released!.Dispose();
+
+        try
+        {
+            var act = () => h.Executor.KillAll();
+            act.Should().NotThrow("гашение живых ходов не обрывается на уже освобождённом процессе");
+            await WaitDeadAsync(alivePid);
+            UnixGroupProcess.IsAlive(alivePid).Should().BeFalse("обход дошёл до живого хода и погасил его");
+        }
+        finally
+        {
+            // барьер снят: оба хода доходят до конца даже при красном тесте
+            h.Server.ReconnectGate.SetResult();
+            await serverB.DisposeAsync();
+            await QuietlyAsync(h.Run!);
+            await QuietlyAsync(runB);
+        }
+    }
+
     private static async Task WaitDeadAsync(int pid)
     {
         for (var i = 0; i < 100 && UnixGroupProcess.IsAlive(pid); i++) await Task.Delay(50);
         UnixGroupProcess.IsAlive(pid).Should().BeFalse($"процесс {pid} обязан умереть вместе с ходом");
+    }
+
+    private static async Task QuietlyAsync(Task run)
+    {
+        try { await run.WaitAsync(Wait); } catch (Exception) { /* красному тесту не мешаем */ }
     }
 }

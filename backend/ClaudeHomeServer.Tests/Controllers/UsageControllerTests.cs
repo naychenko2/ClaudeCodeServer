@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // плашки «нужен claude login» на экране использования. Логика вычисления пути покрыта
 // юнит-тестами SubscriptionOAuthUsageServiceTests.LoginCommandFor_*; здесь проверяем,
 // что контроллер реально прокидывает поле в JSON-ответ для аккаунта пула.
+[Trait("Category", "Host")]
 public class UsageControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

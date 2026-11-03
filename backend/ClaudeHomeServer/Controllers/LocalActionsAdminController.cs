@@ -167,6 +167,8 @@ public class LocalActionsAdminController(
             // имя цепочки, а не маскирует его слотом первого шага. Место общее для всех → пресет
             // ищем только среди общих (global). Битая ссылка (id нет в общих) → name=null, steps=[].
             preset = DescribePreset(store.TryGet(key), specialty.Snapshot.Global.Presets),
+            // Подпись именованного движка (Gemma на Video) — иначе «local» читался бы как основной движок
+            engine = router.EngineLabel(route),
         };
     }
 

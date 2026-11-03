@@ -8,6 +8,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // Права у эндпоинта пресета каркаса (знакомство v2, п.3): чужой проект — 404,
 // неизвестный ключ — 400, повторное применение/отказ — 409.
+[Trait("Category", "Host")]
 public class ProjectPresetsControllerTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {

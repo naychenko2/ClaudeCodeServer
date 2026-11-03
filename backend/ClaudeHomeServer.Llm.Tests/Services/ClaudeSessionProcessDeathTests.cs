@@ -31,7 +31,7 @@ public class ClaudeSessionProcessDeathTests : IDisposable
         foreach (var p in _processes)
         {
             try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
-            p.Dispose();
+            ProcessTestCleanup.SafeDispose(p); // Process.Close гонится с уборкой сессии
         }
     }
 
@@ -54,9 +54,12 @@ public class ClaudeSessionProcessDeathTests : IDisposable
             var fake = new ProcessSpec
             {
                 FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
+                // exec: «CLI» — сам sleep, без дочернего процесса. Голый sleep оставил бы осиротевшего
+                // потомка, держащего stdout: ридер не дошёл бы до EOF, и терминал хода пришёл бы
+                // только по ReaderEofGrace (5 с) — замерено на прежнем харнессе
                 Args = OperatingSystem.IsWindows()
                     ? ["/c", "ping -n 120 127.0.0.1 >nul"]
-                    : ["-c", "sleep 120"],
+                    : ["-c", "exec sleep 120"],
                 WorkingDirectory = spec.WorkingDirectory,
                 ClearEnv = spec.ClearEnv,
                 StdioEncoding = spec.StdioEncoding,
@@ -123,7 +126,8 @@ public class ClaudeSessionProcessDeathTests : IDisposable
 
         Process cli;
         lock (_processes) cli = _processes[^1];
-        cli.Kill();
+        // Дерево целиком: на Windows «CLI» — cmd с дочерним ping; на Linux exec-sleep — сам процесс
+        cli.Kill(entireProcessTree: true);
 
         // Смерть обязана доехать до клиента: error в ленте + терминал хода (не тишина Working)
         await WhenAnyAsync(Task.WhenAll(errorSeen.Task, exitedSeen.Task), TimeSpan.FromSeconds(30),

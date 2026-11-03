@@ -15,8 +15,8 @@ import { act, useSyncExternalStore } from 'react';
 import { createElement, StrictMode } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
-import { pluralTasks, featureRunStatusTag } from './FeaturePageHeader';
-import { __test as pageTest, setFeaturePageTab, type FeatureBrief } from '../../lib/featurePage';
+import { featureRunStatusTag } from './FeaturePageHeader';
+import { __test as pageTest, setFeaturePageTab, refetchFeaturePage, type FeatureBrief } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest, recordBackNav, clearBackNav } from '../../lib/featureBackNav';
 import { setAllFlags } from '../../lib/featureFlags';
@@ -27,7 +27,7 @@ import { api } from '../../lib/api';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
 import type { FeaturePage as FeaturePageData } from '../../types/featureIndex';
-import type { FeatureState } from '../../types/featureRun';
+import type { FeatureMergeRisk, FeatureState } from '../../types/featureRun';
 import type { FeatureStats } from '../../types/featureStats';
 import type { Session, Task } from '../../types';
 
@@ -373,8 +373,10 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     // (в дефолте running/без тревоги их нет).
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-alarm'), 'тревога (running, без attention — нет)').toBeNull();
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-main-action'), 'главное действие (running, без attention — нет)').toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-branch'), 'ветка в мета-строке (волна 3)').not.toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-taskcount'), '«M задач» в мета-строке (волна 3)').not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-meta'), 'мета-строки нет (Ш5)').toBeNull();
+    // Ш5: возраст, «M задач» и сегменты ушли из шапки в сводку — в DOM их нет.
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-taskcount'), '«M задач» в мета-строке убрано (Ш5)').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-steps'), 'сегменты прогресса убраны (Ш5)').toBeNull();
     expect(findNodeByAttr(c, 'aria-label', 'Ещё'), 'меню ⋯ (волна 3) — триггер на месте').not.toBeNull();
     // Строки чатов/шагов/событий фичи — нет. («Мерж»-стадия конвейера — легитимна, не проверяем по тексту.)
     expect(findNodeByAttr(c, 'data-testid', 'feature-chat-chat-key'), 'строка чата на месте (as a file: убрана)').toBeNull();
@@ -411,6 +413,10 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
             { id: 't-done', title: 'Закрытая', status: 'done', role: 'step', linkedSessionId: 'c-arch' },
           ],
           reviews: [], qa: [], final: null, merge: null,
+          stepChains: [
+            { stepRef: 'A', title: 'Открытая', taskIds: ['t-open'], outcome: 'running', status: 'идёт', durationMinutes: 0, loops: 0, rounds: [], chatId: 'c-live' },
+            { stepRef: 'B', title: 'Закрытая', taskIds: ['t-done'], outcome: 'accepted', status: 'принят', durationMinutes: 0, loops: 0, rounds: [], chatId: 'c-arch' },
+          ],
           verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
           progress: 0, ready: false,
         } as never,
@@ -439,7 +445,7 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
       });
     };
 
-    it('вкладка «События»: страница передаёт marks — чат c-arch «в архиве», задача t-done «закрыта»', async () => {
+    it('вкладка «История»: страница передаёт marks — чат c-arch «в архиве», задача t-done «закрыта»', async () => {
       withData();
       const c = render({});
       await settle();
@@ -458,19 +464,19 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
       expect(navFlags(c, 'loss-longest-nav')).toEqual([{ chatArchived: true, taskClosed: true }]);
     });
 
-    it('вкладка «Задачи»: закрытая и архивная строки помечены', async () => {
+    it('вкладка «Шаги»: закрытая и архивная строки помечены', async () => {
       withData();
       const c = render({});
       await settle();
       act(() => { setFeaturePageTab('tasks'); });
-      expect(navFlags(c, 'task-row-t-done')).toEqual([{ chatArchived: true, taskClosed: true }]);
-      expect(navFlags(c, 'task-row-t-open')).toEqual([{ chatArchived: false, taskClosed: false }]);
+      expect(navFlags(c, 'step-row-B')).toEqual([{ chatArchived: true, taskClosed: true }]);
+      expect(navFlags(c, 'step-row-A')).toEqual([{ chatArchived: false, taskClosed: false }]);
     });
 
     // Вкладка запоминается при реальном клике из вкладки: чип в чате покажет её название.
     for (const [tab, rowPrefix, label, btnId] of [
-      ['events', 'event-row-', 'События', 'nav-target-chat'],
-      ['tasks', 'task-row-t-done', 'Задачи', 'nav-target-chat'],
+      ['events', 'event-row-', 'История', 'nav-target-chat'],
+      ['tasks', 'step-row-B', 'Шаги', 'nav-target-chat'],
       ['stats', 'loss-longest-nav', 'Статистика', 'nav-target-chat'],
       // «Статистика»: кнопки задач под лентой времени (TaskButtons) — отдельный путь записи.
       ['stats', 'stats-tasks', 'Статистика', 'nav-target-task'],
@@ -497,8 +503,8 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     }
   });
 
-  // === 2в. Переключение вкладок Чаты/Задачи/События → свои компоненты (мутация: ComingSoon → red) ===
-  it('переключение вкладок Чаты/Задачи/События показывает свои компоненты (мутация → ComingSoon → red)', async () => {
+  // === 2в. Переключение вкладок Чаты/Задачи/История → свои компоненты (мутация: ComingSoon → red) ===
+  it('переключение вкладок Чаты/Шаги/История показывает свои компоненты (мутация → ComingSoon → red)', async () => {
     mockGetFeature.result = pageData({
       run: {
         featureId: 'f1',
@@ -524,29 +530,36 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     expect(findNodeByAttr(c, 'data-testid', 'chats'), 'вкладка «Чаты» → FeatureChatsTab').not.toBeNull();
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-tab-stub'), '«Чаты»: не ComingSoon').toBeNull();
 
-    // «Задачи» → FeatureTasksTab (data-testid="tasks").
+    // «Шаги» → FeatureTasksTab (data-testid="tasks").
     act(() => { setFeaturePageTab('tasks'); });
-    expect(findNodeByAttr(c, 'data-testid', 'tasks'), 'вкладка «Задачи» → FeatureTasksTab').not.toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-tab-stub'), '«Задачи»: не ComingSoon').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'tasks'), 'вкладка «Шаги» → FeatureTasksTab').not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-tab-stub'), '«Шаги»: не ComingSoon').toBeNull();
 
-    // «События» → FeatureEventsTab (data-testid="events").
+    // «История» → FeatureEventsTab (data-testid="events").
     act(() => { setFeaturePageTab('events'); });
-    expect(findNodeByAttr(c, 'data-testid', 'events'), 'вкладка «События» → FeatureEventsTab').not.toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-tab-stub'), '«События»: не ComingSoon').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'events'), 'вкладка «История» → FeatureEventsTab').not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-tab-stub'), '«История»: не ComingSoon').toBeNull();
   });
 
-  // === 2г. Счётчики вкладок = честные числа (мутация: обнулить → red) ===
-  // «События» (major 2): счётчик = ИСТОЧНИК «что реально доступно» = events.length
-  // (загружено), НЕ eventsTotal (общее до обрезки бэком). В фикстуре значения
-  // РАЗВЕДЕНЫ (eventsTotal=1000 ≠ events.length=3): мутация events.length→eventsTotal
-  // (и обратная) красит — счётчик стал бы 1000, а не 3.
-  it('счётчики вкладок Чаты/Задачи/События = честные числа (мутация: обнулить → red)', async () => {
+  // === 2г. Счётчики вкладок = честные числа (мутация: обнулить / вернуть загруженное → red) ===
+  // «История» (Ш1b, разворот решения): счётчик = ОБЩЕЕ число (eventsTotal), лента грузится
+  // частями (по eventsLimit, «Показать все» догружает всё). Раньше (major 2) счётчик брал
+  // events.length (загружено). В фикстуре значения РАЗВЕДЕНЫ (events.length=100 ≠
+  // eventsTotal=361): мутация eventsTotal→events.length красит — счётчик стал бы 100, а не 361.
+  it('счётчики вкладок Чаты/Шаги/История = честные числа (мутация: обнулить → red)', async () => {
+    // Лента обрезана бэком: загружено 100 (eventsLimit), всего 361.
+    const events100: import('../../types/featureIndex').FeatureEvent[] = [];
+    for (let i = 0; i < 100; i++) {
+      events100.push({ at: `2026-10-19T10:00:${String(i % 60).padStart(2, '0')}Z`, kind: 'started', taskId: 's1', role: null, stepRef: null, personaId: null, sessionId: null, round: null, reason: null });
+    }
     mockGetFeature.result = pageData({
       run: {
         featureId: 'f1',
         epic: { id: 'f1', title: 'Моя фича' },
         steps: [{ id: 's1', title: 'Шаг 1', status: 'inProgress' }],
         reviews: [], qa: [], final: null, merge: null,
+        // Знаменатель трекера (7) ≠ числу задач (2): счётчик «Шаги» берёт stepProgress.total.
+        stepProgress: { planState: 'partial', total: 7, accepted: 1, review: 1, work: 1, notCreated: 4, withdrawn: 0, unlinkedReworks: 0 },
         verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
         progress: 0, ready: false,
       },
@@ -554,14 +567,10 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
         { id: 'c1', kind: 'curator', taskId: null, archived: false, personaId: 'p-kira', taskRole: null, stepRef: null, lane: null, modelLabel: null, modelFull: null },
         { id: 'c2', kind: 'executor', taskId: null, archived: false, personaId: 'p-denis', taskRole: null, stepRef: null, lane: null, modelLabel: null, modelFull: null },
       ],
-      events: [
-        { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 's1', role: null, stepRef: null, personaId: null, sessionId: null, round: null, reason: null },
-        { at: '2026-10-19T11:00:00Z', kind: 'started', taskId: 's1', role: null, stepRef: null, personaId: null, sessionId: null, round: null, reason: null },
-        { at: '2026-10-19T12:00:00Z', kind: 'started', taskId: 's1', role: null, stepRef: null, personaId: null, sessionId: null, round: null, reason: null },
-      ],
-      // eventsTotal ≠ events.length: счётчик «События» обязан брать events.length (3),
-      // не eventsTotal (1000) — иначе мутация источника была бы незаметна.
-      eventsTotal: 1000,
+      events: events100,
+      // eventsTotal ≠ events.length: счётчик «История» обязан брать общее (361),
+      // не загруженное (100) — иначе мутация источника была бы незаметна.
+      eventsTotal: 361,
     });
     const c = render({});
     await settle();
@@ -570,17 +579,17 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     const chatsTab = findTab(c, 'Чаты');
     expect(chatsTab, 'вкладка «Чаты»').not.toBeNull();
     expect(textNodes(chatsTab!).join(''), 'счётчик «Чаты» = 2').toContain('2');
-    // «Задачи» = 2 (эпик + шаг).
-    const tasksTab = findTab(c, 'Задачи');
-    expect(tasksTab, 'вкладка «Задачи»').not.toBeNull();
-    expect(textNodes(tasksTab!).join(''), 'счётчик «Задачи» = 2 (эпик + шаг)').toContain('2');
-    // «События» = 3 = events.length (загружено), НЕ eventsTotal=1000 (общее до обрезки).
-    // Мутация events.length→eventsTotal → счётчик 1000 → «3» не найдётся → red.
-    const eventsTab = findTab(c, 'События');
-    expect(eventsTab, 'вкладка «События»').not.toBeNull();
+    // «Шаги» = 7 = stepProgress.total (не число задач 2).
+    const tasksTab = findTab(c, 'Шаги');
+    expect(tasksTab, 'вкладка «Шаги»').not.toBeNull();
+    expect(textNodes(tasksTab!).join(''), 'счётчик «Шаги» = stepProgress.total').toContain('7');
+    // «История» = 361 = eventsTotal (общее), НЕ events.length=100 (загруженная часть).
+    // Мутация eventsTotal→events.length → счётчик 100 → «361» не найдётся → red.
+    const eventsTab = findTab(c, 'История');
+    expect(eventsTab, 'вкладка «История»').not.toBeNull();
     const eventsText = textNodes(eventsTab!).join('');
-    expect(eventsText, 'счётчик «События» = events.length = 3').toContain('3');
-    expect(eventsText, 'счётчик «События» ≠ eventsTotal=1000').not.toContain('1000');
+    expect(eventsText, 'счётчик «История» = eventsTotal = 361').toContain('361');
+    expect(eventsText, 'счётчик «История» ≠ events.length=100').not.toContain('100');
   });
 
 
@@ -716,7 +725,7 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
 
   // === Ф2.5: «Показать все» — догрузка ВСЕЙ ленты (eventsLimit=all) ===
   // Связка «кнопка «Показать все» → стор → запрос»: БЕЗ мока expandFeaturePageEvents
-  // (реальный стор lib/featurePage). Клик по кнопке во вкладке «События» →
+  // (реальный стор lib/featurePage). Клик по кнопке во вкладке «История» →
   // expandFeaturePageEvents → fetchPage → getFeature(fid, 'all').
   // Мутация (в отчёте): getFeature(fid, undefined, signal) (догрузка eventsLimit=all
   // отключена) → последний вызов без eventsLimit='all' → red.
@@ -729,7 +738,7 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     mockGetFeature.result = pageData({ events, eventsTotal: 1000 });
     const c = render({});
     await settle();
-    // Вкладка «События» (кнопка «Показать все» — только там).
+    // Вкладка «История» (кнопка «Показать все» — только там).
     act(() => { setFeaturePageTab('events'); });
     // Кнопка «Показать все · 1000» есть (лента > 8).
     const showAll = findNodeByAttr(c, 'data-testid', 'events-show-all');
@@ -901,10 +910,8 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
 });
 
 
-// === W4-1F: чип «ведёт ·» в мета-строке шапки (макет pt1) ===
-// Чип — сам вход в ключевой чат: клик открывает keySessionId. Мутация (в отчёте):
-// убрать openChatById в обработчике чипа → вызов не попадёт в журнал → тест краснеет.
-describe('W4-1F: чип «ведёт ·» в шапке фичи', () => {
+// === Ш5: ветка и «ведёт» — в сводке, мета-строки шапки нет ===
+describe('Ш5: ветка и ведущий в сводке', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -936,158 +943,102 @@ describe('W4-1F: чип «ведёт ·» в шапке фичи', () => {
     indexTest.setIndex('p1', mockIndex as FeaturesIndex);
   };
 
-  // Клик чипа — переход с записью возврата (плашка Ф9b): recordFeatureReturn пишет
-  // указатель {from: фича, to: ключевой чат}. Мутация: убрать вызов recordFeatureReturn
-  // в onClick → getBackNav() пуст → тест краснеет (хвост R-1F-T, п.3).
-  it('клик по чипу открывает keySessionId и записывает возврат к фиче; на чипе — «ведёт» и имя', async () => {
-    const c = render({});
-    await settle();
-    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead');
-    expect(chip, 'чип «ведёт» в мета-строке').not.toBeNull();
-    const text = textNodes(chip!).join('');
-    expect(text, 'подпись «ведёт» и имя оркестратора').toContain('ведёт');
-    expect(text, 'имя оркестратора').toContain('Софья (локальная)');
-    await act(async () => { (reactProps(chip)!.onClick as () => void)(); });
-    expect(openChatCalls, 'клик ведёт в keySessionId').toEqual(['chat-key']);
-    const nav = backNavTest.getBackNav();
-    expect(nav?.from, 'запись возврата — из фичы f1').toBe('f1');
-    expect(nav?.fromKind, 'дискриминатор — feature').toBe('feature');
-    expect(nav?.to, 'цель возврата — ключевой чат').toEqual({ kind: 'chat', id: 'chat-key' });
-    expect(nav?.fromTitle, 'название фичи для плашки').toBe('Моя фича');
+  const brief = (over: Partial<FeatureBrief> = {}): FeatureBrief => ({
+    kind: 'running', now: null, reason: null,
+    done: { stepsAccepted: 2, stepsTotal: 5, loops: 1, planState: 'cut' },
+    next: [], elapsedMinutes: null, estimate: null, queue: null, note: null,
+    computedAt: '2026-10-19T11:50:00Z',
+    ...over,
+  });
+  const fbStats = (): FeatureStats => ({
+    source: 'journal',
+    truncated: false,
+    timeline: {
+      from: '2026-10-19T10:00:00Z',
+      to: '2026-10-19T11:50:00Z',
+      stages: [{ key: 'prod', startedAt: '2026-10-19T10:00:00Z', barEnd: null }],
+      segments: [
+        { from: '2026-10-19T10:00:00Z', to: '2026-10-19T10:30:00Z', kind: 'work', track: 'main', stage: 'prod', taskId: 't-prod' },
+      ],
+      current: { kind: 'work', since: '2026-10-19T11:40:00Z', taskId: 't-prod' },
+      totals: {
+        elapsedMinutes: 110, workWallMinutes: 30, agentsSumMinutes: 30, notWorkingMinutes: 80,
+        waitingMinutes: null, idleMinutes: null, waitingCount: null, longestWaitMinutes: null,
+        errorCount: null, errorMinutes: null,
+      },
+    },
+    breakdown: { personas: [], models: [], roles: [] },
+    longestNow: null,
+    spend: null,
+  });
+  const note = (byPersonaId: string | null): FeatureBrief['note'] =>
+    ({ text: 'Идём по плану.', at: '2026-10-19T11:30:00Z', byPersonaId, byUser: false, stageAtWrite: 'prod', stale: false });
+
+  it('мета-строки страницы нет ни на 1280, ни на 360; тег статуса — в тулбаре на обеих ширинах', async () => {
+    for (const isMobile of [false, true]) {
+      mockGetFeature.result = pageData({ brief: brief() });
+      const c = render({ isMobile });
+      await settle();
+      expect(findNodeByAttr(c, 'data-testid', 'feature-page-meta'), `мета-строка (mobile=${isMobile})`).toBeNull();
+      expect(findNodeByAttr(c, 'data-testid', 'feature-page-lead'), `чип «ведёт» (mobile=${isMobile})`).toBeNull();
+      expect(findNodeByAttr(c, 'data-testid', 'feature-page-status'), `тег в тулбаре (mobile=${isMobile})`).not.toBeNull();
+    }
   });
 
-  it('keyArchived: чип помечен «в архиве»', async () => {
-    reindex({ keyArchived: true });
+  it('ветка — чип-кнопка в сводке: клик копирует и даёт тост', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    reindex({ branch: 'feat/x' });
+    mockGetFeature.result = pageData({ brief: brief() });
     const c = render({});
     await settle();
-    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
-    expect(textNodes(chip).join(''), 'пометка «в архиве»').toContain('в архиве');
+    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-branch');
+    expect(btn, 'ветка в сводке').not.toBeNull();
+    expect(textNodes(btn!).join('')).toBe('feat/x');
+    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    expect(writeText).toHaveBeenCalledWith('feat/x');
+    vi.unstubAllGlobals();
   });
 
-  it('чата нет, персона есть: чип без перехода (не кнопка, нет onClick)', async () => {
-    reindex({ keySessionId: null });
+  it('ветка есть и при «сводка не загрузилась»', async () => {
+    reindex({ branch: 'feat/x' });
+    mockGetFeature.result = pageData({ brief: null, stats: fbStats() });
     const c = render({});
     await settle();
-    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead');
-    expect(chip, 'статичный чип (без ключевого чата)').not.toBeNull();
-    expect(chip!.nodeName, 'не кнопка — перехода нет').not.toBe('BUTTON');
-    expect(reactProps(chip)?.onClick, 'у статичного чипа нет обработчика клика').toBeUndefined();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-branch')).not.toBeNull();
   });
 
-  it('персоны нет: элемента нет', async () => {
-    mockIndex.features = [feat()]; // дефолт без orchestratorPersonaId
-    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  it('заметка ведущего: подпись «— Имя, ведущая · время»; отдельной строки «Ведёт» нет', async () => {
+    mockGetFeature.result = pageData({ brief: brief({ note: note('p-sofya') }) });
     const c = render({});
     await settle();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-lead'), 'без персоны — чипа нет').toBeNull();
+    const sig = findNodeByAttr(c, 'data-testid', 'brief-voice-by')!;
+    expect(textNodes(sig).join('')).toMatch(/^— Софья \(локальная\), ведущая · /);
+    expect(findNodeByAttr(c, 'data-testid', 'brief-lead')).toBeNull();
   });
 
-  // Состояния чипа (хвосты R-1F-R/R-1F-T): контрол — ui.Button, состояния —
-  // React-состояние LeadChip, обработчики на обёртке (ui.Button их не форвардит,
-  // прецедент TaskCreatedView). Нажатие — pointer-события (тач и мышь дают их
-  // одинаково), фокус — :focus-visible (кольцо только с клавиатуры), глиф-стрелка
-  // красится только по наведению. Мутации (в отчёте): убрать onPointerDown на
-  // обёртке → тест нажатия краснеет; вернуть setFocused(true) без :focus-visible →
-  // тест фокуса краснеет; убрать recordFeatureReturn в onClick → тест записи возврата
-  // краснеет; убрать textOverflow у спана имени → тест ellipsis краснеет.
-  it('наведение: фон и рамка меняются, глиф красится только здесь; с наведения — обратно', async () => {
+  it('заметки нет: одна строка «Ведёт Имя · заметки пока нет» вторичным цветом, не чип', async () => {
+    mockGetFeature.result = pageData({ brief: brief() });
     const c = render({});
     await settle();
-    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
-    const icon = findNodeByAttr(c, 'data-testid', 'feature-page-lead-icon')!;
-    expect(chip.nodeName, 'контрол — кнопка из ui.Button').toBe('BUTTON');
-    expect(chip.style.background, 'базовый фон чипа').toBe(C.bgWhite);
-    expect(icon.style.color, 'глиф без наведения — тихий').toBe(C.textMuted);
-    const wrap = reactProps(chip!.parentNode as never) ?? {};
-    const enter = wrap.onMouseEnter as (() => void) | undefined;
-    const leave = wrap.onMouseLeave as (() => void) | undefined;
-    expect(enter && leave, 'на обёртке обработчики наведения').toBeTruthy();
-    act(() => { enter!(); });
-    expect(chip.style.background, 'фон на наведении').toBe(C.bgSelected);
-    expect(chip.style.borderColor, 'рамка на наведении').toBe(C.accentMuted);
-    expect(icon.style.color, 'глиф на наведении — accent').toBe(C.accent);
-    act(() => { leave!(); });
-    expect(chip.style.background, 'фон возвращается после наведения').toBe(C.bgWhite);
-    expect(chip.style.borderColor, 'рамка возвращается после наведения').toBe(C.border);
-    expect(icon.style.color, 'глиф после наведения — тихий').toBe(C.textMuted);
+    const line = findNodeByAttr(c, 'data-testid', 'brief-lead')!;
+    expect(textNodes(line).join('')).toBe('Ведёт Софья (локальная) · заметки пока нет');
+    expect((reactProps(line)!.style as Record<string, unknown>).color).toBe(C.textMuted);
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-lead')).toBeNull();
   });
 
-  it('нажатие: фон accentLight; отпускание и pointercancel — снова фон наведения', async () => {
+  it('стор персон не догружен: строки нет; после догрузки — появляется', async () => {
+    personaMap.clear();
+    mockGetFeature.result = pageData({ brief: brief() });
     const c = render({});
     await settle();
-    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
-    const wrap = reactProps(chip!.parentNode as never) ?? {};
-    const enter = wrap.onMouseEnter as (() => void) | undefined;
-    const down = wrap.onPointerDown as (() => void) | undefined;
-    const up = wrap.onPointerUp as (() => void) | undefined;
-    const cancel = wrap.onPointerCancel as (() => void) | undefined;
-    expect(down && up && cancel, 'нажатие — по pointer-событиям (не mouse)').toBeTruthy();
-    act(() => { enter!(); });
-    act(() => { down!(); });
-    expect(chip.style.background, 'фон на нажатии').toBe(C.accentLight);
-    act(() => { up!(); });
-    expect(chip.style.background, 'после отпускания — фон наведения').toBe(C.bgSelected);
-    // Сход пальца (pointercancel без pointerup): нажатие должно сниматься.
-    act(() => { down!(); });
-    act(() => { cancel!(); });
-    expect(chip.style.background, 'pointercancel — нажатие снято').toBe(C.bgSelected);
-  });
-
-  it('фокус с клавиатуры: кольцо и accent-рамка; фокус после мыши (:focus-visible false) — нет', async () => {
-    const c = render({});
-    await settle();
-    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
-    const icon = findNodeByAttr(c, 'data-testid', 'feature-page-lead-icon')!;
-    const wrapNode = chip!.parentNode as unknown as { focusVisible: boolean };
-    const wrap = reactProps(wrapNode as never) ?? {};
-    const focus = wrap.onFocus as ((e: unknown) => void) | undefined;
-    const blur = wrap.onBlur as (() => void) | undefined;
-    expect(focus && blur, 'на обёртке обработчики фокуса').toBeTruthy();
-    // Tab: :focus-visible = true → кольцо + accent-рамка (макет pt1).
-    wrapNode.focusVisible = true;
-    act(() => { focus!({ currentTarget: wrapNode }); });
-    expect(chip.style.boxShadow, 'фокус с клавиатуры — кольцо').toBe(SHADOW.focus);
-    expect(chip.style.borderColor, 'фокус с клавиатуры — accent-рамка').toBe(C.accent);
-    expect(icon.style.color, 'глиф по фокусу не красится (только по наведению)').toBe(C.textMuted);
-    // Мышь/тап: :focus-visible = false → рамка и кольцо не залипают (хвост R-1F-T).
-    act(() => { blur!(); });
-    wrapNode.focusVisible = false;
-    act(() => { focus!({ currentTarget: wrapNode }); });
-    expect(chip.style.boxShadow, 'фокус после мыши — без кольца').toBe('none');
-    expect(chip.style.borderColor, 'фокус после мыши — базовая рамка').toBe(C.border);
-    act(() => { blur!(); });
-    expect(chip.style.boxShadow, 'blur — без кольца').toBe('none');
-    expect(chip.style.borderColor, 'blur — базовая рамка').toBe(C.border);
-  });
-
-  it('длинное имя: спан имени с ellipsis (чип не лезет за 360)', async () => {
-    const c = render({});
-    await settle();
-    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead')!;
-    const nameSpan = (chip!.childNodes as FNodeLike[]).find((n) => textNodes(n as never).join('') === 'Софья (локальная)');
-    expect(nameSpan, 'спан с именем оркестратора').not.toBeUndefined();
-    expect(nameSpan!.style.textOverflow, 'имя реется многоточием').toBe('ellipsis');
-    expect(nameSpan!.style.overflow, 'overflow скрыт').toBe('hidden');
-  });
-
-  // Реактивность стора персон (возврат R-2): getPersonaById сам по себе не реактивен
-  // (lib/personas.ts:75) — чип подписывается на версию стора и просит загрузку.
-  // Мутация (в отчёте): убрать usePersonasVersion() в LeadChip → подъём версии не
-  // перерисовывает чип → тест краснеет.
-  it('стор персон не догружен: чипа нет; после догрузки — появляется', async () => {
-    personaMap.clear(); // оркестратор в индексе есть, в сторе — пока нет
-    const c = render({});
-    await settle();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-lead'), 'пока стор не догружен — чипа нет').toBeNull();
-    expect(personaStore.ensureCalls, 'чип запросил загрузку стора персон').toBeGreaterThan(0);
+    expect(findNodeByAttr(c, 'data-testid', 'brief-lead'), 'пока стор не догружен — строки нет').toBeNull();
     act(() => {
       personaMap.set('p-sofya', 'Софья (локальная)');
       personaStore.version++;
       for (const fn of [...personaStore.listeners]) fn();
     });
-    const chip = findNodeByAttr(c, 'data-testid', 'feature-page-lead');
-    expect(chip, 'чип появляется после догрузки стора').not.toBeNull();
-    expect(textNodes(chip!).join(''), 'имя оркестратора после догрузки').toContain('Софья (локальная)');
+    expect(findNodeByAttr(c, 'data-testid', 'brief-lead'), 'строка появляется после догрузки').not.toBeNull();
   });
 });
 
@@ -1159,18 +1110,6 @@ describe('Esc: useEscapeClose (общий хук, CenterViewShell)', () => {
     act(() => { root.unmount(); });
     esc(win);
     expect(onBack, 'слушатель Esc не снят при размонтировании (stale listener)').not.toHaveBeenCalled();
-  });
-});
-
-// Минор 5: склонение «задача/задачи/задач» (FeaturePageHeader.pluralTasks).
-// Мутация (в отчёте): сломать любое правило (11→задача, 21→задачи) → red.
-describe('pluralTasks: склонение «задача/задачи/задач»', () => {
-  it('1 задача / 2 задачи / 5 задач / 11 задач / 21 задача', () => {
-    expect(pluralTasks(1)).toBe('задача');
-    expect(pluralTasks(2)).toBe('задачи');
-    expect(pluralTasks(5)).toBe('задач');
-    expect(pluralTasks(11)).toBe('задач');
-    expect(pluralTasks(21)).toBe('задача');
   });
 });
 
@@ -1264,7 +1203,8 @@ describe('W4-HOLD-F2: пауза и черновик в шапке и блоке
     expect(block, 'блок состояния').not.toBeNull();
     expect(textNodes(block!).join(''), 'исходная длительность — 1 ч').toContain('Фича на паузе 1 ч.');
     await act(async () => { vi.advanceTimersByTime(60_000); });
-    expect(textNodes(block!).join(''), 'после интервала — 1 ч 1 мин, не замерло').toContain('Фича на паузе 1 ч 1 мин.');
+    // Минуты после часов — двумя цифрами (формат Майи, Ш1a): «1 ч 01 мин», не «1 ч 1 мин».
+    expect(textNodes(block!).join(''), 'после интервала — 1 ч 01 мин, не замерло').toContain('Фича на паузе 1 ч 01 мин.');
   });
 
   it('клик «Пауза» с идущими ходами: модалка; подтверждение — POST hold', async () => {
@@ -1404,6 +1344,32 @@ describe('W4-HOLD-F2: пауза и черновик в шапке и блоке
   });
 });
 
+// Ш4: видимой кнопки «Закрыть фичу» нет — закрытие только пунктом ⋯ (и на 1280, и на 360).
+function menuItemsNow(): AnyNode[] {
+  const out: AnyNode[] = [];
+  const walk = (x: AnyNode) => {
+    if ((x as unknown as { getAttribute?: (a: string) => string | null }).getAttribute?.('role') === 'menuitem') out.push(x);
+    for (const ch of x.childNodes) walk(ch);
+  };
+  walk((globalThis as any).document.body as unknown as AnyNode);
+  return out;
+}
+async function openMoreMenu(c: AnyNode) {
+  const trigger = findNodeByAttr(c, 'aria-label', 'Ещё');
+  expect(trigger, 'триггер ⋯').not.toBeNull();
+  await act(async () => { (reactProps(trigger)!.onClick as () => void)(); });
+}
+async function hasCloseItem(c: AnyNode): Promise<boolean> {
+  await openMoreMenu(c);
+  return menuItemsNow().some(x => textNodes(x as never).join('').includes('Закрыть фичу'));
+}
+async function clickClose(c: AnyNode) {
+  await openMoreMenu(c);
+  const item = menuItemsNow().find(x => textNodes(x as never).join('').includes('Закрыть фичу'));
+  expect(item, 'пункт «Закрыть фичу…» в ⋯').toBeDefined();
+  await act(async () => { (reactProps(item)!.onClick as () => void)(); });
+}
+
 // === F2 (статусной модели): кнопка «Закрыть фичу» — только владелец, с подтверждением ===
 // Контракт бэка (гард B2, TasksHttpDelegationGateTests): PUT /api/tasks/{epicId}
 // {status:'done'} с пользовательским JWT проходит; сервисный токен — 403. Фронт
@@ -1416,7 +1382,7 @@ describe('W4-HOLD-F2: пауза и черновик в шапке и блоке
 // (5) закрывать модалку и при отказе (без ветки err) → тест «отказ бэка» красный;
 // (6) снять loading/текст на кнопке тулбара → тест «запрос в полёте» красный;
 // (7) убрать строку предупреждения (nowCount > 0) → тест «идущие шаги» красный.
-describe('F2: кнопка «Закрыть фичу» в шапке', () => {
+describe('F2: «Закрыть фичу» — пункт ⋯ (Ш4: кнопки нет)', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -1455,26 +1421,13 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
   };
   const owner = () => setMeFromServer({ userId: 'u-own', username: 'andrey', role: 'user' });
 
-  // Все пункты шторки ⋯ (их несколько: пауза, ветка, эпик, закрытие).
-  function menuItems(): AnyNode[] {
-    const out: AnyNode[] = [];
-    const walk = (x: AnyNode) => {
-      if ((x as unknown as { getAttribute?: (a: string) => string | null }).getAttribute?.('role') === 'menuitem') out.push(x);
-      for (const ch of x.childNodes) walk(ch);
-    };
-    walk((globalThis as any).document.body as unknown as AnyNode);
-    return out;
-  }
-
-  it('владелец: кнопка есть; клик — подтверждение; «Отмена» — запроса нет', async () => {
+  it('владелец: кнопки в ряду нет, пункт в ⋯; клик — подтверждение; «Отмена» — запроса нет', async () => {
     openPage();
     owner();
     const c = render({ projectOwnerId: 'u-own' });
     await settle();
-    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-close-btn');
-    expect(btn, 'кнопка «Закрыть фичу» в тулбаре').not.toBeNull();
-    expect(textNodes(btn!).join('')).toContain('Закрыть фичу');
-    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close-btn'), 'видимой кнопки «Закрыть фичу» нет').toBeNull();
+    await clickClose(c);
     const modalText = textNodes((globalThis as any).document.body).join(' ');
     expect(modalText, 'заголовок с названием фичи').toContain('Закрыть «Моя фича»?');
     expect(modalText, 'пояснение про группу «Закрытые»').toContain('Закрытые');
@@ -1491,8 +1444,7 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     owner();
     const c = render({ projectOwnerId: 'u-own' });
     await settle();
-    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-close-btn')!;
-    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    await clickClose(c);
     const confirm = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-confirm')!;
     await act(async () => { (reactProps(confirm)!.onClick as () => void)(); });
     expect(mockUpdateTask.calls, 'PUT done по эпику').toEqual([{ id: 'f1', dto: { status: 'done' } }]);
@@ -1513,7 +1465,7 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     const project = { id: 'p1', ownerId: 'u-own' };
     const c = render({ projectOwnerId: project.ownerId });
     await settle();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close-btn'), 'не владельцу кнопки нет').toBeNull();
+    expect(await hasCloseItem(c), 'не владельцу пункта нет').toBe(false);
   });
 
   // Фолбэка «поля нет — владелец по умолчанию» нет: бэк проставляет ownerId всем
@@ -1524,7 +1476,7 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     owner();
     const c = render({});
     await settle();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close-btn'), 'неизвестный владелец — не показываем').toBeNull();
+    expect(await hasCloseItem(c), 'неизвестный владелец — не показываем').toBe(false);
   });
 
   it('уже закрыта (эпик done): кнопки нет; тег — «закрыта без мержа»', async () => {
@@ -1534,7 +1486,7 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     owner();
     const c = render({ projectOwnerId: 'u-own' });
     await settle();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close-btn'), 'у закрытой фичи кнопки нет').toBeNull();
+    expect(await hasCloseItem(c), 'у закрытой фичи пункта нет').toBe(false);
     const tag = findNodeByAttr(c, 'data-testid', 'feature-page-status');
     expect(textNodes(tag!).join(''), 'состояние страницы — «закрыта»').toContain('закрыта');
   });
@@ -1545,12 +1497,7 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     const c = render({ isMobile: true, projectOwnerId: 'u-own' });
     await settle();
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-close-btn'), 'на мобиле кнопки в ряду нет').toBeNull();
-    const trigger = findNodeByAttr(c, 'aria-label', 'Ещё');
-    expect(trigger, 'триггер ⋯').not.toBeNull();
-    await act(async () => { (reactProps(trigger)!.onClick as () => void)(); });
-    const closeItem = menuItems().find(x => textNodes(x as never).join('').includes('Закрыть фичу'));
-    expect(closeItem, 'пункт «Закрыть фичу…»').not.toBeNull();
-    await act(async () => { (reactProps(closeItem)!.onClick as () => void)(); });
+    await clickClose(c);
     const confirm = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-confirm');
     expect(confirm, 'модалка подтверждения').not.toBeNull();
     // Закрыть модалку здесь же: незакрытая остаётся в DOM через портал и её
@@ -1566,8 +1513,7 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     owner();
     const c = render({ projectOwnerId: 'u-own' });
     await settle();
-    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-close-btn')!;
-    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    await clickClose(c);
     const confirm = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-confirm')!;
     await act(async () => { (reactProps(confirm)!.onClick as () => void)(); });
     const last = toasts[toasts.length - 1];
@@ -1600,8 +1546,7 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     owner();
     const c = render({ projectOwnerId: 'u-own' });
     await settle();
-    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-close-btn')!;
-    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    await clickClose(c);
     const warn = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-running');
     expect(warn, 'строка предупреждения').not.toBeNull();
     expect(textNodes(warn!).join(''), 'текст про идущие шаги').toContain('Идут 2 шага — они не остановятся, фича перейдёт в «Закрытые»');
@@ -1623,8 +1568,7 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     owner();
     const c = render({ projectOwnerId: 'u-own' });
     await settle();
-    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-close-btn')!;
-    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    await clickClose(c);
     const warn = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-running');
     expect(warn, 'строка предупреждения').not.toBeNull();
     expect(textNodes(warn!).join(''), 'текст про один шаг').toContain('Идет 1 шаг — он не остановится, фича перейдёт в «Закрытые»');
@@ -1632,19 +1576,18 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     await act(async () => { (reactProps(cancel)!.onClick as () => void)(); });
   });
 
-  it('запрос в полёте: кнопка тулбара disabled и «Закрываю…» (loading)', async () => {
+  it('запрос в полёте: «Закрыть» в модалке disabled и «Закрываю…» (loading)', async () => {
     openPage();
     mockUpdateTask.pending = true; // запрос не разрешается — состояние «в полёте» держится
     owner();
     const c = render({ projectOwnerId: 'u-own' });
     await settle();
-    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-close-btn')!;
-    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    await clickClose(c);
     const confirm = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-confirm')!;
     await act(async () => { (reactProps(confirm)!.onClick as () => void)(); });
-    const props = reactProps(btn) as { disabled?: boolean };
-    expect(props.disabled, 'хвост 2: индикация loading на кнопке').toBe(true);
-    expect(textNodes(btn).join(''), 'текст в полёте').toContain('Закрываю…');
+    const props = reactProps(confirm) as { disabled?: boolean };
+    expect(props.disabled, 'хвост 2: индикация loading на кнопке модалки').toBe(true);
+    expect(textNodes(confirm).join(''), 'текст в полёте').toContain('Закрываю…');
     // Разрешить запрос успехом: модалка закрывается сама (cleanup — незакрытая
     // модалка утекала бы в следующий тест, портал не анмонтирован).
     await act(async () => { mockUpdateTask.settle?.({} as Task); await Promise.resolve(); });
@@ -1657,8 +1600,7 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     owner();
     const c = render({ projectOwnerId: 'u-own' });
     await settle();
-    const btn = findNodeByAttr(c, 'data-testid', 'feature-page-close-btn')!;
-    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    await clickClose(c);
     const confirm = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-confirm')!;
     await act(async () => { (reactProps(confirm)!.onClick as () => void)(); });
     const stillOpen = () => findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-confirm');
@@ -1687,7 +1629,7 @@ describe('F2: кнопка «Закрыть фичу» в шапке', () => {
     pressEsc();
     expect(stillOpen(), 'Esc вне полёта закрывает модалку').toBeNull();
     // «Отмена» тоже работает: открыть снова и закрыть кнопкой.
-    await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
+    await clickClose(c);
     const cancel2 = findNodeByAttr((globalThis as any).document.body, 'data-testid', 'feature-page-close-cancel')!;
     await act(async () => { (reactProps(cancel2)!.onClick as () => void)(); });
     expect(stillOpen(), 'после отказа «Отмена» закрывает').toBeNull();
@@ -1764,7 +1706,8 @@ describe('F3: кнопка «Возобновить» на закрытой фи
     const btn = findNodeByAttr(c, 'data-testid', 'feature-page-resume-btn');
     expect(btn, 'кнопка «Возобновить» в тулбаре').not.toBeNull();
     expect(textNodes(btn!).join('')).toContain('Возобновить');
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close-btn'), 'у закрытой фичи «Закрыть» нет').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close-btn'), 'кнопки «Закрыть» нет нигде').toBeNull();
+    expect(await hasCloseItem(c), 'у закрытой фичи «Закрыть» нет').toBe(false);
     await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
     expect(mockUpdateTask.calls, 'PUT todo по эпику').toEqual([{ id: 'f1', dto: { status: 'todo' } }]);
     const last = toasts[toasts.length - 1];
@@ -1802,7 +1745,7 @@ describe('F3: кнопка «Возобновить» на закрытой фи
     const c = render({ projectOwnerId: 'u-own' });
     await settle();
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-resume-btn'), 'на открытой фиче «Возобновить» нет').toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-page-close-btn'), '«Закрыть» на открытой — есть').not.toBeNull();
+    expect(await hasCloseItem(c), '«Закрыть» на открытой — есть').toBe(true);
   });
 
   it('после возобновления: refetch отдаёт открытый эпик — снова «Закрыть», «Возобновить» нет', async () => {
@@ -1818,8 +1761,7 @@ describe('F3: кнопка «Возобновить» на закрытой фи
     const btn = findNodeByAttr(c, 'data-testid', 'feature-page-resume-btn')!;
     await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
     await settle();
-    const closeBtn = findNodeByAttr(c, 'data-testid', 'feature-page-close-btn');
-    expect(closeBtn, 'после возобновления снова «Закрыть фичу»').not.toBeNull();
+    expect(await hasCloseItem(c), 'после возобновления снова «Закрыть фичу»').toBe(true);
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-resume-btn'), '«Возобновить» исчезла').toBeNull();
   });
 
@@ -2119,7 +2061,7 @@ describe('Q5I-2: блок «Фича в очереди» на странице �
   // Хвост RV-K-Q5I-2, п.1: у стоящей в очереди фичи событий может не быть вовсе — блок
   // перерисовывает только интервал useNow. Мутация: убрать useNow из блока (замершее
   // «сейчас») → второй тезис остаёт «1 ч» → красный.
-  it('длительность живая: «1 ч назад» → «1 ч 1 мин назад» через минуту', async () => {
+  it('длительность живая: «1 ч назад» → «1 ч 01 мин назад» через минуту', async () => {
     queuePage('paused', QUEUED);
     const c = render({});
     await settle();
@@ -2127,7 +2069,7 @@ describe('Q5I-2: блок «Фича в очереди» на странице �
     expect(block, 'блок очереди').not.toBeNull();
     expect(textNodes(block as never).join(''), 'исходная длительность — 1 ч').toContain('Поставили вы 1 ч назад');
     await act(async () => { vi.advanceTimersByTime(60_000); });
-    expect(textNodes(block as never).join(''), 'после интервала — 1 ч 1 мин, не замерло').toContain('Поставили вы 1 ч 1 мин назад');
+    expect(textNodes(block as never).join(''), 'после интервала — 1 ч 01 мин, не замерло').toContain('Поставили вы 1 ч 01 мин назад');
   });
 
   it('нет queue (бэк не отдал): блок без позиции, нулей и слов позиции нет', async () => {
@@ -2384,6 +2326,113 @@ describe('F6: блок «Сводка» на вкладке «Хронологи
   });
 });
 
+// === Ш8-wire: риски мержа в диалоге подтверждения ===
+// FeaturePage передаёт attention.mergeRisks ПОСЛЕДНЕГО снимка страницы в FeatureMergeDialog
+// (FeaturePage.tsx:429). Диалог открывается главным действием «Мерж…» (state merge_pending +
+// attention.kind='merge', FeaturePageHeader.tsx:883-896). Конкурентность: диалог берёт риски
+// из последнего page, а не из момента открытия — второй тест перезапрашивает страницу
+// (refetchFeaturePage, lib/featurePage.ts:381) при открытом диалоге: блок обязан уйти.
+// Мутации (в отчёте): (1) не передавать risks в FeaturePage.tsx → первый тест красный
+// (блока нет); второй остаётся зелёным — там блока нет по данным.
+describe('Ш8-wire: риски мержа в диалоге подтверждения', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    pageTest.reset();
+    indexTest.reset();
+    backNavTest.reset();
+    personaMap.clear();
+    setAllFlags({ 'features-overview': true });
+    mockIndex.features = [feat()];
+    mockIndex.chats = {};
+    mockChats.clear();
+    openChatCalls.length = 0;
+    mockGetFeature.pending = false;
+    mockGetFeature.result = null;
+    mockGetFeature.error = null;
+    mockGetFeature.calls = [];
+    mockGetFeature.perCall = [];
+    mockMergeFeature.pending = false;
+    mockMergeFeature.result = null;
+    mockMergeFeature.error = null;
+    mockMergeFeature.calls = [];
+    toasts.length = 0;
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  const bodyNode = () => (globalThis as { document: { body: unknown } }).document.body as unknown as AnyNode;
+
+  // Страница фичи, ждущей согласия на мерж: state merge_pending + тревога kind='merge'.
+  // Риски — attention.mergeRisks (бэк при отсутствии рисков поля не даёт — undefined).
+  function mergePage(risks?: FeatureMergeRisk[]): FeaturePageData {
+    const pd = pageData();
+    pd.run = {
+      ...pd.run,
+      state: 'merge_pending',
+      attention: {
+        kind: 'merge', taskId: 'f-fin', since: '2026-10-19T11:00:00Z', reason: 'мерж',
+        mergeRisks: risks,
+      },
+    } as never;
+    return pd;
+  }
+
+  // Открыть диалог главным действием шапки: span[data-testid] → Button внутри.
+  async function openMerge(c: ReturnType<typeof render>) {
+    const main = findNodeByAttr(c, 'data-testid', 'feature-page-main-action');
+    expect(main, 'главное действие «Мерж…»').not.toBeNull();
+    const btn = firstButton(main as unknown as AnyNode);
+    expect(btn, 'кнопка внутри главного действия').not.toBeNull();
+    await act(async () => { (reactProps(btn!)!.onClick as () => void)(); });
+  }
+
+  it('attention.kind=merge + риски: «Мерж…» открывает диалог, в нём feature-merge-risks', async () => {
+    mockGetFeature.result = mergePage([
+      { kind: 'not_created', count: 59 },
+      { kind: 'open', count: 13 },
+      { kind: 'tracker', count: 1 },
+    ]);
+    const c = render({});
+    await settle();
+    await openMerge(c);
+    const body = bodyNode();
+    expect(textNodes(body).join(' '), 'модалка мержа открыта').toContain('Смержить «Моя фича» в master?');
+    const risks = findNodeByAttr(body as never, 'data-testid', 'feature-merge-risks');
+    expect(risks, 'блок рисков мержа').not.toBeNull();
+    expect(textNodes(risks!).join(''), 'текст — список бэка, фронт ничего не считает')
+      .toContain('Не заведено шагов: 59 · Заведены, но не приняты: 13 · Трекер расходится: 1');
+    // Закрыть модалку здесь же: незакрытая утекает в следующий тест (портал не анмонтирован).
+    const cancel = findButtonWithText(body, 'Отмена');
+    expect(cancel, '«Отмена» в модалке').not.toBeNull();
+    await act(async () => { (reactProps(cancel!)!.onClick as () => void)(); });
+  });
+
+  it('перезапрос страницы без рисков: блок убран из открытого диалога (диалог берёт последний page)', async () => {
+    mockGetFeature.perCall = [
+      { result: mergePage([{ kind: 'not_created', count: 59 }]) }, // call 1: с рисками
+      { result: mergePage(undefined) }, // call 2: бэк пересчитал — рисков больше нет
+    ];
+    const c = render({});
+    await settle();
+    await openMerge(c);
+    expect(findNodeByAttr(bodyNode() as never, 'data-testid', 'feature-merge-risks'), 'блок первого снимка').not.toBeNull();
+    // Перезапрос страницы при открытом диалоге: модалка не закрывается, данные — новые.
+    refetchFeaturePage('f1');
+    await settle();
+    const body = bodyNode();
+    expect(textNodes(body).join(' '), 'диалог остался открыт').toContain('Смержить «Моя фича» в master?');
+    expect(findNodeByAttr(body as never, 'data-testid', 'feature-merge-risks'), 'устаревший снимок рисков не показан').toBeNull();
+    const cancel = findButtonWithText(body, 'Отмена');
+    expect(cancel, '«Отмена» в модалке').not.toBeNull();
+    await act(async () => { (reactProps(cancel!)!.onClick as () => void)(); });
+  });
+});
+
 // === GC-F11R4 (мажор ревью GC-R-P6): окно возврата и страница ===
 // Страница регистрирует себя в канале окна (FeaturePage → registerFeaturePage): закрытие
 // гасит подтверждённый снимок (отложенная проверка), мнимый unmount→mount StrictMode —
@@ -2466,5 +2515,98 @@ describe('GC-F11R4: окно возврата и страница', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(0); }); // 'ok' → вкладка применила снимок и подтвердила
     expect(backNavTest.lastAppliedFeatureView('f1'), 'мнимый unmount страницы погасил окно').not.toBeNull();
     act(() => { root2.unmount(); });
+  });
+});
+
+// === Ш2: тег этапа в тулбаре — из brief.now.stage (тот же источник, что сводка) ===
+// Раньше: первая active-стадия run (stages.find(state==='active')) — тег тулбара и сводка
+// (brief.now.stage, FeatureBriefBlock.tsx:75) могли показывать РАЗНЫЕ этапы. Теперь тег
+// берёт brief.now.stage; бэк и семантика FeatureStage.State не тронуты.
+// Мутации (в отчёте): (1) вернуть activeStageName на stages.find(active) → тест 1 краснеет
+// (тег стал бы «идёт · Разрез»); (2) убрать терпимость к отсутствию brief (brief!.now.stage)
+// → тест без brief падает.
+describe('Ш2: тег этапа в тулбаре — из brief.now.stage', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    pageTest.reset();
+    indexTest.reset();
+    backNavTest.reset();
+    personaMap.clear();
+    setAllFlags({ 'features-overview': true });
+    mockIndex.features = [feat()];
+    mockIndex.chats = {};
+    mockChats.clear();
+    openChatCalls.length = 0;
+    mockGetFeature.pending = false;
+    mockGetFeature.result = null;
+    mockGetFeature.error = null;
+    mockGetFeature.calls = [];
+    mockGetFeature.perCall = [];
+    mockMergeFeature.pending = false;
+    mockMergeFeature.result = null;
+    mockMergeFeature.error = null;
+    mockMergeFeature.calls = [];
+    toasts.length = 0;
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // brief той же формы, что в F6-блоке выше (now null по умолчанию).
+  const brief = (over: Partial<FeatureBrief> = {}): FeatureBrief => ({
+    kind: 'running',
+    now: null,
+    reason: null,
+    done: { stepsAccepted: 2, stepsTotal: 5, loops: 1, planState: 'cut' },
+    next: [],
+    elapsedMinutes: null,
+    estimate: null,
+    queue: null,
+    note: null,
+    computedAt: '2026-10-19T11:50:00Z',
+    ...over,
+  });
+
+  // run идущей фичи с stages: cut — active, qa — pending. Если тег строился по stages,
+  // он показал бы «Разрез»; по brief.now.stage — «Проверка». Это и различает тесты.
+  const runningPage = (over: Partial<FeaturePageData> = {}) => {
+    const pd = pageData(over);
+    pd.run = { ...pd.run, state: 'running', stages: [
+      { key: 'cut', state: 'active', tone: 'run', passes: 1, taskIds: [], rounds: [], executors: [] },
+      { key: 'qa', state: 'pending', passes: 0, taskIds: [], rounds: [], executors: [] },
+    ] } as never;
+    mockGetFeature.result = pd;
+  };
+
+  const tagText = async (c: ReturnType<typeof render>) => {
+    await settle();
+    const tag = findNodeByAttr(c, 'data-testid', 'feature-page-status');
+    expect(tag, 'тег на месте').not.toBeNull();
+    return textNodes(tag!).join('');
+  };
+
+  it('stages=[cut active, qa pending] + brief.now.stage=qa → тег «идёт · Проверка»', async () => {
+    runningPage({ brief: brief({ now: { stage: 'qa', taskId: null, personaId: null, stepRef: null, lane: null, since: null } }) });
+    const t = await tagText(render({}));
+    expect(t, 'этап тега — из brief.now.stage (тот же источник, что сводка)').toContain('идёт · Проверка');
+    expect(t, 'этап тега — не из первой active-стадии run').not.toContain('Разрез');
+  });
+
+  it('brief есть, brief.now null → тег «идёт» без этапа, без падения', async () => {
+    runningPage({ brief: brief() });
+    const t = await tagText(render({}));
+    expect(t).toContain('идёт');
+    expect(t, 'этапа в теге нет').not.toContain('·');
+  });
+
+  it('brief нет вовсе (старый бэк) → тег «идёт» без этапа, без падения', async () => {
+    runningPage({});
+    const t = await tagText(render({}));
+    expect(t).toContain('идёт');
+    expect(t, 'этапа в теге нет').not.toContain('·');
   });
 });

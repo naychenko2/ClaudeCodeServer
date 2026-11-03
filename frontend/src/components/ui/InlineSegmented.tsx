@@ -21,7 +21,7 @@ export function InlineSegmented<T extends string>({ value, options, onChange, di
   isMobile?: boolean;
   touchWidth?: boolean;
   // full — переключатель на всю ширину: каждый сегмент flex:1 (переключатель движка
-  // «Основная · Bonsai» в начале вкладки «LLM», макет bonsai-toolbar §2/§6)
+  // вкладок моделей в начале вкладки «LLM», макет bonsai-toolbar §2/§6)
   full?: boolean;
   // 'md' (по умолчанию) — плотный сегмент в строках списков (min-height 32/40);
   // 'sm' — для шапки панели: итоговая высота 24, вровень с IconButton xs / IconSegmented sm / Button xs

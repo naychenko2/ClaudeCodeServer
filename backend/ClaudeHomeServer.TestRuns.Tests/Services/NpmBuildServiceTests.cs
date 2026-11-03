@@ -18,7 +18,13 @@ namespace ClaudeHomeServer.Tests.Services.TestRuns;
 /// </summary>
 public class NpmBuildServiceTests : IDisposable
 {
-    private static readonly TimeSpan Wait = TimeSpan.FromSeconds(20);
+    // Страховка от потерянного события, а не ожидание: цепь запуска сборки (prepare в пуле, старт
+    // процесса, гашение по TurnId) под нагрузкой параллельного набора идёт 5 с при загрузке только
+    // CPU и >20 с на пике быстрого гейта (TRX прогона 22:41 01.11) — прежние 20 с оказались ниже
+    // худшего случая живой цепи. Тест падает по неверному результату; этот потолок срабатывает
+    // только на зависании, а не на медленной машине. ReDoS-страж ниже его не использует: его сигнал —
+    // отсутствие таймаута регулярки продукта (комментарий к FlagsStage).
+    private static readonly TimeSpan Wait = TimeSpan.FromSeconds(60);
 
     // Строка `build` нашего frontend/package.json
     private const string FrontendBuild = "tsc -b && vite build && npm run build:notes && npm run build:spend "
@@ -51,9 +57,13 @@ public class NpmBuildServiceTests : IDisposable
     private NpmBuildRequest Request(string? target = "frontend", string script = "build") =>
         new(NewProject(), _root, "sess-1", target, script);
 
+    // Свой шаг прогресса, пауза выхода и потолок подготовки (30 с через существующую опцию):
+    // сценарий класса — «стоп во время сборки», а не контракт подготовки продукта (её дефолт 5 с
+    // не тронут): под загрузкой набора короткий потолок отказал бы сборку до начала сценария.
     private NpmBuildService Service(DotnetBuildServiceTests.FakeLauncher launcher, BuildConcurrencyGate? gate = null) =>
         new(launcher, new TestRunsOptions { MemoryDirectory = MemoryDir },
-            new PhasePipeline(gate ?? new BuildConcurrencyGate(1), TimeSpan.FromSeconds(5)), TimeSpan.FromMilliseconds(5));
+            new PhasePipeline(gate ?? new BuildConcurrencyGate(1), TimeSpan.FromSeconds(5)), TimeSpan.FromMilliseconds(5),
+            prepareTimeout: TimeSpan.FromSeconds(30));
 
     private DotnetBuildServiceTests.FakeLauncher Launcher(string? output, int exit = 0, bool sleep = false) =>
         new(_processes, output, exit, sleep);
@@ -166,11 +176,22 @@ public class NpmBuildServiceTests : IDisposable
     // двумя способами — 2^40 шагов бэктрекинга (ReDoS, ревью этапа 3)
     private static readonly string FlagsStage = "npm run" + string.Concat(Enumerable.Repeat(" --a", 40));
 
+    // Сигнал ReDoS-стража — не время, а собственный таймаут регулярки продукта. У линейного
+    // шаблона флаг имеет ровно один разбор (см. комментарий к NestedScriptCommand), его матч по
+    // FlagsStage — линейный проход и под нагрузкой не достигает потолка RegexTimeoutMs (200 мс):
+    // шесть прогонов быстрого гейта зелёные (02.11). Прежний шаблон с 2^40 путями бьёт в этот
+    // потолок на любой машине — такое число шагов в 200 мс не укладывается. Внутри NestedScript
+    // таймаут глушится в null: взорванный этап функционально идентичен годному, поэтому страж
+    // сверяет этап с шаблоном напрямую (NpmBuildProgress.NestedScriptCommand) и утверждает
+    // отсутствие RegexMatchTimeoutException. Сигнал не зависит от загрузки: откат шаблона краснит
+    // тест и на спокойной, и на нагруженной машине; в тесте нет ни одного предела времени.
     [Fact]
-    public void Разбор_ЭтапыАтакующейФормы_ЛинейныйИБыстрый()
+    public void Разбор_ЭтапыАтакующейФормы_ШаблонНеВзрывается()
     {
         var vites = string.Concat(Enumerable.Repeat("vite ", 8000));
-        var watch = Stopwatch.StartNew();
+
+        FluentActions.Invoking(() => NpmBuildProgress.NestedScriptCommand().Match(FlagsStage)).Should()
+            .NotThrow("у линейного шаблона флаг имеет ровно один разбор: упор в потолок RegexTimeoutMs значит, что шаблон флагов снова стал экспоненциальным");
 
         NpmBuildProgress.NestedScript(FlagsStage).Should().BeNull("имени скрипта нет — одни флаги");
         NpmBuildProgress.IsViteBuild(vites).Should().BeFalse("этап длиннее MaxStageLength с маркерами не сверяется");
@@ -179,8 +200,6 @@ public class NpmBuildServiceTests : IDisposable
         progress.Feed("> " + new string('@', 8000) + " y", TimeSpan.FromSeconds(1)).Should().BeFalse();
         progress.Feed("vite v8.0.16 building client environment for production...", TimeSpan.FromSeconds(2))
             .Should().BeTrue();
-
-        watch.Elapsed.Should().BeLessThan(TimeSpan.FromMilliseconds(100));
         progress.Label().Should().Be("vite build · этап 4 из 4");
     }
 

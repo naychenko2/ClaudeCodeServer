@@ -1,4 +1,4 @@
-// Выбор движка панели «Локальные модели» («Основная» / «Bonsai», макет §2).
+// Выбор движка панели «Локальные модели» (вкладки с короткими названиями моделей, макет §2).
 // Стор: список движков с сервера + выбор пользователя, который запоминается в
 // localStorage. Паттерн — как lib/pinnedProjects.ts: модульное состояние, подписчики,
 // useSyncExternalStore. Фабрика принимает хранилище, чтобы тест мог «перезапустить»
@@ -11,19 +11,21 @@ export const ENGINE_STORAGE_KEY = 'cc_local_model_engine';
 
 type EngineStorage = Pick<Storage, 'getItem' | 'setItem'>;
 
+// Имя движка — непустая строка: 'main' или ключ LocalEngines из конфига сервера.
 function isEngineName(v: unknown): v is LocalModelEngineName {
-  return v === 'main' || v === 'bonsai';
+  return typeof v === 'string' && v.length > 0 && v.length <= 64;
 }
 
 function isConfigured(engines: LocalModelEngine[], name: LocalModelEngineName): boolean {
   return engines.some(e => e.name === name && e.configured);
 }
 
-// Умолчание: main, если vLLM настроен; иначе bonsai, если настроен он; иначе main
+// Умолчание: main, если vLLM настроен; иначе первый настроенный именованный движок; иначе main
 // (ни один не настроен — панели нет, значение безвредно и совпадает с прежним поведением).
 export function pickDefaultEngine(engines: LocalModelEngine[]): LocalModelEngineName {
   if (isConfigured(engines, 'main')) return 'main';
-  if (isConfigured(engines, 'bonsai')) return 'bonsai';
+  const named = engines.find(e => e.name !== 'main' && e.configured);
+  if (named) return named.name;
   return 'main';
 }
 

@@ -11,7 +11,7 @@
 import { createElement } from 'react';
 import { describe, it, expect, afterEach } from 'vitest';
 import { FeatureMergeDialog, type FeatureMergeDialogProps } from './FeatureMergeDialog';
-import { mount, installFakeDom, uninstallFakeDom, textNodes } from '../chat/__tests__/fakeDom';
+import { mount, installFakeDom, uninstallFakeDom, textNodes, findNodeByAttr } from '../chat/__tests__/fakeDom';
 
 // Диалог рендерится порталом в document.body — собираем весь его текст.
 function bodyText(): string {
@@ -33,6 +33,18 @@ function bodyHasClass(cls: string): boolean {
   };
   walk(body as never);
   return hit;
+}
+
+// Узел в body по data-testid (модалка — портал в body, как в bodyText выше).
+function findTestId(id: string) {
+  const body = (globalThis as { document: { body: unknown } }).document.body;
+  return findNodeByAttr(body as never, 'data-testid', id);
+}
+
+// Текст блока рисков (пустая строка, если блока нет).
+function risksText(): string {
+  const el = findTestId('feature-merge-risks');
+  return el ? textNodes(el).join('') : '';
 }
 
 type Props = FeatureMergeDialogProps;
@@ -90,6 +102,49 @@ describe('FeatureMergeDialog', () => {
     expect(t).toContain('Повторить');
     // Красная ошибка — не «Мерж» (подсказка подтверждения заменена).
     expect(t).not.toContain('Мерж');
+  });
+
+  // ── Риски мержа (Ш8): блок feature-merge-risks над кнопками ──────────────
+
+  it('risks нет (undefined) — блока рисков нет', () => {
+    render();
+    expect(findTestId('feature-merge-risks')).toBeNull();
+    expect(risksText()).toBe('');
+  });
+
+  it('risks пустой ([] — чистый мерж) — блока рисков нет', () => {
+    render({ risks: [] });
+    expect(findTestId('feature-merge-risks')).toBeNull();
+    expect(risksText()).toBe('');
+  });
+
+  it('три вида — текст ровно «Не заведено шагов: 59 · Заведены, но не приняты: 13 · Трекер расходится: 1»', () => {
+    render({ risks: [
+      { kind: 'not_created', count: 59 },
+      { kind: 'open', count: 13 },
+      { kind: 'tracker', count: 1 },
+    ] });
+    expect(risksText()).toBe('Не заведено шагов: 59 · Заведены, но не приняты: 13 · Трекер расходится: 1');
+  });
+
+  it('один вид — печатается только он', () => {
+    render({ risks: [{ kind: 'open', count: 13 }] });
+    const t = risksText();
+    expect(t).toBe('Заведены, но не приняты: 13');
+    expect(t).not.toContain('Не заведено');
+    expect(t).not.toContain('Трекер');
+  });
+
+  it('при рисках кнопка подтверждения по-прежнему «Мерж»', () => {
+    render({ risks: [
+      { kind: 'not_created', count: 59 },
+      { kind: 'open', count: 13 },
+      { kind: 'tracker', count: 1 },
+    ] });
+    const t = bodyText();
+    expect(t).toContain('Мерж');
+    expect(t).not.toContain('Повторить');
+    expect(t).not.toContain('Запускаю');
   });
 
   it('360 → шторка снизу (cc-sheet-card), не центрированная карточка', () => {

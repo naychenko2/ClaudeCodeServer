@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -15,17 +16,13 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// решается ДО обращения к каналу — чужой владелец, серверный проект, выключенный флаг,
 /// офлайн. Офлайн — честный 409 с причиной, а не таймаут.
 /// </summary>
-public sealed class ProjectRelayControllerTests : IDisposable
+[Trait("Category", "Host")]
+public sealed class ProjectRelayControllerTests : IClassFixture<ProjectRelayControllerTests.Host>, IDisposable
 {
     private const string Device = "dev-relay";
 
-    private readonly FakeDeviceStatus _devices = new();
-    private readonly SpyRelay _relay = new();
-    private readonly TestWebApplicationFactory _factory;
-    private readonly HttpClient _client;
-
     /// <summary>Канал в одном процессе: агент отвечает сценарием теста или молча закрывает поток.</summary>
-    private sealed class SpyRelay : IDeviceRelayChannel
+    internal sealed class SpyRelay : IDeviceRelayChannel
     {
         public int Opened;
         public DeviceExecRefusedException? Refuse;
@@ -33,33 +30,74 @@ public sealed class ProjectRelayControllerTests : IDisposable
 
         public Task BeforeReturn = Task.CompletedTask;
 
+        // Задачи агентов открытых потоков: Reset дожидается их, чтобы агент прошлого теста не
+        // дописывал в общий хост, пока идёт следующий
+        private readonly ConcurrentQueue<Task> _agents = new();
+
+        // Сброс перед каждым тестом: общий хост помнит счётчик и сценарий агента, а тесты
+        // проверяют абсолютные числа (Opened == 0) и не должны видеть чужих остатков
+        public void Reset()
+        {
+            // Сценарий агента отработал или поток закрыт: ждём недолго, зависшего агента не ждём вечно
+            Task.WhenAll(_agents).Wait(TimeSpan.FromSeconds(2));
+            _agents.Clear();
+            Opened = 0;
+            Refuse = null;
+            Agent = s => s.DisposeAsync().AsTask();
+            BeforeReturn = Task.CompletedTask;
+        }
+
         public async Task<IDeviceExecStream> OpenRelayAsync(string ownerId, string deviceId, CancellationToken ct = default)
         {
             Interlocked.Increment(ref Opened);
             if (Refuse is not null) throw Refuse;
             var stream = new InProcessExecStream(Guid.NewGuid().ToString("N"));
-            stream.AgentTask = Task.Run(() => Agent(stream));
+            // Сценарий читаем сейчас, а не внутри Task.Run: Reset() следующего теста перезапишет поле
+            var agent = Agent;
+            stream.AgentTask = Task.Run(() => agent(stream));
+            _agents.Enqueue(stream.AgentTask);
             await BeforeReturn;
             return stream;
         }
     }
 
-    public ProjectRelayControllerTests()
+    /// <summary>
+    /// Хост на весь класс (IClassFixture), а не на тест: состояние устройств и канал ретранслятора —
+    /// те же синглтоны на весь класс, их mutable-поля поднимает заново конструктор класса
+    /// перед каждым тестом — xUnit создаёт экземпляр класса на каждый тест.
+    /// </summary>
+    public sealed class Host : TestWebApplicationFactory
     {
-        _devices.Devices[Device] = FakeDeviceStatus.Status(Device, online: true,
-            DeviceCapabilities.Exec, DeviceCapabilities.Files, DeviceCapabilities.Relay);
-        _factory = new TestWebApplicationFactory
+        internal readonly FakeDeviceStatus Devices = new();
+        internal readonly SpyRelay Relay = new();
+
+        public Host()
         {
             ExtraServices = s =>
             {
-                s.AddSingleton<IDeviceExecChannel>(_devices);
-                s.AddSingleton<IDeviceRelayChannel>(_relay);
-            },
-        };
+                s.AddSingleton<IDeviceExecChannel>(Devices);
+                s.AddSingleton<IDeviceRelayChannel>(Relay);
+            };
+        }
+    }
+
+    private readonly FakeDeviceStatus _devices;
+    private readonly SpyRelay _relay;
+    private readonly TestWebApplicationFactory _factory;
+    private readonly HttpClient _client;
+
+    public ProjectRelayControllerTests(Host host)
+    {
+        _factory = host;
+        _devices = host.Devices;
+        _relay = host.Relay;
+        _devices.Devices[Device] = FakeDeviceStatus.Status(Device, online: true,
+            DeviceCapabilities.Exec, DeviceCapabilities.Files, DeviceCapabilities.Relay);
+        _relay.Reset();
         _client = _factory.CreateAuthenticatedClient();
     }
 
-    public void Dispose() => _factory.Dispose();
+    public void Dispose() => _client.Dispose();
 
     private async Task<string> CreateAsync(string? deviceId)
     {

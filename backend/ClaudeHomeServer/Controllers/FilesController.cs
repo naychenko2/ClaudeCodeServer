@@ -91,6 +91,17 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     private IActionResult? PrivateContainerDenied(string? path) =>
         PrivateAttachments.IsPrivateContainerPath(path) ? NotFound() : null;
 
+    // Гейт «в вики пишет только Хранитель» (ADR-035, решение 2): Upload и SaveFromUrl пишут
+    // FileStream мимо FileService, поэтому их часть проверки стоит здесь, а не в сервисе.
+    // data-корень — тот же резолв от DataPath, что у FileService/NotesService. Тип — Core.dll
+    // (namespace Services.Notes, не вертикаль Notes), ADR-014 не затронут. Отказ ловится
+    // существующим catch (UnauthorizedAccessException) → 403, как у соседних маршрутов.
+    private void GuardNotWiki(string path)
+    {
+        if (WikiPaths.IsWikiPath(path, SubsystemHostingExtensions.ResolveDataDir(config)))
+            throw new UnauthorizedAccessException("В вики пишет только Хранитель");
+    }
+
     // Проставляет состояние синхронизации (direct/inherited/null) каждой записи
     private IEnumerable<FileEntry> Annotate(string projectId, IEnumerable<FileEntry> entries) =>
         entries.Select(e => e with { Synced = sync.GetSyncState(projectId, e.Path) });
@@ -835,6 +846,8 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             return ok ? Ok() : BadRequest(new { error = "Не удалось откатить (не git-репозиторий?)" });
         }
         catch (KeyNotFoundException) { return NotFound(); }
+        // Отказ вики (RevertFile бросает до git) — 403, как у соседних маршрутов, а не 500
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
     // S2c-8: на WriteContent (см. правило у SaveContent).
@@ -1054,6 +1067,8 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // FileMode.Create на месте молча затирал параллельную правку того же пути — ни хеша,
             // ни 409. Без If-Match — прежнее поведение (перезапись), но под замком.
             var safePath = FileService.SafeJoinPublic(root, relativePath);
+            // До CreateDirectory и до стрима: под data/wiki/ не должна появиться ни папка, ни файл
+            GuardNotWiki(safePath);
             Directory.CreateDirectory(Path.GetDirectoryName(safePath)!);
             // F-4 (п.2): перед сверкой версии — отказ редактору на незакоммиченном целевом файле:
             // загрузка не редактирует то, что клиент видел, а затирает его целиком.
@@ -1459,6 +1474,8 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         {
             var root = GetRoot(projectId);
             var safePath = FileService.SafeJoinPublic(root, req.Path);
+            // До запроса: скачивать тело ради пути, который всё равно откажем, незачем
+            GuardNotWiki(safePath);
             var client = httpClientFactory.CreateClient("safe-download");
 
             // Стриминг в файл вместо буферизации всего ответа в памяти

@@ -71,6 +71,12 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
     // в наборе нет.
     public bool UseFrontend { get; init; } = true;
     private static readonly object _FrontendLock = new();
+    // Сколько раз ЭТОТ хост взял и отдал ссылку на wwwroot: у хоста пула — ровно по разу
+    // на весь процесс, сколько бы классов его ни делили (тест SharedHostPoolTests)
+    private int _frontendAcquired;
+    private int _frontendReleased;
+    internal int FrontendAcquired => Volatile.Read(ref _frontendAcquired);
+    internal int FrontendReleased => Volatile.Read(ref _frontendReleased);
     private static int _FrontendReferences;
     private static string? _FrontendPath;
 
@@ -78,7 +84,7 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
     {
         // Создаём users.json до старта хоста — UserStore прочитает его при инициализации
         Directory.CreateDirectory(TempDir);
-        CreateUsersFile(TempDir);
+        CreateUsersFile(TempDir, InitialUsers());
 
         // Опт-ин фронт-каталога: «фронт как на проде» — `Program.cs` находит
         // `AppContext.BaseDirectory/wwwroot`, регистрирует `MapFallbackToFile` и
@@ -87,7 +93,11 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
         // глобален на процесс (один и тот же путь проверяется в `Program.cs:1766`),
         // поэтому учитываем ссылки на каталог через статический счётчик, чтобы
         // параллельные хосты в xUnit-коллекциях не снесли друг другу wwwroot.
-        if (UseFrontend) EnsureFrontendRoot();
+        if (UseFrontend)
+        {
+            EnsureFrontendRoot();
+            Interlocked.Increment(ref _frontendAcquired);
+        }
         // Пустой «пользовательский профиль CLI»: без оверрайда LlmProviderRegistry брал бы
         // реальный ~/.claude разработчика и синкал его (13k файлов, ~95 MB) в temp-профиль
         // на каждом хосте, где ход строится с профилем подписки/провайдера
@@ -219,14 +229,21 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
         }
     }
 
-    private static void CreateUsersFile(string dir)
+    // Пользователи users.json на старте хоста: (имя, пароль, роль). Общий хост пула
+    // (SharedHostPool) общих учёток не заводит — владелец у каждого класса свой
+    protected virtual IEnumerable<(string Username, string Password, string Role)> InitialUsers() =>
+        [(TestUsername, TestPassword, "admin"), (SecondUsername, SecondPassword, "user")];
+
+    private static void CreateUsersFile(string dir, IEnumerable<(string Username, string Password, string Role)> initial)
     {
         var hasher = new PasswordHasher<User>();
-        var user = new User { Username = TestUsername, Role = "admin" };
-        user.PasswordHash = hasher.HashPassword(user, TestPassword);
-        var second = new User { Username = SecondUsername, Role = "user" };
-        second.PasswordHash = hasher.HashPassword(second, SecondPassword);
-        var usersFile = new { version = 1, users = new[] { user, second } };
+        var users = initial.Select(u =>
+        {
+            var user = new User { Username = u.Username, Role = u.Role };
+            user.PasswordHash = hasher.HashPassword(user, u.Password);
+            return user;
+        }).ToArray();
+        var usersFile = new { version = 1, users };
         File.WriteAllText(
             Path.Combine(dir, "users.json"),
             JsonSerializer.Serialize(usersFile));
@@ -295,8 +312,11 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
         if (!UseFrontend) return;
         lock (_FrontendLock)
         {
-            if (_FrontendReferences <= 0) return;
+            // Отдаём только взятое ЭТИМ хостом: несобранная фабрика или повторный Dispose
+            // не должны снимать чужую ссылку (каталог снёсся бы под живым хостом)
+            if (_frontendReleased >= _frontendAcquired || _FrontendReferences <= 0) return;
             _FrontendReferences--;
+            _frontendReleased++;
             if (_FrontendReferences > 0 || _FrontendPath is null) return;
             try
             {

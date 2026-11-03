@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.ImageEditor;
@@ -18,7 +19,7 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 // очередь ComfyUI не забивается ожиданиями одного человека, а каждый готовый вариант сразу уходит
 // отчётом EditProgress.Ready. Граф ComfyWorkflows при этом не трогается — он общий с MCP-инструментом
 // local_generate_image, где batch_size остаётся.
-public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, IImageEditQuoter
+public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate? gpuGate = null) : IImageEditor, IImageEditQuoter
 {
     public const string ProviderKey = "local";
     // Qwen Turbo (8 шагов) — умолчание авто-выбора; FLUX 3 Klein и Qwen «качественно» (25 шагов) — по выбору
@@ -35,6 +36,11 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
 
     internal TimeSpan PollInterval { get; set; } = TimeSpan.FromSeconds(2);
     internal TimeSpan Ceiling { get; set; } = JobCeiling;
+
+    // Сколько задание ждёт конца хода локальной LLM, делящей с ComfyUI видеокарту (IMediaGpuYieldGate).
+    // Срок вышел — задание всё равно уходит: лучше оборвать долгий ход, чем держать картинку вечно.
+    public static readonly TimeSpan MaxWaitForLlmTurn = TimeSpan.FromMinutes(10);
+    internal TimeSpan LlmTurnWait { get; set; } = MaxWaitForLlmTurn;
 
     public string Key => ProviderKey;
     public string Label => "Локальные модели";
@@ -236,6 +242,11 @@ public sealed class LocalImageEditor(ILocalImageMedia? media) : IImageEditor, II
         string? current = null;
         try
         {
+            // Локальная LLM чата (провайдер с YieldsGpuToMedia) делит видеокарту с ComfyUI: задание,
+            // отданное посреди её хода, выгрузило бы модель и оборвало ход. Ждём конца таких ходов —
+            // задание тем временем в очереди (Queued); отмена задания прерывает и ожидание.
+            if (gpuGate is { HasActiveTurns: true })
+                await gpuGate.WaitForQuietAsync(LlmTurnWait, token);
             for (var i = 0; i < runs; i++)
             {
                 var submitted = await media.SubmitAsync(run, token);

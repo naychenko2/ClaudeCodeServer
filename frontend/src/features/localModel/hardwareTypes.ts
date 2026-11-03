@@ -12,7 +12,7 @@ export type HwLevel = 'ok' | 'warn' | 'danger' | 'none';
 export type HwRole = 'text' | 'media';
 
 // Семейство ряда графика «Температуры».
-export type HwFamily = 'mem' | 'core' | 'hotspot' | 'cpu' | 'chipset' | 'disk';
+export type HwFamily = 'mem' | 'core' | 'hotspot' | 'cpu' | 'chipset' | 'water' | 'disk';
 
 // Видеокарта (nvidia-smi + помощник root для памяти GDDR6X). Числовые поля nullable:
 // null — датчик не ответил (nvidia-smi/помощник), не «0».
@@ -47,7 +47,7 @@ export interface HardwareGpu {
 // name — человекочитаемое имя («Карта 1», «Процессор», «Диск кэша»…).
 export interface HardwareNode {
   key: string;
-  kind: 'gpu' | 'cpu' | 'vrm' | 'chipset' | 'disk' | 'ram';
+  kind: 'gpu' | 'cpu' | 'vrm' | 'chipset' | 'water' | 'disk' | 'ram';
   name: string;
   tempC: number | null;
   // 'ok' — датчик отвечает; 'none' — датчика нет вовсе; 'nodata' — датчик есть, но не ответил.
@@ -65,6 +65,8 @@ export interface HardwareNode {
     critC?: number | null;
     usedGb?: number;
     totalGb?: number;
+    // Занято, % (RAM и диск кэша: плитка показывает его вместо температуры, spark15m — тоже %).
+    usedPerc?: number;
   };
   // Мини-график: 90 точек, шаг 10 с, 15 мин; null — разрыв линии.
   spark15m: (number | null)[];

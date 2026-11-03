@@ -1,25 +1,39 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
 // Статус заготовки-ассистента при ручной правке (план 2.8): PersonasController.Update снимает
 // AssistantPersonaId, ТОЛЬКО когда меняется что-то характер-релевантное (Name/Role/Greeting/
 // слот контракта). Посторонние поля (цвет, модель, привязки) статус не трогают — карточка-
-// приглашение не должна гаснуть от косметики. Своя фабрика НА КАЖДЫЙ тест (не IClassFixture):
-// AssistantPersonaId/DefaultPersonaId живут в общем UserStore синглтона, и общая фабрика на
-// класс сделала бы факты зависимыми от порядка выполнения (как и в OnboardingApplyTranscriptTests).
-public class AssistantStatusTests : IDisposable
+// приглашение не должна гаснуть от косметики.
+[Trait("Category", "Host")]
+public class AssistantStatusTests : IClassFixture<AssistantStatusTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    // Хост на КЛАСС, а не на тест. Статус заготовки (DefaultPersonaId == AssistantPersonaId)
+    // живёт в общем UserStore: тесты «меняет имя/слот» снимают его через продукт, тесты
+    // «не снимает» ждут нетронутым — конструктор класса выставляет дефолт нетронутой заготовкой
+    // перед каждым тестом (саму заготовку заводит стартовый проход провижна хоста, Program.cs).
+    // Имя в тесте смены уникальное: правка тем же именем, что уже стоит на заготовке, —
+    // не изменение (IsCharacterRelevantChange сравнивает значения), и статус не снялся бы.
+    public sealed class Hosts : TestWebApplicationFactory;
+
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
 
-    public AssistantStatusTests() => _client = _factory.CreateAuthenticatedClient();
-
-    public void Dispose() => _factory.Dispose();
+    public AssistantStatusTests(Hosts hosts)
+    {
+        _factory = hosts;
+        _client = _factory.CreateAuthenticatedClient();
+        var users = _factory.Services.GetRequiredService<UserStore>();
+        var ownerId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        users.SetAssistantPersona(ownerId, users.GetById(ownerId)!.DefaultPersonaId);
+    }
 
     private async Task<JsonElement> MeAsync() => JsonSerializer.Deserialize<JsonElement>(
         await (await _client.GetAsync("/api/auth/me")).Content.ReadAsStringAsync());
@@ -33,7 +47,10 @@ public class AssistantStatusTests : IDisposable
     {
         var assistantId = await AssistantIdAsync();
 
-        var response = await _client.PutAsJsonAsync($"/api/personas/{assistantId}", new { name = "Марина" });
+        // Имя уникальное: после теста «из онбординг-сессии» на заготовке уже стоит «Марина»,
+        // повтор того же имени — не изменение, и статус не снялся бы
+        var response = await _client.PutAsJsonAsync($"/api/personas/{assistantId}",
+            new { name = $"Марина-{Guid.NewGuid():N}" });
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var me = await MeAsync();

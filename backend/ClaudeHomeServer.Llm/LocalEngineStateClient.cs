@@ -3,7 +3,7 @@ using System.Text.Json;
 
 namespace ClaudeHomeServer.Services.Llm;
 
-// Состояние GPU-арбитра (GET /state, deploy/video/bonsai/gpu-arbiter.py) для движка с `StateUrl`.
+// Состояние GPU-арбитра (GET /state, deploy/video/local-llm/gpu-arbiter.py) для движка с `StateUrl`.
 // Опрашивается по запросу, фонового цикла нет: арбитра спрашивают дорожка статистики (статус
 // «уступила») и блок «Дежурство» — только когда на них смотрят.
 //
@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Services.Llm;
 //     обрезается: `lease:` (произвольная строка из POST /lease от любого в сети) — до 64 символов,
 //     `gpu:` (pid + командная строка процесса) и `comfy:` (id задачи) — общим потолком 80;
 //   • неверный тип поля обнуляет только это поле (элемент неверного типа в массиве пропускается);
-//   • неизвестное значение `bonsai` → `unknown`; `mode` вне exclusive/shared → null;
+//   • неизвестное значение `engine` (у арбитра до 01.11.2026 — `bonsai`) → `unknown`; `mode` вне exclusive/shared → null;
 //   • часы Video и CCS расходятся: возраст состояния меряется часами арбитра (ts − since) и
 //     переносится на нашу ось — `sinceAt = now − (ts − since)`; сам `ts` наружу не отдаётся;
 //     абсурдные часы (отрицательный возраст или вне диапазона) обнуляют только `sinceAt`.
@@ -24,7 +24,7 @@ namespace ClaudeHomeServer.Services.Llm;
 // общий бюджет 800 мс на заголовки и тело: арбитр отвечает мгновенно, дольше — его нет.
 public sealed record EngineArbiterSnapshot(
     bool Reachable,
-    string? Bonsai,                     // ready | yielded | starting | waiting-vram | unknown
+    string? State,                      // ready | yielded | starting | waiting-vram | unknown
     IReadOnlyList<string>? Reasons,
     DateTimeOffset? SinceAt,           // наша ось: last state change
     int? Yields,
@@ -55,7 +55,7 @@ public sealed class LocalEngineStateClient : IEngineArbiterStateReader
     private const int MaxUntrustedLen = 64;  // текст «lease:» — произвольная строка из сети
     private const int MaxReasonLen = 80;     // прочие причины: «gpu:» pid+командная строка, «comfy:» id
 
-    private static readonly string[] BonsaiStates =
+    private static readonly string[] EngineStates =
         [EngineArbiterSnapshot.StateReady, EngineArbiterSnapshot.StateYielded,
          EngineArbiterSnapshot.StateStarting, EngineArbiterSnapshot.StateWaitingVram,
          EngineArbiterSnapshot.StateUnknown];
@@ -175,7 +175,7 @@ public sealed class LocalEngineStateClient : IEngineArbiterStateReader
 
             return new EngineArbiterSnapshot(
                 Reachable: true,
-                Bonsai: GetBonsai(root),
+                State: GetState(root),
                 Reasons: GetReasons(root),
                 SinceAt: sinceAt,
                 Yields: GetInt(root, "yields"),
@@ -210,12 +210,14 @@ public sealed class LocalEngineStateClient : IEngineArbiterStateReader
         }
     }
 
-    private static string? GetBonsai(JsonElement o, string name = "bonsai")
+    // Состояние движка: поле `engine`; арбитр до 01.11.2026 отдавал его под именем `bonsai` — читаем как запасное.
+    private static string? GetState(JsonElement o)
     {
-        if (!o.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.String) return null;
+        if ((!o.TryGetProperty("engine", out var v) || v.ValueKind != JsonValueKind.String)
+            && (!o.TryGetProperty("bonsai", out v) || v.ValueKind != JsonValueKind.String)) return null;
         var s = v.GetString()!;
         // Значение вне списка состояний — не выдумываем: «unknown» (арбитр так же отвечает до первого цикла).
-        return Array.IndexOf(BonsaiStates, s) >= 0 ? s : EngineArbiterSnapshot.StateUnknown;
+        return Array.IndexOf(EngineStates, s) >= 0 ? s : EngineArbiterSnapshot.StateUnknown;
     }
 
     private static string? GetMode(JsonElement o)

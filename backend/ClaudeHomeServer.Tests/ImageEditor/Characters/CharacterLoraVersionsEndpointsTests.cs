@@ -13,20 +13,63 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace ClaudeHomeServer.Tests.ImageEditor.Characters;
 
 // Ручки версий LoRA персонажа (ADR-026-contracts §7.3)
-public class CharacterLoraVersionsEndpointsTests : IDisposable
+[Trait("Category", "Host")]
+public class CharacterLoraVersionsEndpointsTests : IClassFixture<CharacterLoraVersionsEndpointsTests.Hosts>
 {
-    private readonly List<TestWebApplicationFactory> _factories = [];
+    private readonly Hosts _hosts;
 
-    public void Dispose()
+    public CharacterLoraVersionsEndpointsTests(Hosts hosts) => _hosts = hosts;
+
+    // Хост на КОНФИГУРАЦИЮ, а не на тест: объекты фабрик создаются сразу, ASP.NET-хост внутри каждой
+    // стартует лениво; гасятся вместе с фикстурой. Состояние каждый тест заводит сам: список LoRA
+    // задаёт Use() хоста MediaHost (в самом Hosts метода нет), проект, персонажа и версии —
+    // ProjectWithCharacter с уникальным именем и каталогом
+    public sealed class Hosts : IDisposable
     {
-        foreach (var f in _factories) f.Dispose();
-        GC.SuppressFinalize(this);
+        // Штатный шов хоста: LocalMedia выключен, список LoRA — null
+        public DefaultHost Default { get; } = new();
+        // Подменённый шов со списком LoRA, который задаёт тест
+        public MediaHost Media { get; } = new();
+
+        public void Dispose()
+        {
+            Default.Dispose();
+            Media.Dispose();
+        }
     }
 
-    // Список заполняют после создания фабрики: префикс LoRA зависит от id пользователя этой фабрики
-    private sealed class LoraMedia(IReadOnlyList<string>? initial) : ILocalImageMedia
+    public sealed class DefaultHost : TestWebApplicationFactory
     {
-        public IReadOnlyList<string>? Loras { get; set; } = initial;
+        public DefaultHost() =>
+            ExtraServices = services =>
+                services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
+    }
+
+    public sealed class MediaHost : TestWebApplicationFactory
+    {
+        public LoraMedia Media { get; } = new();
+
+        public MediaHost()
+        {
+            ExtraServices = services =>
+            {
+                services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
+                services.RemoveAll<ILocalImageMedia>();
+                services.AddSingleton<ILocalImageMedia>(Media);
+            };
+        }
+
+        // Префикс LoRA зависит от id пользователя хоста, поэтому список тест заполняет через Media.Loras
+        public MediaHost Use(IReadOnlyList<string>? loras)
+        {
+            Media.Loras = loras;
+            return this;
+        }
+    }
+
+    public sealed class LoraMedia : ILocalImageMedia
+    {
+        public IReadOnlyList<string>? Loras { get; set; }
         public bool Available => true;
         public bool Configured => true;
         public Task<int?> QueueLengthAsync(CancellationToken ct) => throw new NotSupportedException();
@@ -35,22 +78,6 @@ public class CharacterLoraVersionsEndpointsTests : IDisposable
         public Task<LocalImageSubmitted> SubmitAsync(LocalImageRequest request, CancellationToken ct) => throw new NotSupportedException();
         public Task<LocalImagePoll> PollAsync(string ticket, CancellationToken ct) => throw new NotSupportedException();
         public Task<bool> CancelAsync(string ticket, CancellationToken ct) => throw new NotSupportedException();
-    }
-
-    // media == null — штатный шов хоста
-    private TestWebApplicationFactory Factory(ILocalImageMedia? media)
-    {
-        var factory = new TestWebApplicationFactory();
-        factory.ExtraServices = services =>
-        {
-            services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
-            // Без подмены остаётся штатный шов хоста: LocalMedia выключен, список LoRA — null
-            if (media is null) return;
-            services.RemoveAll<ILocalImageMedia>();
-            services.AddSingleton(media);
-        };
-        _factories.Add(factory);
-        return factory;
     }
 
     private static string Api(string projectId) => $"/api/projects/{projectId}/image-editor/characters/anya/lora-versions";
@@ -98,7 +125,7 @@ public class CharacterLoraVersionsEndpointsTests : IDisposable
     [Fact]
     public async Task Список_отдаёт_loraFile_только_у_ready()
     {
-        var factory = Factory(null);
+        var factory = _hosts.Default;
         var lora = OwnerLora(factory);
         var (id, root) = await ProjectWithCharacter(factory);
         var client = factory.CreateAuthenticatedClient();
@@ -120,7 +147,7 @@ public class CharacterLoraVersionsEndpointsTests : IDisposable
     [Fact]
     public async Task Список_показывает_подключённую_версию_и_свою_LoRA()
     {
-        var factory = Factory(null);
+        var factory = _hosts.Default;
         var lora = OwnerLora(factory);
         var (id, root) = await ProjectWithCharacter(factory);
         var client = factory.CreateAuthenticatedClient();
@@ -136,10 +163,9 @@ public class CharacterLoraVersionsEndpointsTests : IDisposable
         body.GetProperty("items").EnumerateArray().Select(i => i.GetProperty("connected").GetBoolean())
             .Should().AllBeEquivalentTo(false);
 
-        var m1 = new LoraMedia([]);
         // Своя LoRA вручную: ни одна версия не совпала — own
-        var withOwn = Factory(m1);
-        m1.Loras = [OwnerLora(withOwn, "manual.safetensors")];
+        var withOwn = _hosts.Media.Use([]);
+        withOwn.Media.Loras = [OwnerLora(withOwn, "manual.safetensors")];
         var (id2, root2) = await ProjectWithCharacter(withOwn);
         var c2 = withOwn.CreateAuthenticatedClient();
         var manual = OwnerLora(withOwn, "manual.safetensors");
@@ -153,10 +179,9 @@ public class CharacterLoraVersionsEndpointsTests : IDisposable
     [Fact]
     public async Task Своя_LoRA_несёт_дату_обучения_если_обучена_у_другого_персонажа_проекта()
     {
-        var m = new LoraMedia([]);
-        var f = Factory(m);
+        var f = _hosts.Media.Use([]);
         var lora = OwnerLora(f, "boris.safetensors");
-        m.Loras = [lora];
+        f.Media.Loras = [lora];
         var (id, root) = await ProjectWithCharacter(f);
         var c = f.CreateAuthenticatedClient();
         var boris = new MultipartFormDataContent { { new StringContent("Борис"), "name" } };
@@ -182,11 +207,10 @@ public class CharacterLoraVersionsEndpointsTests : IDisposable
     [Fact]
     public async Task Подключение_пишет_LoRA_в_манифест_и_список_отмечает_connected()
     {
-        var m = new LoraMedia([]);
-        var f = Factory(m);
+        var f = _hosts.Media.Use([]);
         var (id, root) = await ProjectWithCharacter(f);
         var lora = OwnerLora(f);
-        m.Loras = [lora];
+        f.Media.Loras = [lora];
         Runs(f).Create(root, "anya", Run(Ready, "ready", lora));
         var client = f.CreateAuthenticatedClient();
 
@@ -205,7 +229,7 @@ public class CharacterLoraVersionsEndpointsTests : IDisposable
     [Fact]
     public async Task Подключение_отказывает_по_контракту()
     {
-        var f = Factory(new LoraMedia(["ccs/other/x.safetensors"]));
+        var f = _hosts.Media.Use(["ccs/other/x.safetensors"]);
         var (id, root) = await ProjectWithCharacter(f);
         var lora = OwnerLora(f);
         var runs = Runs(f);
@@ -233,7 +257,7 @@ public class CharacterLoraVersionsEndpointsTests : IDisposable
     [Fact]
     public async Task Подключение_без_списка_ComfyUI_это_503()
     {
-        var down = Factory(new LoraMedia(null));
+        var down = _hosts.Media.Use(null);
         var (id, root) = await ProjectWithCharacter(down);
         Runs(down).Create(root, "anya", Run(Ready, "ready", OwnerLora(down)));
         var resp = await down.CreateAuthenticatedClient().PostAsync($"{Api(id)}/{Ready}/connect", null);
@@ -244,7 +268,7 @@ public class CharacterLoraVersionsEndpointsTests : IDisposable
     [Fact]
     public async Task Переименование_пустое_название_сбрасывает_к_шаблону()
     {
-        var f = Factory(null);
+        var f = _hosts.Default;
         var (id, root) = await ProjectWithCharacter(f);
         var runs = Runs(f);
         runs.Create(root, "anya", Run(Ready, "ready", OwnerLora(f), "Старое"));
@@ -274,10 +298,9 @@ public class CharacterLoraVersionsEndpointsTests : IDisposable
     [Fact]
     public async Task Удаление_подключённой_снимает_LoRA_и_помечает_версию_deleting()
     {
-        var m = new LoraMedia([]);
-        var media = Factory(m);
+        var media = _hosts.Media.Use([]);
         var lora = OwnerLora(media);
-        m.Loras = [lora];
+        media.Media.Loras = [lora];
         var (id, root) = await ProjectWithCharacter(media);
         var runs = Runs(media);
         runs.Create(root, "anya", Run(Ready, "ready", lora));
@@ -312,7 +335,7 @@ public class CharacterLoraVersionsEndpointsTests : IDisposable
     [Fact]
     public async Task Чужой_владелец_не_видит_версии_и_не_трогает_их()
     {
-        var f = Factory(new LoraMedia([]));
+        var f = _hosts.Media.Use([]);
         var (id, root) = await ProjectWithCharacter(f);
         Runs(f).Create(root, "anya", Run(Ready, "ready", OwnerLora(f)));
         var stranger = f.CreateAuthenticatedClient(

@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// из claim sub), состав по осям хвоста (personal/team/dossier) и живые вызовы сервисов.
 /// </summary>
 [Trait("Category", "Slow")]
+[Trait("Category", "Host")]
 public class MemoryHttpTransportTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

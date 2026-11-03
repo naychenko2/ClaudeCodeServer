@@ -9,9 +9,9 @@
 // нет данных из-за сбоя поллера (error из снимка) — карточка «Нет связи с
 // сервером» / «Не удалось получить данные» (Ф10): пустое тело всегда объяснён.
 //
-// Стенд второй модели (Bonsai, макет docs/mockups/bonsai-toolbar.md): тот же порядок
+// Стенд второй модели (движок на Video, макет docs/mockups/bonsai-toolbar.md): тот же порядок
 // блоков, движок — параметр `engine`. Отличия по макету §3–§4:
-// — первой строкой — переключатель «Основная · Bonsai», виден только при двух
+// — первой строкой — переключатель вкладок моделей, виден только при двух
 //   настроенных движках (список — GET /api/local-model/engines);
 // — статус 'yielded' разводится точными подписями по состоянию арбитра (format.ts);
 //   уступка — нейтральный баннер и нейтральный тон, НЕ авария и не приглушение;
@@ -20,7 +20,7 @@
 // — видеокарта — своя карточка «Видеокарта · Video» с чипом «общая с ComfyUI»
 //   (данные с узла ComfyUI на Video; «Железо» — хост CCS, ссылки туда нет);
 // — «Кто сейчас на модели» — места сервера из duty.callsNow, не чаты;
-// — «Дежурство» (DutyBlock) — последним блоком, только у выбранного Bonsai и только
+// — «Дежурство» (DutyBlock) — последним блоком, только у выбранного второго движка и только
 //   если снимок принёс duty (макет §3/§5); переход «→ Медиа» — через onOpenMedia от панели.
 
 import { type CSSProperties } from 'react';
@@ -109,20 +109,22 @@ function StatusRow({ data }: { data: LocalModelStats }) {
 }
 
 // Подстрока под статусом: main — движок · N карт, TP=N · обновлено HH:MM:SS / данные на HH:MM.
-// Стенд Bonsai (макет §3, .html:414): движок · Video · … — карта на Video одна и общая с
+// Подписи из Stats (engineLabel, topology) заменяют движок и «TP=N», если заданы.
+// Стенд на Video (макет §3, .html:414): движок · Video · … — карта на Video одна и общая с
 // ComfyUI, её данные — с узла ComfyUI: число карт и TP там не о чём, по макету стоит
 // положение стенда «Video» (тот же факт, что в заголовке VideoCard).
-function StatusSubline({ data, bonsai }: { data: LocalModelStats; bonsai?: boolean }) {
+function StatusSubline({ data, named }: { data: LocalModelStats; named?: boolean }) {
   const parts: string[] = [];
-  if (data.engine) parts.push(data.engine);
-  if (bonsai) {
+  const engine = data.engineLabel || data.engine;
+  if (engine) parts.push(engine);
+  if (named) {
     parts.push('Video');
   } else {
     const n = data.gpus?.length ?? 0;
     if (n > 0) {
       // TP: из необязательного поля tensorParallel, иначе = число карт
       const tp = data.tensorParallel ?? n;
-      parts.push(`${gpuCountLabel(n)}, TP=${tp}`);
+      parts.push(`${gpuCountLabel(n)}, ${data.topology || `TP=${tp}`}`);
     }
   }
   if (data.status === 'down') {
@@ -144,9 +146,9 @@ function StatusSubline({ data, bonsai }: { data: LocalModelStats; bonsai?: boole
 // === Баннер «Стенд не отвечает» ===
 // C.dangerBg/C.dangerBorder/C.dangerText; кнопка ghost «Проверить сейчас»
 // запускает внеочередной опрос (refetch из панели).
-// Для стенда Bonsai — свой текст (макет §4): 'down' у движка с арбитром означает,
+// Для стенда на Video — свой текст (макет §4): 'down' у движка с арбитром означает,
 // что арбитр её НЕ выгружал, — это авария, а не уступка (Б3b).
-function DownBanner({ data, onCheck, bonsai }: { data: LocalModelStats; onCheck: () => void; bonsai?: boolean }) {
+function DownBanner({ data, onCheck, named }: { data: LocalModelStats; onCheck: () => void; named?: boolean }) {
   const since = formatSince(data.downSince);
   return (
     <div style={{
@@ -159,11 +161,11 @@ function DownBanner({ data, onCheck, bonsai }: { data: LocalModelStats; onCheck:
       </span>
       <div style={{ minWidth: 0 }}>
         <b style={{ fontWeight: 700 }}>
-          {bonsai
-            ? `Bonsai не отвечает${since ? ` с ${since}` : ''}, а арбитр её не выгружал.`
+          {named
+            ? `Модель не отвечает${since ? ` с ${since}` : ''}, а арбитр её не выгружал.`
             : `Стенд не отвечает${since ? ` с ${since}` : ''}.`}
         </b>{' '}
-        {bonsai ? 'Это авария, не уступка: места идут на MiniMax.' : 'Новые ходы на локальной модели встанут в ошибку, пока он не поднимется.'}
+        {named ? 'Это авария, не уступка: места идут на MiniMax.' : 'Новые ходы на локальной модели встанут в ошибку, пока он не поднимется.'}
         <div style={{ marginTop: SP.sm }}>
           <Button variant="ghost" size="xs" onClick={onCheck}>Проверить сейчас</Button>
         </div>
@@ -179,9 +181,9 @@ function DownBanner({ data, onCheck, bonsai }: { data: LocalModelStats; onCheck:
 function YieldBanner({ data }: { data: LocalModelStats }) {
   const state = data.duty?.arbiter?.state;
   const head =
-    state === 'waiting-vram' ? 'Bonsai ждёт память карты.'
-      : state === 'starting' ? 'Bonsai загружается.'
-        : 'Bonsai уступила карту — это по плану.';
+    state === 'waiting-vram' ? 'Модель ждёт память карты.'
+      : state === 'starting' ? 'Модель загружается.'
+        : 'Модель уступила карту — это по плану.';
   return (
     <div style={{
       display: 'flex', gap: SP.sm, alignItems: 'flex-start',
@@ -245,7 +247,7 @@ function NowCard({ data }: { data: LocalModelStats }) {
 // первого токена, а оно включает ожидание очереди шагов, поэтому величина ниже
 // реальной скорости вычисления. Без слова «с ожиданием» показатель вводит в
 // заблуждение.
-function SpeedCard({ data, bonsai }: { data: LocalModelStats; bonsai?: boolean }) {
+function SpeedCard({ data, named }: { data: LocalModelStats; named?: boolean }) {
   if (data.status === 'yielded') {
     return <Card title="Скорость"><UnloadedNote text="Нет данных, пока модель выгружена. Последнее значение — на графике слева от разрыва." /></Card>;
   }
@@ -260,9 +262,9 @@ function SpeedCard({ data, bonsai }: { data: LocalModelStats; bonsai?: boolean }
           label="генерация на запрос, ток/с, за последнюю минуту"
         />
         {/* «с ожиданием» — про vLLM: его prompt-время включает очередь шагов. У
-            llama-server (стенд Bonsai) prompt_seconds_total — чистое время чтения,
+            llama-server (стенд на Video) prompt_seconds_total — чистое время чтения,
             очередь в него не входит, слово было бы неправдой (макет §3) */}
-        <Kpi value={formatTps(data.speed.prefillPerStream)} label={bonsai
+        <Kpi value={formatTps(data.speed.prefillPerStream)} label={named
           ? 'чтение промпта, ток/с, за последнюю минуту'
           : 'чтение промпта с ожиданием, ток/с, за последнюю минуту'} />
       </div>
@@ -279,8 +281,8 @@ function GpusCard({ data, onOpenHardware }: { data: LocalModelStats; onOpenHardw
   return <HwLinkRow brief={data.hardware} onOpen={onOpenHardware} />;
 }
 
-// === «Видеокарта · Video» (стенд Bonsai, макет §3/§6) ===
-// Данные — с узла ComfyUI на Video (b.gpus в ответе stats?engine=bonsai): «Железо» —
+// === «Видеокарта · Video» (стенд на Video, макет §3/§6) ===
+// Данные — с узла ComfyUI на Video (b.gpus в ответе stats?engine=named): «Железо» —
 // это хост CCS, ссылки туда нет. Чип «общая с ComfyUI» — карточка стоит на Video и
 // делит её с ComfyUI (макет §3). ComfyUI не ответил (gpus пустые) — «Нет данных о
 // карте…», карточка остаётся: человек должен видеть, что карта есть, но молчит узел.
@@ -341,8 +343,8 @@ function kvHidden(data: LocalModelStats): boolean {
   return (data.unsupported ?? []).includes('KvUsagePerc');
 }
 
-function ChartCard({ data, window, onWindowChange, isMobile, bonsai }: {
-  data: LocalModelStats; window: Window; onWindowChange: (w: Window) => void; isMobile: boolean; bonsai?: boolean;
+function ChartCard({ data, window, onWindowChange, isMobile, named }: {
+  data: LocalModelStats; window: Window; onWindowChange: (w: Window) => void; isMobile: boolean; named?: boolean;
 }) {
   const hideKv = kvHidden(data);
   return (
@@ -351,7 +353,7 @@ function ChartCard({ data, window, onWindowChange, isMobile, bonsai }: {
         history={data.history} window={window} engine={data.engine}
         cleanStepMs={data.cleanStepMs ?? null} unsupported={data.unsupported}
       />
-      {bonsai && hideKv && (
+      {named && hideKv && (
         <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.sm, lineHeight: 1.45 }}>
           llama-server обновляет счётчики, когда запрос закончен, поэтому график идёт ступеньками.
         </div>
@@ -457,9 +459,9 @@ function WhoCard({ data, isMobile, onOpen }: { data: LocalModelStats; isMobile: 
   );
 }
 
-// === «Кто сейчас на модели» (стенд Bonsai): места сервера, не чаты (макет §3/§4) ===
+// === «Кто сейчас на модели» (стенд на Video): места сервера, не чаты (макет §3/§4) ===
 // Строки из duty.callsNow (журнал EngineCallLedger): не кликабельны, владельца и
-// промпта нет; вместо проекта — звено цепочки («Bonsai» / «MiniMax · страховка» /
+// промпта нет; вместо проекта — звено цепочки («локальная» / «MiniMax · страховка» /
 // «ждёт в очереди»); справа — длительность вызова. Подпись говорит, что это не чаты,
 // чтобы строку не пытались открыть.
 function WhoPlacesCard({ data, isMobile }: { data: LocalModelStats; isMobile: boolean }) {
@@ -508,19 +510,19 @@ function WhoPlacesCard({ data, isMobile }: { data: LocalModelStats; isMobile: bo
   );
 }
 
-// === Переключатель «Основная · Bonsai» (макет §2) ===
+// === Переключатель вкладок моделей (макет §2) ===
 // Первая строка вкладки, над её содержимым — над стендом, над карточкой сбоя и над
 // скелетоном (дефект b129c182): список движков живёт своим опросом
 // (useLocalModelEngines) и не зависит от снимка статистики, поэтому уйти на другой
 // стенд можно и когда данных нет. Виден ТОЛЬКО когда настроены оба движка:
 // с одним движком стенд открывается сразу, переключателя нет. Подписи — titles из
-// /engines («Основная», «Bonsai»): имена моделей в сегмент не ставим (на 320 не
+// /engines («Flash-Next», «Gemma 4»): имена моделей в сегмент не ставим (на 320 не
 // помещаются, имя и так стоит первой строкой стенда). Точка 6 px и подсказка на
-// сегменте «Bonsai» — только когда выбран сам «Bonsai» и по ЕГО снимку: data —
-// снимок текущего движка, состояние Bonsai с основного стенда неизвестно (при
-// падении основного старая логика зажигала на сегменте «Bonsai недоступна» —
+// сегменте второго движка — только когда выбран сам «второй движок» и по ЕГО снимку: data —
+// снимок текущего движка, состояние второй движок с основного стенда неизвестно (при
+// падении основного старая логика зажигала на сегменте «Модель недоступна» —
 // неправда). Снимка нет (data === null) — нет и точки с подсказкой: выдумывать
-// состояние по чужому снимку нечем. Состояние Bonsai на основном стенде придёт в
+// состояние по чужому снимку нечем. Состояние второй движок на основном стенде придёт в
 // Ф6 из лёгкого опроса useLocalModelWatcher. title/aria-label сегмента — та же
 // подсказка, что у рельса.
 function EngineSwitch({ data, engines, engine, onChange, isMobile }: {
@@ -530,9 +532,9 @@ function EngineSwitch({ data, engines, engine, onChange, isMobile }: {
   const configured = engines.filter(e => e.configured);
   if (configured.length < 2) return null;
   // Точка и подсказка — только по снимку выбранного движка (составитель — format.ts)
-  const bonsaiSelected = engine === 'bonsai';
-  const dot = data && bonsaiSelected ? standDot(data) : null;
-  const hint = data && bonsaiSelected ? standHint(data) : null;
+  const namedSelected = engine !== 'main';
+  const dot = data && namedSelected ? standDot(data) : null;
+  const hint = data && namedSelected ? standHint(data) : null;
   return (
     <InlineSegmented<LocalModelEngineName>
       value={engine}
@@ -542,9 +544,9 @@ function EngineSwitch({ data, engines, engine, onChange, isMobile }: {
       options={configured.map(e => ({
         value: e.name,
         label: e.title,
-        // как в макете: «Bonsai — уступила карту» (имя один раз, подсказка без префикса)
-        title: e.name === 'bonsai' && dot && hint ? `Bonsai — ${hint.replace(/^Bonsai:? ?/, '')}` : undefined,
-        icon: e.name === 'bonsai' && dot ? (
+        // как в макете: «Gemma 4 — уступила карту» (имя модели один раз, подсказка без префикса «Модель»)
+        title: e.name !== 'main' && dot && hint ? `${e.title} — ${hint.replace(/^Модель:? ?/, '')}` : undefined,
+        icon: e.name !== 'main' && dot ? (
           <span style={{
             width: 6, height: 6, borderRadius: R.full, flexShrink: 0,
             background: dot === 'warning' ? C.warning : C.textMuted,
@@ -673,7 +675,7 @@ export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch,
   if (!data) return null;
   if (data.status === 'notConnected') return <NotConnected />;
 
-  const bonsai = engine === 'bonsai';
+  const named = engine !== 'main';
   const down = data.status === 'down';
   const yielded = data.status === 'yielded';
   // Приглушение последних данных — только у аварии. Уступка не приглушается:
@@ -685,27 +687,27 @@ export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch,
   return (
     <>
       {engineSwitch}
-      {down && <DownBanner data={data} onCheck={onRefetch} bonsai={bonsai} />}
+      {down && <DownBanner data={data} onCheck={onRefetch} named={named} />}
       {yielded && <YieldBanner data={data} />}
       <StatusRow data={data} />
-      <StatusSubline data={data} bonsai={bonsai} />
+      <StatusSubline data={data} named={named} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, ...stale }}>
         <NowCard data={data} />
-        <SpeedCard data={data} bonsai={bonsai} />
-        <ChartCard data={data} window={window} onWindowChange={onWindowChange} isMobile={isMobile} bonsai={bonsai} />
+        <SpeedCard data={data} named={named} />
+        <ChartCard data={data} window={window} onWindowChange={onWindowChange} isMobile={isMobile} named={named} />
         {/* Видеокарты: основной стенд — строка-ссылка на «Железо» (хост CCS, только
-            админ); Bonsai — своя карточка Video, ссылка на «Железо» была бы неправдой */}
-        {bonsai
+            админ); второй движок — своя карточка Video, ссылка на «Железо» была бы неправдой */}
+        {named
           ? <VideoCard data={data} />
           : <GpusCard data={data} onOpenHardware={onOpenHardware} />}
-        {bonsai
+        {named
           ? <WhoPlacesCard data={data} isMobile={isMobile} />
           : <WhoCard data={data} isMobile={isMobile} onOpen={onOpenChat} />}
-        {/* «Дежурство» — последний блок стенда Bonsai (макет §3/§5): только у выбранного
-            Bonsai; без duty блока нет — DutyBlock сам возвращает null (DutyBlock.tsx:222).
+        {/* «Дежурство» — последний блок стенда на Video (макет §3/§5): только у выбранного
+            второй движок; без duty блока нет — DutyBlock сам возвращает null (DutyBlock.tsx:222).
             Внешний guard по data.duty повторял это условие и маскировал в тестах условие
             движка (R-F5) — оставлено единственное условие: движок */}
-        {bonsai ? <DutyBlock data={data} isMobile={isMobile} onOpenMedia={onOpenMedia} /> : null}
+        {named ? <DutyBlock data={data} isMobile={isMobile} onOpenMedia={onOpenMedia} /> : null}
       </div>
     </>
   );

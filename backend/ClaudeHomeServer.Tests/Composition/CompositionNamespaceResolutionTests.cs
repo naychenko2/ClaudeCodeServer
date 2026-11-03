@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 //
 // Критерий приёмки: мутация — снятая одна регистрация = падение; вернёшь = зелёный.
 // Второй раз за два дня «забытая регистрация»: Skills (позавчера) и Triggers/Watchdog (сегодня).
+[Trait("Category", "Host")]
 public class CompositionNamespaceResolutionTests
 {
     // Маркерные интерфейсы: резолвятся/проверяются по конкретному типу, не через DI.

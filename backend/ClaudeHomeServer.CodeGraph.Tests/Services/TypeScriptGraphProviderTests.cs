@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // npm-зависимости, и тест там исключён фильтром Category!=Node (по аналогии с Dns) —
 // остаётся для локальных прогонов и Windows-хоста.
 [Trait("Category", "Node")]
+[Trait("Category", "Host")]
 public class TypeScriptGraphProviderTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

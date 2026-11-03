@@ -470,6 +470,9 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private Turn.ITurnEventBus? _turnEvents;
     private Turn.ITurnEventBus TurnEvents => _turnEvents ??= new Turn.TurnEventBus();
     private readonly string _sessionsFilePath;
+    // Корень data/ из конфигурации (тот же резолв, что у sessions.json выше) — прокидывается
+    // в LlmSessionContext.DataDir для встроенного deny {data}/wiki/** (ADR-035 §2).
+    private readonly string _dataDir;
     private readonly Lock _saveLock = new();
     /// <summary>
     /// Признак штатной остановки: одноразовый, назад не снимается (процесс после остановки
@@ -987,10 +990,14 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // Llm.ChatTopicMigration.Apply.
         _teamNotifier = this;
 
+        // Корень берётся через GetFullPath (тот же приём, что у Program.cs и NotesService):
+        // относительный DataPath отдал бы в deny-правило CLI относительный корень, а «//…» в
+        // синтаксисе правил — абсолютный путь (ревью S1c, Н5).
         var dataDir = Path.GetDirectoryName(
-            config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
+            Path.GetFullPath(config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json")))
             ?? Path.Combine(AppContext.BaseDirectory, "data");
         _sessionsFilePath = Path.Combine(dataDir, "sessions.json");
+        _dataDir = dataDir;
 
         // Подписки на шину событий хода (ADR-013, этап 1): снимок промпта → PromptSnapshotStore,
         // паспорт сабагента → SubagentRunLog + side-effects, паспорт хода → TurnRunLog.
@@ -2839,6 +2846,23 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             if (!value && entry.Info.PrivateToUserId is not null) return false;
             entry.Info.ExcludeFromDossiers = value;
         }
+        SaveSessions();
+        return true;
+    }
+
+    // Пометка человека для отбора чатов в вики (ADR-035 §12а): WikiMarks.Important —
+    // разбирается всегда, WikiMarks.Skip — не разбирается никогда (ставится и откатом по
+    // источнику, §12г мера 5: иначе следующая ночь вернёт откатанное). null — снять пометку.
+    // UpdatedAt не трогаем по той же причине, что в SetExpiry: пометка — настройка чата,
+    // а не активность (по UpdatedAt идут сортировка и непрочитанность).
+    // Реализация шва ISessionDirectory (по нему зовёт вертикаль Notes — в SessionManager
+    // напрямую ей нельзя, ADR-014). false — неизвестная пометка (валидация на входе) или
+    // сессии нет; отказовый вызов стор не переписывает.
+    public bool SetWikiMark(string sessionId, string? mark)
+    {
+        if (mark is not null && mark != WikiMarks.Important && mark != WikiMarks.Skip) return false;
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
+        entry.Info.WikiMark = mark;
         SaveSessions();
         return true;
     }
@@ -5465,6 +5489,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             rawSystemPrompt, ProjectManager.BuiltInSystemPrompt, permissionRules,
 
             ContentRootPath: AppContext.BaseDirectory,
+            DataDir: _dataDir,
             TasksMcp: tasksMcp,
             OwnerId: ownerId,
             NotesMcp: notesMcp,
@@ -7114,6 +7139,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 RawSystemPrompt: null, BuiltInSystemPrompt: ProjectManager.BuiltInSystemPrompt,
                 PermissionRules: null,
                 ContentRootPath: AppContext.BaseDirectory,
+                DataDir: _dataDir,
                 TasksMcp: tasksMcp,
                 OwnerId: entry.Info.OwnerId,
                 NotesMcp: notesMcp,
@@ -7200,6 +7226,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 ProjectManager.BuiltInSystemPrompt,
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
                 ContentRootPath: AppContext.BaseDirectory,
+                DataDir: _dataDir,
                 TasksMcp: tasksMcp,
                 OwnerId: project.OwnerId,
                 NotesMcp: notesMcp,

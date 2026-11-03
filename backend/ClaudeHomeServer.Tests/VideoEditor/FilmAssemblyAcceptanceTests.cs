@@ -68,6 +68,7 @@ public sealed class FilmAssemblyAcceptanceTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task Фильм_из_трёх_клипов_собирается_а_пересборка_даёт_film_v2()
     {
         var dsp = new FfmpegVideoDsp(new ConfigurationBuilder().Build(), NullLogger<FfmpegVideoDsp>.Instance,

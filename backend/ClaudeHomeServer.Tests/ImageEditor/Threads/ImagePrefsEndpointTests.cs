@@ -19,27 +19,41 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 // Выбор человека в полосе «Картинки» проекта на собранном приложении: GET без файла — умолчания,
 // PUT сохраняет и рассылает image_prefs_changed владельцу, чужой проект — 404 и чужой выбор не
 // трогает, новая нить из ручки нитей наследует сохранённый выбор.
-public class ImagePrefsEndpointTests : IDisposable
+[Trait("Category", "Host")]
+public class ImagePrefsEndpointTests : IClassFixture<ImagePrefsEndpointTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
-    private readonly RecordingBroadcaster _broadcaster = new();
+    /// <summary>
+    /// Хост на весь класс (IClassFixture), а не на тест: подмена широки зарегистрирована один раз.
+    /// Журнал широки — общее состояние хоста: его обнуляет конструктор класса перед каждым
+    /// тестом (тест проверяет абсолютное число рассылок). Выбор проекта ключён (owner, project),
+    /// а проект каждый тест-экземпляр заводит свой (CreateProject — уникальный GUID).
+    /// </summary>
+    public sealed class Hosts : TestWebApplicationFactory
+    {
+        internal readonly RecordingBroadcaster Broadcaster = new();
+
+        public Hosts()
+        {
+            ExtraServices = services => services.AddSingleton<ISessionBroadcaster>(Broadcaster);
+        }
+    }
+
+    private readonly TestWebApplicationFactory _factory;
+    private readonly RecordingBroadcaster _broadcaster;
     private readonly HttpClient _client;
     private readonly string _ownerId;
     private readonly string _projectId;
     private readonly string _root;
 
-    public ImagePrefsEndpointTests()
+    public ImagePrefsEndpointTests(Hosts hosts)
     {
-        _factory.ExtraServices = services => services.AddSingleton<ISessionBroadcaster>(_broadcaster);
+        _factory = hosts;
+        _broadcaster = hosts.Broadcaster;
+        // Сброс перед каждым тестом: общий хост помнит рассылки чужих PUT
+        while (_broadcaster.ToOwnerCalls.TryDequeue(out _)) { }
         (_projectId, _root) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.TestUsername);
         _ownerId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         _client = _factory.CreateAuthenticatedClient();
-    }
-
-    public void Dispose()
-    {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
     }
 
     private string Prefs(string? projectId = null) => $"/api/projects/{projectId ?? _projectId}/image-editor/prefs";

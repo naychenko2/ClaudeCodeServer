@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.Notes.Wiki;
 
 namespace ClaudeHomeServer.Services.Notes;
 
@@ -43,7 +44,13 @@ public sealed partial class NotesService
             throw new ArgumentException("Комментировать можно только markdown-документы");
 
         if (scope == PersonalKey)
-            return (SafePath.Join(Path.Combine(_dataDir, "notes", userId), rel), true);
+        {
+            // Тот же гейт, что для project scope ниже (ревью S1a): ^id — никогда в файл
+            // под data/wiki/. Личный vault, сведённый символьной ссылкой в вику, делает
+            // любой путь под ним путём в вики — якорь в такую вику ставит только Хранитель.
+            var personalFull = SafePath.Join(Path.Combine(_dataDir, "notes", userId), rel);
+            return (personalFull, !WikiPaths.IsWikiPath(personalFull, _dataDir));
+        }
 
         // S2c-7: документ общего проекта открыт тому, кто может писать комментарии этого
         // проекта (WriteContent), а не только владельцу: комментарий — заметка в notes/
@@ -63,8 +70,12 @@ public sealed partial class NotesService
             ?? throw new KeyNotFoundException($"Проект {scope} не найден");
         if (string.IsNullOrWhiteSpace(project.RootPath))
             throw new InvalidOperationException("У проекта нет корневой папки");
-        var canWrite = rel.StartsWith("notes/", StringComparison.OrdinalIgnoreCase);
-        return (SafePath.Join(Composition.ProjectCapabilityGuard.ServerRoot(project), rel), canWrite);
+        // ^id пишем только туда, где живут заметки, — и никогда в файл под data/wiki/:
+        // якорь в вики ставит только Хранитель (ADR-035, решение 2: побочные писатели пропускают вики).
+        var docFull = SafePath.Join(Composition.ProjectCapabilityGuard.ServerRoot(project), rel);
+        var canWrite = rel.StartsWith("notes/", StringComparison.OrdinalIgnoreCase)
+            && !WikiPaths.IsWikiPath(docFull, _dataDir);
+        return (docFull, canWrite);
     }
 
     // --- Создание комментария ---
@@ -161,8 +172,8 @@ public sealed partial class NotesService
                 // [[вики|подписи]]) в DOM не видна. Третья ступень — канонизация «как
                 // рендер» с картой офсетов, единственное вхождение; selText заменяется
                 // РЕАЛЬНЫМ срезом документа. Провал → честный 409.
-                var (norm, map) = NormalizeForMatch(doc);
-                var q = NormalizeForMatch(selText).Norm;
+                var (norm, map) = QuoteMatcher.NormalizeForMatch(doc);
+                var q = QuoteMatcher.NormalizeForMatch(selText).Norm;
                 var idx = q.Length >= 3 ? norm.IndexOf(q, StringComparison.Ordinal) : -1;
                 if (idx >= 0 && norm.IndexOf(q, idx + 1, StringComparison.Ordinal) < 0)
                 {
@@ -215,6 +226,9 @@ public sealed partial class NotesService
             ?? throw new InvalidOperationException("Заметка не является комментарием к документу");
         if (ann.IsReply)
             throw new InvalidOperationException("Перепривязывается корневой комментарий, а не ответ");
+        // Файл комментария под data/wiki/ — не наш: отказ до любого чтения/записи, чтобы
+        // документ не получил ^id в половину операции (ревью S1a, MAJOR 3).
+        EnsureNotWiki(note.FullPath);
 
         var (docFull, canWriteId) = ResolveDoc(userId, ann.DocScope, ann.DocPath);
         if (!File.Exists(docFull)) throw new KeyNotFoundException("Документ не найден");
@@ -287,11 +301,6 @@ public sealed partial class NotesService
 
     // Кавычки внутри значений frontmatter ломают наш простой парсер — заменяем
     private static string Escape(string s) => s.Replace('"', '\'').Replace("\n", " ");
-
-    // Сохранённая цитата прошла через Escape, документ — нет. Сверять их надо в
-    // одной нормализации, иначе выделение с двойными кавычками не находится
-    // никогда. Замена посимвольная — карта офсетов документа не съезжает.
-    private static string FoldQuotes(string s) => s.Replace('"', '\'');
 
     // Derived-поля комментариев при построении модели (не персистятся):
     // IsReply — annotates указывает на другую заметку-комментарий (тред);
@@ -429,6 +438,10 @@ public sealed partial class NotesService
             else if (prefix && a.DocPath.StartsWith(oldRel + "/", StringComparison.OrdinalIgnoreCase))
                 updatedPath = newRel + a.DocPath[oldRel.Length..];
             if (updatedPath is null) continue;
+            // Писатель побочный: файл комментария под data/wiki/ пропускаем пофайлово,
+            // как в RewriteLinks/RemoveWikilinksTo, — до try, чтобы не было полузаписи;
+            // обычный комментарий переписывается (ревью S1a, MAJOR 3).
+            if (WikiPaths.IsWikiPath(n.FullPath, _dataDir)) continue;
             result.Add(new AnnotationTarget(n.Id, n.SourceKey, n.FullPath,
                 $"{newScope}/{updatedPath}" + (a.BlockId is not null ? $"#^{a.BlockId}" : "")));
         }
@@ -518,8 +531,8 @@ public sealed partial class NotesService
         if (!string.IsNullOrEmpty(a.AnchorQuote) && a.AnchorQuote!.Length >= MinQuoteAnchor)
         {
             var (rawNorm, map) = NormalizeWithMap(doc);
-            var norm = FoldQuotes(rawNorm);
-            var q = FoldQuotes(NormalizeWs(a.AnchorQuote!));
+            var norm = QuoteMatcher.FoldQuotes(rawNorm);
+            var q = QuoteMatcher.FoldQuotes(NormalizeWs(a.AnchorQuote!));
             var first = norm.IndexOf(q, StringComparison.OrdinalIgnoreCase);
             if (first >= 0 && norm.IndexOf(q, first + 1, StringComparison.OrdinalIgnoreCase) < 0)
             {
@@ -582,6 +595,9 @@ public sealed partial class NotesService
         var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
         var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return null;
+        // Файл комментария под data/wiki/ — не наш: тот же жёсткий отказ, что у Create/Update/Delete
+        // (ревью S1a, MAJOR 3: «комментарий создаётся только через Create» защитой не является).
+        EnsureNotWiki(full);
 
         var content = File.ReadAllText(full, Encoding.UTF8);
         if (ParseFrontmatter(content, "").Annotation is null)
@@ -680,111 +696,6 @@ public sealed partial class NotesService
 
     private static readonly Regex Ws = new(@"\s+", RegexOptions.Compiled);
     internal static string NormalizeWs(string s) => Ws.Replace(s, " ").Trim();
-
-    // Канонизация текста «как рендер» — для сверки DOM-выделения с источником:
-    // markdown-ссылки и вики-ссылки заменяются видимым текстом, маркеры эмфазиса/кода
-    // выбрасываются, whitespace схлопывается. Карта — норм-индекс → исходный офсет.
-    private static readonly Regex RenderLinks = new(
-        @"\[\[(?<t>[^\]|]+)(?:\|(?<l>[^\]]+))?\]\]|!?\[(?<x>[^\]]*)\]\((?<u>[^)\s]*)\)",
-        RegexOptions.Compiled);
-    private static readonly char[] MarkupChars = ['*', '`', '_', '~', '\\'];
-
-    internal static (string Norm, List<int> Map) NormalizeForMatch(string doc)
-    {
-        // Шаг 1: ссылки → видимый текст (позиции символов подписи — исходные)
-        var buf = new StringBuilder(doc.Length);
-        var map1 = new List<int>(doc.Length);
-        var last = 0;
-        foreach (Match m in RenderLinks.Matches(doc))
-        {
-            for (var i = last; i < m.Index; i++) { buf.Append(doc[i]); map1.Add(i); }
-            var g = m.Groups["l"].Success ? m.Groups["l"] : m.Groups["t"].Success ? m.Groups["t"] : m.Groups["x"];
-            for (var i = 0; i < g.Length; i++) { buf.Append(doc[g.Index + i]); map1.Add(g.Index + i); }
-            last = m.Index + m.Length;
-        }
-        for (var i = last; i < doc.Length; i++) { buf.Append(doc[i]); map1.Add(i); }
-
-        // Шаг 2: whitespace collapse + дроп маркеров эмфазиса/кода (симметрично для
-        // обеих сторон сверки — подчёркивания в идентификаторах матчу не мешают) +
-        // вычищение построчных структурных маркеров (заголовки #, маркеры списков
-        // -/+/1., цитаты >): в рендере их не видно, DOM-выделение их не содержит, а
-        // без этого любое выделение, пересекающее такую границу, отбивалось ложным 409.
-        var sb = new StringBuilder(buf.Length);
-        var map = new List<int>(buf.Length);
-        var pendingSpace = false;
-        var atLineStart = true;
-        for (var i = 0; i < buf.Length; i++)
-        {
-            var ch = buf[i];
-            if (char.IsWhiteSpace(ch))
-            {
-                if (ch == '\n') atLineStart = true;   // индент-пробелы начало строки не сбрасывают
-                pendingSpace = sb.Length > 0;
-                continue;
-            }
-            if (atLineStart)
-            {
-                // Съедаем ведущие маркеры строки (в т.ч. вложенные: «> - пункт»)
-                int after;
-                while ((after = SkipLineMarkers(buf, i)) > i) i = after;
-                atLineStart = false;
-                if (i >= buf.Length) break;
-                ch = buf[i];
-            }
-            if (Array.IndexOf(MarkupChars, ch) >= 0) continue;
-            if (pendingSpace) { sb.Append(' '); map.Add(map1[i]); pendingSpace = false; }
-            sb.Append(ch); map.Add(map1[i]);
-        }
-        return (sb.ToString(), map);
-    }
-
-    // Ведущий структурный маркер строки, начиная с непробельной позиции i (первый
-    // контентный символ строки). Возвращает индекс за маркером и его хвостовыми
-    // пробелами, либо i, если маркера нет. «Как рендер»: заголовки/списки/цитаты
-    // теряют свой синтаксис, но не текст.
-    private static int SkipLineMarkers(StringBuilder s, int i)
-    {
-        var n = s.Length;
-        // ATX-заголовок: 1..6 '#' + пробел (без пробела — это #тег, не заголовок)
-        if (s[i] == '#')
-        {
-            var j = i; var cnt = 0;
-            while (j < n && s[j] == '#' && cnt < 6) { j++; cnt++; }
-            if (j < n && (s[j] == ' ' || s[j] == '\t'))
-            {
-                while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
-                return j;
-            }
-            return i;
-        }
-        // Цитата: один+ '>' с необязательными пробелами
-        if (s[i] == '>')
-        {
-            var j = i;
-            while (j < n && (s[j] == '>' || s[j] == ' ' || s[j] == '\t')) j++;
-            return j;
-        }
-        // Маркированный список: -/+ + пробел ('*' и так дропается как эмфазис)
-        if ((s[i] == '-' || s[i] == '+') && i + 1 < n && (s[i + 1] == ' ' || s[i + 1] == '\t'))
-        {
-            var j = i + 1;
-            while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
-            return j;
-        }
-        // Нумерованный список: цифры + ('.'|')') + пробел
-        if (char.IsDigit(s[i]))
-        {
-            var j = i;
-            while (j < n && char.IsDigit(s[j])) j++;
-            if (j + 1 < n && (s[j] == '.' || s[j] == ')') && (s[j + 1] == ' ' || s[j + 1] == '\t'))
-            {
-                j++;
-                while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
-                return j;
-            }
-        }
-        return i;
-    }
 
     // Нормализация whitespace с картой «нормализованный индекс → сырой индекс»
     internal static (string Norm, List<int> Map) NormalizeWithMap(string doc)

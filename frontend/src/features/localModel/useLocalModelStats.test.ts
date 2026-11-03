@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OfflineError } from '../../lib/offline';
-import { mockBonsaiStats, mockLocalModelStats } from './localModel.fixtures';
+import { mockEngineStats, mockLocalModelStats } from './localModel.fixtures';
 import {
   configuredFetch,
   createStatsPoller,
@@ -152,7 +152,7 @@ describe('createStatsPoller: 2-с опрос', () => {
 // сброс при несовпадении движков» — во втором.
 describe('createStatsPoller: движок снимка (MAJOR 1-2)', () => {
   const mainData = mockLocalModelStats(); // данные основной (vLLM)
-  const bonsaiData = mockBonsaiStats('ready'); // данные стенда Bonsai
+  const engineData = mockEngineStats('ready'); // данные стенда второй движок
 
   const timers = (fn: () => void, ms: number) => setInterval(fn, ms);
   const untimer = (id: unknown) => clearInterval(id as ReturnType<typeof setInterval>);
@@ -161,34 +161,34 @@ describe('createStatsPoller: движок снимка (MAJOR 1-2)', () => {
   afterEach(() => { vi.useRealTimers(); });
 
   it('поздний ответ старого движка не затирает данные нового', async () => {
-    const engine = { current: 'main' as 'main' | 'bonsai' };
+    const engine = { current: 'main' as 'main' | 'gemma' };
     let resolveMain: (v: typeof mainData) => void = () => {};
     const mainPromise = new Promise<typeof mainData>((r) => { resolveMain = r; });
     const fetch = vi.fn<() => Promise<typeof mainData>>();
     fetch.mockImplementationOnce(() => mainPromise); // запрос main отложен
-    fetch.mockImplementationOnce(async () => bonsaiData); // bonsai приходит первым
+    fetch.mockImplementationOnce(async () => engineData); // gemma приходит первым
     const p = createStatsPoller(fetch, 2000, timers, untimer, engine);
     p.setActive(true, true); // первый тик — запрос main
-    engine.current = 'bonsai'; // пользователь переключился, main всё ещё в пути
-    p.refetch(); // запрос bonsai (как эффект смены движка в хуке)
+    engine.current = 'gemma'; // пользователь переключился, main всё ещё в пути
+    p.refetch(); // запрос gemma (как эффект смены движка в хуке)
     await vi.advanceTimersByTimeAsync(0);
-    expect(p.getSnapshot().data).toEqual(bonsaiData);
+    expect(p.getSnapshot().data).toEqual(engineData);
     resolveMain(mainData); // поздний ответ main
     await vi.advanceTimersByTimeAsync(0);
-    expect(p.getSnapshot().data).toEqual(bonsaiData); // снимок остаётся bonsai
+    expect(p.getSnapshot().data).toEqual(engineData); // снимок остаётся gemma
     expect(p.getSnapshot().loading).toBe(false);
     p.dispose();
   });
 
   it('смена движка сбрасывает снимок; отказ нового движка не оставляет чужих данных', async () => {
-    const engine = { current: 'main' as 'main' | 'bonsai' };
+    const engine = { current: 'main' as 'main' | 'gemma' };
     const fetch = vi.fn<() => Promise<typeof mainData>>().mockResolvedValue(mainData);
     const p = createStatsPoller(fetch, 2000, timers, untimer, engine);
     p.setActive(true, true);
     await vi.advanceTimersByTimeAsync(0);
     expect(p.getSnapshot().data).toEqual(mainData); // данные main показаны
-    engine.current = 'bonsai';
-    fetch.mockImplementationOnce(async () => { throw new Error('bonsai offline'); });
+    engine.current = 'gemma';
+    fetch.mockImplementationOnce(async () => { throw new Error('gemma offline'); });
     p.refetch(); // смена движка → немедленный запрос нового
     expect(p.getSnapshot().data).toBeNull(); // чужой снимок сброшен сразу
     expect(p.getSnapshot().loading).toBe(true);
@@ -236,11 +236,11 @@ describe('createStatsPoller: error в снимке (Ф10)', () => {
   });
 
   it('смена движка гасит error вместе со снимком: он относился к старому стенду', async () => {
-    const engine = { current: 'main' as 'main' | 'bonsai' };
+    const engine = { current: 'main' as 'main' | 'gemma' };
     const fetch = vi.fn<() => Promise<typeof mock>>();
     fetch.mockResolvedValueOnce(mock); // main ответил
     fetch.mockRejectedValueOnce(new OfflineError()); // main офлайн (данные остаются)
-    fetch.mockImplementationOnce(() => new Promise<typeof mock>(() => {})); // запрос bonsai «в пути»
+    fetch.mockImplementationOnce(() => new Promise<typeof mock>(() => {})); // запрос gemma «в пути»
     const p = createStatsPoller(fetch, 2000, timers, untimer, engine);
     p.setActive(true, true);
     await vi.advanceTimersByTimeAsync(0);
@@ -248,7 +248,7 @@ describe('createStatsPoller: error в снимке (Ф10)', () => {
     await vi.advanceTimersByTimeAsync(2000); // следующий тик — отказ main
     expect(p.getSnapshot().data).toEqual(mock); // прежние данные показаны
     expect(p.getSnapshot().error).toBe('offline');
-    engine.current = 'bonsai';
+    engine.current = 'gemma';
     p.refetch(); // смена движка → немедленный запрос нового
     expect(p.getSnapshot().data).toBeNull();
     expect(p.getSnapshot().error).toBeNull(); // чужая причина под новым выбором не показывается
@@ -260,25 +260,25 @@ describe('createStatsPoller: error в снимке (Ф10)', () => {
   // guard в catch» краснит первый тест; «сброс только при данных (не помнить
   // движок отказа)» — второй.
   it('поздний отказ чужого движка не трогает снимок текущего', async () => {
-    const engine = { current: 'main' as 'main' | 'bonsai' };
+    const engine = { current: 'main' as 'main' | 'gemma' };
     let rejectMain: (e: unknown) => void = () => {};
     const mainPromise = new Promise<typeof mock>((_, rej) => { rejectMain = rej; });
-    let resolveBonsai: (v: typeof mock) => void = () => {};
-    const bonsaiPromise = new Promise<typeof mock>((r) => { resolveBonsai = r; });
+    let resolveEngine: (v: typeof mock) => void = () => {};
+    const enginePromise = new Promise<typeof mock>((r) => { resolveEngine = r; });
     const fetch = vi.fn<() => Promise<typeof mock>>();
     fetch.mockImplementationOnce(() => mainPromise); // запрос main в пути
-    fetch.mockImplementationOnce(() => bonsaiPromise); // запрос bonsai тоже в пути
+    fetch.mockImplementationOnce(() => enginePromise); // запрос gemma тоже в пути
     const p = createStatsPoller(fetch, 2000, timers, untimer, engine);
     p.setActive(true, true); // первый тик — запрос main
-    engine.current = 'bonsai'; // пользователь переключился, main всё ещё в пути
-    p.refetch(); // запрос bonsai (как эффект смены движка в хуке)
+    engine.current = 'gemma'; // пользователь переключился, main всё ещё в пути
+    p.refetch(); // запрос gemma (как эффект смены движка в хуке)
     rejectMain(new OfflineError()); // отказ старого движка пришёл позже
     await vi.advanceTimersByTimeAsync(0);
     const mid = p.getSnapshot();
     expect(mid.error).toBeNull(); // чужой отказ не выставил error текущему
     expect(mid.loading).toBe(true); // ждём ответ нового движка
     expect(mid.data).toBeNull();
-    resolveBonsai(mock); // ответ нового движка
+    resolveEngine(mock); // ответ нового движка
     await vi.advanceTimersByTimeAsync(0);
     expect(p.getSnapshot().data).toEqual(mock);
     expect(p.getSnapshot().error).toBeNull();
@@ -287,15 +287,15 @@ describe('createStatsPoller: error в снимке (Ф10)', () => {
   });
 
   it('отказ без данных не остаётся при программной смене движка', async () => {
-    const engine = { current: 'main' as 'main' | 'bonsai' };
+    const engine = { current: 'main' as 'main' | 'gemma' };
     const fetch = vi.fn<() => Promise<typeof mock>>();
     fetch.mockRejectedValueOnce(new OfflineError()); // main офлайн, данных никогда не было
-    fetch.mockImplementationOnce(() => new Promise<typeof mock>(() => {})); // запрос bonsai «в пути»
+    fetch.mockImplementationOnce(() => new Promise<typeof mock>(() => {})); // запрос gemma «в пути»
     const p = createStatsPoller(fetch, 2000, timers, untimer, engine);
     p.setActive(true, true);
     await vi.advanceTimersByTimeAsync(0);
     expect(p.getSnapshot().error).toBe('offline'); // причина текущего выбора показана
-    engine.current = 'bonsai';
+    engine.current = 'gemma';
     p.refetch(); // смена движка без данных — прежний сброс (при данных) не сработал бы
     expect(p.getSnapshot().error).toBeNull(); // чужая причина гасится при любой смене
     expect(p.getSnapshot().loading).toBe(true);
@@ -346,16 +346,16 @@ describe('makeStatsFetch: окно доходит до запроса (блок�
     try {
       vi.mocked(fetchLocalModelStats).mockReset();
       vi.mocked(fetchLocalModelStats).mockResolvedValue(mockLocalModelStats());
-      const engine = { current: 'main' as 'main' | 'bonsai' };
+      const engine = { current: 'main' as 'main' | 'gemma' };
       const p = createStatsPoller(
         makeStatsFetch({ current: '5m' }, engine), 2000,
         (fn, ms) => setInterval(fn, ms), (id) => clearInterval(id as ReturnType<typeof setInterval>),
       );
       p.setActive(true, true); // первый тик — main
       expect(vi.mocked(fetchLocalModelStats)).toHaveBeenLastCalledWith('5m');
-      engine.current = 'bonsai'; // выбор переключили между тиками
+      engine.current = 'gemma'; // выбор переключили между тиками
       await vi.advanceTimersByTimeAsync(2000); // следующий тик
-      expect(vi.mocked(fetchLocalModelStats)).toHaveBeenLastCalledWith('5m', undefined, 'bonsai');
+      expect(vi.mocked(fetchLocalModelStats)).toHaveBeenLastCalledWith('5m', undefined, 'gemma');
       p.dispose();
     } finally { vi.useRealTimers(); }
   });

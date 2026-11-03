@@ -75,9 +75,13 @@ public class TestRunServiceTests : IDisposable
         public IProcessLauncher ForOwner(string? ownerId) => this;
         public IProcessLauncher ForProject(Project project) => this;
 
+        // Снимок на старте процесса (например, свободные слоты гейта во время фазы)
+        public Action<ProcessSpec>? OnStart { get; init; }
+
         public Process Start(ProcessSpec spec)
         {
             Specs.Enqueue(spec);
+            OnStart?.Invoke(spec);
             var phase = PhaseOf(spec);
             var script = plan(phase);
             if (script.Throw) throw new InvalidOperationException("dotnet не найден");
@@ -137,10 +141,13 @@ public class TestRunServiceTests : IDisposable
     private TestRunRequest Request(string? filter = null, bool noBuild = false, string? target = "backend/App.Tests") =>
         new(NewProject(), _root, "sess-1", Target: target, Filter: filter, NoBuild: noBuild);
 
+    // Тихая машина: тесты не зависят от настоящей нагрузки (/proc) хоста, где их гоняют
+    private static readonly MachineSnapshot Quiet = new(24, 2.0, 31 * AdaptiveShards.GiB);
+
     private static TestRunService Service(FakeLauncher launcher, BuildConcurrencyGate gate, int ceilingSeconds = 540,
         TimeSpan? progressInterval = null) =>
         new(launcher, new TestRunsOptions { CeilingSeconds = ceilingSeconds }, gate, exitGrace: TimeSpan.FromSeconds(5),
-            progressInterval ?? TimeSpan.Zero);
+            progressInterval ?? TimeSpan.Zero, machine: () => Quiet);
 
     private sealed class ProgressLog
     {
@@ -996,5 +1003,259 @@ public class TestRunServiceTests : IDisposable
         var text = service.FormatResult(await Run(service, Request()));
 
         text.Split('\n')[1].Should().MatchRegex(@"^сборка \S+ с · подсчёт \S+ с · тесты \S+ с$");
+    }
+
+    // --- Шарды монолита (TestShards) ---
+
+    private TestRunRequest MonolithRequest(string? filter = null) =>
+        new(NewProject(), _root, "sess-1", Target: TestRunsOptions.DefaultMonolithTarget, Filter: filter);
+
+    private FakeLauncher ShardRun(BuildConcurrencyGate gate, ConcurrentQueue<int> freeDuringTest) => new(_processes,
+        phase => phase switch
+        {
+            TestRunPhase.Build => Ok(),
+            TestRunPhase.List => Ok("list-tests.txt"),
+            _ => new Script("console-normal.txt", 0),
+        })
+    {
+        OnStart = spec => { if (PhaseOf(spec) == TestRunPhase.Test) freeDuringTest.Enqueue(gate.Available); },
+    };
+
+    [Fact]
+    public async Task Монолит_БезФильтра_ИдётШардамиПодОднимСлотом_СписокОдинРаз()
+    {
+        var gate = new BuildConcurrencyGate(2);
+        var free = new ConcurrentQueue<int>();
+        var launcher = ShardRun(gate, free);
+        var service = Service(launcher, gate);
+
+        var result = await service.RunDotnetAsync(MonolithRequest(), null, CancellationToken.None).WaitAsync(Wait);
+
+        var phases = launcher.Specs.Select(PhaseOf).ToList();
+        phases.Count(p => p == TestRunPhase.List).Should().Be(1, "классы шардов берутся из того же подсчёта");
+        var tests = launcher.Specs.Where(s => PhaseOf(s) == TestRunPhase.Test).ToList();
+        tests.Should().HaveCount(2, "в фикстуре два класса — два непустых шарда из трёх");
+        free.Should().AllSatisfy(f => f.Should().Be(1, "весь прогон держит ровно один слот из двух"));
+        tests.Should().AllSatisfy(s => s.Heavy.Should().BeTrue());
+        tests.Select(s => s.TurnId).Should().OnlyHaveUniqueItems();
+        var filters = tests.Select(s => s.Args[s.Args.ToList().IndexOf("--filter") + 1]).ToList();
+        filters.Should().BeEquivalentTo("FullyQualifiedName~A.Tests.CalcTests.", "FullyQualifiedName~B.Tests.OtherTests.");
+        tests.Select(s => s.Args.Single(a => a.StartsWith("trx;", StringComparison.Ordinal)))
+            .Should().BeEquivalentTo("trx;LogFilePrefix=results-shard1", "trx;LogFilePrefix=results-shard2");
+        gate.Available.Should().Be(2, "слот освобождается по концу конвейера");
+        result.Timings!.Shards.Should().Be(2);
+        result.Total.Should().Be(7);
+        service.FormatResult(result).Should().Contain("шардов параллельно: 2");
+    }
+
+    [Fact]
+    public async Task Монолит_СФильтром_ОднимПроцессом()
+    {
+        var gate = new BuildConcurrencyGate(2);
+        var launcher = ShardRun(gate, new ConcurrentQueue<int>());
+
+        var result = await Service(launcher, gate).RunDotnetAsync(MonolithRequest("FullyQualifiedName~X"), null,
+            CancellationToken.None).WaitAsync(Wait);
+
+        launcher.Specs.Count(s => PhaseOf(s) == TestRunPhase.Test).Should().Be(1);
+        result.Timings!.Shards.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Монолит_ШардыВыключены_ОднимПроцессом()
+    {
+        var gate = new BuildConcurrencyGate(2);
+        var launcher = ShardRun(gate, new ConcurrentQueue<int>());
+        var service = new TestRunService(launcher, new TestRunsOptions { MonolithShards = 1 }, gate,
+            exitGrace: TimeSpan.FromSeconds(5), TimeSpan.Zero);
+
+        await service.RunDotnetAsync(MonolithRequest(), null, CancellationToken.None).WaitAsync(Wait);
+
+        launcher.Specs.Count(s => PhaseOf(s) == TestRunPhase.Test).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task НеМонолит_БезФильтра_ОднимПроцессом()
+    {
+        var gate = new BuildConcurrencyGate(2);
+        var launcher = ShardRun(gate, new ConcurrentQueue<int>());
+
+        await Service(launcher, gate).RunDotnetAsync(Request(), null, CancellationToken.None).WaitAsync(Wait);
+
+        launcher.Specs.Count(s => PhaseOf(s) == TestRunPhase.Test).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Монолит_АдаптивноеN_ЧислоИПричинаВСводке()
+    {
+        var gate = new BuildConcurrencyGate(2);
+        var launcher = ShardRun(gate, new ConcurrentQueue<int>());
+        var service = Service(launcher, gate);
+
+        var result = await service.RunDotnetAsync(MonolithRequest(), null, CancellationToken.None).WaitAsync(Wait);
+
+        service.ShardCount().Should().Be((AdaptiveShards.DefaultMax, "load1 2,0 из 24, свободно 31 ГиБ"));
+        result.Timings!.ShardsReason.Should().Be("load1 2,0 из 24, свободно 31 ГиБ");
+        service.FormatResult(result).Should().Contain("шардов параллельно: 2 — load1 2,0 из 24, свободно 31 ГиБ");
+    }
+
+    [Fact]
+    public void Монолит_АдаптивноеN_ПодНагрузкойИПотолком()
+    {
+        var busy = new MachineSnapshot(24, 50, 31 * AdaptiveShards.GiB);
+        new TestRunService(new FakeLauncher(_processes, _ => Ok()), new TestRunsOptions(), new BuildConcurrencyGate(1),
+            TimeSpan.FromSeconds(5), TimeSpan.Zero, machine: () => busy).ShardCount().Item1.Should().Be(2);
+        new TestRunService(new FakeLauncher(_processes, _ => Ok()), new TestRunsOptions { MonolithShards = 4 },
+            new BuildConcurrencyGate(1), TimeSpan.FromSeconds(5), TimeSpan.Zero, machine: () => Quiet)
+            .ShardCount().Item1.Should().Be(4, "MonolithShards — потолок");
+        new TestRunService(new FakeLauncher(_processes, _ => Ok()), new TestRunsOptions(), new BuildConcurrencyGate(1),
+            TimeSpan.FromSeconds(5), TimeSpan.Zero, machine: () => null).ShardCount()
+            .Should().Be((3, "нет /proc — фиксированное значение"));
+    }
+
+    [Fact]
+    public async Task Монолит_AdaptiveShardsВыключен_ФиксированноеNБезЧтенияМашины()
+    {
+        var gate = new BuildConcurrencyGate(2);
+        var launcher = ShardRun(gate, new ConcurrentQueue<int>());
+        var read = 0;
+        var service = new TestRunService(launcher, new TestRunsOptions { MonolithShards = 3, AdaptiveShards = false },
+            gate, TimeSpan.FromSeconds(5), TimeSpan.Zero, machine: () => { read++; return Quiet; });
+
+        var result = await service.RunDotnetAsync(MonolithRequest(), null, CancellationToken.None).WaitAsync(Wait);
+
+        service.ShardCount().Should().Be((3, null));
+        read.Should().Be(0, "прежнее поведение: число из настроек, нагрузка не читается");
+        result.Timings!.ShardsReason.Should().BeNull();
+        var text = service.FormatResult(result);
+        text.Should().Contain("шардов параллельно: 2)").And.NotContain("load1");
+    }
+
+    // Пик RSS дерева шардов пишется в память прогонов и задаёт память на шард следующему выбору N
+    [Fact]
+    public async Task Монолит_ПикШардовВПамять_СледующийВыборПоНему()
+    {
+        var memory = Path.Combine(_root, "build-memory");
+        var gate = new BuildConcurrencyGate(2);
+        var launcher = ShardRun(gate, new ConcurrentQueue<int>());
+        var tight = new MachineSnapshot(24, 2.0, 31 * AdaptiveShards.GiB, 10 * AdaptiveShards.GiB);
+        var service = new TestRunService(launcher, new TestRunsOptions { MemoryDirectory = memory }, gate,
+            TimeSpan.FromSeconds(5), TimeSpan.Zero, machine: () => tight) { TreeRss = _ => 10 * AdaptiveShards.GiB };
+
+        service.ShardCount().Item1.Should().Be(2, "записи нет — 3,5 ГиБ на шард: 10 / 3,5");
+        var result = await service.RunDotnetAsync(MonolithRequest(), null, CancellationToken.None).WaitAsync(Wait);
+
+        result.Timings!.Shards.Should().Be(2);
+        ShardPeakMemory.Load(memory).Should().Be(5 * AdaptiveShards.GiB, "пик дерева 10 ГиБ на 2 шарда");
+        service.ShardCount().Item1.Should().Be(1, "5 × 1,2 = 6 ГиБ на шард: 10 / 6");
+    }
+
+    [Fact]
+    public void Опции_AdaptiveShards_ИзКонфигаИПоУмолчанию()
+    {
+        static TestRunsOptions From(params (string Key, string Value)[] pairs) => TestRunsOptions.From(
+            new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+                .AddInMemoryCollection(pairs.ToDictionary(p => p.Key, p => (string?)p.Value)).Build());
+
+        From().AdaptiveShards.Should().BeTrue();
+        From().MonolithShards.Should().Be(4, "N=6 по RSS не замерен — потолок 4 до замера");
+        From(("TestRuns:MonolithShards", "6")).MonolithShards.Should().Be(6, "после замера поднимается конфигом");
+        From(("TestRuns:AdaptiveShards", "false"), ("TestRuns:MonolithShards", "3")).Should()
+            .Match<TestRunsOptions>(o => !o.AdaptiveShards && o.MonolithShards == 3);
+    }
+
+    // --- Общий отпечаток с инструментом build (PhasePipeline.Fingerprints) ---
+
+    private void Solution(string relative, params string[] projects)
+    {
+        var items = string.Concat(projects.Select(p => $"<Project Path=\"{p}\" />"));
+        Source(relative, $"<Solution><Folder Name=\"/t/\">{items}</Folder></Solution>");
+    }
+
+    private (DotnetBuildService Build, TestRunService Tests, FakeLauncher Launcher) SharedPipeline(Func<bool> buildFails)
+    {
+        var launcher = new FakeLauncher(_processes, phase => phase switch
+        {
+            TestRunPhase.Build => buildFails() ? new Script("build-error.txt", 1) : Ok(),
+            TestRunPhase.List => Ok("list-tests.txt"),
+            _ => new Script("console-normal.txt", 0),
+        });
+        var pipeline = new PhasePipeline(new BuildConcurrencyGate(1), TimeSpan.FromSeconds(5));
+        var build = new DotnetBuildService(launcher, new TestRunsOptions(), pipeline, TimeSpan.Zero, (_, _, _) => null);
+        var tests = new TestRunService(launcher, new TestRunsOptions(), pipeline, TimeSpan.Zero, null, () => Quiet);
+        return (build, tests, launcher);
+    }
+
+    private async Task<BuildRunResult> Build(DotnetBuildService build, string target) =>
+        await build.RunAsync(new DotnetBuildRequest(NewProject(), _root, "sess-1", target), null, CancellationToken.None)
+            .WaitAsync(Wait);
+
+    [Fact]
+    public async Task ОбщийОтпечаток_СборкаSlnx_ПрогонПроектаБезСборкиСПричиной()
+    {
+        Source("backend/App.Tests/A.cs");
+        Solution("backend/App.slnx", "App.Tests/App.Tests.csproj", "Lib/Lib.csproj");
+        var (build, tests, launcher) = SharedPipeline(() => false);
+
+        (await Build(build, "backend/App.slnx")).ExitCode.Should().Be(0);
+        var result = await Run(tests, Request(target: "backend/App.Tests/App.Tests.csproj"));
+
+        Phases(launcher).Count(p => p == TestRunPhase.Build).Should().Be(1, "build → run_tests собирает один раз");
+        result.Timings!.BuildSkipped.Should().Be("дерево не менялось после сборки backend/App.slnx");
+        tests.FormatResult(result).Should().Contain("(пропущена: дерево не менялось после сборки backend/App.slnx)");
+    }
+
+    [Fact]
+    public async Task ОбщийОтпечаток_ПравкаПослеСборки_ПрогонСобирает()
+    {
+        Source("backend/App.Tests/A.cs");
+        Solution("backend/App.slnx", "App.Tests/App.Tests.csproj");
+        var (build, tests, launcher) = SharedPipeline(() => false);
+        await Build(build, "backend/App.slnx");
+
+        Source("backend/App.Tests/A.cs", "class A { int x; }", mtimeShiftSeconds: 10);
+        var result = await Run(tests, Request(target: "backend/App.Tests"));
+
+        Phases(launcher).Count(p => p == TestRunPhase.Build).Should().Be(2);
+        result.Timings!.BuildSkipped.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ОбщийОтпечаток_УпавшаяСборка_НеПишется()
+    {
+        Source("backend/App.Tests/A.cs");
+        Solution("backend/App.slnx", "App.Tests/App.Tests.csproj");
+        var fails = true;
+        var (build, tests, launcher) = SharedPipeline(() => fails);
+        (await Build(build, "backend/App.slnx")).ExitCode.Should().Be(1);
+
+        fails = false;
+        await Run(tests, Request(target: "backend/App.Tests"));
+
+        Phases(launcher).Count(p => p == TestRunPhase.Build).Should().Be(2, "после упавшей сборки отпечатка нет");
+    }
+
+    [Fact]
+    public async Task ОбщийОтпечаток_СборкаПроекта_НеПокрываетРешениеИЧужойПроект()
+    {
+        Source("backend/App.Tests/A.cs");
+        Solution("backend/App.slnx", "App.Tests/App.Tests.csproj", "Lib/Lib.csproj");
+        var (build, tests, launcher) = SharedPipeline(() => false);
+        await Build(build, "backend/App.Tests/App.Tests.csproj");
+
+        var same = await Run(tests, Request(target: "backend/App.Tests"));
+        same.Timings!.BuildSkipped.Should().Be("дерево не менялось", "тот же проект: .csproj и его каталог — одна цель");
+        await Run(tests, Request(target: "backend/Lib"));
+        await Run(tests, Request(target: "backend/App.slnx"));
+
+        Phases(launcher).Count(p => p == TestRunPhase.Build).Should().Be(3, "сборка проекта решение и соседей не покрывает");
+    }
+
+    [Fact]
+    public void ИтогШардов_ПервыйНенулевойКод_ОбрывЛюбого()
+    {
+        TestRunService.CombineShards([new(0, false), new(1, false), new(2, false)]).Should().Be(new PhaseOutcome(1, false));
+        TestRunService.CombineShards([new(0, false), new(0, false)]).Should().Be(new PhaseOutcome(0, false));
+        TestRunService.CombineShards([new(0, false), new(null, true)]).Should().Be(new PhaseOutcome(null, true));
     }
 }

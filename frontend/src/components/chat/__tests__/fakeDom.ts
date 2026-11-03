@@ -77,8 +77,10 @@ class FNode {
   setAttributeNS() {}
   removeAttribute(n: string) { delete this.attributes[n]; }
   getAttribute(n: string) { return this.attributes[n] ?? null; }
-  focus() {}
-  blur() {}
+  // focus() двигает document.activeElement (как в настоящем DOM): тестам фокуса
+  // (перенос внутрь панели сносок, focus-trap шторки) нужно знать, кто сейчас фокуса
+  focus() { this.ownerDocument.activeElement = this; }
+  blur() { if (this.ownerDocument.activeElement === this) this.ownerDocument.activeElement = null; }
   scrollIntoView() {}
   // querySelector: поддерживает атрибутный селектор [attr="value"] (PipelineFlow ищет строку
   // шага data-step-ref внутри своего корня); прочие формы — null (как раньше).
@@ -109,6 +111,11 @@ class FNode {
   }
   // Элементные потомки (как DOM-children): centerOffset и др. итерируют root.children
   get children(): FNode[] { return this.childNodes.filter(c => c.nodeType === 1); }
+  // options <select> — option-потомки в порядке документа: React updateOptions перебирает
+  // их при установке выбранного значения (setInitialProperties/updateWrapper), и без этого
+  // геттера любой Select падает в тесте на «reading 'length' of undefined». .value/.selected
+  // у option React читает/пишет как свойства — на FNode это обычные поля, не DOM-геттеры
+  get options(): FNode[] { return this.childNodes.filter(c => c.nodeType === 1 && c.nodeName === 'OPTION'); }
   getBoundingClientRect() { return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0, x: 0, y: 0 }; }
 
   _link(child: FNode, at: number) {

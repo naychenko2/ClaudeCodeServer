@@ -12,19 +12,36 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// Умолчание режима прав у нового чата: чат с персоной — AcceptEdits (без серверного классификатора
 /// «Авто» на каждый вызов инструмента), явный режим уважается, чат без персоны — прежнее Auto.
 /// </summary>
-public class ChatDefaultModeTests : IDisposable
+[Trait("Category", "Host")]
+public class ChatDefaultModeTests : IClassFixture<ChatDefaultModeTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    /// <summary>
+    /// Хост на весь класс (IClassFixture), а не на тест: раньше класс поднимал полный хост на каждый
+    /// тест (шесть, по 2–4 с под загрузкой) — это и был вес класса под параллелью, а не проверка.
+    /// Пауз/опросов в классе нет и не было. Общее состояние тесты не делят: каждый заводит свою
+    /// персону и свой чат и читает только свой id — ни одна проверка не зависит от того, что оставил
+    /// предыдущий тест, поэтому сброс общего стора в конструкторе не нужен. Клиент (и вход) —
+    /// свои на тест-экземпляр: конструктор xUnit выполняется перед каждым тестом.
+    /// </summary>
+    public sealed class Hosts : TestWebApplicationFactory
+    {
+    }
+
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
 
-    public ChatDefaultModeTests() => _client = _factory.CreateAuthenticatedClient();
-
-    public void Dispose() => _factory.Dispose();
+    public ChatDefaultModeTests(Hosts hosts)
+    {
+        _factory = hosts;
+        _client = _factory.CreateAuthenticatedClient();
+    }
 
     private T Svc<T>() where T : notnull => _factory.Services.GetRequiredService<T>();
 
     private string OwnerId => Svc<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
 
+    // Персона на тест: имена уникальны внутри класса — порядок прогона не создаёт коллизий,
+    // каждая проверка обращается только к своей персоне и созданному ею чату.
     private string NewPersona(string name) => Svc<PersonaManager>().Create(
         OwnerId, name, null, null, null, null, null, PersonaScope.Global, null, null, null, false).Id;
 

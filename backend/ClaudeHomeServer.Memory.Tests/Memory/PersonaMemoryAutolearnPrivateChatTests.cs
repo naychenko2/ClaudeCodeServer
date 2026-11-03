@@ -207,6 +207,7 @@ public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
             HistoryCalls++;
             return Task.FromResult(History);
         }
+        public bool SetWikiMark(string sessionId, string? mark) => false;
     }
 
     // Стаб раннера: «[]» — парсер читает как «нечего запоминать»; счётчик и сигнал вызова.

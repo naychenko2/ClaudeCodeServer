@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// куда ходит stdio-ветка сервисным токеном). Принимается только путь приложения — чужой
 /// адрес отклоняется, иначе клик по «Одобрите шаг» уводил бы на фишинговую страницу.
 /// </summary>
+[Trait("Category", "Host")]
 public class NotificationUrlGuardTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();

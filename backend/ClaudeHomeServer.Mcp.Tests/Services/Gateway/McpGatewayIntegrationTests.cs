@@ -20,15 +20,25 @@ namespace ClaudeHomeServer.Tests.Services.Gateway;
 /// JwtService, а MCP-over-HTTP бэкенда отвечает шлюзу тем же составом, что и серверному
 /// ходу (сторож G9). Звонок «в свой Kestrel» уводится в TestServer того же хоста.
 /// </summary>
-public sealed class McpGatewayIntegrationTests : IDisposable
+[Trait("Category", "Host")]
+public sealed class McpGatewayIntegrationTests : IClassFixture<McpGatewayIntegrationTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new()
+    // Хост на класс. Устройство (в using) и токены хода каждый тест выпускает сам, общего
+    // изменяемого состояния между тестами нет
+    public sealed class Hosts : IDisposable
     {
-        ExtraServices = s => s.AddHttpClient(McpGatewayEndpoints.HttpClientName)
-            .ConfigurePrimaryHttpMessageHandler(sp => ((TestServer)sp.GetRequiredService<IServer>()).CreateHandler()),
-    };
+        public TestWebApplicationFactory Factory { get; } = new()
+        {
+            ExtraServices = s => s.AddHttpClient(McpGatewayEndpoints.HttpClientName)
+                .ConfigurePrimaryHttpMessageHandler(sp => ((TestServer)sp.GetRequiredService<IServer>()).CreateHandler()),
+        };
 
-    public void Dispose() => _factory.Dispose();
+        public void Dispose() => Factory.Dispose();
+    }
+
+    private readonly TestWebApplicationFactory _factory;
+
+    public McpGatewayIntegrationTests(Hosts hosts) => _factory = hosts.Factory;
 
     // Устройство в боевом реестре хоста: вход шлюза пускает токен хода только с его учёткой
     private GatewayTestDevice Device(string ownerId) =>

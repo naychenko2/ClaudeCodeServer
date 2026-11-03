@@ -7,24 +7,25 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Cloud } from 'lucide-react';
-import { Button, ConfirmDialog, C, FS, SP, ICON_SIZE, ICON_STROKE, showToast } from 'aihome_shell/kit';
+import {
+  Button, ConfirmDialog, C, FS, SP, ICON_SIZE, ICON_STROKE, showToast,
+  LocalGpuQueueLine, makeLaunchGuard, isStandDown, CLOUD_DIALOG_TITLE, cloudDialogSubtitle, cloudButtonLabel,
+} from 'aihome_shell/kit';
 import { audioApi, type AudioCatalog, type AudioMode, type AudioOp, type AudioProvider, type AudioQuote, type AudioQuoteRequest, type AudioThread } from '../api';
 import { opInfo, type ComposerField } from '../ops';
 import { autoOrder } from '../panel/launch';
 import { priceText } from './model';
 import { getCatalog, useAudioStoreVersion } from './threadStore';
-import { LocalGpuQueueLine } from '../../../components/LocalGpuQueueLine';
 import { useBoxWidth } from '../../videoEditor/useBoxWidth';
 import type { LocalGpuQueueInfo } from '../../../types/localGpuQueue';
 import type { JobProgress } from './threadStore';
-import { makeLaunchGuard, isStandDown, CLOUD_DIALOG_TITLE, cloudDialogSubtitle, cloudButtonLabel } from '../../../lib/cloudRescue';
 
 const ic = (I: typeof Cloud, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
 
 // ── Чистая логика видимости (тестится отдельно) ──
 
-// isStandDown — общий модуль cloudRescue (экспортируется для тестов)
-export { isStandDown } from '../../../lib/cloudRescue';
+// isStandDown — общий модуль cloudRescue через кит (экспортируется для тестов)
+export { isStandDown } from 'aihome_shell/kit';
 
 // Умеет ли поставщик операцию
 const supportsOp = (p: AudioProvider, op: AudioOp): boolean => p.models.some(m => m.caps.ops.includes(op));
@@ -106,8 +107,8 @@ export function inputSatisfied(op: AudioOp | null, prompt: string | null): boole
   return true;
 }
 
-// makeLaunchGuard — общий модуль cloudRescue (экспортируется для тестов)
-export { makeLaunchGuard } from '../../../lib/cloudRescue';
+// makeLaunchGuard — общий модуль cloudRescue через кит (экспортируется для тестов)
+export { makeLaunchGuard } from 'aihome_shell/kit';
 
 // ── Хук: котировка облачного исполнителя, пока стенд лежит ──
 

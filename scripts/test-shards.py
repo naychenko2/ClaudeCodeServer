@@ -33,6 +33,11 @@
       CCS_TEST_SHARDS_ADAPTIVE выбирают N по нагрузке под своим потолком; число в --split — прежнее
       фиксированное (его понимает скрипт старых деревьев, переменную он не видит). «проект=auto» в --split
       тоже принимается, но предгейт его не шлёт: старый скрипт на нём падает.
+
+Перезапуск упавших (только --run и --run-fast): красный прогон, где каждый красный шард красен упавшими тестами
+в полном TRX и упавших не больше --rerun-max (20), перезапускает ИХ один раз, последовательно, фильтром по точному
+FQN. Прошли все — exit 0, блок «Флаки» в сводке и <--results>/flaky.json; упал хоть один — красный, «Упали дважды».
+Аборт шарда перезапуском не маскируется. Выключение — --no-rerun или CCS_TEST_SHARDS_RERUN=0.
 """
 import argparse
 import hashlib
@@ -433,15 +438,18 @@ def trx_proof(results, name, expected, launched_at):
 
 
 def trx_report(results, name, launched_at):
-    """Сводка шарда из ВСЕХ свежих TRX с префиксом name: {name, total, skipped, failed, error}.
+    """Сводка шарда из ВСЕХ свежих TRX с префиксом name: {name, total, skipped, failed, passed, seen, assemblies, error}.
 
     failed — результаты не Passed/NotExecuted (упавшие, ошибки, таймауты), по одному на запись TRX;
+    passed и seen — множества FQN с результатом Passed и с любым результатом; assemblies — {FQN: имя сборки}
+    по storage определения теста (у rest это единственный способ узнать проект упавшего теста);
     error — причина, по которой TRX не прочитан (total тогда None). Префикс rest-процесса может дать несколько файлов
     (по файлу на тестовый проект решения): числа складываются."""
     paths = [os.path.join(results, f) for f in sorted(os.listdir(results))
              if f.startswith(name + "_") and f.endswith(".trx")
              and os.path.getmtime(os.path.join(results, f)) >= launched_at - MTIME_SLACK]
-    report = {"name": name, "total": None, "skipped": 0, "failed": [], "error": None}
+    report = {"name": name, "total": None, "skipped": 0, "failed": [], "passed": set(), "seen": set(),
+              "assemblies": {}, "error": None}
     if not paths:
         report["error"] = "свежего TRX шарда нет"
         return report
@@ -452,15 +460,33 @@ def trx_report(results, name, launched_at):
         except (ET.ParseError, OSError) as e:
             report["error"] = f"TRX не читается: {e}"
             return report
+        storage = {d.get("id"): os.path.splitext(os.path.basename(d.get("storage").replace("\\", "/")))[0]
+                   for d in root.findall(".//{*}UnitTest") if d.get("id") and d.get("storage")}
         for r in root.findall(".//{*}UnitTestResult"):
             total += 1
+            fqn = test_fqn(r.get("testName", ""))
+            report["seen"].add(fqn)
+            if r.get("testId") in storage:
+                report["assemblies"][fqn] = storage[r.get("testId")]
             outcome = r.get("outcome")
             if outcome == "NotExecuted":
                 report["skipped"] += 1
-            elif outcome != "Passed":
-                report["failed"].append(test_fqn(r.get("testName", "")))
+            elif outcome == "Passed":
+                report["passed"].add(fqn)
+            else:
+                report["failed"].append(fqn)
     report["total"] = total
     return report
+
+
+def log_has_abort(log_path):
+    """Признак оборванного прогона в логе dotnet test (testhost упал, прогон прерван)."""
+    try:
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return False
+    return any(m in text for m in ABORT_MARKERS)
 
 
 def launch_shards(project, shards, results, prefix, extra_filter, tests):
@@ -473,10 +499,13 @@ def launch_shards(project, shards, results, prefix, extra_filter, tests):
         name = f"{prefix}{i + 1}"
         expected = {t for t in tests if any(matches(c, t) for c in s)}
         launched_at = time.time()
+        log_path = os.path.join(results, f"{name}.log")
         procs.append(launch([project, "--no-build", "--filter", expr, "--logger", f"trx;LogFilePrefix={name}",
-                             "--results-directory", results], os.path.join(results, f"{name}.log")))
+                             "--results-directory", results], log_path))
         proofs.append(lambda n=name, e=expected, t=launched_at: trx_proof(results, n, e, t))
-        reports.append(lambda n=name, t=launched_at: trx_report(results, n, t))
+        # target/expected/log — для перезапуска упавших: куда перезапускать и полон ли TRX шарда
+        reports.append(lambda n=name, t=launched_at, e=expected, lp=log_path:
+                       {**trx_report(results, n, t), "target": project, "expected": e, "log": lp})
     return procs, proofs, reports
 
 
@@ -551,18 +580,196 @@ def wait_all(procs, start, proofs=None, reports=None):
     print_report(wall, codes, reports)
     failed = []
     for i, c in enumerate(codes):
-        if c == 0:
+        verdict, reason = shard_verdict(c, proofs[i] if proofs and i < len(proofs) else None)
+        if verdict == "green":
             continue
-        proof = proofs[i] if proofs and i < len(proofs) else None
-        if c < 0 and proof is not None:
-            reason = proof()
-            if reason is None:
-                print(f"Шард {i + 1} аварийно завершился после зелёных тестов (код {c}): TRX полный, провалов нет — засчитан зелёным",
-                      file=sys.stderr)
-                continue
+        if verdict == "forgiven":
+            print(f"Шард {i + 1} аварийно завершился после зелёных тестов (код {c}): TRX полный, провалов нет — засчитан зелёным",
+                  file=sys.stderr)
+            continue
+        if reason is not None:
             print(f"Шард {i + 1}: код {c}, доказательства зелёности нет ({reason}) — красный", file=sys.stderr)
         failed.append(c)
     return max((c for c in failed if c > 0), default=1) if failed else 0
+
+
+def shard_verdict(code, proof):
+    """Правило wait_all для одного шарда: ("green" | "forgiven" | "red", причина отказа доказательства или None).
+
+    forgiven — сигнальный код при доказанном trx_proof полном зелёном TRX; положительный код не прощается никогда."""
+    if code == 0:
+        return "green", None
+    if code < 0 and proof is not None:
+        reason = proof()
+        return ("forgiven", None) if reason is None else ("red", reason)
+    return "red", None
+
+
+# --- Перезапуск упавших (только локальные --run и --run-fast) ---
+
+# Больше упавших — это поломка, а не флак: перезапуска нет, честный красный
+RERUN_MAX = 20
+# CCS_TEST_SHARDS_RERUN=0 выключает перезапуск так же, как --no-rerun
+RERUN_ENV = "CCS_TEST_SHARDS_RERUN"
+# Потолок длины фильтра одного запуска, символы. Предел Windows — 32 767 на ВСЮ командную строку (Linux — 128 КиБ
+# на аргумент); 8000 оставляет запас под путь проекта и опции, длинный список режется на несколько запусков
+RERUN_FILTER_CHARS = 8000
+# Машиночитаемый список флаков последнего прогона — в корне --results; его читает оркестратор, заводя карточки
+FLAKY_FILE = "flaky.json"
+# Подпапка TRX и логов перезапуска в корне --results: не в подпапке прогона, иначе calibrate (test-profile.py
+# обходит каталог рекурсивно) посчитал бы классы перезапуска вторым проходом
+RERUN_DIR = "rerun"
+# Обрыв прогона в логе dotnet test: упавший testhost. Такой шард перезапуском не лечится — неизвестно, что не успело пройти
+ABORT_MARKERS = ("Test Run Aborted", "The active test run was aborted")
+
+
+def fqn_filter(fqns):
+    """Фильтр VSTest по точным FQN: «FullyQualifiedName=A|FullyQualifiedName=B»."""
+    return "|".join(f"FullyQualifiedName={escape(f)}" for f in fqns)
+
+
+def rerun_chunks(fqns, limit=RERUN_FILTER_CHARS):
+    """Куски fqns, у каждого fqn_filter не длиннее limit (имя длиннее limit — отдельным куском).
+    Объединение кусков — ровно fqns, порядок сохраняется."""
+    out, cur = [], []
+    for fqn in fqns:
+        if cur and len(fqn_filter(cur + [fqn])) > limit:
+            out.append(cur)
+            cur = []
+        cur.append(fqn)
+    if cur:
+        out.append(cur)
+    return out
+
+
+def rerun_blocker(code, report):
+    """Почему красный шард НЕ лечится перезапуском упавших (None — лечится): перезапуск повторяет только упавшие
+    по TRX, поэтому шард, где неизвестно, что вообще прошло, остаётся красным — аборт не маскируется."""
+    if code is None:
+        return "код выхода неизвестен"
+    if code < 0:
+        return f"убит сигналом (код {code})"
+    if report is None or report.get("total") is None:
+        return report.get("error") if report else "отчёта нет"
+    if not report["failed"]:
+        return "в TRX провалов нет — прогон оборван"
+    expected = report.get("expected")
+    if expected and not expected <= report["seen"]:
+        return f"TRX неполный: нет {len(expected - report['seen'])} из {len(expected)} тестов шарда"
+    if report.get("log") and log_has_abort(report["log"]):
+        return "в логе обрыв прогона (testhost упал)"
+    return None
+
+
+def resolve_target(fqn, report, targets):
+    """Что перезапускать для упавшего теста: проект его сборки по TRX, иначе проект шарда, иначе проект с самым
+    длинным именем-префиксом FQN. None — проект не найден (тест остаётся красным)."""
+    assembly = report.get("assemblies", {}).get(fqn)
+    if assembly in targets:
+        return targets[assembly], assembly
+    if report.get("target"):
+        return report["target"], assembly or target_name(report["target"])
+    owner = next((n for n in sorted(targets, key=len, reverse=True) if fqn.startswith(n + ".")), None)
+    return (targets[owner], owner) if owner else (None, assembly)
+
+
+PROJECT_EXTS = {".csproj", ".fsproj", ".vbproj", ".sln", ".slnx", ".dll"}
+
+
+def target_name(path):
+    """Имя проекта по пути: каталог — его имя, файл (.csproj/.slnx/.dll) — имя без расширения."""
+    base = os.path.basename(path.replace("\\", "/").rstrip("/"))
+    # «ClaudeHomeServer.Tests» — каталог: точка в имени проекта не расширение
+    return project_name(base) if os.path.splitext(base)[1].lower() in PROJECT_EXTS else base
+
+
+def rerun_failed(code, procs, proofs, reports, results_root, targets, rerun_max):
+    """Один ПОСЛЕДОВАТЕЛЬНЫЙ перезапуск упавших тестов после красного wait_all; возвращает итоговый код.
+
+    Перезапуск только если КАЖДЫЙ красный шард красен упавшими тестами в полном TRX (rerun_blocker) и упавших
+    не больше rerun_max. Прошли со второго раза все — 0 и блок «Флаки» (они же — в FLAKY_FILE); хоть один упал
+    снова или не нашёлся — прежний код и «Упали дважды»."""
+    failed = {}  # FQN -> (проект, сборка)
+    for i, (p, _) in enumerate(procs):
+        c = getattr(p, "returncode", None)
+        verdict, _ = shard_verdict(c, proofs[i] if proofs and i < len(proofs) else None) if c is not None else ("red", None)
+        if verdict != "red":
+            continue
+        report = reports[i]() if reports and i < len(reports) and reports[i] else None
+        label = report["name"] if report else f"шард {i + 1}"
+        why = rerun_blocker(c, report)
+        if why:
+            print(f"Перезапуск пропущен: {label} — {why}; перезапуск не маскирует обрыв")
+            return code
+        for fqn in dict.fromkeys(report["failed"]):
+            failed.setdefault(fqn, resolve_target(fqn, report, targets))
+    if not failed:
+        return code
+    if len(failed) > rerun_max:
+        print(f"Перезапуск пропущен: упало {len(failed)} > RERUN_MAX ({rerun_max}) — это поломка, не флак")
+        return code
+    rerun_dir = os.path.join(results_root, RERUN_DIR)
+    shutil.rmtree(rerun_dir, ignore_errors=True)
+    os.makedirs(rerun_dir, exist_ok=True)
+    print(f"Перезапуск упавших: {len(failed)} (по одному разу, последовательно)", flush=True)
+    passed, when = set(), {}
+    groups = {}
+    for fqn, (target, _) in failed.items():
+        if target is not None:
+            groups.setdefault(target, []).append(fqn)
+    start = time.monotonic()
+    k = 0
+    for target in sorted(groups):
+        for chunk in rerun_chunks(groups[target]):
+            k += 1
+            name = f"rerun-{k}"
+            launched_at = time.time()
+            proc, log = launch([target, "--no-build", "--filter", fqn_filter(chunk), "--logger",
+                                f"trx;LogFilePrefix={name}", "--results-directory", rerun_dir],
+                               os.path.join(rerun_dir, f"{name}.log"))
+            rc = proc.wait()
+            log.close()
+            report = trx_report(rerun_dir, name, launched_at)
+            ok = [f for f in chunk if f in report["passed"] and f not in report["failed"]]
+            # Положительный код верим TRX, только если его объясняет упавший тест запуска (соседи по куску тогда
+            # честно прошли); необъяснённый положительный — красные все. Сигнальный — только если прошли все
+            if rc == 0 or (rc > 0 and report["failed"]) or (rc < 0 and len(ok) == len(chunk)):
+                stamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+                for f in ok:
+                    passed.add(f)
+                    when[f] = stamp
+    flaky = [f for f in failed if f in passed]
+    twice = [f for f in failed if f not in passed]
+    print(f"Перезапуск: стена {time.monotonic() - start:.1f} с, запусков {k}; TRX и логи — {rerun_dir}")
+    if flaky:
+        print(f"Флаки (прошли со второго раза): {len(flaky)}")
+        for f in flaky:
+            print(f"  {f}")
+    if twice:
+        print(f"Упали дважды: {len(twice)}")
+        for f in twice:
+            print(f"  {f}" + ("" if failed[f][0] else " (проект не найден — не перезапускался)"))
+    write_flaky(results_root, [{"fqn": f, "class": class_of(f), "assembly": failed[f][1], "time": when[f]} for f in flaky],
+                twice)
+    return 0 if not twice else (code or 1)
+
+
+def write_flaky(results_root, flaky, twice):
+    """FLAKY_FILE: флаки прогона (FQN, класс, сборка, время) и упавшие дважды. Сбой записи не роняет прогон."""
+    try:
+        with open(os.path.join(results_root, FLAKY_FILE), "w", encoding="utf-8") as f:
+            json.dump({"time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "flaky": flaky, "failed_twice": twice},
+                      f, ensure_ascii=False, indent=2)
+    except OSError as e:
+        print(f"{FLAKY_FILE} не записан: {e}", file=sys.stderr)
+
+
+def drop_flaky(results_root):
+    """Старый FLAKY_FILE удаляется в начале прогона: оркестратор не должен принять чужие флаки за свежие."""
+    try:
+        os.remove(os.path.join(results_root, FLAKY_FILE))
+    except OSError:
+        pass
 
 
 def cgroup_free(cgroup_file="/proc/self/cgroup", root="/sys/fs/cgroup"):
@@ -700,7 +907,8 @@ def adaptive_split(split, env_value):
     return out
 
 
-def run_shards(project, n, results, timings, extra_filter, fast=None):
+def run_shards(project, n, results, timings, extra_filter, fast=None, rerun_max=RERUN_MAX):
+    """rerun_max — порог перезапуска упавших (None — без перезапуска)."""
     n = resolve_n(n, results=results)
     tests, err = list_tests(project, extra_filter)
     if tests is None:
@@ -712,12 +920,15 @@ def run_shards(project, n, results, timings, extra_filter, fast=None):
     print(f"Тестов {len(tests)}, классов {len(classes_of(tests))}, шардов {n}:")
     print(summary(tests, shards, timings, fast))
     os.makedirs(results, exist_ok=True)
+    drop_flaky(results)
     start = time.monotonic()
     procs, proofs, reports = launch_shards(project, shards, results, "shard", extra_filter, tests)
     global LAST_PEAK_BYTES
     LAST_PEAK_BYTES = 0
     code = wait_all(procs, start, proofs, reports)
     save_shard_peak(results, LAST_PEAK_BYTES, len(procs))
+    if code != 0 and rerun_max is not None:
+        code = rerun_failed(code, procs, proofs, reports, results, {target_name(project): project}, rerun_max)
     return code
 
 
@@ -777,9 +988,10 @@ def calibrate(results):
         os.remove(f.name)
 
 
-def run_fast(slnx, split, results, timings, extra_filter, fast=None):
+def run_fast(slnx, split, results, timings, extra_filter, fast=None, rerun_max=RERUN_MAX):
     """Fast предгейта: проекты --split — шардами по классам, остальные тестовые проекты — одним процессом
-    на rest-slnx. Каждый тест списка попадает ровно в один шард (иначе exit 1) — самопроверка до запуска."""
+    на rest-slnx. Каждый тест списка попадает ровно в один шард (иначе exit 1) — самопроверка до запуска.
+    rerun_max — порог перезапуска упавших (None — без перезапуска)."""
     start = time.monotonic()
     planned = adaptive_split(split, os.environ.get(ADAPTIVE_ENV))
     split = [(p, resolve_n(n, f"Шардов {os.path.basename(p.rstrip('/'))}", top, results)) for p, n, top in planned]
@@ -814,7 +1026,8 @@ def run_fast(slnx, split, results, timings, extra_filter, fast=None):
         print(summary(listings[path], shards, timings, fast))
         layouts.append((path, shards))
     os.makedirs(results, exist_ok=True)
-    peak_dir = results  # пик на шард — в корне --results: его читает выбор N следующего прогона
+    drop_flaky(results)
+    peak_dir = results  # пик на шард и flaky.json — в корне --results: их читают следующий прогон и оркестратор
     results = new_run_dir(results)  # дальше всё (TRX, логи, доказательства) — в подпапке этого прогона
     procs, proofs, reports = [], [], []
     rest_path = os.path.join(os.path.dirname(slnx), "ClaudeHomeServer.FastRest.slnx")
@@ -823,11 +1036,14 @@ def run_fast(slnx, split, results, timings, extra_filter, fast=None):
             with open(rest_path, "w", encoding="utf-8") as f:
                 f.write(shard_slnx(text, rest_projects, exclude))
             rest_at = time.time()
+            rest_log = os.path.join(results, "rest.log")
             procs.append(launch([rest_path, "--no-build"] + (["--filter", extra_filter] if extra_filter else [])
                                 + ["--logger", "trx;LogFilePrefix=fast-rest", "--results-directory", results],
-                                os.path.join(results, "rest.log")))
+                                rest_log))
             proofs.append(None)  # состав rest не листается — доказать полноту нечем, сигнальный код остаётся красным
-            reports.append(lambda t=rest_at: trx_report(results, "fast-rest", t))
+            # проект упавшего теста rest — по сборке из TRX (target нет): rest-slnx к перезапуску уже удалён
+            reports.append(lambda t=rest_at: {**trx_report(results, "fast-rest", t), "target": None,
+                                              "expected": None, "log": rest_log})
         for path, shards in layouts:
             # Префикс fast: профиль этих TRX отдаёт секунды прохода Fast, и следующая раскладка
             # держит серийные классы семейства ClaudeSessionPromptSections* (каждый ≤ ~9,2 с, сумма 34,8 с) в шарде с тем, что укладывается в их поток
@@ -844,6 +1060,11 @@ def run_fast(slnx, split, results, timings, extra_filter, fast=None):
         # пик ВСЕГО дерева (с rest и прочими шардами) на число адаптивных шардов: оценка сверху — безопасная
         # сторона; деление на все процессы занизило бы тяжёлый шард монолита лёгкими соседями
         save_shard_peak(peak_dir, LAST_PEAK_BYTES, adaptive_shards)
+        if code != 0 and rerun_max is not None:
+            targets = {project_name(m.group(1)): os.path.join(os.path.dirname(slnx), m.group(1).replace("\\", "/"))
+                       for m in PROJECT_LINE.finditer(text)}
+            targets.update({target_name(p): p for p, _ in split})
+            code = rerun_failed(code, procs, proofs, reports, peak_dir, targets, rerun_max)
         return code
     finally:
         if os.path.exists(rest_path):
@@ -915,7 +1136,15 @@ def _main(argv):
                     f"(CI-режимы {PARALLEL:g}, локальные --run/--run-fast {LOCAL_PARALLEL:g})")
     ap.add_argument("--timings", help="JSON профиля (test-profile.py --json), можно несколько через запятую — вес класса тогда медиана; нет файла — предупреждение, раскладка по доступным (все пропали при нескольких — exit 2; единственный — по хешу)")
     ap.add_argument("--filter", dest="extra_filter", help="дополнительный фильтр к каждому шарду (--run)")
+    ap.add_argument("--no-rerun", action="store_true",
+                    help=f"для --run/--run-fast: не перезапускать упавшие (то же — {RERUN_ENV}=0)")
+    ap.add_argument("--rerun-max", type=int, default=RERUN_MAX,
+                    help=f"для --run/--run-fast: упало больше — без перезапуска, красный (по умолчанию {RERUN_MAX})")
     args = ap.parse_args(argv)
+    if args.rerun_max < 0:
+        ap.error("--rerun-max: ожидается число ≥ 0")
+    # CI-режимы (--shard, --verify, --slnx) перезапуск не делают вовсе: там флак обязан быть виден
+    rerun_max = None if args.no_rerun or os.environ.get(RERUN_ENV, "").strip() == "0" else args.rerun_max
     if args.n == "auto" and not args.run:
         # раскладка CI и самопроверка не должны зависеть от нагрузки машины, где их считают
         args.n = ADAPTIVE_FALLBACK
@@ -942,9 +1171,9 @@ def _main(argv):
             print(f"--run-fast ждёт файл решения (.slnx), а не каталог и не несуществующий путь: {args.run_fast}",
                   file=sys.stderr)
             return 2
-        return run_fast(args.run_fast, split, args.results, timings, args.extra_filter, fast)
+        return run_fast(args.run_fast, split, args.results, timings, args.extra_filter, fast, rerun_max)
     if args.run:
-        return run_shards(args.run, args.n, args.results, timings, args.extra_filter, fast)
+        return run_shards(args.run, args.n, args.results, timings, args.extra_filter, fast, rerun_max)
     if args.slnx:
         return main_slnx(args, ap, timings, class_projects)
     if not args.list:

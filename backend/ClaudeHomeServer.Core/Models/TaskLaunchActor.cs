@@ -1,6 +1,4 @@
-using ClaudeHomeServer.Models;
-
-namespace ClaudeHomeServer.Services;
+namespace ClaudeHomeServer.Models;
 
 // Актор хода при АВТОзапуске исполнителя (F-9): автозапуск не имеет живого инициатора, поэтому
 // ход наследует создателя задачи (TaskItem.CreatedByUserId), а не «неизвестного», которому

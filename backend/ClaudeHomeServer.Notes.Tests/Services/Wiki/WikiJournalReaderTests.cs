@@ -777,4 +777,33 @@ public class WikiJournalReaderTests : IDisposable
 
         PageOf(new FixedTime(DateTimeOffset.UtcNow.AddMinutes(1))).GetProperty("overrides").GetArrayLength().Should().Be(0);
     }
+
+    [Fact]
+    public void Страница_Overrides_КонфликтПереживаетRestoreДругогоПакета()
+    {
+        // Мутация: убрать условие op.Op == OpSupersede вокруг отсева — спор пропадает вместе с заменой, тест краснеет.
+        WritePage(OverridePage, string.Format(ReturnedBody, "Утверждение человека."));
+        var dispute = NewPackage("common", WikiPackage.StatusApplied, WikiGate.OriginSession, "session:d",
+            OverrideOp(WikiPackage.OpConflict, OverridePage, true, "Оспорено ИИ.", "Утверждение человека"));
+        WikiManifest.AppendLog(Root(), "apply", "common", [OverridePage], "session:d", "keeper", "auto", [dispute], overrodeHuman: true);
+        var back = OverrideOp(WikiPackage.OpSupersede, OverridePage, false, "Старая формулировка человека", "Оспорено ИИ.") with
+        {
+            Class = WikiPackage.ClassKey(WikiGate.OriginHuman, WikiPackage.OpSupersede),
+        };
+        WikiPackageStore.Create(Root(), new WikiPackage
+        {
+            Id = WikiPackageStore.NewId(),
+            Author = WikiPackage.AuthorHuman,
+            Action = WikiPackage.ActionRestore,
+            Section = "common",
+            Sources = [new WikiPackage.SourceRef(WikiGate.OriginHuman, "x:1")],
+            Operations = [back],
+            Status = WikiPackage.StatusChecking,
+        }).Ok.Should().BeTrue();
+        WikiManifest.AppendLog(Root(), "restore", "common", [OverridePage], "x:1", "user");
+
+        var items = PageOf(new FixedTime(DateTimeOffset.UtcNow.AddMinutes(1))).GetProperty("overrides");
+        items.GetArrayLength().Should().Be(1);
+        items[0].GetProperty("op").GetString().Should().Be("conflict");
+    }
 }

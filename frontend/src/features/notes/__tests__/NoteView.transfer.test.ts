@@ -9,6 +9,9 @@
 // Конкурентность: двойной клик по «Перенести» — один запрос (busy-гард); ответ после смены
 // заметки отбрасывается по noteId — ни плашки, ни открытой страницы, и чужой ответ не гасит
 // состояние новой заметки.
+// Исход переноса определяет только ответ сервера (TL-5): действия после успеха вне try
+// переноса — бросающий слушатель 'cc-open-note' не превращает состоявшийся перенос в
+// «Не удалось…».
 //
 // Мутации этого прогона (вывод — в отчёте задачи):
 // (1) снять проверку noteId в успехе doTransfer (убрать `if (forNoteId !== openNoteIdRef.current)
@@ -17,7 +20,9 @@
 // (3) рендерить кнопку при одном llm-wiki (убрать unifiedOn из условия) → «без флага
 //     notes-wiki-unified кнопки нет» краснеет;
 // (4) не звать requestOpenWikiPage после 200 → «200 … и открытие страницы» краснеет;
-// (5) показать сырой код вместо текста → «отказ — русским текстом» краснеет.
+// (5) показать сырой код вместо текста → «отказ — русским текстом» краснеет;
+// (6) вернуть действия после успеха внутрь try переноса (bumpNotes/requestOpenWikiPage/
+//     dispatchEvent до catch отказа) → «бросающий слушатель» краснеет.
 //
 // Стор вики и флаги — настоящие; мокан только транспорт (offline.request), чтение заметки
 // (notesOffline.getNoteForView) и leaf-вызовы api — тот же приём, что в NotesPage.test и
@@ -251,6 +256,32 @@ describe('«Перенести в вики» на экране заметки (F
     const btn = transferBtn(container);
     expect(btn).not.toBeNull();
     expect(attrs(btn).disabled, 'после успеха').toBeUndefined();
+  });
+
+  it('бросающий слушатель «cc-open-note»: плашка остаётся «Перенесено», «Не удалось…» нет', async () => {
+    const t = deferTransfer();
+    const { container } = renderNote(NOTE_A.id);
+    await settle();
+    click(transferBtn(container), 'Перенести в вики');
+    click(buttonByExactText(docBody(), 'Перенести'), 'подтверждение');
+    // приёмник события с багом: бросает синхронно (dispatchEvent в fakeDom зовёт слушателей сразу)
+    const w = globalThis as { window: { addEventListener: Function; removeEventListener: Function } };
+    const boom = () => { throw new Error('слушатель cc-open-note упал'); };
+    w.window.addEventListener('cc-open-note', boom);
+    try {
+      t.resolve(TRANSFER_OK);
+      await settle();
+    } finally {
+      w.window.removeEventListener('cc-open-note', boom);
+    }
+    // Исход переноса определяет только ответ сервера: состояние слушателя на него не влияет
+    const view = texts(container);
+    expect(view).toContain('Перенесено');
+    expect(view).not.toContain('Не удалось перенести заметку');
+    // действия после успеха дошли до падения слушателя: страница заказана в сторе
+    expect(consumeOpenWikiPage()).toEqual({ section: 'personal', path: 'Личное/Заметка А.md' });
+    // кнопка снова активна: перенос уже случился, повтор другой заметки возможен
+    expect(attrs(transferBtn(container)).disabled, 'после успеха').toBeUndefined();
   });
 
   it('отказ — Notice русским текстом по коду, кнопка остаётся, страницу никто не открывает', async () => {

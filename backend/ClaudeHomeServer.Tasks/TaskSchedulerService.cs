@@ -103,7 +103,9 @@ public class TaskSchedulerService(
 
         try
         {
-            await executor.ExecuteAsync(task, auto: true);
+            // Автозапуск без инициатора: ход наследует создателя задачи, а не «неизвестного»
+            // (иначе гейт актора открыл бы исполнителю права арендатора — F-9)
+            await executor.ExecuteAsync(task, auto: true, TaskLaunchActor.For(task));
         }
         catch (Exception ex)
         {

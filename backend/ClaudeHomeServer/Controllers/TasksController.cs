@@ -106,7 +106,7 @@ public class ProjectTasksController(
             // Явный признак происхождения (S2b-1, доработка): этот эндпоинт — человеческий
             // путь (UI/API), признак ставит сервер, а не тело запроса: агентские и серверные
             // пути (тулсет задач, волна, merge, сборка архитектора) зовут TaskManager напрямую.
-            task = tasks.Create(projectId, UserId, req with { CreatedByHuman = true }, targetColumn);
+            task = tasks.Create(projectId, UserId, req with { CreatedByHuman = true, CreatedByActorUserId = null }, targetColumn);
         }
         catch (InvalidOperationException ex)
         {
@@ -343,7 +343,7 @@ public class TasksController(
             // обычный кейс гейта.
             // Явный признак происхождения (S2b-1, доработка): человеческий путь (UI/API),
             // как в проектной ветке Create выше.
-            task = tasks.Create(null, UserId, req with { CreatedByHuman = true }, targetColumn);
+            task = tasks.Create(null, UserId, req with { CreatedByHuman = true, CreatedByActorUserId = null }, targetColumn);
         }
         catch (InvalidOperationException ex)
         {
@@ -1483,7 +1483,9 @@ public class TasksController(
                 PersonaId: persona.Id,
                 Assignee: TaskItemAssignee.Claude,
                 WorktreePath: run.Epic.WorktreePath,
-                WorktreeBranch: run.Epic.WorktreeBranch);
+                WorktreeBranch: run.Epic.WorktreeBranch,
+                // Мерж ставит человек по кнопке: он и создатель (автозапуск возобновления наследует его)
+                CreatedByActorUserId: UserId);
 
             TaskItem task;
             try

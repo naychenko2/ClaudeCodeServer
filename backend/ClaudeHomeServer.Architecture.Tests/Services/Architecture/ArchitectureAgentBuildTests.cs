@@ -48,11 +48,13 @@ public class ArchitectureAgentBuildTests : IDisposable
     private sealed class FakeExecutor : ITaskExecutor
     {
         public List<TaskItem> Started { get; } = [];
+        public List<string?> Actors { get; } = [];
         public bool Fail { get; init; }
-        public Task ExecuteAsync(TaskItem task, bool auto)
+        public Task ExecuteAsync(TaskItem task, bool auto, string? actorUserId)
         {
             if (Fail) throw new InvalidOperationException("не стартовал");
             Started.Add(task);
+            Actors.Add(actorUserId);
             return Task.CompletedTask;
         }
         public Task CheckStalledExecutorAsync(TaskItem task, DateTime nowUtc) => Task.CompletedTask;
@@ -102,6 +104,23 @@ public class ArchitectureAgentBuildTests : IDisposable
         task.ModelTier.Should().Be(ModelTier.Strong);
         task.Labels.Should().Contain(IArchitectureAgentLauncher.BuildLabel);
         exec.Started.Should().ContainSingle(t => t.Id == task.Id);
+    }
+
+    // F-9: создатель сборки — человек, нажавший «Собрать»; автозапуск наследует его актора,
+    // а владелец/вызов без человека идёт как раньше (актор не передаётся)
+    [Fact]
+    public async Task Создатель_сборки_становится_актором_автозапуска()
+    {
+        var (adapter, tasks, _, exec) = Adapter();
+
+        var byEditor = await adapter.LaunchAsync("p1", "u1", Brief, default, createdByUserId: "editor-1");
+        tasks.GetById(byEditor.TaskId!)!.CreatedByUserId.Should().Be("editor-1");
+        exec.Actors.Should().Equal("editor-1");
+
+        tasks.Update(byEditor.TaskId!, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        var byOwner = await adapter.LaunchAsync("p1", "u1", Brief, default, createdByUserId: "u1");
+        tasks.GetById(byOwner.TaskId!)!.CreatedByUserId.Should().Be("u1");
+        exec.Actors.Should().Equal("editor-1", null);
     }
 
     [Fact]
@@ -200,7 +219,7 @@ public class ArchitectureAgentBuildTests : IDisposable
     {
         public List<ArchitectureAgentBrief> Briefs { get; } = [];
         public string? IsBuildInProgress(string projectId, string ownerId) => inProgress;
-        public Task<ArchitectureAgentLaunch> LaunchAsync(string projectId, string ownerId, ArchitectureAgentBrief brief, CancellationToken ct)
+        public Task<ArchitectureAgentLaunch> LaunchAsync(string projectId, string ownerId, ArchitectureAgentBrief brief, CancellationToken ct, string? createdByUserId = null)
         {
             Briefs.Add(brief);
             return Task.FromResult(answer);

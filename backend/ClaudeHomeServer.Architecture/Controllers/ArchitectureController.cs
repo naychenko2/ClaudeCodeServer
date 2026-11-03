@@ -182,7 +182,7 @@ public class ArchitectureController(
             meta?["elements"] as System.Text.Json.Nodes.JsonObject);
 
         var launch = await agents.LaunchAsync(project.Id, project.OwnerId!,
-            ArchitectureAgentPrompt.Build(result, manual), ct);
+            ArchitectureAgentPrompt.Build(result, manual), ct, createdByUserId: UserId);
         if (launch.Error == "build_in_progress")
             return BuildInProgress(launch.TaskId, result);
 

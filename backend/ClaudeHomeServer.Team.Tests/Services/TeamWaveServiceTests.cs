@@ -247,6 +247,8 @@ public class TeamWaveServiceTests : IDisposable
         task.Assignee.Should().Be(TaskItemAssignee.Claude, "персона-исполнитель подразумевает Claude");
         task.SourceSessionId.Should().Be(session.Id, "чат-штаб — источник: из него вычисляется родитель чата исполнения");
         task.CreatedByPersonaId.Should().Be(session.TeamImplement!.CoordinatorPersonaId, "постановщик — координатор");
+        // F-9: создатель под-задачи (актор автозапуска) — автор чата-штаба, а при его отсутствии владелец
+        task.CreatedByUserId.Should().Be(session.CreatedByUserId ?? UserId, "волна несёт создателя, а не null");
         task.ProjectId.Should().Be(session.ProjectId);
         // Описание задачи несёт всё, что нужно исполнителю
         task.Description.Should().Contain("GET /api/tasks/export");

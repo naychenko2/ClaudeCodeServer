@@ -544,7 +544,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
             }
             if (!gate.IsReady) return;
             _log.LogInformation("Устройство проекта готово — запускаю ждавшую задачу {TaskId} «{Title}»", task.Id, task.Title);
-            await ExecuteAsync(task, auto: true);
+            // Возобновление автоматикой: актор — создатель задачи, как у автозапуска по сроку (F-9)
+            await ExecuteAsync(task, auto: true, actorUserId: TaskLaunchActor.For(task));
         }
         catch (Exception ex)
         {

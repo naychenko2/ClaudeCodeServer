@@ -410,7 +410,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             // неотличим от человеческого и автора не получает. В текущем пути записи
             // создающий человек и есть владелец: Write участника в общем проекте закрыт
             // (пометка плана S2b), ключ хранилищ — владелец.
-            CreatedByUserId = req.CreatedByHuman ? ownerId : null,
+            CreatedByUserId = req.CreatedByHuman ? ownerId
+                : string.IsNullOrWhiteSpace(req.CreatedByActorUserId) ? null : req.CreatedByActorUserId.Trim(),
             ReportToSessionId = string.IsNullOrEmpty(req.ReportToSessionId) ? null : req.ReportToSessionId,
             DelegationDepth = ComputeDelegationDepth(req.SourceSessionId),
             Order = NextOrder(ownerId),
@@ -1928,6 +1929,11 @@ public record CreateTaskRequest(
     // волна автора не получают; происхождение не выводится из отсутствия маркеров выше.
     // См. TaskItem.CreatedByUserId.
     bool CreatedByHuman = false,
+    // Актор-создатель, подставленный СЕРВЕРОМ (F-9): актор хода-создателя в MCP (GetTurnActor),
+    // автор чата-штаба у волны, вызывающий человек у сборки архитектора/мержа. Автозапуск
+    // исполнителя наследует именно его (TaskLaunchActor). Из тела REST не принимается:
+    // человеческие эндпоинты зануляют поле (CreatedByHuman выигрывает и так). Фон/система — null.
+    string? CreatedByActorUserId = null,
     // Дерево для чата-исполнителя (см. TaskItem.WorktreePath): путь СУЩЕСТВУЮЩЕГО worktree
     // проекта и его ветка. У личной задачи игнорируются.
     string? WorktreePath = null,

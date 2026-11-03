@@ -1,0 +1,20 @@
+using ClaudeHomeServer.Models;
+
+namespace ClaudeHomeServer.Services;
+
+// Актор хода при АВТОзапуске исполнителя (F-9): автозапуск не имеет живого инициатора, поэтому
+// ход наследует создателя задачи (TaskItem.CreatedByUserId), а не «неизвестного», которому
+// ActorRightGate отдаёт права арендатора. Создатель — участник-редактор общего проекта ⇒ ход
+// идёт с его рангом и закрытые ему инструменты исполнителю тоже закрыты.
+//
+//  • создатель задан и это не владелец записи — он и есть актор;
+//  • создатель — владелец, не задан (старая запись, фон, система) или пуст — null: ход идёт
+//    как раньше, с правами владельца (старые задачи считаются созданными владельцем проекта);
+//  • личный проект: создатель там всегда владелец, поведение прежнее.
+public static class TaskLaunchActor
+{
+    public static string? For(TaskItem task) =>
+        string.IsNullOrWhiteSpace(task.CreatedByUserId) || task.CreatedByUserId == task.OwnerId
+            ? null
+            : task.CreatedByUserId;
+}

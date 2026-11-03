@@ -304,6 +304,9 @@ public sealed class TasksToolset(
                     Lane: OptionalArg(arguments, "lane"),
                     ReviewOf: LabelsArg(arguments, "reviewOf"),
                     PlanSteps: planSteps,
+                    // Создатель — актор хода-создателя (редактор общего проекта и т.п.); актор
+                    // неизвестен — ход шёл с правами арендатора, значит им и создана (F-9)
+                    CreatedByActorUserId: sessions.GetTurnActor(session.Id, context.OwnerId) ?? context.OwnerId,
                     ReportToSessionId: InheritedReportTarget(session.Id, context.OwnerId),
                     Acceptance: AcceptanceArg(arguments));
                 TaskItem created;

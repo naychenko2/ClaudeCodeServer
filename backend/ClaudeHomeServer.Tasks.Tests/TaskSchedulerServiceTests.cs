@@ -260,7 +260,7 @@ public class TaskSchedulerServiceTests
 // не внутренности запуска. Вне класса тестов: локальный хелпер Task(...) тенит тип Task.
 internal sealed class ThrowingExecutor(Dictionary<string, Exception> byTask) : ITaskExecutor
 {
-    public Task ExecuteAsync(TaskItem task, bool auto) => throw byTask[task.Id];
+    public Task ExecuteAsync(TaskItem task, bool auto, string? actorUserId) => throw byTask[task.Id];
     public Task CheckStalledExecutorAsync(TaskItem task, DateTime nowUtc) => Task.CompletedTask;
     public Task ReconcileFeatureQueuesAsync(string ownerId) => Task.CompletedTask;
 }

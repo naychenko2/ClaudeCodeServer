@@ -321,6 +321,10 @@ public class TeamWaveService
                 // Session.ParentSessionId дочернего чата) и координатор как постановщик
                 SourceSessionId: session.Id,
                 CreatedByPersonaId: team.CoordinatorPersonaId ?? session.PersonaId,
+                // Создатель под-задачи — автор чата-штаба (Session.CreatedByUserId): волну запускает
+                // он, и автозапуск исполнителей наследует его актора (F-9). Автор не записан —
+                // старый чат, ход шёл с правами владельца
+                CreatedByActorUserId: session.CreatedByUserId ?? ownerId,
                 Labels: ["Командная реализация", $"волна {subtask.Wave}"]));
             // Поля под-задачи правит и перевыдача (OnTaskFailedAsync) — держим их под тем же
             // локом состояния, иначе на одном объекте плана было бы два разных лока
@@ -363,7 +367,7 @@ public class TeamWaveService
             {
                 // Устройство локального проекта офлайн — под-задача не падает, а ждёт его:
                 // состояние «ждёт устройство» на самой задаче, запуск — по выходу в онлайн
-                var launched = await _exec!.ExecuteAsync(task, auto: true);
+                var launched = await _exec!.ExecuteAsync(task, auto: true, actorUserId: TaskLaunchActor.For(task));
                 if (launched.DeviceWaitSince is not null)
                     _log.LogInformation("Под-задача {TaskId} «{Title}» ждёт устройство: {Reason}",
                         task.Id, task.Title, launched.DeviceWaitReason);
@@ -765,7 +769,7 @@ public class TeamWaveService
         if (_exec is null) return (true, null);
         try
         {
-            await _exec.ExecuteAsync(updated, auto: true);
+            await _exec.ExecuteAsync(updated, auto: true, actorUserId: TaskLaunchActor.For(updated));
             _log.LogInformation("Под-задача {TaskId} «{Title}» перевыдана (попытка {Attempt})",
                 updated.Id, updated.Title, subtask.Attempts);
             return (true, null);

@@ -809,12 +809,19 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
 
     // Загрузка вложения в рабочую папку чата (в подпапку .cc-attachments) → относительный путь.
     // Единый путь для обоих типов чата: у чата вне проекта папка — {дом}/Chats, у проектного —
-    // рабочая папка сессии (GetChatRoot), поэтому здесь GetOwnedVisible, а не OwnedChat.
+    // рабочая папка сессии (GetChatRoot). Гейт — право вести ход (DenyTurn, S2a-10), а не
+    // владение: прежний GetOwnedVisible резолвил владельца по владельцу проекта и давал
+    // редактору общего проекта 404 на его собственном чате (дефект 6bcdca12, QA-D3). Отказ
+    // различим: невидимому/не-участнику — 404, видимому без права хода (читателю) — 403
+    // project_scope. Корень берётся по арендатору из области запроса (scope.TenantOwnerId),
+    // а не по вызывающему: у проектного чата ResolveOwnerId — владелец проекта. Запись в учёт
+    // — по вызывающему: он автор private/{автор} (S2d-6b-1), и только после пройденного гейта.
     [HttpPost("{id}/files/upload")]
     [RequestSizeLimit(100 * 1024 * 1024)] // 100 МБ
     public async Task<IActionResult> Upload(string id, IFormFile? file = null)
     {
-        if (sessions.GetOwnedVisible(id, UserId) is not { } chat) return NotFound();
+        if (sessions.DenyTurn(id, UserId) is { } denied) return denied;
+        var (chat, scope) = sessions.GetAccessible(id, UserId)!.Value;
         // Вложения локального проекта принимает агент устройства, не сервер (ADR-016 §4)
         if (chat.ProjectId is { } pid && projects.GetById(pid) is { } project
             && ProjectCapabilityGuard.Refusal(project, ProjectCapabilityArea.FileBound) is { } refusal)
@@ -822,7 +829,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         if (file == null || file.Length == 0)
             return BadRequest(new { error = "Файл не выбран или пустой" });
 
-        var root = sessions.GetChatRoot(id, UserId);
+        var root = sessions.GetChatRoot(id, scope.TenantOwnerId);
         if (root is null) return NotFound();
 
         // Правило пути одно с агентом устройства: {AttachmentsDir}/{guid}/{имя файла}.

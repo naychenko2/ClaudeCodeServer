@@ -112,8 +112,8 @@ describe('причины «Входящих»: таблица сверяется
   const rows = adrReasonTable();
   const adr = readFileSync(ADR_PATH, 'utf8');
 
-  it('таблица ADR прочитана: шесть пунктов правила замены', () => {
-    expect(rows.length).toBe(6);
+  it('таблица ADR прочитана: семь пунктов правила замены', () => {
+    expect(rows.length).toBe(7);
   });
 
   it('каждый пункт: причина с началом строки ADR показывается текстом пункта; текст — из ADR', () => {
@@ -122,6 +122,13 @@ describe('причины «Входящих»: таблица сверяется
       expect(wikiInboxReasonText(prefix)).toBe(label);
       expect(adr).toContain(`«${label}»`);
     }
+  });
+
+  it('нет секции «История»: строка бэка (TL-3, WikiApplyPolicy.cs:158) даёт новый код и текст для человека, а не unknown', () => {
+    const raw = 'На этой странице нет секции «История», прежняя формулировка не сохранится — решите сами';
+    expect(wikiInboxReasonCode(raw)).toBe('no_history_section');
+    expect(wikiInboxReasonText(raw)).toBe('На этой странице нет раздела «История», прежняя формулировка не сохранится — решите сами');
+    expect(wikiInboxReasonText(raw)).not.toBe(INBOX_TEXT.unknown);
   });
 
   it('тексты пунктов различны: подмена одного текста другим — провал', () => {

@@ -46,7 +46,9 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// чат вне проекта — прежнее поведение.
 /// S2d-3f.1 (доработка по вердикту R-S2d-3f): Update/Delete — отказ на чужом приватном отличим
 /// от «не автор»: постороннему — то же, что несуществующему (404 / тот же идемпотентный 204),
-/// участнику, которому чат виден, — прежний 403. S2d-3f.2: источник отчёта «наверх» (POST report)
+/// участнику, которому чат виден, — прежний 403. QA-P1 (решение Андрея): правка видимому
+/// участнику открыта как право записи (200), удаление видимому не-автору — тот же 403.
+/// S2d-3f.2: источник отчёта «наверх» (POST report)
 /// резолвится GetOwnedVisible — Name и PersonaId чужого приватного не уносятся в карточку родителя.
 /// QA-R1 (дефект c12cd2a2): часть SetParticipants приведена к контракту S2d-7b-3 — приватный чат
 /// не становится групповым (409 private_chat_mode); DI-корень фикстуры регистрирует ленивый шов
@@ -282,9 +284,12 @@ public sealed class GetOwnedVisibleTests : IDisposable
     // S2d-3f.1 (R-S2d-3f §1): Update/Delete на чужом приватном — неотличимы от несуществующего:
     // Update — 404, Delete — тот же 204, что и несуществующему (прежний контракт идемпотентного
     // удаления, SessionsControllerTests.Delete_NonExistentSession_Returns204; сам чат не тронут).
-    // Участнику, которому чат виден (общий, свой приватный), — прежний 403 по контракту ChatAuthorGate.
+    // QA-P1 (решение Андрея, продуктовый вопрос 2 плана v2): вторая половина изменилась —
+    // правка видимому участнику (общий чат, свой приватный) больше не авторский отказ: право
+    // записи открыто редактору и выше, имя пишется; удаление видимому не-автору — прежний 403
+    // по контракту ChatAuthorGate, чат цел (сидированные чаты без CreatedByUserId — nil не автор).
     [Fact]
-    public async Task SessionsController_UpdateDelete_ЧужойПриватныйКакНесуществующий_УчастникуВидимогоЧатаПрежний403()
+    public async Task SessionsController_UpdateDelete_ЧужойПриватныйКакНесуществующий_УчастникПишетВидимыйЧатНоНеУдаляет()
     {
         var asOwner = SessionsAs(_ownerId);
 
@@ -301,22 +306,24 @@ public sealed class GetOwnedVisibleTests : IDisposable
         (await asOwner.Delete(_projectId, "no-such-chat")).Should().BeOfType<NoContentResult>();
         _sessions.GetById(ForeignPrivateId).Should().NotBeNull("204 постороннему не должен удалить чат");
 
-        // Участник, которому чат виден, но кто не арендатор: общий чат и свой приватный — прежний 403
-        // not_chat_author (контракт гейта: «участнику, которому чат виден, отвечаем 403…»)
-        async Task Assert403Async(SessionsController c, string sessionId)
+        // QA-P1: редактор на видимых чатах (общий и свой приватный) — право записи, имя пишется
+        var asEditor = SessionsAs(_editorId);
+        foreach (var sessionId in new[] { OpenChatId, ForeignPrivateId })
         {
-            var upd = (await c.Update(_projectId, sessionId, new UpdateSessionRequest(Name: "Перебил")))
-                .Should().BeOfType<ObjectResult>().Subject;
-            upd.StatusCode.Should().Be(403);
-            System.Text.Json.JsonSerializer.Serialize(upd.Value).Should().Contain("not_chat_author");
-            var del = (await c.Delete(_projectId, sessionId)).Should().BeOfType<ObjectResult>().Subject;
-            del.StatusCode.Should().Be(403);
-            System.Text.Json.JsonSerializer.Serialize(del.Value).Should().Contain("not_chat_author");
+            (await asEditor.Update(_projectId, sessionId, new UpdateSessionRequest(Name: "Перебил")))
+                .Should().BeOfType<OkObjectResult>();
+            _sessions.GetById(sessionId)!.Name.Should().Be("Перебил");
         }
 
-        var asEditor = SessionsAs(_editorId);
-        await Assert403Async(asEditor, OpenChatId);
-        await Assert403Async(asEditor, ForeignPrivateId); // автор своего приватного: виден, но не арендатор
+        // …но не автор этих чатов (сид без CreatedByUserId — nil автором не считается, fail-closed):
+        // удаление — прежний 403 not_chat_author (контракт ChatAuthorGate), чат цел
+        foreach (var sessionId in new[] { OpenChatId, ForeignPrivateId })
+        {
+            var del = (await asEditor.Delete(_projectId, sessionId)).Should().BeOfType<ObjectResult>().Subject;
+            del.StatusCode.Should().Be(403);
+            System.Text.Json.JsonSerializer.Serialize(del.Value).Should().Contain("not_chat_author");
+            _sessions.GetById(sessionId).Should().NotBeNull("отказанный отказ права не трогает чат");
+        }
 
         // Владелец-арендатор: свой приватный и общий удаляются, как раньше
         (await asOwner.Delete(_projectId, OwnPrivateId)).Should().BeOfType<NoContentResult>();

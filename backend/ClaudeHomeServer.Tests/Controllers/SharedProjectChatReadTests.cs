@@ -15,6 +15,8 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// переименование, клон, продолжение, передача и значок —
 /// 403/404 (отправка сообщения редактору открыта в S2a-10, читателю 403) (а чат владельца при этом не меняется). Посторонний, выключенный флаг и выключенный
 /// рубильник — 404: существование не раскрываем. Владелец идёт прежним путём.
+/// QA-P1 (решение Андрея): переименование и AI-переименование — право записи контента чата:
+/// редактору открыты (200 / тело ручки), читателю — прежний отказ.
 /// Создание чата — право редактора с S2d-1c, здесь не проверяется: см. SharedProjectChatCreateTests.
 /// </summary>
 [Trait("Category", "Host")]
@@ -122,12 +124,13 @@ public class SharedProjectChatReadTests : IClassFixture<TestWebApplicationFactor
 
     // ── запись и ходы — не участника ─────────────────────────────────────────────
 
-    [Theory]
-    [InlineData("editor")]
-    [InlineData("reader")]
-    public async Task Участник_НеПереименовываетНеКлонируетНеПродолжаетНеПишет(string role)
+    // Читатель после QA-P1 — как и прежде, ничего: и переименование, и AI-переименование для него
+    // 403 project_scope (права записи контента у читателя нет), клон/продолжение/передача/значок/
+    // контекст/настройки — прежние 403/404.
+    [Fact]
+    public async Task Читатель_НеПереименовываетНеКлонируетНеПродолжаетНеПишет()
     {
-        var (projectId, sessionId) = await SharedChatAsync(role);
+        var (projectId, sessionId) = await SharedChatAsync("reader");
         var member = Member();
         var before = await ChatIdsAsync(Owner(), projectId);
 
@@ -142,11 +145,8 @@ public class SharedProjectChatReadTests : IClassFixture<TestWebApplicationFactor
         ShouldBeRefused(await member.PostAsJsonAsync($"/api/chats/{sessionId}/continue", new { }), "продолжение");
         ShouldBeRefused(await member.PostAsync($"/api/chats/{sessionId}/handoff", null), "передача");
         ShouldBeRefused(await member.PostAsync($"/api/chats/{sessionId}/retitle", null), "AI-переименование");
-        // Отправка в чат — право RunTurn: редактору открыто в S2a-10, читателю нет
-        var send = await member.PostAsJsonAsync($"/api/sessions/{sessionId}/messages",
-            new { text = "привет", wait = "none" });
-        if (role == "editor") send.IsSuccessStatusCode.Should().BeTrue($"редактор отправляет: {(int)send.StatusCode}");
-        else ShouldBeRefused(send, "отправка сообщения");
+        ShouldBeRefused(await member.PostAsJsonAsync($"/api/sessions/{sessionId}/messages",
+            new { text = "привет", wait = "none" }), "отправка сообщения");
         ShouldBeRefused(await member.GetAsync($"/api/chats/{sessionId}/context"), "стор контекста чата");
         ShouldBeRefused(await member.PutAsJsonAsync($"/api/chats/{sessionId}/loop", new { enabled = true }),
             "запись настроек чата");
@@ -161,6 +161,52 @@ public class SharedProjectChatReadTests : IClassFixture<TestWebApplicationFactor
             .EnumerateArray().Should().BeEmpty("в личное пространство участника ничего не утекло");
     }
 
+    // QA-P1 (решение Андрея, продуктовый вопрос 2 плана v2): редактор переименовывает чат владельца —
+    // право записи контента, а не авторство. AI-переименование тоже его (гейт пройден: ручка отвечает
+    // по делу — в чате нет сообщений, 502, а не 403/404). Прочее — по-прежнему не он: клон,
+    // продолжение, передача, значки, контекст, настройки чата.
+    [Fact]
+    public async Task Редактор_ПереименовываетЧатВладельца_ПрочегоЕмуНельзя()
+    {
+        var (projectId, sessionId) = await SharedChatAsync("editor");
+        var member = Member();
+        var before = await ChatIdsAsync(Owner(), projectId);
+
+        ShouldBeRefused(await member.PostAsync($"/api/projects/{projectId}/sessions/icon-batch", null),
+            "смена значков");
+        ShouldBeRefused(await member.PostAsJsonAsync($"/api/chats/{sessionId}/branch",
+            new { userMessageIndex = 0, anchorText = "x", include = "none" }), "клон");
+        ShouldBeRefused(await member.PostAsJsonAsync($"/api/chats/{sessionId}/continue", new { }), "продолжение");
+        ShouldBeRefused(await member.PostAsync($"/api/chats/{sessionId}/handoff", null), "передача");
+        // Право записи пройдено: до тела ручки дошло (там «в чате ещё нет сообщений», 502) —
+        // отказа права (403) или видимости (404) нет; фейковый раннер TestWebApplicationFactory
+        // network не делает
+        var retitle = await member.PostAsync($"/api/chats/{sessionId}/retitle", null);
+        var retitleCode = (int)retitle.StatusCode;
+        retitleCode.Should().NotBe(403, $"retitle редактора отказан правом: {retitleCode}")
+            .And.NotBe(404, $"retitle редактора не видим: {retitleCode}");
+
+        // Ручное переименование чужого общего чата — 200, имя пишется
+        (await member.PutAsJsonAsync($"/api/projects/{projectId}/sessions/{sessionId}",
+            new { name = "Перебил редактор" })).StatusCode.Should().Be(HttpStatusCode.OK);
+        var card = await Owner().GetAsync($"/api/chats/{sessionId}");
+        JsonSerializer.Deserialize<JsonElement>(await card.Content.ReadAsStringAsync())
+            .GetProperty("name").GetString().Should().Be("Перебил редактор");
+
+        // Отправка в чат — право RunTurn (S2a-10), здесь не меняется
+        (await member.PostAsJsonAsync($"/api/sessions/{sessionId}/messages",
+            new { text = "привет", wait = "none" })).IsSuccessStatusCode.Should().BeTrue();
+        ShouldBeRefused(await member.GetAsync($"/api/chats/{sessionId}/context"), "стор контекста чата");
+        ShouldBeRefused(await member.PutAsJsonAsync($"/api/chats/{sessionId}/loop", new { enabled = true }),
+            "запись настроек чата");
+
+        // Отказанные ручки не оставили следа: ни нового чата, ничего в личном пространстве
+        (await ChatIdsAsync(Owner(), projectId)).Should().BeEquivalentTo(before);
+        (await member.GetAsync("/api/chats")).StatusCode.Should().Be(HttpStatusCode.OK);
+        JsonSerializer.Deserialize<JsonElement>(await (await member.GetAsync("/api/chats")).Content.ReadAsStringAsync())
+            .EnumerateArray().Should().BeEmpty("в личное пространство редактора ничего не утекло");
+    }
+
     // ── «сужение, безопасно»: внутри снова GetOwned → участнику 404 (кроме архива и ход-входов) ──
 
     [Fact]
@@ -171,7 +217,8 @@ public class SharedProjectChatReadTests : IClassFixture<TestWebApplicationFactor
 
         (await member.PostAsync($"/api/chats/{sessionId}/window-1m/drop", null)).StatusCode
             .Should().Be(HttpStatusCode.NotFound);
-        // архив чата в группу GetOwned → 404 больше не входит: участнику 403 not_chat_author (матрица ролей)
+        // архив чата здесь нет: с QA-P1 это право записи контента (строка «чат: архив» матрицы
+        // ролей и ChatWriteRightsEndpointTests), а не действий внутреннего GetOwned
         // ход-входы (RunTurn, S1-7): чат участнику виден, вести ход ему нельзя — 403, а не 404
         (await member.PutAsJsonAsync($"/api/chats/{sessionId}/team-implement", new { })).StatusCode
             .Should().Be(HttpStatusCode.Forbidden);

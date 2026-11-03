@@ -403,8 +403,9 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
 
     // Тот же PUT на чужом приватном чате — прежний 404 (существование не выдаётся).
     // На общем чате opt-out включается и выключается без ограничений — но у проектного чата
-    // настройки принадлежат владельцу-арендатору (ResolveOwnerId, SessionManager.cs:4454),
-    // редактор-автор на этой ручке — прежний 403 not_chat_author (контракт Update, не этот шаг).
+    // настройки принадлежат владельцу-арендатору (ResolveOwnerId, SessionManager.cs:4454).
+    // QA-P1: правка чужого общего чата — право записи (редактор и выше), а не авторство:
+    // проверяется в ChatWriteRightsEndpointTests.
     [Fact]
     public void ЧужойПриватный_404_АОбщийЧатВладельца_МеняетOptOut_Свободно()
     {
@@ -461,7 +462,8 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
 
     // QA-D45 (c3): новый порядок отказов ничего не выдаёт лишнего. Постороннему (не участнику
     // проекта) приватный чат — прежний 404, неотличимый от несуществующего; читателю — прежний
-    // 403 (reader на тумблере, not_chat_author на правке), 409 режима его не касается.
+    // 403 (reader на тумблере; на правке — project_scope: QA-P1, право записи вместо авторства),
+    // 409 режима его не касается.
     [Fact]
     public void ПостороннийИЧитатель_ПрежниеОтказы_СуществованиеНеРаскрывается()
     {
@@ -473,7 +475,7 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
         _sessions.GetById(EditorPrivateId)!.PrivateToUserId.Should().Be(_editorId, "чужая попытка ничего не изменила");
 
         Read(ChatsAs(_readerId).SetVisibilitySync(GroupChatId, new SetVisibilityRequest(true))).Should().Be((403, "reader"));
-        Read(SessionsAs(_readerId).UpdateSync(_projectId, OwnerChatId, req)).Should().Be((403, "not_chat_author"));
+        Read(SessionsAs(_readerId).UpdateSync(_projectId, OwnerChatId, req)).Should().Be((403, "project_scope"));
         _sessions.GetById(OwnerChatId)!.ExcludeFromDossiers.Should().BeFalse("отказ не пишет флаг чужому чату");
     }
 }

@@ -99,8 +99,10 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
-    // Переименование и прочие правки чата: до S2a-10 только автор. Область — Read, чтобы
-    // участник дошёл до проверки автора и получил not_chat_author, а не общий project_scope
+    // Переименование и прочие правки чата: QA-P1 (решение Андрея, продуктовый вопрос 2 плана v2) —
+    // право записи (редактор и выше), а не авторство чата: участник упирался даже в своём чате.
+    // Область — Read: постороннего отбивает атрибут (404, проект не виден), участнику остаётся
+    // цепочка тела: видимость чата (404 на чужом приватном) → режим чата (409) → право (403)
     [HttpPut("{sessionId}")]
     [ProjectScope]
     public async Task<IActionResult> Update(string projectId, string sessionId, [FromBody] UpdateSessionRequest req)
@@ -109,24 +111,26 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         if (session == null || session.ProjectId != projectId) return NotFound();
         // Модель и её настройки (effort) — выбор владельца чата (S2a-10b): тот же гейт, что у режима
         // прав и провайдера (DenyOwnerTurn → 403 owner_settings), отдельного гейта «на модель» нет.
-        // Порядок до проверки авторства важен: запрос с моделью отвечает о более узком праве, чем
+        // Порядок до проверки права записи важен: запрос с моделью отвечает о более узком праве, чем
         // запрос о переименовании. Явная очистка модели (null в теле) от отсутствия поля не
-        // различима в контракте — она остаётся на авторском отказе ниже.
+        // различима в контракте — такое поле ниже решается общим правом записи (модель не трогается).
         if ((req.Model is not null || req.Effort is not null) && sessions.DenyOwnerTurn(sessionId, UserId) is { } denied)
             return denied;
         // S2d-3f.1 (R-S2d-3f §1): постороннему (чат не виден по CanSee) — то же, что на несуществующем,
-        // существование не выдаётся кодом. Приём тот же, что у DenyTurnAuthor (TurnRightExtensions.cs:38-39):
-        // сначала гейт видимости GetAccessible, авторский — после него.
+        // существование не выдаётся кодом. Приём тот же, что у DenyTurnAuthor: сначала гейт видимости
+        // GetAccessible, решение о праве — после него.
         if (sessions.GetAccessible(sessionId, UserId) is null) return NotFound();
-        // QA-D45 (D5): отказ режима идёт раньше авторского 403. На своём приватном чате участник —
-        // не арендатор (владелец проектного чата — владелец проекта, GetOwnedVisible для него null),
-        // и «Не сохранять решения» он получал 403 not_chat_author вместо 409 private_chat_dossiers.
+        // QA-D45 (D5): отказ режима идёт раньше отказа права (как прежде — раньше авторского 403).
         // Порядок безопасен по видимости: приватный чат виден только автору (CanSee), поэтому 409
-        // не выдаёт существование постороннему; не-автору на общем чате остаётся прежний 403, и
-        // флаг он не пишет — запись ниже идёт после авторского гейта.
+        // не выдаёт существование постороннему; автор-участник своего приватного чата остаётся на
+        // 409 (до права записи дело не доходит), и чужой флаг он не пишет — запись ниже идёт после
+        // режима и после гейта права.
         if (req.ExcludeFromDossiers is false && sessions.IsPrivateChat(sessionId))
             return PrivateChatDossiersDenied();
-        if (sessions.GetOwnedVisible(sessionId, UserId) is null) return ChatAuthorGate.Denied();
+        // QA-P1 (решение Андрея, продуктовый вопрос 2 плана v2): переименование и поля чата —
+        // право WriteContent (редактор и выше), читателю — 403 project_scope. Авторство чата здесь
+        // больше не решает ничего; модель и effort — на владельном гейте DenyOwnerTurn выше.
+        if (sessions.DenyContentWrite(sessionId, UserId) is { } noWrite) return noWrite;
         // S2d-6c: «Не сохранять решения» нельзя выключить, пока чат приватный. Зовётся раньше
         // остальных Set*: отказ 409 не должен применять половину запроса (остальные поля —
         // mute/озвучка/срок/имя — тогда не трогаются вовсе). true принимается всегда. Ниже это
@@ -252,9 +256,14 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         if (session.ProjectId != projectId) return NotFound(); // чужая сессия — не удаляем
         // S2d-3f.1 (R-S2d-3f §1): постороннему (чат не виден по CanSee) — тот же 204, что и несуществующему:
         // прежний контракт идемпотентного удаления (строка выше) сохранён, существование не выдаётся кодом,
-        // сам чат не тронут. Участнику, которому чат виден, — прежний 403 по контракту ChatAuthorGate.
-        if (sessions.GetOwnedVisible(sessionId, UserId) is null)
-            return sessions.GetAccessible(sessionId, UserId) is null ? NoContent() : ChatAuthorGate.Denied();
+        // сам чат не тронут. Видимость — первым шагом, как требует порядок «решение прав после видимости».
+        if (sessions.GetAccessible(sessionId, UserId) is null) return NoContent();
+        // QA-P1 (решение Андрея, продуктовый вопрос 2 плана v2): удалить может автор чата или владелец
+        // проекта. Авторство — CreatedByUserId (только это поле; nil — автор неизвестен и автором не
+        // считается, тот же fail-closed, что у DenyTurnAuthor). Видимому не-автору (читателю, редактору
+        // чужого чата) — прежний 403 по контракту ChatAuthorGate, чат цел.
+        if (session.CreatedByUserId != UserId && sessions.GetOwnedVisible(sessionId, UserId) is null)
+            return ChatAuthorGate.Denied();
         await sessions.DeleteAsync(sessionId);
         return NoContent();
     }

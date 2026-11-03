@@ -316,17 +316,21 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
 
     // Убрать чат в архив (archived=true) / вернуть (false) — шаг 2 плана «Архив чатов»:
     // архив ПРЯЧЕТ чат, а не удаляет, история и claudeSessionId целы. Как /parent и /loop,
-    // работает и для проектной сессии: гейт — GetOwnedVisible (резолвит владельца через проект
-    // и не пускает на чужой приватный чат, S2d-3a), внутри SetArchivedAsync — GetOwned.
+    // работает и для проектной сессии. QA-P1 (решение Андрея, продуктовый вопрос 2 плана v2):
+    // архив — право записи чата (DenyContentWrite: редактор и выше; читатель — 403 project_scope,
+    // посторонний и чужой приватный — 404), а не владение. Сервис зовётся по арендатору из
+    // области запроса (тот же приём, что у files/upload ниже): ключ архивной записи — арендатор,
+    // решение о праве — в контроллере.
     // 409 на живом ходе/фоновых агентах: архивация идущей работы рвала бы её (пре-мортем
     // №3 плана v4); текст ошибки — человекочитаемый («в чате идёт ход»).
     [HttpPut("{id}/archived")]
     public async Task<IActionResult> SetArchived(string id, [FromBody] SetArchivedRequest req)
     {
-        if (sessions.GetOwnedVisible(id, UserId) is null) return NotAuthorOrNotFound(id);
+        if (sessions.DenyContentWrite(id, UserId) is { } denied) return denied;
+        var (_, scope) = sessions.GetAccessible(id, UserId)!.Value;
         try
         {
-            var updated = await sessions.SetArchivedAsync(id, UserId, req.Archived);
+            var updated = await sessions.SetArchivedAsync(id, scope.TenantOwnerId, req.Archived);
             return updated is null ? NotFound() : Ok(updated);
         }
         catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
@@ -783,15 +787,19 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
 
     // Обновить название чата по текущей переписке (AI-хаб): в отличие от авто-имени по первому
     // сообщению — по всему транскрипту, с перезаписью. Как loop, работает и для проектной сессии.
-    // Гейт ДО RetitleAsync (S2d-3e): чужой приватный чат — 404, как на несуществующем, и LLM по
-    // его транскрипту не зовётся (расход платит арендатор). Внутри RetitleAsync остаётся GetOwned.
+    // QA-P1 (решение Андрея, продуктовый вопрос 2 плана v2): гейт — право записи чата
+    // (DenyContentWrite: редактор и выше; читатель — 403 project_scope), а не владение: редактор
+    // переименовывает и чужой общий чат. На отказанном чате LLM не зовётся вовсе (и чужой
+    // приватный — 404, как на несуществующем). Модель зовётся по арендатору из области запроса:
+    // LLM-расход, как прежде, учитывается на арендаторе (тот же приём, что у files/upload ниже).
     [HttpPost("{id}/retitle")]
     public async Task<IActionResult> Retitle(string id, CancellationToken ct)
     {
-        if (sessions.GetOwnedVisible(id, UserId) is null) return NotFound();
+        if (sessions.DenyContentWrite(id, UserId) is { } denied) return denied;
+        var (_, scope) = sessions.GetAccessible(id, UserId)!.Value;
         try
         {
-            var updated = await sessions.RetitleAsync(UserId, id, ct);
+            var updated = await sessions.RetitleAsync(scope.TenantOwnerId, id, ct);
             return updated is null ? NotFound() : Ok(updated);
         }
         catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }

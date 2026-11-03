@@ -17,6 +17,9 @@ namespace ClaudeHomeServer.Tests.Integration;
 /// читают, а запись проекта и настройки им закрыты — 403 (Write редактору откроют S2b/S2c; S2a-10 открыл только RunTurn);
 /// отправка в ход (RunTurn) — владельцу и редактору, читателю 403; личные отметки (прочитано,
 /// закреплён) — всем, кто чат видит, и у каждого свои.
+/// QA-P1 (решение Андрея, продуктовый вопрос 2 плана v2): запись КОНТЕНТА чата (переименование,
+/// архив) — право WriteContent, открыто редактору поимённо (ProjectAccess.RoleHasRight);
+/// удаление чата — автору и владельцу, не-автору тот же 403 not_chat_author.
 /// Правила S2a-10b различаются машинным кодом отказа (строка DenyCode): перебой чужого хода —
 /// автору идущего хода или владельцу, прочему участнику not_chat_author; «не доставлять» сообщение
 /// из очереди — его отправителю или владельцу, прочему — not_sender; настройки чата (режим прав,
@@ -80,12 +83,16 @@ public class SharedProjectRoleMatrixTests : IClassFixture<TestWebApplicationFact
         // запись проекта: владельцу; участник — 403 (Write редактору S2a-10 не открывал), посторонний — 404
         new("задача: создание", "POST", "/api/projects/{p}/tasks", new { title = "Задача матрицы" }, Ok2xx, 403, 403, 404),
         new("память команды: запись", "POST", "/api/projects/{p}/team-memory", new { text = "Факт матрицы" }, Ok2xx, 403, 403, 404),
+        // удаление — автору чата и владельцу проекта: чат здесь создан владельцем, участнику —
+        // прежний 403 not_chat_author (авторский случай проверяет ChatWriteRightsEndpointTests)
         new("чат: удаление", "DELETE", "/api/projects/{p}/sessions/{s}", null, Ok2xx, 403, 403, 404, NotAuthor),
-        new("чат: переименование", "PUT", "/api/projects/{p}/sessions/{s}", new { name = "Имя матрицы" }, Ok2xx, 403, 403, 404, NotAuthor),
+        // QA-P1: переименование и архив — право записи контента (WriteContent): редактор и выше,
+        // читателю — 403 project_scope
+        new("чат: переименование", "PUT", "/api/projects/{p}/sessions/{s}", new { name = "Имя матрицы" }, Ok2xx, Ok2xx, 403, 404, "project_scope"),
         // модель и её настройки — не «автор чата», а «настройки владельца» (S2a-10b): тот же
         // гейт, что у режима прав и провайдера
         new("чат: смена модели", "PUT", "/api/projects/{p}/sessions/{s}", new { model = "sonnet" }, PassesGate, 403, 403, 404, OwnerSettings),
-        new("чат: архив", "PUT", "/api/chats/{s}/archived", new { archived = true }, Ok2xx, 403, 403, 404, NotAuthor),
+        new("чат: архив", "PUT", "/api/chats/{s}/archived", new { archived = true }, Ok2xx, Ok2xx, 403, 404, "project_scope"),
         new("чат: удаление по /api/chats", "DELETE", "/api/chats/{s}", null, 404, 403, 403, 404, NotAuthor),
         new("чат: переименование по /api/chats", "PUT", "/api/chats/{s}", new { name = "Имя матрицы" }, 404, 403, 403, 404, NotAuthor),
         // настройки и удаление проекта — Configure, только владелец

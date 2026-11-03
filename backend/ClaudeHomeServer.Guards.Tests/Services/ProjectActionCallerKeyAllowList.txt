@@ -153,7 +153,12 @@ backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
 # и journal.Read(UserId) — страница фичи строится по своим задачам вызывающего (GetByOwner);
 # ключом хранилища общего проекта id вызывающего не стал.
 backend/ClaudeHomeServer/Controllers/TasksController.cs|95
-backend/ClaudeHomeServer/Controllers/TurnRightExtensions.cs|6
+# QA-P1: TurnRightExtensions 6→7 — DenyContentWrite (право записи контента чата: переименование и
+# архив, редактор и выше) идёт тем же уровнем Deny, что RunTurn и Configure: id вызывающего входит
+# только в IProjectAccess.ResolveSession (запрошенное право WriteContent) и GetAccessible (развилка
+# 403/404). Ключом хранилищ ничто не стало: запись чата адресована id чата и остаётся на
+# авторе-арендаторе (SetArchivedAsync/RetitleAsync зовутся с TenantOwnerId из RequestScope).
+backend/ClaudeHomeServer/Controllers/TurnRightExtensions.cs|7
 backend/ClaudeHomeServer/Hubs/SessionHub.cs|7
 backend/ClaudeHomeServer/Hubs/TerminalHub.cs|1
 # S2d-4b2: TasksToolset 0→1 — id актора хода (`actor`, неизвестный → пустая строка) входит только в

@@ -433,6 +433,13 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
     if (!isLeftTab(saved)) return 'sessions';
     return saved;
   });
+  // QA-D2 (дефект e18f03f2): chatId из адреса (#/project/{P}/chat/{chatId}) приоритетнее
+  // сохранённого «последнего чата». Pending-канал разрешается асинхронно (ждёт список чатов),
+  // и до этого центр показывал сохранённый: набранное сообщение уходило в него, а не в чат
+  // из адреса (риск общий ↔ приватный). Если адрес называет ДРУГОЙ чат этого проекта —
+  // сохранённый не восстанавливаем, а автовыбор списка молчит (перехват в handleSelectSession),
+  // пока чат из адреса не разрешится (или не окажется недоступным).
+  const pendingDeepLinkRef = useRef<string | null>(null);
   const [activeSession, setActiveSession] = useState<Session | null>(() => {
     // Стартовая сессия от «Поговорить» проектной персоны (раздел «Персоны»): проект уже
     // открыт App-ом, сессию выбираем здесь — SessionList не перебьёт её авто-выбором list[0].
@@ -443,7 +450,19 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
         if (s.projectId === project.id) { sessionStorage.removeItem('cc_pending_session'); return s; }
       }
     } catch { /* битый json — игнорируем */ }
-    return loadWorkspaceState(project.id)?.activeSession ?? null;
+    const saved = loadWorkspaceState(project.id)?.activeSession ?? null;
+    const rawPending = sessionStorage.getItem('cc_pending_project_chat');
+    if (rawPending) {
+      const { pid, chatId, keepFeature } = parsePendingChat(rawPending, project.id);
+      // Pending с меткой keepFeature (запасный переход «← к фиче», «назад/вперёд» на снимок
+      // с фичей) — чат выбирается ПОД открытой страницей, его прежний путь не меняем.
+      if (pid === project.id && !keepFeature) {
+        pendingDeepLinkRef.current = chatId;
+        // Тот же чат, что сохранён, — восстанавливаем его (обычная перезагрузка в том же чате)
+        if (chatId !== saved?.id) return null;
+      }
+    }
+    return saved;
   });
   // Полный список сессий проекта — нужен ChatPanel для плашки «Ветка от …» (проверка,
   // жив ли оригинал). Источник — SessionList ниже через callback onSessionsListChanged:
@@ -1479,6 +1498,11 @@ const windowWidth = useWindowWidth();
   // «чип ← к фиче»): гасит ТОЛЬКО закрытие страницы; мобильный показ чата и запись истории
   // (с feature из снимка) выполняются как при явном выборе
   const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean, replaceNav?: boolean, keepFeaturePage?: boolean) => {
+    // QA-D2: пока чат из адреса не разрешён, автовыбор списка молчит: иначе его первый
+    // (обычно и есть сохранённый «последний») открылся бы раньше адреса, и его запросы
+    // (joinSession, история) ушли бы не туда. Сам чат из адреса выбирается pending-эффектом
+    // с autoSelect=false — его этот перехват не касается.
+    if (autoSelect && pendingDeepLinkRef.current) return;
     // Стартовый автовыбор первого чата (activeSession ещё null: холодный вход/диплинк)
     // страницу НЕ закрывает: она только что открыта по диплинку (M1, регрессия c3ae97728 —
     // вызов closeFeaturePage вынесли из-под if (!autoSelect) ради MAJOR-3, и стартовый
@@ -1642,7 +1666,10 @@ const windowWidth = useWindowWidth();
         inFlight = null;
         const s = sessions.find(x => x.id === chatId);
         if (!s) {
-          // Чата нет (удалён, нет доступа) — запись истории не должна обещать его
+          // QA-D2: чата из адреса нет (удалён, нет доступа) — внятный отказ вместо молчания:
+          // другой чат не открываем, запись истории его не обещает
+          pendingDeepLinkRef.current = null;
+          showToast('Чат недоступен', 'Чат из ссылки не найден — возможно, он удалён или доступ к нему отозван');
           setMobileView('sidebar');
           navReplace({ screen: 'project', project, view: 'sidebar', file: null, task: null });
         } else {
@@ -1657,6 +1684,8 @@ const windowWidth = useWindowWidth();
           // уведомление или инцидент оставляли бы страницу поверх чата. Без метки страница закрывается.
           const keepFeaturePage = keepFeature;
           handleSelectSession(s, undefined, false, replace, keepFeaturePage);
+          // Адрес разрешён — автовыбор снова обычный (перехват больше не нужен)
+          pendingDeepLinkRef.current = null;
           if (view) {
             // «Назад» на снимок (с перемонтажом или внутри проекта): файл и задача — из
             // снимка, а не из сохранённого состояния проекта или замыкания первого рендера.
@@ -1672,7 +1701,9 @@ const windowWidth = useWindowWidth();
           }
         }
       } catch {
-        // офлайн — остаёмся как есть
+        // офлайн — остаёмся как есть; перехват автовыбора всё равно снимаем:
+        // без ответа списка он не должен остаться вечным
+        pendingDeepLinkRef.current = null;
         if (guard.isCurrent(gen)) inFlight = null;
       }
     };

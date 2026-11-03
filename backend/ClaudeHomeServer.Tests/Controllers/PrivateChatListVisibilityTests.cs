@@ -284,6 +284,17 @@ public sealed class PrivateChatListVisibilityTests : IDisposable
             "в списке чатов персоны чужой приватный — тот же мёртвый id, что в остальных списках");
     }
 
+    // Участнику список закрыт раньше, на владении персоны (S2d-4e, c2): проектная персона
+    // принадлежит владельцу (PersonaManager.Get по OwnerId) — «чаты с персоной» участнику
+    // не отдаются вовсе, чужой приватный отсекается на этой границе. VisibleTo внутри
+    // GetPersonaChats — следующий слой: и для доступной персоны список фильтруется по зрителю.
+    [Fact]
+    public void СписокЧатовПерсоны_УчастникуНеДоступнаСамаПерсона_ЕёЧатовУНегоНет()
+    {
+        var result = PersonasAs(_editorId).Chats(_personaId);
+        result.Should().BeOfType<NotFoundResult>().Which.StatusCode.Should().Be(404);
+    }
+
     // ── снимок фоновой работы (id чатов) ───────────────────────────────────────────
 
     [Fact]

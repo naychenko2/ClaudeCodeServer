@@ -1438,10 +1438,18 @@ public sealed partial class WorkspaceToolset(
                 {
                     list = sessions.GetProjectlessChats(context.OwnerId);
                 }
+                // S2d-4e: список фильтруется по актору хода — та же видимость, что у человеческих
+                // списков (S2d-4a): чужой приватный чат не виден даже владельцу проекта, автор свой
+                // видит. Актор неизвестен (фон, исполнитель без инициатора) — приватные не видны
+                // (fail-closed): приватность некому отнести. Владение и зона — как раньше
+                // (TryGetProject, GetProjectlessChats): фильтр добавляет только приватность.
+                var actorId = turnActors.Actor(session.Id, context.OwnerId);
                 // Архив по умолчанию спрятан — как в интерфейсе, где он живёт за отдельным
                 // режимом списка. Признак производный (Session.IsArchived), отдельно не хранится
                 var includeArchived = BoolArg(arguments, "includeArchived");
-                var items = list.Where(s => includeArchived || !s.IsArchived).Select(s =>
+                var visible = list.Where(s => (includeArchived || !s.IsArchived)
+                    && (actorId is null ? s.PrivateToUserId is null : sessions.IsVisibleTo(s.Id, actorId)));
+                var items = visible.Select(s =>
                 {
                     // isSelf — как stdio (s.id === SELF_SESSION_ID || undefined): ключа нет
                     // у чужих сессий

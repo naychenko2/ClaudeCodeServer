@@ -310,6 +310,6 @@ public class TasksPrivateChatDoorTests : IClassFixture<TestWebApplicationFactory
     public void FeatureChatLinks_TasksDisabledSeam_NoLinks_EnabledSeam_Real()
     {
         new NoFeatureChatLinks().IsBoundToFeature("any", "chat").Should().BeFalse();
-        _factory.Services.GetRequiredService<IFeatureChatLinks>().Should().BeOfType<FeatureChatLinks>();
+        _factory.Services.GetRequiredService<IFeatureChatLinks>().Should().BeOfType<ClaudeHomeServer.Services.Tasks.FeatureChatLinks>();
     }
 }

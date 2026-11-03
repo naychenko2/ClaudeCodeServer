@@ -48,6 +48,9 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// от «не автор»: постороннему — то же, что несуществующему (404 / тот же идемпотентный 204),
 /// участнику, которому чат виден, — прежний 403. S2d-3f.2: источник отчёта «наверх» (POST report)
 /// резолвится GetOwnedVisible — Name и PersonaId чужого приватного не уносятся в карточку родителя.
+/// QA-R1 (дефект c12cd2a2): часть SetParticipants приведена к контракту S2d-7b-3 — приватный чат
+/// не становится групповым (409 private_chat_mode); DI-корень фикстуры регистрирует ленивый шов
+/// IFeatureChatLinks, как прод (NoFeatureChatLinks без подсистемы tasks).
 /// Полный хост не нужен: контроллеры создаются напрямую с ClaimsPrincipal вызывающего
 /// (образец — SharedProjectEditorScopeGatesTests), стор сессий сидируется sessions.json
 /// (образец — SessionStatusTests). Для пути участника (read-ручки) в корень DI ставится
@@ -174,6 +177,12 @@ public sealed class GetOwnedVisibleTests : IDisposable
         var services = new ServiceCollection();
         services.AddSingleton<IProjectAccess>(_ => new ProjectAccessService(
             _projects, _sessions, new SharedProjectsGate(_config, new FeatureFlagService(_users))));
+        // Шов IFeatureChatLinks — как в проде: Program.cs:414 регистрирует NoFeatureChatLinks,
+        // TasksSubsystem.cs:65 замещает его настоящим FeatureChatLinks при включённой подсистеме
+        // tasks. Подсистемы tasks в этой фикстуре нет — резолвится ровно то, что прод резолвит
+        // без неё (та же регистрация, что в ChatVisibilityEndpointTests и ChatsControllerPrivateAttachmentUploadTests).
+        // Без неё ленивый шов SetChatVisibility (SessionManager.cs:2576) падает на GetRequiredService.
+        services.AddSingleton<IFeatureChatLinks, NoFeatureChatLinks>();
         return services.BuildServiceProvider();
     }
 
@@ -671,18 +680,21 @@ public sealed class GetOwnedVisibleTests : IDisposable
         _sessions.GetById(ForeignPrivateId)!.Participants.Should().BeNullOrEmpty();
         _sessions.GetById(ForeignPrivateId)!.PersonaId.Should().BeNull();
 
-        // За гейтом для своего приватного и общего — внутренний ValidateParticipants (пустой
-        // состав → 400): это доказательство пройденного входа, вход не изменился
+        // За гейтом — доказательство пройденного входа. Свой приватный после S2d-7b-3:
+        // 409 private_chat_mode (дверь «приватный чат не становится групповым» идёт за гейтом
+        // GetOwnedVisible и перед ValidateParticipants); общий — прежний 400 за пустой состав.
         var empty = new SetParticipantsRequest([]);
-        c.SetParticipants(OwnPrivateId, empty).Should().BeOfType<BadRequestObjectResult>();
+        var ownDenied = c.SetParticipants(OwnPrivateId, empty).Should().BeOfType<ConflictObjectResult>().Subject;
+        System.Text.Json.JsonSerializer.Serialize(ownDenied.Value).Should().Contain("private_chat_mode");
         c.SetParticipants(OpenChatId, empty).Should().BeOfType<BadRequestObjectResult>();
     }
 
     // Реальный состав на видимых чатах — прежнее поведение: владелец-арендатор меняет состав
-    // общего чата и своего приватного (проектные персоны своего проекта — не глобальные,
-    // рамка EnsurePersonasVisibleInFrame их пропускает)
+    // общего чата (проектные персоны своего проекта — не глобальные, рамка EnsurePersonasVisibleInFrame
+    // их пропускает). Свой приватный после S2d-7b-3 групповым не делается: 409 private_chat_mode,
+    // состав не записан (тот же контракт, что ChatVisibilityEndpointTests.ПриватныйЧат_Участники_409privateChatMode_ОбщийЧат_ПрежнийПуть)
     [Fact]
-    public void ChatsController_SetParticipants_ОбщийЧатИСвойПриватныйМеняютСоставКакРаньше()
+    public void ChatsController_SetParticipants_ОбщийЧатМеняетСоставКакРаньше_СвойПриватный409БезПравки()
     {
         var suffix = Guid.NewGuid().ToString("N")[..6];
         var p1 = _personas.Create(_ownerId, $"Участник-1-{suffix}", null, null, null, null, null,
@@ -698,10 +710,12 @@ public sealed class GetOwnedVisibleTests : IDisposable
         // Спикер — первая из нового состава (прежнее правило SwitchSpeaker для чата без спикера)
         _sessions.GetById(OpenChatId)!.PersonaId.Should().Be(p1);
 
-        // Свой приватный (автор — он же арендатор): тот же вход, тот же результат
-        c.SetParticipants(OwnPrivateId, new SetParticipantsRequest([p1, p2]))
-            .Should().BeOfType<OkObjectResult>();
-        _sessions.GetById(OwnPrivateId)!.Participants.Should().Equal(p1, p2);
+        // Свой приватный (автор — он же арендатор): после S2d-7b-3 групповым не делается —
+        // 409 private_chat_mode, состав не тронут
+        var denied = c.SetParticipants(OwnPrivateId, new SetParticipantsRequest([p1, p2]))
+            .Should().BeOfType<ConflictObjectResult>().Subject;
+        System.Text.Json.JsonSerializer.Serialize(denied.Value).Should().Contain("private_chat_mode");
+        _sessions.GetById(OwnPrivateId)!.Participants.Should().BeNullOrEmpty();
     }
 
     // --- S2d-3f.2 (R-S2d-3f §2): источник отчёта «наверх» — POST /api/sessions/{sid}/report ---

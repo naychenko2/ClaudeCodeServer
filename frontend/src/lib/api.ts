@@ -970,7 +970,9 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ username, password }),
       }),
-    me: (opts?: { timeoutMs?: number }) => request<Me>('/auth/me', opts),
+    // live: true — только для пути входа: ответ из IDB-кэша (ключ по URL, общий для владельцев)
+    // подставил бы id прежнего владельца к токену нового.
+    me: (opts?: { timeoutMs?: number; live?: boolean }) => request<Me>('/auth/me', opts),
     // Возвращает свежий токен: смена пароля отзывает все прежние, включая текущий
     changePassword: (currentPassword: string, newPassword: string) =>
       request<{ token: string; expiresAt: string }>('/auth/password', {

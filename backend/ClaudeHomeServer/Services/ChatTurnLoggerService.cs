@@ -43,6 +43,12 @@ public sealed class ChatTurnLoggerService : IHostedService
     private Task OnMsgAsync(Session session, ServerMessage msg)
     {
         if (string.IsNullOrEmpty(session.ProjectId)) return Task.CompletedTask;
+        // Приватный чат в журнал проекта не пишется вовсе (S2d-6d): журнал читают все участники
+        // через GET /api/projects/{id}/events без фильтра по видимости, и событие chat_turn
+        // выносило бы наружу id и активность приватного чата. Признак — тот же
+        // Session.PrivateToUserId, что у SessionAccess.CanSee (пустая строка тоже приватный).
+        // Выход до ветки _turnActors: словарь не должен расти за приватные чаты.
+        if (session.PrivateToUserId is not null) return Task.CompletedTask;
         if (msg is not ResultMessage)
         {
             // Внутри хода актор ещё жив: обновляем запомненного на каждом сообщении

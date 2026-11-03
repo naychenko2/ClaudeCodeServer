@@ -34,7 +34,7 @@ import { PillSwitch } from '../../../components/ui/PillSwitch';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { WikiPageView } from './WikiPageView';
 import { WikiSectionTree } from './WikiSectionTree';
-import { panelTabs, PanelHead, ReplacementDot, WikiDrawer, WikiPanelBody, WikiRail, WikiSidePanel } from './WikiUnifiedChrome';
+import { panelTabs, PanelHead, ReplacementDot, WikiDrawer, WikiPanelBody } from './WikiUnifiedChrome';
 import { WIKI_SUBTABS, wikiSubTabIcon, WikiSubTabStub, type WikiSubTabId } from './wikiTabs';
 import { PAGE_STATUS, PAGE_TYPE, sectionPrefix, wikiErrorText } from './wikiLabels';
 
@@ -231,11 +231,14 @@ function PageRow({ page, onOpen }: { page: WikiPageInfoDto; onOpen: () => void }
 // NotesPage): в центре только документ + рельса с панелью справа, на 360 — две шторки.
 // Дерево разделов на десктопе стоит в ЛЕВОЙ зоне NotesPage: состояние выбора живёт здесь,
 // поэтому дерево уходит туда порталом в узел treeHost (null — левая зона закрыта, дерева
-// нет). Без unified — прежние вкладки, поведение не меняется.
+// нет). Рельса и панель вики на десктопе живут в NotesPage (видны и в режиме заметок,
+// когда эта вкладка не смонтирована), выбранный раздел для панели отдаёт onSectionChange.
+// Без unified — прежние вкладки, поведение не меняется.
 // drawerTree — единое дерево «заметки + вики» для шторки на 360 (строит NotesPage: заметки у
 // него); не передано — прежнее дерево разделов.
-export function WikiTab({ unified = false, treeHost = null, drawerTree }: {
+export function WikiTab({ unified = false, treeHost = null, drawerTree, onSectionChange }: {
   unified?: boolean; treeHost?: HTMLElement | null; drawerTree?: (close: () => void) => ReactNode;
+  onSectionChange?: (key: string | null) => void;
 } = {}) {
   const enabled = useFeature(FLAGS.llmWiki);
   const isMobile = useIsMobile();
@@ -251,7 +254,7 @@ export function WikiTab({ unified = false, treeHost = null, drawerTree }: {
   // Мобильный экран «Разделы» (S5d, хвост ревью S5c): true — вместо каталога показан
   // полноэкранный список разделов; выбор раздела возвращает к каталогу
   const [showSections, setShowSections] = useState(false);
-  // Единая раскладка: открытая панель рельсы (null — закрыта) и шторка на 360
+  // Единая раскладка: открытая панель (null — закрыта) и шторка — на 360; на десктопе панель в NotesPage
   const [panelTab, setPanelTab] = useState<WikiSubTabId | null>(null);
   const [drawer, setDrawer] = useState<'tree' | 'panel' | null>(null);
   // Открытая страница (S5b): pageKey открытой страницы выбранного раздела; null — каталог.
@@ -338,6 +341,9 @@ export function WikiTab({ unified = false, treeHost = null, drawerTree }: {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- старт загрузки при монтировании/флаге: load() синхронно снимает прошлую ошибку загрузки перед запросом — другого места старта нет
     load();
   }, [enabled, load]);
+
+  // Выбранный раздел — наружу: панель рельсы (NotesPage) читает ту же секцию, что и центр
+  useEffect(() => { onSectionChange?.(selectedKey); }, [selectedKey, onSectionChange]);
 
   const sections = tree?.sections ?? [];
   const selected = selectedKey ? sections.find(s => s.key === selectedKey) ?? null : null;
@@ -563,8 +569,6 @@ export function WikiTab({ unified = false, treeHost = null, drawerTree }: {
         <div style={{ display: 'flex', gap: SP.md, flex: 1, minHeight: 0 }}>
           {treeHost && createPortal(renderTree(), treeHost)}
           {centerPane}
-          {panelTab && <WikiSidePanel tab={panelTab} selectedKey={selectedKey} onClose={() => setPanelTab(null)} />}
-          <WikiRail active={panelTab} onSelect={setPanelTab} />
         </div>
         {dialog}
       </div>

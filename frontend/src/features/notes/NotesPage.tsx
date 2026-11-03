@@ -9,7 +9,7 @@ import {
   parseHash, navPush, navReplace, getNav,
   Button, IslandScaffold, ConfirmDialog, PageCanvas, ICON_SIZE, Chip,
   PanelZone, notesPanels, zoneOf, NOTES_KEYS, useIsMobile, useWindowWidth, useListAutoFocus,
-  FLAGS, useFeature, useWikiOpenRequest, consumeOpenWikiPage, requestOpenWikiPage, useWikiTree,
+  SP, FLAGS, useFeature, useWikiOpenRequest, consumeOpenWikiPage, requestOpenWikiPage, useWikiTree,
 } from 'aihome_shell/kit';
 import type { NavSnapshot, WikiSectionDto } from 'aihome_shell/kit';
 import type { HubTabValue } from 'aihome_shell/kit';
@@ -18,7 +18,9 @@ import { NoteView } from './NoteView';
 import { NotesGraph, type GraphStats } from './NotesGraph';
 import { GraphSettingsBody } from './graph/GraphSettingsBody';
 import { useGraphSettings } from './graph/graphSettings';
-import { WikiTab } from './wiki/WikiTab';
+import { WikiTab, defaultSectionKey } from './wiki/WikiTab';
+import { WikiRail, WikiSidePanel } from './wiki/WikiUnifiedChrome';
+import type { WikiSubTabId } from './wiki/wikiTabs';
 import { WikiUnifiedTree, useEnsureWikiTree } from './wiki/WikiUnifiedTree';
 import { CollapseGroup, IconSearch, IconPlus, IconCalendarDay, SourceDot } from './shared';
 
@@ -124,6 +126,11 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const unifiedLeft = wikiUnified && !isMobile && !graphPanelOpen;
   useEnsureWikiTree(unifiedLeft);
   const wikiTree = useWikiTree();
+  // Рельса и панель вики единой раскладки на десктопе — здесь, а не в WikiTab: они видны
+  // в любом режиме центра, в том числе при пустой вики, где в дереве нет страниц и войти
+  // в «Вики» иначе нельзя. Раздел панели — выбранный в WikiTab, до его монтирования — по умолчанию
+  const [railTab, setRailTab] = useState<WikiSubTabId | null>(null);
+  const [wikiSection, setWikiSection] = useState<string | null>(null);
 
   // Вернуться к заметкам из любого режима: снять панель графа, вкладку «Вики» и мобильный
   // режим. Ссылка стабильна — функцию слушает эффект AI-хаба, и пересоздание
@@ -549,7 +556,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // десктопный режим вкладки
   const mode: Mode = isMobile ? mobileMode : (graphPanelOpen ? 'graph' : wikiOn ? 'wiki' : 'notes');
   const centerPane = mode === 'wiki'
-    ? <WikiTab unified={wikiUnified}
+    ? <WikiTab unified={wikiUnified} onSectionChange={setWikiSection}
         // На 360 шторка показывает то же единое дерево, что левая зона десктопа; поиск и фильтры — над ним
         drawerTree={wikiUnified && isMobile ? close => (
           <>
@@ -629,7 +636,17 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
       // открыть панель с одной стороны. Заметка и граф резиновые (тянутся на всю
       // колонку) — им компенсировать нечего, ширина не передаётся
       centerContentWidth={mode === 'notes' && !selectedId ? CHAT_MAX_W : undefined}
-      center={<div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>}
+      center={wikiUnified ? (
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', gap: SP.md }}>
+          <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>
+          {railTab && (
+            <WikiSidePanel tab={railTab} onClose={() => setRailTab(null)}
+              selectedKey={wikiSection ?? defaultSectionKey(wikiTree?.sections ?? NO_SECTIONS)} />
+          )}
+          <WikiRail active={railTab} onSelect={setRailTab}
+            pages={{ active: mode === 'wiki', onClick: () => switchMode(mode === 'wiki' ? 'notes' : 'wiki') }} />
+        </div>
+      ) : <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>}
     />
   );
 

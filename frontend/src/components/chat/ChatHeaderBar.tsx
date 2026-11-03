@@ -1211,6 +1211,9 @@ interface ChatHeaderBarProps {
   participants?: Persona[] | null;
   // Состав группы изменён через поповер участников — родитель обновляет session
   onSessionUpdated?: (s: Session) => void;
+  // Карта переноса вложений (S2d-6b-4F3): тумблер приватности сообщает, какие пути бэк
+  // перенёс в private/… — родитель переписывает ими черновик композера
+  onAttachmentMoves?: (moves: Record<string, string>) => void;
   // «На стену» — набор стены живёт в воркспейсе; не задан — действия нет
   onAddToWall?: () => void;
   // Чат удалён из шапки: уйти из него и обновить список должен владелец экрана.
@@ -1335,7 +1338,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, items, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, contextBar, scrolled }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, items, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAttachmentMoves, onAddToWall, onChatDeleted, island, compact, contextBar, scrolled }: ChatHeaderBarProps) {
   // Вклады слота chat-header-action: невидимый слушатель «Итог сессии в заметку»
   // и его пункт в правом клик-меню. Нет подсистемы — нет и вкладов, остальные
   // AI-действия чата к заметкам не относятся и остаются.
@@ -1751,7 +1754,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Тумблер «Приватный чат» (S2d-F2): компонент сам гасится вне своей границы —
   // только автор чата в общем проекте, не читатель; в личном проекте — нет вовсе
   const privateBtn = <PrivateChatToggle session={session} project={project} hasMessages={hasMessages}
-    online={online} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />;
+    online={online} isMobile={isCompact} onSessionUpdated={onSessionUpdated} onAttachmentMoves={onAttachmentMoves} />;
   // На узких раскладках (мобил/планшет) прогресс workflow втянут в объединённый чип
   // (costBadges) — отдельный бейдж рисуем только на десктопе, где ряду хватает места.
   const workflowBadge = activeWorkflow && !isCompact ? (

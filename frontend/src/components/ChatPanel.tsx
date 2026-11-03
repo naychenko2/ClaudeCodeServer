@@ -4,7 +4,7 @@ import { ArrowDown, ArrowUp, RotateCw, CircleHelp, Archive, ArchiveRestore } fro
 import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, Task, WorkLoopState, SessionTeamImplement, TeamPlanDecision } from '../types';
 import { ProjectFeature } from '../types';
 import { featureReason, isLocalProject, useProjectFeature } from '../lib/projectCapabilities';
-import { useSession } from '../hooks/useSession';
+import { remapPaths, useSession } from '../hooks/useSession';
 import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonasLoaded, personaLabel } from '../lib/personas';
 import { useSphereOf } from '../lib/useSphereOf';
 import { isZoneRefusal } from '../lib/personaZone';
@@ -1274,6 +1274,11 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
   // в рабочую папку сессии (для worktree-чата — в неё же, а не в корень проекта) и сам
   // сохраняет оригинальное имя, уникальность даёт подпапка. Путь из ответа — во вложения.
   const chatFileInputRef = useRef<HTMLInputElement>(null);
+  // Черновик вложений для колбэков, живущих дольше рендера: загрузка b стартовала при
+  // черновике [a], пока она шла, тумблер переписал черновик в [a']. Замыкание по
+  // attachedFiles вернуло бы [a, b] — перенесённый путь потерян; через ref выходит [a', b].
+  const attachedFilesRef = useRef(attachedFiles);
+  attachedFilesRef.current = attachedFiles;
   const handleChatUpload = useCallback(async (files: File[]) => {
     const added: string[] = [];
     for (const file of files) {
@@ -1283,8 +1288,12 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
         added.push(path);
       } catch { showToast('Вложение', UPLOAD_FAIL_MSG); }
     }
-    if (added.length) onAttachedFilesChange([...attachedFiles, ...added]);
-  }, [session.id, project?.id, attachedFiles, onAttachedFilesChange]);
+    if (added.length) onAttachedFilesChange([...attachedFilesRef.current, ...added]);
+  }, [session.id, project?.id, onAttachedFilesChange]);
+
+  // Черновик по карте переноса (S2d-6b-4F3): пути вложений, перенесённых бэком в private/…,
+  // подменяются в черновике композера — иначе AttachmentInliner молча пропустит файл
+  const handleAttachmentMoves = useCallback((moves: Record<string, string>) => onAttachedFilesChange(remapPaths(attachedFilesRef.current, moves)), [onAttachedFilesChange]);
 
   // Единая точка загрузки с устройства (вставка, перетаскивание, кнопка пикера):
   // гейт по зрению модели сужен до картинок — pdf и документы claude читает с диска
@@ -2743,6 +2752,7 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
       agent={persona ? null : chatAgent}
       participants={isGroupChat ? participantPersonas : null}
       onSessionUpdated={onSessionUpdated}
+      onAttachmentMoves={handleAttachmentMoves}
       onAddToWall={onAddToWall}
       onChatDeleted={onChatDeleted}
       contextBar={contextBar}

@@ -599,7 +599,7 @@ public class WikiController : ControllerBase
         return Ok(new WikiJournalDto(
             [.. res.Entries.Select(e => new WikiJournalEntryDto(
                 e.Ts, e.Op, e.Section, e.Actor, e.Source, e.Origin, e.SourceName, e.Pages, e.Packages,
-                e.Status, e.Policy, e.Classes, e.OverrodeHuman, e.OverrodeKind))],
+                e.Status, e.Policy, e.Classes, e.OverrodeHuman, e.OverrodeKind, e.OverridePageKey, e.OverrideReverted))],
             res.Take, res.LinesRead, res.InvalidLines));
     }
 
@@ -792,13 +792,16 @@ public sealed record WikiIngestNoteRequest(string? NoteId, string? Target = null
 /// поля к тому, что фронт строит на GET /api/wiki/packages, и ничего не меняет (S7c-2).
 /// overrodeHuman — ИИ сам заменил или оспорил утверждение человека (ADR-038, предохранитель 4);
 /// overrodeKind — `replaced` (supersede@human) | `disputed` (conflict@human), null без признака
-/// и у старых строк; при замене и оспаривании в одной строке — `replaced`.</summary>
+/// и у старых строк; при замене и оспаривании в одной строке — `replaced`;
+/// overridePageKey — pageKey страницы первой автозамены/спора пакета (null, если не определить);
+/// overrideReverted — все замены пакета уже возвращены более поздним `restore` (спор — всегда false).</summary>
 public sealed record WikiJournalEntryDto(
     DateTimeOffset Ts, string Op, string Section, string Actor,
     string? Source, string? Origin, string? SourceName,
     IReadOnlyList<string> Pages, IReadOnlyList<string> Packages,
     string? Status, string? Policy, IReadOnlyList<string> Classes,
-    bool OverrodeHuman = false, string? OverrodeKind = null);
+    bool OverrodeHuman = false, string? OverrodeKind = null,
+    string? OverridePageKey = null, bool OverrideReverted = false);
 
 /// <summary>Окно журнала. take — фактическое окно после обрезки (запрошенное выше потолка
 /// урезается); linesRead — сколько строк журнала реально прочитано (мера того, что хвост

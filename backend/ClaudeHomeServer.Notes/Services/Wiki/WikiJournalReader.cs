@@ -71,7 +71,9 @@ public sealed class WikiJournalReader
         string? Policy,
         IReadOnlyList<string> Classes,
         bool OverrodeHuman = false,
-        string? OverrodeKind = null);
+        string? OverrodeKind = null,
+        string? OverridePageKey = null,
+        bool OverrideReverted = false);
 
     /// <summary>Вид действия ИИ над утверждением человека в строке `overrodeHuman` (ADR-038,
     /// предохранители 1 и 6): ИИ заменил формулировку (`supersede@human`).</summary>
@@ -131,9 +133,10 @@ public sealed class WikiJournalReader
             byId.TryAdd(p.Id, p);
 
         var names = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var restores = parsed.Where(x => x.Op == WikiPackage.ActionRestore).ToList();
         var entries = new List<Entry>(parsed.Count);
         foreach (var e in parsed)
-            entries.Add(JoinWithPackages(e, byId, ownerId, names));
+            entries.Add(JoinWithPackages(e, byId, ownerId, names, restores));
 
         // Новые сверху — обратный порядок файла: строки дописываются append, его порядок и есть
         // хронология. Фильтры — по собранному хвосту: они сужают окно, а не ищут за его краем.
@@ -447,7 +450,7 @@ public sealed class WikiJournalReader
     // переходов), а второй пакет того же источника имеет свою строку позже. Пакет, созданный
     // позже строки, — не этот: он ещё не применялся.
     private Entry JoinWithPackages(Entry e, Dictionary<string, WikiPackage> byId, string ownerId,
-        Dictionary<string, string?> names)
+        Dictionary<string, string?> names, List<Entry> restores)
     {
         var joined = PackagesOf(e, byId);
 
@@ -469,17 +472,24 @@ public sealed class WikiJournalReader
         // или строка без признака — вида нет (старые строки, системные операции). Замена и
         // оспаривание в одной строке — «replaced»: замена весомее.
         string? kind = null;
+        string? overridePage = null;
+        var reverted = false;
         if (e.OverrodeHuman)
         {
             var overrides = joined.SelectMany(p => p.Operations).Where(WikiPackage.IsAutoOverrideOfHuman).ToList();
             kind = overrides.Any(o => o.Op == WikiPackage.OpSupersede) ? KindReplaced
                 : overrides.Any(o => o.Op == WikiPackage.OpConflict) ? KindDisputed
                 : null;
+            // Страница замены — первая по порядку операций пакета (фронт открывает её, а не pages[0]).
+            overridePage = overrides.FirstOrDefault()?.Page;
+            reverted = IsReverted(e, overrides, restores, byId);
         }
 
         return e with
         {
             OverrodeKind = kind,
+            OverridePageKey = overridePage,
+            OverrideReverted = reverted,
             // Статус — только когда пакет один: строка retract могла откатать несколько, и
             // одного статуса у них нет — их id лежат в поле packages, их видно по ним.
             Status = joined.Count == 1 ? joined[0].Status : null,
@@ -487,6 +497,29 @@ public sealed class WikiJournalReader
             Classes = [.. classes],
             SourceName = SourceNameOf(e, joined, ownerId, names),
         };
+    }
+
+    // Замена уже возвращена: позже применения есть строка restore, чей обратный supersede на той же
+    // странице целится в текст ИИ (та же связь по тексту, что у PageOverrides). Возвращены должны быть
+    // все замены пакета; спор (conflict) стоит на живой строке человека и «возвращённым» не бывает.
+    private static bool IsReverted(Entry e, List<WikiPackage.Operation> overrides, List<Entry> restores,
+        Dictionary<string, WikiPackage> byId)
+    {
+        var replaced = overrides.Where(o => o.Op == WikiPackage.OpSupersede).ToList();
+        if (replaced.Count == 0)
+            return false;
+        var returned = new List<(string Page, string Target)>();
+        foreach (var r in restores.Where(x => x.Ts >= e.Ts && x.Section == e.Section))
+            foreach (var hp in PackagesOf(r, byId))
+                foreach (var op in hp.Operations)
+                    if (op.Op == WikiPackage.OpSupersede && !string.IsNullOrWhiteSpace(op.Target))
+                        returned.Add((op.Page, StripFootnoteRefs(op.Target)!));
+        return replaced.All(o =>
+        {
+            var statement = StripFootnoteRefs(o.Text);
+            return !string.IsNullOrEmpty(statement)
+                && returned.Any(x => x.Page == o.Page && SameStatement(x.Target, statement));
+        });
     }
 
     // Тот же источник, что записан в пакете: SourceOf — joined Ref его источников (форма,

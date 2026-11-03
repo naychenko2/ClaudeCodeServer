@@ -767,6 +767,48 @@ public class WikiJournalReaderTests : IDisposable
     }
 
     [Fact]
+    public void Журнал_OverridePageKey_СтраницаЗамены_НеPages0_ИПризнакВозврата()
+    {
+        // Мутация: брать Pages[0] вместо страницы замены (overrides.FirstOrDefault()?.Page в JoinWithPackages) —
+        // тест краснеет на OverridePageKey; убрать IsReverted — краснеет на OverrideReverted после restore.
+        const string first = "Общее/А.md", second = "Общее/Б.md";
+        var ai = NewPackage("common", WikiPackage.StatusApplied, WikiGate.OriginSession, "session:two",
+            Op(WikiGate.OriginSession, WikiPackage.OpAppend, WikiPackage.DecisionAuto, first),
+            OverrideOp(WikiPackage.OpSupersede, second, true, "Новая формулировка ИИ.[^s1]", "Старая формулировка человека"));
+        WikiManifest.AppendLog(Root(), "apply", "common", [first, second], "session:two", "keeper", "auto", [ai], overrodeHuman: true);
+        // Пакет без замены — оба поля пустые.
+        NewPackage("common", WikiPackage.StatusApplied, WikiGate.OriginSession, "session:plain",
+            Op(WikiGate.OriginSession, WikiPackage.OpAppend, WikiPackage.DecisionAuto, first));
+        WikiManifest.AppendLog(Root(), "apply", "common", [first], "session:plain", "keeper", "auto");
+
+        var before = Read(Any()).Entries;
+        var e = before.Single(x => x.Source == "session:two");
+        e.OverridePageKey.Should().Be(second, "страница замены — вторая, а не Pages[0]");
+        e.OverrideReverted.Should().BeFalse("до «Вернуть мою» замена действует");
+        var plain = before.Single(x => x.Source == "session:plain");
+        (plain.OverridePageKey, plain.OverrideReverted).Should().Be((null, false));
+
+        var back = OverrideOp(WikiPackage.OpSupersede, second, false, "Старая формулировка человека", "Новая формулировка ИИ.") with
+        {
+            Class = WikiPackage.ClassKey(WikiGate.OriginHuman, WikiPackage.OpSupersede),
+        };
+        WikiPackageStore.Create(Root(), new WikiPackage
+        {
+            Id = WikiPackageStore.NewId(),
+            Author = WikiPackage.AuthorHuman,
+            Action = WikiPackage.ActionRestore,
+            Section = "common",
+            Sources = [new WikiPackage.SourceRef(WikiGate.OriginHuman, "x:2")],
+            Operations = [back],
+            Status = WikiPackage.StatusChecking,
+        }).Ok.Should().BeTrue();
+        WikiManifest.AppendLog(Root(), "restore", "common", [second], "x:2", "user");
+
+        var after = Read(Any()).Entries.Single(x => x.Source == "session:two");
+        (after.OverridePageKey, after.OverrideReverted).Should().Be((second, true));
+    }
+
+    [Fact]
     public void Страница_Overrides_ТекстаИИНетСредиДействующих_МеткиНет()
     {
         // Мутация: убрать проверку active (страховку) в PageOverrides — тест краснеет.

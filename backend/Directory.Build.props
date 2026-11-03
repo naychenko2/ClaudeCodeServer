@@ -51,6 +51,31 @@
   </PropertyGroup>
 
   <!--
+    Debug-сборки без хеша коммита в AssemblyInformationalVersion (1.0.0 вместо 1.0.0+<sha>).
+    SDK вшивает хеш в атрибут каждой сборки: после ЛЮБОГО коммита, даже пустого, меняется
+    reference-сборка каждого проекта и пересобирается всё решение. Замер 03.11.2026 на
+    ClaudeHomeServer.slnx после пустого коммита: с хешем — 92 из 92 проектов за 1:22,
+    без хеша (обе строки ниже) — 0 из 92 за 10 с (задача 8d4e8451).
+
+    Release (боевая публикация scripts/ops/publish-linux.sh, dotnet publish -c Release)
+    хеш сохраняет — условие только на Debug (пустой Configuration на этапе props — это
+    будущий дефолт Debug: SDK задаёт его позже, чем импортируется этот файл). Кто читает атрибут: штамп codeVersion в
+    метриках вики (WikiClassHealth, WikiLintService — сравнивается на проде), DeviceAgent
+    и HandsBridge (DeviceAgent ставит false сам и задаёт версию при публикации; хвост +sha
+    и так отбрасывают DeviceAgentVersion и HandsBridge).
+  -->
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug' or '$(Configuration)' == ''">
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <!--
+      Второй путь того же хеша: SourceLink пишет obj/*.sourcelink.json с URL
+      raw.githubusercontent.com/.../<sha>/*, а файл — вход Csc. Без этой строки после
+      пустого коммита всё так же перекомпилировались все 92 проекта. Локальной отладке
+      SourceLink не нужен: исходники лежат на диске.
+    -->
+    <EnableSourceLink>false</EnableSourceLink>
+  </PropertyGroup>
+
+  <!--
     Вынос сборочных артефактов из worktree (opt-in). Переменная окружения CCS_BUILD_ROOT
     (например /home/an/.cache/ccs-build, отдельный диск) уводит bin/obj каждого проекта в
     $(CCS_BUILD_ROOT)/<имя-каталога-worktree>/<проект>/{bin,obj}: дерево worktree остаётся

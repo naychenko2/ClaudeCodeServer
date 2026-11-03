@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -75,6 +76,31 @@ public class ProjectMembersControllerTests : IClassFixture<TestWebApplicationFac
         var r = await AddAsync(owner, id, TestWebApplicationFactory.SecondUsername);
 
         r.StatusCode.Should().Be(HttpStatusCode.OK);
+        var project = _factory.Services.GetRequiredService<ProjectManager>().GetById(id)!;
+        project.Members.Should().ContainSingle(m => m.UserId == IdOf(TestWebApplicationFactory.SecondUsername));
+    }
+
+    [Fact]
+    public async Task СбойEnsureПриПриглашении_ПриглашениеПродолжаетсяБез500()
+    {
+        var owner = Owner(); await SetFlagAsync(owner, true); await SetFlagAsync(Second(), true);
+        var dir = Path.Combine(_factory.TempDir, "members_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        // Репозиторий с шаблоном заранее: .gitignore содержит наш блок, Ensure доходит до
+        // записи. Сам InitAsync при этом — no-op (файл есть), чтобы тест ломал ровно Ensure.
+        await _factory.Services.GetRequiredService<GitService>().InitAsync(null, dir);
+        var id = await CreateProjectAsync(owner, dir);
+
+        // Ломается ровно снятие игнора заметок: .gitignore — только для чтения. Чтение
+        // удаётся, запись даёт UnauthorizedAccess (и на Linux, и на Windows: атрибут
+        // ReadOnly .NET снимает бит записи). До правки этот сбой уносил всё приглашение
+        // 500 git_init_failed (п.2 возврата ревью bc33193f): журнал заметок вторичен
+        // членству — теперь Warning, и участник входит.
+        File.SetAttributes(Path.Combine(dir, ".gitignore"), FileAttributes.ReadOnly);
+
+        var r = await AddAsync(owner, id, TestWebApplicationFactory.SecondUsername);
+
+        r.StatusCode.Should().Be(HttpStatusCode.OK, await r.Content.ReadAsStringAsync());
         var project = _factory.Services.GetRequiredService<ProjectManager>().GetById(id)!;
         project.Members.Should().ContainSingle(m => m.UserId == IdOf(TestWebApplicationFactory.SecondUsername));
     }

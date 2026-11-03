@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
@@ -20,6 +21,33 @@ public class HumanEditCommitterTests : IDisposable
     private sealed class LocalOnlyFactory : ILauncherFactory
     {
         public IProcessLauncher Local => LocalProcessRunner.Instance;
+        public IProcessLauncher ForOwner(string? ownerId) => Local;
+        public IProcessLauncher ForProject(Project project) => Local;
+    }
+
+    // Лончер, который роняет ТОЛЬКО check-ignore: тот же git, но с core.excludesFile,
+    // указывающим на каталог, — «fatal: cannot use … as an exclude file», exit 128
+    // (проверено пробой: status/add/commit при этом не тронуты). Нужен, чтобы проверить:
+    // сбой защитной проверки не уносит группу правок (п.3 возврата ревью bc33193f).
+    private sealed class FailingCheckIgnoreFactory : ILauncherFactory
+    {
+        private sealed class Wrapping : IProcessLauncher
+        {
+            private static readonly IProcessLauncher Inner = LocalProcessRunner.Instance;
+            public bool IsSandboxed => Inner.IsSandboxed;
+            public bool TargetIsWindows => Inner.TargetIsWindows;
+            public IPathMapper Paths => Inner.Paths;
+            public string ClaudeCliCommand => Inner.ClaudeCliCommand;
+            public string HostTempDir => Inner.HostTempDir;
+            public string? McpApiUrlOverride => Inner.McpApiUrlOverride;
+            public Process Start(ProcessSpec spec) => Inner.Start(spec.Args.Contains("check-ignore")
+                ? spec with { Args = ["-c", $"core.excludesFile={spec.WorkingDirectory}", ..spec.Args] }
+                : spec);
+            public void Kill(Process process, string? turnId) => Inner.Kill(process, turnId);
+            public int EstimateCommandLineLength(ProcessSpec spec) => Inner.EstimateCommandLineLength(spec);
+        }
+
+        public IProcessLauncher Local { get; } = new Wrapping();
         public IProcessLauncher ForOwner(string? ownerId) => Local;
         public IProcessLauncher ForProject(Project project) => Local;
     }
@@ -406,20 +434,65 @@ public class HumanEditCommitterTests : IDisposable
     }
 
     [Fact]
-    public async Task Гонка_двух_Ensure_даёт_ровно_один_коммит_по_gitignore()
+    public async Task Ensure_на_CRLF_варианте_шаблона_снимает_наш_блок_чужие_правила_целы()
     {
         var (project, _) = await SetupAsync(shared: true);
+        var gitignorePath = Path.Combine(_repo, ".gitignore");
+        // Тот же шаблон, что записал InitAsync, но с \r\n — как его записал бы Windows-чекаут
+        // до *.cs text eol=lf. Побайтовая склейка с «\n» такой файл не находила никогда:
+        // Ensure был no-op, репозитории с Windows-прошлого не лечились (MAJOR возврата
+        // ревью bc33193f). Мутация «жёсткий \n» (IndexOf целым блоком) краснит этот тест
+        // и тест с барьером ниже.
+        await File.WriteAllTextAsync(gitignorePath,
+            (await File.ReadAllTextAsync(gitignorePath)).ReplaceLineEndings("\r\n"));
         var author = OwnerAuthor(project);
-        var before = int.Parse(await CommitsCountAsync());
 
-        // Две Ensure на одном проекте (приглашение + стартовый проход) — под замком
-        // репозитория: вторая видит уже очищенный файл и выходит no-op.
-        await Task.WhenAll(
-            _git.EnsureNotesVersionedAsync(null, _repo, author: author),
-            _git.EnsureNotesVersionedAsync(null, _repo, author: author));
+        (await _git.EnsureNotesVersionedAsync(null, _repo, author: author)).Should().NotBeEmpty();
+        var after = await File.ReadAllTextAsync(gitignorePath);
+        after.Should().NotContain("Заметки и комментарии проекта").And.NotContain("/notes/");
+        // Чужие строки — байт-в-байт, со своим CRLF.
+        after.Should().Contain(".claude/\r\n").And.Contain("Thumbs.db\r\n").And.Contain("node_modules/\r\n");
 
-        (await File.ReadAllTextAsync(Path.Combine(_repo, ".gitignore"))).Should().NotContain("/notes/");
-        (int.Parse(await CommitsCountAsync())).Should().Be(before + 1);
+        // Повтор не коммитит.
+        var count = await CommitsCountAsync();
+        (await _git.EnsureNotesVersionedAsync(null, _repo, author: author)).Should().BeEmpty();
+        (await CommitsCountAsync()).Should().Be(count);
+    }
+
+    [Fact]
+    public async Task Гонка_двух_Ensure_за_барьером_один_коммит_по_gitignore()
+    {
+        var (project, _) = await SetupAsync(shared: true);
+        var gitignorePath = Path.Combine(_repo, ".gitignore");
+        // Файл грязен и обязан остаться таким до конца барьера: CRLF-вариант шаблона
+        // (тот же Windows-чекаут) плюс чужое правило.
+        await File.WriteAllTextAsync(gitignorePath,
+            (await File.ReadAllTextAsync(gitignorePath)).ReplaceLineEndings("\r\n") + "build/\r\n");
+        var author = OwnerAuthor(project);
+
+        // Барьер: внешний коммит .gitignore держит замок репозитория (status/add/commit —
+        // всё под ним). Обе Ensure стартуют, пока он идёт, и обе становятся на неочищенном
+        // файле у закрытого замка: это настоящая гонка, а не «вторая после первой» (п.4
+        // возврата ревью bc33193f). Без замка в Ensure первая успела бы очистить файл до
+        // git add барьера — и этот тест краснеет (проверено мутацией «снять замок» в копии).
+        var barrier = _git.CommitAsync(null, _repo, "барьер: коммит .gitignore как есть",
+            author: author, paths: [".gitignore"]);
+        var first = _git.EnsureNotesVersionedAsync(null, _repo, author: author);
+        var second = _git.EnsureNotesVersionedAsync(null, _repo, author: author);
+        await Task.WhenAll(barrier, first, second);
+
+        // Барьер взял файл как есть — с нашим блоком: пока держался замок, к файлу никто
+        // не подходил.
+        (await _git.RunAsync(null, _repo, ["show", "HEAD~1:.gitignore"])).Stdout
+            .Should().Contain("/notes/").And.Contain("build/");
+        // Ровно одна из двух сделала работу; вторая увидела уже очищенный файл и вернула "".
+        var shaFirst = await first;
+        var shaSecond = await second;
+        new[] { shaFirst, shaSecond }.Count(r => r.Length > 0).Should().Be(1);
+        // Коммитов .gitignore ровно три: начальный, барьер и один снятие игнора.
+        (await _git.RunAsync(null, _repo, ["rev-list", "--count", "HEAD", "--", ".gitignore"])).Stdout.Trim()
+            .Should().Be("3");
+        (await File.ReadAllTextAsync(gitignorePath)).Should().NotContain("/notes/");
     }
 
     [Fact]
@@ -479,5 +552,27 @@ public class HumanEditCommitterTests : IDisposable
 
         (await File.ReadAllTextAsync(gitignorePath)).Should().Contain("/notes/");
         (await CommitsCountAsync()).Should().Be(before);
+    }
+
+    [Fact]
+    public async Task Ошибка_check_ignore_не_уносит_группу_правок_Warning_и_коммит()
+    {
+        var (project, human) = await SetupAsync(shared: true);
+        var log = new List<(LogLevel Level, string Message)>();
+        // Репозиторий создан обычным _git; журнал работает git-ом, у которого роняется
+        // только check-ignore — сбой защитной проверки не должен отменять коммит (п.3).
+        var sut = new HumanEditCommitter(_projects, _users, new GitService(new FailingCheckIgnoreFactory()),
+            _config, new RecordingLogger<HumanEditCommitter>(log), _clock);
+
+        await File.WriteAllTextAsync(Path.Combine(_repo, "plain.md"), "правка человека\n");
+        sut.Record(project.Id, _repo, "plain.md", human.Id);
+        await sut.FlushAsync(all: true);
+
+        // Сбой назван в Warning…
+        log.Should().Contain(l => l.Level == LogLevel.Warning && l.Message.Contains("Проверка .gitignore"));
+        // …и коммит взял правку: путь не под игнором, pathspec обычный.
+        var files = (await _git.RunAsync(null, _repo, ["show", "--name-only", "--format=", "HEAD"])).Stdout.Trim();
+        files.Should().Be("plain.md");
+        (await LogAsync()).Should().Contain(human.Id);
     }
 }

@@ -252,7 +252,20 @@ public sealed class HumanEditCommitter(
         // потеря названа в логе ДО коммита; -f не ставим намеренно: игнор в файле
         // пользователя — его правило, журнал его не отменяет (свои .gitignore остались,
         // их снимает Ensure только с нашим точным блоком).
-        var ignored = await git.IgnoredPathsAsync(project.OwnerId, root, paths);
+        // Сбой самой проверки не уносит группу правок (возврат ревью bc33193f, п.3):
+        // проверка защитная, коммит — первичный. GitCommandException — Warning и дальше
+        // как обычно: путь под игнором status в индекс не пустит (он и без проверки его не
+        // показывает), остальные пути будут взяты как обычно.
+        List<string> ignored;
+        try
+        {
+            ignored = await git.IgnoredPathsAsync(project.OwnerId, root, paths);
+        }
+        catch (GitCommandException ex)
+        {
+            logger.LogWarning(ex, "Проверка .gitignore для журнала правок в проекте {ProjectId} ({Root}) не удалась: коммит продолжается", projectId, root);
+            ignored = [];
+        }
         if (ignored.Count > 0)
             logger.LogWarning(
                 "Журнал правок человека в проекте {ProjectId} ({Root}): {Count} путей исключены .gitignore и не попадут в коммит",

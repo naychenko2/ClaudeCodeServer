@@ -4,6 +4,7 @@ using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Git;
 using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Services;
 
@@ -30,7 +31,8 @@ public sealed record MembershipResult(int Status, string? Code = null, string? E
 /// </summary>
 public sealed class ProjectMembershipService(
     ProjectManager projects, UserStore users, SharedProjectsGate gate, GitService git,
-    SessionManager sessions, UserConnectionRegistry userConnections, IHubContext<SessionHub> hub)
+    SessionManager sessions, UserConnectionRegistry userConnections, IHubContext<SessionHub> hub,
+    ILogger<ProjectMembershipService> logger)
 {
     // Чтение-проверка-запись списка участников — одна секция, иначе два приглашения подряд
     // перезапишут друг друга
@@ -77,11 +79,22 @@ public sealed class ProjectMembershipService(
         {
             if (!git.IsGitRepo(project.RootPath))
                 await git.InitAsync(project.OwnerId, project.RootPath, ct);
-            // QA-D1 (решение (б) разреза 2cc7578d): при каждом приглашении — снятие игнора
-            // заметок в общем проекте. Идемпотентно и безопасно ставить здесь: покрывает и
-            // свежий init, и репозиторий, заведённый до QA-D1. Свой .gitignore владельца
-            // метод не трогает (только побайтовое совпадение нашего блока). Автор коммита —
-            // владелец: серверный git-конфиг может не иметь user.name.
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new(500, "git_init_failed", "Не удалось подготовить git-репозиторий проекта.");
+        }
+
+        // QA-D1 (решение (б) разреза 2cc7578d): при каждом приглашении — снятие игнора
+        // заметок в общем проекте. Идемпотентно и безопасно ставить здесь: покрывает и
+        // свежий init, и репозиторий, заведённый до QA-D1. Свой .gitignore владельца
+        // метод не трогает (только точное совпадение нашего блока). Автор коммита —
+        // владелец: серверный git-конфиг может не иметь user.name.
+        // Сбой здесь НЕ отменяет приглашение (возврат ревью bc33193f, п.2): журнал заметок
+        // вторичен членству — 500 из-за него отнимал у владельца право пригласить. Отказ
+        // назван в Warning; участник входит, журнал заметок догонит следующий вызов.
+        try
+        {
             var owner = project.OwnerId is null ? null : users.GetById(project.OwnerId);
             await git.EnsureNotesVersionedAsync(
                 project.OwnerId, project.RootPath, ct,
@@ -89,7 +102,7 @@ public sealed class ProjectMembershipService(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            return new(500, "git_init_failed", "Не удалось подготовить git-репозиторий проекта.");
+            logger.LogWarning(ex, "Снятие игнора заметок в проекте {ProjectId} не удалось: приглашение продолжается", projectId);
         }
 
         Project updated;

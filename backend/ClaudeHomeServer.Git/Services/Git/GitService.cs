@@ -1459,13 +1459,15 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
 
         """;
 
-    // Тот самый блок из DefaultGitignore: строка игнора заметок и наш комментарий над ней.
-    // EnsureNotesVersionedAsync удаляет ТОЛЬКО его, побайтово. Текст обязан совпадать с
-    // DefaultGitignore: расход ловит тест HumanEditCommitterTests «Заметки общего проекта
-    // после Ensure…» — его .gitignore пишет InitAsync, и без совпадения заметки не доезжают
-    // до коммита.
-    private const string NotesIgnoreBlock =
-        "# Заметки и комментарии проекта — живут в приложении, не в истории документов\n/notes/";
+    // Строки нашего блока в DefaultGitignore: комментарий и строка игнора заметок.
+    // EnsureNotesVersionedAsync удаляет ТОЛЬКО их (см. WithoutOurNotesBlock). Текст обязан
+    // совпадать с DefaultGitignore: расход ловит тест HumanEditCommitterTests «Заметки общего
+    // проекта после Ensure…» — его .gitignore пишет InitAsync, и без совпадения заметки не
+    // доезжают до коммита. Строки, а не склеенный блок: файл мог быть записан с CRLF
+    // (Windows-чекаут до *.cs text eol=lf в .gitattributes), склейка с «\n» тогда не
+    // совпадала никогда и Ensure молча ничего не делал (возврат ревью bc33193f, MAJOR).
+    private const string NotesIgnoreComment = "# Заметки и комментарии проекта — живут в приложении, не в истории документов";
+    private const string NotesIgnoreRule = "/notes/";
 
     public async Task InitAsync(string? ownerId, string root, CancellationToken ct = default)
     {
@@ -1499,10 +1501,12 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     // проекте notes/ версионируются наравне с файлами — иначе журнал правок человека
     // (HumanEditCommitter) молча теряет каждую правку заметки: git не берёт игнорируемый
     // путь в index, и коммит по pathspec выходит пустым. Идемпотентно: нет точного блока —
-    // no-op без коммита. Свой .gitignore пользователя правится ТОЛЬКО побайтовым совпадением
-    // блока: его «notes/» без нашего комментария — его правило, оно остаётся (для такого
-    // проекта журнала заметок не будет — это видно по Warning в журнале). Чужие правила
-    // файла не трогать. Личные проекты этот метод не вызывает: у них остаётся DefaultGitignore.
+    // no-op без коммита. Свой .gitignore пользователя правится ТОЛЬКО совпадением строк
+    // нашего блока (с любым переводом строки, см. WithoutOurNotesBlock): его «notes/» без
+    // нашего комментария — его правило, оно остаётся (для такого проекта журнала заметок
+    // не будет — это видно по Warning в журнале). Чужие правила файла не трогать — ни
+    // содержимого, ни их перевода строки. Личные проекты этот метод не вызывает: у них
+    // остаётся DefaultGitignore.
     // Коммит .gitignore отдельный, по pathspec [".gitignore"], автор — владелец (приходит
     // явным author: серверный git-конфиг может не иметь user.name, см. DossierBranch.cs).
     // Чтение-проверка-запись — под замком репозитория: две гонящиеся Ensure дают один коммит
@@ -1530,26 +1534,55 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             ct: ct, author: author, paths: [".gitignore"]);
     }
 
-    // Побайтовое удаление нашего блока; нет совпадения — null (файл не трогается). Удаляются
-    // все вхождения: блок попал в файл дважды — оба раза он наш. Перевод строки блока
-    // убирается вместе с ним, пустой строки на его месте не остаётся. Файл с окончаниями
-    // строк CRLF не совпадает никогда — это и есть «побайтовое совпадение»: наш шаблон
-    // пишет \n, чужой файл с CRLF — чужой.
+    // Удаление нашего блока; нет совпадения — null (файл не трогается). Блок ищется по
+    // тексту его строк (комментарий, следом «/notes/») с любым переводом строки: файл мог
+    // быть записан и с \n (наш шаблон), и с \r\n (InitAsync на Windows-чекауте до
+    // *.cs text eol=lf) — побайтовая склейка с \n на CRLF-файле не совпадала никогда,
+    // и Ensure на таких репозиториях молча ничего не делал (возврат ревью bc33193f).
+    // Всё остальное остаётся байт-в-байт: чужие правила сохраняют свой перевод строки.
+    // Удаляются все вхождения: блок попал в файл дважды — оба раза он наш. Перевод строки
+    // блока убирается вместе с ним, пустой строки на его месте не остаётся.
     private static string? WithoutOurNotesBlock(string text)
     {
-        var idx = text.IndexOf(NotesIgnoreBlock, StringComparison.Ordinal);
-        if (idx < 0) return null;
         var sb = new StringBuilder();
-        while (idx >= 0)
+        var removed = false;
+        var i = 0;
+        while (i < text.Length)
         {
-            sb.Append(text, 0, idx);
-            var cut = idx + NotesIgnoreBlock.Length;
-            if (cut < text.Length && text[cut] == '\n') cut++;
-            text = text[cut..];
-            idx = text.IndexOf(NotesIgnoreBlock, StringComparison.Ordinal);
+            var end = EndOfLine(text, i);
+            if (LineEquals(text, i, end, NotesIgnoreComment) && end < text.Length)
+            {
+                var end2 = EndOfLine(text, end);
+                if (LineEquals(text, end, end2, NotesIgnoreRule))
+                {
+                    removed = true;
+                    i = end2;
+                    continue;
+                }
+            }
+            sb.Append(text, i, end - i);
+            i = end;
         }
-        sb.Append(text);
-        return sb.ToString();
+        return removed ? sb.ToString() : null;
+    }
+
+    // Конец строки, начинающейся в i: позиция за '\n' или конец текста ('\r' перед '\n'
+    // принадлежит строке — LineEquals его не считает содержимым).
+    private static int EndOfLine(string text, int i)
+    {
+        var nl = text.IndexOf('\n', i);
+        return nl < 0 ? text.Length : nl + 1;
+    }
+
+    // Сравнение содержимого строки text[from..end) (без её перевода строки) с текстом
+    // блока. Посимвольно и без аллокаций: содержимое обязано совпасть точно — «наш
+    // комментарий с хвостом» или «/notes/ с отступом» уже не наш блок.
+    private static bool LineEquals(string text, int from, int end, string content)
+    {
+        var len = end - from;
+        if (len > 0 && text[end - 1] == '\n') len--;
+        if (len > 0 && text[from + len - 1] == '\r') len--;
+        return len == content.Length && text.AsSpan(from, len).SequenceEqual(content.AsSpan());
     }
 
     // Пути, которые .gitignore не пускает в индекс (QA-D1): git check-ignore, пути через

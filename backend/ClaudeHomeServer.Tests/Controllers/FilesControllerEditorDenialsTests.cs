@@ -338,6 +338,51 @@ public sealed class FilesControllerEditorDenialsTests : IDisposable
             "чистый отслеживаемый целевой — перезапись открыта");
     }
 
+    // F-4 доработка 1 (ревью ccca96a7): алиас пути в запросе не обходит проверку — ключ
+    // берётся из канонического resolved-пути, а не из сырой строки запроса. «./mod.txt» и
+    // «sub/../mod.txt» разрешаются SafeJoin в тот же файл, и он остаётся закрытым редактору
+    // на всех трёх дверях (мутация «ключ из сырого rel»: алиас не совпадает с git-путём →
+    // 204/Ok и файл стёрт — тест красный). «mod.txt/» здесь нет осознанно: SafeJoin
+    // сохраняет завершающий слеш (проверено прогоном: File.Exists по такому пути ложен,
+    // отказ 404 при целом на диске файле) — это поведение разрешения пути, а не ключа
+    // проверки, и в эту доработку не входит.
+    [Fact]
+    public async Task АлиасПути_НеОбходитПроверку_Редактору409FileUncommitted_ФайлНаМесте()
+    {
+        var (projectId, root) = SharedProject(("mod.txt", "база"), ("doc.md", "старый markdown"));
+        File.AppendAllText(Abs(root, "mod.txt"), " + чужая правка");
+        File.AppendAllText(Abs(root, "doc.md"), " + чужая правка");
+        File.WriteAllText(Abs(root, "doc.txt"), "содержимое источника");
+
+        var editor = As(_editorId, projectId);
+
+        // Delete: алиас в path — тот же незакоммиченный файл, отказ и файл цел.
+        foreach (var path in new[] { "./mod.txt", "sub/../mod.txt" })
+        {
+            var denied = (await editor.Delete(projectId, path)).Should().BeOfType<ConflictObjectResult>("path={0}", path).Subject;
+            Body(denied.Value).GetProperty("code").GetString().Should().Be("file_uncommitted", path);
+            File.ReadAllText(Abs(root, "mod.txt")).Should().Be("база + чужая правка", "отказ не удалил файл: " + path);
+        }
+
+        // Upload: алиас каталога в query («.» или «sub/..») — цель та же незакоммиченная,
+        // загрузка не затирает чужую правку.
+        foreach (var dir in new[] { ".", "sub/.." })
+        {
+            var denied = (await editor.Upload(projectId, dir, FormFile("mod.txt", "поверх чужой правки")))
+                .Should().BeOfType<ConflictObjectResult>().Subject;
+            Body(denied.Value).GetProperty("code").GetString().Should().Be("file_uncommitted", dir);
+            File.ReadAllText(Abs(root, "mod.txt")).Should().Be("база + чужая правка", "отказ не затёр чужую правку: " + dir);
+        }
+
+        // ToMarkdown: цель .md собрана из алиасного источника («sub/../doc.txt» → «sub/../doc.md»)
+        // — проверка идёт по целевому файлу, он цел.
+        var md = (await editor.ToMarkdown(projectId, new ToMarkdownRequest("sub/../doc.txt"), default))
+            .Should().BeOfType<ConflictObjectResult>().Subject;
+        Body(md.Value).GetProperty("code").GetString().Should().Be("file_uncommitted");
+        File.ReadAllText(Abs(root, "doc.md")).Should().Be("старый markdown + чужая правка",
+            "отказ не пишет целевой .md");
+    }
+
     // --- п.3: rename на существующую цель ---
 
     [Fact]

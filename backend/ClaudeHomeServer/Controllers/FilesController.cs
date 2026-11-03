@@ -655,7 +655,12 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         if (git is null) return null;
         var status = await git.StatusPathsAsync(TenantId, root);
         if (!status.IsRepo) return null;
-        var key = Normalize(rel);
+        // F-4 доработка 1 (ревью ccca96a7): ключ — канонический путь от корня, а не сырая
+        // строка запроса: алиасы «./mod.txt», «sub/../mod.txt» разрешаются SafeJoin в тот же
+        // файл (abs уже канонический), но со строкой запроса git-путь не совпадал — проверка
+        // молча пропускалась, и редактор терял чужую незакоммиченную правку.
+        // GetRelativePath приводит алиасы к тому же виду путей, что отдаёт git status.
+        var key = Normalize(System.IO.Path.GetRelativePath(root, abs));
         if (!status.Staged.Concat(status.Unstaged).Concat(status.Untracked).Any(f => Normalize(f.Path) == key))
             return null;
         var current = IsEtaggableText(root, rel, abs) ? CanonicalSha256OfTextFile(abs) : null;

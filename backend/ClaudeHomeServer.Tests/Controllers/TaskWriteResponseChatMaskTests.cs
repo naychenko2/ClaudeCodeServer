@@ -40,9 +40,16 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// сериализация ответа — теми же опциями, что MVC. Ветка мержа здесь не проверяется: она требует
 /// живого git-worktree и принятого финала (machinery TasksControllerTests, хост-набор).
 ///
-/// Мутация (критерий c2): в Update вернуть WithWarning(updated) без MaskForeignChats →
-/// «ПравкаЗадачиУчастникаВладельцем…» и «Создание…», «СвойПриватныйИОбщий…» краснеют: в JSON
-/// владельца снова стоит id чужого приватного чата, а на своих чатах появляется форма-заглушка.
+/// S2d-7b-2 (97ed3bf23) убрал чат-источник из тела человеческого REST: оба Create обнуляют
+/// SourceSessionId (TasksController.cs:113 и :356), поэтому задача, созданная через REST, источника
+/// не имеет вовсе, и маске в create-ответе нечего маскировать. Create-часть класса проверяет новое
+/// правило на уровне ответа: тело игнорируется — ни id, ни формы ни в ответе, ни в записи.
+/// Положительная проверка маски (форма рядом с обнулённым id) — на пути Update: источник ставит
+/// только сервер (SeedTask).
+///
+/// Мутации: убрать `SourceSessionId = null` в одном из Create — соответствующий «Создание…» красный;
+/// в Update вернуть WithWarning(updated) без MaskForeignChats — «Правка…» краснеет: в JSON владельца
+/// снова стоит id чужого приватного чата, а на своих чатах появляется форма-заглушка.
 /// </summary>
 public sealed class TaskWriteResponseChatMaskTests : IDisposable
 {
@@ -225,47 +232,63 @@ public sealed class TaskWriteResponseChatMaskTests : IDisposable
         node["sourceChat"].Should().BeNull("формы-заглушки нет там, где id на месте");
     }
 
-    // ─── POST создания задачи: тот же маска-ответ, что PUT и GET ──────────────────────────
+    // ─── POST создания задачи: тело не задаёт источник (S2d-7b-2), маска живёт на PUT ──────
+
+    /// <summary>S2d-7b-2: человеческий Create не принимает id чата из тела (TasksController.cs:113
+    /// и :356) — запись создаётся без источника, поэтому в ответе ни id, ни названия, ни формы.
+    /// Мутация: убрать `SourceSessionId = null` в соответствующем Create — id или форма появятся,
+    /// тест красный.</summary>
+    private static JsonObject AssertBodyIgnored(string wire, string where)
+    {
+        wire.Should().NotContain(ForeignPrivateId, $"{where}: id чужого приватного чата не принимается из тела");
+        wire.Should().NotContain(ForeignPrivateTitle, $"{where}: название чужого приватного чата не принимается из тела");
+        var node = NodeOf(wire);
+        node["sourceSessionId"].Should().BeNull($"{where}: запись создаётся без источника");
+        node["sourceChat"].Should().BeNull($"{where}: источника нет — формы нет");
+        return node;
+    }
 
     [Fact]
-    public async Task СозданиеПроектнойЗадачиСЧужимПриватнымЧатомВТеле_ОтветБезId_ЗаписьСId()
+    public async Task СозданиеПроектнойЗадачиСЧужимПриватнымЧатомВТеле_Игнорируется_НиВОтветеНиВЗаписи()
     {
         var wire = WireOf(await AsProjectOwner().Create(_projectId,
             new CreateTaskRequest("задача проекта с чужим источником", SourceSessionId: ForeignPrivateId)));
 
-        AssertMasked(wire, "POST /api/projects/{id}/tasks");
-        _tasks.GetById(NodeOf(wire)["id"]!.GetValue<string>())!.SourceSessionId
-            .Should().Be(ForeignPrivateId, "ответ проецируется, запись стора — нет");
+        var node = AssertBodyIgnored(wire, "POST /api/projects/{id}/tasks");
+        _tasks.GetById(node["id"]!.GetValue<string>())!.SourceSessionId
+            .Should().BeNull("человеческое тело не ставит источник: запись без него");
     }
 
-    /// <summary>Личная задача (вне проекта) с чужим приватным чатом-источником: приватность
-    /// держит автора чата, а не проект задачи. Тело — wire-форма, как её присылает клиент.</summary>
+    /// <summary>Личная задача (вне проекта): та же единая правило — id из тела не принимается,
+    /// ни в ответе, ни в записи. Тело — wire-форма, как её присылает клиент.</summary>
     [Fact]
-    public async Task СозданиеЛичнойЗадачиСЧужимПриватнымЧатомВТеле_ОтветБезId_ЗаписьСId()
+    public async Task СозданиеЛичнойЗадачиСЧужимПриватнымЧатомВТеле_Игнорируется_НиВОтветеНиВЗаписи()
     {
         var body = JsonSerializer.SerializeToElement(
             new { title = "личная задача с чужим источником", sourceSessionId = ForeignPrivateId });
 
         var wire = WireOf(await AsOwner().Create(body));
 
-        AssertMasked(wire, "POST /api/tasks");
-        _tasks.GetById(NodeOf(wire)["id"]!.GetValue<string>())!.SourceSessionId
-            .Should().Be(ForeignPrivateId);
+        var node = AssertBodyIgnored(wire, "POST /api/tasks");
+        _tasks.GetById(node["id"]!.GetValue<string>())!.SourceSessionId
+            .Should().BeNull("человеческое тело не ставит источник: запись без него");
     }
 
-    /// <summary>Маска бьёт только чужой приватный: своей чат в том же POST остаётся id, без
-    /// формы. Мутация «маска безусловная» (обнулять любой id) — этот тест красный.</summary>
+    /// <summary>Единое правило привязанности (S2d-7b-2): человеческое тело не несёт id чата — ни
+    /// свой, ни общий. Мутация «обнулять только чужой приватный»: id своего/общего чата появится
+    /// в ответе и в записи — этот тест красный.</summary>
     [Theory]
     [InlineData(OwnPrivateId)]
     [InlineData(OpenChatId)]
-    public async Task СозданиеЗадачиСвоимИлиОбщимЧатом_ИдНаМесте_ФормыНет(string chatId)
+    public async Task СозданиеЗадачиСвоимИлиОбщимЧатомВТеле_ТожеИгнорируется(string chatId)
     {
         var wire = WireOf(await AsProjectOwner().Create(_projectId,
             new CreateTaskRequest("задача со своим или общим чатом", SourceSessionId: chatId)));
 
         var node = NodeOf(wire);
-        node["sourceSessionId"]!.GetValue<string>().Should().Be(chatId);
-        node["sourceChat"].Should().BeNull();
+        node["sourceSessionId"].Should().BeNull($"{chatId}: id не принимается из тела — правило единое");
+        node["sourceChat"].Should().BeNull("источника нет — формы нет");
+        _tasks.GetById(node["id"]!.GetValue<string>())!.SourceSessionId.Should().BeNull();
     }
 
     // Копия группы в событии доски и копия владельца — не этот шаг (S2d-4b закрыл их своим

@@ -238,7 +238,8 @@ public class WikiController : ControllerBase
         var content = System.IO.File.ReadAllText(full);
         var (authorship, footnotes) = ReadAuthorship(root, key!, content);
         var overrides = _journal.PageOverrides(userId, key!, page!, _time.GetUtcNow() - OverridesWindow)
-            .Select(o => new WikiOverrideDto(o.Op, o.Statement, ResolveHistoryLine(content, o.Previous), o.At, o.PackageId))
+            .Select(o => new WikiOverrideDto(o.Op, o.Statement, ResolveHistoryLine(content, o.Previous), o.At, o.PackageId,
+                o.Op == WikiPackage.OpConflict ? ResolveLiveLine(content, o.Previous) : null))
             .ToList();
         return Ok(new
         {
@@ -265,6 +266,19 @@ public class WikiController : ControllerBase
         foreach (var line in history.Lines)
             if (QuoteMatcher.ContainsVerbatim(line, target))
                 return line.Trim();
+        return null;
+    }
+
+    // Спор: метка «ИИ оспаривает» стоит на живой строке человека, на которую ссылается пакет (op.Target).
+    // Ищем терпимым поиском среди действующих строк секций, кроме «Истории»; не нашли — null.
+    private static string? ResolveLiveLine(string content, string? target)
+    {
+        if (string.IsNullOrWhiteSpace(target) || WikiPage.Parse(content).Model is not { } model)
+            return null;
+        foreach (var section in model.Sections.Where(s => s.Name != "История"))
+            foreach (var line in section.Lines)
+                if (QuoteMatcher.ContainsVerbatim(line, target))
+                    return line.Trim();
         return null;
     }
 
@@ -738,8 +752,8 @@ public sealed record WikiFootnoteDto(string Label, string Card, string? Origin, 
 
 /// <summary>Что ИИ сам сделал с утверждением человека на странице за последние 14 дней
 /// (GET page, overrides): op — supersede | conflict, statement — текст ИИ без сносок, previous —
-/// что заменялось или оспаривалось. Выводится из журнала и пакета, своего состояния не имеет.</summary>
-public sealed record WikiOverrideDto(string Op, string? Statement, string? Previous, DateTimeOffset At, string PackageId);
+/// что заменялось (строка «Истории»), target — для спора живая строка человека на странице (для замены null). Выводится из журнала и пакета, своего состояния не имеет.</summary>
+public sealed record WikiOverrideDto(string Op, string? Statement, string? Previous, DateTimeOffset At, string PackageId, string? Target = null);
 
 /// <summary>Каталог страниц раздела. manifestState — состояние манифеста раздела:
 /// «ok» | «missing» | «invalid» (закрытый перечень; «missing» — норма до первого

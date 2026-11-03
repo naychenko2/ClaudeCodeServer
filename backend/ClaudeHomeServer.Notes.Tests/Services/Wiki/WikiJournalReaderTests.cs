@@ -671,4 +671,47 @@ public class WikiJournalReaderTests : IDisposable
         error.Should().BeNull("restore по previous не даёт «в «Истории» нет такой формулировки»");
         cardRef.Should().Be("x:1");
     }
+
+    private const string TargetBody = "---\ntype: entity\nsummary: с\nstatus: active\n---\n\n# А\n\n## Сводка\n- **Срок** сдачи — пятница, по словам Ивана.[^s1]\n\n## Хронология\n\n## Противоречия\n- ИИ: срок сдачи — понедельник.\n\n## История\n- Срок сдачи — среда.\n\n[^s1]: [[Нет]] — «цитата»\n";
+
+    private JsonElement OverrideOf(string op, string target, string body = TargetBody)
+    {
+        WritePage(OverridePage, body);
+        var id = NewPackage("common", WikiPackage.StatusApplied, WikiGate.OriginSession, "session:t",
+            OverrideOp(op, OverridePage, true, "ИИ: срок сдачи — понедельник.", target));
+        WikiManifest.AppendLog(Root(), "apply", "common", [OverridePage], "session:t", "keeper", "auto", [id], overrodeHuman: true);
+        return PageOf(new FixedTime(DateTimeOffset.UtcNow.AddMinutes(1))).GetProperty("overrides")[0];
+    }
+
+    [Fact]
+    public void Страница_Overrides_СпорПоЧеловеческомуУтверждению_TargetЖиваяСтрока_PreviousNull()
+    {
+        // Мутация: убрать ResolveLiveLine (target = null) — тест краснеет.
+        var o = OverrideOf(WikiPackage.OpConflict, "Срок сдачи — пятница");
+        o.GetProperty("target").GetString().Should().Be("- **Срок** сдачи — пятница, по словам Ивана.[^s1]");
+        o.GetProperty("previous").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public void Страница_Overrides_СпорЦельВыдержкойСРазметкой_TargetФактическаяСтрокаСекции()
+    {
+        var o = OverrideOf(WikiPackage.OpConflict, "**Срок** сдачи — пятница[^s1]");
+        o.GetProperty("target").GetString().Should().Be("- **Срок** сдачи — пятница, по словам Ивана.[^s1]");
+    }
+
+    [Fact]
+    public void Страница_Overrides_СпорЦельНеНайдена_TargetNull_История_НеИщется()
+    {
+        OverrideOf(WikiPackage.OpConflict, "Совсем другое утверждение").GetProperty("target").ValueKind.Should().Be(JsonValueKind.Null);
+        // Строка лежит только в «Истории» — это не живое утверждение.
+        OverrideOf(WikiPackage.OpConflict, "Срок сдачи — среда").GetProperty("target").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public void Страница_Overrides_Supersede_TargetNull_PreviousКакРаньше()
+    {
+        var o = OverrideOf(WikiPackage.OpSupersede, "Срок сдачи — среда");
+        o.GetProperty("target").ValueKind.Should().Be(JsonValueKind.Null);
+        o.GetProperty("previous").GetString().Should().Be("- Срок сдачи — среда.");
+    }
 }

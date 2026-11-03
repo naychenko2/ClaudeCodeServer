@@ -3453,7 +3453,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public async Task<ChatBranchResult> BranchAsync(string sessionId, string ownerId,
         int userMessageIndex, string anchorText, string include, string? name = null)
     {
-        if (GetOwned(sessionId, ownerId) is not { } source
+        // S2d-7b-1: GetOwnedVisible, а не GetOwned — чужой приватный чат не ветвится даже владельцем
+        // проекта (не копируем его транскрипт и не плодим чат-преемник с его содержимым)
+        if (GetOwnedVisible(sessionId, ownerId) is not { } source
             || !_sessions.TryGetValue(sessionId, out var entry))
             throw new KeyNotFoundException("Чат не найден");
 
@@ -3695,12 +3697,17 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     private async Task<Session> CreateSuccessorChatAsync(Session source, string ownerId, string name,
         string? resumeSessionId, Action<Session>? configure = null)
     {
+        // Приватность преемника (S2d-7b-1): содержимое приватного чата не уходит в общий, ветка/перенос
+        // остаются приватными у того же автора. Читаем один раз и синхронно — до первого await
+        var privateAuthor = source.PrivateToUserId;
         var successor = !string.IsNullOrWhiteSpace(source.PersonaId)
             ? await CreatePersonaChatAsync(ownerId, source.PersonaId!, source.Mode,
-                resumeSessionId: resumeSessionId, name: name, contextProjectId: source.ProjectId)
+                resumeSessionId: resumeSessionId, name: name, contextProjectId: source.ProjectId,
+                createdByUserId: privateAuthor, privateToUserId: privateAuthor)
             : source.ProjectId is not null
                 ? await CreateAsync(source.ProjectId, source.Mode, resumeSessionId: resumeSessionId,
-                    name: name, model: source.Model, effort: source.Effort)
+                    name: name, model: source.Model, effort: source.Effort,
+                    createdByUserId: privateAuthor, privateToUserId: privateAuthor)
                 : await CreateChatAsync(ownerId, source.Mode, resumeSessionId: resumeSessionId,
                     name: name, model: source.Model, effort: source.Effort);
 
@@ -3780,12 +3787,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // режим «Командная реализация» не поддерживаются: их состояние живёт в Session, а не в записке.
     // Старый чат НЕ архивируется и UpdatedAt не двигается; ссылки ставятся в обе стороны.
     // Занятость чата проверяет вызывающий (ChatContinueService): ход передачи уже завершён.
-    public async Task<Session> CreateContinuationAsync(string sessionId, string ownerId)
+    public async Task<Session> CreateContinuationAsync(string sessionId, string ownerId,
+        string? actorUserId = null)
     {
         // S1: участнику общего проекта отказ (GetOwned → 404): продолжение ушло бы в личное
-        // пространство вызывающего вместе с содержимым проекта
+        // пространство вызывающего вместе с содержимым проекта. S2d-7b-1: чужой приватный чат
+        // не продолжается даже владельцем проекта. Видимость считаем по актору (MCP шлёт арендатора
+        // ownerId и человека-актора отдельно; REST — один и тот же id), поэтому не GetOwnedVisible
         if (GetOwned(sessionId, ownerId) is not { } source
-            || !_sessions.TryGetValue(sessionId, out _))
+            || !_sessions.TryGetValue(sessionId, out _)
+            || (source.PrivateToUserId is not null && !VisibleTo(source, actorUserId ?? ownerId)))
             throw new KeyNotFoundException("Чат не найден");
 
         if (source.Participants is { Count: > 0 })
@@ -3796,12 +3807,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 "Чат в режиме «Командная реализация» нельзя продолжить в новом: состояние волн живёт в чате");
 
         var newName = ContinuationName(source.Name);
+        // Продолжение приватного чата остаётся приватным у того же автора (S2d-7b-1)
+        var privateAuthor = source.PrivateToUserId;
         var created = !string.IsNullOrWhiteSpace(source.PersonaId)
             ? await CreatePersonaChatAsync(ownerId, source.PersonaId!, source.Mode,
-                name: newName, contextProjectId: source.ProjectId)
+                name: newName, contextProjectId: source.ProjectId,
+                createdByUserId: privateAuthor, privateToUserId: privateAuthor)
             : source.ProjectId is not null
                 ? await CreateAsync(source.ProjectId, source.Mode, name: newName,
-                    model: source.Model, effort: source.Effort)
+                    model: source.Model, effort: source.Effort,
+                    createdByUserId: privateAuthor, privateToUserId: privateAuthor)
                 : await CreateChatAsync(ownerId, source.Mode, name: newName,
                     model: source.Model, effort: source.Effort);
 
@@ -4109,7 +4124,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null,
         string? effort = null, string? personaId = null, bool taskExecution = false, string? taskId = null,
-        string? onboardingKind = null, string? createdByUserId = null)
+        string? onboardingKind = null, string? createdByUserId = null, string? privateToUserId = null)
     {
         var project = _projects.GetById(projectId)
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
@@ -4136,6 +4151,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // Автор чата — кто его создал (S2d-1c): id вызывающего из JWT контроллера. На видимость
             // не влияет (S2d-1); ключом хранилищ по-прежнему служит владелец проекта, не автор.
             CreatedByUserId = string.IsNullOrWhiteSpace(createdByUserId) ? null : createdByUserId.Trim(),
+            // Приватность задаётся ДО регистрации сессии (S2d-7b-1): чат-преемник приватного чата не
+            // должен ни на миг стать общим — иначе его увидели бы участники проекта
+            // Пустая строка — «не видит никто» (fail-closed): не нормализуем её в null
+            PrivateToUserId = privateToUserId,
         };
 
         await StartNewSessionAsync(session, project.RootPath, project.SystemPrompt,
@@ -4206,7 +4225,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // чат создаётся в нём, а не вне проекта (как давно позволяет смена собеседника SetPersona).
     public async Task<Session> CreatePersonaChatAsync(string ownerId, string personaId,
         ClaudeMode mode, string? resumeSessionId = null, string? name = null,
-        string? contextProjectId = null, string? automationRuleId = null)
+        string? contextProjectId = null, string? automationRuleId = null,
+        string? createdByUserId = null, string? privateToUserId = null)
     {
         var persona = _personas.Get(personaId, ownerId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {personaId}");
@@ -4243,6 +4263,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 Provider = ResolveSubscriptionProvider(personaModel),
                 Effort = persona.Effort,
                 AutomationRuleId = automationRuleId,
+                // Преемник приватного чата (S2d-7b-1): автор и приватность — до регистрации сессии.
+                // Чат вне проекта (ветка ниже) приватным не бывает: он и так виден только владельцу
+                CreatedByUserId = string.IsNullOrWhiteSpace(createdByUserId) ? null : createdByUserId.Trim(),
+                // Пустая строка — «не видит никто» (fail-closed): не нормализуем её в null
+                PrivateToUserId = privateToUserId,
             };
             await StartNewSessionAsync(projectSession, project.RootPath, project.SystemPrompt,
                 () => _projects.GetById(project.Id)?.PermissionRules

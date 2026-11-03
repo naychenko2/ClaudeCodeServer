@@ -1701,6 +1701,11 @@ public sealed partial class WorkspaceToolset(
                 if (isSelf) sid = session.Id;
                 var target = sessions.GetOwned(sid, context.OwnerId);
                 if (target is null) return Deny($"Сессия {sid} не найдена.");
+                // S2d-7b-1: чужой приватный чат не продолжается даже владельцем проекта; актор неизвестен
+                // (фон, исполнитель без инициатора) — приватный чат не виден (fail-closed, как в chats_list)
+                var continueActor = turnActors.Actor(session.Id, context.OwnerId);
+                if (target.PrivateToUserId is not null && !sessions.IsVisibleTo(sid, continueActor))
+                    return Deny($"Сессия {sid} не найдена.");
                 if (target.ProjectId is { } targetPid
                     && ProjectDenied(context, plan, targetPid) is { } zoneDenied)
                     return Deny(zoneDenied);
@@ -1713,7 +1718,8 @@ public sealed partial class WorkspaceToolset(
                 var userNote = OptionalArg(arguments, "note");
                 // Из собственного хода дождаться его конца нельзя — продолжение встаёт в очередь
                 // и стартует, когда ход кончится; чужой чат продолжаем сразу, но фоном
-                var queued = continuation.Schedule(context.OwnerId, sid, userNote, afterCurrentTurn: isSelf);
+                var queued = continuation.Schedule(context.OwnerId, sid, userNote, afterCurrentTurn: isSelf,
+                    actorUserId: continueActor);
                 return queued
                     ? Json(new
                     {

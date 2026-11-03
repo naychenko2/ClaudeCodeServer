@@ -57,7 +57,7 @@ public sealed class ChatContinueService(
     // так что потеря допустима — но это стоит знать, см. описание MCP-инструмента chats_continue)
     private readonly ConcurrentDictionary<string, DeferredContinue> _afterTurn = new();
 
-    private sealed record DeferredContinue(string OwnerId, string? Note);
+    private sealed record DeferredContinue(string OwnerId, string? Note, string? ActorId);
 
     // Шов для тестов: настоящая отправка поднимает процесс CLI, а тестам нужен управляемый исход хода
     internal Func<string, string, TimeSpan, bool, Task<SendAndWaitResult>>? SendOverride { get; set; }
@@ -86,11 +86,19 @@ public sealed class ChatContinueService(
     /// первое сообщение в нём. Контракт отказов: KeyNotFoundException — 404, ChatContinueNotSupported
     /// — 400, InvalidOperationException (занят, агент не написал записку) — 409.
     /// </summary>
-    public async Task<ChatContinueResult> ContinueAsync(string ownerId, string sessionId, string? userNote)
+    public async Task<ChatContinueResult> ContinueAsync(string ownerId, string sessionId, string? userNote,
+        string? actorUserId = null)
     {
         // S1: участнику общего проекта отказ (KeyNotFound → 404): продолжение ушло бы в его пространство
         var source = sessions.GetOwned(sessionId, ownerId)
             ?? throw new KeyNotFoundException("Чат не найден");
+        // S2d-7b-1: чужой приватный чат не продолжается даже владельцем проекта. Актор — человек, от
+        // чьего имени идёт вызов (REST — сам вызывающий, MCP — актор хода); неизвестный актор у
+        // приватного чата — отказ (fail-closed, как в списках MCP)
+        if (source.PrivateToUserId is not null && !sessions.IsVisibleTo(sessionId, actorUserId ?? ownerId))
+            throw new KeyNotFoundException("Чат не найден");
+        // Приватный чат: ходы и записку ведёт его автор, а не арендатор-владелец проекта
+        var sender = source.PrivateToUserId ?? ownerId;
 
         // Всё, что можно отвергнуть без платного хода, отвергаем ДО него
         if (source.Participants is { Count: > 0 })
@@ -121,11 +129,13 @@ public sealed class ChatContinueService(
             throw new InvalidOperationException("Продолжение этого чата уже выполняется");
         try
         {
-            var handoff = await RequestHandoffAsync(sessionId, ownerId);
+            var handoff = await RequestHandoffAsync(sessionId, sender);
 
-            var noteId = SaveHandoffNote(ownerId, source, handoff);
+            // Записка-заметка лежит в notes/ проекта — общем месте: у приватного чата её нет
+            // (записка и так уезжает первым сообщением нового, приватного чата)
+            var noteId = source.PrivateToUserId is null ? SaveHandoffNote(ownerId, source, handoff) : null;
 
-            var created = await sessions.CreateContinuationAsync(sessionId, ownerId);
+            var created = await sessions.CreateContinuationAsync(sessionId, ownerId, actorUserId);
 
             // Первое сообщение нового чата: ход дешёвый (свежий контекст). Не ждём его конца —
             // человек видит новый чат сразу. Сбой отправки не откатывает чат: он создан и пуст,
@@ -133,7 +143,7 @@ public sealed class ChatContinueService(
             try
             {
                 await SendAsync(created.Id, BuildFirstMessage(source, handoff, userNote), TimeSpan.Zero,
-                    systemDirective: false, actorUserId: ownerId);
+                    systemDirective: false, actorUserId: sender);
             }
             catch (Exception ex)
             {
@@ -155,13 +165,14 @@ public sealed class ChatContinueService(
     /// по окончании этого хода (TurnCompleted). Иначе стартует сразу, но фоном: ход передачи
     /// длится минуты, а вызов MCP столько не ждёт. false — такое продолжение уже стоит в очереди.
     /// </summary>
-    public bool Schedule(string ownerId, string sessionId, string? userNote, bool afterCurrentTurn)
+    public bool Schedule(string ownerId, string sessionId, string? userNote, bool afterCurrentTurn,
+        string? actorUserId = null)
     {
         if (afterCurrentTurn)
-            return _afterTurn.TryAdd(sessionId, new DeferredContinue(ownerId, userNote));
+            return _afterTurn.TryAdd(sessionId, new DeferredContinue(ownerId, userNote, actorUserId));
 
         if (_inFlight.ContainsKey(sessionId)) return false;
-        _ = Task.Run(() => RunBackgroundAsync(ownerId, sessionId, userNote, waitIdle: false));
+        _ = Task.Run(() => RunBackgroundAsync(ownerId, sessionId, userNote, waitIdle: false, actorUserId));
         return true;
     }
 
@@ -175,11 +186,12 @@ public sealed class ChatContinueService(
             logger.LogInformation("Отложенное продолжение чата {Session} снято: ход завершился как {Outcome}", e.Turn.SessionId, e.Outcome);
             return Task.CompletedTask;
         }
-        _ = Task.Run(() => RunBackgroundAsync(deferred.OwnerId, e.Turn.SessionId, deferred.Note, waitIdle: true));
+        _ = Task.Run(() => RunBackgroundAsync(deferred.OwnerId, e.Turn.SessionId, deferred.Note, waitIdle: true, deferred.ActorId));
         return Task.CompletedTask;
     }
 
-    private async Task RunBackgroundAsync(string ownerId, string sessionId, string? userNote, bool waitIdle)
+    private async Task RunBackgroundAsync(string ownerId, string sessionId, string? userNote, bool waitIdle,
+        string? actorUserId = null)
     {
         try
         {
@@ -189,7 +201,7 @@ public sealed class ChatContinueService(
                 while (sessions.HasTurnInFlight(sessionId) && DateTime.UtcNow < deadline)
                     await Task.Delay(250);
             }
-            await ContinueAsync(ownerId, sessionId, userNote);
+            await ContinueAsync(ownerId, sessionId, userNote, actorUserId);
         }
         catch (Exception ex)
         {

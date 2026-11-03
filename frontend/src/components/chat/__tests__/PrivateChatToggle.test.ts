@@ -26,8 +26,9 @@ const sstore = new Map<string, string>([['cc_token', 't'], ['cc_user_id', ME]]);
 } as Storage;
 
 // api: подменён только setChatVisibility (класс ChatVisibilityError — настоящий,
-// тексты отказов живут в api и проверяются как есть)
-const apiMock = vi.hoisted(() => ({ setChatVisibility: vi.fn<(id: string, p: boolean) => Promise<Session>>() }));
+// тексты отказов живут в api и проверяются как есть). Тип мока — реальная сигнатура
+// api (api.ts:2784): ответ ChatVisibilityResponse = Session + attachmentMoves
+const apiMock = vi.hoisted(() => ({ setChatVisibility: vi.fn<(id: string, p: boolean) => Promise<ChatVisibilityResponse>>() }));
 const toastMock = vi.hoisted(() => vi.fn());
 // remap ленты по карте переноса (S2d-6b-4F2): сам стор в этом файле не нужен —
 // проверяется только факт и аргументы вызова
@@ -39,7 +40,7 @@ vi.mock('../../../lib/api', async (importOriginal) => {
 vi.mock('../../../lib/toast', () => ({ showToast: toastMock }));
 vi.mock('../../../hooks/useSession', () => ({ remapSessionAttachedPaths: remapMock }));
 
-import { ChatVisibilityError } from '../../../lib/api';
+import { ChatVisibilityError, type ChatVisibilityResponse } from '../../../lib/api';
 import { PrivateChatToggle } from '../PrivateChatToggle';
 
 const sharedProject = { id: 'p1', name: 'Проект', myRole: 'editor' } as unknown as Project;
@@ -225,7 +226,7 @@ describe('PrivateChatToggle: успех — ответ бэка становит
 
   it('ответ с attachmentMoves: лента переставляется, карта уходит наверх; onSessionUpdated — без поля карты', async () => {
     const moves = { 'attachments/c1/a.png': 'attachments-private/c1/a.png' };
-    const updated = { ...chat({ privateToUserId: ME }), attachmentMoves: moves } as Session;
+    const updated = { ...chat({ privateToUserId: ME }), attachmentMoves: moves } as ChatVisibilityResponse;
     apiMock.setChatVisibility.mockResolvedValue(updated);
     const m = render();
     openMenu(m);
@@ -254,12 +255,76 @@ describe('PrivateChatToggle: успех — ответ бэка становит
   });
 
   it('пустая карта {} — тот же no-op: перестановка только при непустой карте', async () => {
-    apiMock.setChatVisibility.mockResolvedValue({ ...chat({ privateToUserId: ME }), attachmentMoves: {} } as Session);
+    apiMock.setChatVisibility.mockResolvedValue({ ...chat({ privateToUserId: ME }), attachmentMoves: {} } as ChatVisibilityResponse);
     const m = render();
     openMenu(m);
     await act(async () => { (reactProps(switchNode() as never)!.onClick as () => void)(); });
     expect(m.onSessionUpdated).toHaveBeenCalledTimes(1);
     expect(remapMock).not.toHaveBeenCalled();
     expect(m.onAttachmentMoves).not.toHaveBeenCalled();
+  });
+});
+
+describe('PrivateChatToggle: повторный клик во время запроса — один вызов бэка (S2d-6b-4F4)', () => {
+  // Текущий onChange контрола — тот же, что контрол зовёт по клику. Ключ __reactFiber$
+  // на узле может стоять на старом alternate (двойная буферизация React), поэтому идём
+  // в current-дерево от корня: HostRoot общего stateNode у обоих alternate, его .current —
+  // настоящий рендер. «Повторный клик» мимикой минует собственный disabled контрола и
+  // доходит до гейта persist (`|| saving`): мутация гейта (PrivateChatToggle.tsx:76)
+  // делает кейс красным — второй запрос уходит на сеть.
+  function currentSwitchOnChange(): (v: boolean) => void {
+    const sw = switchNode();
+    expect(sw).not.toBeNull();
+    const key = Object.keys(sw as object).find(k => k.startsWith('__reactFiber$'));
+    expect(key).toBeTruthy();
+    let rootFiber: any = (sw as any)[key!];
+    while (rootFiber && rootFiber.tag !== 3) rootFiber = rootFiber.return;
+    let hit: ((v: boolean) => void) | null = null;
+    const walk = (f: any, d: number): void => {
+      if (!f || d > 14 || hit) return;
+      const p = f.memoizedProps;
+      if (p && typeof p.onChange === 'function' && typeof p.checked === 'boolean') { hit = p.onChange; return; }
+      walk(f.child, d + 1);
+      walk(f.sibling, d);
+    };
+    walk(rootFiber?.stateNode?.current ?? rootFiber, 0);
+    if (!hit) throw new Error('не найден текущий onChange тумблера');
+    return hit;
+  }
+
+  it('клик, пока запрос не завершён: один вызов и disabled-кнопка; после ответа — снова доступна', async () => {
+    // запрос висит, пока тест сам его не разрешит: «во время запроса» — управляемое состояние
+    let resolveRequest: (r: ChatVisibilityResponse) => void = () => {};
+    apiMock.setChatVisibility.mockImplementation(() => new Promise<ChatVisibilityResponse>((res) => { resolveRequest = res; }));
+    const updated = chat({ privateToUserId: ME });
+    const m = render();
+    openMenu(m);
+    const btn = toggleBtn(m.container);
+    expect(btn).not.toBeNull();
+
+    // первый клик — обычный путь контрола, запрос не резолвлен
+    act(() => { (reactProps(switchNode() as never)!.onClick as () => void)(); });
+    expect(apiMock.setChatVisibility).toHaveBeenCalledTimes(1);
+    // пока saving: кнопка шапки disabled (PrivateChatToggle.tsx:110). В этом fake-DOM
+    // React ставит disabled атрибутом (свойства элемента нет) — проверка по атрибуту
+    expect(btn!.getAttribute('disabled')).not.toBeNull();
+
+    // повторный «клик» до ответа: текущий onChange доходит до гейта и не выпускает запрос
+    act(() => { currentSwitchOnChange()(true); });
+    expect(apiMock.setChatVisibility).toHaveBeenCalledTimes(1);
+    expect(btn!.getAttribute('disabled')).not.toBeNull();
+
+    // ответ пришёл: saving снят (finally, :93), контрол снова доступен — и реально работает
+    await act(async () => { resolveRequest(updated); });
+    expect(btn!.getAttribute('disabled')).toBeNull();
+    expect(m.onSessionUpdated).toHaveBeenCalledTimes(1);
+    expect(m.onSessionUpdated).toHaveBeenCalledWith(updated);
+    // prop session в тесте не переставляется родителем: компонент по-прежнему видит чат
+    // общий — тот же клик «включить» после ответа проходит гейт и уходит на сеть
+    act(() => { currentSwitchOnChange()(true); });
+    expect(apiMock.setChatVisibility).toHaveBeenCalledTimes(2);
+    expect(apiMock.setChatVisibility).toHaveBeenLastCalledWith('c1', true);
+    // второй запрос тоже завершаем: цикл не оставляет компонент в saving
+    await act(async () => { resolveRequest(updated); });
   });
 });

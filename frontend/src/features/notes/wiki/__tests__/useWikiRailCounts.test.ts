@@ -178,6 +178,56 @@ describe('useWikiRailCounts (W12)', () => {
     expect(listCalls().length).toBeGreaterThan(before);
   });
 
+  it('visibilitychange → visible: счётчики перечитываются; hidden — нет', async () => {
+    // Перечитка живого экрана, побывавшего в фоне (useWikiRailCounts.ts:86-98): за время в фоне
+    // счёт мог устареть (ночной прогон, решение в другой вкладке). Слушатель ставится на первой
+    // подписке (subscribe:102) — мутация «снять attachVisibility()» здесь краснеет: слушателя нет.
+    req.mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.startsWith('/wiki/packages')) return Promise.resolve(pkgList(3));
+      if (u.startsWith('/wiki/health/')) return Promise.resolve({ section: SEC_A, content: healthDoc(2) });
+      return Promise.resolve(null);
+    });
+    const { api } = mountHook(SEC_A);
+    await settle();
+    expect(api.current.inbox).toBe(3);
+    expect(api.current.health).toBe(2);
+
+    // Слушатель висит на document фейк-DOM (образец: tabOwnerGuard.test.ts:100-106, приём
+    // WikiPageView.test.ts:613); в этом файле иных visibilitychange-подписок нет — initConnectivity
+    // не зовётся, signalr замокан
+    const doc = (globalThis as unknown as { document: { visibilityState?: string; listeners: Record<string, Set<() => void>> } }).document;
+    const handlers = [...(doc.listeners['visibilitychange'] ?? [])];
+    expect(handlers).toHaveLength(1);
+    const onVisibility = handlers[0];
+
+    const beforeList = listCalls().length;
+    const beforeHealth = healthCalls().length;
+    req.mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.startsWith('/wiki/packages')) return Promise.resolve(pkgList(4));
+      if (u.startsWith('/wiki/health/')) return Promise.resolve({ section: SEC_A, content: healthDoc(1) });
+      return Promise.resolve(null);
+    });
+
+    // Ушёл в фон: guard по visibilityState в обработчике — ни запроса, ни новых чисел
+    doc.visibilityState = 'hidden';
+    await act(async () => { onVisibility(); });
+    await settle();
+    expect(listCalls().length).toBe(beforeList);
+    expect(healthCalls().length).toBe(beforeHealth);
+    expect(api.current.inbox).toBe(3);
+
+    // Вернулся на вкладку: оба числа перечитаны по свежим данным
+    doc.visibilityState = 'visible';
+    await act(async () => { onVisibility(); });
+    await settle();
+    expect(listCalls().length).toBe(beforeList + 1);
+    expect(healthCalls().length).toBe(beforeHealth + 1);
+    expect(api.current.inbox).toBe(4);
+    expect(api.current.health).toBe(1);
+  });
+
   it('гонка: ключ a → b, запоздалый ответ a не пишет своё число (поколение на поток)', async () => {
     let resolveA: (v: unknown) => void = () => {};
     req.mockImplementation((url: string) => {

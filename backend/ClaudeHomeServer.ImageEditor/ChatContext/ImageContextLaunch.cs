@@ -122,7 +122,7 @@ public sealed class ImageContextLaunch(
         if (thread.File is not { Length: > 0 } file) return ImageEditCallResult<ImageBytes?>.Ok(null);
         if (scope.Project is not { } project)
             return ImageEditCallResult<ImageBytes?>.Fail(ImageEditErrorCodes.InvalidRequest, "У чата вне проекта нет файлов проекта");
-        var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, file, "Файл картинки", ct);
+        var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(ownerId, project.RootPath, file, "Файл картинки", ct);
         return read.Value is { } image
             ? ImageEditCallResult<ImageBytes?>.Ok(image)
             : ImageEditCallResult<ImageBytes?>.Fail(read.ErrorCode ?? ImageEditErrorCodes.InvalidRequest, read.Error ?? "Файл не прочитан");

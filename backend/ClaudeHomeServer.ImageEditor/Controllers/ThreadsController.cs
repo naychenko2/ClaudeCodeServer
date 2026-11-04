@@ -325,7 +325,7 @@ public class ThreadsController(
             return found.Image.Bytes;
         if (thread.File is { Length: > 0 } file && projects?.GetById(scope.Key) is { } project)
         {
-            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, file, "Версия", ct);
+            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(scope.Tenant, project.RootPath, file, "Версия", ct);
             return read.Value?.Bytes;
         }
         return null;

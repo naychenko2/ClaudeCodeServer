@@ -35,7 +35,7 @@ public sealed class ImageFrameSource(
             // Исходник нити по файлу — файл проекта; у личной области проекта нет
             if (thread.File is { Length: > 0 } file && projects.GetById(scopeKey) is { } project)
             {
-                var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, file, "Кадр", ct);
+                var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(owner, project.RootPath, file, "Кадр", ct);
                 return read.Value is { } image ? new ImageFrame(image.Bytes, image.ContentType) : null;
             }
             return null;

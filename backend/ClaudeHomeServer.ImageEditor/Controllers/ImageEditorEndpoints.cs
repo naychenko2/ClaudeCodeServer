@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor.ChatContext;
 using ClaudeHomeServer.Services.ImageEditor.Prefs;
@@ -270,7 +271,7 @@ public abstract class ImageEditorEndpoints(
             if (scope.Project is not { } project)
                 return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
                     "У чата вне проекта нет файлов проекта: правка — только от шага");
-            if (!TryJoinInside(project.RootPath, rel, out var full))
+            if (!TryJoinInside(project.RootPath, rel, out var full) || PrivateAttachments.IsForeignResolved(project.RootPath, rel, UserId))
                 return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
                     "Путь вне папки проекта или идёт через символическую ссылку");
             var info = new FileInfo(full);

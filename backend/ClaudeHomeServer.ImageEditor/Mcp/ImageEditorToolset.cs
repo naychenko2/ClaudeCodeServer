@@ -171,7 +171,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             // У личной области файлов проекта нет — отказ до обращения к диску
             if (scope.Project is not { } project)
                 return Deny(NoProjectFiles);
-            if (ProjectImagePath(project, file) is not { } path)
+            if (ProjectImagePath(ownerId, project, file) is not { } path)
                 return Deny($"Картинка не найдена в проекте: {file}");
             written = await _threads.AgentOpenAsync(ownerId, scope.Key, session.Id, path, null, ct);
         }
@@ -244,10 +244,10 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         "В чате вне проекта нет файлов проекта: заведи новую картинку (image_new) или возьми картинку этого чата по threadId.";
 
     // Путь картинки проекта в форме нитей: от корня через «/», строго внутри и без ссылки наружу
-    private static string? ProjectImagePath(Project project, string file)
+    private static string? ProjectImagePath(string ownerId, Project project, string file)
     {
         var rel = ImageThreadPathTracker.Normalize(file);
-        if (rel.Length == 0 || ProjectLinkGuard.ResolveInside(project.RootPath, rel) is not { } full || !File.Exists(full))
+        if (rel.Length == 0 || ProjectLinkGuard.ResolveInsideAs(project.RootPath, rel, ownerId) is not { } full || !File.Exists(full))
             return null;
         return ImageEditLaunchAssembler.ContentTypeByExtension(full).StartsWith("image/", StringComparison.Ordinal)
             ? Path.GetRelativePath(project.RootPath, full).Replace('\\', '/')
@@ -286,7 +286,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             bytes = step.Image.Bytes;
         else if (thread.File is { Length: > 0 } file && scope.Project is { } project)
         {
-            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, file, "Версия", ct);
+            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(ownerId, project.RootPath, file, "Версия", ct);
             if (read.Value is not null) bytes = read.Value.Bytes;
         }
         if (bytes is null)
@@ -518,7 +518,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             // Нить по файлу бывает только в проекте; у личной области — отказ до диска
             if (scope.Project is not { } project) return Deny(NoProjectFiles);
             // Тот же путь чтения, что у образцов человека: проверки пути и лимита одни
-            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, file, "Файл картинки", ct);
+            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(ownerId, project.RootPath, file, "Файл картинки", ct);
             if (read.Value is not { } image) return Deny(read.Error!);
             source = image;
         }
@@ -643,7 +643,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         }
         else if (thread.File is { Length: > 0 } file && scope.Project is { } project)
         {
-            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, file, "Файл картинки", ct);
+            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(ownerId, project.RootPath, file, "Файл картинки", ct);
             if (read.Value is not { } image) return Deny(read.Error!);
             source = image;
         }
@@ -776,7 +776,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             threads = state.Threads.Select(t => new
             {
                 thread = DescribeThread(t, scope),
-                size = t.File is { Length: > 0 } file && scope.Project is { } project ? SizeOf(project, file) : null,
+                size = t.File is { Length: > 0 } file && scope.Project is { } project ? SizeOf(ownerId, project, file) : null,
                 pendingJob = t.PendingJobId is { } jobId && _jobs?.Get(ownerId, scope.Key, jobId) is { } j
                     ? new { j.JobId, j.Status, j.Provider, j.Model, variants = j.Variants.Count, j.Cost, j.Error, j.Initiator }
                     : null,
@@ -840,9 +840,9 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         };
     }
 
-    private static object? SizeOf(Project project, string file)
+    private static object? SizeOf(string ownerId, Project project, string file)
     {
-        var full = ProjectLinkGuard.ResolveInside(project.RootPath, file);
+        var full = ProjectLinkGuard.ResolveInsideAs(project.RootPath, file, ownerId);
         if (full is null || !File.Exists(full)) return null;
         using var stream = File.OpenRead(full);
         var head = new byte[Math.Min(64 * 1024, stream.Length)];

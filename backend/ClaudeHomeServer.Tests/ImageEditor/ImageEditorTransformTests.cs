@@ -131,6 +131,41 @@ public class ImageEditorTransformTests : IClassFixture<ImageEditorTransformTests
         Directory.GetFiles(dir, "*", SearchOption.AllDirectories).Should().Equal(file);
     }
 
+    // F2-P2: private участника не читается через transform даже владельцем проекта (общий предикат
+    // PrivateAttachments.IsForeignResolved); свой private и обычные файлы читаются как раньше
+    [Fact]
+    public async Task Transform_чужой_private_400_корень_проекта_400_свой_private_и_обычный_файл_200()
+    {
+        var (projectId, dir) = CreateProject();
+        var userId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        var foreign = Path.Combine(dir, ".cc-attachments", "private", "other-user", "g1");
+        var own = Path.Combine(dir, ".cc-attachments", "private", userId, "g1");
+        Directory.CreateDirectory(foreign);
+        Directory.CreateDirectory(own);
+        await File.WriteAllBytesAsync(Path.Combine(foreign, "secret.png"), Png(8, 8));
+        await File.WriteAllBytesAsync(Path.Combine(own, "mine.png"), Png(8, 8));
+        await File.WriteAllBytesAsync(Path.Combine(dir, "hero.png"), Png(8, 8));
+        var client = _factory.CreateAuthenticatedClient();
+
+        foreach (var path in new[]
+                 {
+                     ".cc-attachments/private/other-user/g1/secret.png",
+                     ".cc-attachments/PRIVATE/other-user/g1/../g1/secret.png",
+                     ".",
+                 })
+        {
+            var denied = await client.PostAsJsonAsync($"{Root(projectId)}/transform", Rotate(new { path }));
+            denied.StatusCode.Should().Be(HttpStatusCode.BadRequest, path);
+        }
+        StepFiles().Should().BeEmpty("чужие байты не прочитаны и шаг не создан");
+
+        foreach (var path in new[] { $".cc-attachments/private/{userId}/g1/mine.png", "hero.png" })
+        {
+            var ok = await client.PostAsJsonAsync($"{Root(projectId)}/transform", Rotate(new { path }));
+            ok.StatusCode.Should().Be(HttpStatusCode.OK, path + await ok.Content.ReadAsStringAsync());
+        }
+    }
+
     [Fact]
     public async Task Неизвестный_шаг_404_и_недопустимая_операция_400()
     {

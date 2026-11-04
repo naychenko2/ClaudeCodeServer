@@ -157,7 +157,7 @@ public sealed class ImageEditLaunchAssembler(
 
         foreach (var (path, role) in req.ReferencePaths)
         {
-            var read = await ReadProjectImageAsync(scope.Project!.RootPath, path, "Образец", ct);
+            var read = await ReadProjectImageAsync(ownerId, scope.Project!.RootPath, path, "Образец", ct);
             if (read.Value is not { } image) return Fail<ImageEditJobInput>(read.ErrorCode, read.Error);
             references.Add(new ReferenceImage(image.Bytes, image.ContentType, role, Path.GetFileName(path)));
         }
@@ -191,7 +191,7 @@ public sealed class ImageEditLaunchAssembler(
         if (references.Count > limits.MaxReferences)
             return Invalid($"Образцов не больше {limits.MaxReferences}");
 
-        if (req.SourcePath is { Length: > 0 } sourcePath && ProjectLinkGuard.ResolveInside(scope.Project!.RootPath, sourcePath) is null)
+        if (req.SourcePath is { Length: > 0 } sourcePath && ProjectLinkGuard.ResolveInsideAs(scope.Project!.RootPath, sourcePath, ownerId) is null)
             return Invalid("Исходник вне папки проекта или идёт через символическую ссылку");
 
         return ImageEditCallResult<ImageEditJobInput>.Ok(new ImageEditJobInput(
@@ -448,7 +448,7 @@ public sealed class ImageEditLaunchAssembler(
             return found.Image.Bytes;
         if (thread.File is { Length: > 0 } file && scope.Project is { } project)
         {
-            var read = await ReadProjectImageAsync(project.RootPath, file, "Версия", ct);
+            var read = await ReadProjectImageAsync(ownerId, project.RootPath, file, "Версия", ct);
             return read.Value?.Bytes;
         }
         return null;
@@ -485,9 +485,10 @@ public sealed class ImageEditLaunchAssembler(
     // у агента): строго внутри корня, не через символическую ссылку, в пределах лимита.
     // what — чем картинка служит, для текста отказа («Образец», «Файл картинки»)
     public static async Task<ImageEditCallResult<ImageBytes>> ReadProjectImageAsync(
-        string projectRoot, string path, string what, CancellationToken ct)
+        string ownerId, string projectRoot, string path, string what, CancellationToken ct)
     {
-        var full = ProjectLinkGuard.ResolveInside(projectRoot, path);
+        // Чужое private (.cc-attachments/private/{X}) отдаёт тот же отказ, что и «вне проекта»: наличие не раскрываем
+        var full = ProjectLinkGuard.ResolveInsideAs(projectRoot, path, ownerId);
         if (full is null)
             return Fail<ImageBytes>(ImageEditErrorCodes.InvalidRequest,
                 $"{what} вне папки проекта или идёт через символическую ссылку");

@@ -331,7 +331,7 @@ public sealed class ImageThreadService(
             bytes = found.Image.Bytes;
         else if (thread.File is { Length: > 0 } path && scope.Project is { } project)
         {
-            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, path, "Файл картинки", ct);
+            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(ownerId, project.RootPath, path, "Файл картинки", ct);
             if (read.Value is not { } image) return Fail(read.ErrorCode ?? ImageEditErrorCodes.InvalidRequest, read.Error ?? "Файл не прочитан");
             file = new ProjectImage(path, image.Bytes);
             bytes = image.Bytes;

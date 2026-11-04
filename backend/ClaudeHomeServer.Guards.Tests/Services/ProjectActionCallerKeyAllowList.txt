@@ -188,3 +188,8 @@ backend/ClaudeHomeServer/Hubs/TerminalHub.cs|1
 # (context.OwnerId из токена), тот же класс мест, что S2d-4b в TasksController.
 backend/ClaudeHomeServer/Services/Mcp/Http/TasksToolset.cs|1
 backend/ClaudeHomeServer/Services/Mcp/Http/WorkspaceToolset.cs|1
+# R-F2-D1 (возврат ревью R-F2, мост «чекбокс → задача»): NotesToolset 0→1 — id актора хода (`actor`)
+# входит только в IProjectAccess.Resolve (запрошенное право Write на мост «чекбокс → задача»), тот же
+# класс мест, что вердикт S2c-6 выше. Ключом хранилищ он не служит: заметка и задача адресуются
+# context.OwnerId из токена арендатора (PromoteAsync вызывается им, как и раньше).
+backend/ClaudeHomeServer.Notes/Services/Mcp/NotesToolset.cs|1

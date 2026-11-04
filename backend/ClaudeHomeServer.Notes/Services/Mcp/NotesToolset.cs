@@ -62,7 +62,14 @@ public sealed class NotesToolset(
     ISphereDirectory? spheres = null,
     IProjectManager? projects = null,
     // Шов флага llm-wiki — та же опциональная зависимость, что у WikiLintService: нет шва — выключено.
-    IFeatureFlagGate? flags = null) : IMcpParameterizedToolset
+    IFeatureFlagGate? flags = null,
+    // R-F2-D1: право моста «чекбокс → задача» меряется по актору хода (ветка notes_promote_task):
+    // актор — из реестра хода (тот же, что читает гейт актора), право — из IProjectAccess (та же
+    // точка решения, что у REST-двери NotesController.PromoteTask → EnsureSourceWrite). Оба
+    // опциональны: без швов проверка выключена (тестовая обвязка вне DI), гейт актора на составе
+    // инструментов остаётся; в DI оба типа зарегистрированы (Program).
+    ITurnActorRegistry? turnActors = null,
+    IProjectAccess? access = null) : IMcpParameterizedToolset
 {
     // Корень data — для признака заведённой вики (WikiPaths) и корня чтения её разделов.
     // Та же формула, что у всех сервисов вертикали (DataPath указывает на projects.json).
@@ -487,6 +494,19 @@ public sealed class NotesToolset(
 
             case "notes_promote_task":
             {
+                // R-F2-D1: право моста «чекбокс → задача» — по АКТОРУ идущего хода, а не по
+                // владельцу записи: агент пишет под токеном арендатора, и без этой проверки агент
+                // редактора создавал бы в общем проекте задачи, закрытые человеку-редактору на
+                // REST (EnsureSourceWrite в NoteTaskSyncService.PromoteAsync мерит тот же
+                // ProjectRight.Write, но по UserId вызывающего). Порог — тот же, что у REST-двери;
+                // решает его IProjectAccess — общая точка, своей копии правила «свой/чужой» здесь
+                // нет. Актор-арендатор проходит Resolve как владелец; безымянный актор в общем
+                // проекте уже отрезан гейтом актора выше (требует права), в личном (без проекта) —
+                // права арендатора, как раньше.
+                var actor = turnActors?.Actor(session.Id, context.OwnerId);
+                if (actor is not null && projectId is not null &&
+                    access?.Resolve(actor, projectId, ProjectRight.Write) is null)
+                    return Deny(ActorRightGate.DeniedText);
                 var id = StringArg(arguments, "id");
                 try
                 {

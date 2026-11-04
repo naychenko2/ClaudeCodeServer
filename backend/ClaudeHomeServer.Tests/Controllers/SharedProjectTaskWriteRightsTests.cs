@@ -39,6 +39,11 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// ProjectAccessService (право Write участнику) и матрица ProjectAccess.RoleHasRight этим шагом
 /// не тронуты: переводятся двери, а не права.
 ///
+/// Мост «чекбокс заметки → задача» (MCP notes_promote_task) — та же дверь записи задач общего
+/// проекта: право мерится по актору хода тем же Write, что у REST-двери (возврат ревью R-F2-D1:
+/// агент редактора не может больше человека-редактора; раньше мост мерил владельца записи —
+/// арендатора — и был открыт агенту при закрытом человеке).
+///
 /// «Выполнить» проверяется на уже завершённой задаче: прогон исполнителя здесь не нужен (он —
 /// TasksRunExecutorActorTests), а конкретный 400 «задача уже завершена» (а не «не 403») доказывает,
 /// что правом не отшили и до тела ручки дошло.
@@ -474,6 +479,93 @@ public class SharedProjectTaskWriteRightsTests : IClassFixture<TestWebApplicatio
         isError.Should().BeTrue(text);
         text.Should().Contain(NotFeatureOwner, "тот же предикат, что у tasks_update и REST PUT");
         Tasks.GetById(epicId)!.Status.Should().Be(TaskItemStatus.Todo, "задача цела: отказ до мутации");
+    }
+
+    // ── мост «чекбокс заметки → задача»: агентская дверь по актору хода (возврат ревью R-F2-D1) ──
+
+    private static async Task<(string Text, bool IsError)> NotesMcpCallAsync(
+        HttpClient client, string chatId, string tool, object args)
+    {
+        var resp = await client.AsCaller(chatId).PostAsJsonAsync($"/mcp/notes/{chatId}", new
+        {
+            jsonrpc = "2.0", id = 1, method = "tools/call",
+            @params = new { name = tool, arguments = args },
+        });
+        resp.EnsureSuccessStatusCode();
+        var result = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync())
+            .GetProperty("result");
+        var isError = result.TryGetProperty("isError", out var e) && e.GetBoolean();
+        return (result.GetProperty("content")[0].GetProperty("text").GetString()!, isError);
+    }
+
+    /// <summary>Заметка с чекбоксом в общем проекте — создана агентом через notes_create в
+    /// контексте своего чата (шаги 1–2 воспроизведения дефекта).</summary>
+    private async Task<string> NoteWithCheckboxAsync(HttpClient client, string chatId)
+    {
+        var (text, isError) = await NotesMcpCallAsync(client, chatId, "notes_create",
+            new { title = "Дела чата", content = "- [ ] Задача из чекбокса" });
+        isError.Should().BeFalse(text);
+        return JsonSerializer.Deserialize<JsonElement>(text).GetProperty("id").GetString()!;
+    }
+
+    /// <summary>notes_promote_task — из модуля «комментарии и редкие операции» (привязка
+    /// notes-annotations, NotesToolset.cs:118): дефолтной персоне тест-чата модуль не выдан, и
+    /// вызов отказывался на гейте модуля, не доходя до права актора (проверено прогоном).
+    /// Привязка включается персоне чата, чтобы тест мерил дверь, а не модуль.</summary>
+    private void EnableNotesAnnotationsForChatPersona(string chatId)
+    {
+        var session = _factory.Services.GetRequiredService<SessionManager>().GetOwnedVisible(chatId, TenantId)!;
+        var personas = _factory.Services.GetRequiredService<PersonaManager>();
+        var persona = personas.Get(session.PersonaId!, TenantId)!;
+        personas.UpdateBindings(persona.Id, TenantId,
+            [.. persona.Bindings ?? [], new PersonaBinding
+            {
+                Type = PersonaBindingType.Tool, Target = "notes-annotations", Mode = PersonaBindingMode.Always,
+            }]);
+    }
+
+    /// <summary>Ещё один чат того же проекта — для второй половины теста (актор «сужается»,
+    /// см. вызов ниже).</summary>
+    private async Task<string> ChatInProjectAsync(string projectId)
+    {
+        var chat = await OwnerClient().PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" });
+        chat.EnsureSuccessStatusCode();
+        return IdOf(await chat.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task АгентРедактора_notesPromoteTaskЗаметкиПроекта_ТотЖеОтказЧтоREST_ЗадачиНет_АгентВладельцаСоздаёт()
+    {
+        var (projectId, _, chatId) = await SharedWithChatAsync();
+        EnableNotesAnnotationsForChatPersona(chatId);
+        await TurnAsEditorAsync(chatId);
+        var noteId = await NoteWithCheckboxAsync(OwnerClient(), chatId);
+
+        var (text, isError) = await NotesMcpCallAsync(OwnerClient(), chatId, "notes_promote_task",
+            new { id = noteId, text = "Задача из чекбокса" });
+
+        isError.Should().BeTrue(text);
+        text.Should().Contain(ActorRightGate.DeniedText,
+            "тот же отказ, что у гейта актора на прочих инструментах заметок: второй точки правды нет");
+        Tasks.GetByProject(projectId).Should().HaveCount(1,
+            "отказ до первой мутации: агент редактора не создаёт задачу общего проекта — как человек-редактор на REST (403)");
+
+        // Тот же мост открыт агенту владельца — в отдельном чате того же проекта: актор хода
+        // «сужается» (SessionManager.NoteTurnActor), и в чате, где уже был ход редактора, ход
+        // владельца актора не расширяет — там владелец-часть мерилась бы чужому актору, а не двери
+        var ownerChat = await ChatInProjectAsync(projectId);
+        EnableNotesAnnotationsForChatPersona(ownerChat);
+        (await OwnerClient().PostAsJsonAsync($"/api/sessions/{ownerChat}/messages",
+            new { text = "ход владельца", wait = "none" })).EnsureSuccessStatusCode();
+        _factory.Services.GetRequiredService<SessionManager>().GetTurnActor(ownerChat, TenantId)
+            .Should().Be(TenantId, "актор идущего хода — владелец");
+
+        var (_, ownerError) = await NotesMcpCallAsync(OwnerClient(), ownerChat, "notes_promote_task",
+            new { id = noteId, text = "Задача из чекбокса" });
+        ownerError.Should().BeFalse();
+        var created = Tasks.GetByProject(projectId).Single(t => t.SourceNoteId == noteId);
+        created.Title.Should().Be("Задача из чекбокса");
+        created.ProjectId.Should().Be(projectId, "проектная заметка промоутнется в задачу своего проекта");
     }
 
     // ── автор задачи — вызывающий, а не поле из тела (хвост R-F2-T1 п.3) ───────────────

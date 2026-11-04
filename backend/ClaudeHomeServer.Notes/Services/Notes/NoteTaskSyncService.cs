@@ -42,9 +42,13 @@ public sealed class NoteTaskSyncService(
     {
         var note = notes.GetDetail(userId, noteId)
             ?? throw new KeyNotFoundException("Заметка не найдена");
-        // S2c-5 (а): мост «чекбокс → задача» — путь владельца, проверка ЯВНАЯ здесь, а не
-        // через право notes.Update: после S2c-7 заметку будет писать редактор (WriteContent),
-        // а задача из чекбокса редактора в общем проекте создана быть не должна.
+        // S2c-5 (а): мост «чекбокс → задача» — проверка ЯВНАЯ здесь, а не через право
+        // notes.Update: после S2c-7 заметку будет писать редактор (WriteContent), а задача из
+        // чекбокса редактора в общем проекте создана быть не должна. Возврат ревью R-F2-D1:
+        // здесь эта проверка остаётся дверью человека (REST UserId вызывающего); на агентском
+        // пути (MCP notes_promote_task) под параметром userId стоит токен арендатора, поэтому
+        // право по актору хода тем же Write мерится ДО вызова — в NotesToolset (ветка
+        // notes_promote_task), своей копии правила там нет.
         notes.EnsureSourceWrite(userId, note.Source);
         var parsed = NoteTaskParser.Parse(note.Content).FirstOrDefault(l => l.Line == line)
             ?? throw new InvalidOperationException("На этой строке нет задачи-чекбокса");

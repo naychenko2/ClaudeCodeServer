@@ -1352,6 +1352,18 @@ public sealed partial class WorkspaceToolset(
                     var path = StringArg(arguments, "path");
                     var staged = arguments["staged"] is JsonValue sv
                         && sv.TryGetValue<bool>(out var sb) && sb;
+                    // F2-P1b (дефект 3ad0be60): та же дыра, что закрыта в REST-ручке (3c531d5e8).
+                    // Для неотслеживаемого файла DiffFileAsync фолбэчит на `git diff --no-index`
+                    // (GitService.cs:296-300) и отдаёт содержимое чужого private: путь
+                    // .cc-attachments/private/{author}/… несёт id автора и guid вложения — он известен
+                    // каждому, кто видел вложение, пока чат был общим. Актор — из реестра хода
+                    // (тот же шов, что у files_*, :838); неизвестен — null: любое private чужое
+                    // (fail-closed). Гейт — до обращения к git, как ForeignPrivateDenied в REST;
+                    // отказ — текст тот же, что у других путевых гейтов тулсета (files_read:891,
+                    // knowledge_index:1279): наличия чужого private не раскрываем.
+                    var actorId = turnActors.Actor(session.Id, context.OwnerId);
+                    if (PrivateAttachments.IsForeignResolved(root, path, actorId))
+                        return Deny($"Файл не найден: {path}");
                     // Ответ — { diff } (строка унифицированного diff), как REST
                     var diff = await git.DiffFileAsync(p.OwnerId, root, path, staged, ct);
                     return Json(new { diff });

@@ -555,14 +555,20 @@ public class WikiSourceCaptureTests : IDisposable
     // Три отказа по владению (c3): чат чужого владельца, чат другого проекта, чат исполнения
     // задачи. Каждый — с причиной, ни один — исключением.
     [Fact]
-    public async Task ЗахватСессии_чужойВладелец_отказ()
+    public async Task ЗахватСессии_чужойВладелец_отказКакНесуществующий()
     {
         var s = AddSession("s1", "p1");
         s.OwnerId = "u2";
 
         var r = await _sut.CaptureSession(User, "projects/p1", "s1", 1, 2);
         r.Ok.Should().BeFalse();
-        r.Reason.Should().Contain("владел");
+
+        // Чужой неотличим от несуществующего (тот же инвариант, что у AnalyzeAsync):
+        // «принадлежит другому владельцу» выдавало бы существование чужого чата. Сравнение
+        // пословное, а не Contain: уточнение к тексту («(приватный)») краснит эту строку.
+        var missing = await _sut.CaptureSession(User, "projects/p1", "s-none", 1, 2);
+        missing.Ok.Should().BeFalse();
+        r.Reason.Should().Be("чат не существует").And.Be(missing.Reason);
     }
 
     [Fact]

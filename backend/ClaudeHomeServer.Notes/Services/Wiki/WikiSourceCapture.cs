@@ -262,11 +262,12 @@ public sealed class WikiSourceCapture
         if (!WikiPage.TryParseSessionRef(ref_, out _, out _, out _))
             return Refused($"ref карточки не представим формой session:{{id}}#m{{a}}-{{b}}: '{ref_}'");
 
+        // Чужой и несуществующий — одно слово на двоих (тот же инвариант, что у AnalyzeAsync):
+        // «принадлежит другому владельцу» выдавало бы существование чужого чата — per-owner
+        // утечка, которой здесь нет; различить их может только владелец, и он их не различает.
         var session = _sessions.GetById(sessionId);
-        if (session is null)
+        if (session is null || _sessions.ResolveOwnerId(session) != ownerId)
             return Refused("чат не существует");
-        if (_sessions.ResolveOwnerId(session) != ownerId)
-            return Refused("чат принадлежит другому владельцу: источник — тому же владельцу, что вики");
         // Приватный чат (FIN3-3, тот же инвариант, что у AnalyzeAsync и BuildQueue): виден
         // только автору; его выдержку читают лишь машинные потребители — им он не виден вовсе.
         // Отказ неотличим от несуществующего (тот же текст «чат не существует»): приватность

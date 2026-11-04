@@ -320,12 +320,15 @@ public class NotesToolsetWikiTests : IDisposable
         _sessions.All.Add(new Session { Id = "s-foreign", OwnerId = "u2", ProjectId = "p1", Name = "Чужой чат" });
 
         var res = Call(toolset, ctx, "wiki_ingest", Args(("source", "session:s-foreign")));
-        AssertDenied(res, "чат не существует");
+        var missing = Call(toolset, ctx, "wiki_ingest", Args(("source", "session:s-none")));
 
+        res.IsError.Should().BeTrue($"отказ обязан быть отказом: {res.Text}");
+        missing.IsError.Should().BeTrue($"отказ обязан быть отказом: {missing.Text}");
         // Несуществующий — тот же путь и та же форма отказа, одним и тем же сообщением
         // (W3-6 F1): «принадлежит другому владельцу» выдавало бы существование чужого.
-        var missing = Call(toolset, ctx, "wiki_ingest", Args(("source", "session:s-none")));
-        AssertDenied(missing, "чат не существует");
+        // Сравнение пословное, а не Contain: «чат не существует (приватный)» содержало бы
+        // фразу и прошло бы через Contain, но неразличимость была бы нарушена.
+        res.Text.Should().Be("чат не существует").And.Be(missing.Text);
     }
 
     private void AddOpenPackages(int count)
@@ -475,9 +478,9 @@ public class NotesToolsetWikiTests : IDisposable
 
         // Мутация «убрать проверку PrivateToUserId в CaptureSession»: выдержка режется,
         // заявка доходит до модели, карточка ложится на диск — IsError и BeFalse краснеют.
-        // Мутация «вернуть текст, выдающий приватность» («сессия не существует») — краснеет
-        // эта строка: сравнение пословное, как с несуществующим чатом ниже.
-        AssertDenied(res, "чат не существует");
+        // Мутация «вернуть текст, выдающий приватность» («(приватный)») — краснеет
+        // сравнение с несуществующим чатом ниже: оно пословное.
+        res.IsError.Should().BeTrue($"отказ обязан быть отказом: {res.Text}");
         Directory.Exists(SafePath.Join(Root, "pages/Проекты/p1/Источники")).Should().BeFalse(
             "отказ — до захвата: карточки выдержки нет");
 
@@ -491,6 +494,13 @@ public class NotesToolsetWikiTests : IDisposable
             ("sessionRange", "m1-2")), ctxOpen, CancellationToken.None);
         ok.IsError.Should().BeFalse(ok.Text);
         ok.Text.Should().Contain("нечего добавить");
+
+        // Несуществующий чат на том же chokepoint (тот же CaptureSession) — тот же текст
+        // отказа, пословно: приватность не выдавала бы существования чата.
+        var missing = await toolsetOpen.CallAsync("wiki_ingest",
+            Args(("source", "session:s-none#m1-2")), ctxOpen, CancellationToken.None);
+        missing.IsError.Should().BeTrue($"отказ обязан быть отказом: {missing.Text}");
+        res.Text.Should().Be("чат не существует").And.Be(missing.Text);
     }
 
     [Fact]
@@ -503,17 +513,18 @@ public class NotesToolsetWikiTests : IDisposable
 
         var foreign = await toolset.CallAsync("wiki_ingest",
             Args(("source", "session:s-participant-private#m1-2")), ctx, CancellationToken.None);
-        AssertDenied(foreign, "чат не существует");
-
         var own = await toolset.CallAsync("wiki_ingest",
             Args(("source", "session:s-owner-private#m1-2")), ctx, CancellationToken.None);
-        AssertDenied(own, "чат не существует");
-
         // Несуществующий чат неотличим: та же форма отказа пословно — приватность не выдаёт
         // существования чата вызывающему.
         var missing = await toolset.CallAsync("wiki_ingest",
             Args(("source", "session:s-none#m1-2")), ctx, CancellationToken.None);
-        AssertDenied(missing, "чат не существует");
+
+        foreign.IsError.Should().BeTrue($"отказ обязан быть отказом: {foreign.Text}");
+        own.IsError.Should().BeTrue($"отказ обязан быть отказом: {own.Text}");
+        missing.IsError.Should().BeTrue($"отказ обязан быть отказом: {missing.Text}");
+        own.Text.Should().Be("чат не существует").And.Be(missing.Text);
+        foreign.Text.Should().Be(missing.Text);
 
         Directory.Exists(SafePath.Join(Root, "pages/Проекты/p1/Источники")).Should().BeFalse(
             "отказанные выдержки не оставили карточек");

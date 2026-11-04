@@ -319,9 +319,11 @@ public sealed class AudioEditJobServiceTests : IDisposable
         var started = await LaunchAsync(svc, Speak("local"), input: new AudioJobInput("", Session, thread.Id));
         await svc.WhenDone(started.Value!.JobId);
 
-        // Область проекта: события идут группе проекта, владельцу адресно не уходит ничего
-        _broadcaster.Projects.Should().OnlyContain(p => p == Scope.Key);
-        _broadcaster.Owners.Should().BeEmpty();
+        // Фикстура без ISessionDirectory: по fail-closed (S2d-3f) событие с id чата идёт адресно
+        // владельцу, группе проекта — ничего. Маршрутировка по аудитории чата проверяет
+        // AudioEventAudienceTests; здесь — состав, порядок и адресат событий задачи.
+        _broadcaster.Owners.Should().NotBeEmpty().And.OnlyContain(o => o == Owner);
+        _broadcaster.Projects.Should().BeEmpty();
         _broadcaster.Of<AudioEditProgressMessage>().Should().NotBeEmpty();
         _broadcaster.Of<AudioThreadChangedMessage>().Should().HaveCountGreaterThanOrEqualTo(2)
             .And.OnlyContain(m => m.SessionId == Session);

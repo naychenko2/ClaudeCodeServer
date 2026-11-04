@@ -4227,7 +4227,7 @@ public class ClaudeSession : ILlmSessionAdapter
             if (contributorSections.TryGetValue("code-graph", out var codeGraph))
                 Add("code-graph", "Главные узлы кода проекта", codeGraph.Text, stable: false, group: "project");
 
-            // Сценарное правило выбора codegraph / LSP / Grep (ADR-011 шаг 3): slice выше —
+            // Сценарное правило выбора codegraph / Grep (ADR-011 шаг 3): slice выше —
             // данные и могут отсутствовать (граф не построен), правило же статично и доезжает
             // до каждого хода проектного чата. Тот же гейт, что у slice: провайдер не null
             // (проектный чат с включённым codegraph) — правило не советует инструменты,
@@ -4502,6 +4502,12 @@ public class ClaudeSession : ILlmSessionAdapter
             envOverrides[ConsumersHookProjectEnv] = hookGraph.ProjectId;
             envOverrides[ConsumersHookTokenEnv] = ConsumersHookTokenPlaceholder;
         }
+
+        // Признак чата-исполнителя задачи для хука «сборка и тесты — только инструментами»
+        // (ClaudeRuntimeSettings, восьмая обязанность): файл настроек один на все чаты, различие
+        // — только здесь. Свойство сессии, не хода: значение стабильно и сигнатуру не мерцает.
+        if (Info.TaskExecution)
+            envOverrides[ClaudeRuntimeSettings.TaskExecutorEnv] = "1";
 
         // Родной Claude (подписка — основной аккаунт или аккаунт пула): объявляем окно
         // контекста сами, как сторонним провайдерам это делает BuildCliEnv. Считаем по модели

@@ -71,7 +71,7 @@ public sealed class CodeGraphContributor : IPromptSectionContributor
             _log.LogWarning(ex, "Code Graph slice для {Owner}", sessionContext.OwnerId);
         }
 
-        // Статичное правило выбора codegraph / LSP / Grep едет всегда, когда провайдер
+        // Статичное правило выбора codegraph / Grep едет всегда, когда провайдер
         // активен: иначе оно советовало бы инструменты, которых у хода нет.
         var sections = new List<PromptSection>
         {

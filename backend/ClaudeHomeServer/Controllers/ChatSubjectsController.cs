@@ -1,3 +1,5 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
@@ -19,6 +21,8 @@ namespace ClaudeHomeServer.Controllers;
 public class ChatSubjectsController(SessionManager sessions, ProjectManager projects,
     ChatSubjectSweeper sweeper) : ControllerBase
 {
+    private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
+
     [HttpGet("subjects")]
     public IActionResult GetSubjects(string id)
     {
@@ -51,6 +55,12 @@ public class ChatSubjectsController(SessionManager sessions, ProjectManager proj
     public IActionResult MoveSession(string id, string sessionId, [FromBody] MoveSessionSubjectRequest req)
     {
         if (sessions.GetById(sessionId) is not { } chat || chat.ProjectId != id) return NotFound();
+        // FIN3-2 (FINAL-3, п. 2 ревью b13f2105): чужой приватный чат неотличим от несуществующего
+        // и для редактора проекта: ни ответ (Name, LastMessage, ClaudeSessionId), ни запись темы
+        // не состоятся. Гейт — Core-точка видимости (SessionAccess.CanSee), та же, что у правки
+        // чата (S2d-3f): решение о праве здесь уже дал атрибут [ProjectScope], решение о видимости
+        // — здесь, до любой записи.
+        if (!sessions.IsVisibleTo(sessionId, UserId)) return NotFound();
         var write = req.Release == true
             ? new SubjectWrite(sessionId, SubjectWriteKind.Release)
             : new SubjectWrite(sessionId, SubjectWriteKind.Human, req.SubjectId);

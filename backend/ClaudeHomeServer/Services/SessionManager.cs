@@ -4554,6 +4554,17 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public bool IsVisibleTo(string sessionId, string? userId) =>
         _sessions.TryGetValue(sessionId, out var entry) && userId is not null && VisibleTo(entry.Info, userId);
 
+    // Занят ли ключ транскрипта (ClaudeSessionId) чатом, не видимым человеку (FIN3-2, FINAL-3 п. 3):
+    // такой чат есть, и ни один чат с этим ключом человеку не виден. Неизвестный ключ — нет:
+    // продолжение чата (ветвление) подаёт свой новый csid до регистрации чата (CreateBranchAsync),
+    // внешний транскрипт — законный resume. Проверка глобальная, не по проекту: ключ истории
+    // data/sessions/{csid} глобален, приватный чат вне проекта — тот же чужой транскрипт.
+    // Несколько чатов на одном транскрипте (старый resume-поток): достаточно одного видимого —
+    // человек уже держит этот разговор.
+    public bool IsTranscriptReservedForOthers(string csid, string userId) =>
+        _sessions.Values.Any(e => e.Info.ClaudeSessionId == csid)
+        && !_sessions.Values.Any(e => e.Info.ClaudeSessionId == csid && VisibleTo(e.Info, userId));
+
     // Есть ли у пользователя хоть одна сессия/чат — среда исполнения меняется только «начисто»
     // (корни проектов и профили сред различаются, resume привязан к путям старой среды)
     public bool HasSessionsOwnedBy(string ownerId) =>

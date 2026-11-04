@@ -45,6 +45,15 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     [ProjectScope(Right = ProjectRight.RunTurn)]
     public async Task<IActionResult> Create(string projectId, [FromBody] CreateSessionRequest req)
     {
+        // FIN3-2 (FINAL-3, п. 3 ревью b13f2105): resume принимается только для транскрипта чата,
+        // видимого вызывающему. ClaudeSessionId — ключ истории (HistoryKeyOf, SessionManager.cs:557)
+        // и транскрипта CLI: новый общий чат с csid чужого приватного получил бы его разговор
+        // через эту дверь. Отказ — тот же, что на неизвестный id в теле («Персона не найдена»
+        // ниже): существование чужого приватного не выдаётся. Неизвестный ключ не трогается —
+        // продолжение чата (ветвление) подаёт свой новый csid до регистрации чата
+        // (SessionManager.cs:3660), внешний транскрипт — законный случай.
+        if (req.ResumeSessionId is { Length: > 0 } resumeId && sessions.IsTranscriptReservedForOthers(resumeId, UserId))
+            return NotFound(new { error = "Чат не найден" });
         string? personaId = req.PersonaId;
         // Последний рубеж инварианта «новый чат человека — только с персоной» (парная связь
         // с фронтом): без personaId/resumeSessionId сначала провижним ассистента и продолжим

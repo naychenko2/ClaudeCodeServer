@@ -81,6 +81,12 @@ backend/ClaudeHomeServer.VideoEditor/Controllers/VideoEditScopeGate.cs|6
 # access.ResolveSession(actor, sid): id актора входит только в проверку права на чат-адресат, не ключ хранилищ.
 # ProjectsController 14→15 — GetEvents: `actor` здесь необязательный query-фильтр ленты событий, а не id
 # вызывающего; ключ хранилища в той же строке — TenantId, фильтр лишь сужает выборку.
+# FIN3-2 (FINAL-3, п. 2): ChatSubjectsController 0→1 — ручной перенос чата в тему закрывает чужой
+# приватный (ответ не несёт полей чата, тема не пишется): id вызывающего входит только в проверку
+# видимости чата (SessionManager.IsVisibleTo → SessionAccess.CanSee), тот же класс мест, что S2d-1d
+# и S2d-4a. Ключом хранилищ он не служит: тема пишется на чате по его id (ApplySubjects),
+# арендатор — Project.OwnerId.
+backend/ClaudeHomeServer/Controllers/ChatSubjectsController.cs|1
 backend/ClaudeHomeServer/Controllers/CodeGraphController.cs|1
 backend/ClaudeHomeServer/Controllers/DossiersController.cs|4
 # S2c-8: FilesController 5→6 — ветка папки Delete: id вызывающего входит только в явную проверку
@@ -143,7 +149,12 @@ backend/ClaudeHomeServer/Controllers/ProjectsController.cs|15
 # в него (GetWithRight/GetAccessible — право и видимость, тот же уровень, что у модели и режима).
 # Ключом хранилищ ничто не стало: эти поля пишутся на чате по его id (SetExpiry/SetNotificationsMuted/
 # SetVoiceMode/TrySetExcludeFromDossiers), а право на них — арендатора.
-backend/ClaudeHomeServer/Controllers/SessionsController.cs|18
+# FIN3-2 (FINAL-3, п. 3): SessionsController 18→19 — гейт «resume только для транскрипта, видимого
+# вызывающему» при создании чата: id вызывающего входит только в проверку видимости ключа транскрипта
+# (IsTranscriptReservedForOthers → VisibleTo → SessionAccess.CanSee). Ключом хранилищ он не служит:
+# история и транскрипт нового чата ключуются его ClaudeSessionId (HistoryKeyOf), арендатор —
+# ResolveOwnerId; неизвестные ключи гейт не трогает (ветвление подаёт свой новый csid).
+backend/ClaudeHomeServer/Controllers/SessionsController.cs|19
 backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
 # S2d-4i: TasksController 86→92 — шесть write-ответов (POST задачи проекта, POST личной задачи, PUT,
 # merge ×2, execute) отдают копию хранимой задачи с маской чужих приватных чатов: тот же класс мест,

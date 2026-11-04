@@ -517,8 +517,11 @@ public class NotesToolsetWikiTests : IDisposable
         ok.IsError.Should().BeFalse(ok.Text);
         ok.Text.Should().Contain("нечего добавить");
 
-        // Несуществующий чат на том же chokepoint (тот же CaptureSession) — тот же текст
-        // отказа, пословно: приватность не выдавала бы существования чата.
+        // Тот же текст у несуществующего чата, пословно. Точки отказа разные: несуществующий
+        // отсекается пред-проверкой входа (NotesToolset.cs:935-936) и до CaptureSession не
+        // доходит; приватный проходит её (резолвится на владельца) и отказывает проверкой
+        // приватности захвата (WikiSourceCapture.cs:275-276). Текст один на обеих точках:
+        // приватность не выдавала бы существования чата.
         var missing = await toolsetOpen.CallAsync("wiki_ingest",
             Args(("source", "session:s-none#m1-2")), ctxOpen, CancellationToken.None);
         missing.IsError.Should().BeTrue($"отказ обязан быть отказом: {missing.Text}");

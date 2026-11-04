@@ -153,6 +153,9 @@ public class TasksToolsetWindowTests : IClassFixture<TestWebApplicationFactory>
         var foreign = Seed(projectId, "чужой шаг", null);
         foreign.FeatureId = otherEpic.Id;
         Seed(projectId, "без фичи", null);
+        // Задача другого владельца с тем же FeatureId в выдачу не попадает
+        var strangerTask = Tasks.Create(projectId, "other-owner-id", new CreateTaskRequest(Title: "чужая задача фичи"));
+        strangerTask.FeatureId = epic.Id;
 
         var titles = Titles(await ListAsync(sessionId, new { projectId, featureId = epic.Id }));
 

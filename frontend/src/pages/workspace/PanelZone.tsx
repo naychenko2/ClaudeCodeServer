@@ -76,6 +76,10 @@ interface Props {
   // primary — основной, secondary — второй (серый; незапушенные коммиты на «Изменениях»),
   // hint — расшифровка в тултипе. sessionPanels (plan/agents) перекрывают своими.
   railBadges?: Partial<Record<PanelKey, RailBadgeInfo>>;
+  // Ярлык шапки рельсы («шапка») и его тултип: по умолчанию «Панели»/«Панели инструментов»;
+  // на экранах со своим содержимым (раздел «Заметки» — вики) задаётся пропом.
+  hat?: string;
+  hatTitle?: string;
   // Инстанс стора зон: каждый экран держит НЕЗАВИСИМУЮ раскладку
   panelStack?: PanelZonesStore;
   // Какие панели вообще доступны на этом экране. У воркспейса это инструменты
@@ -110,7 +114,7 @@ interface Props {
 }
 
 export function PanelZone({
-  side, panels, railBadges, panelStack,
+  side, panels, railBadges, hat, hatTitle, panelStack,
   allowedKeys: allowedKeysProp, hideWhenEmpty, compact, sessionPanels,
   railFooter, floating, centerFileOpen, onUserClose, pluginPanelMeta,
 }: Props) {
@@ -1088,8 +1092,8 @@ export function PanelZone({
       side={side}
       // Обе зоны держат ОДИН набор панелей (панель переносится с края на край),
       // поэтому подпись у левой и правой рельсы одна и та же
-      hat="Панели"
-      hatTitle="Панели инструментов"
+      hat={hat ?? 'Панели'}
+      hatTitle={hatTitle ?? 'Панели инструментов'}
       visible={showRail}
       peek={peekCard ? {
         node: peekCard,

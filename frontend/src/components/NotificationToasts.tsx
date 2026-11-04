@@ -212,9 +212,9 @@ export function ToastStack({ items, sheetRaised, onOpen, onDismiss, onAction }: 
               }}>
                 {t.body}
               </div>
-              // Адрес уведомления — переход остаётся явной кнопкой: сама карточка клики
-              // не принимает. Форма та же, что у кнопки-действия ниже: accent-цветом,
-              // без заливки
+              {/* Адрес уведомления — переход остаётся явной кнопкой: сама карточка клики
+                  не принимает. Форма та же, что у кнопки-действия ниже: accent-цветом,
+                  без заливки */}
               {t.url && (
                 <div style={{ marginTop: SP.sm, display: 'flex', justifyContent: 'flex-end' }}>
                   <button

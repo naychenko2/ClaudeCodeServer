@@ -43,6 +43,9 @@ public sealed class FileServicePrivateAttachmentsLinkTests : IDisposable
     private readonly string _foreignGuid = Guid.NewGuid().ToString("N");
     private readonly string _ownGuid = Guid.NewGuid().ToString("N");
     private readonly string _commonGuid = Guid.NewGuid().ToString("N");
+    private readonly string _otherForeignGuid = Guid.NewGuid().ToString("N");
+    private readonly string _otherOwnGuid = Guid.NewGuid().ToString("N");
+    private readonly string _otherCommonGuid = Guid.NewGuid().ToString("N");
 
     private string ForeignRel => $".cc-attachments/private/{Other}/{_foreignGuid}/foreign.txt";
     private string OwnRel => $".cc-attachments/private/{Me}/{_ownGuid}/own.txt";
@@ -72,6 +75,18 @@ public sealed class FileServicePrivateAttachmentsLinkTests : IDisposable
 
     private void Link(string relName, string target) =>
         Directory.CreateSymbolicLink(Path.Combine(_root, relName), target);
+
+    /// <summary>Корень чужого проекта (раскладка «S»): свой контейнер со своей раскладкой и
+    /// обычная папка. Лежит под _tempDir — удаляется вместе с ним.</summary>
+    private string OtherProject()
+    {
+        var dir = Directory.CreateDirectory(Path.Combine(_tempDir, "otherProject")).FullName;
+        Write(dir, $"{TreeExcludes.AttachmentsDir}/private/{Other}/{_otherForeignGuid}/other-foreign.txt", "чужое");
+        Write(dir, $"{TreeExcludes.AttachmentsDir}/private/{Me}/{_otherOwnGuid}/other-own.txt", "своё");
+        Write(dir, $"{TreeExcludes.AttachmentsDir}/{_otherCommonGuid}/other-common.txt", "общее");
+        Write(dir, "docs/plain.txt", "обычное");
+        return dir;
+    }
 
     private static List<string> PathsOf(IEnumerable<FileEntry> entries) => entries.Select(e => e.Path).ToList();
 
@@ -359,6 +374,66 @@ public sealed class FileServicePrivateAttachmentsLinkTests : IDisposable
                 $"{TreeExcludes.AttachmentsDir}/{_commonGuid}/common.txt",
                 $"L/{_commonGuid}/common.txt",
             });
+    }
+
+    /// <summary>
+    /// Вердикт 34cd6fac (п.4 «Новое в тронутых строках») к шагу 86d2a75f3: ссылка в корне проекта
+    /// на каталог, СОДЕРЖАЩИЙ контейнер .cc-attachments (корень чужого проекта в общем проекте),
+    /// префикса не давала — канон цели сегмента .cc-attachments не содержит и под closedRoot
+    /// операции не лежит ⇒ текстовая линия видит первым сегментом имя ссылки («S») и чужее не
+    /// видит: Search отдал S/.cc-attachments/private/{чужой}/… ни именем, ни содержимым. (Содержимое
+    /// при этом не утекало: чтение закрыто IsForeignResolved; Tree/List не текли только потому,
+    /// что TreeExcludes режет переход .cc-attachments по имени.) Теперь якорь ставится и по имени
+    /// перехода: чужое закрыто ровно тем же набором, что от прямого имени контейнера; своё и
+    /// общая раскладка через ссылку видны; обычный не-private содержимое чужого проекта — легальная
+    /// ссылка наружу, она видна; без зрителя — тот же fail-closed.
+    /// </summary>
+    /// <Named мутации: «прежнее правило префикса» (в ClosedPrefixFor убрать fromName — якорь только
+    /// по канону цели) краснит этот тест: foreign.txt через S возвращается в выдачу поиска.</Named>
+    [Fact]
+    public void Search_СсылкаНаКаталогСодержащийКонтейнер_ЧужоеНеНаходится_СвоёОбщееИОбычноеНаходятся()
+    {
+        if (OperatingSystem.IsWindows()) return; // ссылка на каталог требует привилегий
+        var other = OtherProject();
+        Link("S", other);
+
+        // чужого нет: ни по своему пути (текстовая линия), ни через S (имя ссылки больше не первый сегмент)
+        PathsOf(_svc.Search(_root, "foreign", Me)).Should().BeEmpty(
+            "чужое private закрыто и по своему пути, и через ссылку на каталог, содержащий контейнер");
+        PathsOf(_svc.Search(_root, "foreign")).Should().BeEmpty(
+            "без зрителя — тот же fail-closed: своё private закрыто, чужого нет");
+
+        // автору — своё в обоих проектах: и своим именем, и через ссылку на каталог, содержащий контейнер
+        var foreignThroughS = $"S/{TreeExcludes.AttachmentsDir}/private/{Other}/{_otherForeignGuid}/other-foreign.txt";
+        PathsOf(_svc.Search(_root, "foreign", Other)).Should().BeEquivalentTo(new[] { ForeignRel, foreignThroughS },
+            "автор своё видит везде, где до него дотянулся обход");
+
+        // своё и общая раскладка чужого проекта — тот же набор, что от прямого имени его контейнера
+        PathsOf(_svc.Search(_root, "other-foreign", Other)).Should().Equal(new[] { foreignThroughS },
+            "автор своё видит и через ссылку на каталог, содержащий контейнер");
+        PathsOf(_svc.Search(_root, "other-own", Me)).Should().Equal(
+            new[] { $"S/{TreeExcludes.AttachmentsDir}/private/{Me}/{_otherOwnGuid}/other-own.txt" },
+            "своё private чужого проекта через ссылку — не чужое");
+        PathsOf(_svc.Search(_root, "other-common", Me)).Should().Equal(
+            new[] { $"S/{TreeExcludes.AttachmentsDir}/{_otherCommonGuid}/other-common.txt" },
+            "общая раскладка через ссылку — как прежде");
+
+        // обычный не-private содержимый чужой проект — легальная ссылка наружу: видна и без скрытых
+        PathsOf(_svc.Search(_root, "plain", Me)).Should().BeEquivalentTo(new[] { "docs/plain.txt", "S/docs/plain.txt" },
+            "легальная ссылка наружу на не-private путь остаётся доступной для поиска");
+        PathsOf(_svc.Tree(_root, showHidden: true, viewerUserId: Me))
+            .Should().Contain("S/docs/plain.txt", "Tree через S: обычное содержимое видно");
+        PathsOf(_svc.Tree(_root, showHidden: true, viewerUserId: Me))
+            .Should().NotContain(p => p.StartsWith($"S/{TreeExcludes.AttachmentsDir}"),
+                "Tree через S: переход .cc-attachments режется по имени, как и в своём дереве");
+        PathsOf(_svc.List(_root, "S", showHidden: true, viewerUserId: Me))
+            .Should().Equal(new[] { "S/docs" }, "List корня чужого проекта: тот же TreeExcludes по имени");
+
+        // тот же исход в той же раскладке и для своей ссылки на контейнер (ссылка «Q» → его .cc-attachments):
+        // закрыта первой линией — по канону цели, как была
+        Link("Q", Path.Combine(other, TreeExcludes.AttachmentsDir));
+        PathsOf(_svc.Search(_root, "other-foreign", Me)).Should().BeEmpty(
+            "ссылка прямо на контейнер чужого проекта — закрыта и с новой линией, как была");
     }
 
     /// <summary>Явный обход вместо EnumerateFiles обязан держать и циклы ссылок: в уже

@@ -182,17 +182,39 @@ public class FileService(
     // closedPrefix записи: продолжение префикса родителя или новый префикс на переходе.
     // null — позиция относительно closed-поддерева не разрешима: вызывающий отказывает запись
     // и не спускается в неё (fail-closed, см. блок ClosedPrefixOf); отказ наследуется вниз.
+    //
+    // Якорь по ИМЕНИ перехода (TAIL-SEARCH-PRIV-H, вердикт 34cd6fac п.4): переход может сам
+    // быть контейнером — каталог, названный .cc-attachments. Ссылка на каталог, СОДЕРЖАЩИЙ
+    // чужие вложения (корень чужого проекта в общем проекте), префикса не давала: канон цели
+    // сегмента .cc-attachments не содержит и под closedRoot операции не лежит ⇒ пустой префикс
+    // ⇒ текстовая линия видит первым сегментом имя ссылки («S») и чужего private не видит
+    // (Search отдал S/.cc-attachments/private/{чужой}/…; Tree/List в той же раскладке не текли
+    // только потому, что TreeExcludes режет этот переход по имени). Теперь якорь ставится и
+    // здесь: тот же признак, что первая линия предиката (сегмент .cc-attachments,
+    // HasForeignPrivateSegment, PrivateAttachments.cs:252), применённый к имени перехода —
+    // без канонизации записей и без второго разыменования ссылки.
+    //
+    // Границы этой линии: ставится вне closed-поддерева (пустой префикс родителя — тот же
+    // «пустой префикс = вне», что у обычного пути; внутри поддерева префикс уже продолжен
+    // именами и его не перезаписывает) и только когда цель ссылки сама якоря не дала:
+    // префикс от канона цели точнее (он знает, куда ссылка разыменовалась), а неразрешимый
+    // канон остаётся отказом. Файл с таким именем — не каталог-контейнер: исход по нему не
+    // меняется (IsForeign по «.cc-attachments» без автора — false, PrivateAttachments.cs:77).
     private static string? ClosedPrefixFor(string? parentPrefix, string name, string absolutePath, bool isLink,
         string? closedRoot)
     {
         if (parentPrefix is null) return null;
+        var fromName = parentPrefix.Length == 0
+            && string.Equals(name, TreeExcludes.AttachmentsDir, StringComparison.OrdinalIgnoreCase)
+            ? TreeExcludes.AttachmentsDir
+            : null;
         var inherited = parentPrefix.Length == 0 ? "" : parentPrefix + "/" + name;
-        if (!isLink) return inherited;
+        if (!isLink) return fromName ?? inherited;
         var fromTarget = ClosedPrefixOf(SafePath.Canonical(absolutePath), closedRoot);
         if (fromTarget is null) return null; // неразрешимый канон цели — тот же отказ, что у предиката
         // Ссылка наружу из closed-поддерева — обход снова обычный (её цель вне его);
         // внутрь — тот же префикс, что дал бы прямой путь.
-        return fromTarget.Length != 0 ? fromTarget : inherited;
+        return fromTarget.Length != 0 ? fromTarget : fromName ?? inherited;
     }
 
     // Защита от path traversal — форвардер к Core-примитиву (Этап 3, уборка Git).

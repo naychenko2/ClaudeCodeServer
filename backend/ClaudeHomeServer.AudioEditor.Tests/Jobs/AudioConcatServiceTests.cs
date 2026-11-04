@@ -90,7 +90,7 @@ public sealed class AudioConcatServiceTests : IDisposable
         var (threadId, versionId) = ThreadWithVersion("VOICE", license: "CC BY-NC 4.0");
         var before = _store.Get(Owner, Session).Threads.Single();
 
-        var result = await Service().ConcatAsync(Owner, _scope, new AudioConcatInput(Session,
+        var result = await Service().ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session,
         [
             new AudioConcatPiece(ThreadId: threadId, VersionId: versionId),
             new AudioConcatPiece(ProjectFile: "sfx/jingle.wav"),
@@ -131,7 +131,7 @@ public sealed class AudioConcatServiceTests : IDisposable
     public async Task Без_флажка_громкость_не_выравнивается_а_стык_по_умолчанию_встык()
     {
         var (threadId, _) = ThreadWithVersion("A");
-        var result = await Service().ConcatAsync(Owner, _scope, new AudioConcatInput(Session,
+        var result = await Service().ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session,
             [new AudioConcatPiece(threadId), new AudioConcatPiece(threadId)], NormalizeLoudness: false), CancellationToken.None);
 
         result.Error.Should().BeNull();
@@ -143,7 +143,7 @@ public sealed class AudioConcatServiceTests : IDisposable
     public async Task Меньше_двух_кусков_отказ_до_шва()
     {
         var (threadId, _) = ThreadWithVersion("A");
-        var result = await Service().ConcatAsync(Owner, _scope, new AudioConcatInput(Session, [new AudioConcatPiece(threadId)]),
+        var result = await Service().ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session, [new AudioConcatPiece(threadId)]),
             CancellationToken.None);
 
         result.ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
@@ -157,7 +157,7 @@ public sealed class AudioConcatServiceTests : IDisposable
     {
         var (threadId, _) = ThreadWithVersion("A");
         var pieces = Enumerable.Range(0, AudioDspLimits.MaxConcatPieces + 1).Select(_ => new AudioConcatPiece(threadId)).ToList();
-        var result = await Service().ConcatAsync(Owner, _scope, new AudioConcatInput(Session, pieces), CancellationToken.None);
+        var result = await Service().ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session, pieces), CancellationToken.None);
 
         result.ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
         _dsp.Calls.Should().Be(0);
@@ -167,7 +167,7 @@ public sealed class AudioConcatServiceTests : IDisposable
     public async Task Файл_проекта_в_личной_области_отказ()
     {
         var (threadId, _) = ThreadWithVersion("A");
-        var result = await Service().ConcatAsync(Owner, Personal, new AudioConcatInput(Session,
+        var result = await Service().ConcatAsync(Owner, Owner, Personal, new AudioConcatInput(Session,
             [new AudioConcatPiece(threadId), new AudioConcatPiece(ProjectFile: "sfx/jingle.wav")]), CancellationToken.None);
 
         result.ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
@@ -180,7 +180,7 @@ public sealed class AudioConcatServiceTests : IDisposable
     {
         var origin = _store.Open(Owner, Session, "sfx/jingle.wav", null, null).Thread!;
         var (threadId, _) = ThreadWithVersion("A");
-        var result = await Service().ConcatAsync(Owner, Personal, new AudioConcatInput(Session,
+        var result = await Service().ConcatAsync(Owner, Owner, Personal, new AudioConcatInput(Session,
             [new AudioConcatPiece(threadId), new AudioConcatPiece(origin.Id, AudioThreadVersion.OriginId)]), CancellationToken.None);
 
         result.Error.Should().Contain(AudioConcatService.PersonalProjectFileText);
@@ -194,7 +194,7 @@ public sealed class AudioConcatServiceTests : IDisposable
     public async Task Путь_вне_проекта_или_несуществующий_отказ(string file)
     {
         var (threadId, _) = ThreadWithVersion("A");
-        var result = await Service().ConcatAsync(Owner, _scope, new AudioConcatInput(Session,
+        var result = await Service().ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session,
             [new AudioConcatPiece(threadId), new AudioConcatPiece(ProjectFile: file)]), CancellationToken.None);
 
         result.Error.Should().StartWith("Кусок 2:");
@@ -212,7 +212,7 @@ public sealed class AudioConcatServiceTests : IDisposable
     public async Task Кусок_из_чужого_private_отказ_без_байтов(string file)
     {
         var (threadId, _) = ThreadWithVersion("A");
-        var result = await Service().ConcatAsync(Owner, _scope, new AudioConcatInput(Session,
+        var result = await Service().ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session,
             [new AudioConcatPiece(threadId), new AudioConcatPiece(ProjectFile: file)]), CancellationToken.None);
 
         result.Error.Should().Be("Кусок 2: путь вне проекта", file);
@@ -225,7 +225,7 @@ public sealed class AudioConcatServiceTests : IDisposable
     public async Task Кусок_из_своего_private_и_обычного_файла_читается()
     {
         var (threadId, _) = ThreadWithVersion("A");
-        var result = await Service().ConcatAsync(Owner, _scope, new AudioConcatInput(Session,
+        var result = await Service().ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session,
             [new AudioConcatPiece(threadId),
              new AudioConcatPiece(ProjectFile: $".cc-attachments/private/{Owner}/g1/mine.wav"),
              new AudioConcatPiece(ProjectFile: "sfx/jingle.wav")]), CancellationToken.None);
@@ -239,13 +239,13 @@ public sealed class AudioConcatServiceTests : IDisposable
     {
         var (threadId, _) = ThreadWithVersion("A");
         var svc = Service();
-        (await svc.ConcatAsync(Owner, _scope, new AudioConcatInput("chat-2",
+        (await svc.ConcatAsync(Owner, Owner, _scope, new AudioConcatInput("chat-2",
             [new AudioConcatPiece(threadId), new AudioConcatPiece(threadId)]), CancellationToken.None))
             .Error.Should().Contain("нить не найдена");
-        (await svc.ConcatAsync(Owner, _scope, new AudioConcatInput(Session,
+        (await svc.ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session,
             [new AudioConcatPiece(threadId), new AudioConcatPiece(threadId, ProjectFile: "sfx/jingle.wav")]), CancellationToken.None))
             .ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
-        (await svc.ConcatAsync(Owner, _scope, new AudioConcatInput(Session,
+        (await svc.ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session,
             [new AudioConcatPiece(threadId), new AudioConcatPiece(threadId)], Name: "../x"), CancellationToken.None))
             .ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
         _dsp.Calls.Should().Be(0);
@@ -257,9 +257,9 @@ public sealed class AudioConcatServiceTests : IDisposable
         var (threadId, _) = ThreadWithVersion("A");
         var input = new AudioConcatInput(Session, [new AudioConcatPiece(threadId), new AudioConcatPiece(threadId)]);
 
-        (await Service(noDsp: true).ConcatAsync(Owner, _scope, input, CancellationToken.None))
+        (await Service(noDsp: true).ConcatAsync(Owner, Owner, _scope, input, CancellationToken.None))
             .ErrorCode.Should().Be(AudioEditErrorCodes.DspUnavailable);
-        (await Service(new FakeDsp { Available = false }).ConcatAsync(Owner, _scope, input, CancellationToken.None))
+        (await Service(new FakeDsp { Available = false }).ConcatAsync(Owner, Owner, _scope, input, CancellationToken.None))
             .ErrorCode.Should().Be(AudioEditErrorCodes.DspUnavailable);
     }
 
@@ -268,7 +268,7 @@ public sealed class AudioConcatServiceTests : IDisposable
     {
         var (threadId, _) = ThreadWithVersion("A");
         var result = await Service(new FakeDsp { Error = "Кусок 1 короче плавных переходов на его краях." })
-            .ConcatAsync(Owner, _scope, new AudioConcatInput(Session, [new AudioConcatPiece(threadId), new AudioConcatPiece(threadId)]),
+            .ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session, [new AudioConcatPiece(threadId), new AudioConcatPiece(threadId)]),
                 CancellationToken.None);
 
         result.Error.Should().Contain("короче плавных переходов");

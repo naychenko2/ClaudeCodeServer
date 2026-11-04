@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.ChatContext;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -75,6 +76,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
     private readonly IDelegatedTurnGate? _turnGate;
     private readonly AudioConcatService? _concat;
     private readonly IAudioAgentEdits? _edits;
+    private readonly ITurnActorRegistry? _turnActors;
     private readonly IAudioVoiceLibrary? _library;
     private readonly bool _agentLaunch;
     private readonly ChatContext.AudioContextLaunch? _context;
@@ -97,8 +99,10 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         IAudioVoiceLibrary? library = null,
         ITurnEventBus? events = null,
         IConfiguration? config = null,
-        ChatContext.AudioContextLaunch? context = null)
+        ChatContext.AudioContextLaunch? context = null,
+        ITurnActorRegistry? turnActors = null)
     {
+        _turnActors = turnActors;
         _context = context;
         _sessions = sessions;
         _projects = projects;
@@ -114,6 +118,10 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         _agentLaunch = config?.GetValue(AgentLaunchKey, true) ?? true;
         events?.OnNotification<TurnCompleted>(OnTurnCompleted, "AudioEditorToolset.ResetLaunches");
     }
+
+    // Актор приватности — тот, кто запустил ход, а не арендатор (ownerId). Неизвестен (реестра нет, рестарт) —
+    // null: чужим считается любое private (fail-closed), как в WorkspaceToolset
+    private string? Actor(string ownerId, Session session) => _turnActors?.Actor(session.Id, ownerId);
 
     public string Name => ServerName;
     public string Version => "1.0.0";
@@ -175,7 +183,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         {
             // У личной области файлов проекта нет — отказ до обращения к диску
             if (scope.Project is not { } project) return Deny(NoProjectFiles);
-            if (ProjectAudioPath(project, file, ownerId) is not { } path)
+            if (ProjectAudioPath(project, file, Actor(ownerId, session)) is not { } path)
                 return Deny($"Звуковой файл не найден в проекте: {file}");
             written = _threads.Tracked(ownerId, session.Id, () => Store.Open(ownerId, session.Id, path, null, null), ContextActor.Agent);
             if (written is { Status: AudioThreadWriteStatus.Ok, Existing: false, Thread: { } created })
@@ -240,10 +248,10 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         "В чате вне проекта нет файлов проекта: заведи новый звук (audio_new) или возьми звук этого чата по threadId.";
 
     // Путь звукового файла проекта от корня через «/»: строго внутри и без ссылки наружу
-    private static string? ProjectAudioPath(Project project, string file, string ownerId)
+    private static string? ProjectAudioPath(Project project, string file, string? actorId)
     {
         var rel = Normalize(file);
-        if (rel.Length == 0 || ProjectLinkGuard.ResolveInsideAs(project.RootPath, rel, ownerId) is not { } full || !File.Exists(full))
+        if (rel.Length == 0 || ProjectLinkGuard.ResolveInsideAs(project.RootPath, rel, actorId) is not { } full || !File.Exists(full))
             return null;
         return AudioVersionFiles.ContentTypeOf(full).StartsWith("audio/", StringComparison.Ordinal)
             ? Path.GetRelativePath(project.RootPath, full).Replace('\\', '/')
@@ -425,7 +433,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         AudioBytes? source = null;
         if (AudioEditorEndpoints.NeedsSource.Contains(final.Op))
         {
-            if (await SourceAsync(ownerId, scope, version) is not { } bytes)
+            if (await SourceAsync(ownerId, Actor(ownerId, session), scope, version) is not { } bytes)
                 return Deny("Для этой операции нужен звук: возьми в работу файл или версию со звуком.");
             source = bytes;
         }
@@ -470,7 +478,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             return Deny("Монтаж без ИИ на этом сервере ещё не подключён — попроси человека сделать это в панели «Контекст» (работать с этим звуком).");
         if (version is null) return Deny("У этого звука ещё нет версии со звуком — монтировать нечего.");
         var range = Range(args);
-        var edited = await _edits.ApplyAsync(ownerId, scope, session.Id, thread.Id, version.Id, op, range.Start, range.End,
+        var edited = await _edits.ApplyAsync(ownerId, Actor(ownerId, session), scope, session.Id, thread.Id, version.Id, op, range.Start, range.End,
             args["params"] as JsonObject, ct);
         if (edited.Value is not { } value) return Fail(edited.ErrorCode, edited.Error);
         return Json(new
@@ -484,10 +492,10 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
     }
 
     // Главный файл версии-основы: исходник — файл проекта, версия запуска — файл рабочей папки задачи
-    private async Task<AudioBytes?> SourceAsync(string ownerId, AudioEditScope scope, AudioThreadVersion? version)
+    private async Task<AudioBytes?> SourceAsync(string ownerId, string? actorId, AudioEditScope scope, AudioThreadVersion? version)
     {
         if (version?.File(AudioFileRoles.Main) is not { } main) return null;
-        var path = AudioVersionFiles.Resolve(_workspace, ownerId, scope, version, main);
+        var path = AudioVersionFiles.Resolve(_workspace, ownerId, actorId, scope, version, main);
         if (path is null || !File.Exists(path) || new FileInfo(path).Length > MaxSourceBytes) return null;
         return new AudioBytes(await File.ReadAllBytesAsync(path), AudioVersionFiles.ContentTypeOf(path));
     }
@@ -540,7 +548,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         if (Str(args, "format") is { } f && !Enum.TryParse(f, ignoreCase: true, out format))
             return Deny("format — wav, mp3, flac или ogg.");
 
-        var result = await _concat.ConcatAsync(ownerId, scope, new AudioConcatInput(session.Id, pieces, joint,
+        var result = await _concat.ConcatAsync(ownerId, Actor(ownerId, session), scope, new AudioConcatInput(session.Id, pieces, joint,
             NormalizeLoudness: Bool(args, "normalizeLoudness") ?? true,
             Name: Str(args, "name"),
             Format: format,

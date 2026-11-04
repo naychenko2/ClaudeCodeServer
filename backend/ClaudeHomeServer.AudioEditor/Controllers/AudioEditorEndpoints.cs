@@ -145,7 +145,7 @@ public abstract class AudioEditorEndpoints(
         if (NeedsSource.Contains(quote.Op))
         {
             var main = baseVersion?.File(AudioFileRoles.Main);
-            var path = main is null ? null : AudioVersionFiles.Resolve(workspace, Owner(scope), scope, baseVersion!, main);
+            var path = main is null ? null : AudioVersionFiles.Resolve(workspace, Owner(scope), UserId, scope, baseVersion!, main);
             if (path is null || !System.IO.File.Exists(path))
                 return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
                     "Для этой операции нужен звук: возьмите в работу файл или версию со звуком");
@@ -169,7 +169,7 @@ public abstract class AudioEditorEndpoints(
                 ? (refPiece.VersionId is null ? rt.CurrentVersion : rt.Version(refPiece.VersionId))
                 : null;
             var refMain = refVersion?.File(AudioFileRoles.Main);
-            var refPath = refMain is null ? null : AudioVersionFiles.Resolve(workspace, Owner(scope), scope, refVersion!, refMain);
+            var refPath = refMain is null ? null : AudioVersionFiles.Resolve(workspace, Owner(scope), UserId, scope, refVersion!, refMain);
             if (refPath is null || !System.IO.File.Exists(refPath))
                 return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Образец из контекста не найден или без звука");
             reference = await ReadAsync(refPath, ct) is { } refBytes ? new AudioBytes(refBytes, AudioVersionFiles.ContentTypeOf(refPath)) : null;
@@ -320,7 +320,7 @@ public abstract class AudioEditorEndpoints(
     {
         if (FindVersion(scope, sessionId, threadId, versionId, out var thread, out var version) is { } denied) return denied;
         if (version!.File(role) is not { } file
-            || AudioVersionFiles.Resolve(workspace, Owner(scope), scope, version, file) is not { } path
+            || AudioVersionFiles.Resolve(workspace, Owner(scope), UserId, scope, version, file) is not { } path
             || !System.IO.File.Exists(path))
             return Error(StatusCodes.Status404NotFound, AudioEditErrorCodes.FileNotFound, "Файла нет в этой версии");
         var result = PhysicalFile(path, AudioVersionFiles.ContentTypeOf(path), enableRangeProcessing: true);
@@ -381,7 +381,7 @@ public abstract class AudioEditorEndpoints(
         var input = new Engines.AudioDspEditInput(sessionId, threadId, op, req.BaseVersionId, req.StartSec, req.EndSec,
             req.FadeInSec ?? 0, req.FadeOutSec ?? 0, req.GainDb ?? 0, req.TargetLufs, format, req.SampleRate, req.Channels,
             req.Revision);
-        return Map(await dsp.EditAsync(Owner(scope), scope, input, ct), Ok);
+        return Map(await dsp.EditAsync(Owner(scope), UserId, scope, input, ct), Ok);
     }
 
     protected async Task<IActionResult> MixIn(AudioEditScope scope, string sessionId, string threadId,
@@ -390,14 +390,14 @@ public abstract class AudioEditorEndpoints(
         if (req?.Stems is not { } stems)
             return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Выберите хотя бы один стем");
         if (!TryFormat(req.Format, out var format)) return UnknownFormat();
-        return Map(await dsp.MixAsync(Owner(scope), scope,
+        return Map(await dsp.MixAsync(Owner(scope), UserId, scope,
             new Engines.AudioMixInput(sessionId, threadId, stems, req.BaseVersionId, format, req.Revision,
                 ContextRevision: req.ContextRevision), ct), Ok);
     }
 
     protected async Task<IActionResult> PeaksIn(AudioEditScope scope, string sessionId, string threadId, string versionId,
         string? role, int points, CancellationToken ct) =>
-        Map(await dsp.PeaksAsync(Owner(scope), scope, sessionId, threadId, versionId, role, points, ct), Ok);
+        Map(await dsp.PeaksAsync(Owner(scope), UserId, scope, sessionId, threadId, versionId, role, points, ct), Ok);
 
     protected async Task<IActionResult> ConcatIn(AudioEditScope scope, string sessionId, AudioConcatRequest? req,
         CancellationToken ct)
@@ -417,7 +417,7 @@ public abstract class AudioEditorEndpoints(
         var input = new AudioConcatInput(sessionId, req.Pieces ?? [], joint, req.Joints is null ? null : joints,
             req.NormalizeLoudness ?? true, req.Name, format ?? AudioFormat.Wav, req.Folder,
             ContextRevision: req.ContextRevision);
-        return Map(await concat.ConcatAsync(Owner(scope), scope, input, ct), Ok);
+        return Map(await concat.ConcatAsync(Owner(scope), UserId, scope, input, ct), Ok);
     }
 
     // null — формат не задан; незнакомое имя — false

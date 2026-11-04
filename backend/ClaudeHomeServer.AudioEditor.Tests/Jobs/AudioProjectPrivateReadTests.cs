@@ -42,8 +42,29 @@ public sealed class AudioProjectPrivateReadTests : IDisposable
 
     public void Dispose() => Directory.Delete(_root, true);
 
-    private string? ResolveOrigin(string file) => AudioVersionFiles.Resolve(_workspace, Owner, _scope,
+    private string? ResolveOrigin(string file, string? actor = Owner) => AudioVersionFiles.Resolve(_workspace, Owner, actor, _scope,
         AudioThreadVersion.Origin(file, DateTime.UtcNow), new AudioVersionFile(AudioFileRoles.Main, file));
+
+    // F2-P2e: субъект — вызывающий, арендатор (Owner) на чужесть не влияет
+    [Fact]
+    public void Приватный_чат_участника_своё_вложение_читается_а_чужие_private_отказаны()
+    {
+        var own = Path.Combine(_root, "project", ".cc-attachments", "private", "user-b", "g1");
+        Directory.CreateDirectory(own);
+        File.WriteAllBytes(Path.Combine(own, "mine.wav"), "B"u8.ToArray());
+
+        ResolveOrigin(".cc-attachments/private/user-b/g1/mine.wav", "user-b").Should().NotBeNull();
+        ResolveOrigin($".cc-attachments/private/{Owner}/g1/mine.wav", "user-b").Should().BeNull("private владельца");
+        ResolveOrigin(".cc-attachments/private/other-user/g1/secret.wav", "user-b").Should().BeNull("private другого участника");
+    }
+
+    [Fact]
+    public void Общий_чат_актор_неизвестен_private_любого_участника_отказан()
+    {
+        ResolveOrigin($".cc-attachments/private/{Owner}/g1/mine.wav", null).Should().BeNull();
+        ResolveOrigin(".cc-attachments/private/other-user/g1/secret.wav", null).Should().BeNull();
+        ResolveOrigin("sfx/jingle.wav", null).Should().NotBeNull("обычный файл проекта читается");
+    }
 
     [Theory]
     [InlineData(".cc-attachments/private/other-user/g1/secret.wav")]

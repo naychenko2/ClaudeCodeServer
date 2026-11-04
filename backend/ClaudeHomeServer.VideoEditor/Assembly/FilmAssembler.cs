@@ -38,26 +38,26 @@ public sealed class FilmAssembler(
 
     private TimeSpan Timeout => TimeSpan.FromMinutes(Math.Clamp(config.GetValue("VideoEditor:AssembleTimeoutMinutes", DefaultTimeoutMinutes), 1, 240));
 
-    public FilmBuildStatusDto? Status(string ownerId, VideoEditScope scope, string? path)
+    public FilmBuildStatusDto? Status(string ownerId, string? actorId, VideoEditScope scope, string? path)
     {
-        var resolved = FilmService.ResolveFilm(scope, path);
+        var resolved = FilmService.ResolveFilm(scope, path, actorId);
         return resolved.IsOk ? registry.Get(ownerId, scope.Key, resolved.Value!.Relative) : null;
     }
 
-    public bool Cancel(string ownerId, VideoEditScope scope, string? path)
+    public bool Cancel(string ownerId, string? actorId, VideoEditScope scope, string? path)
     {
-        var resolved = FilmService.ResolveFilm(scope, path);
+        var resolved = FilmService.ResolveFilm(scope, path, actorId);
         return resolved.IsOk && registry.Cancel(ownerId, scope.Key, resolved.Value!.Relative);
     }
 
     // Заявка: быстрые проверки — здесь, остальное и сама сборка — в фоне. Возвращает состояние «ждём слот»
-    public FilmCallResult<FilmBuildStatusDto> Start(string ownerId, VideoEditScope scope, string? path, string initiator,
+    public FilmCallResult<FilmBuildStatusDto> Start(string ownerId, string? actorId, VideoEditScope scope, string? path, string initiator,
         string? sessionId = null)
     {
         if (dsp is not { Available: true })
             return FilmCallResult<FilmBuildStatusDto>.Fail(VideoEditorErrors.DspUnavailable,
                 "Сборка недоступна: на сервере нет ffmpeg или выключены «Картинки»");
-        var resolved = FilmService.ResolveFilm(scope, path);
+        var resolved = FilmService.ResolveFilm(scope, path, actorId);
         if (!resolved.IsOk) return FilmCallResult<FilmBuildStatusDto>.Fail(resolved.ErrorCode!, resolved.Error!);
         var film = resolved.Value!;
 
@@ -78,14 +78,14 @@ public sealed class FilmAssembler(
         // Файлы и размеры — сразу и до заявки: человек видит причину ответом, а не провалом в фоне
         foreach (var item in doc.Items)
         {
-            var clip = Resolve(film.Project, item.File, ownerId);
+            var clip = Resolve(film.Project, item.File, actorId);
             if (!clip.IsOk) return FilmCallResult<FilmBuildStatusDto>.Fail(clip.ErrorCode!, clip.Error!);
             if (new FileInfo(clip.Value!.Full).Length > SafeMediaDownloader.VideoMaxBytes)
                 return FilmCallResult<FilmBuildStatusDto>.Fail(VideoEditorErrors.InvalidRequest, $"Клип больше 300 МБ: {item.File}");
         }
         if (doc.Music is { } music)
         {
-            var track = Resolve(film.Project, music.File, ownerId);
+            var track = Resolve(film.Project, music.File, actorId);
             if (!track.IsOk) return FilmCallResult<FilmBuildStatusDto>.Fail(track.ErrorCode!, track.Error!);
         }
 
@@ -98,7 +98,7 @@ public sealed class FilmAssembler(
                 _ => "На сервере идёт слишком много сборок — попробуйте позже",
             });
 
-        var task = Task.Run(() => RunAsync(ownerId, scope, film, doc, entry!, initiator, sessionId));
+        var task = Task.Run(() => RunAsync(ownerId, actorId, scope, film, doc, entry!, initiator, sessionId));
         lock (_running)
         {
             _running.RemoveAll(t => t.IsCompleted);
@@ -115,16 +115,16 @@ public sealed class FilmAssembler(
         await Task.WhenAll(pending);
     }
 
-    private static FilmCallResult<FilmService.Resolved> Resolve(Project project, string relative, string ownerId)
+    private static FilmCallResult<FilmService.Resolved> Resolve(Project project, string relative, string? actorId)
     {
-        var inside = FilmService.ResolveInside(project, relative, ownerId);
+        var inside = FilmService.ResolveInside(project, relative, actorId);
         if (!inside.IsOk) return inside;
         return File.Exists(inside.Value!.Full)
             ? inside
             : FilmCallResult<FilmService.Resolved>.Fail(VideoEditorErrors.FileNotFound, $"Файл не найден: {relative}");
     }
 
-    private async Task RunAsync(string ownerId, VideoEditScope scope, FilmService.Resolved film, FilmDocument doc,
+    private async Task RunAsync(string ownerId, string? actorId, VideoEditScope scope, FilmService.Resolved film, FilmDocument doc,
         FilmBuildRegistry.Entry entry, string initiator, string? sessionId)
     {
         var sw = Stopwatch.StartNew();
@@ -133,7 +133,7 @@ public sealed class FilmAssembler(
         string? error = null, outFile = null;
         try
         {
-            var planned = await PlanAsync(film, doc, ownerId, entry.Cts.Token);
+            var planned = await PlanAsync(film, doc, actorId, entry.Cts.Token);
             if (planned.Error is not null) { error = planned.Error; return; }
 
             // doc.Aspect — кеш пропорций первой сцены: сборка его обновляет, и хеш входов считается уже с ним, иначе
@@ -177,13 +177,13 @@ public sealed class FilmAssembler(
     }
 
     // План по документу: клипы пробуются (длина, звук, размер), обрезка укладывается в длину клипа
-    private async Task<(FilmPlan? Plan, string? Error, string Aspect)> PlanAsync(FilmService.Resolved film, FilmDocument doc, string ownerId, CancellationToken ct)
+    private async Task<(FilmPlan? Plan, string? Error, string Aspect)> PlanAsync(FilmService.Resolved film, FilmDocument doc, string? actorId, CancellationToken ct)
     {
         var clips = new List<FilmPlanClip>();
         VideoDspInfo? first = null;
         foreach (var item in doc.Items)
         {
-            var clip = Resolve(film.Project, item.File, ownerId);
+            var clip = Resolve(film.Project, item.File, actorId);
             if (!clip.IsOk) return (null, clip.Error, doc.Aspect);
             var info = await dsp!.ProbeAsync(clip.Value!.Full, ct);
             if (info is null) return (null, $"Клип не разобран как видео: {item.File}", doc.Aspect);
@@ -196,7 +196,7 @@ public sealed class FilmAssembler(
         FilmPlanMusic? music = null;
         if (doc.Music is { } m)
         {
-            var track = Resolve(film.Project, m.File, ownerId);
+            var track = Resolve(film.Project, m.File, actorId);
             if (!track.IsOk) return (null, track.Error, doc.Aspect);
             music = new FilmPlanMusic(track.Value!.Full, m.Volume, m.FadeOut);
         }
@@ -259,7 +259,7 @@ public sealed class FilmAssembler(
     {
         try
         {
-            if (films.State(ownerId, scope, film.Relative).Value is { } state)
+            if (films.StateOf(ownerId, scope, film, films.Films.ReadFile(film.Full)).Value is { } state)
                 await films.Threads.BroadcastFilmAsync(ownerId, scope.Key, film.Relative, state);
         }
         catch (Exception ex)

@@ -158,7 +158,7 @@ public sealed class FilmMediaEventsTests : IDisposable
         var music = _music; var audio = _audio;
         _w.WriteFilm("video/a/a.film", Doc());
 
-        var result = await music.CreateDraftAsync(Owner, _w.Scope, "video/a/a.film", new FilmMusicRequest(Session), default);
+        var result = await music.CreateDraftAsync(Owner, Owner, _w.Scope, "video/a/a.film", new FilmMusicRequest(Session), default);
 
         result.IsOk.Should().BeTrue(result.Error);
         result.Value!.ThreadId.Should().Be("thread-1");
@@ -172,7 +172,7 @@ public sealed class FilmMediaEventsTests : IDisposable
     {
         var music = _music; var audio = _audio; var hub = _hub;
         _w.WriteFilm("video/a/a.film", Doc(Item("video/a/1.mp4")));
-        await music.CreateDraftAsync(Owner, _w.Scope, "video/a/a.film", new FilmMusicRequest(Session), default);
+        await music.CreateDraftAsync(Owner, Owner, _w.Scope, "video/a/a.film", new FilmMusicRequest(Session), default);
         audio.Files["v1"] = new AudioTrackFile([1, 2, 3], ".mp3");
         audio.Files["v2"] = new AudioTrackFile([9, 9], ".mp3");
 
@@ -193,7 +193,7 @@ public sealed class FilmMediaEventsTests : IDisposable
         var music = _music; var audio = _audio; var hub = _hub;
         _w.WriteFilm("video/a/a.film", Doc());
         _w.WriteFile("music/a.mp3", [5, 5]);
-        await music.CreateDraftAsync(Owner, _w.Scope, "video/a/a.film", new FilmMusicRequest(Session), default);
+        await music.CreateDraftAsync(Owner, Owner, _w.Scope, "video/a/a.film", new FilmMusicRequest(Session), default);
 
         await hub.PublishAsync(new AudioVersionAdded(Owner, Session, ProjectId, "thread-1", "stems-only", "human"));
         _w.Side.Get(Owner, ProjectId, "video/a/a.film").PendingMusic.Should().NotBeNull("нет основного файла — ждём следующую версию");
@@ -225,12 +225,12 @@ public sealed class FilmMediaEventsTests : IDisposable
         _w.WriteFilm("video/a/a.film", Doc());
         var without = Music(null);
 
-        (await without.CreateDraftAsync(Owner, _w.Scope, "video/a/a.film", new FilmMusicRequest(Session), default))
+        (await without.CreateDraftAsync(Owner, Owner, _w.Scope, "video/a/a.film", new FilmMusicRequest(Session), default))
             .ErrorCode.Should().Be(VideoEditorErrors.ProviderUnavailable);
         var with = Music(new FakeAudio());
-        (await with.CreateDraftAsync(Owner, new VideoEditScope(VideoEditScope.Personal, null), "video/a/a.film", new FilmMusicRequest(Session), default))
+        (await with.CreateDraftAsync(Owner, Owner, new VideoEditScope(VideoEditScope.Personal, null), "video/a/a.film", new FilmMusicRequest(Session), default))
             .ErrorCode.Should().Be(VideoEditorErrors.PersonalScopeNoFilms);
-        (await with.CreateDraftAsync(Owner, _w.Scope, "video/a/a.film", new FilmMusicRequest("чужой-чат"), default))
+        (await with.CreateDraftAsync(Owner, Owner, _w.Scope, "video/a/a.film", new FilmMusicRequest("чужой-чат"), default))
             .ErrorCode.Should().Be(VideoEditorErrors.ChatNotFound);
     }
 

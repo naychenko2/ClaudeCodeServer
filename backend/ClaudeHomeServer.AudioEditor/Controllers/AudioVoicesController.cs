@@ -92,8 +92,8 @@ public class AudioVoicesController(
         if (model is null || index is null)
             return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
                 "В версии нет пары модели RVC: нужны .pth и .index");
-        var modelPath = AudioVersionFiles.Resolve(workspace, AudioEditorEndpoints.Owner(scope), scope, version, model);
-        var indexPath = AudioVersionFiles.Resolve(workspace, AudioEditorEndpoints.Owner(scope), scope, version, index);
+        var modelPath = AudioVersionFiles.Resolve(workspace, AudioEditorEndpoints.Owner(scope), UserId, scope, version, model);
+        var indexPath = AudioVersionFiles.Resolve(workspace, AudioEditorEndpoints.Owner(scope), UserId, scope, version, index);
         if (modelPath is null || indexPath is null)
             return Error(StatusCodes.Status404NotFound, AudioEditErrorCodes.FileNotFound,
                 "Файлы модели больше не найдены — рабочая папка очищена");

@@ -94,7 +94,7 @@ public class ChatContextController(
         // S2d-3b: чужой приватный чат — тот же отказ даже для владельца проекта
         if (sessions.GetOwnedVisible(sessionId, UserId) is not { } session) return null;
         var project = session.ProjectId is { } pid ? projects.GetById(pid) : null;
-        return new ContextScope(UserId, session, project);
+        return new ContextScope(UserId, session, project, UserId);
     }
 
     private static bool FilesUnavailable(ContextScope scope) =>

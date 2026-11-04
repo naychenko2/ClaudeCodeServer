@@ -30,7 +30,8 @@ public sealed class TurnContextToolset(
     ContextKindRegistry registry,
     IChatContextStore store,
     TurnContextContributor text,
-    IDelegatedTurnGate? turnGate = null) : IMcpParameterizedToolset
+    IDelegatedTurnGate? turnGate = null,
+    ClaudeHomeServer.Services.Access.ITurnActorRegistry? turnActors = null) : IMcpParameterizedToolset
 {
     public const string ServerName = McpEndpoints.TurnContextName;
 
@@ -129,7 +130,8 @@ public sealed class TurnContextToolset(
         if (reference is null) return Deny("Не указан ref: идентификатор объекта своего вида.");
 
         // Проверка Ref до записи — провайдер владельца; мусор в стор не попадает
-        var scope = new ContextScope(ownerId, session, project);
+        // Актор хода — субъект приватности пути; неизвестен — fail-closed
+        var scope = new ContextScope(ownerId, session, project, turnActors?.Actor(session.Id, ownerId));
         if (registry.Validate(scope, kind, reference) is { } refusal) return Deny(refusal);
 
         var item = new ContextItem("ci_" + Guid.NewGuid().ToString("N")[..12], kind, reference.DeepClone().AsObject(),

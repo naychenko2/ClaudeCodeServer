@@ -78,7 +78,7 @@ public sealed class VideoFormatJobTests : IDisposable
 
     private sealed class Frames(Dictionary<string, byte> byThread) : IImageFrameSource
     {
-        public Task<ImageFrame?> GetAsync(string ownerId, string threadId, string versionId, CancellationToken ct) =>
+        public Task<ImageFrame?> GetAsync(string ownerId, string? actorId, string threadId, string versionId, CancellationToken ct) =>
             Task.FromResult<ImageFrame?>(byThread.TryGetValue(threadId, out var b) ? new ImageFrame([b], "image/png") : null);
 
         public Task<ImageFrameDraft?> CreateDraftAsync(string ownerId, string scopeKey, string sessionId, string folder, CancellationToken ct) =>

@@ -23,8 +23,8 @@ public sealed class ProjectFileContextKind : IContextKindProvider
         if (PathOf(reference) is not { } path) return "Не указан путь файла";
         var root = scope.Project.RootPath;
         // Чужой private не подтверждаем даже существованием: тот же отказ, что у пути вне проекта
-        if (ProjectLinkGuard.ResolveInsideAs(root, path, scope.OwnerId) is not null) return null;
-        if (PrivateAttachments.IsForeignResolved(root, path, scope.OwnerId)) return "Путь вне проекта";
+        if (ProjectLinkGuard.ResolveInsideAs(root, path, scope.ActorId) is not null) return null;
+        if (PrivateAttachments.IsForeignResolved(root, path, scope.ActorId)) return "Путь вне проекта";
         // Отказ двух родов: лексически путь вне корня — или внутри, но идёт через ссылку
         return LiesInsideLexically(root, path)
             ? "Путь идёт через символическую ссылку"
@@ -45,7 +45,7 @@ public sealed class ProjectFileContextKind : IContextKindProvider
         var exists = scope.Project is not null
             && ProjectCapabilityGuard.Allows(scope.Project, ProjectCapabilityArea.FileBound)
             && !string.IsNullOrEmpty(path)
-            && ProjectLinkGuard.ResolveInsideAs(scope.Project.RootPath, path, scope.OwnerId) is { } full
+            && ProjectLinkGuard.ResolveInsideAs(scope.Project.RootPath, path, scope.ActorId) is { } full
             && File.Exists(full);
         return new ContextItemSummary(label.Length > 0 ? label : path, null, null, Missing: !exists);
     }

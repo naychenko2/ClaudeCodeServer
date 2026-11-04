@@ -56,7 +56,7 @@ public sealed class VideoFrameReaderPrivateTests : IDisposable
     [InlineData("other/.cc-attachments/private/other-user/g1/secret.png")]
     public async Task Кадр_из_чужого_private_отказ_без_байтов(string path)
     {
-        var frame = await new VideoFrameReader().ReadAsync(Owner, _scope, FrameRef.File(path), default);
+        var frame = await new VideoFrameReader().ReadAsync(Owner, Owner, _scope, FrameRef.File(path), default);
 
         frame.Bytes.Should().BeNull(path);
         frame.ErrorCode.Should().Be(VideoEditorErrors.FrameUnavailable, path);
@@ -68,7 +68,7 @@ public sealed class VideoFrameReaderPrivateTests : IDisposable
     [InlineData("hero.png")]
     public async Task Свой_private_и_обычный_файл_проекта_читаются_как_раньше(string path)
     {
-        var frame = await new VideoFrameReader().ReadAsync(Owner, _scope, FrameRef.File(path), default);
+        var frame = await new VideoFrameReader().ReadAsync(Owner, Owner, _scope, FrameRef.File(path), default);
 
         frame.ErrorCode.Should().BeNull(path + " " + frame.Error);
         frame.Bytes!.Bytes.Should().NotBeEmpty(path);

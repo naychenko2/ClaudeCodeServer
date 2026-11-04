@@ -18,7 +18,7 @@ public sealed class ImageFrameSource(
     // Сколько раз повторяем создание черновика, если человек записал нити между чтением и записью
     private const int DraftAttempts = 3;
 
-    public async Task<ImageFrame?> GetAsync(string ownerId, string threadId, string versionId, CancellationToken ct)
+    public async Task<ImageFrame?> GetAsync(string ownerId, string? actorId, string threadId, string versionId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(ownerId) || string.IsNullOrWhiteSpace(threadId) || string.IsNullOrWhiteSpace(versionId))
             return null;
@@ -35,7 +35,7 @@ public sealed class ImageFrameSource(
             // Исходник нити по файлу — файл проекта; у личной области проекта нет
             if (thread.File is { Length: > 0 } file && projects.GetById(scopeKey) is { } project)
             {
-                var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(owner, project.RootPath, file, "Кадр", ct);
+                var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(actorId, project.RootPath, file, "Кадр", ct);
                 return read.Value is { } image ? new ImageFrame(image.Bytes, image.ContentType) : null;
             }
             return null;

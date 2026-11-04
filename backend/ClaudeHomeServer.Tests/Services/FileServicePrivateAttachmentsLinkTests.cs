@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Files;
 using FluentAssertions;
 using Xunit;
@@ -24,6 +25,9 @@ namespace ClaudeHomeServer.Tests.Services;
 /// лишнего обхода нет ни в одну сторону.
 /// TAIL-SEARCH-PRIV (хвост ревью 11256e5f, секция 6): поиск — последний обход без канонического
 /// префикса, сведён к той же схеме; его ожидаемый набор — тот же, что у Tree/List.
+/// Доработка по вердикту 13d3c2ab (секции 7–8): якорь префикса — по глубочайшей паре
+/// .cc-attachments+private (предок канона с тем же именем его не уводит), а неразрешимый канон
+/// якоря — отказ обхода, тот же fail-closed, что у читающих и разрушительных точек.
 /// Ссылка на каталог требует привилегий на Windows (образец PrivateAttachmentsResolvedTests),
 /// тесты ссылки идут только на Linux.
 /// </summary>
@@ -383,5 +387,123 @@ public sealed class FileServicePrivateAttachmentsLinkTests : IDisposable
         PathsOf(_svc.Search(_root, "evilfile")).Should().BeEmpty("без зрителя — тот же fail-closed");
         PathsOf(_svc.Search(_root, "evilfile", Other)).Should().Equal(new[] { "evilfile" },
             "автору — своё и через файл-ссылку, как прямым именем");
+    }
+
+    // --- 7. (доработка по вердикту 13d3c2ab, минор 1) предок канона с тем же именем не уводит якорь ---
+
+    /// <summary>
+    /// Вердикт 13d3c2ab (минор 1) к доработке 81fb61c3: первая линия ClosedPrefixOf брала ПЕРВЫЙ
+    /// сегмент .cc-attachments в каноне цели. Если путь к вложениям сам проходит через каталог с
+    /// тем же именем (вложения вынесены на отдельный диск: .cc-attachments →
+    /// /mnt/.cc-attachments/store/.cc-attachments) — в каноне цели их два, и якорь брался от
+    /// предка: префикс .cc-attachments/store/.cc-attachments/… не начинается с
+    /// .cc-attachments/private/, текстовый фильтр слепнет на L/private/{чужой}, а верная линия
+    /// корня не выполнялась — первая вернула раньше. Здесь та же проверка, что тест 5: чужое
+    /// закрыто ровно тем же набором, что от прямого имени контейнера; своё и общая раскладка
+    /// открыты; ссылка прямо в чужое private под тем же корнем закрыта (якорь по паре
+    /// .cc-attachments+private); легальная ссылка наружу на не-private путь — видна; без зрителя
+    /// обход не меняется.
+    /// </summary>
+    /// <Named мутации: «первая линия ClosedPrefixOf возвращает ПЕРВЫЙ сегмент .cc-attachments»
+    /// (как до этой доработки) краснит этот тест: якорь уходит в предка, L/private/{чужой} и evil
+    /// возвращаются в дерево.</Named>
+    [Fact]
+    public void ПредокКанонаСТемЖеИменемНеУводитЯкорь_ЧужоеPrivateЗакрыто_КакПриПрямомИмени()
+    {
+        if (OperatingSystem.IsWindows()) return; // ссылка на каталог требует привилегий
+        // «диск» с вложениями: путь к ним сам содержит .cc-attachments (предок с тем же именем),
+        // и сам каталог вложений назван .cc-attachments — в каноне цели их ДВА.
+        var disk = Path.Combine(_tempDir, TreeExcludes.AttachmentsDir, "store", TreeExcludes.AttachmentsDir);
+        Write(disk, $"private/{Other}/{_foreignGuid}/foreign.txt", "чужое");
+        Write(disk, $"private/{Me}/{_ownGuid}/own.txt", "своё");
+        Write(disk, $"{_commonGuid}/common.txt", "общее");
+        Directory.Delete(Path.Combine(_root, TreeExcludes.AttachmentsDir), recursive: true);
+        Directory.CreateSymbolicLink(Path.Combine(_root, TreeExcludes.AttachmentsDir), disk);
+        Link("L", TreeExcludes.AttachmentsDir);
+        // ссылка прямо в чужое private под тем же корнем: здесь якорь — по паре .cc-attachments+private
+        Link("evil", $"{TreeExcludes.AttachmentsDir}/private/{Other}");
+        var outside = Directory.CreateDirectory(Path.Combine(_tempDir, "outside")).FullName;
+        Write(outside, "keep.txt", "внешнее");
+        Link("ext", outside);
+
+        var viaRoot = PathsOf(_svc.Tree(_root, showHidden: true, viewerUserId: Me));
+        var viaName = PathsOf(_svc.Tree(_root, "L", showHidden: true, viewerUserId: Me));
+        var expected = DirectOfContainer(TreeExcludes.AttachmentsDir);
+        var foreignDir = $"L/private/{Other}";
+
+        foreach (var (label, paths) in new[] { ("обход корня", viaRoot), ("названный L", viaName) })
+        {
+            paths.Where(p => p.StartsWith("L/")).Should().Equal(expected,
+                $"{label}: якорь — по глубочайшей паре/сегменту, не по первому: closed-поддерево за " +
+                "предком с тем же именем — ровно тот набор, что от прямого имени");
+            paths.Should().NotContain(p => p.StartsWith(foreignDir),
+                $"чужое private через обе ссылки закрыто: ни каталогов ({foreignDir}), ни файлов под ним");
+        }
+
+        viaRoot.Should().NotContain("evil", "ссылка прямо в чужое private под корнем с тем же именем — не запись дерева");
+        viaRoot.Should().NotContain(p => p.StartsWith("evil/"));
+        viaRoot.Should().Contain("ext/keep.txt", "легальная ссылка наружу на не-private путь — как прежде");
+        viaRoot.Should().Contain("docs/plain.txt", "обычное дерево не меняется");
+
+        // List по пути под ссылкой — тот же исход, что от названного контейнера
+        PathsOf(_svc.List(_root, "L", showHidden: true, viewerUserId: Me))
+            .Should().BeEquivalentTo(new[] { "L/private", $"L/{_commonGuid}" });
+        PathsOf(_svc.List(_root, "L/private", showHidden: true, viewerUserId: Me))
+            .Should().Equal(new[] { $"L/private/{Me}" });
+
+        // без зрителя обход не меняется (контракт вызывающих без актора — см. doc Tree)
+        PathsOf(_svc.Tree(_root, showHidden: true))
+            .Should().Contain($"L/private/{Other}/{_foreignGuid}/foreign.txt");
+    }
+
+    // --- 8. (доработка по вердикту 13d3c2ab, минор 2) неразрешимый канон якоря: обход fail-closed ---
+
+    /// <summary>
+    /// Вердикт 13d3c2ab (минор 2): при неразрешимом каноне якоря (цикл ссылок в самом
+    /// .cc-attachments) обход возвращал пустой префикс и судил запись текстовым IsForeign по
+    /// relDir, тогда как читающие и разрушительные точки в той же раскладке отказывают
+    /// (IsForeignResolved → PrivateAttachments.cs:235/:287, IsContainerAt → :317/:322):
+    /// «поддерево, которого нельзя разобрать, не может быть и «своим»». Расхождение наблюдаемо:
+    /// то же содержимое достижимо отдельной легальной ссылкой «L». Здесь обход отказывает так же:
+    /// с зрителем — ни содержимого под ссылкой, ни обычного дерева (тот же отказ, что даёт
+    /// IsForeignResolved по любому пути этой операции); без зрителя обход не меняется (контракт
+    /// вызывающих без актора — см. doc Tree).
+    /// </summary>
+    /// <Named мутации: «пустой префикс вместо fail-closed» (ClosedPrefixOf на неразрешимом
+    /// closedRoot возвращает "") краснит этот тест: L/… и docs/plain.txt возвращаются в обход.</Named>
+    [Fact]
+    public void НеразрешимыйКанонЯкоря_ОбходНеОтдаётСодержимое_FailClosedКакЧитающиеТочки()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var store = Directory.CreateDirectory(Path.Combine(_tempDir, "store")).FullName;
+        Write(store, $"private/{Other}/{_foreignGuid}/foreign.txt", "чужое");
+        Write(store, $"private/{Me}/{_ownGuid}/own.txt", "своё");
+        Write(store, $"{_commonGuid}/common.txt", "общее");
+        Directory.Delete(Path.Combine(_root, TreeExcludes.AttachmentsDir), recursive: true);
+        // сам контейнер — цикл ссылок: его канон неразрешим (тот же приём, что
+        // «НеразрешимыйПуть_ЦиклСсылок_FailClosedОбаПредиката» в PrivateAttachmentsResolvedTests)
+        Directory.CreateSymbolicLink(Path.Combine(_root, TreeExcludes.AttachmentsDir), "loop");
+        Directory.CreateSymbolicLink(Path.Combine(_root, "loop"), TreeExcludes.AttachmentsDir);
+        // отдельная легальная ссылка на то же содержимое: обход доходит до него, не разбирая якорь
+        Link("L", store);
+
+        // гейт читающих точек в этой же раскладке — отказывает: это основание, а не проверка правки
+        PrivateAttachments.IsForeignResolved(_root, $"L/private/{Other}/{_foreignGuid}/foreign.txt", Me)
+            .Should().BeTrue();
+        PrivateAttachments.IsForeignResolved(_root, "docs/plain.txt", Me).Should().BeTrue();
+
+        // обход — тот же отказ: с зрителем closed-поддерево не опознано, содержимого нет
+        PathsOf(_svc.Tree(_root, showHidden: true, viewerUserId: Me)).Should().BeEmpty(
+            "якорь неразрешим → обход fail-closed: ни чужого, ни своего за ссылкой, ни обычного дерева");
+        var listed = PathsOf(_svc.List(_root, showHidden: true, viewerUserId: Me));
+        listed.Should().NotContain(p => p.StartsWith("L/"), "листинг корня — тот же отказ");
+        listed.Should().NotContain("docs/plain.txt", "обычное дерево в этой раскладке закрыто и для List");
+        PathsOf(_svc.Search(_root, "foreign", Me)).Should().BeEmpty();
+        PathsOf(_svc.Search(_root, "own", Me)).Should().BeEmpty();
+        PathsOf(_svc.Search(_root, "common", Me)).Should().BeEmpty();
+        PathsOf(_svc.Search(_root, "plain", Me)).Should().BeEmpty();
+
+        // без зрителя обход не меняется (контракт вызывающих без актора — см. doc Tree)
+        PathsOf(_svc.Tree(_root, showHidden: true)).Should().Contain($"L/{_commonGuid}/common.txt");
     }
 }

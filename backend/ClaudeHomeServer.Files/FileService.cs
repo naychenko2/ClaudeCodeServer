@@ -86,8 +86,8 @@ public class FileService(
     // ссылка внутри закрытого поддерева — свой переход и свой префикс (она может вести и наружу:
     // обход снова обычный). Ссылка наружу на не-private путь (frontend/node_modules → primary
     // checkout у worktree-setup.sh) даёт пустой префикс: обход и его цена — как прежде.
-    // Неразрешимый канон (цикл ссылок) — пустой префикс: на запись он не влияет, а сама
-    // операция по такому пути даст свой отказ ниже (Directory.Exists/404).
+    // Неразрешимый канон (цикл ссылок) — отказ обхода, тот же fail-closed, что у предиката
+    // (см. конец ClosedPrefixOf): раньше такой записи отдавались текстовым фильтром по relDir.
     //
     // ДВЕ ЛИНИИ, как у канонического предиката (доработка по ревью 6c2e1385, MAJOR 1): раньше
     // префикс выводился только из первой — литерального сегмента .cc-attachments в каноне цели.
@@ -105,31 +105,72 @@ public class FileService(
     // IsForeign по собранному пути — автор это сегмент после private/ (тот же разбор, что у
     // предиката); сам контейнер и его private — не чужие. Инвариант сохранён: легальная ссылка
     // наружу на не-private путь (frontend/node_modules → primary checkout у worktree-setup.sh)
-    // под якорем не оказывается — префикс пуст, обход и его цена как прежде. Неразрешимый канон
-    // якоря (цикл ссылок в самом .cc-attachments) — пустой префикс: второй линии нечем судить;
-    // читающие и разрушительные точки остаются на fail-closed предикате (IsForeignResolved),
-    // обход такой записи — тот же принятый порядок, что у неразрешимой цели.
-    private static string ClosedPrefixOf(string? canonical, string? closedRoot)
+    // под якорем не оказывается — префикс пуст, обход и его цена как прежде.
+    //
+    // ПОРЯДОК поиска якоря (доработка по вердикту 13d3c2ab, минор 1): раньше первая линия брала
+    // ПЕРВЫЙ сегмент .cc-attachments в каноне цели. Предок канона с тем же именем (вложения на
+    // отдельном диске: .cc-attachments → /mnt/.cc-attachments/store/.cc-attachments) уводит такой
+    // якорь не в то поддерево: префикс строится от предка, собранный путь перестаёт начинаться с
+    // .cc-attachments/private/, текстовый фильтр слепнет на L/private/{чужой} — а верная вторая
+    // линия не выполняется, потому что первая вернула раньше. Теперь якорь ищется теми же
+    // признаками, что чужесть у предиката, и в том же порядке: сначала ПОРА
+    // .cc-attachments+private (тот же сегментный обход, что у HasForeignPrivateSegment,
+    // PrivateAttachments.cs:246), ГЛУБОЧАЙШАЯ из найденных; затем корень closed-поддерева
+    // операции (closedRoot — настоящий контейнер через ссылки); и только потом литеральный
+    // сегмент .cc-attachments без своей private ниже по пути — тоже ГЛУБОЧАЙШИЙ, не первый.
+    //
+    // Неразрешимый якорь — отказ обхода (минор 2 того же вердикта): раньше при неразрешимом
+    // каноне (цель через цикл ссылок или цикл ссылок в самом .cc-attachments → closedRoot null)
+    // возвращался пустой префикс, и запись судилась текстовой линией по relDir, тогда как
+    // читающие и разрушительные точки в той же раскладке отказывают (IsForeignResolved:
+    // PrivateAttachments.cs:235, :287; IsContainerAt: :317, :322) — содержимое, недостижимое по
+    // канону, оставалось достижимым через отдельную легальную ссылку. Такие точки дают null:
+    // обход не отдаёт запись и не спускается в неё. Пустой префикс остаётся тем, чем был: цель
+    // вне closed-поддерева (обычный путь или ссылка наружу) — текстовый фильтр, как прежде.
+    private static string? ClosedPrefixOf(string? canonical, string? closedRoot)
     {
-        if (canonical is null) return "";
+        if (canonical is null) return null; // цель неразрешима (цикл ссылок): тот же отказ, что у предиката
         var segments = canonical.Split('/'); // Canonical отдаёт «/» независимо от ОС
-        for (var i = 0; i < segments.Length; i++)
+
+        // Линия 1 — по паре .cc-attachments+private: private под литеральным .cc-attachments —
+        // верный якорь на любой глубине канона; берётся глубочайшая пара, предок с тем же именем
+        // её не уводит. Префикс нормализован к паре — текстовая линия ниже судит его как свой путь.
+        var anchor = -1;
+        for (var i = 0; i + 1 < segments.Length; i++)
+        {
+            if (string.Equals(segments[i], TreeExcludes.AttachmentsDir, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(segments[i + 1], PrivateAttachments.PrivateRoot, StringComparison.OrdinalIgnoreCase))
+                anchor = i;
+        }
+        if (anchor >= 0) return string.Join('/', segments[anchor..]);
+
+        // Линия 2 — корень closed-поддерева операции: ловит то, чего первая не видит (сам
+        // .cc-attachments — ссылка на каталог с другим именем: пары сегментов в каноне нет).
+        if (closedRoot is not null)
+        {
+            // Форма сравнения — та же, что у второй линии предиката: канон без завершающего «/»,
+            // регистр по правилам ФС хоста (SafePath.ComparisonFor).
+            var target = canonical.TrimEnd('/');
+            var root = closedRoot.TrimEnd('/');
+            var comparison = SafePath.ComparisonFor(OperatingSystem.IsWindows());
+            // Цель — сам контейнер через ссылку («L» → .cc-attachments → каталог с другим именем):
+            // префикс корня, содержимое судится ниже по именам обхода.
+            if (target.Equals(root, comparison)) return TreeExcludes.AttachmentsDir;
+            if (target.StartsWith(root + "/", comparison))
+                return TreeExcludes.AttachmentsDir + "/" + target[(root.Length + 1)..];
+        }
+
+        // Линия 3 — closed-поддерево ДРУГОГО корня («L» → /other/.cc-attachments): якорь —
+        // глубочайший литеральный сегмент, не первый: предок канона с тем же именем не уводит его.
+        for (var i = segments.Length - 1; i >= 0; i--)
         {
             if (string.Equals(segments[i], TreeExcludes.AttachmentsDir, StringComparison.OrdinalIgnoreCase))
                 return string.Join('/', segments[i..]);
         }
-        if (closedRoot is null) return "";
-        // Форма сравнения — та же, что у второй линии предиката: канон без завершающего «/»,
-        // регистр по правилам ФС хоста (SafePath.ComparisonFor).
-        var target = canonical.TrimEnd('/');
-        var root = closedRoot.TrimEnd('/');
-        var comparison = SafePath.ComparisonFor(OperatingSystem.IsWindows());
-        // Цель — сам контейнер через ссылку («L» → .cc-attachments → каталог с другим именем):
-        // префикс корня, содержимое судится ниже по именам обхода.
-        if (target.Equals(root, comparison)) return TreeExcludes.AttachmentsDir;
-        if (target.StartsWith(root + "/", comparison))
-            return TreeExcludes.AttachmentsDir + "/" + target[(root.Length + 1)..];
-        return "";
+
+        // Нечем судить: якорь операции неразрешим (цикл ссылок в самом .cc-attachments) —
+        // fail-closed, как читающие точки; иначе цель вне closed-поддерева — пустой префикс.
+        return closedRoot is null ? null : "";
     }
 
     // Канон корня closed-поддерева операции: <opRoot>/.cc-attachments через ссылки (тот же
@@ -139,12 +180,16 @@ public class FileService(
         SafePath.Canonical(Path.Combine(opRoot, TreeExcludes.AttachmentsDir));
 
     // closedPrefix записи: продолжение префикса родителя или новый префикс на переходе.
-    private static string ClosedPrefixFor(string parentPrefix, string name, string absolutePath, bool isLink,
+    // null — позиция относительно closed-поддерева не разрешима: вызывающий отказывает запись
+    // и не спускается в неё (fail-closed, см. блок ClosedPrefixOf); отказ наследуется вниз.
+    private static string? ClosedPrefixFor(string? parentPrefix, string name, string absolutePath, bool isLink,
         string? closedRoot)
     {
+        if (parentPrefix is null) return null;
         var inherited = parentPrefix.Length == 0 ? "" : parentPrefix + "/" + name;
         if (!isLink) return inherited;
         var fromTarget = ClosedPrefixOf(SafePath.Canonical(absolutePath), closedRoot);
+        if (fromTarget is null) return null; // неразрешимый канон цели — тот же отказ, что у предиката
         // Ссылка наружу из closed-поддерева — обход снова обычный (её цель вне его);
         // внутрь — тот же префикс, что дал бы прямой путь.
         return fromTarget.Length != 0 ? fromTarget : inherited;
@@ -249,8 +294,9 @@ public class FileService(
             if (!showHidden && name.StartsWith('.')) continue;
             // S2d-6b-2 доработка 1: каталог чужого автора (и чужой private выше по дереву) — не в ответе, см. doc метода
             var prefix = ClosedPrefixFor(startPrefix, name, d, isLink, closedRoot);
+            // prefix null — якорь неразрешим: запись не отдаётся, как отказывает IsForeignResolved
             if (viewerUserId is not null &&
-                PrivateAttachments.IsForeign(prefix.Length == 0 ? relDir : prefix, viewerUserId)) continue;
+                (prefix is null || PrivateAttachments.IsForeign(prefix.Length == 0 ? relDir : prefix, viewerUserId))) continue;
             entries.Add(new FileEntry(name, relDir, true, null, modifiedAt, false));
         }
 
@@ -279,7 +325,7 @@ public class FileService(
             if (!showHidden && name.StartsWith('.')) continue;
             var prefix = ClosedPrefixFor(startPrefix, name, f, isLink, closedRoot);
             if (viewerUserId is not null &&
-                PrivateAttachments.IsForeign(prefix.Length == 0 ? rel : prefix, viewerUserId)) continue;
+                (prefix is null || PrivateAttachments.IsForeign(prefix.Length == 0 ? rel : prefix, viewerUserId))) continue;
             entries.Add(new FileEntry(name, rel, false, size, modifiedAt,
                 modified.Contains(rel), IsNew: newFiles.Contains(rel)));
         }
@@ -342,7 +388,7 @@ public class FileService(
 
         // Найденные файлы — до метаданных: обход ленивый, как прежний, FileInfo только для
         // совпавших по имени.
-        IEnumerable<(string Abs, string Rel, string Name, FileInfo Info)> Matches(string dir, string parentPrefix)
+        IEnumerable<(string Abs, string Rel, string Name, FileInfo Info)> Matches(string dir, string? parentPrefix)
         {
             string[] files;
             try { files = Directory.GetFiles(dir); }
@@ -370,7 +416,8 @@ public class FileService(
                 }
                 var prefix = ClosedPrefixFor(parentPrefix, name, f, isLink, closedRoot);
                 var rel = Path.GetRelativePath(rootPath, f).Replace('\\', '/');
-                if (PrivateAttachments.IsForeign(prefix.Length == 0 ? rel : prefix, viewerUserId)) continue;
+                // prefix null — якорь неразрешим: запись не находится, как отказывает IsForeignResolved
+                if (prefix is null || PrivateAttachments.IsForeign(prefix.Length == 0 ? rel : prefix, viewerUserId)) continue;
                 yield return (f, rel, name, info);
             }
 
@@ -397,6 +444,7 @@ public class FileService(
                     continue;
                 }
                 var prefix = ClosedPrefixFor(parentPrefix, name, d, isLink, closedRoot);
+                if (prefix is null) continue; // якорь неразрешим: поддерево не обходится (fail-closed)
                 if (!isLink)
                 {
                     foreach (var m in Matches(d, prefix)) yield return m;
@@ -465,7 +513,7 @@ public class FileService(
         var closedRoot = ClosedRootOf(rootPath);
         var startPrefix = ClosedPrefixOf(SafePath.Canonical(start), closedRoot);
 
-        void Walk(string dir, string parentPrefix)
+        void Walk(string dir, string? parentPrefix)
         {
             if (result.Count >= TreeMaxEntries) return;
 
@@ -497,8 +545,9 @@ public class FileService(
                 // Через ссылку чужесть решается по каноническому относительному пути (см. блок
                 // ClosedPrefixOf выше), её поддерево не обходится: префикс наследуется вниз.
                 var prefix = ClosedPrefixFor(parentPrefix, name, d, isLink, closedRoot);
+                // prefix null — якорь неразрешим: записи нет и вниз не идём, как отказывает IsForeignResolved
                 if (viewerUserId is not null &&
-                    PrivateAttachments.IsForeign(prefix.Length == 0 ? relDir : prefix, viewerUserId)) continue;
+                    (prefix is null || PrivateAttachments.IsForeign(prefix.Length == 0 ? relDir : prefix, viewerUserId))) continue;
                 result.Add(new FileEntry(name, relDir, true, null, modifiedAt, false));
                 Walk(d, prefix);
             }
@@ -529,7 +578,7 @@ public class FileService(
                 if (!showHidden && name.StartsWith('.')) continue;
                 var prefix = ClosedPrefixFor(parentPrefix, name, f, isLink, closedRoot);
                 if (viewerUserId is not null &&
-                    PrivateAttachments.IsForeign(prefix.Length == 0 ? rel : prefix, viewerUserId)) continue;
+                    (prefix is null || PrivateAttachments.IsForeign(prefix.Length == 0 ? rel : prefix, viewerUserId))) continue;
                 result.Add(new FileEntry(name, rel, false, size, modifiedAt,
                     modified.Contains(rel), IsNew: newFiles.Contains(rel)));
             }

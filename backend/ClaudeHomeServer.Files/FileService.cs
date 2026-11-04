@@ -69,6 +69,48 @@ public class FileService(
         relativePath.Equals(".claude/worktrees", StringComparison.OrdinalIgnoreCase) ||
         relativePath.StartsWith(".claude/worktrees/", StringComparison.OrdinalIgnoreCase);
 
+    // ─── обход closed-поддерева через символьную ссылку (дефект d07d7054) ────────
+    // Текстовый фильтр ниже судит относительный путь и не знает о ссылках: «L» → .cc-attachments
+    // в корне проекта ни не исключён по имени (имя «L»), ни не отфильтрован (первый сегмент «L»),
+    // обход спускается в настоящий .cc-attachments и отдаёт L/private/{чужой}/… — их содержимое
+    // доходит и до IndexFolder. Канонический гейт (шаг 0859cdb5) закрыл читающие и разрушительные
+    // точки; обход оставал текстовым.
+    //
+    // Цена (замечание ревью 6db670ff): канонический предикат на каждую запись дерева — лишние
+    // разыменования на всём обходе (замер ~42 мс на 1000 вызовов; при пороке TreeMaxEntries
+    // заметно). Обход знает место, где перешёл по ссылке: каталог-ссылка (reparse-точка) или
+    // названный старт. Поэтому разыменование — ОДНО на переход, дальше только строковая сборка:
+    // closedPrefix — путь текущего каталога относительно корня closed-поддерева
+    // (.cc-attachments); пустой — вне его. На переходе выводится из канона цели ссылки, ниже
+    // продлевается именами обхода: канон записи под ссылкой = канон цели + имена обхода. Новая
+    // ссылка внутри закрытого поддерева — свой переход и свой префикс (она может вести и наружу:
+    // обход снова обычный). Ссылка наружу на не-private путь (frontend/node_modules → primary
+    // checkout у worktree-setup.sh) даёт пустой префикс: обход и его цена — как прежде.
+    // Неразрешимый канон (цикл ссылок) — пустой префикс: на запись он не влияет, а сама
+    // операция по такому пути даст свой отказ ниже (Directory.Exists/404).
+    private static string ClosedPrefixOf(string? canonical)
+    {
+        if (canonical is null) return "";
+        var segments = canonical.Split('/'); // Canonical отдаёт «/» независимо от ОС
+        for (var i = 0; i < segments.Length; i++)
+        {
+            if (string.Equals(segments[i], TreeExcludes.AttachmentsDir, StringComparison.OrdinalIgnoreCase))
+                return string.Join('/', segments[i..]);
+        }
+        return "";
+    }
+
+    // closedPrefix записи: продолжение префикса родителя или новый префикс на переходе.
+    private static string ClosedPrefixFor(string parentPrefix, string name, string absolutePath, bool isLink)
+    {
+        var inherited = parentPrefix.Length == 0 ? "" : parentPrefix + "/" + name;
+        if (!isLink) return inherited;
+        var fromTarget = ClosedPrefixOf(SafePath.Canonical(absolutePath));
+        // Ссылка наружу из closed-поддерева — обход снова обычный (её цель вне его);
+        // внутрь — тот же префикс, что дал бы прямой путь.
+        return fromTarget.Length != 0 ? fromTarget : inherited;
+    }
+
     // Защита от path traversal — форвардер к Core-примитиву (Этап 3, уборка Git).
     // Реализация и обоснование граничных случаев (`..`, абсолютный путь, символы диска)
     // живут в `ClaudeHomeServer.Core/Services/SafePath.cs`. Внутренний форвардер — для кода
@@ -115,6 +157,8 @@ public class FileService(
     /// (Files-ручка без JWT): любое private закрыто, fail-closed, как сам IsForeign.
     /// TreeExcludes режет ОБХОД, а не названный путь: прямая ссылка на .cc-attachments или private/
     /// отдаёт их содержимое — поэтому фильтр стоит по записям, а не по стартовому каталогу.
+    /// Названный путь идёт на диск: «L» → .cc-attachments — тот же контейнер, и чужесть его
+    /// содержимого решается по каноническому относительному пути (дефект d07d7054, см. ClosedPrefixOf).
     /// </summary>
     public IEnumerable<FileEntry> List(string rootPath, string relativePath = "", bool showHidden = false,
         string? viewerUserId = null)
@@ -132,6 +176,11 @@ public class FileService(
         var (modified, newFiles) = GetGitStatus(rootPath);
         var entries = new List<FileEntry>();
 
+        // Канонический префикс названного старта: «L» → .cc-attachments и «L/private» — те же
+        // контейнеры на диске (шаг 0859cdb5), их содержимое судится по каноническому пути.
+        // Обычный путь даёт пустой префикс — фильтр ниже остаётся текстовым, как прежде.
+        var startPrefix = ClosedPrefixOf(SafePath.Canonical(dir));
+
         foreach (var d in Directory.GetDirectories(dir).OrderBy(x => x))
         {
             // Чтение метаданных одной записи может бросить IOException/UnauthorizedAccessException
@@ -140,12 +189,15 @@ public class FileService(
             string name;
             DateTime modifiedAt;
             string relDir;
+            bool isLink;
             try
             {
                 var info = new DirectoryInfo(d);
                 name = info.Name;
                 modifiedAt = info.LastWriteTimeUtc;
                 relDir = Path.GetRelativePath(rootPath, d).Replace('\\', '/');
+                // Attributes — тот же снимок, что у Name/LastWriteTimeUtc: нового syscall нет
+                isLink = (info.Attributes & FileAttributes.ReparsePoint) != 0;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -155,7 +207,9 @@ public class FileService(
             if (TreeExcludes.Contains(name)) continue;
             if (!showHidden && name.StartsWith('.')) continue;
             // S2d-6b-2 доработка 1: каталог чужого автора (и чужой private выше по дереву) — не в ответе, см. doc метода
-            if (viewerUserId is not null && PrivateAttachments.IsForeign(relDir, viewerUserId)) continue;
+            var prefix = ClosedPrefixFor(startPrefix, name, d, isLink);
+            if (viewerUserId is not null &&
+                PrivateAttachments.IsForeign(prefix.Length == 0 ? relDir : prefix, viewerUserId)) continue;
             entries.Add(new FileEntry(name, relDir, true, null, modifiedAt, false));
         }
 
@@ -166,6 +220,7 @@ public class FileService(
             DateTime modifiedAt;
             long size;
             string rel;
+            bool isLink;
             try
             {
                 var info = new FileInfo(f);
@@ -173,6 +228,7 @@ public class FileService(
                 size = info.Length;
                 modifiedAt = info.LastWriteTimeUtc;
                 rel = Path.GetRelativePath(rootPath, f).Replace('\\', '/');
+                isLink = (info.Attributes & FileAttributes.ReparsePoint) != 0;
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -180,7 +236,9 @@ public class FileService(
                 continue;
             }
             if (!showHidden && name.StartsWith('.')) continue;
-            if (viewerUserId is not null && PrivateAttachments.IsForeign(rel, viewerUserId)) continue;
+            var prefix = ClosedPrefixFor(startPrefix, name, f, isLink);
+            if (viewerUserId is not null &&
+                PrivateAttachments.IsForeign(prefix.Length == 0 ? rel : prefix, viewerUserId)) continue;
             entries.Add(new FileEntry(name, rel, false, size, modifiedAt,
                 modified.Contains(rel), IsNew: newFiles.Contains(rel)));
         }
@@ -250,12 +308,15 @@ public class FileService(
     // меняется (WebDAV/MCP/ProjectFiles, см. doc List); пустая строка — без зрителя: любое private
     // закрыто (fail-closed). TreeExcludes режет ОБХОД, а не названный старт: путь внутрь
     // .cc-attachments вызывающий назвал явно — фильтр по записям, не по стартовому каталогу.
-    // virtual — тестовый шов (S2d-6b-8, хвост ревью R-S2d-6b-6): передача зрителя в обход
-    // (KnowledgeController.IndexFolder) не наблюдаема извне — из разрешённых IndexFolder стартов
-    // чужое private фильтром не достигается (обход ниже .cc-attachments не спускается), и мутация
-    // «снять аргумент UserId» не краснит ни один поведенческий тест (проба А ревьюера: 6/6 зелёные).
-    // Белый тест на шов требует подменного FileService, пишущего переданного зрителя, — тот же
-    // приём, что virtual-шов у EgressConnector/MockupCatalog.
+    // Через символьную ссылку в обход попадает и то, что режет имя: «L» → .cc-attachments из
+    // обычного старта даёт L/private/{чужой}/… — их чужесть решается по каноническому
+    // относительному пути (дефект d07d7054, см. ClosedPrefixOf), и там же передача зрителя
+    // становится наблюдаемой поведением (тест IndexFolder через ссылку).
+    // virtual — тестовый шов (S2d-6b-8, хвост ревью R-S2d-6b-6): из стартов без ссылки чужое
+    // private фильтром не достигается (обход ниже .cc-attachments не спускается), и мутация
+    // «снять аргумент UserId» на них не краснит ни один поведенческий тест (проба А ревьюера:
+    // 6/6 зелёные) — белый тест на шов остаётся: подменный FileService, пишущий переданного
+    // зрителя, тот же приём, что virtual-шов у EgressConnector/MockupCatalog.
     public virtual IEnumerable<FileEntry> Tree(string rootPath, string relativePath = "", bool showHidden = false,
         string? viewerUserId = null)
     {
@@ -265,7 +326,11 @@ public class FileService(
         var (modified, newFiles) = GetGitStatus(rootPath);
         var result = new List<FileEntry>();
 
-        void Walk(string dir)
+        // Тот же канонический старт, что у List: «L» → .cc-attachments и «L/private» как названный
+        // старт дают префикс closed-поддерева, обычный путь — пустой (обход и цена как прежде).
+        var startPrefix = ClosedPrefixOf(SafePath.Canonical(start));
+
+        void Walk(string dir, string parentPrefix)
         {
             if (result.Count >= TreeMaxEntries) return;
 
@@ -276,12 +341,14 @@ public class FileService(
                 string name;
                 DateTime modifiedAt;
                 string relDir;
+                bool isLink;
                 try
                 {
                     var info = new DirectoryInfo(d);
                     name = info.Name;
                     modifiedAt = info.LastWriteTimeUtc;
                     relDir = Path.GetRelativePath(rootPath, d).Replace('\\', '/');
+                    isLink = (info.Attributes & FileAttributes.ReparsePoint) != 0;
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
@@ -291,10 +358,14 @@ public class FileService(
                 if (TreeExcludes.Contains(name)) continue;
                 if (!showHidden && name.StartsWith('.')) continue;
                 if (IsWorktreesPath(relDir)) continue;
-                // S2d-6b-2 доработка 1: чужой каталог автора — ни в список, ни в обход (см. doc метода)
-                if (viewerUserId is not null && PrivateAttachments.IsForeign(relDir, viewerUserId)) continue;
+                // S2d-6b-2 доработка 1: чужой каталог автора — ни в список, ни в обход (см. doc метода).
+                // Через ссылку чужесть решается по каноническому относительному пути (см. блок
+                // ClosedPrefixOf выше), её поддерево не обходится: префикс наследуется вниз.
+                var prefix = ClosedPrefixFor(parentPrefix, name, d, isLink);
+                if (viewerUserId is not null &&
+                    PrivateAttachments.IsForeign(prefix.Length == 0 ? relDir : prefix, viewerUserId)) continue;
                 result.Add(new FileEntry(name, relDir, true, null, modifiedAt, false));
-                Walk(d);
+                Walk(d, prefix);
             }
 
             foreach (var f in Directory.GetFiles(dir).OrderBy(x => x))
@@ -305,6 +376,7 @@ public class FileService(
                 DateTime modifiedAt;
                 long size;
                 string rel;
+                bool isLink;
                 try
                 {
                     var info = new FileInfo(f);
@@ -312,6 +384,7 @@ public class FileService(
                     size = info.Length;
                     modifiedAt = info.LastWriteTimeUtc;
                     rel = Path.GetRelativePath(rootPath, f).Replace('\\', '/');
+                    isLink = (info.Attributes & FileAttributes.ReparsePoint) != 0;
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
@@ -319,13 +392,15 @@ public class FileService(
                     continue;
                 }
                 if (!showHidden && name.StartsWith('.')) continue;
-                if (viewerUserId is not null && PrivateAttachments.IsForeign(rel, viewerUserId)) continue;
+                var prefix = ClosedPrefixFor(parentPrefix, name, f, isLink);
+                if (viewerUserId is not null &&
+                    PrivateAttachments.IsForeign(prefix.Length == 0 ? rel : prefix, viewerUserId)) continue;
                 result.Add(new FileEntry(name, rel, false, size, modifiedAt,
                     modified.Contains(rel), IsNew: newFiles.Contains(rel)));
             }
         }
 
-        Walk(start);
+        Walk(start, startPrefix);
         return result;
     }
 

@@ -475,7 +475,9 @@ public class NotesToolsetWikiTests : IDisposable
 
         // Мутация «убрать проверку PrivateToUserId в CaptureSession»: выдержка режется,
         // заявка доходит до модели, карточка ложится на диск — IsError и BeFalse краснеют.
-        AssertDenied(res, "не существует");
+        // Мутация «вернуть текст, выдающий приватность» («сессия не существует») — краснеет
+        // эта строка: сравнение пословное, как с несуществующим чатом ниже.
+        AssertDenied(res, "чат не существует");
         Directory.Exists(SafePath.Join(Root, "pages/Проекты/p1/Источники")).Should().BeFalse(
             "отказ — до захвата: карточки выдержки нет");
 
@@ -501,17 +503,17 @@ public class NotesToolsetWikiTests : IDisposable
 
         var foreign = await toolset.CallAsync("wiki_ingest",
             Args(("source", "session:s-participant-private#m1-2")), ctx, CancellationToken.None);
-        AssertDenied(foreign, "не существует");
+        AssertDenied(foreign, "чат не существует");
 
         var own = await toolset.CallAsync("wiki_ingest",
             Args(("source", "session:s-owner-private#m1-2")), ctx, CancellationToken.None);
-        AssertDenied(own, "не существует");
+        AssertDenied(own, "чат не существует");
 
-        // Несуществующий чат неотличим: та же форма отказа — приватность не выдаёт
+        // Несуществующий чат неотличим: та же форма отказа пословно — приватность не выдаёт
         // существования чата вызывающему.
         var missing = await toolset.CallAsync("wiki_ingest",
             Args(("source", "session:s-none#m1-2")), ctx, CancellationToken.None);
-        AssertDenied(missing, "не существует");
+        AssertDenied(missing, "чат не существует");
 
         Directory.Exists(SafePath.Join(Root, "pages/Проекты/p1/Источники")).Should().BeFalse(
             "отказанные выдержки не оставили карточек");

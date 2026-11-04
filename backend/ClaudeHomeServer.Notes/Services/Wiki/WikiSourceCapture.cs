@@ -264,15 +264,15 @@ public sealed class WikiSourceCapture
 
         var session = _sessions.GetById(sessionId);
         if (session is null)
-            return Refused("сессия не существует");
+            return Refused("чат не существует");
         if (_sessions.ResolveOwnerId(session) != ownerId)
             return Refused("чат принадлежит другому владельцу: источник — тому же владельцу, что вики");
         // Приватный чат (FIN3-3, тот же инвариант, что у AnalyzeAsync и BuildQueue): виден
         // только автору; его выдержку читают лишь машинные потребители — им он не виден вовсе.
-        // Отказ неотличим от несуществующего (тот же текст): приватность не выдавала бы
-        // существования чата вызывающему — для владельца проекта это чат участника.
+        // Отказ неотличим от несуществующего (тот же текст «чат не существует»): приватность
+        // не выдавала бы существования чата вызывающему.
         if (session.PrivateToUserId is not null)
-            return Refused("сессия не существует");
+            return Refused("чат не существует");
         if (session.TaskExecution)
             return Refused("чаты исполнения задач не разбираются: их итоги уже источники");
 

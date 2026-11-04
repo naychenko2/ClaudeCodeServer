@@ -197,7 +197,10 @@ export interface WikiUnifiedTreeProps {
   query: string;
   selectedNoteId: string | null;
   selectedPage: { section: string; page: string } | null;
-  onSelectNote: (id: string) => void;
+  /** sectionKey — ключ узла, где лежит заметка; для «Других заметок» (OTHER_KEY) — null:
+   * чип раздела при выборе такой заметки не меняется. Второй аргумент необязателен для
+   * вызывающего: существующие одноаргументные обработчики остаются валидны. */
+  onSelectNote: (id: string, sectionKey: string | null) => void;
   onOpenPage: (section: string, page: string) => void;
 }
 
@@ -242,7 +245,9 @@ export function WikiUnifiedTree({
         style={rowStyle(selected, !isMobile && hovered === id)}
         onMouseEnter={() => !isMobile && setHovered(id)}
         onMouseLeave={() => setHovered(h => (h === id ? null : h))}
-        onClick={() => (item.kind === 'note' ? onSelectNote(item.id) : onOpenPage(item.sectionKey, item.id))}
+        onClick={() => (item.kind === 'note'
+          ? onSelectNote(item.id, item.sectionKey === OTHER_KEY ? null : item.sectionKey)
+          : onOpenPage(item.sectionKey, item.id))}
       >
         <OriginGlyph kind={item.kind === 'note' ? 'note' : GLYPH_OF[item.origin as Exclude<OriginFilter, 'all'>]} />
         <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.title}</span>
@@ -332,7 +337,8 @@ export function WikiUnifiedTree({
         {FILTERS.map(f => (
           <Chip
             key={f.value} variant="toggle" selected={filter === f.value} large={isMobile}
-            minHeight={isMobile ? 32 : undefined}
+            // тач-цель на мобиле — не ниже 40 px (палец); на десктопе высота по контенту
+            minHeight={isMobile ? 40 : undefined}
             leading={f.glyph ? <OriginGlyph kind={f.glyph} /> : undefined}
             onClick={() => setFilter(f.value)}
           >

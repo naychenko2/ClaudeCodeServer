@@ -6,7 +6,8 @@
 // Мутации (прогнаны, вывод — в отчёте задачи):
 //  (1) снять сверку ключа запроса в useSectionCatalogs → «гонка» краснеет;
 //  (2) читать отсутствующее authorship не как 'ai' (wikiAuthorshipOf) → «без authorship — ИИ» краснеет;
-//  (3) не фильтровать по происхождению (filterGroups возвращает всё) → «фильтр» краснеет.
+//  (3) не фильтровать по происхождению (filterGroups возвращает всё) → «фильтр» краснеет;
+//  (4) передавать ключ узла и для OTHER_KEY (без null) → «Другие заметки» краснеет.
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -113,7 +114,7 @@ function allByAttr(c: C, attr: string, value: string): ReturnType<typeof findNod
 }
 
 // Чип фильтра: ближайший к подписи узел с onClick внутри группы фильтра
-function clickChip(c: C, label: string) {
+function chipNode(c: C, label: string) {
   const group = findNodeByAttr(c, 'data-testid', 'unified-filter')!;
   let hit: C | null = null;
   const walk = (n: C) => {
@@ -124,10 +125,21 @@ function clickChip(c: C, label: string) {
   };
   walk(group);
   if (!hit) throw new Error(`нет чипа ${label}`);
-  act(() => { (reactProps(hit!) as { onClick: () => void }).onClick(); });
+  return hit;
 }
+const clickChip = (c: C, label: string) => {
+  const node = chipNode(c, label);
+  act(() => { (reactProps(node) as { onClick: () => void }).onClick(); });
+};
+// Заявленный minHeight кнопки чипа: на мобиле — тач-цель, на десктопе его нет
+const chipMinHeight = (c: C, label: string) =>
+  (reactProps(chipNode(c, label)) as { style?: { minHeight?: number } }).style?.minHeight;
 
 const rowTitles = (c: C) => allByAttr(c, 'data-testid', 'unified-row').map(r => String(reactProps(r!)?.title));
+const clickRow = (c: C, title: string) => {
+  const r = allByAttr(c, 'data-testid', 'unified-row').find(x => reactProps(x!)?.title === title)!;
+  act(() => { (reactProps(r) as { onClick: () => void }).onClick(); });
+};
 
 beforeEach(() => {
   wikiStore.reset();
@@ -263,15 +275,59 @@ describe('Дерево в интерфейсе', () => {
     const props = baseProps();
     const { container } = render(props);
     await settle();
-    const rows = allByAttr(container, 'data-testid', 'unified-row');
-    const click = (title: string) => {
-      const r = rows.find(x => reactProps(x!)?.title === title)!;
-      act(() => { (reactProps(r) as { onClick: () => void }).onClick(); });
-    };
-    click('Идея про граф');
-    expect(props.onSelectNote).toHaveBeenCalledWith('n1');
-    click('Апскейл картинок');
+    clickRow(container, 'Идея про граф');
+    expect(props.onSelectNote).toHaveBeenCalledWith('n1', 'personal');
+    clickRow(container, 'Апскейл картинок');
     expect(props.onOpenPage).toHaveBeenCalledWith(PROJECT_KEY, `Проекты/${PROJECT_ID}/a1.md`);
+  });
+
+  // Мутация: передавать item.sectionKey и для OTHER_KEY (без null) → «Другие заметки» краснеет
+  it('клик по заметке в узле раздела зовёт onSelectNote с ключом этого раздела', async () => {
+    const props = baseProps();
+    const { container } = render(props);
+    await settle();
+    clickRow(container, 'Идея про граф');
+    expect(props.onSelectNote).toHaveBeenCalledWith('n1', 'personal');
+    clickRow(container, 'Заметка проекта');
+    expect(props.onSelectNote).toHaveBeenCalledWith('n2', PROJECT_KEY);
+  });
+
+  it('клик по заметке в «Других заметках» зовёт onSelectNote с null (чип не меняется)', async () => {
+    const props = baseProps();
+    const { container } = render(props);
+    await settle();
+    clickRow(container, 'Чужая');
+    expect(props.onSelectNote).toHaveBeenCalledWith('n3', null);
+  });
+
+  it('клик по заголовку узла onSelectNote не зовёт', async () => {
+    const props = baseProps();
+    const { container } = render(props);
+    await settle();
+    const heads = allByAttr(container, 'data-testid', 'unified-group');
+    expect(heads.length).toBeGreaterThan(0);
+    for (const h of heads) act(() => { (reactProps(h!) as { onClick: () => void }).onClick(); });
+    expect(props.onSelectNote).not.toHaveBeenCalled();
+  });
+
+  it('чипы фильтра на мобильной ширине — тач-цель не ниже 40 px', async () => {
+    installFakeDom();
+    (globalThis as unknown as { window: { matchMedia: unknown } }).window.matchMedia =
+      () => ({ matches: true, addEventListener: () => {}, removeEventListener: () => {} });
+    const m = mount(createElement(WikiUnifiedTree, baseProps()));
+    roots.push(m.root);
+    await settle();
+    for (const label of ['Все', 'Заметки', 'ИИ', 'Вместе', 'Мои']) {
+      expect(chipMinHeight(m.container, label)).toBeGreaterThanOrEqual(40);
+    }
+  });
+
+  it('чипы фильтра на десктопе — без повышенной высоты (как прежде)', async () => {
+    const { container } = render(baseProps());
+    await settle();
+    for (const label of ['Все', 'Заметки', 'ИИ', 'Вместе', 'Мои']) {
+      expect(chipMinHeight(container, label)).toBeUndefined();
+    }
   });
 
   it('фильтр «кто написал»: «Вместе» оставляет только совместные страницы', async () => {

@@ -417,7 +417,10 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
           isMobile={isMobile}
           onSave={handleSave}
           onCancel={() => { setEditing(false); setPendingAi(null); }}
-          onDelete={() => setConfirmDelete(true)}
+          // Корзина в тулбаре формы — тот же гейт canDeleteTask (доработка F2-Q3,
+          // ревью 54d79690): без пропа форма не рендерит кнопку (редактор на чужой
+          // задаче — бэковый 403 not_task_author, не обещаем её и в форме)
+          onDelete={canDelete ? () => setConfirmDelete(true) : undefined}
           pendingAi={pendingAi}
           onPendingConsumed={() => setPendingAi(null)}
         />

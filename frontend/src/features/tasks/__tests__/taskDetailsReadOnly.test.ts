@@ -41,8 +41,16 @@ vi.mock('../../../lib/tasks', async importOriginal => {
 vi.mock('../../chatContext/useContextButton', () => ({
   useContextButton: () => ({ available: false, inContext: false, title: '', toggle: () => {} }),
 }));
+// Маркер пропа onDelete: форма правки рендерит корзину только когда проп передан
+// (доработка F2-Q3, ревью 54d79690) — тесты ниже смотрят на маркер, а не на DOM формы
 vi.mock('../TaskEditForm', () => ({
-  TaskEditForm: () => createElement('div', { 'data-testid': 'edit-form' }, 'ФОРМА ПРАВКИ'),
+  TaskEditForm: (props: { onDelete?: () => void }) =>
+    createElement(
+      'div',
+      { 'data-testid': 'edit-form' },
+      'ФОРМА ПРАВКИ',
+      props.onDelete ? createElement('span', { 'data-testid': 'edit-form-delete' }, 'КОРЗИНА В ФОРМЕ') : null,
+    ),
 }));
 vi.mock('../../../lib/sessionsList', () => ({ listProjectSessions: async () => [] }));
 
@@ -265,6 +273,32 @@ describe('панель деталей: корзина — автору или в
     m.project = { myRole: 'owner' }; m.width = 500;
     const host = await mount({ createdByUserId: 'u-other' });
     expect(host.querySelector('[title="Удалить задачу"]')).not.toBeNull();
+  });
+});
+
+// Доработка F2-Q3 (ревью 54d79690): второй путь к удалению — корзина в тулбаре формы
+// правки. Тот же гейт canDeleteTask: TaskDetailsPane передаёт onDelete только при
+// canDelete; без пропа TaskEditForm кнопку не рендерит. Проверяем по маркеру пропа
+// в моке формы (DOM самой формы здесь не рисуем).
+describe('форма правки: корзина — тот же гейт (onDelete только при canDelete)', () => {
+  it('редактор + чужой автор, startInEdit: форма открыта, onDelete не передан (корзины нет)', async () => {
+    m.project = { myRole: 'editor' }; m.width = 500;
+    const host = await mount({ createdByUserId: 'u-other' }, true);
+    expect(host.querySelector('[data-testid="edit-form"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="edit-form-delete"]')).toBeNull();
+  });
+
+  it('редактор + свой автор, startInEdit: onDelete передан (корзина есть)', async () => {
+    m.project = { myRole: 'editor' }; m.width = 500;
+    const host = await mount({ createdByUserId: ME }, true);
+    expect(host.querySelector('[data-testid="edit-form-delete"]')).not.toBeNull();
+  });
+
+  it('владелец + чужой автор, startInEdit: onDelete передан (корзина есть)', async () => {
+    m.project = { myRole: 'owner' }; m.width = 500;
+    const host = await mount({ createdByUserId: 'u-other' }, true);
+    expect(host.querySelector('[data-testid="edit-form"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="edit-form-delete"]')).not.toBeNull();
   });
 });
 

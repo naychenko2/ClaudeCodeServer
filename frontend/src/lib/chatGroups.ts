@@ -192,7 +192,7 @@ export function sortChatsFlat(chats: Session[], sortOrder: ChatSortOrder = 'newe
   });
 }
 
-// === Режим «Фичи» (фасет «Фичи», ) ===
+// === Режим «Фичи» (фасет «Фичи») ===
 
 // Секция режима «Фичи»: feature — строка фичи из индекса, null — хвост «Без фичи».
 // sessions — чаты группы с ЭФФЕКТИВНЫМ parentSessionId: межгрупповые рёбра дерева
@@ -649,8 +649,8 @@ export function featureGroupTreeRows(
   return rows;
 }
 
-// Пункты группировки для тулбара: 'features' — только в списке проекта и при
-// включённом  (у глобального списка реестра фич нет).
+// Пункты группировки для тулбара: 'features' — только в списке проекта
+// (у глобального списка реестра фич нет).
 export function featureGroupByOptions(inProject: boolean, featuresOverview: boolean): ChatGroupBy[] {
   const base: ChatGroupBy[] = inProject ? ['days', 'tags', 'subjects'] : ['days'];
   if (inProject && featuresOverview) base.push('features');

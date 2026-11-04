@@ -1120,7 +1120,7 @@ function ChatCardView({
           {badges.map((b, i) => b.render && <span key={b.name ?? i} style={{ display: 'contents' }}>{b.render({ session: s, isMobile })}</span>)}
           <TeamImplementMarker session={s} />
           <ExpiryBadge session={s} />
-          {/* Метка фичи: для чата, принадлежащего фиче, под флагом features-overview.
+          {/* Метка фичи: для чата, принадлежащего фиче.
               Глиф + название (обрезка с title); в «Днях» — вместо имени персоны.
               Внутри группы фичи (inFeatureGroup) — не рисуем: имя уже в заголовке (n1) */}
           {feature && !inFeatureGroup && <FeatureLabel feature={feature} />}

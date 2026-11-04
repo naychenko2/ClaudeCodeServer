@@ -561,9 +561,6 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
     }
     return getNav()?.feature ?? parseHash(window.location.hash)?.featureId ?? null;
   });
-  // Флаг «Обзор фич»: страница показана, только когда он включён (dark launch). До прихода
-  // флагов (не загружены) getFlag читает «выключено», но адрес ещё не схлопываем — этим
-  // занимается эффект «привести к проекту один раз» (ниже, рядом с handleFeatureBack).
   // Холодный старт: страница открыта при монтировании из хэша/снимка (диплинк) — её seq
   // ставится при монтировании. Восстановленный файл (openFile из workspaceState) событием
   // «открыли» не является (fileOpenedAt = 0), поэтому страница выигрывает.

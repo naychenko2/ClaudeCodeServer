@@ -27,8 +27,7 @@ export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];
 
 let _flags: Record<string, boolean> = {};
 // Флаги пришли с сервера (setAllFlags/mergeFlags). Пока false — getFlag читает «выключено»,
-// но это «ещё не загружено», а не «загружено и выключено»: для навигации (адрес страницы
-// фичи) разница важна — до загрузки адрес не схлопывают, а после — приводят к проекту.
+// но это «ещё не загружено», а не «загружено и выключено» — разницу видят потребители flagsLoaded/useFlagsLoaded.
 let _loaded = false;
 const _listeners = new Set<() => void>();
 

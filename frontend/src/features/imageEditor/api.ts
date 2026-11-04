@@ -258,7 +258,7 @@ export interface ImageEditCharacter {
   // LoRA для локальной модели; null — не задана
   local?: { lora: string; trigger: string; strength: number } | null;
   createdAt: string;
-  // Сколько фото уходит в один запрос (лимит окна выбора); 
+  // Сколько фото уходит в один запрос (лимит окна выбора)
   photosPerRequest?: number | null;
 }
 
@@ -437,7 +437,6 @@ export type FacesErrorCode =
   | 'faces_changed'         // 409: картинка изменилась, в теле свежий список лиц
   | 'version_not_found'
   | 'not_found'             // 404: личная область (ручки нет) или нить/версия не найдены
-  | 'feature_disabled'      //  выключен
   | 'other';
 
 export interface FacesError {
@@ -453,7 +452,7 @@ export function facesError(e: unknown): FacesError {
   const code = typeof err?.body?.code === 'string' ? err.body.code : null;
   const faces = parseFacesResponse(err?.body?.faces);
   if (code === 'busy' || code === 'provider_unavailable' || code === 'faces_changed'
-    || code === 'version_not_found' || code === 'not_found' || code === 'feature_disabled') {
+    || code === 'version_not_found' || code === 'not_found') {
     return { code, ...(code === 'faces_changed' && faces ? { faces } : null) };
   }
   if (code) return { code: 'other' };

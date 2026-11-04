@@ -1142,8 +1142,7 @@ export function RingPillBadge(props: {
         </div>
       )}
       {showCtx && <ContextActions {...props} />}
-      {/* Секция «Кэш промпта» целиком —  (дефект QA): при
-          выключенном нет ни секции, ни кнопки порогов, хотя данные кэша приходят с бэка */}
+      {/* Секция «Кэш промпта» показывается всегда, когда с бэка пришли данные кэша (с кнопкой порогов) */}
       {cache && (
         <div style={(lmActive || wfActive || showCtx || showCost) ? sectionDivider : undefined}>
           <PromptCacheSection state={cache} isWaiting={props.isWaiting} sessionId={props.sessionId ?? ''} />

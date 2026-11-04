@@ -225,9 +225,6 @@ describe('launchFailure: код → состояние', () => {
   it('faces_changed → facesChanged (обновление рамок + сброс выбора)', () => {
     expect(launchFailure('faces_changed', null)).toEqual({ kind: 'facesChanged' });
   });
-  it('feature_disabled → featureDisabled (закрытие режима)', () => {
-    expect(launchFailure('feature_disabled', null)).toEqual({ kind: 'featureDisabled' });
-  });
   it('неизвестный код → generic с сообщением', () => {
     expect(launchFailure('weird_code', 'что-то пошло не так')).toEqual({ kind: 'generic', message: 'что-то пошло не так' });
   });

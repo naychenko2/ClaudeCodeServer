@@ -4,7 +4,9 @@
 // wiki_pkg_auto). Неспорное и применённое — «Журнал» (S7b), не этот экран.
 //
 // Данные: GET /api/wiki/packages?inbox=true (стор не задействован — список живёт в компоненте,
-// он не читается другими экранами). Порядок запросов — тот же инвариант, что у стора S5a:
+// он не читается другими экранами). Область раздела (W9a) — клиентский фильтр по этому списку:
+// проп sectionScope не меняет запрос и не перечитывает его. Порядок запросов — тот же
+// инвариант, что у стора S5a:
 // ответ кладётся, только если его поколение последнее (урок S5b/S5e); смена экрана или
 // закрытие пакета поднимает новое поколение, поздний ответ прежней загрузки его не затрёт.
 //
@@ -128,10 +130,18 @@ function PackageRow({ pkg, onOpen }: { pkg: WikiPackageDto; onOpen: () => void }
 
 // ─── Подвкладка ───
 
-export function WikiInbox() {
+// Область раздела (W9a): необязательный проп панели с чипом раздела. undefined / 'all' / null —
+// все пакеты (старая раскладка WikiTab его не передаёт, её вид не меняется); строка раздела —
+// только пакеты этого раздела. Фильтр поверх уже загруженного списка: смена пропa не трогает
+// загрузку и её поколение (loadSeq). selectedKey в типе пропов — контракт старого реестра
+// подвкладок (WikiTab передаёт его всем, wikiTabs.tsx:41): компонент его не читает —
+// область «Входящих» задаёт sectionScope, не выбор в дереве.
+export function WikiInbox({ sectionScope }: { sectionScope?: string | null | 'all'; selectedKey?: string | null }) {
   const [data, setData] = useState<{ packages: WikiPackageDto[]; invalidCount: number } | null>(null);
   const [loadError, setLoadError] = useState<unknown>(null);
   const [opened, setOpened] = useState<WikiPackageDto | null>(null);
+  // Дерево нужно только имени пустого состояния области — тот же источник, что у строк списка
+  const tree = useWikiTree();
   // Поколение загрузок (урок S5b/S5e, образец — openSeq в WikiTab): только последний
   // запрос пишет список; поздний ответ прежней загрузки его не затрёт
   const loadSeq = useRef(0);
@@ -167,7 +177,14 @@ export function WikiInbox() {
   }
   if (!data) return <LoadingSkeleton />;
 
-  const empty = data.packages.length === 0;
+  // Область раздела (W9a): 'all'/null/пустая строка/undefined — области нет (все пакеты,
+  // прежнее поведение); строка раздела — только его пакеты. Фильтр поверх data: запроса нет
+  const scope = typeof sectionScope === 'string' && sectionScope !== 'all' && sectionScope !== '' ? sectionScope : null;
+  const packages = scope ? data.packages.filter(p => p.section === scope) : data.packages;
+  // Имя раздела пустого состояния — по tree.sections тем же форматтером, что и строки;
+  // раздела нет в дереве — ключ как есть (тот же фолбэк, что у строки списка)
+  const scopeSection = scope ? tree?.sections.find(s => s.key === scope) ?? null : null;
+  const empty = packages.length === 0;
   return (
     <div style={{ padding: `0 0 ${SP.md}px` }}>
       <div style={{ padding: `${SP.sm}px ${SP.md}px 0` }}>
@@ -183,19 +200,33 @@ export function WikiInbox() {
         </div>
       )}
       {empty ? (
-        <EmptyState
-          icon={<Inbox size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
-          title="Спорного нет"
-          subtitle={
-            <span style={{ maxWidth: 360 }}>
-              Всё, что Хранитель сделал, применилось само. Смотреть в «Журнале» —
-              он придёт следующим шагом.
-            </span>
-          }
-        />
+        scope ? (
+          // Непустой фильтр и пустой результат: по разделу всё разобрано — это не «ничего
+          // нет», а «здесь решено всё» (W9a)
+          <EmptyState
+            icon={<Inbox size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
+            title="Разобрано"
+            subtitle={
+              <span style={{ maxWidth: 360 }}>
+                {`Всё, что ИИ предлагал по разделу «${scopeSection ? sectionPrefix(scopeSection) : scope}», применено или отклонено.`}
+              </span>
+            }
+          />
+        ) : (
+          <EmptyState
+            icon={<Inbox size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
+            title="Спорного нет"
+            subtitle={
+              <span style={{ maxWidth: 360 }}>
+                Всё, что Хранитель сделал, применилось само. Смотреть в «Журнале» —
+                он придёт следующим шагом.
+              </span>
+            }
+          />
+        )
       ) : (
         <>
-          {data.packages.map(p => (
+          {packages.map(p => (
             <div key={p.id}><PackageRow pkg={p} onOpen={() => setOpened(p)} /></div>
           ))}
           <div style={{ padding: `${SP.md}px ${SP.md}px 0`, fontSize: FS.xs, color: C.textMuted }}>

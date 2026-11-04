@@ -530,8 +530,7 @@ public sealed class MemoryToolset(
     }
 
     // Состав по хвосту: personal — при своей персоне, team — при своём проекте,
-    // dossier — при проекте и флаге владельца change-dossiers-recall (решается по
-    // владельцу, стабильно в рамках сессии — инвариант IMcpToolset)
+    // dossier — при проекте (стабильно в рамках сессии — инвариант IMcpToolset)
     private IReadOnlyList<McpToolSchema> BuildTools(McpToolCallContext context)
     {
         if (!TryResolve(context, out var persona, out var project, out _)) return [];

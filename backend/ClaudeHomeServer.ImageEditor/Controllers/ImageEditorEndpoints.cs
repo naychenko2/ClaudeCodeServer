@@ -367,8 +367,7 @@ public abstract class ImageEditorEndpoints(
                 => StatusCodes.Status409Conflict,
             ImageEditErrorCodes.QuoteNotFound or ImageEditErrorCodes.JobNotFound
                 or ImageEditErrorCodes.CharacterNotFound or ImageEditErrorCodes.StepNotFound
-                or ImageEditErrorCodes.ThreadNotFound or ImageEditErrorCodes.VersionNotFound
-                or ImageEditErrorCodes.FeatureDisabled => StatusCodes.Status404NotFound,
+                or ImageEditErrorCodes.ThreadNotFound or ImageEditErrorCodes.VersionNotFound =>StatusCodes.Status404NotFound,
             ImageEditErrorCodes.TooManyJobs => StatusCodes.Status429TooManyRequests,
             ImageEditErrorCodes.Unavailable or ImageEditErrorCodes.RasterUnavailable
                 or ImageEditErrorCodes.Busy => StatusCodes.Status503ServiceUnavailable,

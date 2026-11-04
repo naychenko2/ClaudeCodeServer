@@ -44,7 +44,7 @@ public sealed class CharacterPhotoLabeling(
     // Нет шва разметки (подсистема Llm выключена) — работы нет
     private bool Enabled() => labeler is not null;
 
-    // Поводы зовут это не глядя: флаг выключен или персонаж уже в очереди — тихо ничего
+    // Поводы зовут это не глядя: разметка не настроена или персонаж уже в очереди — тихо ничего
     public void Enqueue(string ownerId, string root, string slug)
     {
         if (!Enabled()) return;

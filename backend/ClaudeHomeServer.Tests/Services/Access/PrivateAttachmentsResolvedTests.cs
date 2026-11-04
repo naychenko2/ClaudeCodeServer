@@ -226,6 +226,37 @@ public sealed class PrivateAttachmentsResolvedTests : IDisposable
         PrivateAttachments.IsForeignResolved(wt, $"L/private/{Me}/own.txt", Me).Should().BeFalse();
     }
 
+    /// <Named мутации: «снять вторую линию канона (IsUnderCanonicalPrivate)» краснит этот тест:
+    /// .cc-attachments — ссылка на каталог с другим именем, пары сегментов в каноне нет, и
+    /// чужое private под ним (через «L») читалось бы 200 — регрессия приватности 8b56ba3db.</Named>
+    [Fact]
+    public void СсылкаНаКаталогСДругимИменем_ЧужоеPrivateПодНим_ВсёРавноЧужое()
+    {
+        if (OperatingSystem.IsWindows()) return; // ссылка на каталог требует привилегий
+        // Пользователь уводит .cc-attachments на другой диск: ссылка на каталог, чьё имя
+        // не .cc-attachments (хвост ревью 44e1219c: сужение чужести до одной сегментной линии)
+        var disk = Directory.CreateDirectory(Path.Combine(_tempDir, "attachments")).FullName;
+        WriteAt(disk, $"private/{Other}/x.txt", "чужое на другом диске");
+        WriteAt(disk, $"private/{Me}/own.txt", "своё на другом диске");
+        WriteAt(disk, $"{_commonGuid}/common.txt", "общее на другом диске");
+        Directory.Delete(Path.Combine(_root, ".cc-attachments"), recursive: true);
+        Directory.CreateSymbolicLink(Path.Combine(_root, ".cc-attachments"), disk);
+        Link("L", ".cc-attachments");
+
+        // текстовая линия молчит (в имени нет литерала .cc-attachments), первая каноническая —
+        // тоже (пары .cc-attachments+private в каноне нет): судит канон под private корня
+        PrivateAttachments.IsForeignResolved(_root, $"L/private/{Other}/x.txt", Me)
+            .Should().BeTrue("closed-поддерево за ссылкой — то же чужое private");
+        PrivateAttachments.IsForeignResolved(_root, $"L/private/{Other}", Me)
+            .Should().BeTrue("каталог чужого автора через обе ссылки — чужой, как и прямой путь");
+        PrivateAttachments.IsForeignResolved(_root, $".cc-attachments/private/{Other}/x.txt", Me)
+            .Should().BeTrue("тот же файл прямым именем — тот же отказ");
+
+        // своё и общее под той же ссылкой не закрыты: линия судит по автору, а не по месту канона
+        PrivateAttachments.IsForeignResolved(_root, $"L/private/{Me}/own.txt", Me).Should().BeFalse();
+        PrivateAttachments.IsForeignResolved(_root, $"L/{_commonGuid}/common.txt", Me).Should().BeFalse();
+    }
+
     // --- контейнеры через ссылку ---
 
     /// <Named мутации: «IsContainerResolved сравнивает текстовый путь» краснит этот тест:

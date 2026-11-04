@@ -317,7 +317,7 @@ public class NotesToolsetWikiTests : IDisposable
     // обращения к модели; чужой и несуществующий неразличимы кодом.
 
     [Fact]
-    public void С7b0a_РазборЧата_ЧужойЧат_ОтказДоМодели()
+    public void S7b0a_РазборЧата_ЧужойЧат_ОтказДоМодели()
     {
         var (toolset, ctx) = McpEnv("p1");
         _sessions.All.Add(new Session { Id = "s-foreign", OwnerId = "u2", ProjectId = "p1", Name = "Чужой чат" });

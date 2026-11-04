@@ -30,7 +30,9 @@ import { GUARD_AREAS, LEGACY_ALLOWED } from './guardLists.mjs';
 // как ESLint-страж.
 const AREA_MATCHERS = GUARD_AREAS.map((area) => ({
   // запретные резолвим из тех же имён, из которых ESLint строит group-паттерны
-  forbiddenRe: new RegExp(`(^|\\/)src\\/lib\\/(${area.forbidden.join('|')})(\\.ts)?$`),
+  forbiddenRe: new RegExp(
+    `(^|\\/)src\\/(?:lib\\/(${area.forbidden.join('|')})|pages\\/(${area.forbiddenPages.join('|')}))(\\.ts)?$`,
+  ),
   // область — по префиксу каталога или поименованному файлу
   inArea: (p: string) => p.includes(`/${area.dir}/`) || (area.extraFiles ?? []).some((f) => p.includes(`/${f}`)),
 }));
@@ -70,7 +72,7 @@ function notesStoreGraphGuard(): Plugin {
       const hit = areaMatcher.forbiddenRe.exec(resolved);
       if (!hit) return null;
       const rel = importerPath.slice(Math.max(importerPath.indexOf('/src/'), 0) + 1);
-      violations.add(`${rel} → src/lib/${hit[2]}.ts`);
+      violations.add(`${rel} → src/${hit[2] ? `lib/${hit[2]}` : `pages/${hit[3]}`}.ts`);
       return null;
     },
     buildEnd() {

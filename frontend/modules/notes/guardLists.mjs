@@ -12,6 +12,11 @@
 // проходит) — исходная болевая точка QA B1.
 export const NARROW_FORBIDDEN = ['featureFlags', 'wiki', 'offline', 'signalr', 'toast'];
 
+// Модули с состоянием из src/pages/ (путь внутри src/pages/, без расширения): относительный
+// импорт значений из модуля соберёт вторую копию notesPanels со своими подписчиками, и обе
+// будут писать в cc_notes_zones (разрез ac431663, раздел 3). `import type` разрешён.
+export const PAGES_FORBIDDEN = ['workspace/panelStackState', 'workspace/panelCatalog'];
+
 // Вики-часть запрещает дополнительно токены дизайна и брейкпоинты: они есть в runtime-ките
 // и другим remote запрещены — следуем их правилу (ср. imageEditorImportGuard).
 export const WIKI_FORBIDDEN = [...NARROW_FORBIDDEN, 'design', 'breakpoints'];
@@ -26,6 +31,7 @@ export const NOTES_MODULE_GUARD = {
   name: 'notes-module',
   dir: 'src/features/notes',
   forbidden: NARROW_FORBIDDEN,
+  forbiddenPages: PAGES_FORBIDDEN,
 };
 
 export const NOTES_WIKI_GUARD = {
@@ -34,6 +40,7 @@ export const NOTES_WIKI_GUARD = {
   // единственный файл вики-части вне каталога — действия «Вики» в шапке чата
   extraFiles: ['src/features/notes/WikiChatActions.tsx'],
   forbidden: WIKI_FORBIDDEN,
+  forbiddenPages: PAGES_FORBIDDEN,
 };
 
 export const GUARD_AREAS = [NOTES_MODULE_GUARD, NOTES_WIKI_GUARD];

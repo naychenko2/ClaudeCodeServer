@@ -11,9 +11,12 @@ export interface NotesGuardArea {
   extraFiles?: readonly string[];
   /** запретные модули — имена внутри src/lib/ (без префикса «lib/») */
   forbidden: readonly string[];
+  /** запретные модули внутри src/pages/ (без расширения), например 'workspace/panelStackState' */
+  forbiddenPages: readonly string[];
 }
 
 export declare const NARROW_FORBIDDEN: readonly string[];
+export declare const PAGES_FORBIDDEN: readonly string[];
 export declare const WIKI_FORBIDDEN: readonly string[];
 export declare const NOTES_MODULE_GUARD: NotesGuardArea;
 export declare const NOTES_WIKI_GUARD: NotesGuardArea;

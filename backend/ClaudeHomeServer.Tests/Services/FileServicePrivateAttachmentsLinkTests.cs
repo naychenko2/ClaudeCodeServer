@@ -195,4 +195,70 @@ public sealed class FileServicePrivateAttachmentsLinkTests : IDisposable
         PathsOf(_svc.Tree(_root, showHidden: true))
             .Should().Contain($"L/private/{Other}/{_foreignGuid}/foreign.txt");
     }
+
+    // --- 5. (доработка по ревью 6c2e1385) сам .cc-attachments — ссылка на каталог с другим
+    //        именем: обход судит чужесть обеими линиями предиката, как читающие ручки ---
+
+    /// <summary>
+    /// Вердикт ревью 6c2e1385 (MAJOR 1) к шагу 212886b1: префикс closed-поддерева на переходе
+    /// ссылки строился только первой линией — литеральным сегментом .cc-attachments в каноне
+    /// цели. Если сам .cc-attachments — ссылка на каталог с другим именем (вложения унесены на
+    /// другой диск: .cc-attachments → /mnt/bigdisk/attachments), пары сегментов в каноне нет и
+    /// обход снова слепнет на L/private/{чужой} — хотя IsForeignResolved второй линией
+    /// (IsUnderCanonicalPrivate, PrivateAttachments.cs:284) тот же путь отказывает
+    /// (guard «СсылкаНаКаталогСДругимИменем…», PrivateAttachmentsResolvedTests). Здесь — та же
+    /// раскладка на уровне обхода: чужое закрыто ровно тем же набором, что от прямого имени
+    /// контейнера; своё и общая раскладка — открыты; легальная ссылка наружу на не-private путь
+    /// (frontend/node_modules → primary checkout у worktree-setup.sh) под тем же корнем
+    /// остаётся видимой; без зрителя обход не меняется.
+    /// </summary>
+    [Fact]
+    public void СсылкаКонтейнераНаКаталогСДругимИменем_ЧужоеPrivateЗакрыто_КакПриПрямомИмени()
+    {
+        if (OperatingSystem.IsWindows()) return; // ссылка на каталог требует привилегий
+        var disk = Directory.CreateDirectory(Path.Combine(_tempDir, "attachments")).FullName;
+        Write(disk, $"private/{Other}/{_foreignGuid}/foreign.txt", "чужое");
+        Write(disk, $"private/{Me}/{_ownGuid}/own.txt", "своё");
+        Write(disk, $"{_commonGuid}/common.txt", "общее");
+        Directory.Delete(Path.Combine(_root, TreeExcludes.AttachmentsDir), recursive: true);
+        Directory.CreateSymbolicLink(Path.Combine(_root, TreeExcludes.AttachmentsDir), disk);
+        Link("L", TreeExcludes.AttachmentsDir);
+        // инвариант той же раскладки: легальная ссылка наружу на не-private путь — под тем же
+        // корнем операции, её содержимое — обычные записи
+        var outside = Directory.CreateDirectory(Path.Combine(_tempDir, "outside")).FullName;
+        Write(outside, "keep.txt", "внешнее");
+        Link("ext", outside);
+
+        var viaRoot = PathsOf(_svc.Tree(_root, showHidden: true, viewerUserId: Me));
+        var viaName = PathsOf(_svc.Tree(_root, "L", showHidden: true, viewerUserId: Me));
+        var expected = DirectOfContainer(TreeExcludes.AttachmentsDir);
+        var foreignDir = $"L/private/{Other}";
+
+        foreach (var (label, paths) in new[] { ("обход корня", viaRoot), ("названный L", viaName) })
+        {
+            paths.Where(p => p.StartsWith("L/")).Should().Equal(expected,
+                $"{label}: closed-поддерево за ссылкой на каталог с другим именем — ровно тот набор, " +
+                "что от прямого имени: своё private и общая раскладка открыты, чужого нет");
+            paths.Should().NotContain(p => p.StartsWith(foreignDir),
+                $"чужое private через обе ссылки закрыто: ни каталогов ({foreignDir}), ни файлов под ним");
+        }
+
+        viaRoot.Should().Contain("L", "сам контейнер через ссылку — обычная запись дерева, как при прямом имени");
+        viaRoot.Should().Contain("docs/plain.txt", "обычное дерево не меняется");
+        viaRoot.Should().Contain("ext/keep.txt",
+            "легальная ссылка наружу на не-private путь под тем же корнем остаётся видимой в обходе");
+        viaRoot.Should().NotContain(p => p.StartsWith(TreeExcludes.AttachmentsDir),
+            "прямой путь как прежде: TreeExcludes режет обход по имени");
+
+        // List по пути под ссылкой — тот же исход, что от названного контейнера
+        PathsOf(_svc.List(_root, "L", showHidden: true, viewerUserId: Me))
+            .Should().BeEquivalentTo(new[] { "L/private", $"L/{_commonGuid}" },
+                "чужой каталог автора не перечисляется и через ссылку на каталог с другим именем");
+        PathsOf(_svc.List(_root, "L/private", showHidden: true, viewerUserId: Me))
+            .Should().Equal(new[] { $"L/private/{Me}" });
+
+        // без зрителя обход не меняется (контракт вызывающих без актора — см. doc Tree)
+        PathsOf(_svc.Tree(_root, showHidden: true))
+            .Should().Contain($"L/private/{Other}/{_foreignGuid}/foreign.txt");
+    }
 }

@@ -40,8 +40,10 @@ public static class ChatContextEventNames
     public const string Changed = "chat_context_changed";
 }
 
-// Контекст чата сменился (любая запись в IChatContextStore); SessionId наследуется от ServerMessage, это чат-владелец
-public record ChatContextChangedMessage(ChatContextDto Context) : ServerMessage(ChatContextEventNames.Changed);
+// Контекст чата сменился (любая запись в IChatContextStore); SessionId наследуется от ServerMessage, это чат-владелец.
+// Событие — только сигнал с ревизией (решение CONSULT-CONTEXT-SUBJECT): у аудитории ToChatAudience нет одного
+// субъекта, поэтому карточек в рассылке нет — клиент перечитывает их по REST под своим субъектом.
+public record ChatContextChangedMessage(long Revision) : ServerMessage(ChatContextEventNames.Changed);
 
 // Тело 409 context_changed: свежий DTO, по нему фронт перерисует чипы и цену
 public sealed record ChatContextConflictDto(string Error, ChatContextDto Context);

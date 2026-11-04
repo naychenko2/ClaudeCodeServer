@@ -119,6 +119,106 @@ public static class PrivateAttachments
             && string.Equals(segments[1], PrivateRoot, StringComparison.OrdinalIgnoreCase);
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Канонический (по РАЗЫМЕНОВАННОМУ пути) гейт того же поддерева — для точек,
+    // которые действуют на диске (дефект a6f5cb15, ревью R-QA-W1 03.11).
+    // IsForeign/IsPrivateContainerPath/IsAttachmentsContainer выше судят по СТРОКОВЫМ
+    // сегментам: они держат обходы («..», «./», %2F, слеши, регистр) без обращения к диску,
+    // но символьные ссылки не разыменовывают. Операция же идёт по разыменованному пути
+    // (ядро разыменовывает компонент-ссылку на любом syscall): симлинк «L» → .cc-attachments
+    // в корне проекта делает «L/private/{other}/…» тем же чужым private, и текстовый гейт о
+    // нём молчит — чужое читается, пишется, переносится и сносится через ссылку.
+    // Здесь — сравнение канонических форм по образцу WikiPaths.IsWikiPath: путь и сами
+    // контейнеры канонизируются одним обходом SafePath.Canonical — иначе «L/private» и
+    // настоящий .cc-attachments/private описывают разные деревья (MAJOR 2 ревью S1a).
+    // Путь сначала проходит SafePath.Join — ровно так же, как его пропустит сама операция
+    // (FileService открывает уже свёрнутый по «..» путь), поэтому «..» в строке не меняет
+    // смысл сравнения. За пределами корня — false: там вызывающий отдаёт свой отказ раньше
+    // (SafeJoin), как и в текстовой ветке. Canonical == null (цикл ссылок, превышен бюджет)
+    // — true: предикат fail-closed, как IsWikiPath — отказ возможной операции безопаснее
+    // действия по неразрешённому пути. Регистр — по правилам ФС хоста (SafePath.ComparisonFor),
+    // как у канонических проверок MOVE.
+    // Вызывающим, которые открывают файл (WebDAV, FilesController, MCP, Knowledge), нужен
+    // этот вариант; текстовый остаётся там, где пути не идут на диск (перенос раскладки,
+    // фильтр обхода FileService по относительным путям).
+
+    /// <summary>
+    /// Чужое ли это приватное вложение по разыменованному пути: каноническая форма пути лежит
+    /// под каноническим .cc-attachments/private/ и первый сегмент под ним — не userId. Сам
+    /// контейнер private/ — не «чужой автор»: его решает <see cref="IsContainerResolved"/>.
+    /// Пустой userId — «своего» нет: любое приватное чужое (fail-closed, как <see cref="IsForeign"/>).
+    /// Неразрешимый путь (цикл ссылок) — true: тот же fail-closed, что у IsWikiPath.
+    /// </summary>
+    public static bool IsForeignResolved(string root, string? relPath, string? userId)
+    {
+        var (inRoot, target) = CanonicalWithinRoot(root, relPath);
+        if (!inRoot) return false;
+        if (target is null) return true; // неразрешимый путь: fail-closed
+        var privateDir = CanonicalOf(Path.Combine(root, TreeExcludes.AttachmentsDir, PrivateRoot));
+        if (privateDir is null) return true; // сам контейнер неразрешим — тот же fail-closed
+        var comparison = SafePath.ComparisonFor(OperatingSystem.IsWindows());
+        if (!target.StartsWith(privateDir + "/", comparison)) return false; // не под closed-поддеревом
+        var author = target[(privateDir.Length + 1)..].Split('/')[0];
+        if (author.Length == 0) return false; // сам private/ — контейнер, не автор
+        if (string.IsNullOrEmpty(userId)) return true;
+        return !author.Equals(userId, comparison);
+    }
+
+    /// <summary>
+    /// Контейнер ли это (корень проекта, .cc-attachments, .cc-attachments/private) по
+    /// разыменованному пути: каноническая форма пути равна канонической форме одного из
+    /// контейнеров — «L» → .cc-attachments и «L/private» дают те же контейнеры на диске.
+    /// Неразрешимый путь — true (fail-closed). Каталоги авторов и {guid}-каталоги — не
+    /// контейнеры и через ссылку: их канонический путь не равен ни одному контейнеру.
+    /// </summary>
+    public static bool IsContainerResolved(string root, string? relPath) =>
+        IsContainerAt(root, relPath, includeRoot: true);
+
+    /// <summary>
+    /// То же без корня проекта — там, где корень не разрушается, а является штатной целью
+    /// операции (индексация папки, IndexFolder, S2d-6b-6). Нормализация та же, что у
+    /// <see cref="IsContainerResolved"/>.
+    /// </summary>
+    public static bool IsAttachmentsContainerResolved(string root, string? relPath) =>
+        IsContainerAt(root, relPath, includeRoot: false);
+
+    private static bool IsContainerAt(string root, string? relPath, bool includeRoot)
+    {
+        var (inRoot, target) = CanonicalWithinRoot(root, relPath);
+        if (!inRoot) return false;
+        if (target is null) return true; // неразрешимый путь: fail-closed
+        var comparison = SafePath.ComparisonFor(OperatingSystem.IsWindows());
+        foreach (var container in ContainersOf(root, includeRoot))
+        {
+            var canonical = CanonicalOf(container);
+            if (canonical is null) return true; // контейнер неразрешим — тот же fail-closed
+            if (target.Equals(canonical, comparison)) return true;
+        }
+        return false;
+    }
+
+    private static IEnumerable<string> ContainersOf(string root, bool includeRoot)
+    {
+        if (includeRoot) yield return root;
+        yield return Path.Combine(root, TreeExcludes.AttachmentsDir);
+        yield return Path.Combine(root, TreeExcludes.AttachmentsDir, PrivateRoot);
+    }
+
+    // Путь запроса → каноническая форма внутри корня проекта. Отметка inRoot=false — путь за
+    // пределами корня: его отклоняет SafeJoin у вызывающего, здесь он ни чужой, ни контейнер
+    // (тот же порядок, что у текстовой ветки). Canonical=null при inRoot=true — путь неразрешим
+    // (цикл ссылок, превышен бюджет): вызывающие трактают это fail-closed. Форма — с «/», без
+    // завершающего разделителя: «L» и «L/» — одна цель (сравнение идёт по равенству и префиксу).
+    private static (bool InRoot, string? Canonical) CanonicalWithinRoot(string root, string? relPath)
+    {
+        string abs;
+        try { abs = SafePath.Join(root, relPath ?? ""); }
+        catch (UnauthorizedAccessException) { return (false, null); }
+        return (true, CanonicalOf(abs));
+    }
+
+    private static string? CanonicalOf(string path) => SafePath.Canonical(path)?.TrimEnd('/');
+
     // Путь к сегментам в каноническом виде. Одно снятие %-кодирования: %2F/%2E — тот же путь,
     // записанный экранированно (двойное кодирование вне контракта: %252e остаётся сегментом
     // «%2e» — он не «.» и не «..», чужое private под ним остаётся чужим). «..» при пустом

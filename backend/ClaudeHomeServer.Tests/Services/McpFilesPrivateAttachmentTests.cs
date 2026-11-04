@@ -626,6 +626,68 @@ public sealed class McpFilesPrivateAttachmentTests : IDisposable
         Directory.Exists(AbsOf($".cc-attachments/private/{foreignId}")).Should().BeTrue();
     }
 
+    // Хвост a6f5cb15: files_* действуют по РАЗЫМЕНОВАННОМУ пути, а текстовые гейты
+    // (IsForeignPrivate/IsPrivateContainer в тулсете) символьные ссылки не видели: симлинк
+    // «L» → .cc-attachments в корне проекта давал чужое private и контейнер через ссылку.
+    // Гейт — единый канонический (PrivateAttachments.IsForeignResolved / IsContainerResolved),
+    // тот же, что у WebDAV и FilesController.
+    [Fact]
+    public async Task СимлинкВКорне_RenameIDeleteЧерезСсылку_Отказ_ПоддеревоЦело()
+    {
+        if (OperatingSystem.IsWindows()) return; // ссылка на каталог требует привилегий (образец WebDavPrivateAttachmentTests)
+        Directory.CreateSymbolicLink(AbsOf("L"), ".cc-attachments");
+        var foreignId = _foreignPath.Split('/')[2];
+        var foreignGuid = _foreignPath.Split('/')[3];
+
+        // источник — чужой файл через ссылку: тот же отказ, что у несуществующего файла
+        var foreignThroughLink = $"L/private/{foreignId}/{foreignGuid}/foreign.txt";
+        var r = await CallAsync("files_rename",
+            new JsonObject { ["projectId"] = _projectId, ["oldPath"] = foreignThroughLink, ["newPath"] = "moved.txt" }, _ownerId);
+        r.IsError.Should().BeTrue(r.Text);
+        r.Text.Should().Be($"Файл не найден: {foreignThroughLink}", "тот же отказ, что у прямого пути");
+        File.ReadAllText(AbsOf(_foreignPath)).Should().Be("чужое", "чужой файл не сдвинут");
+        File.Exists(AbsOf("moved.txt")).Should().BeFalse();
+
+        // цель — чужое private через ссылку: не пишем
+        r = await CallAsync("files_rename",
+            new JsonObject { ["projectId"] = _projectId, ["oldPath"] = PlainPath, ["newPath"] = $"L/private/{foreignId}/moved.txt" }, _ownerId);
+        r.IsError.Should().BeTrue(r.Text);
+        File.ReadAllText(AbsOf(PlainPath)).Should().Be("обычное", "источник не перенесён");
+        File.Exists(AbsOf($".cc-attachments/private/{foreignId}/moved.txt")).Should().BeFalse();
+
+        // снос чужого через ссылку — тот же отказ, поддерево цело
+        var d = await CallAsync(OwnerPrivateChatId, "files_delete",
+            new JsonObject { ["projectId"] = _projectId, ["path"] = foreignThroughLink }, _ownerId);
+        d.IsError.Should().BeTrue(d.Text);
+        File.Exists(AbsOf(_foreignPath)).Should().BeTrue();
+
+        // источник-контейнер через ссылку («L» и «L/private»): перенос унёс бы настоящий
+        // .cc-attachments/private со всеми авторами, снос — снёс бы его целиком
+        r = await CallAsync("files_rename",
+            new JsonObject { ["projectId"] = _projectId, ["oldPath"] = "L", ["newPath"] = "attic" }, _ownerId);
+        r.IsError.Should().BeTrue(r.Text);
+        Directory.Exists(AbsOf("attic")).Should().BeFalse();
+        new DirectoryInfo(AbsOf("L")).LinkTarget.Should().NotBeNull("ссылка цела: отказ до любого следа на диске");
+
+        r = await CallAsync("files_rename",
+            new JsonObject { ["projectId"] = _projectId, ["oldPath"] = "L/private", ["newPath"] = "attic" }, _ownerId);
+        r.IsError.Should().BeTrue(r.Text);
+        Directory.Exists(AbsOf("attic")).Should().BeFalse();
+
+        d = await CallAsync(OwnerPrivateChatId, "files_delete",
+            new JsonObject { ["projectId"] = _projectId, ["path"] = "L/private" }, _ownerId);
+        d.IsError.Should().BeTrue(d.Text);
+        File.ReadAllText(AbsOf(_foreignPath)).Should().Be("чужое", "private-поддерево цел");
+        File.ReadAllText(AbsOf(_ownPath)).Should().Be("своё");
+
+        // граница правила та же и через ссылку: свой каталог автора — не контейнер, переносится
+        r = await CallAsync("files_rename",
+            new JsonObject { ["projectId"] = _projectId, ["oldPath"] = $"L/private/{_ownPath.Split('/')[2]}", ["newPath"] = "myprivate" }, _ownerId);
+        r.IsError.Should().BeFalse(r.Text);
+        File.ReadAllText(AbsOf($"myprivate/{_ownPath.Split('/')[3]}/own.txt")).Should().Be("своё");
+        File.ReadAllText(AbsOf(_foreignPath)).Should().Be("чужое", "чужой автор не тронут разрешённой операцией");
+    }
+
     [Fact]
     public async Task ToMarkdown_ЦельВЧужомPrivate_ОтказДоКонвертера()
     {

@@ -855,8 +855,10 @@ public sealed partial class WorkspaceToolset(
                         || e.path.Split('/').Length - baseDepth <= depth.Value)
                     // S2d-6b-3: чужие приватные вложения в дерево не попадают: обход TreeExcludes
                     // отсекает .cc-attachments целиком, но явный путь внутрь поддерева — адресат
-                    // модели, и записи фильтруются здесь (свои private и общие вложения остаются)
-                    .Where(e => !PrivateAttachments.IsForeign(e.path, actorId))
+                    // модели, и записи фильтруются здесь (свои private и общие вложения остаются).
+                    // Гейт канонический: запись через симлинк («L/private/{other}») — та же чужая
+                    // запись на диске, что и прямая (a6f5cb15)
+                    .Where(e => !PrivateAttachments.IsForeignResolved(root, e.path, actorId))
                     .ToList();
                 var truncated = list.Count > TreeMaxEntries;
                 if (truncated) list = list.Take(TreeMaxEntries).ToList();
@@ -885,7 +887,7 @@ public sealed partial class WorkspaceToolset(
                 {
                     // S2d-6b-3: чужое приватное вложение — тот же отказ, что у несуществующего
                     // файла: существования не раскрывается
-                    if (IsForeignPrivate(root, path, actorId))
+                    if (PrivateAttachments.IsForeignResolved(root, path, actorId))
                         return Deny($"Файл не найден: {path}");
                     if (Directory.Exists(FileService.SafeJoinPublic(root, path)))
                         return Deny("Файл не найден: путь ведёт в папку");
@@ -947,7 +949,7 @@ public sealed partial class WorkspaceToolset(
                 var content = StringArg(arguments, "content");
                 // S2d-6b-3 доработка (ревью 426b21ad): запись в чужое private — тот же отказ, что у
                 // несуществующего файла: чужой путь не создаётся и не перезаписывается
-                if (IsForeignPrivate(root, path, actorId))
+                if (PrivateAttachments.IsForeignResolved(root, path, actorId))
                     return Deny($"Файл не найден: {path}");
                 try
                 {
@@ -972,7 +974,7 @@ public sealed partial class WorkspaceToolset(
                 var path = StringArg(arguments, "path");
                 // S2d-6b-3 доработка (ревью 426b21ad): каталог внутри чужого private — тот же
                 // отказ: чужой путь не создаётся
-                if (IsForeignPrivate(root, path, actorId))
+                if (PrivateAttachments.IsForeignResolved(root, path, actorId))
                     return Deny($"Файл не найден: {path}");
                 try { files.CreateDirectory(root, path); }
                 catch (UnauthorizedAccessException) { return Deny("Доступ за пределы проекта запрещён"); }
@@ -987,18 +989,20 @@ public sealed partial class WorkspaceToolset(
                 // чужого автора: после переноса путевое правило уже не видит private, и чужой
                 // материал оказался бы общим. Цель — чужой путь: в него не пишем. Отказ — как у
                 // несуществующего файла, каталог жертвы остаётся на месте
-                if (IsForeignPrivate(root, oldPath, actorId))
+                if (PrivateAttachments.IsForeignResolved(root, oldPath, actorId))
                     return Deny($"Файл не найден: {oldPath}");
-                if (IsForeignPrivate(root, newPath, actorId))
+                if (PrivateAttachments.IsForeignResolved(root, newPath, actorId))
                     return Deny($"Файл не найден: {newPath}");
                 // S2d-6b-3 доработка 2 (дельта-ревью 24c92aef): и сам контейнер — ни источник, ни
                 // цель: перенос .cc-attachments или .cc-attachments/private унёс бы private ВСЕХ
                 // участников из-под путевого правила (тот же исход, что с чужим каталогом), а
                 // перенос В контейнер спрятал бы обычный материал под closed-поддеревом.
-                // Та же формула, что у WebDAV COPY/MOVE (PrivateAttachments.IsPrivateContainerPath)
-                if (IsPrivateContainer(root, oldPath))
+                // Та же каноническая формула, что у WebDAV COPY/MOVE и FilesController
+                // (PrivateAttachments.IsContainerResolved): и через симлинк в корне — тот же
+                // контейнер (a6f5cb15)
+                if (PrivateAttachments.IsContainerResolved(root, oldPath))
                     return Deny($"Файл не найден: {oldPath}");
-                if (IsPrivateContainer(root, newPath))
+                if (PrivateAttachments.IsContainerResolved(root, newPath))
                     return Deny($"Файл не найден: {newPath}");
                 try
                 {
@@ -1022,7 +1026,7 @@ public sealed partial class WorkspaceToolset(
                 try
                 {
                     // S2d-6b-3: чужое приватное вложение — тот же отказ, что у несуществующего файла
-                    if (IsForeignPrivate(root, path, actorId))
+                    if (PrivateAttachments.IsForeignResolved(root, path, actorId))
                         return Deny($"Файл не найден: {path}");
                     if (DocumentAbsPath(root, path) is not { } abs)
                         return Deny("Это не документ (pdf/docx/xlsx/pptx)");
@@ -1040,7 +1044,7 @@ public sealed partial class WorkspaceToolset(
                 try
                 {
                     // S2d-6b-3: чужое приватное вложение — тот же отказ, что у несуществующего файла
-                    if (IsForeignPrivate(root, path, actorId))
+                    if (PrivateAttachments.IsForeignResolved(root, path, actorId))
                         return Deny($"Файл не найден: {path}");
                     var text = await GetAiTextAsync(root, path, ct);
                     if (text is null) return Deny("Файл не поддерживается (нужен документ или текст)");
@@ -1058,7 +1062,7 @@ public sealed partial class WorkspaceToolset(
                 try
                 {
                     // S2d-6b-3: чужое приватное вложение — тот же отказ, что у несуществующего файла
-                    if (IsForeignPrivate(root, path, actorId))
+                    if (PrivateAttachments.IsForeignResolved(root, path, actorId))
                         return Deny($"Файл не найден: {path}");
                     var text = await GetAiTextAsync(root, path, ct);
                     if (text is null) return Deny("Файл не поддерживается (нужен документ или текст)");
@@ -1082,7 +1086,7 @@ public sealed partial class WorkspaceToolset(
                 if (path.Length == 0) return Deny("Нужен путь файла");
                 // S2d-6b-3: источник читается по пути — чужое приватное вложение не конвертируется;
                 // тот же отказ, что у несуществующего файла
-                if (IsForeignPrivate(root, path, actorId))
+                if (PrivateAttachments.IsForeignResolved(root, path, actorId))
                     return Deny($"Файл не найден: {path}");
                 // S2d-6b-3 доработка (ревью 426b21ad): явный targetDir — отдельный путь записи, и он
                 // может вести в чужой private (прежний вывод «targetDir здесь не private-путь» держался
@@ -1090,7 +1094,7 @@ public sealed partial class WorkspaceToolset(
                 // создаётся, дорогой конвертер не тратится на отказанную запись. Без targetDir цель —
                 // рядом с источником, он уже гейтнут выше
                 var targetDir = OptionalArg(arguments, "targetDir");
-                if (!string.IsNullOrWhiteSpace(targetDir) && IsForeignPrivate(root, targetDir!, actorId))
+                if (!string.IsNullOrWhiteSpace(targetDir) && PrivateAttachments.IsForeignResolved(root, targetDir!, actorId))
                     return Deny($"Файл не найден: {targetDir}");
                 string abs;
                 try { abs = FileService.SafeJoinPublic(root, path); }
@@ -1129,33 +1133,12 @@ public sealed partial class WorkspaceToolset(
         }
     }
 
-    // S2d-6b-3: чужое ли это приватное вложение (S2d-6b-1, раскладка .cc-attachments/private/{author}/…).
-    // Решение по нормализованному пути: SafeJoin разрешает «..», «./», обратные слеши и двойные
-    // разделители так же, как их раскрывает FileService при открытии файла — guard судит ровно о том
-    // пути, который будет открыт. Путь за пределами корня — не чужое (вызывающий отдаёт ему свой
-    // отказ «за пределы», как раньше). Актор null — любое private чужое (IsForeign fail-closed).
-    private static bool IsForeignPrivate(string root, string path, string? actorId)
-    {
-        string abs;
-        try { abs = FileService.SafeJoinPublic(root, path); }
-        catch (UnauthorizedAccessException) { return false; }
-        return PrivateAttachments.IsForeign(
-            Path.GetRelativePath(Path.GetFullPath(root), abs).Replace('\\', '/'), actorId);
-    }
-
-    // S2d-6b-3 доработка 2 (дельта-ревью 24c92aef): контейнер, под которым лежит closed-поддерево
-    // private/ (.cc-attachments, .cc-attachments/private, корень проекта). Формула — в Core
-    // (PrivateAttachments.IsPrivateContainerPath), та же, что у WebDAV COPY/MOVE; нормализация —
-    // та же, что у IsForeignPrivate: guard судит ровно о том пути, который откроет операция.
-    // Путь за пределами корня — не контейнер (вызывающий отдаёт ему свой отказ «за пределы», как раньше).
-    private static bool IsPrivateContainer(string root, string path)
-    {
-        string abs;
-        try { abs = FileService.SafeJoinPublic(root, path); }
-        catch (UnauthorizedAccessException) { return false; }
-        return PrivateAttachments.IsPrivateContainerPath(
-            Path.GetRelativePath(Path.GetFullPath(root), abs).Replace('\\', '/'));
-    }
+    // Гейты чужого private и контейнеров были здесь текстовыми (IsForeignPrivate, IsPrivateContainer:
+    // SafeJoin + строковые сегменты) и не разыменовывали символьные ссылки: симлинк в корне проекта
+    // («L» → .cc-attachments) обходил их, хотя files_* работают по разыменованному пути (дефект
+    // a6f5cb15). Формула — в Core, рядом с PrivateAttachments (IsForeignResolved / IsContainerResolved):
+    // тот же SafeJoin как первая линия и тот же отказ «за пределы корня» остаётся поведением Core,
+    // актор null — любое private чужое (fail-closed, как раньше).
 
     // Абсолютный путь документа с проверкой, что это просматриваемый документ
     // (pdf/docx/xlsx/pptx). Visio исключён: markitdown его не конвертирует.
@@ -1292,7 +1275,7 @@ public sealed partial class WorkspaceToolset(
                 // до IndexPathAsync — документ в датасете не создаётся (и чужой текст не уходит в
                 // общую базу знаний проекта)
                 var actorId = turnActors.Actor(session.Id, context.OwnerId);
-                if (IsForeignPrivate(p.RootPath, path, actorId))
+                if (PrivateAttachments.IsForeignResolved(p.RootPath, path, actorId))
                     return Deny($"Файл не найден: {path}");
                 if (!KnowledgeService.IsKnowledgeIndexable(path))
                     return Deny($"Формат файла не поддерживается для индексирования: {Path.GetExtension(path)}");
@@ -1939,12 +1922,12 @@ public sealed partial class WorkspaceToolset(
                 // S2d-6b-3 доработка (ревью 426b21ad): удаление по пути — чужое private и чужой
                 // каталог автора не удаляются рекурсивно: тот же отказ, что у несуществующего файла
                 var actorId = turnActors.Actor(session.Id, context.OwnerId);
-                if (IsForeignPrivate(p.RootPath, path, actorId))
+                if (PrivateAttachments.IsForeignResolved(p.RootPath, path, actorId))
                     return Deny($"Файл не найден: {path}");
                 // S2d-6b-3 доработка 2 (дельта-ревью 24c92aef): сам контейнер не удаляется
                 // рекурсивно: под ним private всех участников (та же формула, что у WebDAV
                 // COPY/MOVE и у files_rename выше)
-                if (IsPrivateContainer(p.RootPath, path))
+                if (PrivateAttachments.IsContainerResolved(p.RootPath, path))
                     return Deny($"Файл не найден: {path}");
                 try { files.Delete(p.RootPath, path); }
                 catch (FileNotFoundException) { return Deny($"Файл не найден: {path}"); }

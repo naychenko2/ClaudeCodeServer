@@ -31,7 +31,10 @@ namespace ClaudeHomeServer.Controllers;
 public class ProjectTasksController(
     TaskManager tasks, ProjectManager projects, PersonaManager personas,
     ISessionBroadcaster broadcaster, PersonaBindingsService bindings,
-    ISphereDirectory spheres, SessionManager sessions) : ControllerBase
+    ISphereDirectory spheres, SessionManager sessions,
+    // Явный резолв доступа к проекту — та же точка, что у FeatureOwnerGate на двери правки
+    // (F2-M2); null — fail-closed (проект недоступен)
+    IProjectAccess? access = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -84,6 +87,15 @@ public class ProjectTasksController(
         if (FeatureChatDoor.DenyForHeader(sessions, tasks, UserId,
                 Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), FeatureChatDoor.CreateTarget(req.FeatureId, req.Role)) is { } bound)
             return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
+
+        // Фичевые поля при создании — тот же предикат, что на двери правки (F2-M2, возврат
+        // финала db216f32): дверь WriteContent открыта редактору, но она не отдаёт ему ведение
+        // фичи арендатора — роль/фичу/план/связь с ревью создаёт только владелец. Актор —
+        // вызывающий, запись ляжет под арендатором (tenantId — ключ, не автор). Отказ до любой
+        // записи. Обычная задача (без фичевых полей) — создаётся как раньше.
+        if (FeatureOwnerGate.DeniedForCreate(access, UserId, tenantId, projectId, req) is { } featureDenied)
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new { error = featureDenied, code = FeatureOwnerGate.ErrorCode });
 
         // Колонка доски → статус выводим из её категории
         var cat = BoardColumnHelper.Category(project, req.ColumnId);

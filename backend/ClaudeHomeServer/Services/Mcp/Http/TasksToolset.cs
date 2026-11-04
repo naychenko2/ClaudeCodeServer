@@ -314,6 +314,12 @@ public sealed class TasksToolset(
                     CreatedByActorUserId: sessions.GetTurnActor(session.Id, context.OwnerId) ?? context.OwnerId,
                     ReportToSessionId: InheritedReportTarget(session.Id, context.OwnerId),
                     Acceptance: AcceptanceArg(arguments));
+                // Фичевые поля при создании — тот же предикат, что на дверях правки (F2-M2,
+                // возврат финала db216f32): FeatureOwnerGate, по актору идущего хода — агент
+                // редактора не может больше человека-редактора. Отказ до первой мутации.
+                if (FeatureOwnerGate.DeniedForCreate(access, TurnActorId(session.Id, context.OwnerId),
+                        context.OwnerId, targetProjectId, req) is { } featureDenied)
+                    return Deny($"{featureDenied} ({FeatureOwnerGate.ErrorCode})");
                 TaskItem created;
                 try
                 {

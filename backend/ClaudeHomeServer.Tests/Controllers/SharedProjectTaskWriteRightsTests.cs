@@ -33,7 +33,9 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// фичевые поля только у задачи фичи (её Role или FeatureId заданы), у обычной задачи и дефекта
 /// это исполнительские поля (возврат дельта-ревью c2b408f8: фронт шлёт verification при каждом
 /// сохранении, и безусловный гейт закрывал редактору даже обычный дефект).
-/// (FeatureOwnerGate — один предикат на REST PUT и на MCP tasks_update/tasks_complete);
+/// (FeatureOwnerGate — один предикат на REST PUT и POST создания и на MCP
+/// tasks_update/tasks_complete/tasks_create, F2-M2; статус мерж-задачи — тоже жизнь фичи:
+/// «merged» выводится из его закрытия, FeatureProjector.cs:83);
 /// статус обычной задачи, заголовок, описание, подзадачи, колонка, порядок, исполнитель и срок
 /// остаются редактору.
 ///
@@ -532,6 +534,76 @@ public class SharedProjectTaskWriteRightsTests : IClassFixture<TestWebApplicatio
         Tasks.GetById(stepId)!.Verification?.Notes.Should().Be("вердикт владельца");
     }
 
+    // ── дверь создания: тот же FeatureOwnerGate (F2-M2, возврат финала db216f32) ──────────
+
+    /// <summary>Фича «готова к мержу»: принятый финал как проектная задача (форма —
+    /// TasksControllerTests.CreateAcceptedFinal; гард role=merge в TaskManager.cs:722).</summary>
+    private async Task AcceptedFinalAsync(string projectId, string epicId)
+    {
+        var final = await OwnerClient().PostAsJsonAsync($"/api/projects/{projectId}/tasks",
+            new { title = "Финал фичи", role = "final", featureId = epicId,
+                  status = "done", verification = new { verdict = "accepted" } });
+        final.EnsureSuccessStatusCode();
+    }
+
+    [Fact]
+    public async Task РедакторНеСоздаётЗадачуФичи_403featureOwner_ЗадачиНет_ВладелецСоздаёт()
+    {
+        // До правки гейт стоял только на дверях правки: редактор мог завести в фиче арендатора
+        // финал с вердиктом accepted и мерж-задачу — и фича доходила до «готова к мержу» без
+        // владельца. Фичу заранее делаем Ready (принятый финал владельцем): отказ редактору
+        // идёт по гейту владельца, а не по состоянию фичи — по состоянию его дал бы и TaskManager.
+        var (projectId, _) = await ArrangeAsync(Editor);
+        var epicId = await SharedEpicAsync(projectId);
+        await AcceptedFinalAsync(projectId, epicId);
+        var before = Tasks.GetByProject(projectId).Count;
+
+        var (mergeStatus, mergeCode) = await SendAsync(SecondClient(), HttpMethod.Post, $"/api/projects/{projectId}/tasks",
+            new { title = "Мерж фичи от редактора", role = "merge", featureId = epicId });
+        mergeStatus.Should().Be(403);
+        mergeCode.Should().Be(NotFeatureOwner, "по коду фронт выключает фичевые контролы создания с причиной");
+
+        var (finalStatus, finalCode) = await SendAsync(SecondClient(), HttpMethod.Post, $"/api/projects/{projectId}/tasks",
+            new { title = "Финал фичи от редактора", role = "final", featureId = epicId,
+                  verification = new { verdict = "accepted" } });
+        finalStatus.Should().Be(403);
+        finalCode.Should().Be(NotFeatureOwner);
+
+        Tasks.GetByProject(projectId).Count.Should().Be(before, "отказанное создание не заводит задачу");
+
+        // Тот же ход владельцу открыт: отказывает роль вызывающего, а не состав полей
+        var ok = await OwnerClient().PostAsJsonAsync($"/api/projects/{projectId}/tasks",
+            new { title = "Мерж фичи", role = "merge", featureId = epicId });
+        var okBody = await ok.Content.ReadAsStringAsync();
+        ok.StatusCode.Should().Be(HttpStatusCode.OK, $"фичу ведёт владелец: {okBody}");
+        var mergeId = IdOf(okBody);
+        Tasks.GetById(mergeId)!.Role.Should().Be("merge");
+        Tasks.GetById(mergeId)!.FeatureId.Should().Be(epicId);
+    }
+
+    [Fact]
+    public async Task АгентРедактора_tasksCreateФичевыеПоля_ТотЖеОтказ_ЗадачиНет_ОбычнуюСоздаёт()
+    {
+        var (projectId, _, chatId) = await SharedWithChatAsync();
+        await TurnAsEditorAsync(chatId);
+        var epicId = await SharedEpicAsync(projectId);
+        var before = Tasks.GetByProject(projectId).Count;
+
+        var (text, isError) = await McpCallAsync(OwnerClient(), chatId, "tasks_create",
+            new { title = "Шаг фичи от агента", role = "step", featureId = epicId, stepRef = "М1", lane = "back" });
+        isError.Should().BeTrue(text);
+        text.Should().Contain(NotFeatureOwner,
+            "дверь создания и дверь правки отказывают одним предикатом (FeatureOwnerGate): второй точки правды нет");
+        Tasks.GetByProject(projectId).Count.Should().Be(before, "отказ до первой мутации");
+
+        // Исполнительские поля остаются агенту: обычная задача создаётся как раньше
+        // (матрица Actions покрывает REST-дверь, здесь — MCP-дверь)
+        var (plainText, plainError) = await McpCallAsync(OwnerClient(), chatId, "tasks_create",
+            new { title = "Обычная задача агента" });
+        plainError.Should().BeFalse(plainText);
+        Tasks.GetByProject(projectId).Count.Should().Be(before + 1);
+    }
+
     // ── мерж фичи: дверь по вызывающему, не по проекту (пункт 2 дельта-ревью 94ef33f0) ──
 
     [Fact]
@@ -562,6 +634,33 @@ public class SharedProjectTaskWriteRightsTests : IClassFixture<TestWebApplicatio
         ownerBody.GetProperty("error").GetString().Should().Contain("Финал не принят");
         Tasks.GetByProject(projectId).Should().NotContain(t => t.Role == TaskRoles.Merge,
             "преждевременный мерж тоже ничего не пишет");
+    }
+
+    [Fact]
+    public async Task РедакторНеЗакрываетМержЗадачуФичи_403featureOwner_МержОткрыт_ВладелецЗакрывает()
+    {
+        // a64356f9 п.2: состояние «merged» выводится из закрытого мержа (closedMerges →
+        // TerminalState, FeatureProjector.cs:83), поэтому статус мерж-задачи — жизнь фичи, а не
+        // исполнительское поле: клауза статуса FeatureOwnerGate.Touches покрывает и role=merge.
+        var (projectId, _) = await ArrangeAsync(Editor);
+        var epicId = await SharedEpicAsync(projectId);
+        await AcceptedFinalAsync(projectId, epicId);
+        var mergeCreated = await OwnerClient().PostAsJsonAsync($"/api/projects/{projectId}/tasks",
+            new { title = "Мерж фичи", role = "merge", featureId = epicId });
+        mergeCreated.EnsureSuccessStatusCode();
+        var mergeId = IdOf(await mergeCreated.Content.ReadAsStringAsync());
+
+        var (status, code) = await SendAsync(SecondClient(), HttpMethod.Put, $"/api/tasks/{mergeId}",
+            new { status = "done", resultMarkdown = "мерж закрыл редактор" });
+
+        status.Should().Be(403);
+        code.Should().Be(NotFeatureOwner);
+        Tasks.GetById(mergeId)!.Status.Should().Be(TaskItemStatus.Todo,
+            "мерж-задача открыта: фича не merged — её состояние выводится только из закрытия мержа");
+
+        (await SendAsync(OwnerClient(), HttpMethod.Put, $"/api/tasks/{mergeId}", new { status = "done" }))
+            .Status.Should().Be(200, "жизнь фичи — решение владельца");
+        Tasks.GetById(mergeId)!.Status.Should().Be(TaskItemStatus.Done);
     }
 
     // ── мост «чекбокс заметки → задача»: агентская дверь по актору хода (возврат ревью R-F2-D1) ──

@@ -1,7 +1,7 @@
 // Манифест фичи «Локальные модели». Статическая фича:
 // бэковой подсистемы с тумблером у неё нет — гейт включённости не применяется
-// (core), доступность решает isLocalModelPanelVisible: admin — флаг + configured,
-// не-админ — только configured (isAvailable) и сама панель (то же условие внутри).
+// (core), доступность решает isLocalModelPanelVisible: только configured
+// (isAvailable) и сама панель (то же условие внутри).
 // «configured» — одно выражение на значок и панель: основной/медиа ИЛИ последний
 // снимок второй дорожки (isLocalModelConfiguredAny, «движок без vLLM тоже
 // configured»). Плюс Ф6: геттер indicator — точка состояния на значке рельса.
@@ -61,11 +61,7 @@ export const manifest: SubsystemManifest = {
           // основная дорожка не настроена, значим и configured из лёгкого опроса второй
           // дорожки — значок есть вход в стенд на Video. Для не-админа опроса второй
           // движок нет вовсе — здесь по-прежнему только настроенный ComfyUI.
-          isAvailable: (_projectId: string | null) => isLocalModelPanelVisible({
-            flag: true,
-            isAdmin: getLocalModelAdmin(),
-            configured: isLocalModelConfiguredAny(),
-          }),
+          isAvailable: (_projectId: string | null) => isLocalModelPanelVisible(isLocalModelConfiguredAny()),
           // Точка состояния на значке рельса (Ф6): состояние второй модели из лёгкого
           // опроса сторожа, а НЕ из снимка текущего стенда — точка горит и при закрытой
           // панели, а тяжёл опрос живёт только пока она открыта (ревью Ф2, MAJOR 2).

@@ -387,7 +387,7 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
   const r = currentResolved(sessionId, scope, scene);
   const gpu = jobs[0]?.gpu ?? null;
   const gpuBlock = !jobId && gpu
-    ? <GpuQueueBlock scope={scope} sessionId={sessionId} sceneId={scene.sceneId} feature gpu={gpu}
+    ? <GpuQueueBlock scope={scope} sessionId={sessionId} sceneId={scene.sceneId} gpu={gpu}
         params={{ count: r.count, durationSec: r.durationSec, aspect: r.aspect, sound: r.sound }} />
     : null;
   return (

@@ -104,7 +104,7 @@ export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
   // со значком рельса (isLocalModelConfiguredAny: основной/медиа ИЛИ последний
   // снимок второй дорожки): с другой формулой был бы значок без панели (пустая
   // карточка). Ререндер при смене — подписка сторожа на странице.
-  const visible = isLocalModelPanelVisible({ flag: true, isAdmin, configured: isLocalModelConfiguredAny() });
+  const visible = isLocalModelPanelVisible(isLocalModelConfiguredAny());
 
   // Не-админ: вкладка всегда «Медиа» — переключателя нет, /stats (LLM) не опрашивается.
   // Если в localStorage 'hardware' (оставлено админом) и пользователь не админ —

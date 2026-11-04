@@ -17,7 +17,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { parseHash, navPush, type NavSnapshot } from '../nav';
-import { setAllFlags, __test as flagsTest } from '../featureFlags';
+import { __test as flagsTest } from '../featureFlags';
 
 // Минимальный снимок проекта — нужен только для экрана 'project', в этом тесте
 // используется лишь как заполнитель типа (NavSnapshot.project обязателен).

@@ -107,7 +107,7 @@ function setError(sessionId: string, error: string | null) {
   emit();
 }
 
-// M2: «активные» сессии — у них смонтирован useFeatureRuns(enabled=true). Для них
+// M2: «активные» сессии — у них смонтирован useFeatureRuns. Для них
 // task_changed перезапрашивает агрегат; чужие (неактивные) не трогаем.
 const _active = new Set<string>();
 // Дебаунс-таймеры по сессии: серия task_changed → один перезапрос.
@@ -381,12 +381,10 @@ function wireRealtime() {
 }
 
 // Хук: агрегаты фич чата.
-//   `enabled` — гейт фич-флага (dark-launch): выключен — источник не зовётся,
-//     возвращается `[]` (карточка фичи не показывается, «План хода» — как раньше);
 //   `sessionId` — id сессии-чата: по нему бэк выбирает фичи именно этого чата.
-// Запрос идемпотентен по (sessionId, enabled): повторный fetch — только при смене
-// сессии или включении флага; cancel-метка не даёт позднему ответу затереть свежий.
-export function useFeatureRuns(sessionId: string | null, enabled: boolean): FeatureRun[] {
+// Запрос идемпотентен по sessionId: повторный fetch — только при смене
+// сессии; cancel-метка не даёт позднему ответу затереть свежий.
+export function useFeatureRuns(sessionId: string | null): FeatureRun[] {
   const runs = useSyncExternalStore(
     subscribeRuns,
     () => snapshotFor(sessionId),
@@ -394,8 +392,8 @@ export function useFeatureRuns(sessionId: string | null, enabled: boolean): Feat
   );
   useEffect(() => {
     wireRealtime();
-    if (!enabled || !sessionId) {
-      // выключили/нет сессии — чистим срез этого чата (не весь стор)
+    if (!sessionId) {
+      // нет сессии — чистим срез этого чата (не весь стор)
       if (sessionId && _runsBySession.get(sessionId) !== EMPTY) setRuns(sessionId, EMPTY);
       return;
     }
@@ -411,7 +409,7 @@ export function useFeatureRuns(sessionId: string | null, enabled: boolean): Feat
       cancelled = true;
       _active.delete(sessionId);
     };
-  }, [sessionId, enabled]);
+  }, [sessionId]);
   return runs;
 }
 

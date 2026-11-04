@@ -22,7 +22,6 @@ import { SummaryRow } from './FeatureBriefTimeline';
 import { __test as pageTest, setFeaturePageTab } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest } from '../../lib/featureBackNav';
-import { setAllFlags } from '../../lib/featureFlags';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
 import type { FeaturePage as FeaturePageData } from '../../types/featureIndex';

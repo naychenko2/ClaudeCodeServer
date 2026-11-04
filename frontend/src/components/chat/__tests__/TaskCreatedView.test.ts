@@ -11,7 +11,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { ChatItem, Task } from '../../../types';
 import { TaskCreatedView, TaskRunExecutorView } from '../TaskCreatedView';
 import { upsertTaskLocal } from '../../../lib/tasks';
-import { setAllFlags } from '../../../lib/featureFlags';
 import { __test } from '../../../lib/featureRuns';
 import { ChatSessionContext } from '../contexts';
 import { findNodeByAttr, installFakeDom, mount, reactProps, textNodes, uninstallFakeDom } from './fakeDom';

@@ -10,7 +10,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { __test, FEATURE_TAB_LABEL, stepsTabCount } from './featurePage';
 import { api } from './api';
-import { setAllFlags } from './featureFlags';
 import type { Task } from '../types';
 import type { FeaturePage } from '../types/featureIndex';
 import type { FeatureRun } from '../types/featureRun';

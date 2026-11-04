@@ -175,10 +175,9 @@ export function FeatureLabel({ feature }: { feature: FeatureIndexFeature }) {
   );
 }
 
-// Фича чата для метки: null — метки нет (чат без фичи или флаг выключен).
-// Чистая функция: читает индекс фич (featureOf) и флаг; тестируется без рендера.
-export function featureLabelFor(sessionId: string | null, flagOn: boolean): FeatureIndexFeature | null {
-  if (!flagOn) return null;
+// Фича чата для метки: null — метки нет (чат без фичи).
+// Чистая функция: читает индекс фич (featureOf); тестируется без рендера.
+export function featureLabelFor(sessionId: string | null): FeatureIndexFeature | null {
   const entries = featureOf(sessionId);
   return entries[0]?.feature ?? null;
 }
@@ -366,8 +365,8 @@ function ChatCardView({
   // useFeaturesIndex — реактивная подписка на индекс (один запрос на проект:
   // первичная загрузка при 0→1 потребителях); featureLabelFor — чистое решение
   // «показывать ли метку» (null — нет)
-  useFeaturesIndex(s.projectId ?? null, true);
-  const feature = featureLabelFor(s.id, true);
+  useFeaturesIndex(s.projectId ?? null);
+  const feature = featureLabelFor(s.id);
   // Открытое меню действий: rect кнопки-триггера (null — закрыто)
   const [menu, setMenu] = useState<DOMRect | null>(null);
   // M1: фокус на карточке-строке — подсказка «что значит ключевой» (Tooltip) поднимается

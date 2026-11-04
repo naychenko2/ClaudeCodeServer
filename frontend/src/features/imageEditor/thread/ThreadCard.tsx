@@ -107,9 +107,9 @@ export function JobBlock({ projectId, sessionId, thread, inEditor, onPreview }: 
           <Button size="xs" variant="ghost" leftIcon={ic(X)} onClick={() => { void cancel(); }}>Отменить</Button>
         </Acts>
         {/* Собственная полоса: прячем, когда есть строка GPU (ровно одна полоса, не дубль) */}
-        {!showQueueLine(true, status?.gpu ?? null) && <ProgressBar value={progress.percent} transition="width .5s linear" />}
+        {!showQueueLine(status?.gpu ?? null) && <ProgressBar value={progress.percent} transition="width .5s linear" />}
         <GpuQueueBlock projectId={projectId} sessionId={sessionId} thread={thread} status={status}
-          feature count={count} />
+          count={count} />
         <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(count, 4)}, minmax(0, 1fr))`, gap: SP.xs }}>
           {Array.from({ length: Math.min(count, 4) }, (_, i) => (
             <div key={i} style={{ aspectRatio: '1 / 1', borderRadius: R.md, background: C.bgInset }} />

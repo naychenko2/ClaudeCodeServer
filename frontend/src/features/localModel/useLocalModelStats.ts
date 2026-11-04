@@ -33,12 +33,10 @@ export function makeStatsFetch(
 }
 
 // === Условие показа значка и панели ===
-// Админ: параметр flag + configured. Не-админ: только configured === true —
-// flag его не гейтит, панель доступна всем, когда настроен ComfyUI.
+// Панель доступна всем, когда сервер настроен (configured === true).
 // configured === null — сервер ещё не ответил: значка нет, но и «не настроена» ещё не значит.
-export function isLocalModelPanelVisible(p: { flag: boolean; isAdmin: boolean; configured: boolean | null }): boolean {
-  if (p.isAdmin) return p.flag && p.configured === true;
-  return p.configured === true;
+export function isLocalModelPanelVisible(configured: boolean | null): boolean {
+  return configured === true;
 }
 
 // === Стор configured: лёгкий редкий опрос для значка ===
@@ -80,13 +78,10 @@ export function useLocalModelAdmin(): boolean {
   );
 }
 
-// Источник значения configured для значка: админ — /stats (только при flag === true),
-// не-админ — /stats/media (flag на него не влияет). null — ни одного запроса
-// к /api/local-model/* (только админ при flag === false).
+// Источник значения configured для значка: админ — /stats, не-админ — /stats/media.
 export type ConfiguredSource = 'stats' | 'media';
-export function configuredSource(flag: boolean, isAdmin: boolean): ConfiguredSource | null {
-  if (isAdmin) return flag ? 'stats' : null;
-  return 'media';
+export function configuredSource(isAdmin: boolean): ConfiguredSource {
+  return isAdmin ? 'stats' : 'media';
 }
 
 // Чистый запуск лёгкого опроса (60 с): первый запрос сразу, затем по таймеру.

@@ -17,7 +17,6 @@ import { WorkspacePage } from './WorkspacePage';
 import { getNav } from '../lib/nav';
 import { encodePendingChat } from '../lib/pendingProjectChat';
 import { centerWinner } from './workspace/DesktopWorkspace';
-import { setAllFlags, __test as flagsTest } from '../lib/featureFlags';
 import { setMeFromServer } from '../lib/defaultPersona';
 import { __test as backNavTest, recordBackNav, recordFeatureReturn, featureBackNavFrom, backNavFrom, getBackNav } from '../lib/featureBackNav';
 import { centerOccupiedByOther, centerFingerprint, CENTER_OCCUPANCY_KEYS, type CenterOccupancy } from '../lib/centerOccupancy';

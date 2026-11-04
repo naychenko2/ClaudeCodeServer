@@ -308,7 +308,7 @@ function RunningLine({ projectId, sessionId, thread, jobId, model, faces, count 
         : <ProgressBar value={progress.percent} transition="width .5s linear" />}
       {stage?.hint && <div style={{ fontSize: FS.xs, color: C.textMuted }}>{stage.hint}</div>}
       <GpuQueueBlock projectId={projectId} sessionId={sessionId} thread={thread} status={status}
-        feature count={count} />
+        count={count} />
     </div>
   );
 }

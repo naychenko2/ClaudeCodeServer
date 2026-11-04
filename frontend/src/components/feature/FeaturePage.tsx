@@ -128,7 +128,7 @@ function FeatureBriefWithNames(props: Omit<FeatureBriefBlockProps, 'nameOf' | 'g
 export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = false, onBack, onOpenFile }: FeaturePageProps) {
   // Данные страницы (run + events) — из стора; здесь для фолбэка заголовка и 404/503.
   const page = useFeaturePage(featureId);
-  const index = useFeaturesIndex(projectId, true);
+  const index = useFeaturesIndex(projectId);
   const feature = index.features.find(f => f.featureId === featureId) ?? null;
   // «Открыть ключевой чат» (общее пустое «Материалы»): тот же переход, что в шапке.
   const keyChat = feature?.keySessionId ?? null;

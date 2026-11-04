@@ -1,5 +1,5 @@
 // Метка фичи в строке чата (Ф9, макет features-overview.html, «Дни»):
-//   • featureLabelFor — чистое решение «показывать ли метку» (чат фичи + флаг → фича;
+//   • featureLabelFor — чистое решение «показывать ли метку» (чат фичи → фича;
 //     иначе null — прежнее имя персоны);
 //   • FeatureLabel — рендер глифа + названия (обрезка с title).
 //
@@ -93,13 +93,13 @@ beforeEach(() => {
 describe('featureLabelFor', () => {
   it('чат фичи + флаг вкл → фича (метка показывается)', () => {
     setupIndex();
-    const result = featureLabelFor('chat-1', true);
+    const result = featureLabelFor('chat-1');
     expect(result?.featureId).toBe('f1');
   });
 
   it('чат без фичи → null (прежнее имя персоны)', () => {
     setupIndex();
-    const result = featureLabelFor('chat-other', true);
+    const result = featureLabelFor('chat-other');
     expect(result).toBeNull();
   });
 

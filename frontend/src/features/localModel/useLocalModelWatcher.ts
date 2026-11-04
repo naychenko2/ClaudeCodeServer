@@ -79,7 +79,7 @@ export function startEngineStatePolling(
 export function useLocalModelWatcher(isAdmin: boolean): void {
   useEffect(() => { setLocalModelAdmin(isAdmin); }, [isAdmin]);
   // Админ — /stats, не-админ — /stats/media
-  useLocalModelConfiguredPolling(configuredSource(true, isAdmin));
+  useLocalModelConfiguredPolling(configuredSource(isAdmin));
   // Состояние второй модели — только админу: точка на значке тоже только для него
   useEffect(() => {
     if (!isAdmin) return;

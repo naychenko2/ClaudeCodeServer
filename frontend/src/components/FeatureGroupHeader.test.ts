@@ -461,17 +461,12 @@ describe('featureGroupChats: ключевой первым и «ещё N»', () 
 // === Пункты группировки (featureGroupByOptions) ===
 
 describe('featureGroupByOptions: пункт «Фичи»', () => {
-  it('в списке проекта с включённым флагом — «features» на месте', () => {
-    expect(featureGroupByOptions(true, true)).toEqual(['days', 'tags', 'subjects', 'features', 'none']);
+  it('в списке проекта — «features» на месте', () => {
+    expect(featureGroupByOptions(true)).toEqual(['days', 'tags', 'subjects', 'features', 'none']);
   });
 
-  it('флаг выключен — пункта «Фичи» нет (даже в проекте)', () => {
-    expect(featureGroupByOptions(true, false)).toEqual(['days', 'tags', 'subjects', 'none']);
-  });
-
-  it('вне проекта — «Фичи» нет (реестра фич нет), даже с флагом', () => {
-    expect(featureGroupByOptions(false, true)).toEqual(['days', 'none']);
-    expect(featureGroupByOptions(false, false)).toEqual(['days', 'none']);
+  it('вне проекта — «Фичи» нет (реестра фич нет)', () => {
+    expect(featureGroupByOptions(false)).toEqual(['days', 'none']);
   });
 });
 

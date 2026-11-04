@@ -36,10 +36,9 @@ const _listeners = new Set<() => void>();
 function emit() { _listeners.forEach(fn => fn()); }
 
 // «Активные» проекты — у них смонтирован хотя бы один потребитель
-// useFeaturesIndex(enabled=true). Только их task_changed перезапрашивает; чужие
-// (неактивные) не трогаем. Счёт — по потребителям (R3, минор 5): выключенный
-// потребитель (enabled=false) срез не трогает и чужих не отписывает; срез чистится,
-// а проект снимается с «активных», только когда уходит ПОСЛЕДНИЙ включённый.
+// useFeaturesIndex. Только их task_changed перезапрашивает; чужие (неактивные) не
+// трогаем. Счёт — по потребителям (R3, минор 5): срез чистится, а проект снимается
+// с «активных», только когда уходит ПОСЛЕДНИЙ потребитель.
 const _activeCount = new Map<string, number>();
 // Дебаунс-таймеры по проекту: серия task_changed → один перезапрос.
 const _pending = new Map<string, ReturnType<typeof setTimeout>>();
@@ -173,16 +172,13 @@ function onUnmount(projectKey: string) {
 }
 
 // Хук: индекс фич проекта.
-//   `enabled` — гейт фич-флага (dark launch): выключен — источник не зовётся,
-//     возвращается EMPTY (фасет/плашка не показываются, «Дни» — как раньше);
 //   `projectId` — область ответа; null — все проекты владельца и чаты вне проектов.
-// Запрос идемпотентен по (projectId, enabled): повторный fetch — только при смене
-// проекта или включении флага; cancel-метка не даёт позднему ответу затереть свежий.
+// Запрос идемпотентен по projectId: повторный fetch — только при смене проекта;
+// cancel-метка не даёт позднему ответу затереть свежий.
 //
-// Потребители считаются по проекту (R3, минор 5): выключенный потребитель
-// (enabled=false) срез не трогает и чужих не отписывает; срез чистится, а проект
-// снимается с «активных», только когда уходит последний включённый потребитель.
-export function useFeaturesIndex(projectId: string | null, enabled: boolean): FeaturesIndex {
+// Потребители считаются по проекту (R3, минор 5): срез чистится, а проект
+// снимается с «активных», только когда уходит последний потребитель.
+export function useFeaturesIndex(projectId: string | null): FeaturesIndex {
   const projectKey = projectId ?? '';
   const index = useSyncExternalStore(
     subscribeIndex,
@@ -191,16 +187,11 @@ export function useFeaturesIndex(projectId: string | null, enabled: boolean): Fe
   );
   useEffect(() => {
     wireRealtime();
-    if (!enabled) {
-      // Выключенный потребитель: срез не трогает и чужих не отписывает (учёт
-      // по проекту; последний ушедший включённый чистит срез в onUnmount).
-      return;
-    }
     const prev = _activeCount.get(projectKey) ?? 0;
     _activeCount.set(projectKey, prev + 1);
-    // Первичная загрузка — только когда первый включённый потребитель приходит
+    // Первичная загрузка — только когда первый потребитель приходит
     // (0→1): один запрос на проект, а не на каждую карточку. Ответ применяется,
-    // пока проект активен (есть хотя бы один включённый потребитель).
+    // пока проект активен (есть хотя бы один потребитель).
     if (prev === 0) {
       setLoading(projectKey, true);
       void api.tasks.featuresIndex(projectKey || undefined)
@@ -217,7 +208,7 @@ export function useFeaturesIndex(projectId: string | null, enabled: boolean): Fe
     return () => {
       onUnmount(projectKey);
     };
-  }, [projectKey, enabled]);
+  }, [projectKey]);
   return index;
 }
 

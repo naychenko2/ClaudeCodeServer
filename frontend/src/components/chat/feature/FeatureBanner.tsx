@@ -143,10 +143,10 @@ interface FeatureBannerProps {
 // строки нет (чат не принадлежит ни одной фиче).
 export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTaskId, onFocusComposer }: FeatureBannerProps) {
   // Индекс — строки фич и связь «чат × фича» (стор, один запрос на проект).
-  useFeaturesIndex(projectId, true);
+  useFeaturesIndex(projectId);
   // Run'ы чата — данные полосы («в master»), «Сейчас», расхождений и оценки. Тот же
   // источник, что у попапа пилюли, без догрузки features/{id}.
-  const runs = useFeatureRuns(sessionId, true);
+  const runs = useFeatureRuns(sessionId);
   const runsLoading = useFeatureRunsLoading(sessionId);
   const runsError = useFeatureRunsError(sessionId);
   const [selIdx, setSelIdx] = useState(0);

@@ -194,9 +194,9 @@ function RunningLine({ scope, sessionId, thread, jobId, op, mode, count }: {
         </Button>
       </div>
       {/* Собственная полоса: прячем, когда есть строка GPU (ровно одна полоса, не дубль) */}
-      {!showQueueLine(true, job?.gpu ?? null) && <ProgressBar value={percent} transition="width .5s linear" />}
+      {!showQueueLine(job?.gpu ?? null) && <ProgressBar value={percent} transition="width .5s linear" />}
       <GpuQueueBlock scope={scope} sessionId={sessionId} thread={thread} job={job}
-        feature op={op} mode={mode} count={count} />
+        op={op} mode={mode} count={count} />
       <Note>Варианты появятся здесь по мере готовности.</Note>
     </div>
   );

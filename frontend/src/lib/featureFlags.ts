@@ -27,7 +27,7 @@ export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];
 
 let _flags: Record<string, boolean> = {};
 // Флаги пришли с сервера (setAllFlags/mergeFlags). Пока false — getFlag читает «выключено»,
-// но это «ещё не загружено», а не «загружено и выключено» — разницу видят потребители flagsLoaded/useFlagsLoaded.
+// но это «ещё не загружено», а не «загружено и выключено» — разницу видит __test.isLoaded.
 let _loaded = false;
 const _listeners = new Set<() => void>();
 
@@ -66,12 +66,6 @@ export function getAllFlags(): Record<string, boolean> {
   return _flags;
 }
 
-// Флаги загружены с сервера (setAllFlags/mergeFlags). До этого getFlag возвращает false
-// по «не загружено», а не по «загружено и выключено» — см. _loaded.
-export function flagsLoaded(): boolean {
-  return _loaded;
-}
-
 export function subscribeFlags(fn: () => void): () => void {
   _listeners.add(fn);
   return () => _listeners.delete(fn);
@@ -81,7 +75,6 @@ export function subscribeFlags(fn: () => void): () => void {
 // адреса) и прямой доступ к состоянию.
 export const __test = {
   reset() { _flags = {}; _loaded = false; },
-  setLoaded(v: boolean) { _loaded = v; },
   isLoaded() { return _loaded; },
 };
 
@@ -91,16 +84,6 @@ export function useFeature(key: FlagKey): boolean {
     subscribeFlags,
     () => getFlag(key),
     () => getFlag(key),
-  );
-}
-
-// Подписка на «флаги загружены»: true после setAllFlags/mergeFlags (ответ /me).
-// До этого getFlag читает false по «не загружено», а не по «выключено».
-export function useFlagsLoaded(): boolean {
-  return useSyncExternalStore(
-    subscribeFlags,
-    () => _loaded,
-    () => _loaded,
   );
 }
 

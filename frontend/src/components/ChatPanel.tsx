@@ -1821,13 +1821,13 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
     () => todoBatches.reduce((max, b) => Math.max(max, b.lastIndex), -1),
     [todoBatches]);
   // Режим «Исполнение фичи»: агрегаты берутся из REST по сессии чата.
-  const featureRuns = useFeatureRuns(session.id, true);
+  const featureRuns = useFeatureRuns(session.id);
   // Слот строки фичи в шапке (В2), как и сама строка (FeatureBanner).
   // Решение «есть ли у чата фича» принимается ЗДЕСЬ: React-элемент всегда truthy, и
   // переданный при пустом чате слот гасил бы линию тулбара у каждого чата без фичи
   // (ревью F2, major 2). Индекс — тот же стор, что у FeatureBanner (один запрос на
   // проект, идемпотентен), нужен ровно чтобы отличить «слот задан» от «в нём есть».
-  useFeaturesIndex(session.projectId ?? null, true);
+  useFeaturesIndex(session.projectId ?? null);
   const hasFeatureRow = featureOf(session.id).length > 0;
 
 

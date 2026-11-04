@@ -651,9 +651,9 @@ export function featureGroupTreeRows(
 
 // Пункты группировки для тулбара: 'features' — только в списке проекта
 // (у глобального списка реестра фич нет).
-export function featureGroupByOptions(inProject: boolean, featuresOverview: boolean): ChatGroupBy[] {
+export function featureGroupByOptions(inProject: boolean): ChatGroupBy[] {
   const base: ChatGroupBy[] = inProject ? ['days', 'tags', 'subjects'] : ['days'];
-  if (inProject && featuresOverview) base.push('features');
+  if (inProject) base.push('features');
   base.push('none');
   return base;
 }

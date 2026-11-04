@@ -301,8 +301,8 @@ describe('live-режим: перезапрос затронутого прое�
 // ── 4: несколько потребителей (R3, минор 5) — хук с эффектами (fakeDom + mount) ──
 
 // Тестовый потребитель: та же подписка, что FeatureBanner/SessionList/ChatCard.
-function Consumer(props: { projectId: string | null; enabled: boolean }) {
-  useFeaturesIndex(props.projectId, props.enabled);
+function Consumer(props: { projectId: string | null }) {
+  useFeaturesIndex(props.projectId);
   return null;
 }
 
@@ -312,7 +312,7 @@ async function flush() {
   await act(async () => { await new Promise(r => setTimeout(r, 0)); });
 }
 
-describe('несколько потребителей: выключенный не стирает чужой срез (R3, минор 5)', () => {
+describe('несколько потребителей одного проекта (R3, минор 5)', () => {
   let featuresIndexSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
@@ -327,47 +327,10 @@ describe('несколько потребителей: выключенный н
     uninstallFakeDom();
   });
 
-  it('один enabled=true, другой enabled=false: срез не стирается, данные доходят', async () => {
-    const a = mount(createElement(Consumer, { projectId: 'p1', enabled: true }));
-    await flush();
-    // Включённый потребитель загрузил срез (фикстура — глобальная область, но срез
-    // кладётся по projectKey запроса).
-    expect(__test.snapshotFor('p1')).toBe(FIXTURE);
-    // Выключенный потребитель того же проекта: его монтирование срез не стирает.
-    const b = mount(createElement(Consumer, { projectId: 'p1', enabled: false }));
-    await flush();
-    expect(__test.snapshotFor('p1')).toBe(FIXTURE);
-    // Данные доходят: лукап видит чаты фикстуры (сценарий — фасет «Фичи» SessionList
-    // при выключенной плашке: dark launch,).
-    expect(featureOf('chat-cur').map(e => e.feature.featureId)).toEqual(['feat-closed', 'feat-attention', 'feat-running']);
-    // Проект остаётся «активным» (включённый потребитель на месте).
-    expect(__test.active().has('p1')).toBe(true);
-    // Размонтирование ВЫКЛЮЧЕННОГО потребителя срез тоже не трогает.
-    b.root.unmount();
-    await flush();
-    expect(__test.snapshotFor('p1')).toBe(FIXTURE);
-    // Последний включённый ушёл — срез очищен, проект неактивен.
-    a.root.unmount();
-    await flush();
-    expect(__test.snapshotFor('p1').features).toHaveLength(0);
-    expect(__test.active().has('p1')).toBe(false);
-  });
-
-  it('оба выключены: ничего не грузится и не подписывается (как в Ф1)', async () => {
-    const a = mount(createElement(Consumer, { projectId: 'p1', enabled: false }));
-    const b = mount(createElement(Consumer, { projectId: 'p1', enabled: false }));
-    await flush();
-    expect(featuresIndexSpy).not.toHaveBeenCalled();
-    expect(__test.snapshotFor('p1').features).toHaveLength(0);
-    expect(__test.active().has('p1')).toBe(false);
-    a.root.unmount();
-    b.root.unmount();
-  });
-
   it('MAJOR-1: N потребителей → 1 запрос на проект', async () => {
-    const a = mount(createElement(Consumer, { projectId: 'p1', enabled: true }));
-    const b = mount(createElement(Consumer, { projectId: 'p1', enabled: true }));
-    const c = mount(createElement(Consumer, { projectId: 'p1', enabled: true }));
+    const a = mount(createElement(Consumer, { projectId: 'p1' }));
+    const b = mount(createElement(Consumer, { projectId: 'p1' }));
+    const c = mount(createElement(Consumer, { projectId: 'p1' }));
     await flush();
     // Три потребителя одного проекта — ровно один GET.
     expect(featuresIndexSpy).toHaveBeenCalledTimes(1);
@@ -381,11 +344,11 @@ describe('несколько потребителей: выключенный н
   });
 
   it('MAJOR-1: после ответа новый потребитель не стучится заново, пока индекс свежий', async () => {
-    const a = mount(createElement(Consumer, { projectId: 'p1', enabled: true }));
+    const a = mount(createElement(Consumer, { projectId: 'p1' }));
     await flush();
     expect(featuresIndexSpy).toHaveBeenCalledTimes(1);
     // Новый потребитель того же проекта: fetch уже отработал, срез свежий.
-    const b = mount(createElement(Consumer, { projectId: 'p1', enabled: true }));
+    const b = mount(createElement(Consumer, { projectId: 'p1' }));
     await flush();
     // Второй запрос не ушёл.
     expect(featuresIndexSpy).toHaveBeenCalledTimes(1);
@@ -396,7 +359,7 @@ describe('несколько потребителей: выключенный н
   });
 
   it('MAJOR-1: все ушли, новый потребитель — новый запрос', async () => {
-    const a = mount(createElement(Consumer, { projectId: 'p1', enabled: true }));
+    const a = mount(createElement(Consumer, { projectId: 'p1' }));
     await flush();
     expect(featuresIndexSpy).toHaveBeenCalledTimes(1);
     // Последний ушёл — срез очищен.
@@ -404,7 +367,7 @@ describe('несколько потребителей: выключенный н
     await flush();
     expect(__test.snapshotFor('p1').features).toHaveLength(0);
     // Новый потребитель — первичная загрузка заново.
-    const b = mount(createElement(Consumer, { projectId: 'p1', enabled: true }));
+    const b = mount(createElement(Consumer, { projectId: 'p1' }));
     await flush();
     expect(featuresIndexSpy).toHaveBeenCalledTimes(2);
     expect(__test.snapshotFor('p1')).toBe(FIXTURE);

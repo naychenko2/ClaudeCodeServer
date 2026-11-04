@@ -12,7 +12,7 @@ import path from 'node:path';
 import react from '@vitejs/plugin-react';
 import { federation } from '@module-federation/vite';
 import { hostReactShared } from '../hostReactShared';
-import { GUARD_AREAS, LEGACY_ALLOWED } from './guardLists.mjs';
+import { findViolation } from './guardLists.mjs';
 
 // Сторож графа сборки remote «Заметки» (LLM-wiki, QA B1 critical; доработка ревью 0c1052e1):
 // сторы ядра хоста (featureFlags, offline, signalr, toast, wiki) не должны попасть в remote
@@ -28,15 +28,6 @@ import { GUARD_AREAS, LEGACY_ALLOWED } from './guardLists.mjs';
 // и не помечается: MF резолвит его в кит хоста, второй копии нет. Транзитивные импорты
 // (components/ui/* → lib/design) не помечаются: смотрим только прямые импорты файлов области —
 // как ESLint-страж.
-const AREA_MATCHERS = GUARD_AREAS.map((area) => ({
-  // запретные резолвим из тех же имён, из которых ESLint строит group-паттерны
-  forbiddenRe: new RegExp(
-    `(^|\\/)src\\/(?:lib\\/(${area.forbidden.join('|')})|pages\\/(${area.forbiddenPages.join('|')}))(\\.ts)?$`,
-  ),
-  // область — по префиксу каталога или поименованному файлу
-  inArea: (p: string) => p.includes(`/${area.dir}/`) || (area.extraFiles ?? []).some((f) => p.includes(`/${f}`)),
-}));
-
 function toPosix(p: string) {
   return p.split(path.sep).join('/');
 }
@@ -55,24 +46,12 @@ function notesStoreGraphGuard(): Plugin {
     enforce: 'pre',
     resolveId(source, importer) {
       if (!importer) return null;
-      const importerPath = toPosix(importer);
-      if (
-        importerPath.includes('/__tests__/') ||
-        /\.test\.[cm]?[jt]sx?$/.test(importerPath) ||
-        LEGACY_ALLOWED.some((f) => importerPath.includes(`/${f}`))
-      ) return null;
-      // Последний совпавший выигрывает: узкая область идёт в GUARD_AREAS после общей —
-      // та же семантика, что у идущего позже блока в ESLint (для вики-файлов широкий
-      // список заменяет собой узкий).
-      const areaMatcher = AREA_MATCHERS.filter((m) => m.inArea(importerPath)).at(-1);
-      if (!areaMatcher) return null;
-      // Относительный импорт резолвим относительно импортера; прочие ('aihome_shell/kit',
-      // пакеты) — не относительные, второй копии стора они не собирают.
-      const resolved = toPosix(source.startsWith('.') ? path.resolve(path.dirname(importer), source) : source);
-      const hit = areaMatcher.forbiddenRe.exec(resolved);
+      // Вердикт целиком в guardLists.mjs (findViolation): тот же матчер гоняет тест барьеров.
+      const hit = findViolation(importer, source);
       if (!hit) return null;
+      const importerPath = toPosix(importer);
       const rel = importerPath.slice(Math.max(importerPath.indexOf('/src/'), 0) + 1);
-      violations.add(`${rel} → src/${hit[2] ? `lib/${hit[2]}` : `pages/${hit[3]}`}.ts`);
+      violations.add(`${rel} → ${hit}`);
       return null;
     },
     buildEnd() {

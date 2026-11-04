@@ -129,7 +129,10 @@ const notesImportGuard = (area) => ({
   rules: {
     'no-restricted-imports': ['error', {
       patterns: [{
-        group: [...area.forbidden.map((m) => `**/lib/${m}`), ...area.forbiddenPages.map((m) => `**/pages/${m}`)],
+        group: [
+          ...area.forbidden.flatMap((m) => [`**/lib/${m}`, `**/lib/${m}.*`]),
+          ...area.forbiddenSrc.flatMap((m) => [`**/${m}`, `**/${m}.*`]),
+        ],
         allowTypeImports: true,
         message: area.name === 'notes-wiki'
           ? `Вики-часть модуля «Заметки» берёт ядро только из aihome_shell/kit (${area.forbidden.join(', ')}): прямой импорт соберёт вторую копию в remote (флаги пусты, realtime мёртв, отдельный экземпляр WikiError).`

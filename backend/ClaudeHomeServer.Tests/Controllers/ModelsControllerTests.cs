@@ -718,4 +718,81 @@ public class ModelsControllerTests : IClassFixture<TestWebApplicationFactory>
         (await owner.GetAsync($"/api/models/preview?sessionId={sharedChatId}")).StatusCode
             .Should().Be(HttpStatusCode.OK, "общий чат проекта виден его владельцу");
     }
+
+    // --- TAIL-PREVIEW-ACCESS (решение DEC-TAIL п.3): превью модели — ЧТЕНИЕ, резолв —
+    // ключом боевого хода (арендатором). До правки обе ветки взяли гейт записи
+    // GetOwnedVisible, и участник общего проекта получал 404 на превью СВОЕГО чата проекта.
+
+    [Fact]
+    public async Task Preview_ЧатУчастникаОбщегоПроекта_РезолвКлючомАрендатора()
+    {
+        var (owner, member, projectId) = await SharedProjectWithMemberAsync();
+
+        // Известные разные слоты: у арендатора — каскад, у участника — своя модель.
+        // Резолв чата проекта обязан идти каскадом проекта: в бою дефолт модели чата и
+        // цепочка хода считаются владельцем проекта (SessionManager.CreateAsync / ResolveOwnerId).
+        var presetId = "tail-" + Guid.NewGuid().ToString("N");
+        (await owner.PutAsJsonAsync("/api/specialties/settings/global", new
+        {
+            specialties = new Dictionary<string, object>(),
+            presets = new[] { new { id = presetId, name = "Каскад проекта", steps = new[] { "tenant-a", "tenant-b", "tenant-c" } } },
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+        await owner.PutAsJsonAsync("/api/me/model-tiers", new { strong = $"preset:{presetId}", medium = "", weak = "" });
+        await member.PutAsJsonAsync("/api/me/model-tiers", new { strong = "member-x", medium = "", weak = "" });
+        try
+        {
+            // Свой чат участника в общем проекте: 200 и цепочка арендатора, не его личная
+            var ownChatId = await ProjectChatAsync(member, projectId, "Чат участника", makePrivate: false);
+            var own = D(await member.GetAsync($"/api/models/preview?sessionId={ownChatId}"));
+            own.GetProperty("model").GetString().Should().Be("tenant-a",
+                "дефолт модели чата проекта — слоты его арендатора");
+            own.GetProperty("frozen").GetBoolean().Should().BeTrue("модель чата заморожена при создании");
+            own.GetProperty("tier").GetString().Should().Be("strong", "тир — по слотам арендатора");
+            var chain = own.GetProperty("chain").EnumerateArray().Select(c => c.GetString()).ToList();
+            chain.Should().ContainInOrder(new[] { "tenant-a", "tenant-b", "tenant-c" },
+                "хвост цепочки — каскад слота strong арендатора");
+            chain.Should().NotContain("member-x", "личные слоты участника в резолв его чата не входят");
+
+            // Чип сабагента своего чата — вторая ветка того же гейта чтения: и она открыта
+            // участнику его же чата проекта
+            var memberPersonaId = D(await member.PostAsJsonAsync("/api/personas",
+                new { name = "Персона участника" })).GetProperty("id").GetString()!;
+            var chipBody = D(await member.GetAsync(
+                $"/api/models/preview?sessionId={ownChatId}&personaId={memberPersonaId}"));
+            chipBody.GetProperty("subagentChip").TryGetProperty("kind", out _).Should().BeTrue(
+                "чип сабагента своего чата проекта — 200 с чипом");
+
+            // Общий чат проекта (не приватный): участник видит и его модель — 200
+            var ownerChatId = await ProjectChatAsync(owner, projectId, "Чат владельца", makePrivate: false);
+            var seen = D(await member.GetAsync($"/api/models/preview?sessionId={ownerChatId}"));
+            seen.GetProperty("model").GetString().Should().Be("tenant-a");
+        }
+        finally
+        {
+            await owner.PutAsJsonAsync("/api/specialties/settings/global", new
+            {
+                specialties = new Dictionary<string, object>(),
+                presets = Array.Empty<object>(),
+            });
+            await owner.PutAsJsonAsync("/api/me/model-tiers", new { strong = "", medium = "", weak = "" });
+            await member.PutAsJsonAsync("/api/me/model-tiers", new { strong = "", medium = "", weak = "" });
+        }
+    }
+
+    // Та же граница в обратную сторону: приватный чат владельца не раскрывается участнику —
+    // 404, неотличимый от несуществующей сессии (обе ветки: контекст чата и чип сабагента).
+    [Fact]
+    public async Task Preview_ПриватныйЧатВладельца_УчастникуПроекта_404()
+    {
+        var (owner, member, projectId) = await SharedProjectWithMemberAsync();
+        var chatId = await ProjectChatAsync(owner, projectId, "Приватный чат владельца", makePrivate: true);
+
+        (await member.GetAsync($"/api/models/preview?sessionId={chatId}")).StatusCode
+            .Should().Be(HttpStatusCode.NotFound, "чужой приватный чат неотличим от несуществующего");
+
+        var memberPersonaId = D(await member.PostAsJsonAsync("/api/personas",
+            new { name = "Персона участника" })).GetProperty("id").GetString()!;
+        (await member.GetAsync($"/api/models/preview?sessionId={chatId}&personaId={memberPersonaId}")).StatusCode
+            .Should().Be(HttpStatusCode.NotFound, "чип сабагента на чужом приватном чате не раскрывает его");
+    }
 }

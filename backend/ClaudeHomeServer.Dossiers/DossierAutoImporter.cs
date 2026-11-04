@@ -12,8 +12,8 @@ namespace ClaudeHomeServer.Services.Dossiers;
 // DossierCaptureState.ImportKey) — вызывает штатный DossierImporter и фиксирует tip.
 //
 // Границы те же, что у ручного POST /dossiers/import и автовыгрузки (DossierAutoExporter):
-//   • тумблер проекта AutoImportDossiers (дефолт false) + флаг владельца
-//     change-dossiers-recall — проверяются в момент импорта, а не включения;
+//   • тумблер проекта AutoImportDossiers (дефолт false) проверяется
+//     в момент импорта, а не включения (флаг change-dossiers-recall снят);
 //   • дедуп двух уровней: этот поллер не зовёт импортёр для уже внесённого tip, а сам
 //     импортёр не добавляет записей, чей sha уже представлен (imported vs skipped) —
 //     повторный тик ничего не меняет;

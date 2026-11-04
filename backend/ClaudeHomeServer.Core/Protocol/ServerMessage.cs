@@ -245,7 +245,7 @@ public record FileChangedMessage(string Path, int Added, int Removed, bool Exter
 // инструментов и ожидания подтверждений. По нему считается скорость генерации в плашке итога:
 // DurationMs для этого не годится — у хода с тул-лупом он кратно больше и занижает скорость.
 // null — CLI поля не прислал (сторонний поток) либо ход шёл мимо CLI (локальный движок).
-// PromptCache — состояние prompt cache для индикатора (фич-флаг prompt-cache); null — у
+// PromptCache — состояние prompt cache для индикатора (индикатор prompt cache); null — у
 // хода без сигнала кэша и у исторических result до этого поля.
 // UpstreamProvider/UpstreamModel — фактический маршрут прогона («учётка хода», SP1): ключ
 // провайдера, которому ход реально ушёл (родной Claude — "claude", аккаунт пула — его ключ,
@@ -762,7 +762,7 @@ public record HandsNoticeMessage(string Text)
 public record PromptSuggestionMessage(string Text)
     : ServerMessage("prompt_suggestion");
 
-// Живые метрики локальной модели (флаг local-model-stats). Оба события ЭФЕМЕРНЫЕ:
+// Живые метрики локальной модели (статистика локальных моделей). Оба события ЭФЕМЕРНЫЕ:
 // в history.json не пишутся (нет case в OnMessageAsync и StoredMessage) — после F5 их
 // подхватит следующий снимок. SessionId — унаследованное свойство ServerMessage,
 // рассылка проставляет его сама (msg with { SessionId = … }); здесь только состав.
@@ -786,7 +786,7 @@ public record LocalModelTurnStatsMessage(double? GenTps, double? PrefillTps,
     : ServerMessage("local_model_turn_stats");
 
 // Ход ждёт свободный слот локальной модели (гейт допуска LocalEngineBusyTracker). В отличие от
-// LocalModelLiveMessage идёт БЕЗ флага local-model-stats: человек обязан видеть, что ход ждёт,
+// LocalModelLiveMessage идёт независимо от включённости статистики local-model-stats: человек обязан видеть, что ход ждёт,
 // а не «виснет молча». Position — место в очереди (1 — следующий), Active/Limit — «заняты N из M».
 // Position = 0 — ожидание кончилось (ход допущен либо отказан/остановлен): строку надо снять.
 // Эфемерное, в history.json не пишется (нет case в OnMessageAsync и StoredMessage).

@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Services.Dossiers;
 // (DossierGitExporter.ShouldExportDossier — opt-out могли включить и позже захвата).
 //
 // Границы:
-//   • флаг change-dossiers-recall ВЛАДЕЛЬЦА — тот же гейт, что у ручного POST /export;
+//   • выгрузка доступна всем владельцам (флаг change-dossiers-recall снят), как и ручной POST /export;
 //   • общая папка и чужая ветка — фон молчит (блокеры консилиума 23.08, вариант «б»):
 //     выгрузка идёт только когда история заведомо наша — ветки нет нигде (первая
 //     выгрузка на этой машине) либо tip создан нашей же выгрузкой (метка ImportKey).

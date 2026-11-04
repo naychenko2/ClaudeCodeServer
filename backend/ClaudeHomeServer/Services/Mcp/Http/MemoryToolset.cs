@@ -31,7 +31,7 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// отказ с текстом, а не пустая память (McpHttpOwnerIsolationTests + MemoryHttpTransportTests).
 ///
 /// ИНВАРИАНТ состава (IMcpToolset): tools/list зависит только от хвоста и владельца
-/// (персона/проект/флаг change-dossiers-recall) — всё это закреплено конфигом хода на
+/// (персона/проект) — всё это закреплено конфигом хода на
 /// жизнь адаптера и от свойств хода не зависит. Сторож парности со stdio-веткой отката —
 /// MemoryToolsetParityTests.
 /// </summary>

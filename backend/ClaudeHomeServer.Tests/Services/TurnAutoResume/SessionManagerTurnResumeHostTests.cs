@@ -93,14 +93,14 @@ public class SessionManagerTurnResumeHostTests : IDisposable
     {
         var project = MakeOwnedProject();
 
-        _host.IsEnabledFor(ProjectChat(project.Id)).Should().BeTrue(
+        _host.HasResolvableOwner(ProjectChat(project.Id)).Should().BeTrue(
             "владелец берётся из проекта (ResolveOwnerId), а не из пустого Session.OwnerId");
     }
 
     [Fact]
     public void ПроектныйЧат_ПроектНеизвестен_False()
     {
-        _host.IsEnabledFor(ProjectChat("нет-такого-проекта")).Should().BeFalse(
+        _host.HasResolvableOwner(ProjectChat("нет-такого-проекта")).Should().BeFalse(
             "владелец не резолвится (null) — возобновлять некому");
     }
 }

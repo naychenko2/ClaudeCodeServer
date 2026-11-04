@@ -324,7 +324,7 @@ public class ImageEditorController(
         public string? LoraTrigger { get; set; }
         public string? LoraStrength { get; set; }
         public bool? RemoveLora { get; set; }
-        // JSON {"<файл>": {"angle","pitch","emotion"}}; только при включённом флаге character-smart-photos
+        // JSON {"<файл>": {"angle","pitch","emotion"}}
         public string? PhotoLabels { get; set; }
     }
 

@@ -371,7 +371,7 @@ public class WikiController : ControllerBase
     /// <summary>Системная операция adopt (ADR-035, решение 6): текущий файл на диске
     /// принимается в манифест раздела, дрейф снимается, файл не трогается. Режимы (ADR-038, §6):
     /// `as-is` (по умолчанию, без флага) — как выше; `mine` («Принять как мою правку») — дифф
-    /// «манифест → диск» собирается в пакет human, под флагами llm-wiki и notes-wiki-unified,
+    /// «манифест → диск» собирается в пакет human, под флагом llm-wiki,
     /// baseHash обязателен (sha256 файла, каким его видел человек).</summary>
     [HttpPost("adopt")]
     public async Task<IActionResult> Adopt([FromBody] WikiAdoptRequest? req)

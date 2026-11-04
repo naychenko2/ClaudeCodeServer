@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Services.Dossiers;
 // (сторона-поставщик объявляет, что исполняет Core-контракт).
 //
 // ⚠ Потребитель принимает шов ОПЦИОНАЛЬНО (`IDossierRecallSource?`): «канала паспортов
-// нет» — штатное состояние (юнит-тесты, владелец без флага `change-dossiers-recall`), а
+// нет» — штатное состояние (юнит-тесты, проект без канала паспортов), а
 // не ошибка. На этом стоит публичный `PersonaMemoryService.DossierRecallAvailable`.
 public interface IDossierRecallSource
 {

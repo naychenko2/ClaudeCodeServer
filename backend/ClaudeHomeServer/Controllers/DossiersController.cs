@@ -15,7 +15,7 @@ namespace ClaudeHomeServer.Controllers;
 // Паспорта изменений: просмотр (ADR-004, этап 1), активный канал recall — поиск
 // для MCP dossier_lookup и полная запись для dossier_get (этап 2 §5; изоляция —
 // владелец проекта, сервисный JWT памяти резолвит того же владельца) и выгрузка
-// в ветку ccs/dossiers/v1 (этап 3). Всё, кроме List, — за флагом change-dossiers-recall.
+// в ветку ccs/dossiers/v1 (этап 3). Доступно всем владельцам (флаг снят).
 [ProjectCapability(ProjectCapabilityArea.ServerContent, ProjectKey = "id")]
 [ApiController]
 [Authorize]

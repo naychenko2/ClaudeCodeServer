@@ -19,7 +19,7 @@ using Moq;
 
 namespace ClaudeHomeServer.Tests.Services.LocalStats;
 
-// Боевая рассылка живых событий локальной модели (флаг local-model-stats, шаг 19):
+// Боевая рассылка живых событий локальной модели (статистика локальных моделей, шаг 19):
 // OnLive/OnTurn шлют ServerMessage в session-группу, только если есть зритель (HasViewers).
 // События эфемерные — в history.json не пишутся.
 public class LocalModelLiveSinkTests : IDisposable

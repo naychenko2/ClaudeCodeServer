@@ -10,7 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Characters;
 
-// Метки фото в API персонажа (ADR-027 §1, §10): DTO и PUT photoLabels гейтятся флагом character-smart-photos
+// Метки фото в API персонажа (ADR-027 §1, §10): DTO и PUT photoLabels (флаг character-smart-photos снят)
 [Trait("Category", "Host")]
 public class CharacterLabelsEndpointsTests : IClassFixture<CharacterLabelsEndpointsTests.Hosts>
 {

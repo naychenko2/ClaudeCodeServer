@@ -52,7 +52,7 @@ public class TurnAutoResumeServiceTests
         // Владелец резолвится как в боевом адаптере (ResolveOwnerId): у проектной сессии
         // OwnerId пустой — владелец из проекта. Тесты дают OwnerId напрямую, поэтому здесь
         // резолв тривиальный; регресс-тест причины 2 подменяет GetSession на проектный чат.
-        public bool IsEnabledFor(Session session) => FlagOn(session.OwnerId ?? "");
+        public bool HasResolvableOwner(Session session) => FlagOn(session.OwnerId ?? "");
         public bool IsDeviceOnline(Project project) => true;
         public bool LastTurnWasDeployOrRollback(Session session, Project? project) => false;
         public int DrainRestoredCalls;

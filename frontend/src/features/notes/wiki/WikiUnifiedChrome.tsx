@@ -1,32 +1,30 @@
-// Обвязка единой раскладки «Заметки + Вики» (ADR-038, F1): рельса кнопок справа, панель
-// выбранного раздела и шторки на 360. Навигации вики в контентной зоне нет — всё, что раньше
-// было вкладками и «Назад», живёт здесь, по краям. Данных своих нет: список разделов панели —
+// Обвязка единой раскладки «Заметки + Вики» (ADR-038, F1): панели вики в зонах раздела (W3;
+// рельсу и раскладку держит стор зон) и шторки на 360. Навигации вики в контентной зоне нет —
+// всё, что раньше было вкладками и «Назад», живёт здесь, по краям. Данных своих нет: список разделов панели —
 // WIKI_SUBTABS (кроме «Страниц»: каталог — это центр), сама подвкладка рисуется своим
 // компонентом из реестра.
 
 import { useEffect, useRef } from 'react';
-import type { CSSProperties, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { ICON_SIZE } from '../../../components/ui/icons';
-import { C, FS, R, SHADOW, SP, Z, useWikiReplacementDot } from 'aihome_shell/kit';
+import {
+  C, FS, R, SHADOW, SP, Z, useWikiReplacementDot, PanelHeaderSlot, parseSectionKey,
+  type WikiSectionDto,
+} from 'aihome_shell/kit';
 import { Button } from '../../../components/ui/Button';
+import { SectionChip, SECTION_CHIP_ALL_LABEL } from '../../../components/ui/SectionChip';
 import { OVERRIDE_TEXT } from './wikiLabels';
-import { WIKI_SUBTABS, wikiSubTabIcon, WikiSubTabStub, type WikiSubTabId } from './wikiTabs';
+import { resolveWikiScope, useWikiPanelScope } from './wikiPanelScope';
+import { WIKI_SUBTABS, WikiSubTabStub, type WikiSubTabId } from './wikiTabs';
 
 // Разделы правой панели: всё, кроме каталога («Страницы» — центр экрана)
 // Функцией, не константой: WikiInbox тянет WikiTab, и на момент загрузки этого модуля реестр
 // может быть ещё не заполнен (цикл импортов)
 export const panelTabs = () => WIKI_SUBTABS.filter(t => t.id !== 'pages');
 
-export const RAIL_W = 44;
-export const PANEL_W = 340;
 const DRAWER_W = 304;
 const DRAWER_PANEL_W = 330;
-
-const railStyle: CSSProperties = {
-  width: RAIL_W, flexShrink: 0, display: 'flex', flexDirection: 'column',
-  alignItems: 'center', gap: SP.xs, paddingTop: SP.xs,
-};
 
 /** Точка C.info: на странице есть замена ваших формулировок, которую ещё не вернули (F3b).
  *  Берётся из открытой страницы стора; после «Вернуть мою» страница перечитывается, и точка гаснет */
@@ -41,75 +39,67 @@ export function ReplacementDot({ top = 4, right = 4 }: { top?: number; right?: n
   );
 }
 
-/** Рельса кнопок раздела: нажатие открывает панель, повторное — закрывает.
- *  pages — первая кнопка «Страницы»: вход в центральный вид вики из режима заметок
- *  (в том числе при пустой вики, где в дереве нет ни одной страницы); повторное нажатие
- *  возвращает к заметкам. Не передано — кнопки нет */
-export function WikiRail({ active, onSelect, pages }: {
-  active: WikiSubTabId | null; onSelect: (id: WikiSubTabId | null) => void;
-  pages?: { active: boolean; onClick: () => void };
+/** Тело панели выбранного раздела: компонент из реестра или заглушка.
+ *  sectionScope — область панели из чипа шапки (W9a/W9b); без него подвкладка живёт по selectedKey */
+export function WikiPanelBody({ tab, selectedKey, sectionScope }: {
+  tab: WikiSubTabId; selectedKey: string | null; sectionScope?: string | null | 'all';
 }) {
-  const pagesTab = WIKI_SUBTABS.find(t => t.id === 'pages');
-  return (
-    <div data-testid="wiki-rail" role="toolbar" aria-label="Панель вики" aria-orientation="vertical" style={railStyle}>
-      {pages && pagesTab && (
-        <Button
-          variant={pages.active ? 'secondary' : 'ghost'}
-          size="md"
-          dataTestId="wiki-rail-pages"
-          ariaLabel={pagesTab.label}
-          title={pagesTab.label}
-          ariaPressed={pages.active}
-          leftIcon={wikiSubTabIcon(pagesTab)}
-          onClick={pages.onClick} >{null}</Button>
-      )}
-      {panelTabs().map(t => (
-        <span key={t.id} style={{ position: 'relative', display: 'inline-flex' }}>
-        <Button
-          variant={active === t.id ? 'secondary' : 'ghost'}
-          size="md"
-          dataTestId={`wiki-rail-${t.id}`}
-          ariaLabel={t.label}
-          title={t.label}
-          ariaPressed={active === t.id}
-          leftIcon={wikiSubTabIcon(t)}
-          onClick={() => onSelect(active === t.id ? null : t.id)} >{null}</Button>
-        {t.id === 'journal' && <ReplacementDot />}
-        </span>
-      ))}
-    </div>
-  );
-}
-
-/** Тело панели выбранного раздела: компонент из реестра или заглушка */
-export function WikiPanelBody({ tab, selectedKey }: { tab: WikiSubTabId; selectedKey: string | null }) {
   const t = panelTabs().find(x => x.id === tab);
   if (!t) return null;
   const Comp = t.component;
   return (
     <div data-testid="wiki-panel-body" style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
       {Comp
-        ? <Comp selectedKey={selectedKey} />
+        ? <Comp selectedKey={selectedKey} sectionScope={sectionScope} />
         : <div style={{ padding: SP.sm }}><WikiSubTabStub label={t.label} when={t.stubNote ?? ''} /></div>}
     </div>
   );
 }
 
-/** Панель десктопа: шапка с названием и крестиком, ниже — тело раздела */
-export function WikiSidePanel({ tab, selectedKey, onClose }: { tab: WikiSubTabId; selectedKey: string | null; onClose: () => void }) {
-  const t = panelTabs().find(x => x.id === tab);
+// Подпись чипа: короткое имя раздела (макет — «Общее», «Личное», имя проекта или сферы)
+function chipLabelOf(key: string, sections: readonly WikiSectionDto[]): string {
+  const s = sections.find(x => x.key === key);
+  const ref = parseSectionKey(key);
+  if (ref?.kind === 'common') return 'Общее';
+  if (ref?.kind === 'personal') return 'Личное';
+  return s?.name ?? (ref?.kind === 'sphere' ? 'Сфера' : 'Раздел');
+}
+
+const PANEL_SCOPE_KEY = { inbox: 'wikiInbox', journal: 'wikiJournal', health: 'wikiHealth' } as const;
+
+/** Панель вики в зоне раздела «Заметки» (W3): тело подвкладки; у «Входящих», «Журнала» и «Здоровья» в
+ *  закреплённом слоте шапки — чип области. Состояния открытости и ширины здесь нет — их держит стор зон.
+ *  followKey — раздел открытой страницы (или умолчание): чип в режиме follow идёт за ним.
+ *  Пока вики не начата (нет разделов), чипа нет, а телу область не передаётся. */
+export function WikiZonePanel({ tab, followKey, sections, started }: {
+  tab: Exclude<WikiSubTabId, 'pages'>; followKey: string | null;
+  sections: readonly WikiSectionDto[]; started: boolean;
+}) {
+  if (tab === 'settings') return <WikiPanelBody tab="settings" selectedKey={null} />;
+  return <WikiScopedPanel tab={tab} followKey={followKey} sections={sections} started={started} />;
+}
+
+function WikiScopedPanel({ tab, followKey, sections, started }: {
+  tab: 'inbox' | 'journal' | 'health'; followKey: string | null;
+  sections: readonly WikiSectionDto[]; started: boolean;
+}) {
+  const [value, setValue] = useWikiPanelScope(PANEL_SCOPE_KEY[tab]);
+  const scope = resolveWikiScope(value, { followKey, sectionKeys: sections.map(x => x.key) });
+  const label = scope === 'all' ? SECTION_CHIP_ALL_LABEL : scope === null ? 'Раздел' : chipLabelOf(scope, sections);
   return (
-    <aside
-      data-testid="wiki-panel"
-      aria-label={t?.label}
-      style={{
-        width: PANEL_W, flexShrink: 0, display: 'flex', flexDirection: 'column', minHeight: 0,
-        background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, overflow: 'hidden',
-      }}
-    >
-      <PanelHead title={t?.label ?? ''} onClose={onClose} />
-      <WikiPanelBody tab={tab} selectedKey={selectedKey} />
-    </aside>
+    <>
+      {started && (
+        <PanelHeaderSlot pinned>
+          <SectionChip
+            value={value} label={label} onChange={setValue}
+            options={sections.map(x => ({ key: x.key, label: chipLabelOf(x.key, sections) }))}
+            allowAll={tab !== 'health'} />
+        </PanelHeaderSlot>
+      )}
+      {/* Здоровью область нужна одним разделом (selectedKey), остальным — sectionScope */}
+      <WikiPanelBody tab={tab} selectedKey={scope === 'all' ? null : scope}
+        sectionScope={tab === 'health' ? undefined : scope} />
+    </>
   );
 }
 

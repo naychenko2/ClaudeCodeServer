@@ -28,7 +28,7 @@ import {
   Calendar, Share2, MessageCircle,
   Network, FileText, AlertCircle, Loader2,
 } from 'lucide-react';
-import { Rows3, Pin, FolderOpen, Bell, List, ListTree, ArrowRightToLine, Unplug, ImageIcon, Info, Mic, Music, SlidersHorizontal } from 'lucide-react';
+import { Rows3, Pin, FolderOpen, Bell, List, ListTree, ArrowRightToLine, Unplug, ImageIcon, Info, Mic, Music, SlidersHorizontal, Link2 } from 'lucide-react';
 import { GenerationPanel } from '../components/generation/GenerationPanel';
 import type { GenerationFoot } from '../components/generation/GenerationPanel';
 import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../lib/design';
@@ -57,6 +57,7 @@ import {
 } from '../components/ui';
 import { CapabilityUnavailable } from '../components/CapabilityGate';
 import { InlineSegmented } from '../components/ui/InlineSegmented';
+import { SectionChip, type SectionChipOption, type SectionChipValue } from '../components/ui/SectionChip';
 import { ICON_SIZE, ICON_STROKE, ICON_PROPS } from '../components/ui/icons';
 import { Toolbar, ToolbarIconButton } from '../components/Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOverflowMenu';
@@ -149,6 +150,7 @@ const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-panels',     label: 'Панели'             },
   { id: 'sec-visual-plan',label: 'Визуальный план'    },
   { id: 'sec-headers',    label: 'Шапки'              },
+  { id: 'sec-section-chip', label: 'Чип «Раздел»' },
   { id: 'sec-ring-pill',  label: 'Пилюля «кольца»'    },
   { id: 'sec-tool-progress', label: 'Прогресс инструмента' },
   { id: 'sec-local-gpu-queue', label: 'Очередь локальной GPU' },
@@ -340,6 +342,11 @@ export function UiKitPage() {
             {/* Секция «Шапки» — HubHeader, ProjectRail, IslandHeader */}
             <div id="sec-headers" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <HeadersSection />
+            </div>
+
+            {/* Секция «Чип «Раздел»» (W7, Заметки+Вики) — чип закрепленного слота шапки панели */}
+            <div id="sec-section-chip" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <SectionChipKitSection />
             </div>
 
             {/* Секция «Пилюля «кольца» шапки чата» — все состояния RingPillBadge */}
@@ -3707,6 +3714,61 @@ function HeadersSection() {
             Левые сайдбары его НЕ используют — у них кастомные div-шапки.
           </p>
         </SubBlock>
+      </div>
+    </Island>
+  );
+}
+
+// === Секция «Чип «Раздел»» ==========================================
+// SectionChip (W7, Заметки+Вики): чип-кнопка с меню выбора раздела вики, ставится
+// в закрепленный слот шапки панели (PanelHeaderSlot pinned). Состояния follow /
+// all / section + пример длинного имени — оно режется многоточием (maxWidth 150),
+// это ожидаемое поведение контрола, а не дефект. Демо живое: выбор в меню меняет
+// состояние примера.
+const SECTION_CHIP_DEMO_OPTIONS: SectionChipOption[] = [
+  { key: 'aihome', label: 'AI Home' },
+  { key: 'home', label: 'Дом и семья' },
+  { key: 'health', label: 'Здоровье' },
+  { key: 'long', label: 'Долгое имя раздела для проверки многоточия' },
+];
+
+function SectionChipDemo({ initial, caption }: { initial: SectionChipValue; caption: string }) {
+  const [value, setValue] = useState<SectionChipValue>(initial);
+  // Подпись на чипе решает вызывающий: при follow — раздел открытой страницы,
+  // при all — «Все разделы», при section — имя выбранного
+  const label = value.mode === 'follow' ? 'AI Home'
+    : value.mode === 'all' ? 'Все разделы'
+    : SECTION_CHIP_DEMO_OPTIONS.find(o => o.key === value.key)?.label ?? 'Раздел';
+  return (
+    <ToggleRow label={caption}>
+      <span data-testid="section-chip-demo" style={{ display: 'inline-flex', flexShrink: 0 }}>
+        <SectionChip value={value} options={SECTION_CHIP_DEMO_OPTIONS} label={label} onChange={setValue} />
+      </span>
+    </ToggleRow>
+  );
+}
+
+function SectionChipKitSection() {
+  return (
+    <Island>
+      <IslandHeader
+        icon={<Link2 size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ color: C.accent, flexShrink: 0 }} />}
+        title="Чип «Раздел» панели вики"
+        badge="шапка · pinned"
+      />
+      <div style={{ padding: ISLAND.pad, display: 'flex', flexDirection: 'column', gap: ISLAND.gap }}>
+        <SubBlock label="Состояния (макет notes-wiki-panels-v1, раздел «Чип раздела»)">
+          <SectionChipDemo initial={{ mode: 'follow' }} caption="следует за открытой страницей (значок Link2)" />
+          <SectionChipDemo initial={{ mode: 'all' }} caption="все разделы" />
+          <SectionChipDemo initial={{ mode: 'section', key: 'home' }} caption="выбранный раздел" />
+          <SectionChipDemo initial={{ mode: 'section', key: 'long' }} caption="длинное имя — многоточие (ожидаемое)" />
+        </SubBlock>
+        <p style={{ margin: 0, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono, lineHeight: 1.5 }}>
+          В покое opacity 0.55, под курсором и при открытом меню — opacity 1, фон
+          accentMuted, текст accent. Меню: «Следовать за открытой страницей» (галка
+          при follow), разделитель, «Все разделы», затем разделы. В продукте ставится
+          в PanelHeaderSlot pinned шапки панели (W3).
+        </p>
       </div>
     </Island>
   );

@@ -1,7 +1,7 @@
 // Вкладка «Вики» (макет llm-wiki-v2.html, §1 «Дерево разделов и каталог»): дерево разделов
-// + каталог выбранного раздела. Состояния: «Вики не заведена» с «Завести», сирота с
-// «Удалить раздел» (ConfirmDialog, danger), локальный проект, ошибка загрузки с «Повторить»,
-// отказ контракта — русским текстом, не сырым кодом.
+// + каталог выбранного раздела. Состояния: «Вики пока пустая» без кнопки (вики заводится
+// сама, LI-3), сирота с «Удалить раздел» (ConfirmDialog, danger), локальный проект,
+// ошибка загрузки с «Повторить», отказ контракта — русским текстом, не сырым кодом.
 //
 // Данные — только стор S5a (lib/wiki): ensureWikiLoaded при монтировании, каталог раздела —
 // GET /api/wiki/section (оглавление строится из него: проекции _index/_log через
@@ -17,11 +17,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, BookOpen, Check, ChevronLeft, ChevronRight, Folder, FolderTree, Lock, Monitor, PanelRight, Shield, Trash2 } from 'lucide-react';
+import { AlertTriangle, ChevronLeft, ChevronRight, Folder, FolderTree, Monitor, PanelRight, Trash2 } from 'lucide-react';
 import {
   C, FONT, FS, R, SP, useIsMobile, FLAGS, useFeature,
-  WikiError, ensureWikiLoaded, deleteWikiSection, groupSectionsByKind, initializeWiki,
-  loadWikiCatalog, loadWikiPage, useWikiCatalog, useWikiPage, useWikiPageGone, useWikiTree,
+  WikiError, ensureWikiLoaded, deleteWikiSection, groupSectionsByKind,
+  getWikiTreeSnapshot, parseSectionKey, loadWikiCatalog, loadWikiPage, loadWikiTree,
+  useWikiCatalog, useWikiPage, useWikiPageGone, useWikiTree,
   consumeOpenWikiPage, useWikiOpenRequest,
   type WikiPageInfoDto, type WikiSectionDto,
 } from 'aihome_shell/kit';
@@ -32,6 +33,7 @@ import { EmptyState } from '../../../components/ui/EmptyState';
 import { Notice } from '../../../components/ui/Notice';
 import { PillSwitch } from '../../../components/ui/PillSwitch';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
+import { WikiEmpty } from './WikiEmpty';
 import { WikiPageView } from './WikiPageView';
 import { WikiSectionTree } from './WikiSectionTree';
 import { panelTabs, PanelHead, ReplacementDot, WikiDrawer, WikiPanelBody } from './WikiUnifiedChrome';
@@ -43,6 +45,8 @@ import { PAGE_STATUS, PAGE_TYPE, sectionPrefix, wikiErrorText } from './wikiLabe
 const TREE_W = 300;
 // Строка кнопки «Раздел ▸» — та же тач-высота, что у строк дерева (макет .trow 44)
 const SECTION_SWITCH_H = 44;
+// Кнопки-триггеры шторок — квадрат 40×40 (кадр mob-closed): тач-цель ровно 40
+const DRAWER_BTN = 40;
 // id шторок для aria-controls кнопок-триггеров
 const DRAWER_TREE_ID = 'wiki-drawer-tree';
 const DRAWER_PANEL_ID = 'wiki-drawer-panel';
@@ -67,6 +71,16 @@ export function defaultSectionKey(sections: readonly WikiSectionDto[]): string |
     g.project.find(s => !s.local) ??
     null;
   return pick?.key ?? null;
+}
+
+// Имя раздела для строки в шторке панели — та же короткая форма, что у бейджа шапки на
+// десктопе (записка notes-wiki-panels-v1, п. 1): «Общее», «Личное», имя проекта или
+// сферы; безымянный заместитель — тот же, что в дереве («Удалённый проект», «Сфера»)
+function sectionLabel(s: WikiSectionDto): string {
+  const ref = parseSectionKey(s.key);
+  if (ref?.kind === 'common') return 'Общее';
+  if (ref?.kind === 'personal') return 'Личное';
+  return s.name ?? (ref?.kind === 'sphere' ? 'Сфера' : 'Удалённый проект');
 }
 
 // ─── Куски экрана ───
@@ -96,34 +110,6 @@ function ErrorNotice({ e, onRetry, onDismiss }: { e: unknown; onRetry?: () => vo
     <div data-testid="wiki-error" style={{ padding: SP.sm }}>
       <Notice tone="danger" icon={AlertTriangle} title={text} action={action} />
     </div>
-  );
-}
-
-// Пустое «Вики не заведена» — тексты макета (emptyCenter), три пункта и одна кнопка на владельца
-function EmptyWiki({ busy, onInit }: { busy: boolean; onInit: () => void }) {
-  const step = (icon: ReactNode, text: string) => (
-    <div style={{ display: 'flex', gap: SP.sm, alignItems: 'flex-start', textAlign: 'left' }}>
-      <span style={{ flexShrink: 0, marginTop: 2, color: C.textSecondary }}>{icon}</span>
-      <span>{text}</span>
-    </div>
-  );
-  return (
-    <EmptyState
-      icon={<BookOpen size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
-      title="Вики не заведена"
-      subtitle={
-        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, maxWidth: 340 }}>
-          <span>
-            Хранитель соберёт из ваших заметок, файлов, задач и разговоров связную базу:
-            раздел на каждый проект, «Общее» и «Личное». Каждое утверждение — с цитатой.
-          </span>
-          {step(<Lock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, 'Ваши заметки Хранитель не трогает: он пишет только в вики.')}
-          {step(<Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, 'Неспорное применяется само, спорное ждёт во «Входящих». Любой пакет и весь источник можно откатить.')}
-          {step(<Shield size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, 'Вики хранится на сервере и входит в бэкап данных.')}
-        </div>
-      }
-      action={<Button variant="primary" size="md" dataTestId="wiki-init-btn" loading={busy} onClick={onInit}>Завести вики</Button>}
-    />
   );
 }
 
@@ -249,7 +235,6 @@ export function WikiTab({ unified = false, treeHost = null, drawerTree, onSectio
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<unknown>(null);
   const [actionError, setActionError] = useState<unknown>(null);
-  const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<WikiSectionDto | null>(null);
   // Мобильный экран «Разделы» (S5d, хвост ревью S5c): true — вместо каталога показан
   // полноэкранный список разделов; выбор раздела возвращает к каталогу
@@ -333,7 +318,17 @@ export function WikiTab({ unified = false, treeHost = null, drawerTree, onSectio
     setLoadError(null);
     // Смена владельца в этой же вкладке — известный минор S5a (N1): самолечится новым
     // ensureWikiLoaded; здесь не лечим.
-    ensureWikiLoaded().catch(e => setLoadError(e));
+    // (LI-3) Пока вики не заведена, экран перечитывает дерево при каждом показе: сервер
+    // заводит её при действиях человека («Разобрать этот чат», перенос заметки), и
+    // устаревший пустой снимок не должен оставаться на экране. Сверка — по снимку ДО
+    // загрузки: если дерева здесь ещё не читали, свой GET делает ensureWikiLoaded,
+    // второй не нужен.
+    const staleUninitialized = getWikiTreeSnapshot()?.initialized === false;
+    ensureWikiLoaded()
+      .then(() => {
+        if (staleUninitialized) return loadWikiTree();
+      })
+      .catch(e => setLoadError(e));
   }, []);
 
   useEffect(() => {
@@ -387,15 +382,15 @@ export function WikiTab({ unified = false, treeHost = null, drawerTree, onSectio
 
   if (!enabled) return null;
 
-  const runAction = (fn: () => Promise<unknown>) => {
-    setBusy(true);
-    setActionError(null);
-    void fn()
-      .catch(e => setActionError(e))
-      .finally(() => setBusy(false));
-  };
-
   const commonKey = groupSectionsByKind(sections).common[0]?.key ?? null;
+
+  // «Настройки» из пустого состояния (LI-3) — там, где панель достижима состоянием этой
+  // вкладки: подкладкой вкладки (не-unified) или шторкой панели (unified, мобиле). На
+  // десктопной unified панель живёт в NotesPage — связь без её правок невозможна: там
+  // текст остаётся без ссылки (отмечено в отчёте LI-3).
+  const openSettings = unified
+    ? (isMobile ? () => { setPanelTab('settings'); setDrawer('panel'); } : undefined)
+    : () => setTab('settings');
 
   // Кнопка «Раздел ▸» (макет 360, строка каталога над заголовком раздела): на мобили
   // заменяет «дерево над каталогом» и открывает полноэкранный экран «Разделы».
@@ -426,8 +421,10 @@ export function WikiTab({ unified = false, treeHost = null, drawerTree, onSectio
   const center = () => {
     if (loadError) return <ErrorNotice e={loadError} onRetry={load} />;
     if (!tree) return <LoadingSkeleton />;
-    if (!tree.initialized) {
-      return <EmptyWiki busy={busy} onInit={() => runAction(() => initializeWiki())} />;
+    // «Вики пока пустая» — и когда вики ещё не заведена, и когда заведена, но разделов
+    // ещё нет: голый каталог здесь не о чём (LI-3)
+    if (!tree.initialized || !tree.sections.length) {
+      return <WikiEmpty onOpenSettings={openSettings} />;
     }
     if (!selected) {
       return (
@@ -484,7 +481,7 @@ export function WikiTab({ unified = false, treeHost = null, drawerTree, onSectio
           confirmLabel="Удалить раздел"
           confirmVariant="danger"
           onConfirm={async () => {
-            // Отказ — тем же путём, что у действия в runAction: русским текстом в баннер.
+            // Отказ — как у прочих действий вкладки: русским текстом в баннер.
             // Без catch rejection ушёл бы в void result.finally() (ConfirmDialog) и
             // пользователь не увидел бы ничего. Диалог закрываем при обоих исходах:
             // отказ видно в баннере вкладки, а не за спиннером диалога.
@@ -519,17 +516,27 @@ export function WikiTab({ unified = false, treeHost = null, drawerTree, onSectio
       <div data-testid="wiki-doc" style={{ flex: 1, minWidth: 0, overflow: 'auto' }}>{center()}</div>
     );
     if (isMobile) {
+      // Раздел для строки под переключателем (записка notes-wiki-panels-v1, п. 1 и таблица
+      // «Шторка 360»): ровно то же значение, по которому тело шторки уже работает —
+      // selectedKey, до выбора — defaultSectionKey. Своего состояния здесь нет: строка —
+      // только чтение раздела панели. Правила п. 1 держит то, что доходит до selectedKey:
+      // строки, у которых есть раздел (строка дерева, открытие страницы). Заметка из
+      // «Других заметок» (OTHER_KEY — ключа нет) и клик по заголовку узла его не меняют.
+      const shownKey = selectedKey ?? defaultSectionKey(sections);
+      const shownSection = shownKey ? sections.find(s => s.key === shownKey) ?? null : null;
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minHeight: 0, height: '100%' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, padding: `0 ${SP.sm}px` }}>
             <Button variant="ghost" size="md" dataTestId="wiki-open-tree" ariaLabel="Дерево разделов" title="Дерево разделов"
               leftIcon={<FolderTree size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />} ariaExpanded={drawer === 'tree'} ariaControls={DRAWER_TREE_ID}
+              style={{ width: DRAWER_BTN, height: DRAWER_BTN, padding: 0 }}
               onClick={() => setDrawer(d => d === 'tree' ? null : 'tree')}>{null}</Button>
             <span style={{ flex: 1 }} />
             <span style={{ position: 'relative', display: 'inline-flex' }}>
             <Button variant="ghost" size="md" dataTestId="wiki-open-panel" ariaLabel="Входящие, журнал, здоровье, настройки"
               title="Входящие, журнал, здоровье, настройки"
               leftIcon={<PanelRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />} ariaExpanded={drawer === 'panel'} ariaControls={DRAWER_PANEL_ID}
+              style={{ width: DRAWER_BTN, height: DRAWER_BTN, padding: 0 }}
               onClick={() => {
                 // Панель открывается на выбранном разделе; не выбран — на первом, и выбор запоминается
                 if (!panelTab) setPanelTab(panelTabs()[0].id);
@@ -556,6 +563,24 @@ export function WikiTab({ unified = false, treeHost = null, drawerTree, onSectio
                   options={panelTabs().map(t => ({ value: t.id, label: t.label, icon: wikiSubTabIcon(t), title: t.label }))}
                 />
               </div>
+              {/* Строка раздела под переключателем (записка п. 1, кадр mob-journal): заменяет
+                  бейдж шапки на мобиле; имя — короткое, как у бейджа; полное — в title */}
+              {shownSection && (
+                <div
+                  data-testid="wiki-drawer-section-line"
+                  title={`Раздел вики: ${sectionLabel(shownSection)}`}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: SP.sm, flexShrink: 0,
+                    padding: `${SP.sm}px ${SP.md}px`, fontSize: FS.sm, color: C.textSecondary,
+                    borderBottom: `1px solid ${C.borderLight}`,
+                  }}
+                >
+                  <Folder size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    Раздел: <b style={{ color: C.textHeading, fontWeight: 600 }}>{sectionLabel(shownSection)}</b>
+                  </span>
+                </div>
+              )}
               <WikiPanelBody tab={panelTab ?? panelTabs()[0].id} selectedKey={selectedKey} />
             </WikiDrawer>
           )}

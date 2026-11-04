@@ -124,7 +124,7 @@ public class WikiPrivateChatTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, User)], "test"));
-        return new WikiChatsController(_sessions, RealIngest(), new WikiChatRecalc(_sessions, _config), _config, _flag)
+        return new WikiChatsController(_sessions, RealIngest(), new WikiChatRecalc(_sessions, _config), _keeper, _config, _flag)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

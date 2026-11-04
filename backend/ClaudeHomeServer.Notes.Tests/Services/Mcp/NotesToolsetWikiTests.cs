@@ -399,6 +399,16 @@ public class NotesToolsetWikiTests : IDisposable
                 ("sessionRange", "m1-2")));
             AssertDenied(res, "Вики этого владельца не заведена: её инструменты работают только с заведённой.");
         }
+        // Заявка — тоже не заводит: агент не приводит вику в существование своим вызовом
+        // (инвариант «svc/MCP вики не заводят», LI-2).
+        var note = _notes.Create(User, new CreateNoteRequest(Title: "Заметка для отказа", Content: "Содержимое.", Source: "p1"));
+        AssertDenied(Call(toolset, ctx, "wiki_ingest", Args(("source", note.Id))),
+            "Вики этого владельца не заведена: её инструменты работают только с заведённой.");
+
+        // Мутация (критерий c2): позвать EnsureInitializedAsync из инструмента — этот тест
+        // красный: под pages/ появился бы _schema.md.
+        File.Exists(SafePath.Join(Root, "pages/_schema.md")).Should().BeFalse(
+            "ни один вызов MCP не оставил заведённой вики");
         // Состав tools/list при этом не изменился: инструменты вики в нём остаются.
         var (toolset2, _) = McpEnv("p1");
         toolset2.ToolsFor(ctx).Select(t => t.Name).Should().Contain(["wiki_ingest", "wiki_add_fact", "wiki_query", "wiki_status"]);

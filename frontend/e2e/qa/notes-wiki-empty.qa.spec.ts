@@ -1,54 +1,110 @@
-// QA-5: повторная проверка дефекта 9817046a (TL-8) — рельса и панель вики доступны из режима
-// заметок и при пустой вики (фикс 5a12368dd, ветка feat/notes-wiki-unified).
+// QA-LI · LI-3 — «Вики пока пустая»: пустое состояние БЕЗ кнопки «Завести вики»,
+// и LI-2 — вики заводится сама (ночной разбор, перенос заметки).
 //
-// Стенд — со СВЕЖИМ каталогом данных: вики не заведена, чужих фикстур нет (reseed прежнего
-// спека здесь не вызывается намеренно). Спек сам наращивает состояние по ходу: сначала пустая
-// вики, затем «Завести вики», затем своя страница для пробы переключения заметка ↔ вики.
-// Свой мусор убирает afterAll. Рецепт — docs/operations/qa-stand.md.
+// Сценарии разведены по владельцам: вики заводится один раз на всю жизнь, поэтому
+// «незаведённая вики» у одного и того же владельца получить нельзя. Учётки создаёт
+// админ через POST /api/users, свой пароль у каждой (≥8 символов). Мусор убирается
+// в afterAll: учётки удаляются, каталоги вики сносятся с диска.
+//
+// Пустое состояние проверяется по центру (WikiEmpty: «Вики пока пустая», без кнопки
+// «Завести вики») и по рельсе зон: кнопки панелей вики есть, а счётчиков на них нет.
+// Прежних самодельных testid вики больше нет — смотрим на штатную рельсу зон
+// (data-rail-item) и карточки панелей.
+//
+// Рецепт — docs/operations/qa-stand.md.
 
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { api, collectConsoleErrors, login, type Api } from './helpers';
 
 const BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:5500';
-const NOTE_TITLE = 'Заметка для проверки QA5';
-const WIKI_PAGE = 'Страница для проверки QA5';
-// Порядок кнопок рельсы — реестр wikiTabs.tsx; «Страницы» добавлена фиксом TL-8
-const RAIL_IDS = ['wiki-rail-pages', 'wiki-rail-inbox', 'wiki-rail-journal', 'wiki-rail-health', 'wiki-rail-settings'];
+const USER_PASS = 'qa-lI-empty-2026';
+const NOTE_TITLE = 'Заметка для проверки LI-3';
 
 test.describe.configure({ mode: 'serial' });
 
-// Ошибки консоли без сетевого шума стенда — то же правило, что в прежнем спеке:
-// обрыв соединения и 4xx-ответы («Failed to load resource») экранами не проверяются.
 function uiErrors(sink: string[]): string[] {
   return sink.filter(t => !t.includes('net::ERR_') && !t.includes('Failed to load resource'));
 }
 
+// ─── Владельцы ───
+
+interface Owner {
+  name: string;
+  id: string;
+  token: string;
+  client: Api;
+}
+
 let request: APIRequestContext;
-let token: string;
-let client: Api;
-let noteId = '';
+let admin: Api;
+const owners: Owner[] = [];
 
-async function setFlags(unified: boolean, wiki = true): Promise<void> {
-  await client.put('/api/feature-flags/llm-wiki', { enabled: wiki });
+function repoRoot(): string {
+  return path.resolve(process.cwd(), '../../..');
+}
+
+// Каталог данных стенда — из его appsettings.Local.json (DataPath — файл projects.json).
+function dataDir(): string {
+  const cfgPath = path.join(repoRoot(), 'backend/ClaudeHomeServer/appsettings.Local.json');
+  expect(existsSync(cfgPath), 'у стенда должен быть appsettings.Local.json с DataPath').toBeTruthy();
+  const cfg = JSON.parse(readFileSync(cfgPath, 'utf8')) as { DataPath?: string };
+  expect(cfg.DataPath, 'в appsettings.Local.json стенда должен быть DataPath').toBeTruthy();
+  return path.dirname(path.resolve(cfg.DataPath!));
+}
+
+function wikiRoot(ownerId: string): string {
+  return path.join(dataDir(), 'wiki', ownerId);
+}
+
+function wikiInitialized(ownerId: string): boolean {
+  return existsSync(path.join(wikiRoot(ownerId), 'pages', '_schema.md'));
+}
+
+async function loginAs(name: string): Promise<string> {
+  const r = await request.post('/api/auth/login', { data: { username: name, password: USER_PASS } });
+  expect(r.ok(), `логин ${name} должен пройти (${r.status()})`).toBeTruthy();
+  const body = await r.json() as { token: string };
+  return body.token;
+}
+
+// Новый владелец: учётка, вход, флаги вики.
+async function makeOwner(baseName: string, unified = true): Promise<Owner> {
+  const name = `${baseName}_${Date.now().toString(36)}`.slice(0, 32);
+  const created = await admin.post<{ id: string; username: string }>('/api/users', {
+    username: name, password: USER_PASS, role: 'user',
+  });
+  expect(created?.id, `POST /api/users должен был создать ${name}`).toBeTruthy();
+  const token = await loginAs(name);
+  const client = api(request, token);
+  const owner: Owner = { name, id: created.id, token, client };
+  owners.push(owner);
+  await client.put('/api/feature-flags/llm-wiki', { enabled: true });
   await client.put('/api/feature-flags/notes-wiki-unified', { enabled: unified });
+  return owner;
 }
 
-// Каталог данных этого билета — тот же путь, что читает прежний спек. Стенд с другим
-// DataPath своих файлов не трогает.
-async function dataRoot(): Promise<string> {
-  const me = await client.get<{ userId: string }>('/api/auth/me');
-  const dataDir = path.resolve(process.cwd(), '../../..', 'backend/ClaudeHomeServer/bin/Debug/net10.0/data');
-  if (!existsSync(dataDir)) return '';
-  return path.join(dataDir, 'wiki', me.userId);
+// ─── Хелперы страницы ───
+
+// Кнопка панели вики в рельсе зон (ключ из panelCatalog).
+const railButton = (p: Page, key: string) => p.locator(`[data-rail-item="${key}"] button`);
+
+// Карточка панели: заголовок в шапке островка ищется по стилю заголовка.
+function panelCard(p: Page, title: string) {
+  return p.locator(
+    `xpath=//span[contains(@style,"font-weight: 600") and normalize-space()="${title}"]` +
+    `/ancestor::div[contains(@style,"flex-direction: column")][1]`);
 }
 
-const noteRow = (p: Page) => p.locator('[data-testid="unified-row"][data-kind="note"]', { hasText: NOTE_TITLE });
-const wikiRow = (p: Page) => p.locator('[data-testid="unified-row"][data-kind="page"]', { hasText: WIKI_PAGE });
+// Числа на кнопках панелей вики в рельсе (счётчики) — у пустой вики их нет.
+async function wikiRailNumbers(p: Page): Promise<string[]> {
+  return p.evaluate(() => Array.from(document.querySelectorAll('[data-rail-item^="wiki"]'))
+    .flatMap(item => Array.from(item.querySelectorAll('span'))
+      .map(s => (s.textContent || '').trim())
+      .filter(t => /^\d+$/.test(t))));
+}
 
-// Тосты перекрывают кнопки на узких экранах — перед кликами закрываем их штатной кнопкой.
 async function closeToasts(page: Page): Promise<void> {
   const closes = page.locator('button[title="Закрыть"]');
   for (let i = await closes.count(); i > 0; i--) {
@@ -59,23 +115,15 @@ async function closeToasts(page: Page): Promise<void> {
 async function gotoNotes(page: Page): Promise<void> {
   await page.goto(BASE + '/#/notes');
   await page.reload();
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(2000);
   await closeToasts(page);
-  // Раздел мог не открыться после reload — идём по навигации, как человек
-  const inSection = await page.getByRole('button', { name: 'Вики', exact: true }).count()
-    + await page.getByTestId('unified-filter').count();
+  // Раздел «Заметки» мог не открыться (перезагрузка сбрасывает маршрут) — открываем руками.
+  const inSection = await page.getByTestId('unified-filter').count()
+    + await page.getByRole('button', { name: 'Вики', exact: true }).count();
   if (inSection === 0) {
     const nav = page.getByRole('button', { name: 'Заметки', exact: true }).first();
-    if (await nav.count()) { await nav.click(); await page.waitForTimeout(1500); }
+    if (await nav.count()) { await nav.click(); await page.waitForTimeout(2000); await closeToasts(page); }
   }
-}
-
-// Открыть «Заметки» в режиме заметок. При пустой вики строк страниц вики в дереве нет —
-// ждём свою строку-заметку: она и есть рабочее состояние этого спека.
-async function openNotesMode(page: Page): Promise<void> {
-  await gotoNotes(page);
-  await expect(page.getByTestId('wiki-unified-tree')).toBeVisible({ timeout: 30000 });
-  await expect(noteRow(page).first()).toBeVisible({ timeout: 30000 });
 }
 
 const SHOTS = path.resolve(process.cwd(), '../../.cc-attachments/notes-wiki');
@@ -88,313 +136,191 @@ async function docOverflow(p: Page): Promise<number> {
   return p.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 }
 
-// Своя страница для пробы переключения: обычная topic-страница без сносок
-// (авторство по умолчанию «ai» — на проверку не влияет).
-const PAGE_TEXT = `---
-type: topic
-aliases: []
-owns: []
-sources: []
-status: active
----
-
-# ${WIKI_PAGE}
-
-## Сводка
-Утверждение про проверку переключения режимов.
-
-## Хронология
-
-## Противоречия
-
-## История
-`;
-
-async function writeMyPage(): Promise<void> {
-  const root = await dataRoot();
-  if (!root) throw new Error('каталог данных стенда недоступен — сценарий не выполним');
-  const pages = path.join(root, 'pages', 'Личное');
-  mkdirSync(pages, { recursive: true });
-  writeFileSync(path.join(pages, `${WIKI_PAGE}.md`), PAGE_TEXT, 'utf8');
-  const manifestPath = path.join(root, 'keeper/manifest/personal.json');
-  const manifest = existsSync(manifestPath)
-    ? JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, string>
-    : {};
-  manifest[`Личное/${WIKI_PAGE}.md`] = createHash('sha256').update(PAGE_TEXT, 'utf8').digest('hex');
-  writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
-}
+// ─── Жизненный цикл ───
 
 test.beforeAll(async ({ playwright }) => {
   request = await playwright.request.newContext({ baseURL: BASE });
-  token = await login(request);
-  client = api(request, token);
-  await setFlags(true);
-  // Стенд обязан быть свежим: вики не заведена. Иначе «пустая вики» проверялась бы
-  // на чужом состоянии, а не на том, что описывает дефект.
-  const tree = await client.get<{ initialized: boolean }>('/api/wiki/tree');
-  expect(tree.initialized, 'стенд должен быть со свежим каталогом данных: вики не заведена').toBeFalsy();
-  // Своя заметка — ради «режима заметок» и переключения. Фикстур вики не заводим вовсе.
-  const note = await client.post<{ id?: string }>('/api/notes', {
-    title: NOTE_TITLE, source: 'personal', content: 'Текст заметки для проверки рельсы при пустой вики.',
-  });
-  noteId = note?.id ?? '';
+  const adminToken = await login(request);
+  admin = api(request, adminToken);
 });
 
 test.afterAll(async () => {
-  // Убираю за собой: заметку (API; и файл на диске, если id не вернулся),
-  // свою страницу вместе с её записью из манифеста — иначе файл и манифест разойдутся.
-  try { if (noteId) await client.del(`/api/notes/${noteId}`); } catch { /* best-effort */ }
-  const root = await dataRoot();
-  if (root) {
-    rmSync(path.join(root, 'pages', 'Личное', `${WIKI_PAGE}.md`), { force: true });
-    const manifestPath = path.join(root, 'keeper/manifest/personal.json');
-    if (existsSync(manifestPath)) {
-      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, string>;
-      if (delete manifest[`Личное/${WIKI_PAGE}.md`]) writeFileSync(manifestPath, JSON.stringify(manifest), 'utf8');
-    }
-    if (!noteId) {
-      // id не вернулся — сносим файл заметки по заголовку из личного vaulta
-      const userId = path.basename(root);
-      const notesDir = path.join(path.dirname(path.dirname(root)), 'notes', userId);
-      if (existsSync(notesDir)) {
-        for (const f of readdirSync(notesDir)) {
-          if (f === `${NOTE_TITLE}.md`) rmSync(path.join(notesDir, f), { force: true });
-        }
-      }
-    }
+  for (const o of owners) {
+    try { await admin.del(`/api/users/${o.id}`); } catch { /* best-effort */ }
+    rmSync(wikiRoot(o.id), { recursive: true, force: true });
   }
   await request?.dispose();
 });
 
-// ─── П.5: без флага совместной правки — прежняя раскладка (проверяем первой, пока вики пуста) ───
+// ─── LI-3: пустое состояние без кнопки «Завести вики» (новая раскладка) ───
 
-test('QA5 п.5: без notes-wiki-unified — прежние вкладки в центре, рельсы нет; без llm-wiki — нет входа в «Вики»', async ({ page, context }) => {
+test('LI-3: пустая вики — «Вики пока пустая» с пояснением, кнопки «Завести вики» нет нигде', async ({ page, context }) => {
   const errors = collectConsoleErrors(page);
-  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
-  await setFlags(false, true); // llm-wiki включён, notes-wiki-unified выключен
+  const o = await makeOwner('qa_li_empty');
+  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), o.token);
   await gotoNotes(page);
 
-  // Прежний переключатель с входом в «Вики» — на месте
+  // Центр вики: пустое состояние LI-3.
+  await expect(page.getByTestId('wiki-empty'), 'пустое состояние вики показано').toBeVisible({ timeout: 30000 });
+  await expect(page.getByText('Вики пока пустая')).toBeVisible();
+  await expect(page.getByText('Она наполнится сама, когда вы разберёте чат или перенесёте заметку.'))
+    .toBeVisible();
+
+  // Вторая строка пояснения — по снимку настроек, а он читается открытием панели
+  // «Настройки»: сначала открываем её, потом смотрим пустое состояние в центре.
+  await railButton(page, 'wikiSettings').click();
+  await expect(panelCard(page, 'Настройки'), 'панель настроек открылась').toBeVisible({ timeout: 20000 });
+  await expect(page.getByText('Ночной разбор выключен — его можно включить в настройках вики.'))
+    .toBeVisible({ timeout: 15000 });
+  // В пустом состоянии есть только кнопка «Открыть настройки» — завести вики нечем
+  await expect(page.getByTestId('wiki-empty-settings'), 'кнопка «Открыть настройки» есть').toBeVisible();
+
+  // Кнопки «Завести вики» нет нигде: ни по testid, ни текстом
+  await expect(page.getByTestId('wiki-init-btn'), 'кнопки заведения вики быть не должно').toHaveCount(0);
+  await expect(page.getByText('Завести вики'), 'слов «Завести вики» на экране быть не должно').toHaveCount(0);
+  await shot(page, 'qali-01-empty-wiki-no-button-1280.png');
+
+  // Рельса зон: кнопки панелей вики есть, а счётчиков на них нет — вики пуста
+  for (const key of ['wikiInbox', 'wikiJournal', 'wikiHealth', 'wikiSettings']) {
+    await expect(railButton(page, key), `кнопка панели «${key}» в рельсе`).toBeVisible();
+  }
+  expect(await wikiRailNumbers(page), 'у пустой вики на рельсе нет ни одного числа').toEqual([]);
+
+  // Пустое состояние ничего не завело
+  const tree = await o.client.get<{ initialized: boolean }>('/api/wiki/tree');
+  expect(tree.initialized, 'пустое состояние не должно заводить вики').toBeFalsy();
+  expect(wikiInitialized(o.id), 'на диске шаблона вики быть не должно').toBeFalsy();
+
+  expect(await docOverflow(page), 'горизонтального переполнения нет').toBeLessThanOrEqual(1);
+  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
+});
+
+// ─── LI-3: пустое состояние без кнопки и в прежней раскладке ───
+
+test('LI-3: прежняя раскладка (без «Заметки и Вики») — пустое состояние тоже без кнопки', async ({ page, context }) => {
+  const errors = collectConsoleErrors(page);
+  const o = await makeOwner('qa_li_old', false);
+  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), o.token);
+  await gotoNotes(page);
+
+  // Прежняя раскладка: вкладки вики в центре
   await expect(page.getByRole('button', { name: 'Вики', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Вики', exact: true }).click();
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(1000);
 
-  // Прежняя раскладка: вкладки в центре вики, единого дерева и рельсы нет
+  // Пустое состояние LI-3 — и здесь без кнопки
+  await expect(page.getByTestId('wiki-empty'), 'пустое состояние вики показано').toBeVisible({ timeout: 30000 });
+  await expect(page.getByText('Вики пока пустая')).toBeVisible();
+  await expect(page.getByTestId('wiki-init-btn'), 'кнопки заведения вики быть не должно').toHaveCount(0);
+  await expect(page.getByText('Завести вики')).toHaveCount(0);
+  await shot(page, 'qali-02-old-layout-empty-no-button-1280.png');
+
+  // Прежних вкладок вики на месте, а рельсы панелей вики нет (флажная раскладка)
   for (const t of ['Страницы', 'Входящие', 'Журнал', 'Здоровье', 'Настройки']) {
     await expect(page.getByRole('button', { name: t, exact: true })).toBeVisible();
   }
-  await expect(page.getByTestId('wiki-rail')).toHaveCount(0);
-  await expect(page.getByTestId('wiki-unified-tree')).toHaveCount(0);
+  await expect(page.locator('[data-rail-item^="wiki"]'), 'правой рельсы панелей вики быть не должно').toHaveCount(0);
 
-  // Пустая вики достижима и в прежней раскладке: «Вики не заведена» с кнопкой «Завести вики»
-  await expect(page.getByText('Вики не заведена')).toBeVisible();
-  await expect(page.getByTestId('wiki-init-btn')).toBeVisible();
-  await shot(page, 'qa5-01-old-layout-empty-wiki-1280.png');
+  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
+});
 
-  // Без llm-wiki — входа в «Вики» нет вовсе
-  await setFlags(false, false);
+// ─── Регресс: чтение и PUT только классов вику не заводят ───
+
+test('LI регресс: GET дерева и настроек, PUT только классов — вики не заведена', async () => {
+  const o = await makeOwner('qa_li_read');
+
+  const tree = await o.client.get<{ initialized: boolean }>('/api/wiki/tree');
+  expect(tree.initialized).toBeFalsy();
+  await o.client.get('/api/wiki/settings');
+
+  await o.client.put('/api/wiki/settings', { autoApplyEnabled: true });
+  await o.client.put('/api/wiki/settings', { class: 'note×create', enable: false });
+
+  const tree2 = await o.client.get<{ initialized: boolean }>('/api/wiki/tree');
+  expect(tree2.initialized, 'чтение и PUT только классов не должны заводить вики').toBeFalsy();
+  expect(wikiInitialized(o.id), 'на диске шаблона вики быть не должно').toBeFalsy();
+});
+
+// ─── LI-2: тумблер ночного разбора заводит вику ───
+
+test('LI-2: тумблер ночного разбора заводит вику — дерево разделов появляется', async ({ page, context }) => {
+  const errors = collectConsoleErrors(page);
+  const o = await makeOwner('qa_li_night');
+  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), o.token);
   await gotoNotes(page);
-  await expect(page.getByRole('button', { name: 'Вики', exact: true })).toHaveCount(0);
 
-  await setFlags(true);
-  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
-});
+  // Панель «Настройки» → «Ночной разбор» → тумблер
+  await railButton(page, 'wikiSettings').click();
+  const card = panelCard(page, 'Настройки');
+  await expect(card, 'панель настроек открылась').toBeVisible({ timeout: 20000 });
+  await expect(card.getByTestId('wiki-nightly-switch')).toContainText('Разбирать по ночам');
+  const toggle = card.getByRole('switch', { name: 'Разбирать по ночам' });
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  await shot(page, 'qali-03-settings-nightly-before-1280.png');
 
-// ─── П.1: пустая вики, оба флага, десктоп — рельса в режиме заметок ───
+  await toggle.click();
 
-test('QA5 п.1: пустая вики, оба флага, 1280 — рельса видна в режиме заметок, ровно одна, пять кнопок', async ({ page, context }) => {
-  const errors = collectConsoleErrors(page);
-  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
-  await setFlags(true);
-  await openNotesMode(page);
+  // Вики заведена: это видно и в интерфейсе (дерево разделов), и по данным
+  await expect
+    .poll(async () => (await o.client.get<{ initialized: boolean }>('/api/wiki/tree')).initialized,
+      { timeout: 30000, message: 'тумблер ночного разбора должен завести вики' })
+    .toBe(true);
+  expect(wikiInitialized(o.id), 'шаблон вики (pages/_schema.md) должен появиться на диске').toBeTruthy();
 
-  // Режим заметок: центр — не вики, «Завести вики» здесь нет
+  // Вики заведена — и в интерфейсе пустого состояния вики больше нет.
+  // Каталог разделов читается при открытии раздела, поэтому раздел переоткрываем.
+  await gotoNotes(page);
+  await expect(page.getByTestId('wiki-empty'), 'пустое состояние вики больше не показывается')
+    .toHaveCount(0);
+  await expect(page.getByText('Вики пока пустая'), 'слов «Вики пока пустая» на экране быть не должно')
+    .toHaveCount(0);
+  await shot(page, 'qali-04-after-nightly-toggle-1280.png');
+
+  // Кнопки «Завести вики» по-прежнему нет — вики завелась сама, заводить её не нужно
   await expect(page.getByTestId('wiki-init-btn')).toHaveCount(0);
-  await expect(page.getByTestId('wiki-doc')).toHaveCount(0);
-
-  // Рельса видна и ровно одна; кнопки — все пять по порядку реестра
-  await expect(page.getByTestId('wiki-rail')).toHaveCount(1);
-  for (const id of RAIL_IDS) await expect(page.getByTestId(id)).toBeVisible();
-  await expect(page.getByTestId('wiki-rail-pages')).toHaveAttribute('aria-pressed', 'false');
-
-  // Постоянные разделы бэк отдаёт всегда (ADR-036, решение 1): в дереве они есть и до
-  // заведённой вики — фикс не «добавляет разделы», он даёт вход в центр вики
-  await expect(page.locator('[data-testid="unified-group"]', { hasText: 'Личное' }).first()).toBeVisible();
-  await expect(page.locator('[data-testid="unified-group"]', { hasText: 'Общее' }).first()).toBeVisible();
-
-  // Открытая заметка — рельса остаётся (ровно этого не было в дефекте 9817046a)
-  await noteRow(page).first().click();
-  await expect(page.getByRole('button', { name: 'Перенести в вики' })).toBeVisible();
-  await expect(page.getByTestId('wiki-rail')).toHaveCount(1);
-  await expect(page.getByTestId('wiki-rail-pages')).toHaveAttribute('aria-pressed', 'false');
-  await shot(page, 'qa5-02-rail-in-notes-empty-wiki-1280.png');
+  await expect(page.getByText('Завести вики')).toHaveCount(0);
 
   expect(await docOverflow(page), 'горизонтального переполнения нет').toBeLessThanOrEqual(1);
   expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
 });
 
-// ─── П.2: панели из режима заметок при пустой вики ───
+// ─── LI-2 (UI): перенос заметки в вику заводит вику сам ───
 
-test('QA5 п.2: из режима заметок панели открываются и закрываются без ошибки (пустая вики)', async ({ page, context }) => {
+test('LI-2: перенос заметки в вику заводит вику — отказа «вики не заведена» на экране нет', async ({ page, context }) => {
   const errors = collectConsoleErrors(page);
-  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
-  await setFlags(true);
-  await openNotesMode(page);
+  const o = await makeOwner('qa_li_transfer');
+  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), o.token);
 
-  // «Из режима заметок (открыта заметка)» — открываем свою заметку
-  await noteRow(page).first().click();
-  await expect(page.getByRole('button', { name: 'Перенести в вики' })).toBeVisible();
+  const note = await o.client.post<{ id: string }>('/api/notes', {
+    title: NOTE_TITLE, source: 'personal', content: 'Текст заметки для проверки переноса в вику.',
+  });
+  expect(note?.id).toBeTruthy();
 
-  // «Настройки»: блок «Ночной разбор» — тумблер, окно, лимиты
-  await page.getByTestId('wiki-rail-settings').click();
-  const settings = page.getByTestId('wiki-panel');
-  await expect(settings).toBeVisible();
-  await expect(settings).toContainText('Ночной разбор');
-  await expect(settings.getByTestId('wiki-nightly-switch')).toContainText('Разбирать по ночам');
-  await expect(settings.getByTestId('wiki-nightly-window')).toBeVisible();
-  await expect(settings.getByTestId('wiki-nightly-input-inputTokenBudget')).toBeVisible();
-  await expect(settings.getByTestId('wiki-nightly-input-maxPackagesPerNight')).toBeVisible();
-  await expect(settings.getByTestId('wiki-nightly-input-maxPackagesPerSection')).toBeVisible();
-  // Пустая вики — «Прошлая ночь» пуста: пустое состояние допустимо
-  await expect(settings.getByTestId('wiki-nightly-none')).toBeVisible();
-  await shot(page, 'qa5-03-settings-nightly-empty-wiki-1280.png');
-  // Повторный клик закрывает
-  await page.getByTestId('wiki-rail-settings').click();
-  await expect(page.getByTestId('wiki-panel')).toHaveCount(0);
+  await gotoNotes(page);
+  const row = page.locator('[data-testid="unified-row"][data-kind="note"]', { hasText: NOTE_TITLE }).first();
+  await expect(row, 'заметка видна в дереве заметок').toBeVisible({ timeout: 30000 });
+  await row.click();
+  await page.waitForTimeout(1500);
+  await closeToasts(page);
 
-  // «Входящие», «Журнал», «Здоровье» — открываются без ошибки и без краша; пустые состояния допустимы
-  for (const [id, label] of [['wiki-rail-inbox', 'Входящие'], ['wiki-rail-journal', 'Журнал'], ['wiki-rail-health', 'Здоровье']] as const) {
-    await page.getByTestId(id).click();
-    const panel = page.getByTestId('wiki-panel');
-    await expect(panel, `панель «${label}» открылась`).toBeVisible();
-    await expect(panel).toContainText(label);
-    await expect(panel.getByTestId('wiki-panel-body')).toBeVisible();
-    // Отказа на панели нет: пустая вики — пустое состояние, не ошибка
-    await expect(panel).not.toContainText('Не удалось');
-    await page.getByTestId(id).click();
-    await expect(panel, `повторный клик закрыл «${label}»`).toHaveCount(0);
-  }
-  await shot(page, 'qa5-04-panels-closed-empty-wiki-1280.png');
+  const transferBtn = page.getByRole('button', { name: 'Перенести в вики' });
+  await expect(transferBtn, 'кнопка переноса на заметке есть').toBeVisible();
+  await transferBtn.click();
 
-  expect(await docOverflow(page), 'горизонтального переполнения нет').toBeLessThanOrEqual(1);
-  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
-});
+  // Подтверждение переноса
+  const confirm = page.getByRole('button', { name: 'Перенести', exact: true });
+  await expect(confirm, 'диалог подтверждения открылся').toBeVisible({ timeout: 10000 });
+  await confirm.click();
 
-// ─── П.1 (вторая половина): «Страницы» → «Завести вики» ───
+  // Вики завелась сама — и отказа «вики не заведена» на экране нет
+  await expect
+    .poll(async () => (await o.client.get<{ initialized: boolean }>('/api/wiki/tree')).initialized,
+      { timeout: 30000, message: 'перенос заметки должен завести вику' })
+    .toBe(true);
+  await expect(page.getByText(/не заведена/i)).toHaveCount(0);
+  await expect(page.getByText('Завести вики')).toHaveCount(0);
+  await shot(page, 'qali-05-transfer-note-1280.png');
 
-test('QA5 п.1: «Страницы» ведут к «Вики не заведена»; кнопка заводит вики', async ({ page, context }) => {
-  const errors = collectConsoleErrors(page);
-  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
-  await setFlags(true);
-  await openNotesMode(page);
-
-  // Клик «Страницы» — центр показывает пустое состояние вики с кнопкой
-  await page.getByTestId('wiki-rail-pages').click();
-  await expect(page.getByTestId('wiki-doc')).toBeVisible();
-  await expect(page.getByText('Вики не заведена')).toBeVisible();
-  const initBtn = page.getByTestId('wiki-init-btn');
-  await expect(initBtn).toBeVisible();
-  await expect(page.getByTestId('wiki-rail-pages')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('wiki-rail')).toHaveCount(1);
-  await shot(page, 'qa5-05-empty-wiki-center-1280.png');
-
-  // Кнопка заводит вики: EmptyWiki уходит, бэк подтверждает заведённость
-  await initBtn.click();
-  await expect(initBtn).toHaveCount(0, { timeout: 15000 });
-  await expect(page.getByText('Вики не заведена')).toHaveCount(0);
-  const tree = await client.get<{ initialized: boolean; sections: { key: string }[] }>('/api/wiki/tree');
-  expect(tree.initialized, 'POST /api/wiki/initialize завёл вики').toBeTruthy();
-  expect(tree.sections.map(s => s.key), 'постоянные разделы на месте').toEqual(expect.arrayContaining(['personal', 'common']));
-  // Дерево показывает разделы
-  await expect(page.locator('[data-testid="unified-group"]', { hasText: 'Личное' }).first()).toBeVisible();
-  await expect(page.locator('[data-testid="unified-group"]', { hasText: 'Общее' }).first()).toBeVisible();
-  await shot(page, 'qa5-06-after-init-1280.png');
-
-  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
-});
-
-// ─── П.3: переключение заметка ↔ вики — панель не сбрасывается, рельса одна ───
-
-test('QA5 п.3: переключение заметка ↔ вики — открытая панель не сбрасывается, рельса без дубля', async ({ page, context }) => {
-  const errors = collectConsoleErrors(page);
-  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
-  await setFlags(true);
-
-  // Своя страница на диске + запись в манифесте — чтобы в дереве было на что кликнуть
-  await writeMyPage();
-  await openNotesMode(page);
-  await expect(wikiRow(page).first(), 'своя страница появилась в дереве').toBeVisible({ timeout: 30000 });
-
-  // Открытая панель («Журнал») переживает переход в вики и обратно
-  await page.getByTestId('wiki-rail-journal').click();
-  await expect(page.getByTestId('wiki-panel')).toBeVisible();
-
-  await wikiRow(page).first().click();
-  await expect(page.getByTestId('wiki-page')).toBeVisible({ timeout: 30000 });
-  await expect(page.getByTestId('wiki-page')).toContainText(WIKI_PAGE);
-  await expect(page.getByTestId('wiki-panel'), 'панель не сбросилась при переходе в вики').toBeVisible();
-  await expect(page.getByTestId('wiki-rail'), 'рельса ровно одна в режиме «Вики»').toHaveCount(1);
-  await expect(page.getByTestId('wiki-rail-journal')).toHaveAttribute('aria-pressed', 'true');
-  await shot(page, 'qa5-07-wiki-mode-panel-kept-1280.png');
-
-  await noteRow(page).first().click();
-  await expect(page.getByTestId('wiki-page')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Перенести в вики' })).toBeVisible();
-  await expect(page.getByTestId('wiki-panel'), 'панель не сбросилась при возврате к заметке').toBeVisible();
-  await expect(page.getByTestId('wiki-rail'), 'рельса ровно одна в режиме заметок').toHaveCount(1);
-  await shot(page, 'qa5-08-note-mode-panel-kept-1280.png');
-
-  // Ещё раз в вики — дубля рельсы нет
-  await wikiRow(page).first().click();
-  await expect(page.getByTestId('wiki-page')).toBeVisible({ timeout: 30000 });
-  await expect(page.getByTestId('wiki-rail')).toHaveCount(1);
-
-  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
-});
-
-// ─── П.4: мобильный 360 — переключатель на месте, шторки как раньше, рельсы у края нет ───
-
-test('QA5 п.4: 360 — переключатель «Заметки | Вики | Граф» на месте, шторки работают, рельсы нет', async ({ browser }) => {
-  const ctx = await browser.newContext({ baseURL: BASE });
-  await ctx.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
-  const p = await ctx.newPage();
-  const errors = collectConsoleErrors(p);
-  await setFlags(true);
-
-  await p.setViewportSize({ width: 360, height: 800 });
-  await p.goto(BASE + '/#/notes');
-  await p.reload();
-  await p.waitForTimeout(1800);
-  await closeToasts(p);
-
-  // Переключатель режимов на месте
-  for (const t of ['Заметки', 'Вики', 'Граф']) {
-    await expect(p.getByRole('button', { name: t, exact: true }).first(), `переключатель «${t}»`).toBeVisible();
-  }
-  // Рельсы у края нет
-  await expect(p.getByTestId('wiki-rail')).toHaveCount(0);
-
-  // Шторка дерева: «Вики» → дерево → выбор страницы открывает её и закрывает шторку
-  await p.getByRole('button', { name: 'Вики', exact: true }).first().click();
-  await p.waitForTimeout(600);
-  await expect(p.getByTestId('wiki-rail'), 'в режиме «Вики» рельсы всё равно нет').toHaveCount(0);
-  await p.getByTestId('wiki-open-tree').click();
-  await expect(p.getByTestId('wiki-unified-tree')).toBeVisible({ timeout: 20000 });
-  await expect(p.locator('[data-testid="unified-row"][data-kind="page"]', { hasText: WIKI_PAGE }).first()).toBeVisible({ timeout: 20000 });
-  await p.locator('[data-testid="unified-row"][data-kind="page"]', { hasText: WIKI_PAGE }).first().click();
-  await expect(p.getByTestId('wiki-page'), 'страница открылась').toBeVisible({ timeout: 20000 });
-  await expect(p.getByTestId('wiki-drawer-overlay'), 'шторка закрылась').toHaveCount(0);
-  await shot(p, 'qa5-09-mobile-page-360.png');
-
-  // Шторка панели: «Входящие» открывается и без заведённых данных (пустое состояние допустимо)
-  await p.getByTestId('wiki-open-panel').click();
-  await p.waitForTimeout(400);
-  await p.getByRole('button', { name: 'Журнал', exact: true }).first().click();
-  await expect(p.getByTestId('wiki-panel-body'), 'панель в шторке открылась').toBeVisible({ timeout: 20000 });
-  await expect(p.getByTestId('wiki-rail'), 'рельсы у края по-прежнему нет').toHaveCount(0);
-  await shot(p, 'qa5-10-mobile-panel-360.png');
-
-  expect(await docOverflow(p), 'горизонтального переполнения на 360 нет').toBeLessThanOrEqual(1);
-  await ctx.close();
+  await o.client.del(`/api/notes/${note.id}`);
   expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
 });

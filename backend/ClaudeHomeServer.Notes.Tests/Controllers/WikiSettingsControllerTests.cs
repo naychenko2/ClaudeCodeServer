@@ -7,6 +7,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
+using ClaudeHomeServer.Tests.Helpers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Infrastructure;
@@ -25,6 +26,10 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // N7c: GET несёт lastNight — итог последней ночи из keeper/nightly-last.json (пишет его
 // ночная служба; здесь файл подменяется, прогон службы — в WikiNightlyNotifyTests). Нет
 // файла или он нечитаем — null без 500. PUT итога не несёт (стор фронта хранит его от GET).
+//
+// LI-2: PUT, включивший ночной разбор, заводит вику (pages/_schema.md): человек поставил
+// тумблер, а ночная служба вики не заводит. PUT класса или автоприменения вики не заводит;
+// svc (403) и выключенный флаг (409) до заведения не доходят; GET остаётся читающим.
 public class WikiSettingsControllerTests : IDisposable
 {
     private const string User = "u1";
@@ -34,6 +39,9 @@ public class WikiSettingsControllerTests : IDisposable
     private readonly FlagGate _flags = new();
     private readonly Notifier _notifier = new();
     private readonly WikiClassHealth _health;
+    // LI-2: контроллер держит Хранителя — с включённой ночью он заводит вику. Хранитель здесь
+    // настоящий (тот же, что в бою): заведение — предмет этих тестов, а не заглушка.
+    private readonly WikiKeeper _keeper;
 
     public WikiSettingsControllerTests()
     {
@@ -43,6 +51,9 @@ public class WikiSettingsControllerTests : IDisposable
             .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = Path.Combine(_dir, "projects.json") })
             .Build();
         _health = new(_config, _flags, _notifier);
+        var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var projects = new ProjectManager(_config, users, new AppSettingsService(_config));
+        _keeper = new WikiKeeper(new NotesService(projects, _config, NullLogger<NotesService>.Instance), _config);
     }
 
     public void Dispose()
@@ -84,9 +95,9 @@ public class WikiSettingsControllerTests : IDisposable
     // ─── PUT: частичный блок мержется с состоянием (здесь — с умолчаниями) ──────
 
     [Fact]
-    public void PUTЧастичногоНочногоБлокаМержитсяСУмолчаниямиИЗаписывается()
+    public async Task PUTЧастичногоНочногоБлокаМержитсяСУмолчаниямиИЗаписывается()
     {
-        var put = Controller().Put(new WikiSettingsRequest { Nightly = new() { Enabled = true, WindowStartHour = 21 } });
+        var put = await Controller().Put(new WikiSettingsRequest { Nightly = new() { Enabled = true, WindowStartHour = 21 } });
 
         var dto = (WikiSettingsDto)((OkObjectResult)put.Result!).Value!;
         dto.Nightly.Enabled.Should().BeTrue();
@@ -131,30 +142,33 @@ public class WikiSettingsControllerTests : IDisposable
     // ─── c4: выключенный флаг — 409 до любой записи ────────────────────────────
 
     [Fact]
-    public void PUTПриВыключенномФлагеLlmWikiЭто409_ФайлНеСоздан()
+    public async Task PUTПриВыключенномФлагеLlmWikiЭто409_НиНастроекНиВики()
     {
         _flags.Enabled = false;
 
-        var put = Controller().Put(new WikiSettingsRequest { Nightly = new() { Enabled = true } });
+        var put = await Controller().Put(new WikiSettingsRequest { Nightly = new() { Enabled = true } });
 
         AssertCode(put.Result!, 409, "wiki_llm_wiki_off");
         File.Exists(SettingsPath()).Should().BeFalse("отказ до любой записи: ни байта на диске");
+        // Мутация (LI-2, критерий c2): перенести заведение до проверки флага — pages/_schema.md
+        // появился бы при выключенной функции: тест красный.
+        WikiPaths.IsInitialized(_dir, User).Should().BeFalse("выключенная функция не заводит вику");
     }
 
     // ─── валидация merged-блока и «менять нечего» ───────────────────────────────
 
     [Fact]
-    public void PUTНочногоБлокаСКривымMergedРезультатомЭто400_ФайлНеТронут()
+    public async Task PUTНочногоБлокаСКривымMergedРезультатомЭто400_ФайлНеТронут()
     {
-        var ok = Controller().Put(new WikiSettingsRequest { Nightly = new() { WindowStartHour = 3, WindowEndHour = 6 } });
+        var ok = await Controller().Put(new WikiSettingsRequest { Nightly = new() { WindowStartHour = 3, WindowEndHour = 6 } });
         ((OkObjectResult)ok.Result!).StatusCode.Should().Be(200);
 
         // Начало уже в файле (3); request ставит конец 3 — кривым становится merged-целое,
         // хотя само по себе поле корректно.
-        var bad = Controller().Put(new WikiSettingsRequest { Nightly = new() { WindowEndHour = 3 } });
+        var bad = await Controller().Put(new WikiSettingsRequest { Nightly = new() { WindowEndHour = 3 } });
         AssertCode(bad.Result!, 400, "wiki_nightly");
 
-        var bad2 = Controller().Put(new WikiSettingsRequest { Nightly = new() { WindowStartHour = 24 } });
+        var bad2 = await Controller().Put(new WikiSettingsRequest { Nightly = new() { WindowStartHour = 24 } });
         AssertCode(bad2.Result!, 400, "wiki_nightly");
 
         var (settings, _) = WikiSettingsStore.Read(Root());
@@ -163,9 +177,9 @@ public class WikiSettingsControllerTests : IDisposable
     }
 
     [Fact]
-    public void PUTПустогоНочногоБлокаЭтоНечегоМенять_ФайлНеСоздан()
+    public async Task PUTПустогоНочногоБлокаЭтоНечегоМенять_ФайлНеСоздан()
     {
-        var put = Controller().Put(new WikiSettingsRequest { Nightly = new() });
+        var put = await Controller().Put(new WikiSettingsRequest { Nightly = new() });
 
         AssertCode(put.Result!, 400, "wiki_settings_nothing_to_change");
         File.Exists(SettingsPath()).Should().BeFalse();
@@ -174,17 +188,19 @@ public class WikiSettingsControllerTests : IDisposable
     // ─── отказ записи: код в ответе, temp-файл убран ────────────────────────────
 
     [Fact]
-    public void ОтказЗаписиФайлаЭтоКодВОтвете_БезTempФайловНаДиске()
+    public async Task ОтказЗаписиФайлаЭтоКодВОтвете_БезTempФайловНаДиске()
     {
         // settings.json — каталог: атомарный перенос (temp→Move) не может его заменить,
         // запись отказана. Так же ведёт себя диск, отказавший запись.
         Directory.CreateDirectory(SettingsPath());
 
-        var put = Controller().Put(new WikiSettingsRequest { Nightly = new() { Enabled = true } });
+        var put = await Controller().Put(new WikiSettingsRequest { Nightly = new() { Enabled = true } });
 
         AssertCode(put.Result!, 500, "wiki_settings_write_failed");
         Directory.GetFiles(Path.Combine(Root(), "keeper")).Should()
             .NotContain(f => f.EndsWith(".tmp"), "WriteAtomic убирает свой temp перед тем, как бросать дальше");
+        // Заведение — после успешной записи настроек: отказанная запись вики не заводит.
+        WikiPaths.IsInitialized(_dir, User).Should().BeFalse();
     }
 
     // ─── N7c: lastNight в GET ────────────────────────────────────────────────────
@@ -235,13 +251,13 @@ public class WikiSettingsControllerTests : IDisposable
     }
 
     [Fact]
-    public void PUTИтогаНочиНеНесёт_ДажеКогдаФайлЕсть()
+    public async Task PUTИтогаНочиНеНесёт_ДажеКогдаФайлЕсть()
     {
         // PUT меняет настройки, а не читает прошлые проходы: стор фронта хранит lastNight
         // от последнего GET (wiki.ts:983-985).
         WriteLastNight(LastNightJson);
 
-        var put = Controller().Put(new WikiSettingsRequest { Nightly = new() { Enabled = true } });
+        var put = await Controller().Put(new WikiSettingsRequest { Nightly = new() { Enabled = true } });
 
         var dto = (WikiSettingsDto)((OkObjectResult)put.Result!).Value!;
         dto.LastNight.Should().BeNull();
@@ -252,26 +268,72 @@ public class WikiSettingsControllerTests : IDisposable
     // Мутация (критерий c2): убрать проверку IsServiceToken в Put — этот тест падает
     // (PUT дошёл бы до записи и вернул 200 с файлом).
     [Fact]
-    public void PUT_СервисныйТокен_403_ФайлНеСоздан()
+    public async Task PUT_СервисныйТокен_403_НиНастроекНиВики()
     {
-        var put = Controller(svc: true).Put(new WikiSettingsRequest { Nightly = new() { Enabled = true } });
+        var put = await Controller(svc: true).Put(new WikiSettingsRequest { Nightly = new() { Enabled = true } });
 
         ((IStatusCodeActionResult)put.Result!).StatusCode.Should().Be(403);
         File.Exists(SettingsPath()).Should().BeFalse("отказ до любой записи: ни байта на диске");
+        // LI-2: svc не доходит до заведения — агент не заводит вику (инвариант ADR-035).
+        WikiPaths.IsInitialized(_dir, User).Should().BeFalse();
     }
 
     // Отказ по типу токена не зависит от состояния: он раньше флага и раньше валидации
     // тела — при выключенной функции и при пустом теле ответ тот же 403.
     [Fact]
-    public void PUT_СервисныйТокенПриВыключенномФлаге_403ПоТокену_АНе409()
+    public async Task PUT_СервисныйТокенПриВыключенномФлаге_403ПоТокену_АНе409()
     {
         _flags.Enabled = false;
 
-        var put = Controller(svc: true).Put(new WikiSettingsRequest { Nightly = new() { Enabled = true } });
+        var put = await Controller(svc: true).Put(new WikiSettingsRequest { Nightly = new() { Enabled = true } });
 
         ((IStatusCodeActionResult)put.Result!).StatusCode.Should().Be(403,
             "отказ по типу токена раньше состояния: по ответу нельзя узнать, включена ли функция");
         File.Exists(SettingsPath()).Should().BeFalse();
+        WikiPaths.IsInitialized(_dir, User).Should().BeFalse("ни типа токена, ни флага — до заведения не дошло");
+    }
+
+    // ─── LI-2: включённая ночь заводит вику, класс и автоприменение — нет ──────
+
+    [Fact]
+    public async Task PUTНочногоТумблераЗаводитВики_БезКнопкиЗавести()
+    {
+        // Мутация (критерий c2): убрать EnsureInitializedAsync в Put — этот тест красный
+        // (pages/_schema.md не появляется), а ночная служба дальше молчит без владельца.
+        var put = await Controller().Put(new WikiSettingsRequest { Nightly = new() { Enabled = true } });
+
+        ((OkObjectResult)put.Result!).StatusCode.Should().Be(200);
+        var schema = Path.Combine(WikiPaths.Pages(_dir, User), WikiPaths.SchemaFileName);
+        File.Exists(schema).Should().BeTrue("человек включил ночной разбор — вики нужна ей сразу");
+        File.ReadAllText(schema).Should().StartWith("# Схема вики", "шаблон пишет только Хранитель");
+        // Разделы при этом не заведены: их заводит первая применённая операция (решение 1).
+        Directory.Exists(Path.Combine(WikiPaths.Pages(_dir, User), "Проекты")).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task PUTКлассаИАвтопримененияВикиНеЗаводит()
+    {
+        // Ни одно из этих действий не включает ночь: в итоговых настройках она остаётся
+        // выключенной — вики не появляется. Мутация «заводить при любом PUT» — красный.
+        ((OkObjectResult)(await Controller().Put(new WikiSettingsRequest { AutoApplyEnabled = true })).Result!)
+            .StatusCode.Should().Be(200);
+        ((OkObjectResult)(await Controller().Put(new WikiSettingsRequest { Class = "session×append", Enable = false })).Result!)
+            .StatusCode.Should().Be(200);
+
+        WikiPaths.IsInitialized(_dir, User).Should().BeFalse();
+        Directory.Exists(WikiPaths.Pages(_dir, User)).Should().BeFalse("ни байта в pages/");
+    }
+
+    [Fact]
+    public async Task GETНастроекВикиНеЗаводит_ЧтениеНеИмеетПобочныхЭффектов()
+    {
+        var res = await Controller().Get();
+
+        ((OkObjectResult)res.Result!).StatusCode.Should().Be(200);
+        // Мутация «заводить и на GET»: этот тест красный. Пустая вики показывается пустым
+        // состоянием, заведение — на первом действии.
+        WikiPaths.IsInitialized(_dir, User).Should().BeFalse();
+        Directory.Exists(WikiPaths.Pages(_dir, User)).Should().BeFalse();
     }
 
     // Чтение под svc остаётся 200: отказ — только мутирующих ручек (контракт B2b).
@@ -304,7 +366,7 @@ public class WikiSettingsControllerTests : IDisposable
         // MapInboundClaims=false оставляет raw-имена, как в бою.
         if (svc) identity.AddClaim(new Claim("typ", "svc"));
         http.User = new ClaimsPrincipal(identity);
-        return new WikiSettingsController(_health, _flags, _config)
+        return new WikiSettingsController(_health, _flags, _keeper, _config)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

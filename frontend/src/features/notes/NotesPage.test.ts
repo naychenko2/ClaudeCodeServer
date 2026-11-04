@@ -13,6 +13,8 @@ import type { NoteDetail, NoteSummary } from '../../types';
 import { NotesPage } from './NotesPage';
 import { findNodeByAttr, installFakeDom, mount, reactProps, uninstallFakeDom } from '../../components/chat/__tests__/fakeDom';
 import { setAllFlags } from '../../lib/featureFlags';
+import { notesPanels, zoneOf } from '../../pages/workspace/panelStackState';
+import { SECTION_CHIP_TITLE } from '../../components/ui/SectionChip';
 // порог тач-цели мобилы — тот же токен, что в коде страницы (сверяем не магическое число)
 import { TB } from '../../lib/design';
 // очередь запроса «открыть страницу» — настоящая (не моканная): тестам прямой импорт разрешён
@@ -71,7 +73,12 @@ vi.mock('../../lib/signalr', async (importOriginal) => {
 // в WikiTab.test; здесь проверяется связь вкладки со страницей заметок, а не стор.
 // OPEN-1 не мокан: очередь запроса (requestOpenWikiPage/consumeOpenWikiPage/useWikiOpenRequest)
 // настоящая — через spread orig; её контракт — в lib/__tests__/wiki.test.ts
-const { wikiMock } = vi.hoisted(() => ({ wikiMock: { tree: null as unknown, catalog: null as unknown, page: null as unknown } }));
+const { wikiMock } = vi.hoisted(() => ({
+  wikiMock: {
+    tree: null as unknown, catalog: null as unknown, page: null as unknown,
+    packages: [] as unknown[], healthCalls: [] as string[],
+  },
+}));
 vi.mock('../../lib/wiki', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../lib/wiki')>();
   return {
@@ -81,7 +88,9 @@ vi.mock('../../lib/wiki', async (importOriginal) => {
     loadWikiPage: async () => wikiMock.page,
     // S7a: «Входящие» — свои, экран списка зовёт listWikiPackages; здесь он пустой:
     // тест проверяет смену подвкладки, а не список пакетов
-    listWikiPackages: async () => ({ packages: [], invalidCount: 0 }),
+    listWikiPackages: async () => ({ packages: wikiMock.packages, invalidCount: 0 }),
+    // W3: ключи, по которым «Здоровье» запросило отчёт, — проверка передачи ключа раздела
+    getWikiHealth: async (key: string) => { wikiMock.healthCalls.push(key); return { section: key, content: '' }; },
     useWikiTree: () => wikiMock.tree,
     useWikiCatalog: () => wikiMock.catalog,
     useWikiPage: () => wikiMock.page,
@@ -567,9 +576,14 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     noteMock.detail = NOTE_DETAIL;
     wikiMock.tree = WIKI_TREE;
     wikiMock.catalog = WIKI_CATALOG;
+    wikiMock.packages = [];
   });
   afterEach(() => {
     setAllFlags({});
+    // раскладка зон — модульное состояние: закрываем открытое тестом, чтобы оно не текло дальше
+    for (const k of ['wikiInbox', 'wikiJournal', 'wikiHealth', 'wikiSettings', 'notesGraph'] as const)
+      notesPanels.ops.close(k);
+    wikiMock.packages = [];
     wikiMock.tree = null;
     wikiMock.catalog = null;
     noteMock.detail = null;
@@ -633,9 +647,7 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     root.unmount();
   });
 
-  // Мутации (вывод прогона — в отчёте задачи): (1) не рисовать WikiRail в центре unified →
-  // «в режиме заметок рельса есть» краснеет; (2) не передавать pages в WikiRail → «вход в вики
-  // из пустой вики» краснеет; (3) вернуть рельсу в WikiTab → «ровно одна рельса» краснеет.
+  // W3: панели вики — панели зон раздела; самодельной рельсы TL-8 в центре нет
   const rails = (c: AnyNode) => {
     const out: AnyNode[] = [];
     const walk = (x: AnyNode) => {
@@ -645,65 +657,142 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     walk(c);
     return out;
   };
+  // Кнопки рельсы зоны по подписи: aria-label «Журнал» или «Журнал: <подсказка бейджа>»
+  const railButtons = (c: AnyNode, label: string) => {
+    const out: AnyNode[] = [];
+    const walk = (x: AnyNode) => {
+      const al = x.nodeType === 1 ? (x as unknown as { getAttribute(n: string): string | null }).getAttribute('aria-label') : null;
+      if (al === label || (al != null && al.startsWith(`${label}: `))) out.push(x);
+      for (const ch of x.childNodes) walk(ch);
+    };
+    walk(c);
+    return out;
+  };
+  const chipOf = (c: AnyNode) => findNodeByAttr(c as never, 'title', SECTION_CHIP_TITLE) as AnyNode | null;
+  const openWikiPanel = (key: 'wikiInbox' | 'wikiJournal' | 'wikiHealth' | 'wikiSettings') =>
+    act(() => { notesPanels.ops.openIn('right', key); });
 
-  it('TL-8: unified — в режиме заметок рельса вики есть (четыре раздела + «Страницы»), панель закрыта', async () => {
+  it('W3: при флаге на 1280 рельсы TL-8 нет, кнопка «Журнал» ровно одна — в рельсе зоны', async () => {
     setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
     const { root, container } = mountNotes();
     await settle();
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-doc'), 'режим заметок: центр не вики').toBeNull();
-    expect(rails(container as unknown as AnyNode).length, 'рельса одна').toBe(1);
-    for (const id of ['pages', 'inbox', 'journal', 'health', 'settings'])
-      expect(findNodeByAttr(container, 'data-testid', `wiki-rail-${id}`), `кнопка ${id}`).not.toBeNull();
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-panel'), 'панель закрыта').toBeNull();
+    expect(rails(container as unknown as AnyNode).length, 'самодельной рельсы нет').toBe(0);
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-rail-pages'), 'кнопки «Страницы» нет').toBeNull();
+    for (const label of ['Входящие', 'Журнал', 'Здоровье', 'Настройки'])
+      expect(railButtons(container as unknown as AnyNode, label).length, `кнопка «${label}» ровно одна`).toBe(1);
     root.unmount();
   });
 
-  it('TL-8: пустая вики — «Страницы» на рельсе ведут к «Завести вики»; панель вики открывается без заведённой вики', async () => {
-    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
-    wikiMock.tree = { initialized: false, sections: [] };
-    const { root, container } = mountNotes();
-    await settle();
-    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-rail-settings')!);
-    await settle();
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-panel'), 'панель «Настройки» открыта при пустой вики').not.toBeNull();
-    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-rail-pages')!);
-    await settle();
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-init-btn'), '«Завести вики» достижима').not.toBeNull();
-    expect(rails(container as unknown as AnyNode).length, 'в режиме «Вики» рельса ровно одна').toBe(1);
-    // повторное нажатие «Страниц» возвращает к заметкам
-    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-rail-pages')!);
-    await settle();
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-init-btn')).toBeNull();
-    root.unmount();
-  });
-
-  it('TL-8: кнопка рельсы открывает панель, повторное нажатие закрывает; в режиме «Вики» рельса одна', async () => {
-    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
-    const { root, container } = mountNotes();
-    await settle();
-    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-rail-journal')!);
-    await settle();
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-panel'), 'панель открыта').not.toBeNull();
-    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-rail-pages')!);
-    await settle();
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-doc'), 'центр — вики').not.toBeNull();
-    expect(rails(container as unknown as AnyNode).length, 'ровно одна рельса').toBe(1);
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-panel'), 'панель пережила смену режима').not.toBeNull();
-    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-rail-journal')!);
-    await settle();
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-panel'), 'повторное нажатие закрывает').toBeNull();
-    root.unmount();
-  });
-
-  it('TL-8: без notes-wiki-unified рельсы на десктопе нет', async () => {
+  it('W3: без notes-wiki-unified кнопок панелей вики в рельсе нет', async () => {
     setAllFlags({ 'llm-wiki': true });
     const { root, container } = mountNotes();
     await settle();
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-rail'), 'рельсы нет').toBeNull();
+    for (const label of ['Входящие', 'Журнал', 'Здоровье', 'Настройки'])
+      expect(railButtons(container as unknown as AnyNode, label).length, `«${label}» нет`).toBe(0);
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-rail')).toBeNull();
     clickNode(findNodeByAttr(container, 'aria-label', 'Вики')!);
     await settle();
     expect(findNodeByAttr(container, 'data-testid', 'wiki-rail'), 'и в режиме «Вики» прежней раскладки нет').toBeNull();
     root.unmount();
+  });
+
+  it('W3: открытая панель «Входящие» переживает выключение и включение флага — раскладка та же', async () => {
+    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+    const { root, container } = mountNotes();
+    await settle();
+    openWikiPanel('wikiInbox');
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-panel-body'), 'панель открыта').not.toBeNull();
+    const layout = JSON.stringify(notesPanels.getZones());
+    expect(layout).toContain('wikiInbox');
+    act(() => { setAllFlags({ 'llm-wiki': true }); });
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-panel-body'), 'без флага контента нет').toBeNull();
+    expect(JSON.stringify(notesPanels.getZones()), 'раскладка не тронута выключением').toBe(layout);
+    act(() => { setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true }); });
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-panel-body'), 'после включения панель снова с контентом').not.toBeNull();
+    expect(JSON.stringify(notesPanels.getZones())).toBe(layout);
+    root.unmount();
+  });
+
+  it('W3: чип раздела — у «Журнала» и «Входящих» (подпись по умолчанию — AI Home), у «Настроек» чипа нет', async () => {
+    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+    const { root, container } = mountNotes();
+    await settle();
+    openWikiPanel('wikiJournal');
+    await settle();
+    expect(hasText(chipOf(container as unknown as AnyNode)!, 'AI Home'), 'follow по умолчанию — раздел AI Home').toBe(true);
+    act(() => { notesPanels.ops.close('wikiJournal'); });
+    openWikiPanel('wikiSettings');
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-panel-body'), 'панель «Настройки» открыта').not.toBeNull();
+    expect(chipOf(container as unknown as AnyNode), 'у «Настроек» чипа нет').toBeNull();
+    root.unmount();
+  });
+
+  it('W3: выбор заметки двигает чип за её разделом, «Другие заметки» раздел не меняют; «Здоровье» получает ключ', async () => {
+    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+    notesMock.push({ ...note('n2', 'Заметка без раздела', []), source: 'zzz-unknown', sourceLabel: 'Чужой' });
+    wikiMock.healthCalls.length = 0;
+    const { root, container } = mountNotes();
+    await settle();
+    openWikiPanel('wikiHealth');
+    await settle();
+    expect(wikiMock.healthCalls.at(-1), 'по умолчанию — раздел проекта').toBe('projects/aaa11111');
+    // заметка личного источника → раздел «Личное»
+    clickNode(findNodeByAttr(findNodeByAttr(container, 'data-testid', 'wiki-unified-tree')!, 'title', NOTE_TITLE)!);
+    await settle();
+    expect(hasText(chipOf(container as unknown as AnyNode)!, 'Личное'), 'чип за разделом заметки').toBe(true);
+    expect(wikiMock.healthCalls.at(-1), '«Здоровье» запросило отчёт нового раздела').toBe('personal');
+    // заметка из «Других заметок» раздел не меняет
+    clickNode(findNodeByAttr(findNodeByAttr(container, 'data-testid', 'wiki-unified-tree')!, 'title', 'Заметка без раздела')!);
+    await settle();
+    expect(hasText(chipOf(container as unknown as AnyNode)!, 'Личное'), 'раздел чипа прежний').toBe(true);
+    expect(wikiMock.healthCalls.at(-1)).toBe('personal');
+    root.unmount();
+  });
+
+  it('W3: пустая вики — в центре «Вики пока пустая», чипа и чисел на рельсе нет', async () => {
+    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+    wikiMock.tree = { initialized: false, sections: [] };
+    wikiMock.packages = [{ id: 'p1' }];
+    const { root, container } = mountNotes();
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-empty'), 'пустое состояние в центре').not.toBeNull();
+    expect(railButtons(container as unknown as AnyNode, 'Входящие').length, 'кнопка есть, числа и подсказки нет').toBe(1);
+    wikiMock.packages = [];
+    expect(findButtonByText(container, 'Завести вики'), 'кнопки «Завести вики» нет').toBeNull();
+    openWikiPanel('wikiInbox');
+    await settle();
+    expect(chipOf(container as unknown as AnyNode), 'чипа нет').toBeNull();
+    root.unmount();
+  });
+
+  it('W3: число «Входящих» на рельсе — с подсказкой «N ждут вашего решения»', async () => {
+    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+    wikiMock.packages = [{ id: 'p1' }, { id: 'p2' }];
+    const { root, container } = mountNotes();
+    await settle();
+    const al = (railButtons(container as unknown as AnyNode, 'Входящие')[0] as unknown as { getAttribute(n: string): string }).getAttribute('aria-label');
+    expect(al).toBe('Входящие: 2 ждут вашего решения');
+    root.unmount();
+  });
+
+  it('W3: открытая панель вики не закрывает граф заметок слева', async () => {
+    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+    // граф в центре тянет useThemeColors: в node нет MutationObserver
+    (globalThis as { MutationObserver?: unknown }).MutationObserver = class { observe() {} disconnect() {} };
+    const { root, container } = mountNotes();
+    await settle();
+    act(() => { notesPanels.ops.openIn('left', 'notesGraph'); });
+    openWikiPanel('wikiJournal');
+    await settle();
+    expect(zoneOf(notesPanels.getZones(), 'notesGraph'), 'граф на месте').toBe('left');
+    expect(zoneOf(notesPanels.getZones(), 'wikiJournal'), 'журнал открыт').toBe('right');
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-panel-body')).not.toBeNull();
+    root.unmount();
+    delete (globalThis as { MutationObserver?: unknown }).MutationObserver;
   });
 
   it('переключение «Заметки ↔ Вики» работает в обе стороны', async () => {

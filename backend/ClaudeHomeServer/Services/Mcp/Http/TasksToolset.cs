@@ -1079,6 +1079,11 @@ public sealed class TasksToolset(
             source = source.Where(t => t.Priority == p);
         if (ParseEnum<TaskItemAssignee>(arguments, "assignee") is { } a)
             source = source.Where(t => t.Assignee == a);
+        // Фича: сам эпик (Id) и задачи с этим FeatureId. Работает поверх выборки владельца и
+        // InScope вызывающего — чужую фичу по её id не прочитать.
+        var featureId = StringArg(arguments, "featureId");
+        if (featureId.Length > 0)
+            source = source.Where(t => t.Id == featureId || t.FeatureId == featureId);
         return source;
     }
 
@@ -1090,7 +1095,7 @@ public sealed class TasksToolset(
     // Потолок выдачи tasks_list после всех фильтров (≈ 100 КБ ответа вместо мегабайт).
     internal const int ListLimit = 300;
 
-    // Окно закрытых: действует, только если нет ни status, ни from/to; doneDays его переопределяет
+    // Окно закрытых: действует, только если нет ни status, ни featureId, ни from/to; doneDays его переопределяет
     // (0 — без закрытых, all — все закрытые). Граница полуоткрытая: CompletedAt >= now - N дней.
     private static IEnumerable<TaskItem> ApplyDoneWindow(IEnumerable<TaskItem> source, JsonObject arguments)
     {
@@ -1102,7 +1107,7 @@ public sealed class TasksToolset(
             if (raw.Equals("all", StringComparison.OrdinalIgnoreCase)) return source;
             days = int.TryParse(raw, out var n) && n >= 0 ? n : DefaultDoneDays;
         }
-        else if (StringArg(arguments, "status").Length > 0
+        else if (StringArg(arguments, "status").Length > 0 || StringArg(arguments, "featureId").Length > 0
                  || StringArg(arguments, "from").Length > 0 || StringArg(arguments, "to").Length > 0)
             return source;
         else
@@ -1448,7 +1453,7 @@ public sealed class TasksToolset(
                     ["doneDays"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = $"Окно закрытых задач по дате закрытия: число дней (0 — без закрытых) или all — все закрытые; по умолчанию {DefaultDoneDays}. Не действует при status и from/to. Потолок выдачи {ListLimit} записей (при обрезке первым элементом note); старое — doneDays=all, status=done или tasks_search.",
+                        ["description"] = $"Окно закрытых задач по дате закрытия: число дней (0 — без закрытых) или all — все закрытые; по умолчанию {DefaultDoneDays}. Не действует при status, featureId и from/to. Потолок выдачи {ListLimit} записей (при обрезке первым элементом note); старое — doneDays=all, status=done или tasks_search.",
                     },
                     ["scope"] = new JsonObject
                     {
@@ -1460,6 +1465,11 @@ public sealed class TasksToolset(
                     {
                         ["type"] = "string",
                         ["description"] = "Явный проект — переопределяет scope, только его задачи",
+                    },
+                    ["featureId"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Id задачи-эпика фичи: только задачи этой фичи и сам эпик (окно doneDays не применяется)",
                     },
                 },
             });

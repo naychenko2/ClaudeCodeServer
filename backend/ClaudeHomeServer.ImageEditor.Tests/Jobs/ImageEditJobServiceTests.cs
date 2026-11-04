@@ -202,11 +202,14 @@ public class ImageEditJobServiceTests : IDisposable
         });
         var service = Service(slow);
         var jobId = await StartAsync(service, "user-a", "higgsfield", count: 2);
-        await accepted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        // Потолки 30 с — страховка от зависания, не проверяемая скорость: старт драйвера — work item
+        // пула (ImageEditJobService.StartAsync), под нагрузкой параллельного гейта он не получает
+        // поток за 5 с (флак 6aa5013e: TimeoutException за 7 с в первом прогоне, зелёный на перезапуске)
+        await accepted.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
         var cancelled = await service.CancelAsync("user-a", Project, jobId, default);
 
-        await driverSawCancel.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await driverSawCancel.Task.WaitAsync(TimeSpan.FromSeconds(30));
         cancelled!.Status.Should().Be(ImageEditJobStatus.Cancelled);
         cancelled.Outcome.Should().Be(EditOutcome.Cancelled);
         // Higgsfield работу не останавливает: списание неизвестно, трата по котировке остаётся

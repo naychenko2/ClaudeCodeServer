@@ -23,7 +23,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 /// <summary>
 /// FIN3-2 (доработка по FINAL-3, п. 2 и 3 ревью b13f2105): инвариант «приватный чат виден
-/// только автору, даже владельцу проекта» нарушался на двух путях входа, которых не было в
+/// только автору, даже владельцу проекта» нарушался на путях входа, которых не было в
 /// таблице разреза S2d:
 ///
 /// 1) PUT /api/projects/{id}/sessions/{sid}/subject (ChatSubjectsController.MoveSession) —
@@ -39,6 +39,11 @@ namespace ClaudeHomeServer.Tests.Controllers;
 ///    (тот же код, что на неизвестный id в теле). Неизвестный ключ принимается как прежде:
 ///    ветвление подаёт свой новый csid до регистрации чата (SessionManager.cs:3660), внешний
 ///    транскрипт — законный resume (сторож: ChatCreationPersonaGateTests.СессияСResume_Проходит).
+/// 3) POST /api/chats (ChatsController.Create → CreateChatAsync) и POST /api/personas/{id}/chats
+///    (PersonasController.CreateChat → CreatePersonaChatAsync, включая проектную ветку
+///    contextProjectId, SessionManager.cs:4378) — те же двери без гейта: новый чат с csid чужого
+///    приватного получил бы его транскрипт. Закрыто тем же гейтом и тем же 404 (доработка по
+///    возврату ревью cea595f7 шага FIN3-2).
 ///
 /// Стенд — как у ChatVisibilityEndpointTests/GetOwnedVisibleTests: контроллеры напрямую с
 /// ClaimsPrincipal вызывающего, сессии сидируются sessions.json, в корне DI — настоящая
@@ -57,6 +62,9 @@ public sealed class PrivateChatSubjectResumeTests : IDisposable
     private readonly string _editorId;
     private readonly string _projectId;
     private readonly string _subjectId;
+    private readonly string _editorPersonaId;
+    private readonly string _ownerProjectPersonaId;
+    private readonly string _ownerGlobalPersonaId;
 
     // Сид: приватный владельцу, приватный редактору, общий — у каждого свой ClaudeSessionId:
     // именно он ключ истории и транскрипта (HistoryKeyOf), т.е. то, что подставляет resume.
@@ -114,6 +122,15 @@ public sealed class PrivateChatSubjectResumeTests : IDisposable
         ]);
 
         _personas = new PersonaManager(_config);
+        // Персоны для четвёртой группы (POST /personas/{id}/chats): глобальная персона редактора —
+        // ветка чата вне проекта; глобальная и проектная персоны владельца — обе дороги в проектную
+        // ветку CreatePersonaChatAsync (через contextProjectId и через persona.ProjectId, :4378)
+        _editorPersonaId = _personas.Create(_editorId, "Персона редактора", null, null, null, null, null,
+            PersonaScope.Global, null, null, null, false).Id;
+        _ownerProjectPersonaId = _personas.Create(_ownerId, "Персона проекта", null, null, null, null, null,
+            PersonaScope.Project, _projectId, null, null, false).Id;
+        _ownerGlobalPersonaId = _personas.Create(_ownerId, "Глобальная владельца", null, null, null, null, null,
+            PersonaScope.Global, null, null, null, false).Id;
         _sessions = CreateSessionManager(appSettings);
     }
 
@@ -176,6 +193,18 @@ public sealed class PrivateChatSubjectResumeTests : IDisposable
 
     private SessionsController SessionsAs(string userId) =>
         new(_sessions, _projects, null!, _personas, null!, null!) { ControllerContext = AsUser(userId) };
+
+    // Create с непустым resume не доходит до провижнера (блока «без персоны и без resume») —
+    // несуществующие для ручки зависимости как null!, образец — PrivateChatListVisibilityTests
+    private ChatsController ChatsAs(string userId) =>
+        new(_sessions, _projects, null!, null!, null!, null!, null!, _users, null!, null!,
+            NullLogger<ChatsController>.Instance) { ControllerContext = AsUser(userId) };
+
+    // CreateChat не трогает оркестрацию персон (memory/ask/automation/...) — те же null!
+    private PersonasController PersonasAs(string userId) =>
+        new(_personas, _projects, _sessions, null!, null!, null!, null!, null!, null!, null!, null!,
+            null!, null!, null!, null!, null!, _config, NullLogger<PersonasController>.Instance, null!)
+        { ControllerContext = AsUser(userId) };
 
     // ── 1. subject: чужой приватный — 404, тема не пишется ────────────────────────────
 
@@ -261,5 +290,97 @@ public sealed class PrivateChatSubjectResumeTests : IDisposable
         var unknown = (CreatedAtActionResult)await SessionsAs(_editorId).Create(_projectId,
             new CreateSessionRequest(ResumeSessionId: "resume-unknown-123"));
         ((Session)unknown.Value!).ClaudeSessionId.Should().Be("resume-unknown-123");
+    }
+
+    // ── 3. POST /api/chats (ChatsController.Create → CreateChatAsync): тот же гейт ───────
+
+    [Fact]
+    public async Task ResumeChats_ЧужойПриватныйCsid_404_ЧатНеСоздан()
+    {
+        var before = _sessions.GetProjectlessChats(_editorId).Count;
+
+        // Редактор создаёт чат вне проекта с csid приватного чата владельца: ClaudeSessionId
+        // (SessionManager.cs:4311) — ключ истории (HistoryKeyOf) и транскрипта CLI, новый чат
+        // получил бы чужой разговор — отказ, неотличимый от неизвестного id
+        var r = await ChatsAs(_editorId).Create(new CreateChatRequest(ResumeSessionId: OwnerPrivateCsid));
+        r.Should().BeOfType<NotFoundObjectResult>("csid чужого приватного — тот же отказ, что неизвестный id");
+        _sessions.GetProjectlessChats(_editorId).Count.Should().Be(before, "отказ не создаёт чат");
+
+        // Даже владелец на csid приватного чата редактора — тот же 404 (приватный виден только автору)
+        (await ChatsAs(_ownerId).Create(new CreateChatRequest(ResumeSessionId: EditorPrivateCsid)))
+            .Should().BeOfType<NotFoundObjectResult>();
+    }
+
+    [Fact]
+    public async Task ResumeChats_СвойПриватныйОбщийИНеизвестный_201_ВладелецНеЗатронут()
+    {
+        // Автор на своём приватном csid — прежний путь: чат вне проекта продолжает свой разговор
+        var own = (CreatedAtActionResult)await ChatsAs(_editorId).Create(
+            new CreateChatRequest(ResumeSessionId: EditorPrivateCsid));
+        ((Session)own.Value!).ClaudeSessionId.Should().Be(EditorPrivateCsid);
+
+        // Общий csid проекта — и редактору, и владельцу (для владельца — свой, поведение не меняется)
+        var openByEditor = (CreatedAtActionResult)await ChatsAs(_editorId).Create(
+            new CreateChatRequest(ResumeSessionId: OwnerOpenCsid));
+        ((Session)openByEditor.Value!).ClaudeSessionId.Should().Be(OwnerOpenCsid);
+        var openByOwner = (CreatedAtActionResult)await ChatsAs(_ownerId).Create(
+            new CreateChatRequest(ResumeSessionId: OwnerOpenCsid));
+        ((Session)openByOwner.Value!).ClaudeSessionId.Should().Be(OwnerOpenCsid);
+
+        // Неизвестный ключ принимается как прежде: ветвление и внешний транскрипт — законный resume
+        var unknown = (CreatedAtActionResult)await ChatsAs(_editorId).Create(
+            new CreateChatRequest(ResumeSessionId: "resume-unknown-456"));
+        ((Session)unknown.Value!).ClaudeSessionId.Should().Be("resume-unknown-456");
+    }
+
+    // ── 4. POST /api/personas/{id}/chats (PersonasController.CreateChat → CreatePersonaChatAsync) ──
+    // CreateChat отдаёт ActionResult<Session>: Ok()/NotFound() оборачиваются в него, результат
+    // действия — на .Result (так же его разворачивает рантайм).
+
+    [Fact]
+    public async Task ResumePersonaChats_ЧужойПриватныйCsid_404_ОбеВеткиОтказ()
+    {
+        var beforeChats = _sessions.GetProjectlessChats(_editorId).Count;
+        var beforeProject = _sessions.GetVisibleByProject(_projectId, _ownerId).Count;
+
+        // Глобальная персона редактора, чат вне проекта: csid приватного чата владельца — отказ,
+        // неотличимый от неизвестного id
+        var r = await PersonasAs(_editorId).CreateChat(_editorPersonaId,
+            new CreatePersonaChatRequest(ResumeSessionId: OwnerPrivateCsid));
+        r.Result.Should().BeOfType<NotFoundObjectResult>("csid чужого приватного — тот же отказ, что неизвестный id");
+        _sessions.GetProjectlessChats(_editorId).Count.Should().Be(beforeChats, "отказ не создаёт чат");
+
+        // Проектная ветка (persona.ProjectId → SessionManager.cs:4378): тот же 404
+        (await PersonasAs(_ownerId).CreateChat(_ownerProjectPersonaId,
+            new CreatePersonaChatRequest(ResumeSessionId: EditorPrivateCsid)))
+            .Result.Should().BeOfType<NotFoundObjectResult>();
+
+        // Та же ветка через contextProjectId (req.ProjectId): тот же 404, чат проекта не создан
+        (await PersonasAs(_ownerId).CreateChat(_ownerGlobalPersonaId,
+            new CreatePersonaChatRequest(ResumeSessionId: EditorPrivateCsid, ProjectId: _projectId)))
+            .Result.Should().BeOfType<NotFoundObjectResult>();
+        _sessions.GetVisibleByProject(_projectId, _ownerId).Count.Should().Be(beforeProject,
+            "отказ не создаёт чат проекта");
+    }
+
+    [Fact]
+    public async Task ResumePersonaChats_СвойПриватныйОбщийИНеизвестный_200_ОбеВеткиПроходят()
+    {
+        // Глобальная персона редактора, чат вне проекта: свой, общий и неизвестный csid — прежний путь
+        var own = (OkObjectResult)(await PersonasAs(_editorId).CreateChat(_editorPersonaId,
+            new CreatePersonaChatRequest(ResumeSessionId: EditorPrivateCsid))).Result!;
+        ((Session)own.Value!).ClaudeSessionId.Should().Be(EditorPrivateCsid);
+        var open = (OkObjectResult)(await PersonasAs(_editorId).CreateChat(_editorPersonaId,
+            new CreatePersonaChatRequest(ResumeSessionId: OwnerOpenCsid))).Result!;
+        ((Session)open.Value!).ClaudeSessionId.Should().Be(OwnerOpenCsid);
+        var unknown = (OkObjectResult)(await PersonasAs(_editorId).CreateChat(_editorPersonaId,
+            new CreatePersonaChatRequest(ResumeSessionId: "resume-unknown-789"))).Result!;
+        ((Session)unknown.Value!).ClaudeSessionId.Should().Be("resume-unknown-789");
+
+        // Проектная ветка на своём csid — гейт её не блокирует (приватный виден автору)
+        var proj = (OkObjectResult)(await PersonasAs(_ownerId).CreateChat(_ownerProjectPersonaId,
+            new CreatePersonaChatRequest(ResumeSessionId: OwnerPrivateCsid))).Result!;
+        ((Session)proj.Value!).ClaudeSessionId.Should().Be(OwnerPrivateCsid);
+        ((Session)proj.Value!).ProjectId.Should().Be(_projectId);
     }
 }

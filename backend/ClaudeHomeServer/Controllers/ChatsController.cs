@@ -132,6 +132,16 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateChatRequest req)
     {
+        // FIN3-2 (доработка по возврату ревью cea595f7): тот же гейт, что на POST /sessions
+        // (SessionsController.cs:55). resume принимается только для транскрипта, видимого
+        // вызывающему: ClaudeSessionId = resumeSessionId (SessionManager.cs:4311) — ключ истории
+        // (HistoryKeyOf) и транскрипта CLI; новый чат с csid чужого приватного получил бы его
+        // разговор через эту дверь. Отказ неотличим от несуществующего. Неизвестный ключ не
+        // трогается: ветвление подаёт свой новый csid до регистрации чата, внешний транскрипт —
+        // законный resume. Гейт в контроллере, не в сервисе: исключение из StartNewSessionAsync
+        // дало бы 400 в catch ниже, а нужен 404.
+        if (req.ResumeSessionId is { Length: > 0 } resumeId && sessions.IsTranscriptReservedForOthers(resumeId, UserId))
+            return NotFound(new { error = "Чат не найден" });
         string? personaId = req.PersonaId;
         // Последний рубеж инварианта «новый чат человека — только с персоной»: без
         // personaId/resumeSessionId сначала провижним ассистента и продолжим создание с ним.

@@ -235,6 +235,14 @@ public class PersonasController(
     public async Task<ActionResult<Session>> CreateChat(string id, [FromBody] CreatePersonaChatRequest req)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
+        // FIN3-2 (доработка по возврату ревью cea595f7): тот же гейт, что на POST /sessions
+        // (SessionsController.cs:55), для обеих веток CreatePersonaChatAsync — проектной
+        // (contextProjectId, SessionManager.cs:4378) и чата вне проекта: ClaudeSessionId =
+        // resumeSessionId (:4390/:4415) — ключ истории (HistoryKeyOf) и транскрипта CLI.
+        // Отказ неотличим от несуществующего; неизвестный ключ не трогается. Гейт здесь, не в
+        // сервисе: исключение из StartNewSessionAsync дало бы 400 в catch ниже, а нужен 404.
+        if (req.ResumeSessionId is { Length: > 0 } resumeId && _sessions.IsTranscriptReservedForOthers(resumeId, UserId))
+            return NotFound(new { error = "Чат не найден" });
         var mode = ClaudeModeExtensions.ForNewChat(req.Mode, hasPersona: true);
         try
         {

@@ -483,16 +483,17 @@ S2d-1; пока его в модели нет, «не приватный» по 
 | Создать задачу в общий проект | REST `POST /api/tasks` (`Controllers/TasksController.cs:66`) | `WriteContent` |
 | Своя задача с чужой доской в теле (резолв колонки) | REST `POST /api/tasks` без `projectId` (`:332`, резолв `:367`) | `WriteContent` по проекту из тела |
 | Правка полей, статуса, колонки (перетаскивание), подзадач, порядка | REST `PUT /api/tasks/{taskId}` (`:496`) | `WriteContent` по проекту задачи |
-| Фичевые поля и жизнь фичи (role/featureId/planSteps/reviewOf/verification/evidence, статус эпика) | `FeatureOwnerGate` (`:500`, `ClaudeHomeServer.Tasks/FeatureOwnerGate.cs:19`) | только владелец: `WriteContent` ведения фичи не отдаёт |
+| Фичевые поля и жизнь фичи (role/featureId/planSteps/reviewOf, статус эпика; `verification`/`evidence` — только у задачи фичи) | `FeatureOwnerGate` (`:500`, `ClaudeHomeServer.Tasks/FeatureOwnerGate.cs:19`, разбор `Touches` `:38-43`) | только владелец: `WriteContent` ведения фичи не отдаёт. Вердикт и свидетельства **обычной** задачи (без `Role` и `FeatureId`) — исполнительские поля, их правит и редактор: оговорка внесена дельта-ревью `c2b408f8`, код — карточка `86c2433e` (коммит `47742a674`) |
 | Перенос задачи в другой проект или в личные | `:534`, `:537` | `Write` — только владелец |
 | Запустить исполнителя («Выполнить с Claude») | REST `POST /api/tasks/{taskId}/execute` (`:1743`) | `RunTurn` (у редактора открыт с S2a-10) |
 | Удалить задачу | REST `DELETE /api/tasks/{taskId}` (`:1803`) | сначала `WriteContent`, затем авторство: `TaskAuthorGate` (`Core/Services/Access/TaskAuthorGate.cs:15`) — автор (`CreatedByUserId`) или владелец; автор неизвестен — только владелец |
 | Колонки доски и настройки проекта | `ProjectRight.Configure` (`Core/Services/Access/ProjectAccess.cs:41`) | только владелец |
 | Ручки `features/*` (summary/hold/note/merge) | `:1101…1468` | в перевод не входили: ведение фичи остаётся владельцу |
 | `ai/*` (описание, подзадачи, классификация) | `OwnProjectId` (`:209`) | вне прав роли: чужой проект сводится к личному контексту |
-| MCP `tasks_create/update/complete/add_subtask/toggle_subtask` | таблица `ActorToolRights` → `TasksOpenQ1` (`Core/Services/Access/ActorRightGate.cs:18`, `:86`) | `WriteContent` |
+| MCP `tasks_create/update/complete/add_subtask/toggle_subtask` | таблица `ActorToolRights` → `TasksOpenQ1` (`Core/Services/Access/ActorRightGate.cs:18`, `:86`) | `WriteContent`, поверх — `FeatureOwnerGate` для `tasks_update`/`tasks_complete` (`Services/Mcp/Http/TasksToolset.cs:542`, `:648`): тот же предикат, что у REST `PUT`, по актору идущего хода |
 | MCP `tasks_delete` | там же плюс `TaskAuthorGate` (`Services/Mcp/Http/TasksToolset.cs:787`) | `WriteContent`, поверх — автор или владелец |
 | MCP `tasks_run_executor` | `ActorRightGate.cs:89` | `RunTurn` |
+| Мост «чекбокс заметки → задача» — обе двери | MCP `notes_promote_task` (`Core/Services/Access/ActorRightGate.cs:97`, поверх — право по актору хода `ClaudeHomeServer.Notes/Services/Mcp/NotesToolset.cs:506-509`) и REST `POST /api/notes/{id}/tasks/promote` (`ClaudeHomeServer.Notes/Controllers/NotesController.cs:359-366` → `NoteTaskSyncService.cs:52` → `NotesService.cs:1936`) | `Write` — только владельцу, **и человеку, и агенту**: участнику закрыт тот же замок `ProjectAccessService`. Строка описывает целевое состояние; до карточки `28c61400` (коммит `13fc0e95e`) агентская дверь была открыта редактору — право мерилось по владельцу записи (арендатору), а не по актору хода, при закрытой той же двери человеку (тест `ClaudeHomeServer.Notes.Tests/Services/Notes/NotesSideWritePathsTests.cs:126`). Открывать мост редактору — отдельное продуктовое решение, не эта правка |
 
 **Правило (новое): фронтовый гейт роли повторяет право сервера.** У UI нет своей меры права: он
 повторяет ответ точки доступа и не бывает ни строже, ни мягче его. Шаг, который подгоняет кнопки под
@@ -513,7 +514,7 @@ S2b, а не новая фича; закрыт он `F2-T1` переводом �
 чтения, подсказка „Задачу меняет владелец проекта“» было временной подгонкой UI под незакрытую дверь
 S2b и заменено правилом «только читатель». Подсказка — «Менять задачи может редактор»
 (`frontend/src/features/projects/members/participantGate.ts:153`), это сделал фронтовый шаг `F2-Q3`
-(`1170b8e6`, коммит `31c0afb17`). Расхождения с макетом нет: `docs/mockups/shared-projects-v2-proposal.md`
+(карточка `1170b8e6`, коммит `31c0afb17`). Расхождения с макетом нет: `docs/mockups/shared-projects-v2-proposal.md`
 §4.7 и п. 38 описывали это право с самого начала, и править макет не нужно.
 
 ### 2.2 Приглашение и отзыв

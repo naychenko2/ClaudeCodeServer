@@ -115,14 +115,14 @@ public sealed class ImageContextLaunch(
 
     // Картинка версии: шаг истории, иначе файл нити в проекте; null — картинки ещё нет (черновик)
     public async Task<ImageEditCallResult<ImageBytes?>> ReadVersionAsync(
-        string ownerId, ImageEditScope scope, ImageThread thread, ImageThreadVersion version, CancellationToken ct)
+        string ownerId, string? actorId, ImageEditScope scope, ImageThread thread, ImageThreadVersion version, CancellationToken ct)
     {
         if (thread.ImageStepOf(version) is { Length: > 0 } stepId && steps?.Open(ownerId, scope.Key, stepId) is { } step)
             return ImageEditCallResult<ImageBytes?>.Ok(new ImageBytes(step.Image.Bytes, step.Image.ContentType));
         if (thread.File is not { Length: > 0 } file) return ImageEditCallResult<ImageBytes?>.Ok(null);
         if (scope.Project is not { } project)
             return ImageEditCallResult<ImageBytes?>.Fail(ImageEditErrorCodes.InvalidRequest, "У чата вне проекта нет файлов проекта");
-        var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(ownerId, project.RootPath, file, "Файл картинки", ct);
+        var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(actorId, project.RootPath, file, "Файл картинки", ct);
         return read.Value is { } image
             ? ImageEditCallResult<ImageBytes?>.Ok(image)
             : ImageEditCallResult<ImageBytes?>.Fail(read.ErrorCode ?? ImageEditErrorCodes.InvalidRequest, read.Error ?? "Файл не прочитан");
@@ -130,19 +130,19 @@ public sealed class ImageContextLaunch(
 
     // Размер картинки основной версии для котировки (цена по мегапикселям); null — картинки ещё нет
     public async Task<(int Width, int Height)?> BaseSizeAsync(
-        string ownerId, ImageEditScope scope, string sessionId, Inputs inputs, CancellationToken ct)
+        string ownerId, string? actorId, ImageEditScope scope, string sessionId, Inputs inputs, CancellationToken ct)
     {
         var thread = threads.Get(ownerId, sessionId).Threads.FirstOrDefault(t => t.Id == inputs.ThreadId);
         if (thread is null) return null;
         var version = inputs.VersionId is { } v ? thread.Version(v) : thread.CurrentVersion;
         if (version is null) return null;
-        var read = await ReadVersionAsync(ownerId, scope, thread, version, ct);
+        var read = await ReadVersionAsync(ownerId, actorId, scope, thread, version, ct);
         return read.Value is { } image ? ImageDimensions.Read(image.Bytes) : null;
     }
 
     // Образцы раскладки байтами: картинка версии нити этого чата или образец, загруженный в рабочую папку
     public async Task<ImageEditCallResult<IReadOnlyList<ReferenceImage>>> LoadSamplesAsync(
-        string ownerId, ImageEditScope scope, string sessionId, Inputs inputs, CancellationToken ct)
+        string ownerId, string? actorId, ImageEditScope scope, string sessionId, Inputs inputs, CancellationToken ct)
     {
         var list = new List<ReferenceImage>();
         foreach (var (item, role) in inputs.Samples)
@@ -159,7 +159,7 @@ public sealed class ImageContextLaunch(
                 return SampleFail("Картинка-образец не найдена в этом чате");
             var version = Text(item.Ref, "versionId") is { } v ? thread.Version(v) : thread.CurrentVersion;
             if (version is null) return SampleFail("У картинки-образца нет такой версии");
-            var read = await ReadVersionAsync(ownerId, scope, thread, version, ct);
+            var read = await ReadVersionAsync(ownerId, actorId, scope, thread, version, ct);
             if (read.Value is not { } image) return SampleFail(read.Error ?? "У картинки-образца ещё нет изображения");
             list.Add(new ReferenceImage(image.Bytes, image.ContentType, role, ImageThreadService.Name(thread)));
         }

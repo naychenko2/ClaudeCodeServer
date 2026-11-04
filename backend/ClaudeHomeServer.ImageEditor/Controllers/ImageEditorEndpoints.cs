@@ -152,7 +152,7 @@ public abstract class ImageEditorEndpoints(
             if (resolved.ErrorCode is not null) return Map(resolved, _ => Ok());
             var (inputs, _, sessionId) = resolved.Value;
             byContext = inputs;
-            var size = await context.BaseSizeAsync(scope.Tenant, scope, sessionId, inputs, ct);
+            var size = await context.BaseSizeAsync(scope.Tenant, UserId, scope, sessionId, inputs, ct);
             req = req with
             {
                 References = inputs.ReferenceCount,
@@ -219,7 +219,7 @@ public abstract class ImageEditorEndpoints(
             CharacterPhotos: form.CharacterPhotos,
             FaceTarget: faceTarget);
 
-        var started = await launcher.LaunchAsync(scope.Tenant, scope, request, ct);
+        var started = await launcher.LaunchAsync(scope.Tenant, UserId, scope, request, ct);
         return Map(started, created => StatusCode(StatusCodes.Status202Accepted, created));
     }
 

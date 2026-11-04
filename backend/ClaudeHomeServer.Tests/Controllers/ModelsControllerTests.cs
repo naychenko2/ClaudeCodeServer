@@ -1,6 +1,7 @@
 ﻿using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,6 +16,11 @@ public class ModelsControllerTests : IClassFixture<TestWebApplicationFactory>
     public ModelsControllerTests(TestWebApplicationFactory factory)
     {
         _factory = factory;
+        // Рубильник инстанса «Общие проекты» (образец — SharedProjectChatCreateTests): нужен
+        // тестам хвоста FIN3 — приватным делают только чат общего проекта. Флаг пользователя
+        // включяется там же, в SharedProjectWithMemberAsync; без него общие проекты выключены
+        // и остальные тесты класса не меняются.
+        _factory.ExtraConfig[SharedProjectsGate.SwitchKey] = "true";
     }
 
     private string GetSecondUserId() =>
@@ -630,5 +636,86 @@ public class ModelsControllerTests : IClassFixture<TestWebApplicationFactory>
         {
             Directory.Delete(dir, recursive: true);
         }
+    }
+
+    // --- Хвост FIN3 (дефект 6c037429): превью модели не раскрывает чужой приватный чат ---
+
+    /// <summary>
+    /// Общий проект с участником-редактором (образец — SharedProjectChatCreateTests):
+    /// рубильник инстанса задан в конструкторе класса, флаг «Общие проекты» — здесь, у обоих
+    /// участников. Без общего проекта приватность чата не существует: приватным делают
+    /// только чат общего проекта (not_shared_project).
+    /// </summary>
+    private async Task<(HttpClient Owner, HttpClient Member, string ProjectId)> SharedProjectWithMemberAsync()
+    {
+        var owner = _factory.CreateAuthenticatedClient();
+        var member = _factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        foreach (var c in new[] { owner, member })
+            (await c.PutAsJsonAsync("/api/feature-flags/shared-projects", new { enabled = true }))
+                .EnsureSuccessStatusCode();
+
+        var dir = Path.Combine(_factory.TempDir, "priv_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var projectId = D(await owner.PostAsJsonAsync("/api/projects",
+            new { name = "Приватный-хвост", rootPath = dir })).GetProperty("id").GetString()!;
+        (await owner.PostAsJsonAsync($"/api/projects/{projectId}/members",
+            new { username = TestWebApplicationFactory.SecondUsername, role = "editor" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        return (owner, member, projectId);
+    }
+
+    /// <summary>Чат проекта вызывающего и его приватность (тумблер S2d-7a, автор — вызывающий).</summary>
+    private async Task<string> ProjectChatAsync(HttpClient client, string projectId, string name, bool makePrivate)
+    {
+        var chatId = D(await client.PostAsJsonAsync($"/api/projects/{projectId}/sessions",
+            new { mode = "auto", name })).GetProperty("id").GetString()!;
+        if (makePrivate)
+            (await client.PutAsJsonAsync($"/api/chats/{chatId}/visibility", new { @private = true }))
+                .StatusCode.Should().Be(HttpStatusCode.OK);
+        return chatId;
+    }
+
+    // Приватный чат участника не раскрывается даже владельцу проекта (решение 28.10): ответ
+    // неотличим от «нет такого чата» — 404 обеими ветками, контекста чата и чипа сабагента.
+    // До правки обе ветки сверяли только арендатора (ResolveOwnerId), и владелец получал 200
+    // с моделью чужого приватного чата.
+    [Fact]
+    public async Task Preview_ПриватныйЧатУчастника_ВладельцуПроекта_404()
+    {
+        var (owner, member, projectId) = await SharedProjectWithMemberAsync();
+        var chatId = await ProjectChatAsync(member, projectId, "Приватный чат участника", makePrivate: true);
+
+        (await owner.GetAsync($"/api/models/preview?sessionId={chatId}")).StatusCode
+            .Should().Be(HttpStatusCode.NotFound, "чужой приватный чат неотличим от несуществующего");
+
+        var personaId = D(await owner.PostAsJsonAsync("/api/personas",
+            new { name = "Персона владельца проекта" })).GetProperty("id").GetString()!;
+        (await owner.GetAsync($"/api/models/preview?sessionId={chatId}&personaId={personaId}")).StatusCode
+            .Should().Be(HttpStatusCode.NotFound, "чип сабагента на чужом приватном чате не раскрывает его");
+    }
+
+    // Инвариант той же правки: свой чат и общий чат проекта — превью работает как прежде,
+    // обеими ветками. Отсечь чужой приватный — не значит закрыть проектную сессию её же
+    // владельцу или закрыть общий чат проекта.
+    [Fact]
+    public async Task Preview_СвойИОбщийЧатПроекта_РаботаетКакПрежде()
+    {
+        var (owner, member, projectId) = await SharedProjectWithMemberAsync();
+
+        // Свой чат арендатора в своём проекте: обе ветки — 200 и та же форма ответа
+        var ownChatId = await ProjectChatAsync(owner, projectId, "Чат владельца", makePrivate: false);
+        var personaId = D(await owner.PostAsJsonAsync("/api/personas",
+            new { name = "Персона для чипа" })).GetProperty("id").GetString()!;
+
+        var own = D(await owner.GetAsync($"/api/models/preview?sessionId={ownChatId}"));
+        own.TryGetProperty("model", out _).Should().BeTrue("превью своего чата отвечает той же формой");
+        var chip = D(await owner.GetAsync($"/api/models/preview?sessionId={ownChatId}&personaId={personaId}"));
+        chip.TryGetProperty("subagentChip", out _).Should().BeTrue("чип сабагента своего чата — как прежде");
+
+        // Общий чат участника (не приватный) виден владельцу проекта: 200, как прежде
+        var sharedChatId = await ProjectChatAsync(member, projectId, "Общий чат участника", makePrivate: false);
+        (await owner.GetAsync($"/api/models/preview?sessionId={sharedChatId}")).StatusCode
+            .Should().Be(HttpStatusCode.OK, "общий чат проекта виден его владельцу");
     }
 }

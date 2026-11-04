@@ -145,9 +145,15 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
         // место по признакам сессии, поверх замороженной модели чата.
         if (!string.IsNullOrEmpty(sessionId) && persona is null)
         {
-            var session = sessions.GetById(sessionId);
-            // Чужая/неизвестная сессия — 404, не раскрывая существование
-            if (session is null || sessions.ResolveOwnerId(session) != ownerId)
+            // Чужая/неизвестная сессия — 404, не раскрывая существования. Гейт человеческой
+            // ручки — GetOwnedVisible (резолв арендатора + видимость чата, SessionAccess.CanSee),
+            // та же, что у соседних точек (SessionsController.SetPersona). Хвост FIN3
+            // (дефект 6c037429): раньше сверялся только арендатор, поэтому владелец проекта
+            // получал превью модели ПРИВАТНОГО чата участника — по 200 вместо 404 было видно,
+            // что такой чат есть. Приватный чат участника не виден даже владельцу проекта
+            // (решение 28.10): ответ неотличим от «нет такого чата». Свой и общий чат — 200.
+            var session = sessions.GetOwnedVisible(sessionId, ownerId);
+            if (session is null)
                 return NotFound(new { error = "Сессия не найдена" });
             var usageKey = UsageKeyFor(session);
             // Персона сессии — как в бою (ClaudeSession.EffectiveTurnChain зовёт ResolveChain
@@ -176,11 +182,12 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
         {
             if (persona is null)
                 return BadRequest(new { error = "subagentChip требует существующего personaId" });
-            var session = sessions.GetById(sessionId);
-            // Чужая/неизвестная сессия — 404, не раскрывая существование. Проверка та же,
-            // что у ветки чата выше (ResolveOwnerId): проектная сессия принадлежит
-            // владельцу проекта и при пустом OwnerId чип недоступен посторонним.
-            if (session is null || sessions.ResolveOwnerId(session) != ownerId)
+            // Чужая/неизвестная сессия — 404, не раскрывая существования. Проверка та же,
+            // что у ветки чата выше: GetOwnedVisible. Проективная сессия принадлежит
+            // владельцу проекта и при пустом OwnerId чип недоступен посторонним; приватный
+            // чат участника не виден и владельцу проекта (хвост FIN3, дефект 6c037429).
+            var session = sessions.GetOwnedVisible(sessionId, ownerId);
+            if (session is null)
                 return NotFound(new { error = "Сессия не найдена" });
             chip = assignments.SubagentChipFor(persona, session.Model, ownerId);
         }

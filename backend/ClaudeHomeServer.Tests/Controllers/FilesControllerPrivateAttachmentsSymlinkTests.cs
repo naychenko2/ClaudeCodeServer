@@ -147,9 +147,10 @@ public sealed class FilesControllerPrivateAttachmentsSymlinkTests : IDisposable
         var (projectId, root) = Project();
         // защитный кейс: worktree, созданный ВНУТРИ корня. Штатные деревья чатов и слотов
         // ревью лежат вне главного дерева: {home}/.worktrees/<проект>/<ветка>
-        // (SessionManager.WorktreesBase, SessionManager.cs:3009; ReviewTreePool.cs:89 — та же
+        // (SessionManager.WorktreesBase — SessionManager.cs:3012; ReviewTreePool.cs:49 — та же
         // база), поэтому эта раскладка продуктовой не является. private образуется там сам,
-        // без всякой символьной ссылки — та же дыра DEC-ROOTS на поверхности REST
+        // без всякой символьной ссылки — та же дыра DEC-ROOTS (5c8a4705): прежняя формула
+        // по префиксу её не ловит, сегментная линия — ловит
         var foreign = "worktrees/x/" + PrivateOf(_authorId, "чужое.txt");
         Write(root, foreign, "чужое во вложенном дереве");
         var own = "worktrees/x/" + PrivateOf(_editorId, "своё.txt");

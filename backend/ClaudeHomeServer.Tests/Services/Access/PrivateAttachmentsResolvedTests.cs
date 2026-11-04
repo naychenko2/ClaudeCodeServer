@@ -166,10 +166,12 @@ public sealed class PrivateAttachmentsResolvedTests : IDisposable
     [Fact]
     public void ВложенныйWorktreeПодКорнем_ЧужоеPrivate_Чужое_СвоёСвоё()
     {
-        // защитный кейс: worktree, созданный ВНУТРИ корня (штатные деревья чатов и слотов
-        // ревью — вне главного дерева: {home}/.worktrees/<проект>/<ветка>,
-        // SessionManager.WorktreesBase). private образуется там сам, без всякой символьной
-        // ссылки (DEC-ROOTS: «новая дыра, которой нет у Дениса»)
+        // защитный кейс: worktree, созданный ВНУТРИ корня. Штатные деревья чатов и слотов
+        // ревью лежат вне главного дерева: {home}/.worktrees/<проект>/<ветка>
+        // (SessionManager.WorktreesBase — SessionManager.cs:3012; ReviewTreePool.cs:49 — та же
+        // база), поэтому эта раскладка продуктовой не является. private образуется там сам,
+        // без всякой символьной ссылки — та же дыра DEC-ROOTS (5c8a4705): прежняя формула
+        // по префиксу её не ловит, сегментная линия — ловит
         Write($"worktrees/x/.cc-attachments/private/{Other}/nested.txt", "чужое во вложенном дереве");
         PrivateAttachments.IsForeignResolved(_root, $"worktrees/x/.cc-attachments/private/{Other}/nested.txt", Me)
             .Should().BeTrue("сегмент .cc-attachments/private/{X} на любой глубине канона — то же чужое");

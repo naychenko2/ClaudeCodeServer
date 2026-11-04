@@ -145,12 +145,19 @@ public class SharedProjectPersonaTests : IClassFixture<TestWebApplicationFactory
             "отказ не оставил в проекте нового чата");
     }
 
+    /// <summary>Агент чата общего проекта создаёт чат глобальной персоне: тот же отказ, что в REST.
+    /// Ход в чате-вызывателе начинает владелец: после О2 финального ревью «Общих проектов» (892deb00)
+    /// безымянный вызов общего проекта отказан ГЕЙТОМ актора (chats_create — OwnerOnly) и не дошёл
+    /// бы до проверки собеседника — тест мерил бы гейт, а не этот контракт.</summary>
     [Fact]
     public async Task McpChatsCreateВОбщемПроектеСГлобальнойПерсоной_ОтказСКодомИЧатНеСоздан()
     {
         var (projectId, callerChatId) = await ProjectWithChatAsync("editor");
         var personaId = await CreatePersonaAsync(Owner(), "Глобальная-" + Guid.NewGuid().ToString("N")[..6], "global");
         var before = await ProjectChatIdsAsync(Owner(), projectId);
+
+        (await Owner().PostAsJsonAsync($"/api/sessions/{callerChatId}/messages",
+            new { text = "создай чат персоне", wait = "none" })).EnsureSuccessStatusCode();
 
         var resp = await Owner().AsCaller(callerChatId).PostAsJsonAsync($"/mcp/wsp/{callerChatId}", new
         {

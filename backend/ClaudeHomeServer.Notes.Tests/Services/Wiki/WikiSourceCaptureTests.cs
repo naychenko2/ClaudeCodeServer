@@ -387,6 +387,76 @@ public class WikiSourceCaptureTests : IDisposable
         (await _sut.CaptureFile(User, wide.Id, "projects.json")).Ok.Should().BeFalse();
     }
 
+    // F2-P3 (вердикт финального ревью 892deb00): вложения приватных чатов участников общего
+    // проекта лежат в .cc-attachments/private/{X}/ того же дерева. Чужое (X ≠ владелец) в вики
+    // проекта не берётся — тот же общий предикат (PrivateAttachments.IsForeignResolved), что у
+    // files_read / FilesController / Knowledge. Отказ неотличим от «файла не найден»:
+    // существования чужого private не раскрываем (тот же инвариант, что у «чат не существует»
+    // в CaptureSession).
+
+    [Fact]
+    public async Task ЗахватФайла_ЧужоеPrivate_отказКакНесуществующий_НичегоНеЗаписано()
+    {
+        var project = NewProject("П23");
+        var foreignRel = $"{TreeExcludes.AttachmentsDir}/private/u2/{Guid.NewGuid():N}/foreign.md";
+        var full = Path.Combine(project.RootPath!, foreignRel);
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.WriteAllText(full, "тело чужого private");
+
+        var r = await _sut.CaptureFile(User, project.Id, foreignRel);
+        r.Ok.Should().BeFalse("чужое private-вложение участника — не источник вики проекта");
+        // Чужое неотличимо от несуществующего: сравнение пословное — уточнение к тексту
+        // («(приватный)») краснит эту строку.
+        var missing = await _sut.CaptureFile(User, project.Id,
+            $"{TreeExcludes.AttachmentsDir}/private/u2/{Guid.NewGuid():N}/absent.md");
+        missing.Ok.Should().BeFalse();
+        r.Reason.Should().Be("файл не найден").And.Be(missing.Reason);
+        Directory.Exists(Path.Combine(WikiPaths.Pages(_dir, User), "Проекты", project.Id, "Источники"))
+            .Should().BeFalse("отказ — содержимое в вики не попало");
+    }
+
+    // Та же чужесть «на любой глубине» канонического пути (DEC-ROOTS): корень чужого проекта —
+    // каталог, содержащий свой .cc-attachments, — может лежать внутри дерева этого проекта
+    // (копия, вложенный checkout). Текстовый гейт (IsForeign) видел бы первым сегментом имя
+    // этого каталога и чужее не увидел бы; каноническая линия предиката видит сегмент
+    // .cc-attachments/private/{X} на любой глубине — тот же отказ. Мутация «IsForeignResolved
+    // заменён текстовым IsForeign» краснит этот тест: файл чужого private принялся бы карточкой.
+    [Fact]
+    public async Task ЗахватФайла_КореньЧужогоПроектаВнутриДерева_тотЖеОтказ()
+    {
+        var project = NewProject("П24");
+        var foreignRel = $"otherProject/{TreeExcludes.AttachmentsDir}/private/u2/{Guid.NewGuid():N}/x.md";
+        var full = Path.Combine(project.RootPath!, foreignRel);
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.WriteAllText(full, "чужое private вложенного проекта");
+
+        var r = await _sut.CaptureFile(User, project.Id, foreignRel);
+        r.Ok.Should().BeFalse();
+        r.Reason.Should().Be("файл не найден");
+        Directory.Exists(Path.Combine(WikiPaths.Pages(_dir, User), "Проекты", project.Id, "Источники"))
+            .Should().BeFalse();
+    }
+
+    // Критерий «не сломать» (c3 вердикта): свой private и общая раскладка .cc-attachments/{guid}/
+    // — не чужое: принимаются той же карточкой, что и любой файл проекта.
+    [Theory]
+    [InlineData(".cc-attachments")]                // общая раскладка
+    [InlineData(".cc-attachments/private/u1")]     // свой private-каталог
+    public async Task ЗахватФайла_СвоёPrivateИОбщаяРаскладка_принятыКакРаньше(string dir)
+    {
+        var project = NewProject("П25");
+        var rel = $"{dir}/{Guid.NewGuid():N}/own.md";
+        var full = Path.Combine(project.RootPath!, rel);
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.WriteAllText(full, "своё содержимое");
+
+        var r = await _sut.CaptureFile(User, project.Id, rel);
+        r.Ok.Should().BeTrue(r.Reason);
+        r.CardRelPath.Should().StartWith($"Проекты/{project.Id}/Источники/");
+        CardModel(r).Frontmatter.Ref.Should().Be($"file:{project.Id}/{rel}");
+        r.SourceText.Should().Be("своё содержимое");
+    }
+
     // —— карточка файла: ref с проектом, хэш байтов, а не строки (c2/c3) ——
 
     [Fact]

@@ -402,7 +402,8 @@ public class NotesToolsetWikiTests : IDisposable
         // Заявка — тоже не заводит: агент не приводит вику в существование своим вызовом
         // (инвариант «svc/MCP вики не заводят», LI-2).
         var note = _notes.Create(User, new CreateNoteRequest(Title: "Заметка для отказа", Content: "Содержимое.", Source: "p1"));
-        AssertDenied(Call(toolset, ctx, "wiki_ingest", Args(("source", note.Id))), "не заведена");
+        AssertDenied(Call(toolset, ctx, "wiki_ingest", Args(("source", note.Id))),
+            "Вики этого владельца не заведена: её инструменты работают только с заведённой.");
 
         // Мутация (критерий c2): позвать EnsureInitializedAsync из инструмента — этот тест
         // красный: под pages/ появился бы _schema.md.

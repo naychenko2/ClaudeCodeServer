@@ -6918,7 +6918,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     {
         if (entry.Info.PrivateToUserId is not { } author) return false;
         var project = entry.Info.ProjectId is not null ? _projects.GetById(entry.Info.ProjectId) : null;
-        return Access.ProjectAccess.Check(project, author) is null;
+        // Тот же признак видимости приватного чата, что у шлюзов этого файла (GetOwnedVisible,
+        // VisibleTo): после вывода автора из проекта CanSee гаснет (ProjectAccess.Check = null),
+        // и стартующий ход-сирота сливал бы события в user_{id} отозванного. Id автора входит
+        // только в видимость его же чата; право уже реализовано RemoveAsync — здесь перечитывается
+        // его следствие, нового права никто не получает.
+        return !Access.SessionAccess.CanSee(entry.Info, project, author);
     }
 
     // Клиенту уходят только видимые элементы: silent — ход-реакция на доклад, чей текст

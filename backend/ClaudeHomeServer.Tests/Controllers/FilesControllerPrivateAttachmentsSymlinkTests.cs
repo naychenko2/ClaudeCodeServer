@@ -145,8 +145,11 @@ public sealed class FilesControllerPrivateAttachmentsSymlinkTests : IDisposable
     public async Task ВложенныйWorktreeПодКорнем_ЧужоеPrivate_404_СвоёАвтору_200()
     {
         var (projectId, root) = Project();
-        // worktree под корнем проекта (worktreePath задач трекера): private образуется там
-        // сам, без всякой символьной ссылки — та же дыра DEC-ROOTS на поверхности REST
+        // защитный кейс: worktree, созданный ВНУТРИ корня. Штатные деревья чатов и слотов
+        // ревью лежат вне главного дерева: {home}/.worktrees/<проект>/<ветка>
+        // (SessionManager.WorktreesBase, SessionManager.cs:3009; ReviewTreePool.cs:89 — та же
+        // база), поэтому эта раскладка продуктовой не является. private образуется там сам,
+        // без всякой символьной ссылки — та же дыра DEC-ROOTS на поверхности REST
         var foreign = "worktrees/x/" + PrivateOf(_authorId, "чужое.txt");
         Write(root, foreign, "чужое во вложенном дереве");
         var own = "worktrees/x/" + PrivateOf(_editorId, "своё.txt");

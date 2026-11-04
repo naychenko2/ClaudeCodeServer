@@ -748,7 +748,7 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
     // FilesControllerPrivateAttachmentsReadTests/SymlinkTests; здесь их нет, чтобы тест не был
     // зелёным не по своей причине.
     //
-    // Мутация (пункт c2 ревью 44e1219c): снять строки FilesController.cs:198/:211/:1137 — чужое
+    // Мутация (критерий c2 карточки 3df09cd9, по вердикту 44e1219c): снять строки FilesController.cs:198/:211/:1137 — чужое
     // читается 200, оба теста краснеют. Ссылка на каталог требует привилегий на Windows, поэтому
     // тесты идут только на Linux (образец FilesControllerPrivateAttachmentsSymlinkTests).
 

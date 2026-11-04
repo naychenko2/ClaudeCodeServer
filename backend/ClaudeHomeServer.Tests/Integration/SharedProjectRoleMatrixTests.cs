@@ -80,8 +80,10 @@ public class SharedProjectRoleMatrixTests : IClassFixture<TestWebApplicationFact
         new("память команды: чтение", "GET", "/api/projects/{p}/team-memory", null, Ok2xx, Ok2xx, Ok2xx, 404),
         new("участники: список", "GET", "/api/projects/{p}/members", null, Ok2xx, Ok2xx, Ok2xx, 404),
         new("журнал событий: чтение", "GET", "/api/projects/{p}/events", null, Ok2xx, Ok2xx, Ok2xx, 404),
-        // запись проекта: владельцу; участник — 403 (Write редактору S2a-10 не открывал), посторонний — 404
-        new("задача: создание", "POST", "/api/projects/{p}/tasks", new { title = "Задача матрицы" }, Ok2xx, 403, 403, 404),
+        // запись проекта: владельцу и редактору (F2-T1: править задачи — WriteContent, разрез §2.1),
+        // читателю — 403 project_scope, постороннему — 404. Право Write участнику по-прежнему
+        // закрыто (замок ProjectAccessService): матрица задач — SharedProjectTaskWriteRightsTests
+        new("задача: создание", "POST", "/api/projects/{p}/tasks", new { title = "Задача матрицы" }, Ok2xx, Ok2xx, 403, 404, "project_scope"),
         new("память команды: запись", "POST", "/api/projects/{p}/team-memory", new { text = "Факт матрицы" }, Ok2xx, 403, 403, 404),
         // удаление — автору чата и владельцу проекта: чат здесь создан владельцем, участнику —
         // прежний 403 not_chat_author (авторский случай проверяет ChatWriteRightsEndpointTests)

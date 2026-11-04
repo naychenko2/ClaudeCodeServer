@@ -54,9 +54,16 @@ public class TaskLaunchActorTests : IDisposable
         var plain = _tasks.Create("p", "owner", new CreateTaskRequest("t"));
         plain.CreatedByUserId.Should().BeNull("фон/система — null");
 
-        // человеческий путь: создатель — владелец записи, присланный актор игнорируется
+        // Человеческий путь без названного актора: создающий и есть владелец записи (личная
+        // задача, свой проект). Названный актор — автор: в общем проекте запись лежит под
+        // арендатором, а поставил её участник с правом WriteContent (F2-T1), поэтому автор и
+        // владелец записи разные. Тело поля не касается: человеческие эндпоинты либо зануляют
+        // его, либо называют id вызывающего сами (TasksController) — подменить ему нечем.
         var human = _tasks.Create("p", "user-1", new CreateTaskRequest("t", CreatedByHuman: true, CreatedByActorUserId: "evil"));
-        human.CreatedByUserId.Should().Be("user-1");
+        human.CreatedByUserId.Should().Be("evil", "названный актор — автор, даже когда запись лежит под другим владельцем");
+
+        var humanNoActor = _tasks.Create("p", "user-1", new CreateTaskRequest("t", CreatedByHuman: true));
+        humanNoActor.CreatedByUserId.Should().Be("user-1", "без названного актора человек и есть владелец записи");
     }
 
     private sealed class RecordingExecutor : ITaskExecutor

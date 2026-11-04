@@ -761,6 +761,16 @@ public sealed class TasksToolset(
                 var id = StringArg(arguments, "id");
                 if (GetAccessible(context.OwnerId, projectId, allowed, id, narrow) is not { } task)
                     return Deny($"Задача {id} не найдена или недоступна в этом контексте.");
+                // Право удаления (F2-T1) — тот же, что у REST DELETE: автор задачи или её
+                // владелец. Агент участника пишет под токеном арендатора, поэтому авторство
+                // меряется по АКТОРУ хода (единый источник — реестр SessionManager), а не по
+                // токену: иначе агент редактора удалял бы чужие задачи шире, чем человеку-
+                // редактору (правило «агент не больше человека»). Актор совпадает с арендатором
+                // или неизвестен — права арендатора, как раньше (тот же fail-closed, что у
+                // гейта актора S2c-6). Отказ — тем же машинным кодом, что REST-ответ.
+                var actor = sessions.GetTurnActor(session.Id, context.OwnerId) ?? context.OwnerId;
+                if (actor != context.OwnerId && task.CreatedByUserId != actor)
+                    return Deny($"{TaskAuthorGate.DeniedText} ({TaskAuthorGate.ErrorCode})");
                 // W4-HOLD-N (хвост R-N п.3): та же страховка, что у REST-удаления: MCP-путь
                 // её обходил — удалённый на паузе эпик/шаг оставлял чат «вечным».
                 executor.RestoreFrozenChatsBeforeDelete(task);

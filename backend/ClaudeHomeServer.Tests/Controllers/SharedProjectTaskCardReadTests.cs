@@ -15,8 +15,8 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// S2c-9 (решение Андрея 01.11): полная карточка чужой задачи открыта участнику общего проекта
 /// по праву чтения. GET /api/tasks/{id}: редактор и читатель получают 200 с Description и
 /// ResultMarkdown; посторонний, отозванный, участник с выключенным флагом, личная задача владельца —
-/// 404 («нет» и «чужое» не различаем). Правка задачи участнику по-прежнему отказ (403) —
-/// SharedProjectWriteDenied этот шаг не трогает.
+/// 404 («нет» и «чужое» не различаем). Правка остаётся отказом читателю (403 project_scope);
+/// редактору дверь правки открыл F2-T1 — её матрица в SharedProjectTaskWriteRightsTests.
 ///
 /// Список и карточка идут через одну проекцию для участника (TaskView): id заметки личного vault
 /// владельца участнику не уходит (он раскрывает путь и название личной заметки), id заметки этого
@@ -178,14 +178,12 @@ public class SharedProjectTaskCardReadTests : IClassFixture<TestWebApplicationFa
         (await Owner().GetAsync($"/api/tasks/{personalId}")).EnsureSuccessStatusCode();
     }
 
-    // ── правка участником по-прежнему отказ (этот шаг её не открывает) ───────────────
+    // ── правка читателю по-прежнему отказ (редактору её открыл F2-T1: SharedProjectTaskWriteRightsTests) ──
 
-    [Theory]
-    [InlineData("editor")]
-    [InlineData("reader")]
-    public async Task Участник_ПравитКарточку_403(string role)
+    [Fact]
+    public async Task Читатель_ПравитКарточку_403()
     {
-        var projectId = await ProjectWithMemberAsync(role);
+        var projectId = await ProjectWithMemberAsync("reader");
         var taskId = SeedTaskAsync(projectId);
 
         var r = await Member().PutAsJsonAsync($"/api/tasks/{taskId}", new { title = "перебил участник" });

@@ -209,7 +209,10 @@ test('LI регресс: MCP-инструмент wiki_ingest не заводи�
 
   const svc = serviceToken(o.id);
   const res = await request.post(`/mcp/notes/${session.id}`, {
-    headers: { Authorization: `Bearer ${svc}` },
+    // Заголовок вызывающей сессии шлёт и живой клиент (ClaudeSession, конфиг сервера notes).
+    // Без него рамка хода считается Narrow (fail-closed) и отказ приходит РАНЬШЕ проверки
+    // вики — «Недоступно в общем проекте» вместо «вики не заведена».
+    headers: { Authorization: `Bearer ${svc}`, 'X-Caller-Session-Id': session.id },
     data: {
       jsonrpc: '2.0', id: 1, method: 'tools/call',
       params: { name: 'wiki_ingest', arguments: { source: `note:${note.id}` } },

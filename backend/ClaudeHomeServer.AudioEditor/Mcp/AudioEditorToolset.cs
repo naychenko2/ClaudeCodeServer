@@ -376,7 +376,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             DurationSec: duration,
             Prompt: spokenGuess ? null : text,
             Lyrics: lyrics);
-        var quote = await _jobs.QuoteAsync(ownerId, scope, quoteRequest, ct);
+        var quote = await _jobs.QuoteAsync(ownerId, scope, quoteRequest, ct, Actor(ownerId, session));
         if (quote.Value is not { } q) return Fail(quote.ErrorCode, quote.Error);
 
         // Частные параметры — по схеме модели, которую выбрала цепочка; неизвестный ключ — отказ до запуска
@@ -425,7 +425,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
                 Fields = fields.Count > 0 ? fields : quoteRequest.Fields,
                 Text = spoken ? text : null,
                 Prompt = spoken ? null : text,
-            }, ct);
+            }, ct, Actor(ownerId, session));
             if (pinned.Value is not { } p) return Fail(pinned.ErrorCode, pinned.Error);
             final = p;
         }
@@ -453,7 +453,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
             EndSec: range.End,
             Source: source,
             Voice: libraryVoice);
-        var started = await _jobs.StartAsync(ownerId, scope, input, ct);
+        var started = await _jobs.StartAsync(ownerId, scope, input, ct, Actor(ownerId, session));
         if (started.Value is not { } created)
             return Fail(started.ErrorCode, started.Recreate is null ? started.Error
                 : started.Error + ". Пересоздать клон может только человек — кнопкой «Пересоздать» у голоса в «Голосах».");

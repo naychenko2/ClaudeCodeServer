@@ -386,7 +386,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         // «настройки сцены → префы области → умолчание каталога» разворачивает исполнитель
         var quote = await _jobs.QuoteAsync(owner, scope,
             new VideoQuoteRequest(session.Id, sceneId, Str(args, "provider"), Str(args, "model"), count, duration,
-                null, Bool(args, "sound"), Format: shootFormat), ct);
+                null, Bool(args, "sound"), Format: shootFormat), ct, Actor(owner, session));
         if (quote.Value is not { } q) return Fail(quote.ErrorCode, quote.Error, quote.Retry);
         if (shootFormat is not null)
         {

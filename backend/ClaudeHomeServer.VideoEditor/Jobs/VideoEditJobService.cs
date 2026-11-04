@@ -154,7 +154,7 @@ public sealed class VideoEditJobService : IDisposable
     // ── Котировка ────────────────────────────────────────────────────────────────
 
     public async Task<VideoEditCallResult<VideoQuoteResponse>> QuoteAsync(
-        string ownerId, VideoEditScope scope, VideoQuoteRequest request, CancellationToken ct)
+        string ownerId, VideoEditScope scope, VideoQuoteRequest request, CancellationToken ct, string? actorId = null)
     {
         // Ревизия контекста: сцена и кадры берутся из стора, одноимённые поля запроса игнорируются
         VideoContextInputs? fromContext = null;
@@ -162,7 +162,7 @@ public sealed class VideoEditJobService : IDisposable
         {
             if (_context is null)
                 return Fail<VideoQuoteResponse>(VideoEditorErrors.ProviderUnavailable, VideoContextLaunch.UnavailableText);
-            var read = _context.Read(ownerId, scope, request.SessionId, revision);
+            var read = _context.Read(ownerId, scope, request.SessionId, revision, actorId);
             if (!read.Ok) return read.Fail<VideoQuoteResponse>();
             fromContext = VideoContextLaunch.Extract(read.State!);
             if (fromContext.SceneId is null)
@@ -320,10 +320,10 @@ public sealed class VideoEditJobService : IDisposable
         {
             if (_context is null)
                 return Fail<VideoJobCreated>(VideoEditorErrors.ProviderUnavailable, VideoContextLaunch.UnavailableText);
-            var read = _context.Read(ownerId, scope, input.SessionId, revision);
+            var read = _context.Read(ownerId, scope, input.SessionId, revision, actorId);
             if (!read.Ok) return read.Fail<VideoJobCreated>();
             if (quote.ContextRevision != revision)
-                return _context.Stale(ownerId, scope, input.SessionId).Fail<VideoJobCreated>();
+                return _context.Stale(ownerId, scope, input.SessionId, actorId).Fail<VideoJobCreated>();
             fromContext = VideoContextLaunch.Extract(read.State!);
             if (fromContext.SceneId is null)
                 return Fail<VideoJobCreated>(VideoEditorErrors.InvalidRequest, VideoContextLaunch.NotSceneText);

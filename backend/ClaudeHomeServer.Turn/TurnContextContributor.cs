@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.ChatContext;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Git;
 
@@ -76,15 +77,17 @@ public sealed class TurnContextContributor(
             return Task.FromResult<PromptSectionContribution?>(null);
         var session = sessionContext.Session;
         var project = session.ProjectId is { } pid ? projects.GetById(pid) : null;
-        var text = Compose(ownerId, session, project, sessionContext.RootPath);
+        // Актор хода — субъект приватности файлов проекта; реестр берём лениво (SessionManager сам собирает контрибьюторов)
+        var actor = services.GetService<ITurnActorRegistry>()?.Actor(session.Id, ownerId);
+        var text = Compose(ownerId, session, project, sessionContext.RootPath, actor);
         return Task.FromResult<PromptSectionContribution?>(new PromptSectionContribution(
             [new PromptSection(Key, text, Title, InTurnTail: true)]));
     }
 
     // Текст хвоста: единственная точка сборки, её же зовёт context_state агента — «тем же текстом, что хвост»
-    public string Compose(string ownerId, Session session, Project? project, string? rootPath)
+    public string Compose(string ownerId, Session session, Project? project, string? rootPath, string? actorId = null)
     {
-        var scope = new ContextScope(ownerId, session, project);
+        var scope = new ContextScope(ownerId, session, project, actorId);
         var state = store.Get(ownerId, session.Id);
         var dto = ChatContextDtoBuilder.Build(registry, scope, state);
         // Отключаемость (ADR-023 §4): элементы выключенной вертикали в хвост не идут, в DTO они остаются с missing

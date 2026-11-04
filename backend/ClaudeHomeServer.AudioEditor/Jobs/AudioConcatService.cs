@@ -66,7 +66,7 @@ public sealed class AudioConcatService(
         if (input.ContextRevision is { } revision)
         {
             if (context is null) return Fail(AudioEditErrorCodes.Unavailable, ChatContext.AudioContextLaunch.UnavailableText);
-            var read = context.Read(ownerId, scope, input.SessionId, revision);
+            var read = context.Read(ownerId, scope, input.SessionId, revision, actorId);
             if (!read.Ok) return read.Fail<AudioConcatResultDto>();
             requested = ChatContext.AudioContextLaunch.Extract(scope, read.State!, AudioEditJobService.OpName(AudioOp.Concat)).Pieces;
             if (requested.Count < AudioDspLimits.MinConcatPieces)

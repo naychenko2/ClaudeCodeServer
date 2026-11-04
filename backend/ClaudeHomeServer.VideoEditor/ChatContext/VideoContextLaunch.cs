@@ -44,7 +44,7 @@ public sealed class VideoContextLaunch(
     public const string NotFilmText = "Основной объект контекста — не этот фильм";
 
     // Сверить ревизию клиента со стором. Чат обязан быть из области запроса: чужой — как несуществующий
-    public VideoContextRead Read(string ownerId, VideoEditScope scope, string? sessionId, long revision)
+    public VideoContextRead Read(string ownerId, VideoEditScope scope, string? sessionId, long revision, string? actorId = null)
     {
         if (store is null || registry is null) return new(null, VideoEditorErrors.ProviderUnavailable, UnavailableText);
         if (string.IsNullOrWhiteSpace(sessionId)) return new(null, VideoEditorErrors.InvalidRequest, NoSessionText);
@@ -54,24 +54,24 @@ public sealed class VideoContextLaunch(
             && ((session = directory.GetById(id)) is null || VideoEditScope.Of(session).Key != scope.Key))
             return new(null, VideoEditorErrors.ChatNotFound, "Чат не найден");
         var state = store.Get(ownerId, id);
-        return state.Revision == revision ? new(state) : Stale(ownerId, scope, id, session, state);
+        return state.Revision == revision ? new(state) : Stale(ownerId, scope, id, session, state, actorId);
     }
 
     // Свежий DTO для тела 409 (ревизия котировки не совпала с запуском и т. п.)
-    public VideoContextRead Stale(string ownerId, VideoEditScope scope, string sessionId)
+    public VideoContextRead Stale(string ownerId, VideoEditScope scope, string sessionId, string? actorId = null)
     {
         if (store is null || registry is null) return new(null, VideoEditorErrors.ProviderUnavailable, UnavailableText);
         var id = sessionId.Trim();
-        return Stale(ownerId, scope, id, directory?.GetById(id), store.Get(ownerId, id));
+        return Stale(ownerId, scope, id, directory?.GetById(id), store.Get(ownerId, id), actorId);
     }
 
     private VideoContextRead Stale(string ownerId, VideoEditScope scope, string sessionId, Models.Session? session,
-        ChatContextState state)
+        ChatContextState state, string? actorId)
     {
         session ??= directory?.GetById(sessionId);
         if (session is null || registry is null)
             return new(null, VideoEditorErrors.ContextChanged, StaleText);
-        var dto = ChatContextDtoBuilder.Build(registry, new ContextScope(ownerId, session, scope.Project), state);
+        var dto = ChatContextDtoBuilder.Build(registry, new ContextScope(ownerId, session, scope.Project, actorId), state);
         return new(null, VideoEditorErrors.ContextChanged, StaleText, dto);
     }
 

@@ -126,12 +126,12 @@ public sealed class DspAudioEngine(
         if (input.ContextRevision is { } revision)
         {
             if (context is null) return Fail(AudioEditErrorCodes.Unavailable, ChatContext.AudioContextLaunch.UnavailableText);
-            var read = context.Read(ownerId, scope, input.SessionId, revision);
+            var read = context.Read(ownerId, scope, input.SessionId, revision, actorId);
             if (!read.Ok) return read.Fail<AudioDspVersionDto>();
             var inputs = ChatContext.AudioContextLaunch.Extract(scope, read.State!, null);
             // Нить маршрута сверяется со стором: основной объект сменился — это тот же 409, что и устаревшая ревизия
             if (inputs.ThreadId != input.ThreadId.Trim())
-                return context.Stale(ownerId, scope, input.SessionId).Fail<AudioDspVersionDto>();
+                return context.Stale(ownerId, scope, input.SessionId, actorId).Fail<AudioDspVersionDto>();
             baseVersionId = inputs.VersionId;
         }
         var (basis, error) = Base(ownerId, scope, input.SessionId, input.ThreadId, baseVersionId, input.Revision);

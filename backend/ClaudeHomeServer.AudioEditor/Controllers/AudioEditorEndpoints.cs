@@ -88,7 +88,7 @@ public abstract class AudioEditorEndpoints(
     {
         if (req is null || string.IsNullOrWhiteSpace(req.Mode))
             return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Не указан режим");
-        return Map(await jobs.QuoteAsync(Owner(scope), scope, req, ct), Ok);
+        return Map(await jobs.QuoteAsync(Owner(scope), scope, req, ct, UserId), Ok);
     }
 
     protected async Task<IActionResult> StartIn(AudioEditScope scope, AudioStartJobForm form, CancellationToken ct)
@@ -103,7 +103,7 @@ public abstract class AudioEditorEndpoints(
         {
             if (context is null) return Error(StatusCodes.Status503ServiceUnavailable, AudioEditErrorCodes.Unavailable,
                 ChatContext.AudioContextLaunch.UnavailableText);
-            var read = context.Read(Owner(scope), scope, form.SessionId, revision);
+            var read = context.Read(Owner(scope), scope, form.SessionId, revision, UserId);
             if (!read.Ok) return Map(read.Fail<object>(), Ok);
             fromContext = ChatContext.AudioContextLaunch.Extract(scope, read.State!, AudioEditJobService.OpName(quote.Op));
             form.ThreadId = fromContext.ThreadId;
@@ -226,7 +226,7 @@ public abstract class AudioEditorEndpoints(
             Seed: form.Seed,
             Voice: form.Voice,
             ContextRevision: form.ContextRevision);
-        return Map(await jobs.StartAsync(Owner(scope), scope, input, ct), created => StatusCode(StatusCodes.Status202Accepted, created));
+        return Map(await jobs.StartAsync(Owner(scope), scope, input, ct, UserId), created => StatusCode(StatusCodes.Status202Accepted, created));
     }
 
     protected IActionResult JobIn(AudioEditScope scope, string jobId) =>

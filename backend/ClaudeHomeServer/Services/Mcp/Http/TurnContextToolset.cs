@@ -110,7 +110,7 @@ public sealed class TurnContextToolset(
     private McpToolCallResult State(string ownerId, Session session)
     {
         var project = ProjectOf(session);
-        var body = text.Compose(ownerId, session, project, project?.RootPath);
+        var body = text.Compose(ownerId, session, project, project?.RootPath, turnActors?.Actor(session.Id, ownerId));
         return new(body);
     }
 
@@ -151,7 +151,7 @@ public sealed class TurnContextToolset(
             var state = store.AddRef(ownerId, session.Id, item, null);
             var stored = state.Refs.FirstOrDefault(i => i.Kind == kind && JsonNode.DeepEquals(i.Ref, item.Ref) && i.Role == role)
                 ?? state.Primary;
-            return new($"Референс добавлен (itemId {stored?.Id ?? item.Id}). Теперь контекст:\n" + text.Compose(ownerId, session, project, project?.RootPath));
+            return new($"Референс добавлен (itemId {stored?.Id ?? item.Id}). Теперь контекст:\n" + text.Compose(ownerId, session, project, project?.RootPath, turnActors?.Actor(session.Id, ownerId)));
         }
         catch (ChatContextException ex)
         {
@@ -170,7 +170,7 @@ public sealed class TurnContextToolset(
         if (!store.Get(ownerId, session.Id).Refs.Any(i => i.Id == itemId))
             return Deny($"Референса {itemId} в контексте нет. Основной объект снимается через image_focus / audio_focus.");
         store.RemoveRef(ownerId, session.Id, itemId, null);
-        return new("Референс убран. Теперь контекст:\n" + text.Compose(ownerId, session, project, project?.RootPath));
+        return new("Референс убран. Теперь контекст:\n" + text.Compose(ownerId, session, project, project?.RootPath, turnActors?.Actor(session.Id, ownerId)));
     }
 
     // Изменять контекст может только ход, который видит человек; без гейта — отказ по построению

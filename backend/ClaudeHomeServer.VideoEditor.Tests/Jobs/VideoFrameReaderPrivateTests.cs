@@ -73,4 +73,19 @@ public sealed class VideoFrameReaderPrivateTests : IDisposable
         frame.ErrorCode.Should().BeNull(path + " " + frame.Error);
         frame.Bytes!.Bytes.Should().NotBeEmpty(path);
     }
+
+    // F2-P2i: в общем проекте арендатор и вызывающий расходятся — private судит вызывающий
+    [Theory]
+    [InlineData("member-a", ".cc-attachments/private/member-a/g1/own.png", true)]
+    [InlineData("member-a", ".cc-attachments/private/u1/g1/mine.png", false)]
+    public async Task Private_в_общем_проекте_судит_актор_а_не_арендатор(string actor, string path, bool readable)
+    {
+        var own = Path.Combine(_project, ".cc-attachments", "private", "member-a", "g1");
+        Directory.CreateDirectory(own);
+        File.WriteAllBytes(Path.Combine(own, "own.png"), [5, 5]);
+
+        var frame = await new VideoFrameReader().ReadAsync(Owner, actor, _scope, FrameRef.File(path), default);
+
+        (frame.ErrorCode is null).Should().Be(readable, path + " " + frame.Error);
+    }
 }

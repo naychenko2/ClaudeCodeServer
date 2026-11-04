@@ -76,7 +76,7 @@ public class FilmController(
         if (context is null)
             return StatusCode(StatusCodes.Status503ServiceUnavailable,
                 new { error = ChatContext.VideoContextLaunch.UnavailableText, code = VideoEditorErrors.ProviderUnavailable });
-        var read = context.Read(Tenant(scope), scope, sessionId, revision);
+        var read = context.Read(Tenant(scope), scope, sessionId, revision, UserId);
         if (!read.Ok)
             return read.Fresh is { } fresh
                 ? StatusCode(StatusCodes.Status409Conflict, new Protocol.ChatContextConflictDto(read.ErrorCode!, fresh))

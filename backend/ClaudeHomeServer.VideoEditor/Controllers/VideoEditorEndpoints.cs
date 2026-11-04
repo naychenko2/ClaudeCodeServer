@@ -72,7 +72,7 @@ public abstract class VideoEditorEndpoints(
             || (req.ContextRevision is null && string.IsNullOrWhiteSpace(req.SceneId)))
             return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Не указана сцена");
         return Map(await jobs.QuoteAsync(Tenant(scope), scope,
-            req with { SessionId = req.SessionId.Trim(), SceneId = req.SceneId?.Trim() ?? "" }, ct), Ok);
+            req with { SessionId = req.SessionId.Trim(), SceneId = req.SceneId?.Trim() ?? "" }, ct, UserId), Ok);
     }
 
     // Запуск человека: Initiator из тела игнорируется — агент запускает через тулсет, а не ручкой

@@ -158,7 +158,7 @@ public sealed class AudioEditJobService : IDisposable
     // ── Котировка ────────────────────────────────────────────────────────────────
 
     public async Task<AudioEditCallResult<AudioQuoteDto>> QuoteAsync(
-        string ownerId, AudioEditScope scope, AudioQuoteRequest request, CancellationToken ct)
+        string ownerId, AudioEditScope scope, AudioQuoteRequest request, CancellationToken ct, string? actorId = null)
     {
         if (!AudioModes.IsValid(request.Mode))
             return Fail<AudioQuoteDto>(AudioEditErrorCodes.InvalidRequest, $"Неизвестный режим: {request.Mode}");
@@ -171,7 +171,7 @@ public sealed class AudioEditJobService : IDisposable
         {
             if (_context is null)
                 return Fail<AudioQuoteDto>(AudioEditErrorCodes.Unavailable, ChatContext.AudioContextLaunch.UnavailableText);
-            var read = _context.Read(ownerId, scope, request.SessionId, revision);
+            var read = _context.Read(ownerId, scope, request.SessionId, revision, actorId);
             if (!read.Ok) return read.Fail<AudioQuoteDto>();
             contextState = read.State;
             requestThreadId = ChatContext.AudioContextLaunch.Extract(scope, contextState!, null).ThreadId;
@@ -323,7 +323,7 @@ public sealed class AudioEditJobService : IDisposable
     // ── Запуск ───────────────────────────────────────────────────────────────────
 
     public async Task<AudioEditCallResult<AudioJobCreatedDto>> StartAsync(
-        string ownerId, AudioEditScope scope, AudioJobInput input, CancellationToken ct)
+        string ownerId, AudioEditScope scope, AudioJobInput input, CancellationToken ct, string? actorId = null)
     {
         if (!_quotes.TryGetValue(input.QuoteId, out var quote)
             || quote.OwnerId != ownerId || quote.ScopeKey != scope.Key || quote.ExpiresAt < Now())
@@ -334,10 +334,10 @@ public sealed class AudioEditJobService : IDisposable
         {
             if (_context is null)
                 return Fail<AudioJobCreatedDto>(AudioEditErrorCodes.Unavailable, ChatContext.AudioContextLaunch.UnavailableText);
-            var read = _context.Read(ownerId, scope, input.SessionId, revision);
+            var read = _context.Read(ownerId, scope, input.SessionId, revision, actorId);
             if (!read.Ok) return read.Fail<AudioJobCreatedDto>();
             if (quote.ContextRevision != revision)
-                return _context.Stale(ownerId, scope, input.SessionId!).Fail<AudioJobCreatedDto>();
+                return _context.Stale(ownerId, scope, input.SessionId!, actorId).Fail<AudioJobCreatedDto>();
             // Нить, версия-основа и голос — из стора; одноимённые поля тела игнорируются
             var fromContext = ChatContext.AudioContextLaunch.Extract(scope, read.State!, OpName(quote.Op));
             input = input with { ThreadId = fromContext.ThreadId, BaseVersionId = fromContext.VersionId, Voice = fromContext.VoiceRef };

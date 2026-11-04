@@ -227,6 +227,22 @@ public sealed class FilmSceneSaverTests : IDisposable
         version.Should().NotBeNull();
     }
 
+    // F2-P2i: субъект приватности кадра-нити — вызывающий, а не арендатор (в общем проекте они расходятся)
+    [Fact]
+    public async Task Кадр_нити_читается_от_имени_актора_а_не_арендатора()
+    {
+        var settings = new VideoSceneSettingsDto(FrameRef.Image("t1", "v1"), null, "Камера", "fal", "veo", 5, "16:9", false, 1);
+        var (scene, version) = _w.SceneWithClip(settings: settings);
+        var images = new FakeFrames(new ImageFrame([8, 8, 8], "image/png"));
+
+        var result = await Saver(images).SaveAsync(Owner, "member-a", _w.Scope,
+            new SaveSceneRequest(Session, scene.SceneId, version.VersionId, null, null), VideoInitiators.Human, default);
+
+        result.IsOk.Should().BeTrue(result.Error);
+        images.Asked.Should().Equal((Owner, "t1", "v1"));
+        images.Actors.Should().Equal("member-a");
+    }
+
     [Fact]
     public async Task Сохранение_агентом_ставит_пометку_Claude_на_новой_строке()
     {
@@ -240,10 +256,12 @@ public sealed class FilmSceneSaverTests : IDisposable
     private sealed class FakeFrames(ImageFrame? frame) : IImageFrameSource
     {
         public List<(string, string, string)> Asked { get; } = [];
+        public List<string?> Actors { get; } = [];
 
         public Task<ImageFrame?> GetAsync(string ownerId, string? actorId, string threadId, string versionId, CancellationToken ct)
         {
             Asked.Add((ownerId, threadId, versionId));
+            Actors.Add(actorId);
             return Task.FromResult(frame);
         }
 

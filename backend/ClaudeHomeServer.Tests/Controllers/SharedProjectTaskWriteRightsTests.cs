@@ -29,7 +29,10 @@ namespace ClaudeHomeServer.Tests.Controllers;
 ///
 /// Фичевые поля и жизненный цикл фичи — отдельная линия (возврат ревью R-F2-T1): дверь
 /// WriteContent открыта редактору, но она не отдаёт ему ведение фичи арендатора. Роль, фичу,
-/// план, связь с ревью, вердикт/свидетельства и статус задачи-эпика правит только владелец
+/// план, связь с ревью и статус задачи-эпика правит только владелец; вердикт и свидетельства —
+/// фичевые поля только у задачи фичи (её Role или FeatureId заданы), у обычной задачи и дефекта
+/// это исполнительские поля (возврат дельта-ревью c2b408f8: фронт шлёт verification при каждом
+/// сохранении, и безусловный гейт закрывал редактору даже обычный дефект).
 /// (FeatureOwnerGate — один предикат на REST PUT и на MCP tasks_update/tasks_complete);
 /// статус обычной задачи, заголовок, описание, подзадачи, колонка, порядок, исполнитель и срок
 /// остаются редактору.
@@ -479,6 +482,54 @@ public class SharedProjectTaskWriteRightsTests : IClassFixture<TestWebApplicatio
         isError.Should().BeTrue(text);
         text.Should().Contain(NotFeatureOwner, "тот же предикат, что у tasks_update и REST PUT");
         Tasks.GetById(epicId)!.Status.Should().Be(TaskItemStatus.Todo, "задача цела: отказ до мутации");
+    }
+
+    [Fact]
+    public async Task РедакторЗакрываетОбычныйДефектСВердиком_200_ВердикЗаписан()
+    {
+        // Возврат дельта-ревью c2b408f8: TaskEditForm шлёт verification при каждом сохранении
+        // карточки, и безусловный гейт закрывал редактору даже обычный дефект с заметкой
+        // проверки — он не мог сохранить даже заголовок. Вердикт вне фичи — исполнительское поле.
+        var (projectId, _) = await ArrangeAsync(Editor);
+        var defectId = IdOf(await (await OwnerClient().PostAsJsonAsync($"/api/projects/{projectId}/tasks",
+            new { title = "Обычный дефект" + Guid.NewGuid().ToString("N")[..6], kind = "defect",
+                  repro = new { steps = "Открыть карточку дефекта" } })).Content.ReadAsStringAsync());
+
+        var (status, code) = await SendAsync(SecondClient(), HttpMethod.Put, $"/api/tasks/{defectId}",
+            new { kind = "defect", status = "done",
+                  verification = new { notes = "Проверено: дефект не воспроизводится" } });
+
+        status.Should().Be(200, $"редактор закрывает обычный дефект с заметкой проверки (code={code})");
+        var closed = Tasks.GetById(defectId)!;
+        closed.Status.Should().Be(TaskItemStatus.Done);
+        closed.Verification?.Notes.Should().Be("Проверено: дефект не воспроизводится",
+            "вердикт записан, а не отброшен молча");
+    }
+
+    [Fact]
+    public async Task РедакторНеСтавитВердикШагуФичи_403featureOwner_ЗаписьЦела_ВладелецМожет()
+    {
+        // Вторая половина той же правки: у задачи фичи (Role/FeatureId заданы) вердикт и
+        // свидетельства остаются закрытыми — их ведёт постановщик фичи.
+        var (projectId, _) = await ArrangeAsync(Editor);
+        var epicId = await SharedEpicAsync(projectId);
+        var stepId = IdOf(await (await OwnerClient().PostAsJsonAsync($"/api/projects/{projectId}/tasks",
+            new { title = "Шаг фичи" + Guid.NewGuid().ToString("N")[..6], role = "step",
+                  featureId = epicId, stepRef = "T1", lane = "back" })).Content.ReadAsStringAsync());
+
+        var (status, code) = await SendAsync(SecondClient(), HttpMethod.Put, $"/api/tasks/{stepId}",
+            new { verification = new { notes = "вердикт редактора" },
+                  evidence = new[] { new { criterionId = "c1", how = "прогон", result = "зелёный" } } });
+
+        status.Should().Be(403);
+        code.Should().Be(NotFeatureOwner, "вердикт и свидетельства шага фичи — решение постановщика");
+        Tasks.GetById(stepId)!.Verification.Should().BeNull("отказ до мутации");
+        Tasks.GetById(stepId)!.Evidence.Should().BeEmpty();
+
+        (await SendAsync(OwnerClient(), HttpMethod.Put, $"/api/tasks/{stepId}",
+            new { verification = new { notes = "вердикт владельца" } })).Status.Should().Be(200,
+            "фичу ведёт владелец");
+        Tasks.GetById(stepId)!.Verification?.Notes.Should().Be("вердикт владельца");
     }
 
     // ── мост «чекбокс заметки → задача»: агентская дверь по актору хода (возврат ревью R-F2-D1) ──

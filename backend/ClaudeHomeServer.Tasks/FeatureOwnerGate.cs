@@ -23,16 +23,23 @@ public static class FeatureOwnerGate
         "Фичевые поля и жизненный цикл фичи — только владелец проекта";
 
     /// <summary>
-    /// Трогает ли запрос фичевые поля или жизнь фичи: role / featureId / planSteps / reviewOf /
-    /// verification / evidence — прислано любое из них, включая сброс (пустая строка, пустой
-    /// список): снять роль или снять связь с ревью — тоже решение по фиче. Плюс смена статуса
-    /// задачи-эпика (role=feature) в любую сторону: закрытие и возобновление эпика решают
-    /// состояние фичи. Статус обычной задачи (в том числе шага фичи) — исполнительское поле,
-    /// его правит редактор: оно здесь не участвует.
+    /// Трогает ли запрос фичевые поля или жизнь фичи: role / featureId / planSteps / reviewOf —
+    /// прислано любое из них, включая сброс (пустая строка, пустой список): снять роль или снять
+    /// связь с ревью — тоже решение по фиче. Плюс смена статуса задачи-эпика (role=feature) в
+    /// любую сторону: закрытие и возобновление эпика решают состояние фичи. Статус обычной задачи
+    /// (в том числе шага фичи) — исполнительское поле, его правит редактор: оно здесь не участвует.
+    ///
+    /// verification / evidence — фичевые поля ТОЛЬКО у задачи фичи (её Role или FeatureId заданы):
+    /// вердикт и свидетельства шага/ревью ведёт постановщик фичи. У обычной задачи и дефекта вне
+    /// фичи это исполнительские поля: фронт шлёт verification при каждом сохранении карточки
+    /// (TaskEditForm), и без этой оговорки редактор общего проекта не мог закрыть обычный дефект
+    /// с заметкой проверки (возврат дельта-ревью c2b408f8).
     /// </summary>
     public static bool Touches(UpdateTaskRequest req, TaskItem task) =>
         req.Role is not null || req.FeatureId is not null || req.PlanSteps is not null
-        || req.ReviewOf is not null || req.Verification is not null || req.Evidence is not null
+        || req.ReviewOf is not null
+        || (task.Role is not null || task.FeatureId is not null)
+            && (req.Verification is not null || req.Evidence is not null)
         || (task.Role == TaskRoles.Feature && req.Status is not null && req.Status != task.Status);
 
     /// <summary>

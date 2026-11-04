@@ -79,15 +79,17 @@ public class FallbackTurnOwnerSubstitutionLimitTests : IDisposable
     [Fact]
     public void ЧатВнеПроекта_ВладелецХодаРавенInfoOwner_ПотолокПрежний()
     {
-        var sut = Build(sessionOwnerId: Tenant, turnOwnerId: null);
+        var sut = Build(sessionOwnerId: Tenant, turnOwnerId: Tenant);
 
         Assert.Equal(5, sut.EffectiveMaxSubstitutions());
     }
 
+    // Боевой кейс: владелец есть, личного слота нет → global. Фабрика всегда передаёт непустой
+    // TurnOwnerId, поэтому «ни владельца сессии, ни владельца хода» в бою недостижимо.
     [Fact]
-    public void БезВладельцаВовсе_ГлобальныйПотолок()
+    public void ВладелецЕсть_ЛичногоСлотаНет_ГлобальныйПотолок()
     {
-        var sut = Build(sessionOwnerId: null, turnOwnerId: null);
+        var sut = Build(sessionOwnerId: null, turnOwnerId: "tenant-without-slot");
 
         Assert.Equal(2, sut.EffectiveMaxSubstitutions());
     }

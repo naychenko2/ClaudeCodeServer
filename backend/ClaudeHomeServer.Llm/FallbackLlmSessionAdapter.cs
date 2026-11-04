@@ -208,9 +208,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
     private void LogDebug(string message) => _log?.LogDebug("[ModelFallback] {FallbackStep}", message);
 
-    // Эффективный потолок подмен для владельца сессии: per-owner → global → дефолт 3
-    // (FallbackSettingsStore.ClampMaxSubstitutions). Ключ — владелец хода (_turnOwnerId):
-    // Info.OwnerId у проектной сессии пуст по контракту, и по нему читался бы global-слой.
+    // Эффективный потолок подмен для владельца ХОДА: личный слот → global → дефолт 4
+    // (FallbackSettingsStore.DefaultMaxSubstitutions), значение клампится ClampMaxSubstitutions.
+    // Ключ — _turnOwnerId (у проектного чата это арендатор): Info.OwnerId у проектной сессии
+    // пуст по контракту, и по нему читался бы global-слой.
     internal int EffectiveMaxSubstitutions() =>
         _fallbackSettings?.ResolveMaxSubstitutions(_turnOwnerId)
         ?? FallbackSettingsStore.DefaultMaxSubstitutions;

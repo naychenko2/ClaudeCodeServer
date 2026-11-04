@@ -19,7 +19,8 @@ namespace ClaudeHomeServer.Controllers;
 public class SpecialtiesController(
     SpecialtySettingsStore settings,
     FallbackSettingsStore fallback,
-    PersonaManager personas) : ControllerBase
+    PersonaManager personas,
+    SessionManager sessions) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -100,16 +101,24 @@ public class SpecialtiesController(
     // у слоя — defaultSpecialty («любая специальность»). Слой сериализуется как есть
     // (SpecialtySettingsLayer), пресеты разворачиваются в плоский список со steps.
     [HttpGet("settings")]
-    public IActionResult GetSettings()
+    public IActionResult GetSettings([FromQuery] string? sessionId = null)
     {
+        // Бой считает потолок по владельцу ХОДА (у проектного чата — арендатор), поэтому при
+        // заданном чате ключ берётся из его области доступа, а не из id вызывающего: иначе
+        // участник видит свой личный слот, а ход идёт по слоту арендатора. Нет чата или он
+        // недоступен — личный слот вызывающего (экран настроек вне чата).
+        var budgetOwnerId = !string.IsNullOrEmpty(sessionId)
+            && sessions.GetAccessible(sessionId, UserId) is { } accessible
+                ? accessible.Scope.TenantOwnerId
+                : UserId;
         return Ok(new
         {
             version = SpecialtySettingsStore.FormatVersion,
             // Эффективный бюджет подмен цепочки хода (ADR-007 §4): per-owner → global →
-            // дефолт, значение клампится в 1..HardMaxSubstitutions (FallbackSettingsStore).
+            // дефолт по владельцу хода (см. выше), значение клампится в 1..HardMaxSubstitutions (FallbackSettingsStore).
             // Фронт приглушает шаги пресета за этим пределом как «обычно не используется» —
             // без этого числа UI хардкодил дефолт и считал приглушение от неверного потолка.
-            maxSubstitutions = fallback.ResolveMaxSubstitutions(UserId),
+            maxSubstitutions = fallback.ResolveMaxSubstitutions(budgetOwnerId),
             global = settings.Snapshot.Global,
             presets = settings.EffectivePresetsWithScope(UserId).Select(e => new
             {

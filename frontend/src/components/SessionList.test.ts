@@ -1,4 +1,4 @@
-// Кламп groupBy в SessionList (Минор 1 по R4): при выключенном флаге features-overview
+// Кламп groupBy в SessionList (Минор 1 по R4): недоступный режим
 // сохранённый в localStorage groupBy='features' не должен уводить список в режим фич
 // (иначе — EmptyState «Фич пока нет» без пункта «Фичи» в тулбаре). Клампим к 'days',
 // как 'subjects' в глобальном списке (ChatList.tsx); при включённом флаге значение
@@ -67,11 +67,10 @@ const project: Project = {
   tagRegistry: [], subjectRegistry: [], subjectsSweepSince: null,
 } as Project;
 
-// Рендер списка: флаг features-overview + groupBy, сохранённый в хранилище.
+// Рендер списка: groupBy, сохранённый в хранилище.
 // Индекс фич сбрасываем в EMPTY — в режиме фич это даёт «Фич пока нет».
-function renderList(featuresOn: boolean, storedGroupBy: string): string {
+function renderList(_featuresOn: boolean, storedGroupBy: string): string {
   store.clear();
-  setAllFlags({ 'features-overview': featuresOn });
   featuresIndexTest.reset();
   store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: storedGroupBy, sortOrder: 'newest' }));
   return renderToStaticMarkup(

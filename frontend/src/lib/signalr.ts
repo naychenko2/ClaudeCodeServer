@@ -282,7 +282,7 @@ export function onProjectAccessRevoked(handler: (data: { projectId: string; owne
   return () => conn.off('project_access_revoked', handler);
 }
 
-// Живые метрики локальной модели (флаг local-model-stats): тиковый снимок состояния
+// Живые метрики локальной модели: тиковый снимок состояния
 // генерации (local_model_live) и итог завершённого хода (local_model_turn_stats). Оба
 // эфемерные (в историю не пишутся) и приходят в группу сессии — подписчик фильтрует по
 // sessionId, как и остальные события хода. Чат не на локальной модели — событий просто нет.

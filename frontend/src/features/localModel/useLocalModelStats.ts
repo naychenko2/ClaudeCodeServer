@@ -34,7 +34,7 @@ export function makeStatsFetch(
 
 // === Условие показа значка и панели ===
 // Админ: флаг фичи + configured (как раньше). Не-админ: только configured === true —
-// флаг local-model-stats его не гейтит, панель доступна всем, когда настроен ComfyUI.
+//  его не гейтит, панель доступна всем, когда настроен ComfyUI.
 // configured === null — сервер ещё не ответил: значка нет, но и «не настроена» ещё не значит.
 export function isLocalModelPanelVisible(p: { flag: boolean; isAdmin: boolean; configured: boolean | null }): boolean {
   if (p.isAdmin) return p.flag && p.configured === true;

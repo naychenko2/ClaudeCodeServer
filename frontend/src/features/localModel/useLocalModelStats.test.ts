@@ -33,7 +33,7 @@ describe('isLocalModelPanelVisible: видимость панели', () => {
   it('admin: configured: null — сервер ещё не ответил, нет', () => {
     expect(isLocalModelPanelVisible({ flag: true, isAdmin: true, configured: null })).toBe(false);
   });
-  // Не-админ: только configured (флаг local-model-stats его не гейтит)
+  // Не-админ: только configured ( его не гейтит)
   it('не admin: configured: true — показывается, флаг не важен', () => {
     expect(isLocalModelPanelVisible({ flag: true, isAdmin: false, configured: true })).toBe(true);
     expect(isLocalModelPanelVisible({ flag: false, isAdmin: false, configured: true })).toBe(true);

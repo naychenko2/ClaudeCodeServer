@@ -1207,7 +1207,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
     case 'local_turn_queue': {
       // Ход ждёт свободный слот локальной модели (гейт допуска). Строка live-only и единственная
       // на ход: сдвиг позиции обновит стоящую строку (второй под тем же смыслом не плодится),
-      // position=0 снимает её (допущен/отказан/остановлен). Вне флага local-model-stats —
+      // position=0 снимает её (допущен/отказан/остановлен). Вне  —
       // человек обязан видеть ожидание, а не «виснет молча».
       if (msg.position <= 0) {
         return prev.items.some(it => it.kind === 'local_turn_queue')

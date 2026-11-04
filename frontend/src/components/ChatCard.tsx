@@ -150,7 +150,7 @@ function TeamImplementMarker({ session }: { session: Session }) {
 
 // Метка фичи в строке чата (макет features-overview.html, «Дни»: глиф + название,
 // обрезка с title). Показывается для чата, принадлежащего фиче, под флагом
-// features-overview — вместо имени персоны. Глиф — по состоянию фичи
+// «Обзор фич» — вместо имени персоны. Глиф — по состоянию фичи
 // (featureDisplayState: wait/stopped/run/loop/closed/done).
 export function FeatureLabel({ feature }: { feature: FeatureIndexFeature }) {
   const st = featureDisplayState(feature);

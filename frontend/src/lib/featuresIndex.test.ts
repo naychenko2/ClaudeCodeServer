@@ -338,7 +338,7 @@ describe('несколько потребителей: выключенный н
     await flush();
     expect(__test.snapshotFor('p1')).toBe(FIXTURE);
     // Данные доходят: лукап видит чаты фикстуры (сценарий — фасет «Фичи» SessionList
-    // при выключенной плашке: dark launch, turn-plan-feature-mode off).
+    // при выключенной плашке: dark launch,).
     expect(featureOf('chat-cur').map(e => e.feature.featureId)).toEqual(['feat-closed', 'feat-attention', 'feat-running']);
     // Проект остаётся «активным» (включённый потребитель на месте).
     expect(__test.active().has('p1')).toBe(true);

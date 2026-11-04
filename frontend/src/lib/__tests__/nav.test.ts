@@ -17,7 +17,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { parseHash, navPush, type NavSnapshot } from '../nav';
-import { setAllFlags, __test as flagsTest, FLAGS } from '../featureFlags';
+import { setAllFlags, __test as flagsTest } from '../featureFlags';
 
 // Минимальный снимок проекта — нужен только для экрана 'project', в этом тесте
 // используется лишь как заполнитель типа (NavSnapshot.project обязателен).
@@ -164,7 +164,6 @@ describe('nav: страница фичи (#/project/{id}/feature/{fid})', () => 
   let originalWindow: unknown;
 
   beforeEach(() => {
-    setAllFlags({ [FLAGS.featuresOverview]: true });
     pushStateMock = vi.fn();
     originalWindow = (globalThis as { window?: unknown }).window;
     (globalThis as { window?: unknown }).window = {
@@ -187,13 +186,6 @@ describe('nav: страница фичи (#/project/{id}/feature/{fid})', () => 
   });
 
   it('parseHash: #/project/{id}/feature/{fid} → featureId (флаг включён)', () => {
-    expect(parseHash('#/project/p1/feature/f1')).toEqual({ screen: 'project', projectId: 'p1', featureId: 'f1' });
-  });
-
-  // M1: parseHash НЕ гейтит по флагу — featureId сохраняется, даже когда флаг выключен.
-  // Мутация «вернуть гейт по флагу в parseHash» красит этот тест (featureId пропадает).
-  it('M1: parseHash сохраняет featureId при выключенном флаге (гейт — в toHash/WorkspacePage)', () => {
-    setAllFlags({ [FLAGS.featuresOverview]: false });
     expect(parseHash('#/project/p1/feature/f1')).toEqual({ screen: 'project', projectId: 'p1', featureId: 'f1' });
   });
 

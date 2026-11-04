@@ -1099,7 +1099,7 @@ export function RingPillBadge(props: {
           )}
         </span>
         {/* Циферблат кэша — справа от лица, через разделитель; сам по себе не кнопка,
-            цель клика — вся пилюля (F-1b). Только за фич-флагом prompt-cache (дефект QA) */}
+            цель клика — вся пилюля (F-1b). Только  (дефект QA) */}
         {cache && <CacheDial state={cache} isWaiting={props.isWaiting} isMobile={isMobile} warnThresholds={warn} />}
       </>}
       isMobile={isMobile}
@@ -1142,7 +1142,7 @@ export function RingPillBadge(props: {
         </div>
       )}
       {showCtx && <ContextActions {...props} />}
-      {/* Секция «Кэш промпта» целиком — за фич-флагом prompt-cache (дефект QA): при
+      {/* Секция «Кэш промпта» целиком —  (дефект QA): при
           выключенном нет ни секции, ни кнопки порогов, хотя данные кэша приходят с бэка */}
       {cache && (
         <div style={(lmActive || wfActive || showCtx || showCost) ? sectionDivider : undefined}>

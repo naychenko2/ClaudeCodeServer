@@ -29,7 +29,7 @@ export interface GlyphCandidate {
   name?: string | null;
 }
 
-// === «Локальные модели» (фича local-model-stats) ===
+// === «Локальные модели» ===
 //
 // DTO REST-ручек: LocalModelStatsController (снимок панели и список движков, только
 // админ — настройка глобальная) и SessionLocalModelController (итог последнего хода
@@ -131,7 +131,7 @@ export interface LocalModelStats {
 //
 // Ключ словаря движков: 'main' — основной стенд (то, что было до фичи), имя движка LocalEngines (например 'gemma') —
 // llama-server на Video. Ключ — только ключ: URL из него не строится никогда.
-// Обе ручки: админ (иначе 403), флаг local-model-stats на сервере (иначе 404);
+// Обе ручки: админ (иначе 403),  на сервере (иначе 404);
 // неизвестный движок или выключенная Llm → configured:false, 200; 500 — нигде.
 
 // 'main' — основной стенд; любое другое — имя движка LocalEngines из конфига сервера (например 'gemma').
@@ -354,7 +354,7 @@ export interface MediaDone {
 // 7 дней на диске, переживает рестарты. Запись — один прогон ComfyUI по prompt_id;
 // события журнала (enqueued/started/finished) бэкенд склеивает. В отличие от прочих
 // ручек фичи: времена — ISO-8601 UTC (не unix-мс), и обе ручки проверяют и роль
-// admin (403), и серверный флаг local-model-stats (без него — 404).
+// admin (403), и серверный  (без него — 404).
 // owner — логин владельца; название чата/проекта и sessionId/projectId НЕ отдаются
 // ни у чужих, ни у своих записей (строка и карточка одинаковы для всех).
 export interface MediaHistoryRecord {
@@ -611,7 +611,7 @@ const PREVIEW_START_TIMEOUT_MS = DEV_SERVER_PORT_WAIT_MS + 30_000;
 // за N с»), а не OfflineError, и приложение не уводится в офлайн (offline.ts:423–447).
 const CONTINUE_TIMEOUT_MS = 16 * 60 * 1000;
 
-// Потолок ожидания «Перенести в новый чат» (фича prompt-cache, шаг F-4): тёплый путь —
+// Потолок ожидания «Перенести в новый чат» (фича, шаг F-4): тёплый путь —
 // видимый ход самого чата, бэкенд ждёт его до WarmTurnTimeout = 5 мин (ChatHandoffService.cs);
 // холодный — быстрый раннер по транскрипту. Берём 6 мин: обрыв по этому таймауту —
 // RequestTimeoutError, а не OfflineError (тот же приём, что у CONTINUE_TIMEOUT_MS).
@@ -1195,7 +1195,7 @@ export const api = {
         { method: 'POST', body: JSON.stringify({ preset }) }),
   },
 
-  // «Локальные модели» (фича local-model-stats): снимок панели — только админ
+  // «Локальные модели»: снимок панели — только админ
   // (настройка глобальная), итог последнего хода чата — его владелец. DTO — записи
   // LocalModelStatsController / SessionLocalModelController (типы выше).
   localModel: {
@@ -2940,7 +2940,7 @@ export const api = {
         `/chats/${id}/continue`,
         { method: 'POST', body: JSON.stringify(note ? { note } : {}), timeoutMs: CONTINUE_TIMEOUT_MS },
       ),
-    // «Перенести в новый чат» (фича prompt-cache, шаг F-4): путь выбирает сервер — тёплый
+    // «Перенести в новый чат» (фича, шаг F-4): путь выбирает сервер — тёплый
     // (записку пишет сам чат, пока его кэш тёплый) или холодный (её собирает дешёвый раннер
     // по транскрипту). Ответ — id нового чата, его проект и черновик композера. 409 — чат
     // занят/повторный клик/не тот тип чата, 502 — модель не дала записку; текст ошибки

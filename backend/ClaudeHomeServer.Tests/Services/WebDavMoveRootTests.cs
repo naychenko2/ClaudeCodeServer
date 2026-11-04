@@ -23,6 +23,8 @@ namespace ClaudeHomeServer.Tests.Services;
 public class WebDavMoveRootTests : IDisposable
 {
     private const string Project = "p1";
+    // Пользователь WebDAV (S2d-6b-3): COPY/MOVE сверяют пути с его приватными вложениями
+    private const string DavUser = "u1";
     private readonly string _home = Path.Combine(Path.GetTempPath(), "webdav-move-root-" + Guid.NewGuid().ToString("N"));
     private readonly string _root;    // корень проекта — не содержит data/
     private readonly string _dataDir; // data-корень — соседний, тот же резолв от DataPath, что у FileService
@@ -72,7 +74,7 @@ public class WebDavMoveRootTests : IDisposable
         var ctx = Ctx();
         SetMoveDestination(ctx, ""); // URI корня со завершающим слэшем → ParseDestination отдаёт ""
         ctx.Request.Headers["Overwrite"] = "T";
-        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project);
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project, DavUser);
 
         ctx.Response.StatusCode.Should().Be(403);
         Directory.Exists(_root).Should().BeTrue();  // проект цел: отказ до любого следа на диске
@@ -93,7 +95,7 @@ public class WebDavMoveRootTests : IDisposable
 
         var ctx = Ctx();
         SetMoveDestination(ctx, "docs/b.txt");
-        WebDavHandler.HandleMove(ctx, new FileService(), _root, "", Project);
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "", Project, DavUser);
 
         ctx.Response.StatusCode.Should().Be(403);
         Directory.Exists(_root).Should().BeTrue();
@@ -130,7 +132,7 @@ public class WebDavMoveRootTests : IDisposable
         var ctx = Ctx();
         SetMoveDestination(ctx, destTail);
         ctx.Request.Headers["Overwrite"] = "T";
-        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project);
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project, DavUser);
 
         ctx.Response.StatusCode.Should().Be(expected);
         Directory.Exists(_root).Should().BeTrue();  // проект цел: отказ до любого следа на диске
@@ -151,7 +153,7 @@ public class WebDavMoveRootTests : IDisposable
 
         var ctx = Ctx();
         SetMoveDestination(ctx, "docs/b.txt");
-        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/..", Project);
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/..", Project, DavUser);
 
         ctx.Response.StatusCode.Should().Be(403);
         Directory.Exists(_root).Should().BeTrue();
@@ -181,7 +183,7 @@ public class WebDavMoveRootTests : IDisposable
         var ctx = Ctx();
         SetMoveDestination(ctx, destTail);
         ctx.Request.Headers["Overwrite"] = "T";
-        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project);
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project, DavUser);
 
         ctx.Response.StatusCode.Should().Be(403);
         File.Exists(src).Should().BeTrue();  // источник не тронут: отказ до любого следа на диске
@@ -211,7 +213,7 @@ public class WebDavMoveRootTests : IDisposable
         var ctx = Ctx();
         SetMoveDestination(ctx, destTail);
         ctx.Request.Headers["Overwrite"] = "T";
-        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs", Project);
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs", Project, DavUser);
 
         ctx.Response.StatusCode.Should().Be(403);
         Directory.Exists(srcDir).Should().BeTrue(); // каталог цел: отказ до любого следа на диске
@@ -235,7 +237,7 @@ public class WebDavMoveRootTests : IDisposable
 
         var ctx = Ctx();
         SetMoveDestination(ctx, "docs/A.TXT");
-        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project);
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project, DavUser);
 
         if ("a.txt".Equals("A.TXT", SafePath.ComparisonFor(OperatingSystem.IsWindows())))
         {
@@ -270,7 +272,7 @@ public class WebDavMoveRootTests : IDisposable
         var ctx = Ctx();
         SetMoveDestination(ctx, "link/a.txt");
         ctx.Request.Headers["Overwrite"] = "T";
-        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project);
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project, DavUser);
 
         ctx.Response.StatusCode.Should().Be(403);
         File.Exists(src).Should().BeTrue(); // источник цел: отказ до любого следа на диске
@@ -296,7 +298,7 @@ public class WebDavMoveRootTests : IDisposable
         var ctx = Ctx();
         SetMoveDestination(ctx, "other/x");
         ctx.Request.Headers["Overwrite"] = "T";
-        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs", Project);
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs", Project, DavUser);
 
         ctx.Response.StatusCode.Should().Be(403);
         Directory.Exists(srcDir).Should().BeTrue(); // каталог цел: отказ до любого следа на диске
@@ -321,7 +323,7 @@ public class WebDavMoveRootTests : IDisposable
         var ctx = Ctx();
         SetMoveDestination(ctx, "a/x");
         ctx.Request.Headers["Overwrite"] = "T";
-        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project);
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project, DavUser);
 
         ctx.Response.StatusCode.Should().Be(403);
         File.Exists(src).Should().BeTrue();

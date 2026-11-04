@@ -11,8 +11,8 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace ClaudeHomeServer.Controllers;
 
-// Контекст чата (ADR-023 §2.1): основной объект и референсы. Владелец — из sub, сессия — GetOwned
-// (чужая или несуществующая — 404). Область (проект или личный чат) вертикаль выводит сама, поэтому
+// Контекст чата (ADR-023 §2.1): основной объект и референсы. Владелец — из sub, сессия — GetOwnedVisible
+// (чужая, чужой приватный или несуществующая — 404, S2d-3b). Область (проект или личный чат) вертикаль выводит сама, поэтому
 // путь один. Проверку Ref и подписи делают провайдеры видов; выключенная вертикаль провайдера не
 // регистрирует — её элементы приходят с missing, а запись такого вида отказывает 400 kind_unknown.
 // Локальный проект (ADR-016): сервер его файлов не видит, поэтому чтение отдаёт пустой контекст, а
@@ -89,7 +89,10 @@ public class ChatContextController(
 
     private ContextScope? Scope(string sessionId)
     {
-        if (sessions.GetOwned(sessionId, UserId) is not { } session) return null;
+        // S1: участнику общего проекта отказ (404): стор chat-context/{UserId} — личный ключ
+        // вызывающего, контекст чата арендатора в него не кладём.
+        // S2d-3b: чужой приватный чат — тот же отказ даже для владельца проекта
+        if (sessions.GetOwnedVisible(sessionId, UserId) is not { } session) return null;
         var project = session.ProjectId is { } pid ? projects.GetById(pid) : null;
         return new ContextScope(UserId, session, project);
     }

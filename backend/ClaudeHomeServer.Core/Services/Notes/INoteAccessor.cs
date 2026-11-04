@@ -49,7 +49,10 @@ public interface INoteAccessor
     // первым (`ResolveRoot`): несуществующий источник — `KeyNotFoundException`, чужой
     // владельцу проекта — `UnauthorizedAccessException`. То есть сигнатура обещает null
     // только для «нет такой заметки», промах по источнику летит исключением.
-    NoteDetail? Update(string ownerId, string noteId, UpdateNoteRequest request);
+    // S2c-2 (К8): `ifMatch` — значение заголовка If-Match (хеш содержимого): расхождение с
+    // фактическим хешом — `NoteConflictException`, заметка не тронута. null — проверки нет,
+    // как раньше; существующие вызывающие (спина, фоновые службы) зовут три аргумента.
+    NoteDetail? Update(string ownerId, string noteId, UpdateNoteRequest request, string? ifMatch = null);
 
     // Перепись привязок комментариев к документу при его переименовании/переносе
     // (точечно или по префиксу для папки). Возвращает число изменённых комментариев.

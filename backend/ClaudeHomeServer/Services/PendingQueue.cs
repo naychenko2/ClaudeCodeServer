@@ -64,4 +64,24 @@ public sealed class PendingQueue : Collection<SessionManager.QueuedMessage>
     {
         foreach (var item in items) Items.Add(item);
     }
+
+    /// <summary>
+    /// Заменить элементы по правилу, не трогая порядок (S2d-6b-7: снятие приватности переносит
+    /// файлы вложений — записанные пути отложенных сообщений должны поехать за ними). transform
+    /// отдаёт новую версию сообщения или null — оставить как есть. Каждая замена — обычный
+    /// SetItem, то есть дёргает Changed поштучно, как <see cref="RemoveAll"/>: pending.json
+    /// обновляется на каждую переписанную запись. Синхронизацию держит вызывающий (PendingLock).
+    /// </summary>
+    public int ReplaceWhere(Func<SessionManager.QueuedMessage, SessionManager.QueuedMessage?> transform)
+    {
+        var changed = 0;
+        for (var i = 0; i < Count; i++)
+        {
+            var next = transform(this[i]);
+            if (next is null) continue;
+            this[i] = next;
+            changed++;
+        }
+        return changed;
+    }
 }

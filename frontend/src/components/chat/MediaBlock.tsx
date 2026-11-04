@@ -9,6 +9,7 @@ import { ChatProjectContext } from './contexts';
 import { fmtCredits } from './glifStats';
 import { NO_AUTOFILL } from '../../lib/noAutofill';
 import { readStoredToken } from '../../lib/offline';
+import { canWriteContent } from '../../features/projects/members/contentRights';
 
 export function mediaLabel(items: MediaItem[]): string {
   const imgCount = items.filter(m => m.kind === 'image').length;
@@ -385,6 +386,10 @@ export function MediaBlock({
   online?: boolean;
 }) {
   const project = useContext(ChatProjectContext);
+  // Дверь 'file.saveFromUrl' (S2c-F4i): редактору и читателю не обещаем то, что бэк
+  // откажет (на бэке save-from-url остаётся на Write). Кнопка — единственный вход
+  // в диалог и doSave: закрытая прячет всю цепочку записи, а не только себя.
+  const canSaveFromUrl = !!project && canWriteContent(project, 'file.saveFromUrl');
   const [lightbox, setLightbox] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveDialog, setSaveDialog] = useState<{ baseName: string; ext: string } | null>(null);
@@ -476,7 +481,7 @@ export function MediaBlock({
         ↓ Скачать
       </a>
       {/* Локальное медиа уже лежит в проекте — копировать его через save-from-url некуда */}
-      {project && !isLocalStreamUrl(m.url) && (
+      {canSaveFromUrl && !isLocalStreamUrl(m.url) && (
         <button
           onClick={openSaveDialog}
           disabled={!online || saveState === 'saving'}

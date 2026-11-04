@@ -291,7 +291,7 @@ public class ChatContextStoreTests : IDisposable
     public async Task Writes_DoNotMoveSessionUpdatedAt_OrArchive()
     {
         var updated = new DateTime(2026, 9, 1, 8, 0, 0, DateTimeKind.Utc);
-        var session = new Session { Id = "s1", UpdatedAt = updated, ArchivedAt = updated.AddHours(1) };
+        var session = new Session { Id = "s1", OwnerId = "u1", UpdatedAt = updated, ArchivedAt = updated.AddHours(1) };
         var archivedBefore = session.IsArchived;
 
         var sessions = new Mock<ISessionDirectory>();

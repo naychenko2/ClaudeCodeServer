@@ -51,7 +51,7 @@ public class WikiControllerPagesTests : IDisposable
         var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _projects = new ProjectManager(_config, users, new AppSettingsService(_config));
         _pages = WikiPaths.Pages(_dir, User);
-        var notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, new Flags(true, true));
+        var notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, flags: new Flags(true, true));
         _keeper = new WikiKeeper(notes, _config);
         // GET page читает журнал (overrides): имена источников там не нужны — каталог сессий не зовётся.
         _journalReader = new WikiJournalReader(notes, null!, _config);

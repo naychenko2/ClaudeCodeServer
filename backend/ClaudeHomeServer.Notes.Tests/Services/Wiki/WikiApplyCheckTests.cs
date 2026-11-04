@@ -135,7 +135,7 @@ public class WikiApplyCheckTests : IDisposable
         var projects = new ProjectManager(config, users, new AppSettingsService(config));
         // Флаг llm-wiki включён: состояние проверки читается моделью (BuildFresh), а источник
         // wiki в модель попадает только с включённым флагом (тот же приём, что в WikiKeeperTests).
-        _notes = new NotesService(projects, config, NullLogger<NotesService>.Instance, null, new WikiFlagOn());
+        _notes = new NotesService(projects, config, NullLogger<NotesService>.Instance, null, flags: new WikiFlagOn());
         _keeper = new WikiKeeper(_notes, config);
         _sut = new WikiApplyService(_notes, _keeper, new NoSpheres(), config);
         _keeper.EnsureInitializedAsync(User).GetAwaiter().GetResult();

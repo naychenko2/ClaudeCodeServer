@@ -1,13 +1,19 @@
 using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Access;
 
 namespace ClaudeHomeServer.Services.Notes;
 
 // ИИ-помощь по заметкам одноразовыми вызовами: предложение связей, авто-теги, конспект дня.
 // Идут через «дешёвый» раннер — локальная модель Ollama (если действие на неё заведено) или
 // claude (модель Notes:AiModel, дефолт haiku) как фолбэк/по умолчанию.
-public class NotesAiService(NotesService notes, IConfiguration config, Llm.ICheapTextRunner cheap)
+// F-3 (разрез 4bc3d04f §3): ручки, пишущие ПРОЕКТНУЮ заметку (toc/translate), проверяют право
+// записи ДО вызова модели — иначе отказ случилось бы уже после расхода генерации.
+// Остальные не имеют проектной двери: suggestions ничего не пишут, daily-summary — только
+// личный vault (EnsureWriteBeforeModel).
+public class NotesAiService(NotesService notes, IConfiguration config, Llm.ICheapTextRunner cheap,
+    IProjectAccess? access = null)
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
@@ -137,6 +143,7 @@ public class NotesAiService(NotesService notes, IConfiguration config, Llm.IChea
     {
         var note = notes.GetDetail(userId, noteId)
             ?? throw new KeyNotFoundException("Заметка не найдена");
+        EnsureWriteBeforeModel(userId, note);
 
         var prompt =
             "Составь оглавление для заметки ниже. Ответь ТОЛЬКО markdown-списком (маркеры «-»), " +
@@ -158,6 +165,7 @@ public class NotesAiService(NotesService notes, IConfiguration config, Llm.IChea
     {
         var note = notes.GetDetail(userId, noteId)
             ?? throw new KeyNotFoundException("Заметка не найдена");
+        EnsureWriteBeforeModel(userId, note);
 
         var prompt =
             "Переведи текст заметки ниже: если он преимущественно на русском — на английский, иначе — на русский. " +
@@ -217,6 +225,26 @@ public class NotesAiService(NotesService notes, IConfiguration config, Llm.IChea
             }
         }
         return block + (content.Length > 0 ? "\n" + content : "");
+    }
+
+    /// <summary>
+    /// F-3 (разрез 4bc3d04f §3): право записи заметки проверяется ДО вызова модели — иначе
+    /// читатель общего проекта жжёт генерацию владельца на вызове, который отказал бы на двери
+    /// Update (модель отработала, потом 403). Дверь — та же, что у ручки записи заметки:
+    /// личный vault — всегда свой (ResolveRoot, NotesService.cs:1517), проект — WriteContent
+    /// (то же право, что у Update, NotesService.cs:1155). Отказ — тот же
+    /// UnauthorizedAccessException → Forbid() (403), что у контроллера ручки записи
+    /// (NotesController.cs:300,315). Без точки доступа (конструирование вне DI) проверка
+    /// остаётся двери Update: без неё не-владелец не прочитал бы проектную заметку вовсе
+    /// (SourcesFor(Read) → ProjectScope fail-closed, NotesService.cs:186,1481) — вызова
+    /// впустую здесь нет ни при каком исходе.
+    /// </summary>
+    private void EnsureWriteBeforeModel(string userId, NoteDetail note)
+    {
+        if (note.Source == "personal") return;
+        if (access is null) return;
+        if (access.Resolve(userId, note.Source, ProjectRight.WriteContent) is null)
+            throw new UnauthorizedAccessException("Нет права на это действие в проекте");
     }
 
     private Task<string> RunAsync(string actionKey, string prompt, string? ownerId, CancellationToken ct, object? jsonFormat = null) =>

@@ -141,6 +141,28 @@ public class TasksToolsetWindowTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
+    public async Task List_FeatureId_ЭпикИЕгоЗадачи_ВклЗакрытыеСтарше14Дней()
+    {
+        var (projectId, sessionId) = await CreateProjectWithSessionAsync();
+        var epic = Seed(projectId, "эпик", null);
+        var step = Seed(projectId, "шаг-открыт", null);
+        step.FeatureId = epic.Id;
+        var oldStep = Seed(projectId, "шаг-закрыт-30", 30);
+        oldStep.FeatureId = epic.Id;
+        var otherEpic = Seed(projectId, "другой эпик", null);
+        var foreign = Seed(projectId, "чужой шаг", null);
+        foreign.FeatureId = otherEpic.Id;
+        Seed(projectId, "без фичи", null);
+        // Задача другого владельца с тем же FeatureId в выдачу не попадает
+        var strangerTask = Tasks.Create(projectId, "other-owner-id", new CreateTaskRequest(Title: "чужая задача фичи"));
+        strangerTask.FeatureId = epic.Id;
+
+        var titles = Titles(await ListAsync(sessionId, new { projectId, featureId = epic.Id }));
+
+        titles.Should().BeEquivalentTo(["эпик", "шаг-открыт", "шаг-закрыт-30"]);
+    }
+
+    [Fact]
     public async Task List_Потолок_350Задач_300ИNote()
     {
         var (projectId, sessionId) = await CreateProjectWithSessionAsync();

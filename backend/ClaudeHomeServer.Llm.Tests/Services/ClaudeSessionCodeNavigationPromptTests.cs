@@ -11,11 +11,11 @@ using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Сценарное правило выбора codegraph / LSP / Grep в системном промпте хода (ADR-011 шаг 3):
+// Сценарное правило выбора codegraph / Grep в системном промпте хода (ADR-011 шаг 3):
 // секция "code-navigation" добавляется при том же гейте, что slice графа (CodeGraphProvider
 // не null — проектный чат с включённым codegraph), но, в отличие от slice, НЕ зависит от
 // построения графа. Ключевой кейс: свежий проект без graph.json — slice нет, правило есть;
-// иначе модель не узнала бы про LSP ровно так же, как до ADR-011 (8 вызовов за 14 дней).
+// иначе модель не узнала бы про граф ровно так же, как до ADR-011.
 // Проверяем фактический аргумент --append-system-prompt, ушедший бы модели: гоняем
 // настоящую ClaudeSession с fake-CLI launcher (паттерн ClaudeSessionPromptSectionsOrderTests).
 public class ClaudeSessionCodeNavigationPromptTests : IDisposable
@@ -41,7 +41,8 @@ public class ClaudeSessionCodeNavigationPromptTests : IDisposable
     // ход сам по себе тесту не нужен, только аргументы запуска
     private sealed class CapturingLauncher(
         ConcurrentDictionary<int, Process> clis,
-        TaskCompletionSource<IReadOnlyList<string>> argsCaptured) : IProcessLauncher
+        TaskCompletionSource<IReadOnlyList<string>> argsCaptured,
+        Action<IReadOnlyDictionary<string, string>?>? onEnv = null) : IProcessLauncher
     {
         public bool IsSandboxed => false;
         public bool TargetIsWindows => OperatingSystem.IsWindows();
@@ -52,6 +53,7 @@ public class ClaudeSessionCodeNavigationPromptTests : IDisposable
 
         public Process Start(ProcessSpec spec)
         {
+            onEnv?.Invoke(spec.Env);
             argsCaptured.TrySetResult(spec.Args);
             var fake = new ProcessSpec
             {
@@ -88,10 +90,13 @@ public class ClaudeSessionCodeNavigationPromptTests : IDisposable
         }
     }
 
-    private async Task<string> RunTurnCapturePromptAsync(Func<string?, Task<string?>>? codeGraphProvider)
+    private IReadOnlyDictionary<string, string>? _capturedEnv;
+
+    private async Task<string> RunTurnCapturePromptAsync(Func<string?, Task<string?>>? codeGraphProvider,
+        Session? sessionInfo = null)
     {
         var messages = new List<ServerMessage>();
-        var info = new Session();
+        var info = sessionInfo ?? new Session();
         // Этап 2: CodeGraphProvider заменён контрибьютором, его кладём на шину как
         // подписчик prompt/assembling и прокидываем шину через LlmSessionContext.Events.
         var bus = new TurnEventBus();
@@ -118,7 +123,7 @@ public class ClaudeSessionCodeNavigationPromptTests : IDisposable
             RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
             PermissionRules: null,
             TasksMcp: null,
-            Launcher: new CapturingLauncher(_clis, _argsCaptured),
+            Launcher: new CapturingLauncher(_clis, _argsCaptured, env => _capturedEnv = env),
             SystemPromptViaFile: false,
             Events: bus);
 
@@ -140,16 +145,30 @@ public class ClaudeSessionCodeNavigationPromptTests : IDisposable
         // а правило обязано доехать: оно статично и не зависит от graph.json
         var prompt = await RunTurnCapturePromptAsync(_ => Task.FromResult<string?>(null));
 
-        prompt.Should().Contain("три уровня, не взаимозаменяемы");
+        prompt.Should().Contain("два уровня, не взаимозаменяемы");
         prompt.Should().Contain("codegraph_hubs");
         prompt.Should().Contain("codegraph_neighbors");
         prompt.Should().Contain("codegraph_find");
-        prompt.Should().Contain("goToDefinition");
-        prompt.Should().Contain("findReferences");
-        // Момент выбора, а не перечень возможностей — формулировка ADR-011
-        prompt.Should().Contain("сначала LSP findReferences, а не Grep");
+        // LSP в CLI отложенный — агенту его не обещаем
+        prompt.Should().NotContain("findReferences");
+        prompt.Should().NotContain("LSP");
         // Slice нет — данные графа не приехали, правило живёт само по себе
         prompt.Should().NotContain("Структура кода проекта", "граф не построен — slice быть не должно");
+    }
+
+    [Theory]
+    [InlineData(true, "1")]
+    [InlineData(false, null)]
+    public async Task ПризнакИсполнителяЗадачи_ВОкруженииПроцессаCli_ТолькоУЧатаИсполнителя(bool taskExecution,
+        string? expected)
+    {
+        // Хук «сборка и тесты — только инструментами» читает признак из окружения CLI:
+        // файл настроек один на все чаты, различие — только здесь
+        await RunTurnCapturePromptAsync(_ => Task.FromResult<string?>(null), new Session { TaskExecution = taskExecution });
+
+        _capturedEnv.Should().NotBeNull();
+        _capturedEnv!.TryGetValue(ClaudeRuntimeSettings.TaskExecutorEnv, out var value).Should().Be(expected is not null);
+        value.Should().Be(expected);
     }
 
     [Fact]
@@ -159,7 +178,7 @@ public class ClaudeSessionCodeNavigationPromptTests : IDisposable
             _ => Task.FromResult<string?>("## Структура кода проекта (Code Graph)\nМАРКЕР_SLICE"));
 
         var sliceIdx = prompt.IndexOf("МАРКЕР_SLICE", StringComparison.Ordinal);
-        var ruleIdx = prompt.IndexOf("три уровня, не взаимозаменяемы", StringComparison.Ordinal);
+        var ruleIdx = prompt.IndexOf("два уровня, не взаимозаменяемы", StringComparison.Ordinal);
         sliceIdx.Should().BeGreaterThanOrEqualTo(0);
         ruleIdx.Should().BeGreaterThanOrEqualTo(0);
         sliceIdx.Should().BeLessThan(ruleIdx, "правило встаёт следом за данными графа");
@@ -172,7 +191,7 @@ public class ClaudeSessionCodeNavigationPromptTests : IDisposable
         // инструменты, которых в этом ходе нет
         var prompt = await RunTurnCapturePromptAsync(null);
 
-        prompt.Should().NotContain("три уровня, не взаимозаменяемы",
+        prompt.Should().NotContain("два уровня, не взаимозаменяемы",
             "без CodeGraphProvider правила быть не должно");
     }
 

@@ -87,14 +87,23 @@ internal sealed class FakeHiggsfieldAccess(string? token = "admin-token") : IHig
 internal sealed class RecordingBroadcaster : ISessionBroadcaster
 {
     public ConcurrentQueue<(string OwnerId, ServerMessage Message)> ToOwnerCalls { get; } = new();
+    public ConcurrentQueue<(string ProjectId, ServerMessage Message)> ToProjectCalls { get; } = new();
+
+    // Все доставленные сообщения: проектные события уходят в группу проекта, личные — владельцу
+    public IEnumerable<ServerMessage> AllMessages => ToOwnerCalls.Select(c => c.Message).Concat(ToProjectCalls.Select(c => c.Message));
 
     // Сигнал для тестов: срабатывает после каждой записи в ToOwnerCalls — ожидание по событию вместо опроса
     public event Action? OwnerMessageSent;
 
     public Task ToSession(string sessionId, ServerMessage message) => Task.CompletedTask;
     public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) => Task.CompletedTask;
-    public Task ToProject(string projectId, ServerMessage message) => Task.CompletedTask;
     public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) => Task.CompletedTask;
+
+    public Task ToProject(string projectId, ServerMessage message)
+    {
+        ToProjectCalls.Enqueue((projectId, message));
+        return Task.CompletedTask;
+    }
 
     public Task ToOwner(string ownerId, ServerMessage message)
     {

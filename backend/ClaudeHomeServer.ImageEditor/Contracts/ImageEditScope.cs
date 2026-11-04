@@ -10,10 +10,24 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 // Единственная точка сопоставления «чат ↔ область»: инлайновых `?? "personal"` не заводить.
 public sealed record ImageEditScope(string Key, Project? Project)
 {
+    // Арендатор области: владелец проекта (для личной области — владелец чата). Ключ хранилищ
+    // вертикали (нити, префы, задачи) берут отсюда, а не из id вызывающего: в общем проекте они расходятся.
+    // Заполняет только гейт области; у Of(Session) для сопоставления по ключу не задан
+    public string? TenantOwnerId { get; init; }
+
+    // Ключ хранилищ проектных действий. Область без арендатора (Of(Session) мимо гейта) — отказ,
+    // а не тихий откат на id вызывающего
+    public string Tenant => TenantOwnerId
+        ?? throw new InvalidOperationException("Область редактора не прошла гейт: TenantOwnerId не задан");
+
     // Без двоеточия: ImageProjectPrefsStore.Safe его режет; с id проекта (Guid) не пересекается
     public const string Personal = "personal";
 
-    public static ImageEditScope Of(Project project) => new(project.Id, project);
+    // Ключ хранилищ проектного действия по самому проекту (когда область не нужна); проект без владельца — отказ
+    public static string TenantOf(Project project) => project.OwnerId
+        ?? throw new InvalidOperationException("У проекта нет владельца: ключ хранилищ не определён");
+
+    public static ImageEditScope Of(Project project) => new(project.Id, project) { TenantOwnerId = project.OwnerId };
 
     // Область чата для сопоставления по ключу; Project здесь не резолвится — диску проекта нужна
     // область из самого проекта (Of(Project)), которую вызывающий уже проверил

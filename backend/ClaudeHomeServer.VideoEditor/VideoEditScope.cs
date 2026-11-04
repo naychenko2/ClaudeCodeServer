@@ -10,10 +10,15 @@ namespace ClaudeHomeServer.Services.VideoEditor;
 // Единственная точка сопоставления «чат ↔ область»: инлайновых `?? "personal"` не заводить.
 public sealed record VideoEditScope(string Key, Project? Project)
 {
+    // Арендатор области: владелец проекта (для личной области — владелец чата). Ключ хранилищ
+    // вертикали (нити, префы, задачи) берут отсюда, а не из id вызывающего: в общем проекте они расходятся.
+    // Заполняет только гейт области; у Of(Session) для сопоставления по ключу не задан
+    public string? TenantOwnerId { get; init; }
+
     // Без двоеточия: ключ идёт сегментом пути префов; с id проекта (Guid) не пересекается
     public const string Personal = "personal";
 
-    public static VideoEditScope Of(Project project) => new(project.Id, project);
+    public static VideoEditScope Of(Project project) => new(project.Id, project) { TenantOwnerId = project.OwnerId };
 
     // Область чата для сопоставления по ключу; Project здесь не резолвится — диску проекта нужна
     // область из самого проекта (Of(Project)), которую вызывающий уже проверил

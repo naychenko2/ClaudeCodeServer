@@ -46,7 +46,7 @@ public class WikiJournalReaderTests : IDisposable
             .Build();
         var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _projects = new ProjectManager(_config, users, new AppSettingsService(_config));
-        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, new FlagOn());
+        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, flags: new FlagOn());
         _reader = new WikiJournalReader(_notes, _sessions, _config);
     }
 

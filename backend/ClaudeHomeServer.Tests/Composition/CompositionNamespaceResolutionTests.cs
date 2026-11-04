@@ -26,6 +26,19 @@ public class CompositionNamespaceResolutionTests
         typeof(ClaudeHomeServer.Services.Composition.IAppPhaseSubsystem),
     };
 
+    // Фацеты вещателя (S2d-4b2 IChatVisibilitySource, S2d-7a ISessionGroupEvictor): НЕ отдельные
+    // DI-швы — доп. интерфейсы реализации SessionHubBroadcaster (Program.cs регистрирует только
+    // её и форвардер ISessionBroadcaster). Потребители берут фацет проверкой типа на самом
+    // вещателе (SessionManager.cs:2775 `is ISessionGroupEvictor`, SessionBroadcasterExtensions
+    // `is IChatVisibilitySource`), поэтому и сторож проверяет их по зарегистрированной
+    // реализации: реализация потеряет фацет — тест красный. Новый фацет без явного решения здесь
+    // остаётся в общем списке и красный (fail-closed).
+    private static readonly Type[] BroadcasterFacets =
+    [
+        typeof(ClaudeHomeServer.Services.Composition.IChatVisibilitySource),
+        typeof(ClaudeHomeServer.Services.Composition.ISessionGroupEvictor),
+    ];
+
     [Fact]
     public void AllCompositionInterfaces_Resolve_NonNull()
     {
@@ -47,11 +60,22 @@ public class CompositionNamespaceResolutionTests
         var sp = factory.Services;
 
         var unresolved = interfaces
+            .Where(t => !BroadcasterFacets.Contains(t))
             .Where(t => sp.GetService(t) is null)
             .Select(t => t.Name)
             .ToArray();
 
         unresolved.Should().BeEmpty(
             $"Швы Composition-namespace, не зарегистрированные в DI: {string.Join(", ", unresolved)}");
+
+        // Фацеты — по зарегистрированной реализации вещателя (тот же путь, что у потребителей:
+        // проверка типа на экземпляре ISessionBroadcaster), а не отдельной регистрацией в DI.
+        var broadcaster = sp.GetService(typeof(ClaudeHomeServer.Services.Composition.ISessionBroadcaster));
+        broadcaster.Should().NotBeNull(
+            "ISessionBroadcaster обязан быть зарегистрирован — через него проверяются его фацеты");
+        foreach (var facet in BroadcasterFacets)
+            facet.IsInstanceOfType(broadcaster).Should().BeTrue(
+                $"{facet.Name} — фацет реализации вещателя: потеря фацета в SessionHubBroadcaster " +
+                "ломает маску события доски / вышибание зрителей без всякого красного DI");
     }
 }

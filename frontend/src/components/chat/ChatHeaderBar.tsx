@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles, SlidersHorizontal, MessageSquareShare } from 'lucide-react';
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag, ChatItem } from '../../types';
-import { api } from '../../lib/api';
+import { api, chatFieldsErrorText } from '../../lib/api';
 import { openChatById } from '../../lib/openChat';
 import { isArchivedChat } from '../../lib/chatFilters';
 import { TagAssignMenu } from '../TagChip';
@@ -11,6 +11,7 @@ import { effortLabel } from '../../lib/effort';
 import { ExpiryButton } from './ExpiryButton';
 import { ExpiryPicker } from './ExpiryPicker';
 import { DossierOptOutButton } from './DossierOptOutButton';
+import { PrivateChatToggle } from './PrivateChatToggle';
 import { NotifyButton } from './NotifyButton';
 import { updateChatFields } from '../../lib/chatUpdate';
 import { isNotifySupported, useChatNotifyOn } from '../../lib/notify';
@@ -42,6 +43,8 @@ import { Badge, Button, IconButton, ChatTopicIcon, Modal, ModalActions, ConfirmD
 import { FeatureBackChip } from './FeatureBackChip';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
+import { chatActionDeniedReason, isNotChatAuthorError } from '../../features/projects/members/participantGate';
+import { readStoredUserId } from '../../lib/offline';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import { useSlotItem } from '../../lib/subsystems/registry';
 import type { ChatHeaderSummaryCtx, ChatHeaderMenuItemCtx, ChatHeaderBadgeCtx } from '../../lib/subsystems/registryCore';
@@ -1209,6 +1212,9 @@ interface ChatHeaderBarProps {
   participants?: Persona[] | null;
   // Состав группы изменён через поповер участников — родитель обновляет session
   onSessionUpdated?: (s: Session) => void;
+  // Карта переноса вложений (S2d-6b-4F3): тумблер приватности сообщает, какие пути бэк
+  // перенёс в private/… — родитель переписывает ими черновик композера
+  onAttachmentMoves?: (moves: Record<string, string>) => void;
   // «На стену» — набор стены живёт в воркспейсе; не задан — действия нет
   onAddToWall?: () => void;
   // Чат удалён из шапки: уйти из него и обновить список должен владелец экрана.
@@ -1239,7 +1245,7 @@ interface ChatHeaderBarProps {
 
 // «Обновить название чата» — запускается через AI-палитру (действие chat.retitle).
 // Невидимый слушатель cc-ai-run: перечитывает переписку и переименовывает чат по её смыслу.
-function RetitleButton({ session, hasMessages, online }: { session: Session; hasMessages: boolean; online: boolean }) {
+function RetitleButton({ session, hasMessages, online, locked }: { session: Session; hasMessages: boolean; online: boolean; locked?: boolean }) {
   const [busy, setBusy] = useState(false);
   // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс busy при смене чата
   useEffect(() => { setBusy(false); }, [session.id]);
@@ -1253,7 +1259,7 @@ function RetitleButton({ session, hasMessages, online }: { session: Session; has
       .finally(() => { setBusy(false); endAiBusy(); });
   };
   useEffect(() => {
-    if (!online || !hasMessages) return;
+    if (!online || !hasMessages || locked) return;
     const onRun = (e: Event) => { if ((e as CustomEvent<{ action?: string }>).detail?.action === 'chat.retitle') run(); };
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);
@@ -1343,7 +1349,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, items, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, contextBar, featureBar, scrolled }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, items, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAttachmentMoves, onAddToWall, onChatDeleted, island, compact, contextBar, featureBar, scrolled }: ChatHeaderBarProps) {
   // Вклады слота chat-header-action: невидимый слушатель «Итог сессии в заметку»
   // и его пункт в правом клик-меню. Нет подсистемы — нет и вкладов, остальные
   // AI-действия чата к заметкам не относятся и остаются.
@@ -1751,14 +1757,20 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const expiryValue = expiryLeft ? expiryLeft.replace(/^через /, 'осталось ') : null;
   const expAt = expiresAt(session);
   const expiryUrgent = !!expAt && expAt.getTime() - Date.now() < ONE_HOUR_MS;
+  // project — ради owner-гейта (QA-P1F): срок и досье — настройки владельца, кнопка
+  // гасится сама вне своей границы (тот же паттерн, что у PrivateChatToggle ниже)
   const expiryBadge = online ? (
-    <ExpiryButton session={session} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
+    <ExpiryButton session={session} project={project} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
   ) : null;
   // Opt-out «не сохранять решения из этого чата» — только у проектных чатов, рядом со
   // «Временем жизни» (тем же паттерном кнопки в шапке)
   const dossierBtn = project && online ? (
-    <DossierOptOutButton session={session} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
+    <DossierOptOutButton session={session} project={project} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
   ) : null;
+  // Тумблер «Приватный чат» (S2d-F2): компонент сам гасится вне своей границы —
+  // только автор чата в общем проекте, не читатель; в личном проекте — нет вовсе
+  const privateBtn = <PrivateChatToggle session={session} project={project} hasMessages={hasMessages}
+    online={online} isMobile={isCompact} onSessionUpdated={onSessionUpdated} onAttachmentMoves={onAttachmentMoves} />;
   // На узких раскладках (мобил/планшет) прогресс workflow втянут в объединённый чип
   // (costBadges) — отдельный бейдж рисуем только на десктопе, где ряду хватает места.
   const workflowBadge = activeWorkflow && !isCompact ? (
@@ -1812,19 +1824,26 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       {badgeVisible('spend') && spendBadge}
     </>
   );
+  // Причина недоступности действия ЭТОМУ участнику (QA-P1, доработка QA-P1F): решение
+  // живёт в едином гейте (chatActionDeniedReason): rename/archive/tags — право записи
+  // чата (отказано только читателю), delete — автор чата и владелец, срок/мьют/досье —
+  // настройки владельца (отказаны и редактору, и читателю). myUserId — текущий человек
+  // из stored-пары
+  const myUserId = readStoredUserId();
+  const actionDenied = (key: string): string | null => chatActionDeniedReason(key, project, session, myUserId);
   // Тумблер уведомлений ЭТОГО чата — сигнал о завершённом ходе, когда вкладка не в фокусе.
   // compact (колонка стены): не показываем — в тесной колонке хватает срока жизни,
   // а заглушить чат можно из меню его карточки в списке. Общий рубильник уведомлений
   // живёт в разделе «Уведомления»
   const notifyBtn = online
-    ? <NotifyButton session={session} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
+    ? <NotifyButton session={session} project={project} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
     : null;
   // На узких раскладках артефакты и настройки — плотная пара справа (gap 0 вместо
   // TB.gap), читаются как единая группа действий чата; на десктопе — как раньше, врозь.
   const summaryBtn = summaryAction?.render?.({ session, hasMessages, online });
   const wikiActionsBtn = wikiActions?.render?.({ session, hasMessages, online, compact: isCompact || compact });
   const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} />;
-  const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} />;
+  const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} locked={!!actionDenied('rename')} />;
 
   // === Видимость ряда действий ===
   // «⋯» стоит в ряду ВСЕГДА, а тумблеры внутри решают, что показывать рядом с ним.
@@ -1866,15 +1885,19 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const [renameDialog, setRenameDialog] = useState<string | null>(null);
   const [deleteAsk, setDeleteAsk] = useState(false);
   // Сохранение имени — одна точка на кнопку «Сохранить» и на Enter в поле
+  // Отказ бэка «только автор» (устаревшая роль на клиенте) показываем текстом ответа
+  const failToast = (title: string, fallback: string) => (e: unknown) =>
+    showToast(title, isNotChatAuthorError(e) ? (e as Error).message : fallback, 'info');
   const saveRename = () => {
     const next = (renameDialog ?? '').trim();
     setRenameDialog(null);
     if (!next || next === (session.name ?? '')) return;
     void updateChatFields(session, { name: next })
       .then(s => onSessionUpdated?.(s))
-      .catch(() => showToast('Чат', 'Не удалось переименовать чат', 'info'));
+      .catch(failToast('Чат', 'Не удалось переименовать чат'));
   };
   const runAction = (key: ChatActionKey, anchor?: DOMRect) => {
+    if (actionDenied(key)) return;
     switch (key) {
       case 'rename': setRenameDialog(session.name ?? ''); break;
       case 'pin':
@@ -1892,7 +1915,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       case 'dossier':
         void updateChatFields(session, { excludeFromDossiers: !session.excludeFromDossiers })
           .then(s => onSessionUpdated?.(s))
-          .catch(() => showToast('История решений', 'Не удалось изменить настройку чата', 'info'));
+          .catch(e => showToast('История решений', chatFieldsErrorText(e), 'info'));
         break;
       case 'expiry': if (anchor) setExpiryMenu(anchor); break;
       case 'archive':
@@ -1911,7 +1934,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
             // где этого чата уже нет, значит прятать его от человека второй раз
             if (isArchivedChat(session) && !isArchivedChat(s)) leaveChatArchiveView(chatFilterScope(s));
           })
-          .catch(() => showToast('Архив', 'Не удалось изменить архив чата', 'info'));
+          .catch(failToast('Архив', 'Не удалось изменить архив чата'));
         break;
       case 'delete': setDeleteAsk(true); break;
     }
@@ -1969,10 +1992,12 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     if (key === 'expiry') return expiryBadge;
     if (key === 'notify') return notifyBtn;
     const m = actionMeta(key);
+    const denied = actionDenied(key);
     return (
       <ToolbarIconButton
         onClick={e => runAction(key, (e.currentTarget as HTMLElement).getBoundingClientRect())}
-        title={m.label}
+        title={denied ?? m.label}
+        disabled={!!denied}
         isMobile={isCompact}
         active={m.active}
         color={m.danger ? C.danger : undefined}
@@ -2059,12 +2084,15 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // «осталось 2 ч» (меньше часа — C.warningText); порядок остальных — канонический
   const overflowActionItems: OverflowItem[] = headerActions.map(k => {
     const m = actionMeta(k);
+    const denied = actionDenied(k);
     const visible = headerVis.isVisible(k);
     const it: OverflowItem = {
       key: k,
       icon: m.icon,
       label: m.label,
       danger: m.danger,
+      disabled: !!denied,
+      sublabel: denied ?? undefined,
       // Теги и срок открывают свои поповеры по якорю «⋯» — сама кнопка исчезнет
       // вместе с меню, и её rect брать было бы неоткуда
       onClick: () => runAction(k, overflowAnchorRef.current ?? undefined),
@@ -2096,6 +2124,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       // композер растянут во весь экран и места ему не осталось (placeFab, hidden)
       ...(isMobile ? [{
         key: 'ai-hub', icon: <Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'AI-действия',
+        disabled: !!actionDenied('rename'),
+        sublabel: actionDenied('rename') ?? undefined,
         onClick: () => window.dispatchEvent(new Event(OPEN_AI_EVENT)),
       }] : []),
       ...(canContinue ? [{
@@ -2125,7 +2155,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Ghost-заглушение ряда действий — только на десктопе (класс сам гасится вне
   // hover-media): компактные раскладки получают полную непрозрачность
   const actionBtns = isCompact
-    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{wikiActionsBtn}{rowActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}{headerOverflow}</div>
+    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{wikiActionsBtn}{privateBtn}{rowActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}{headerOverflow}</div>
     // На десктопе кнопки — неразрывная группа: при переносе кластера уходят вниз целиком,
     // оставаясь последними у правого края (мышечная память на позицию). Ghost-класс
     // приглушает ряд в покое; «⋯» стоит ВНЕ него — это единственный путь к скрытым
@@ -2133,7 +2163,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     : (
       <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>
         <div className="cc-ghost-actions" style={{ display: 'flex', alignItems: 'center', gap: TB.gap }}>
-          {retitleBtn}{extractBtn}{summaryBtn}{wikiActionsBtn}
+          {retitleBtn}{extractBtn}{summaryBtn}{wikiActionsBtn}{privateBtn}
           {rowActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}
         </div>
         {headerOverflow}
@@ -2184,6 +2214,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         <MenuItem
           icon={<Tags size={15} strokeWidth={2} />}
           label="Теги чата"
+          hint={actionDenied('tags') ?? undefined}
+          disabled={!!actionDenied('tags')}
           action={visAction('tags')}
           // Меню тегов открывается по тому же якорю: это меню уже закрылось бы,
           // и rect взять неоткуда — фиксируем якорь до закрытия (приём ChatCard)
@@ -2194,6 +2226,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         <MenuItem
           icon={notifyOn ? <Bell size={15} strokeWidth={2} /> : <BellOff size={15} strokeWidth={2} />}
           label={notifyOn ? 'Уведомления: включены' : 'Уведомления: выключены'}
+          hint={actionDenied('notify') ?? undefined}
+          disabled={!!actionDenied('notify')}
           action={visAction('notify')}
           onClick={() => {
             setCtxMenu(null);
@@ -2207,18 +2241,22 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         <MenuItem
           icon={<History size={15} strokeWidth={2} />}
           label={dossierExcluded ? 'Досье: не сохраняются' : 'Досье: сохраняются'}
+          hint={actionDenied('dossier') ?? undefined}
+          disabled={!!actionDenied('dossier')}
           action={visAction('dossier')}
           onClick={() => {
             setCtxMenu(null);
             void updateChatFields(session, { excludeFromDossiers: !dossierExcluded })
               .then(s => onSessionUpdated?.(s))
-              .catch(() => showToast('История решений', 'Не удалось изменить настройку чата', 'info'));
+              .catch(e => showToast('История решений', chatFieldsErrorText(e), 'info'));
           }}
         />
       )}
       <MenuItem
         icon={<Hourglass size={15} strokeWidth={2} />}
         label={chatTemporary ? `Хранить: ${formatTimeLeft(session) ?? 'по сроку'}` : 'Срок хранения…'}
+        hint={actionDenied('expiry') ?? undefined}
+        disabled={!!actionDenied('expiry')}
         action={visAction('expiry')}
         onClick={() => { const a = ctxMenu; setCtxMenu(null); setExpiryMenu(a); }}
       />
@@ -2238,6 +2276,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           <MenuItem
             icon={<Pencil size={15} strokeWidth={2} />}
             label="Переименовать по переписке"
+            hint={actionDenied('rename') ?? undefined}
+            disabled={!!actionDenied('rename')}
             onClick={() => { setCtxMenu(null); runAi('chat.retitle'); }}
           />
           <MenuItem
@@ -2299,7 +2339,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
             // Уйти из удалённого чата и обновить список — дело владельца экрана
             return del
               .then(() => { setDeleteAsk(false); onChatDeleted?.(session.id); })
-              .catch(() => { setDeleteAsk(false); showToast('Чат', 'Не удалось удалить чат', 'info'); });
+              .catch(e => { setDeleteAsk(false); failToast('Чат', 'Не удалось удалить чат')(e); });
           }}
           onCancel={() => setDeleteAsk(false)}
         />

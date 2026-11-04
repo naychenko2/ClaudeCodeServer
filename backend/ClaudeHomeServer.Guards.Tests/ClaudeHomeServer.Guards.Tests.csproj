@@ -39,11 +39,19 @@
       исходники — нужна явная ссылка (тот же приём, что в монолите ClaudeHomeServer.Tests.csproj).
     -->
     <ProjectReference Include="..\ClaudeHomeServer.Notes\ClaudeHomeServer.Notes.csproj" />
+    <!-- ParticipantTurnFrameGuardTests (S2a-5, ревью R-S2a-5 M1): строка memory/dossier_get
+         обязана быть реальным вызовом — фикстура засевает паспорт в DossierStore. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Dossiers\ClaudeHomeServer.Dossiers.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Spend\ClaudeHomeServer.Spend.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.ImageEditor\ClaudeHomeServer.ImageEditor.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.AudioEditor\ClaudeHomeServer.AudioEditor.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.VideoEditor\ClaudeHomeServer.VideoEditor.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Architecture\ClaudeHomeServer.Architecture.csproj" />
+    <!-- ParticipantTurnFrameGuardTests (S2a-5): поведенческий сторож поднимает живой хост
+         (TestWebApplicationFactory из TestKit.Host) и зовёт tools/list / tools/call через
+         транспорт — как McpNarrowFrameTests в монолите. Тот же приём, что в модульных
+         тест-проектах (шаг 1.3): ссылка прямая, где реально нужен хост. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit.Host\ClaudeHomeServer.TestKit.Host.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -60,4 +68,35 @@
     <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
   </ItemGroup>
 
+  <!-- ParticipantTurnFrameGuardTests (S2a-5): поведенческий сторож поднимает живой хост и
+       требует динамические модули в реестре MCP. ModuleLoader резолвит их относительные
+       AssemblyPath от каталога теста (AppContext.BaseDirectory) — тот же паттерн копирования
+       dll в modules/, что у ClaudeHomeServer.Tests.csproj и ClaudeHomeServer.CodeGraph.Tests.csproj.
+       Без копии notes/architecture/image-editor/audio-editor/video-editor выпадают из реестра,
+       и сторож видел бы неполный tools/list. -->
+  <Target Name="CopyNotesModuleForTests" AfterTargets="Build">
+    <Copy SourceFiles="..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll"
+          DestinationFolder="$(OutDir)modules\notes" SkipUnchangedFiles="true"
+          Condition="Exists('..\ClaudeHomeServer.Notes\bin\$(Configuration)\net10.0\ClaudeHomeServer.Notes.dll')" />
+  </Target>
+  <Target Name="CopyImageEditorModuleForTests" AfterTargets="Build">
+    <Copy SourceFiles="..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll"
+          DestinationFolder="$(OutDir)modules\image-editor" SkipUnchangedFiles="true"
+          Condition="Exists('..\ClaudeHomeServer.ImageEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.ImageEditor.dll')" />
+  </Target>
+  <Target Name="CopyAudioEditorModuleForTests" AfterTargets="Build">
+    <Copy SourceFiles="..\ClaudeHomeServer.AudioEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.AudioEditor.dll"
+          DestinationFolder="$(OutDir)modules\audio-editor" SkipUnchangedFiles="true"
+          Condition="Exists('..\ClaudeHomeServer.AudioEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.AudioEditor.dll')" />
+  </Target>
+  <Target Name="CopyVideoEditorModuleForTests" AfterTargets="Build">
+    <Copy SourceFiles="..\ClaudeHomeServer.VideoEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.VideoEditor.dll"
+          DestinationFolder="$(OutDir)modules\video-editor" SkipUnchangedFiles="true"
+          Condition="Exists('..\ClaudeHomeServer.VideoEditor\bin\$(Configuration)\net10.0\ClaudeHomeServer.VideoEditor.dll')" />
+  </Target>
+  <Target Name="CopyArchitectureModuleForTests" AfterTargets="Build">
+    <Copy SourceFiles="..\ClaudeHomeServer.Architecture\bin\$(Configuration)\net10.0\ClaudeHomeServer.Architecture.dll"
+          DestinationFolder="$(OutDir)modules\architecture" SkipUnchangedFiles="true"
+          Condition="Exists('..\ClaudeHomeServer.Architecture\bin\$(Configuration)\net10.0\ClaudeHomeServer.Architecture.dll')" />
+  </Target>
 </Project>

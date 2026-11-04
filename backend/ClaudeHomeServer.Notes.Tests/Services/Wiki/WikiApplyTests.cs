@@ -115,7 +115,7 @@ public class WikiApplyTests : IDisposable
         var projects = new ProjectManager(_config, users, new AppSettingsService(_config));
         // Флаг llm-wiki включён: состояние читается моделью (BuildFresh), источник wiki в модель
         // попадает только с ним (тот же приём, что в WikiKeeperTests).
-        _notes = new NotesService(projects, _config, NullLogger<NotesService>.Instance, _events, new WikiFlagOn());
+        _notes = new NotesService(projects, _config, NullLogger<NotesService>.Instance, _events, flags: new WikiFlagOn());
         _keeper = new WikiKeeper(_notes, _config, _events);
         _sut = new WikiApplyService(_notes, _keeper, new NoSpheres(), _config, _events);
         _keeper.EnsureInitializedAsync(User).GetAwaiter().GetResult();
@@ -147,7 +147,7 @@ public class WikiApplyTests : IDisposable
         public List<ProjectEvent> Appended { get; } = [];
 
         public ProjectEvent? Append(string projectId, string ownerId, string type, string actor,
-            string summary, string? entityRef = null)
+            string summary, string? entityRef = null, string? actorUserId = null)
         {
             var e = new ProjectEvent { ProjectId = projectId, OwnerId = ownerId, Type = type, Actor = actor, Summary = summary, EntityRef = entityRef };
             Appended.Add(e);

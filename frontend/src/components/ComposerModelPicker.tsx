@@ -47,6 +47,10 @@ interface Props {
   // (узкий экран) уже имеет фиксированную ширину в ComposerMenu — этот проп на неё
   // не действует
   maxTriggerWidth?: number;
+  // Я здесь участник общего проекта (не его владелец): модель проекта — решение владельца,
+  // участнику остаётся смотреть. Строки списка выключены, сверху — пояснение (п.16 карты).
+  // У владельца общего проекта и в личном проекте — как прежде
+  participant?: boolean;
 }
 
 // Иконка модели по «классу» (мощная/универсальная/экономичная/быстрая). Тир угадываем
@@ -74,7 +78,7 @@ function groupLabel(key: string): string {
 
 export function ComposerModelPicker({ value, onChange, started, isMobile, compact,
   usage = USAGE.chatNew, showFreezeNote, effort, onEffortChange, showEffortLabel = true,
-  maxTriggerWidth }: Props) {
+  maxTriggerWidth, participant }: Props) {
   const models = useModels();
   const defaultOption = useDefaultModelOption(usage);
 
@@ -121,6 +125,8 @@ export function ComposerModelPicker({ value, onChange, started, isMobile, compac
       description: defaultOption.description,
       icon: <ModelIcon value="" />,
       badge: <WindowBadge tokens={defaultOption.contextWindow} />,
+      // «По умолчанию» — тоже настройка владельца: участнику не выбирается
+      disabled: !!participant,
     }],
   }] : [];
 
@@ -139,6 +145,8 @@ export function ComposerModelPicker({ value, onChange, started, isMobile, compac
       description: m.description,
       icon: <ModelIcon value={m.value} />,
       badge: <WindowBadge tokens={m.contextWindow} />,
+      // Участник не меняет модель проекта — строки только для чтения (п.16)
+      disabled: !!participant,
     })),
   }));
 
@@ -157,11 +165,16 @@ export function ComposerModelPicker({ value, onChange, started, isMobile, compac
       triggerLabel={current ? modelLabel(current) : 'Модель'}
       triggerSuffix={onEffortChange && showEffortLabel && <EffortBars value={effortValue} />}
       title={`Модель: ${current ? modelLabel(current) : defaultOption.label}`
+        // В compact-форме (узкая полоса) тултип — единственный способ сказать, почему
+        // список только для чтения
+        + (participant ? ' · выбирает владелец проекта' : '')
         + (onEffortChange ? ` · Усилие: ${effortLabel(effortValue)}` : '')}
       isMobile={isMobile}
       compact={compact}
       maxTriggerWidth={maxTriggerWidth}
-      header={frozen && <ComposerFreezeNote />}
+      // Участнику пояснение идёт вместо пометки заморозки: менять модель он не может
+      // вовсе, а «на что повлияет правка» ему решать не о чем
+      header={participant ? <ModelOwnerNote /> : frozen && <ComposerFreezeNote />}
       footer={onEffortChange && <ComposerEffortPanel value={effort} onChange={onEffortChange} />}
     />
   );
@@ -188,6 +201,27 @@ function ComposerFreezeNote() {
     >
       <Lock size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
       <span>Правки цепочек — только для новых чатов</span>
+    </div>
+  );
+}
+
+// Пояснение для участника общего проекта: модель — решение владельца, список только для
+// чтения. Вид — как пометка заморозки (та же строка с отчерком снизу, без заливки):
+// это сведения о чате, а не запрет — человек видит, на чём проект идёт, и может это
+// прочитать в тултипе плашки и в compact-форме.
+function ModelOwnerNote() {
+  return (
+    <div
+      title="Модель общего проекта выбирает его владелец. Участникам остаётся смотреть, на чём идёт чат."
+      style={{
+        display: 'flex', alignItems: 'center', gap: SP.sm,
+        margin: `0 ${SP.xs}px ${SP.xs}px`, padding: `${SP.xs}px ${SP.sm}px ${SP.sm}px`,
+        borderBottom: `1px solid ${C.borderLight}`, cursor: 'help',
+        fontSize: FS.xs, color: C.textMuted, lineHeight: 1.35, fontFamily: FONT.sans,
+      }}
+    >
+      <Lock size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
+      <span>Модель выбирает владелец проекта</span>
     </div>
   );
 }

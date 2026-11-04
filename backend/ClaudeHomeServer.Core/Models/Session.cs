@@ -381,6 +381,29 @@ public class Session
     public string? ProjectId { get; set; }
     // Владелец project-less чата (JWT sub). Для проектных сессий null — владелец резолвится через проект
     public string? OwnerId { get; set; }
+    // Автор приватного чата (приватность чатов, правило И.2, S2d-1): проектный чат виден
+    // ТОЛЬКО автору — ни другим участникам, ни владельцу проекта (решение 28.10). null — чат
+    // общий (виден по доступу к проекту). Отдельное поле, а не OwnerId: владельца проектного
+    // чата резолвит проект, а приватность — ограничение видимости, не владения. Ставится
+    // тумблером видимости (S2d-7a, PUT /api/chats/{id}/visibility); читает её SessionAccess.CanSee. Аддитивное nullable-поле:
+    // старые записи sessions.json читаются с null, BackupSchema.Version не двигается
+    // (добавление поля с дефолтом формат не ломает — тот же приём, что у CommittedFilePaths).
+    public string? PrivateToUserId { get; set; }
+    // Автор чата — кто его создал (в общем проекте: владелец или участник). На видимость
+    // не влияет (S2d-1): приватность держит PrivateToUserId; поле нужно для атрибуции и
+    // следующих шагов. null — автор не зафиксирован (записи до появления поля).
+    // Аддитивное nullable-поле, тот же приём.
+    public string? CreatedByUserId { get; set; }
+    // Отметка «чат занят» (S2d-7a): в чат уже пытались записать сообщение или карточку, поэтому
+    // приватным его не сделать (chat_has_messages), а после приватного периода — тем более. Ставится
+    // под замком видимости SessionManager и ПЕРЕЖИВАЕТ рестарт: очередь отложенных сообщений и записи
+    // ленты тоже на диске. Аддитивное nullable-поле (null — не занят), BackupSchema.Version не двигается.
+    public bool? MessageClaimed { get; set; }
+    // Учёт вложений чата (S2d-6b-4): пути относительно рабочей папки, загруженные через Upload этого
+    // чата, в той раскладке, где они лежат сейчас. Нужен переносу при смене видимости: до перевода в
+    // приватный общие вложения переезжают в private/{автор}/…, при снятии приватности — обратно.
+    // Пишется ТОЛЬКО под VisibilityLock SessionManager. Аддитивное nullable-поле, BackupSchema.Version не двигается.
+    public List<string>? Attachments { get; set; }
     // Закреплён в списке чатов («Закреплённые»)
     public bool IsPinned { get; set; }
     public string? ClaudeSessionId { get; set; }
@@ -672,7 +695,8 @@ public sealed record DeviceWaitMessage(
     string? SenderChatName = null,
     string? StaffNote = null,
     IReadOnlyList<string>? AttachedPaths = null,
-    string? Mode = null)
+    string? Mode = null,
+    string? SenderUserId = null)
 {
     public const string RouteAuto = "auto";
     public const string RouteAgent = "agent";

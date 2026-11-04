@@ -5,6 +5,7 @@ using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Services.Plugins;
 using ClaudeHomeServer.Services.Plugins.Mcp;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Moq;
@@ -66,7 +67,9 @@ public class PluginsToolsetTests : IDisposable
             .Returns((string id) => id == ProjectId
                 ? new Project { Id = id, OwnerId = Owner, DeviceId = deviceId }
                 : null);
-        return new PluginsToolset(accessor.Object, projects.Object, _drafts, flags, config);
+        // Шов рамки обязателен (fail-closed, R-S2a-3b); эти тесты проверяют черновики,
+        // не рамку — стаб с широкой рамкой сохраняет их прежнее поведение
+        return new PluginsToolset(accessor.Object, projects.Object, new WideTurnFrame(), _drafts, flags, config);
     }
 
     private static McpToolCallContext Ctx(string owner = Owner, string tail = ChatId) =>

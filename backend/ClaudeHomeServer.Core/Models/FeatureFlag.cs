@@ -71,6 +71,12 @@ public static class FeatureFlagKeys
     // Dark launch, выключено по умолчанию.
     public const string PromptCache = "prompt-cache";
 
+    // Общие проекты (docs/research/shared-projects-plan-2026-10.md): владелец приглашает
+    // участников в проект, у участников он появляется в списке. Рубильник инстанса —
+    // SharedProjects:Enabled, читается только через SharedProjectsGate.
+    // Dark launch, выключено по умолчанию.
+    public const string SharedProjects = "shared-projects";
+
     // LLM-wiki (ADR-035/036): база знаний, которую ведёт Хранитель. Флаг прячет UI (вкладку
     // «Вики») и источник wiki от агентов; гейт записи в заведённую вику от него не зависит.
     // Dark launch, выключено по умолчанию.
@@ -195,6 +201,14 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.PromptCache,
             Title: "Индикатор prompt cache",
             Description: "В шапке чата: сколько ещё держится тёплый prompt cache, почему он остыл, и подсказка перенести контекст в новый чат.",
+            Default: false,
+            Stage: "dev"),
+
+        // Общие проекты: приглашение участников по точному имени учётной записи.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.SharedProjects,
+            Title: "Общие проекты",
+            Description: "Можно открыть свой проект другому человеку: пригласить его по имени учётной записи редактором или читателем, и проект появится у него в списке. Чтобы вас пригласили, флаг должен быть включён и у вас.",
             Default: false,
             Stage: "dev"),
 

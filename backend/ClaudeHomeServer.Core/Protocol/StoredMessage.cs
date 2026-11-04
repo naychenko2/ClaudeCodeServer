@@ -33,7 +33,7 @@ public abstract class StoredMessage { }
 public class StoredUserMessage(string text, string[]? attachedPaths = null, bool? viaAgent = null,
     string? senderPersonaId = null, bool? systemDirective = null, bool? auto = null,
     string? senderOrigin = null, string? senderChatName = null, string? staffNote = null,
-    long? timestamp = null, string? delegationTaskId = null) : StoredMessage
+    long? timestamp = null, string? delegationTaskId = null, string? senderUserId = null) : StoredMessage
 {
     // Когда отправлено сообщение (Unix-мс UTC) — см. StoredTextMessage.Timestamp
     public long? Timestamp { get; init; } = timestamp;
@@ -63,6 +63,13 @@ public class StoredUserMessage(string text, string[]? attachedPaths = null, bool
     // Персона-отправитель (chats_send из чата персоны, авто-ход задачи) — для рендера
     // сообщения её лицом
     public string? SenderPersonaId { get; init; } = senderPersonaId;
+    // Человек-автор сообщения (id пользователя, S2a-6a): в общем проекте в один чат пишут
+    // несколько — по этому полю отличают автора поста. null — сообщение без человека-
+    // отправителя (агентское, служебное) либо история до этого поля; в JSON поля тогда нет
+    // вовсе (WhenWritingNull, как у StoredToolUseMessage.Result), старая история без поля
+    // десериализуется штатно.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SenderUserId { get; init; } = senderUserId;
     // Служебная директива механики цикла «до готово» (continuation/verification) — UI прячет
     // сырой текст за компактной плашкой вместо пузыря пользователя
     public bool? SystemDirective { get; init; } = systemDirective;

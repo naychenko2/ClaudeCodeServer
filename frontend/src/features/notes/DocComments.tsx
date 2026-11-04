@@ -11,6 +11,8 @@ import type { DocAnnotation, NoteReply, Persona } from '../../types';
 import type { ResolvedNote } from '../../components/MarkdownViewer';
 import { isGlobalPersona, visibleIn, type SphereOf } from '../../lib/personaZone';
 import { useSphereOf } from '../../lib/useSphereOf';
+import { canWriteContent, type ContentDoor } from '../projects/members/contentRights';
+import { useAllProjects } from '../projects/useAllProjects';
 
 // Комментарии к MD-документам (флаг doc-annotations): обёртка над MarkdownViewer
 // для просмотра .md проекта — выделение → попап «Комментировать», маркеры якорных
@@ -116,6 +118,15 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
   const docRef = useRef<HTMLDivElement | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const { items, reload } = useDocAnnotations(scope, docPath);
+  // Право записи по роли проекта области (S2c-F4g): у 'personal' проекта нет — все двери
+  // открыты; проекта нет в кэше (ещё не загружен) — как раньше: бэк ответит 403, если права нет.
+  // Чтение комментариев читателю открыто (F-8): список комментариев остаётся виден,
+  // прячутся только точки записи — создать, статус, удалить, ответить, перепривязать
+  // (дверь 'note.comment') и поручение (дверь 'note.tasks', как в NoteTasksSection).
+  const allProjects = useAllProjects();
+  const can = (door: ContentDoor) =>
+    canWriteContent(scope === 'personal' ? undefined : allProjects.find(p => p.id === scope), door);
+  const canComment = can('note.comment');
   // Просмотр — без frontmatter (иначе title/annotates рендерятся текстом); офсеты
   // якорей на сервере считаются по ПОЛНОМУ файлу — переводим через fmOffset
   const { body: renderBody, offset: fmOffset } = useMemo(() => stripFrontmatter(content), [content]);
@@ -574,16 +585,18 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
               </div>
             )}
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', position: 'relative' }}>
-              <ActionBtn onClick={e => { e.stopPropagation(); void toggleStatus(a); }}>
-                {a.status === 'open' ? <><Check size={11} /> Решён</> : <><Undo2 size={11} /> Снова открыть</>}
-              </ActionBtn>
+              {canComment && (
+                <ActionBtn onClick={e => { e.stopPropagation(); void toggleStatus(a); }}>
+                  {a.status === 'open' ? <><Check size={11} /> Решён</> : <><Undo2 size={11} /> Снова открыть</>}
+                </ActionBtn>
+              )}
               <ActionBtn onClick={e => { e.stopPropagation(); openNote(a); }}>Открыть заметку</ActionBtn>
-              {a.state !== 'exact' && (
+              {a.state !== 'exact' && canComment && (
                 <ActionBtn onClick={e => { e.stopPropagation(); setRepinError(null); setRepinFor(a); }}>
                   <Pin size={11} /> Перепривязать
                 </ActionBtn>
               )}
-              {assignable.length > 0 && (
+              {can('note.tasks') && assignable.length > 0 && (
                 <ActionBtn onClick={e => {
                   e.stopPropagation();
                   setAssignFor(assignFor?.a.noteId === a.noteId ? null : { a, el: e.currentTarget as HTMLElement });
@@ -591,33 +604,39 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
                   <User size={11} /> Поручить ▾
                 </ActionBtn>
               )}
-              <button
-                title="Удалить комментарий"
-                onClick={e => { e.stopPropagation(); setDeleteFor(a); }}
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 4, border: `1px solid ${C.border}`,
-                  borderRadius: 7, padding: '3px 7px', fontSize: 11.5, color: C.textMuted,
-                  background: C.bgCard, cursor: 'pointer', fontFamily: FONT.sans, marginLeft: 'auto',
-                }}
-                onMouseEnter={e => { e.currentTarget.style.color = C.danger; e.currentTarget.style.borderColor = C.danger; }}
-                onMouseLeave={e => { e.currentTarget.style.color = C.textMuted; e.currentTarget.style.borderColor = C.border; }}
-              >
-                <Trash2 size={11} />
-              </button>
+              {canComment && (
+                <button
+                  title="Удалить комментарий"
+                  onClick={e => { e.stopPropagation(); setDeleteFor(a); }}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 4, border: `1px solid ${C.border}`,
+                    borderRadius: 7, padding: '3px 7px', fontSize: 11.5, color: C.textMuted,
+                    background: C.bgCard, cursor: 'pointer', fontFamily: FONT.sans, marginLeft: 'auto',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.color = C.danger; e.currentTarget.style.borderColor = C.danger; }}
+                  onMouseLeave={e => { e.currentTarget.style.color = C.textMuted; e.currentTarget.style.borderColor = C.border; }}
+                >
+                  <Trash2 size={11} />
+                </button>
+              )}
             </div>
 
-            {/* Тред: ответы + инлайн-«Ответить» */}
+            {/* Тред: ответы + инлайн-«Ответить». Чтение ответов открыто и читателю (F-8):
+                без права записи остаётся переключатель «Ответы · N» с самими ответами,
+                но только когда ответы есть; «Ответить» без ответов — чисто вход записи, его нет */}
             <div onClick={e => e.stopPropagation()}>
-              <button onClick={() => toggleReplies(a)} style={{
-                border: 'none', background: 'none', cursor: 'pointer', padding: 0,
-                fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans,
-                display: 'inline-flex', alignItems: 'center', gap: 4,
-              }}>
-                <span style={{ fontSize: 9 }}>{openReplies.has(a.noteId) ? '▾' : '▸'}</span>
-                {(repliesMap[a.noteId]?.length ?? a.replies) > 0
-                  ? `Ответы · ${repliesMap[a.noteId]?.length ?? a.replies}`
-                  : 'Ответить'}
-              </button>
+              {(canComment || (repliesMap[a.noteId]?.length ?? a.replies) > 0) && (
+                <button onClick={() => toggleReplies(a)} style={{
+                  border: 'none', background: 'none', cursor: 'pointer', padding: 0,
+                  fontSize: 11.5, color: C.textMuted, fontFamily: FONT.sans,
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                }}>
+                  <span style={{ fontSize: 9 }}>{openReplies.has(a.noteId) ? '▾' : '▸'}</span>
+                  {(repliesMap[a.noteId]?.length ?? a.replies) > 0
+                    ? `Ответы · ${repliesMap[a.noteId]?.length ?? a.replies}`
+                    : 'Ответить'}
+                </button>
+              )}
               {openReplies.has(a.noteId) && (
                 <div style={{ marginTop: 6, paddingLeft: 8, borderLeft: `2px solid ${C.border}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {(repliesMap[a.noteId] ?? []).map(r => (
@@ -628,23 +647,25 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
                       </span>
                     </div>
                   ))}
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <input
-                      {...NO_AUTOFILL}
-                      value={replyDraft[a.noteId] ?? ''}
-                      onChange={e => setReplyDraft(d => ({ ...d, [a.noteId]: e.target.value }))}
-                      onKeyDown={e => { if (e.key === 'Enter') void sendReply(a); }}
-                      placeholder="Ответить…"
-                      style={{
-                        flex: 1, minWidth: 0, border: `1px solid ${C.border}`, borderRadius: 8,
-                        background: C.bgMain, color: C.textHeading, font: `12px ${FONT.sans}`,
-                        padding: '4px 8px',
-                      }}
-                    />
-                    <ActionBtn onClick={() => void sendReply(a)}>
-                      {replySending === a.noteId ? '…' : 'Отправить'}
-                    </ActionBtn>
-                  </div>
+                  {canComment && (
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      <input
+                        {...NO_AUTOFILL}
+                        value={replyDraft[a.noteId] ?? ''}
+                        onChange={e => setReplyDraft(d => ({ ...d, [a.noteId]: e.target.value }))}
+                        onKeyDown={e => { if (e.key === 'Enter') void sendReply(a); }}
+                        placeholder="Ответить…"
+                        style={{
+                          flex: 1, minWidth: 0, border: `1px solid ${C.border}`, borderRadius: 8,
+                          background: C.bgMain, color: C.textHeading, font: `12px ${FONT.sans}`,
+                          padding: '4px 8px',
+                        }}
+                      />
+                      <ActionBtn onClick={() => void sendReply(a)}>
+                        {replySending === a.noteId ? '…' : 'Отправить'}
+                      </ActionBtn>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -682,8 +703,9 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
           // справа пустую полосу до конца документа
           display: items.length > 0 && railSide === 'right' ? 'flow-root' : undefined,
         }}>
-        {/* Подсказка первого использования — пока нет ни одного комментария */}
-        {!hintDismissed && items.length === 0 && (
+        {/* Подсказка первого использования — пока нет ни одного комментария.
+            Она зовёт к записи ('note.comment'): без права обещать её некому — прячем */}
+        {!hintDismissed && items.length === 0 && canComment && (
           <div style={{
             display: 'flex', alignItems: 'flex-start', gap: 8, margin: '0 0 14px',
             border: `1px dashed ${C.accent}`, borderRadius: R.lg, padding: '9px 12px',
@@ -718,8 +740,9 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
         }}>{panel}</aside>
       )}
 
-      {/* Плавающая кнопка над выделением: создание или перепривязка (режим repin) */}
-      {selection && !formOpen && createPortal(
+      {/* Плавающая кнопка над выделением: создание или перепривязка (режим repin).
+          Обе — запись 'note.comment': без права её нет (выделение остаётся — это чтение) */}
+      {selection && !formOpen && canComment && createPortal(
         <button onClick={repinFor ? () => void doRepin() : openForm} style={{
           position: 'fixed', zIndex: Z.modal,
           left: clamp(selection.x - 80, 8, window.innerWidth - (repinFor ? 210 : 180)),
@@ -737,8 +760,9 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
         document.body,
       )}
 
-      {/* Форма создания: на десктопе — поповер у выделения, на мобиле — шторка снизу */}
-      {selection && formOpen && createPortal(
+      {/* Форма создания: на десктопе — поповер у выделения, на мобиле — шторка снизу.
+          Дверь та же, что у плавающей кнопки, — гейт явный, чтобы вход записи был описан здесь */}
+      {selection && formOpen && canComment && createPortal(
         <div style={{
           position: 'fixed', zIndex: Z.modal,
           ...(isMobile

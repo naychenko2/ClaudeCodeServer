@@ -48,12 +48,14 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
     /// заголовка X-Agent-Depth для прямых REST-вызовов без сессии-вызывателя.
     /// callerSessionId != null — признак MCP-вызова: только тогда расходуется квота
     /// пробуждения штаба («Командная реализация»), ход человека/фронта её не тратит.
+    /// actorUserId — инициатор прямого вызова без сессии-вызывателя (REST человека); при наличии
+    /// вызывателя актор берётся из реестра его хода (S2a-1).
     /// preempt=false — не прерывать рабочий ход получателя (сообщение в очередь, доставка
     /// по result); Waiting прерывается всегда, дефолт true — прежнее поведение.
     /// </summary>
     public async Task<SendOutcome> SendAsync(string ownerId, string sessionId, string? text,
         string? callerSessionId, string? senderSessionId, int agentDepthFallback,
-        string? wait, int? timeoutSec, bool preempt = true)
+        string? wait, int? timeoutSec, bool preempt = true, string? actorUserId = null)
     {
         var session = sessions.GetOwned(sessionId, ownerId);
         if (session is null) return new SendOutcome.NotFound();
@@ -96,6 +98,12 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
             wakeSpent = wake.TeamMode;
         }
 
+        // Актор нового хода: сообщение агента наследует актора вызывателя (его живой ход), прямой
+        // REST-вызов человека — его же. Без обоих (будильник сторожа) актор неизвестен — fail-closed.
+        var turnActor = callerSessionId is { Length: > 0 }
+            ? sessions.GetTurnActor(callerSessionId, ownerId)
+            : actorUserId;
+
         var waitTurn = !string.Equals(wait, "none", StringComparison.OrdinalIgnoreCase);
         var timeout = waitTurn
             ? TimeSpan.FromSeconds(Math.Clamp(timeoutSec ?? 90, 5, 240))
@@ -105,7 +113,8 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
         try
         {
             result = await sessions.SendMessageAndWaitAsync(sessionId, trimmed, timeout,
-                agentDepth, senderPersonaId, senderOrigin, senderChatName, preempt);
+                agentDepth, senderPersonaId, senderOrigin, senderChatName, preempt,
+                senderUserId: turnActor);
         }
         catch (InvalidOperationException) { return new SendOutcome.NotFound(); }
 

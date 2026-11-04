@@ -15,8 +15,16 @@ const h = vi.hoisted(() => {
     state: HubConnectionState.Connected as string,
     start: vi.fn(async () => { fake.state = HubConnectionState.Connected; }),
     invoke: vi.fn(async () => {}),
-    on: vi.fn(),
-    off: vi.fn(),
+    // Реестр хаб-событий (.on/.off): тест может «прислать» событие и проверить,
+    // дошло ли оно ровно до подписчиков этого события (mock-учёт .on/.off сохраняется)
+    events: new Map<string, Set<(data: any) => void>>(),
+    on: vi.fn((ev: string, cb: (data: any) => void) => {
+      const set = fake.events.get(ev) ?? new Set();
+      set.add(cb);
+      fake.events.set(ev, set);
+    }),
+    off: vi.fn((ev: string, cb: (data: any) => void) => { fake.events.get(ev)?.delete(cb); }),
+    fire(ev: string, data: any) { (fake.events.get(ev) ?? new Set()).forEach(cb => cb(data)); },
     stop: vi.fn(async () => { fake.state = HubConnectionState.Disconnected; fake.closeCbs.forEach(cb => cb()); }),
     // Колбэки, зарегистрированные signalr.ts — дёргаем их из тестов как «события» соединения
     reconnectingCbs: [] as Array<() => void>,
@@ -76,7 +84,9 @@ beforeEach(async () => {
   h.fake.start.mockClear();
   h.fake.invoke.mockClear();
   h.fake.stop.mockClear();
+  h.fake.on.mockClear();
   h.fake.off.mockClear();
+  h.fake.events.clear();
   h.build.mockClear();
   h.isOnline = true;
   h.serverAlive = false;
@@ -282,6 +292,110 @@ describe('onReconnected-подписки', () => {
 
     expect(() => fireReconnected()).not.toThrow();
     expect(good).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('подписка на project_members_changed', () => {
+  it('событие доходит только до подписчиков этого события; отписка снимает', () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const otherEvent = vi.fn(); // подписчик другого события (message)
+    signalr.onMessage(otherEvent);
+    const offFirst = signalr.onProjectMembersChanged(first);
+    signalr.onProjectMembersChanged(second);
+
+    h.fake.fire('project_members_changed', { projectId: 'p1' });
+    expect(first).toHaveBeenCalledWith({ projectId: 'p1' });
+    expect(second).toHaveBeenCalledWith({ projectId: 'p1' });
+    expect(otherEvent, 'чужое событие не трогает').not.toHaveBeenCalled();
+
+    // чужое хаб-событие — тоже мимо
+    h.fake.fire('filesChanged', { projectId: 'p1', paths: [] });
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(1);
+
+    offFirst();
+    h.fake.fire('project_members_changed', { projectId: 'p2' });
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('подписка на project_access_revoked', () => {
+  it('личное событие доходит только до подписчиков этого события; отписка снимает', () => {
+    const first = vi.fn();
+    const otherEvent = vi.fn(); // подписчик другого события (message)
+    signalr.onMessage(otherEvent);
+    const offFirst = signalr.onProjectAccessRevoked(first);
+
+    // чужое хаб-событие — мимо
+    h.fake.fire('project_members_changed', { projectId: 'p1' });
+    expect(first, 'чужое событие не трогает').not.toHaveBeenCalled();
+
+    h.fake.fire('project_access_revoked', { projectId: 'p2', ownerDisplayName: 'admin' });
+    expect(first).toHaveBeenCalledWith({ projectId: 'p2', ownerDisplayName: 'admin' });
+    expect(otherEvent, 'личное событие не трогает подписчиков message').not.toHaveBeenCalled();
+
+    offFirst();
+    h.fake.fire('project_access_revoked', { projectId: 'p3' });
+    expect(first, 'после отписки событие не должно приходить').toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('project-группа: счётчик членства и возврат после разрыва', () => {
+  it('вторый держатель не вызывает второго входа; выход первого не выбивает второго', async () => {
+    await signalr.joinProject('p1');
+    await signalr.joinProject('p1'); // второй держатель того же проекта (воркспейс + секция участников)
+    expect(h.fake.invoke, 'повторный вход в группу лишний').toHaveBeenCalledTimes(1);
+
+    await signalr.leaveProject('p1'); // секция закрылась — воркспейс этого же проекта остаётся открыт
+    expect(h.fake.invoke, 'выход секции выбил группу у открытого воркспейса').not.toHaveBeenCalledWith('LeaveProject', 'p1');
+
+    await signalr.leaveProject('p1'); // вышел и последний держатель — только теперь реальный выход
+    expect(h.fake.invoke).toHaveBeenCalledWith('LeaveProject', 'p1');
+  });
+
+  it('выход без входа не трогает хаб', async () => {
+    await signalr.leaveProject('p1');
+    expect(h.fake.invoke).not.toHaveBeenCalled();
+  });
+
+  it('после реконнекта перезаходим в держимые группы; полностью вышедшая не возобновляется', async () => {
+    await signalr.joinProject('p1');
+    await signalr.joinProject('p2');
+    await signalr.joinProject('p2');
+    await signalr.leaveProject('p2'); // один из двух держателей вышел — группу держим
+    h.fake.invoke.mockClear();
+
+    fireReconnected();
+    await vi.advanceTimersByTimeAsync(0); // возврат асинхронный — дать микрозадачам завершиться
+
+    expect(h.fake.invoke).toHaveBeenCalledWith('JoinProject', 'p1');
+    expect(h.fake.invoke).toHaveBeenCalledWith('JoinProject', 'p2');
+    expect(h.fake.invoke, 'сброшенный проект не должен вернуться').not.toHaveBeenCalledWith('JoinProject', 'p3');
+  });
+
+  it('полностью вышедшая группа после реконнекта не возобновляется', async () => {
+    await signalr.joinProject('p1');
+    await signalr.leaveProject('p1');
+    h.fake.invoke.mockClear();
+
+    fireReconnected();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(h.fake.invoke).not.toHaveBeenCalled();
+  });
+
+  it('после рестарта из Disconnected держимые группы возобновляются', async () => {
+    await signalr.joinProject('p1');
+    h.fake.state = h.HubConnectionState.Disconnected;
+    h.fake.invoke.mockClear();
+
+    await signalr.ensureConnected();
+    await vi.advanceTimersByTimeAsync(0); // возврат после start — fire-and-forget
+
+    expect(h.fake.start).toHaveBeenCalledTimes(1);
+    expect(h.fake.invoke).toHaveBeenCalledWith('JoinProject', 'p1');
   });
 });
 

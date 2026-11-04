@@ -143,7 +143,10 @@ public sealed class WikiNoteTransfer
         var stub = StubPrefix + folder.TrimEnd('/') + "/" + title + "]]\n";
         try
         {
-            if ((ReplaceNoteHook ?? _notes.Update)(ownerId, noteId, new UpdateNoteRequest(Content: stub)) is null)
+            // Update принимает и необязательные ifMatch/byHuman (общие проекты) — группа методов
+            // в Func не сводится, поэтому обёртка; поведение по умолчанию прежнее.
+            var replace = ReplaceNoteHook ?? ((o, n, r) => _notes.Update(o, n, r));
+            if (replace(ownerId, noteId, new UpdateNoteRequest(Content: stub)) is null)
                 return new(TransferOutcome.NotFound, "заметка исчезла до замены ссылкой");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or KeyNotFoundException)

@@ -51,7 +51,7 @@ public class WikiDifySyncTests : IDisposable
         // без сети. Через него идут и синк, и каскад — форма запросов проверяется как она есть.
         _knowledge = new KnowledgeService(new StubHttpClientFactory(_dify),
             Options.Create(new DifyOptions { ApiUrl = "http://dify.test/v1", ApiKey = "k" }), _wkStore);
-        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, new WikiFlagOn());
+        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, flags: new WikiFlagOn());
         _keeper = new WikiKeeper(_notes, _config);
         _sut = new NotesKnowledgeService(_knowledge, _notes, _users, _config, NullLogger<NotesKnowledgeService>.Instance);
     }

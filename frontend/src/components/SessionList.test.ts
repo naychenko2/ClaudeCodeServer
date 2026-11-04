@@ -25,13 +25,19 @@ vi.mock('../lib/chatSubjects', async (importOriginal) => {
   return { ...orig, useSubjectRun: () => null as never };
 });
 
-// signalr: подписки no-op — без createRoot (effects) соединение не открывается, а с ним
-// HttpConnection роняет resolveUrl('/hubs/session') без полного window.location
+// signalr: подписки не открывают соединение (HttpConnection роняет resolveUrl('/hubs/session')
+// без полного window.location), но onMessage ЗАХВАТЫВАЕТ обработчики: кейс S2d-F2 сам
+// зовёт их с событием — реакция проверяется на настоящем сторе списка
+const { msgHandlers } = vi.hoisted(() => ({ msgHandlers: [] as ((msg: unknown) => void)[] }));
+const toastMock = vi.hoisted(() => vi.fn());
 vi.mock('../lib/signalr', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../lib/signalr')>();
   const noop = () => () => {};
-  return { ...orig, onMessage: noop, onReconnected: noop, onGitStatusChanged: noop, onFilesChanged: noop, joinUser: noop };
+  const capture = (fn: (msg: unknown) => void) => { msgHandlers.push(fn); return () => { const i = msgHandlers.indexOf(fn); if (i >= 0) msgHandlers.splice(i, 1); }; };
+  return { ...orig, onMessage: capture, onReconnected: noop, onGitStatusChanged: noop, onFilesChanged: noop, joinUser: noop };
 });
+// toast: мокаем целиком — нейтральное сообщение об уходе приватного чата проверяется по вызову
+vi.mock('../lib/toast', () => ({ showToast: toastMock }));
 
 // Окружение node — localStorage нет; минимальная реализация на Map (как в chatFilters.test.ts)
 const store = new Map<string, string>();
@@ -187,6 +193,9 @@ const _doc: any = {
 _doc.defaultView = (globalThis as any).window;
 
 let mockSessions: Session[] = [];
+// api.chats.get для кейса S2d-F2: поведение задаёт сам кейс (404 — «чата для тебя нет»,
+// 200 — свежая копия с privateToUserId)
+let getImpl: (id: string) => Promise<Session> = async () => { throw { status: 404 }; };
 // useFeaturesIndex (effects) сам зовёт api.tasks.featuresIndex и setIndex-ит результат:
 // без мока он падает (нет сервера) → сброс в EMPTY, и группа фичи не рисуется
 let mockIndex: import('../types/featureIndex').FeaturesIndex = { features: [], chats: {} };
@@ -198,6 +207,7 @@ vi.mock('../lib/api', async (importOriginal) => {
   return { ...orig, api: { ...orig.api,
     sessions: { ...orig.api.sessions, list: async () => mockSessions },
     tasks: { ...orig.api.tasks, featuresIndex: async () => { indexCalls++; return mockIndex; } },
+    chats: { ...orig.api.chats, get: (id: string) => getImpl(id) },
   } };
 });
 
@@ -652,3 +662,84 @@ function buttonTagWithText(html: string, text: string): string | null {
   if (start < 0) return null;
   return html.slice(start, end);
 }
+
+// === S2d-F2: chat_visibility_changed — реакция настоящего стора списка ===
+// Событие шлётся в project-группу после того, как сервер снял чужие соединения с группы
+// чата. Различение — по ответу GET (он сильнее локальной копии): автору чат виден
+// (200 с privateToUserId — копия обновляется), неавтору 404 (чат убирается, открытый
+// уводится на соседа, нейтральное сообщение).
+describe('SessionList: chat_visibility_changed (S2d-F2)', () => {
+  const s2 = (id: string, over: Partial<Session> = {}): Session => ({
+    id, projectId: 'p1', name: `Чат ${id}`, mode: 'auto', status: 'finished', messageCount: 0,
+    createdAt: '2026-11-01T10:00:00Z', updatedAt: '2026-11-01T10:00:00Z', origin: 'manual', ...over,
+  } as Session);
+
+  async function mountList(active: Session | null) {
+    const lists: Session[][] = [];
+    const onActiveDeleted = vi.fn();
+    const container = new _FakeNode();
+    const root = createRoot(container);
+    const startIdx = msgHandlers.length; // только обработчики ЭТОГО монтажа (чужие уже сняты unmount)
+    await act(async () => {
+      root.render(createElement(SessionList, {
+        project, activeSession: active, onSelect: () => {}, onActiveDeleted,
+        onSessionsListChanged: (l: Session[]) => lists.push(l),
+      }));
+    });
+    return { lists, onActiveDeleted, root, startIdx };
+  }
+
+  it('неавтору (GET 404): чат убран из списка, открытый уведён на соседа, нейтральное сообщение', async () => {
+    setAllFlags({}); featuresIndexTest.reset(); store.clear();
+    mockSessions = [s2('c1'), s2('c2')];
+    getImpl = async () => { throw { status: 404 }; };
+    toastMock.mockReset();
+    const { lists, onActiveDeleted, root, startIdx } = await mountList(s2('c1'));
+    expect(lists.at(-1)?.map(s => s.id)).toEqual(['c1', 'c2']);
+    await act(async () => {
+      for (const h of msgHandlers.slice(startIdx)) h({ type: 'chat_visibility_changed', sessionId: 'c1', private: true });
+      await Promise.resolve();
+    });
+    expect(lists.at(-1)?.map(s => s.id)).toEqual(['c2']);
+    expect(onActiveDeleted).toHaveBeenCalledTimes(1);
+    expect((onActiveDeleted.mock.calls[0] as [Session | null])[0]?.id).toBe('c2');
+    expect(toastMock).toHaveBeenCalledTimes(1);
+    const [title, text] = toastMock.mock.calls[0] as [string, string];
+    expect(title).toBe('Видимость чата');
+    expect(text).toBe('Чат стал приватным — вы его больше не видите');
+    root.unmount();
+  });
+
+  it('автору (GET 200 с privateToUserId): чат остаётся, его копия обновлена; сосед и тоста нет', async () => {
+    setAllFlags({}); featuresIndexTest.reset(); store.clear();
+    mockSessions = [s2('c1', { createdByUserId: 'me-1' })];
+    getImpl = async (id: string) => ({ ...s2(id, { createdByUserId: 'me-1' }), privateToUserId: 'me-1' });
+    toastMock.mockReset();
+    const { lists, onActiveDeleted, root, startIdx } = await mountList(null);
+    await act(async () => {
+      for (const h of msgHandlers.slice(startIdx)) h({ type: 'chat_visibility_changed', sessionId: 'c1', private: true });
+      await Promise.resolve();
+    });
+    const kept = lists.at(-1)?.find(s => s.id === 'c1');
+    expect(kept?.privateToUserId).toBe('me-1');
+    expect(onActiveDeleted).not.toHaveBeenCalled();
+    expect(toastMock).not.toHaveBeenCalled();
+    root.unmount();
+  });
+
+  it('сбой сети (не 404) — список не тронут: на реконнекте он перечитается сам', async () => {
+    setAllFlags({}); featuresIndexTest.reset(); store.clear();
+    mockSessions = [s2('c1'), s2('c2')];
+    getImpl = async () => { throw { status: 0 }; };
+    toastMock.mockReset();
+    const { lists, onActiveDeleted, root, startIdx } = await mountList(s2('c1'));
+    await act(async () => {
+      for (const h of msgHandlers.slice(startIdx)) h({ type: 'chat_visibility_changed', sessionId: 'c1', private: true });
+      await Promise.resolve();
+    });
+    expect(lists.at(-1)?.map(s => s.id)).toEqual(['c1', 'c2']);
+    expect(onActiveDeleted).not.toHaveBeenCalled();
+    expect(toastMock).not.toHaveBeenCalled();
+    root.unmount();
+  });
+});

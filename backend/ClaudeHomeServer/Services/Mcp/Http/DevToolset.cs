@@ -88,6 +88,10 @@ public sealed class DevToolset(
             return ProjectRunCaller.Deny(error);
 
         var root = ProjectRunCaller.RootOf(session, project);
+        // tree: сборка в копии мутации ЭТОГО дерева; корень меняется, очередь и счётчик те же
+        if (!MutationCopyTree.TryResolve(ProjectRunCaller.StringArg(arguments, MutationCopyTree.ParamName), root,
+                out root, out error))
+            return ProjectRunCaller.Deny(error);
         if (!TryParseKind(ProjectRunCaller.StringArg(arguments, "kind"), out var isNpm, out error))
             return ProjectRunCaller.Deny(error);
         var script = ProjectRunCaller.StringArg(arguments, "script");
@@ -245,6 +249,11 @@ public sealed class DevToolset(
                         ["type"] = "string",
                         ["enum"] = new JsonArray("dotnet", "npm"),
                         ["description"] = "Вид сборки; по умолчанию dotnet",
+                    },
+                    [MutationCopyTree.ParamName] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = MutationCopyTree.ParamDescription,
                     },
                     ["target"] = new JsonObject
                     {

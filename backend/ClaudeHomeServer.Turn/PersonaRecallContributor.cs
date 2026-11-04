@@ -81,6 +81,11 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
         {
             var session = sessionContext.Session;
 
+            // S2a-4 (разрез И.3, решение 29.10): в узкой рамке общего проекта личная часть блока
+            // памяти не строится вовсе — личная память владельца и его глобальных персон в
+            // подборку не попадает; из этого контрибьютора остаётся только досье проекта.
+            var narrow = sessionContext.Frame == ClaudeHomeServer.Services.Access.TurnFrameKind.Narrow;
+
             // Контекст паспортов (ADR-004 §5): проект чата + якоря + текст хода. null —
             // вне проектного контекста (нет ProjectId у сессии) или выключен флаг.
             Dossiers.DossierRecallRequest? dossier = null;
@@ -99,7 +104,8 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
             // Досье выделяется в свою секцию (план «Секции промптов» этап 3).
             var recallTask = _recall.BuildRecallAsync(
                 sessionContext.OwnerId, sessionContext.Persona.Id, query,
-                topK, minScore, dossier, splitDossier: true, session.ProjectId);
+                topK, minScore, dossier, splitDossier: true, session.ProjectId,
+                personalMemory: !narrow);
             var completed = await Task.WhenAny(recallTask, Task.Delay(timeoutMs));
             if (completed != recallTask) return null;
             var recall = await recallTask;
@@ -112,15 +118,19 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
                     $"Паспорт {d.CommitSha[..Math.Min(7, d.CommitSha.Length)]}: {d.CommitSubject}", null)))
                 .ToList();
 
-            // Селекция секций: основной блок всегда идёт; dossier-блок — только непустой.
-            var sections = new List<PromptSection>
+            // Селекция секций: в широкой рамке основной блок идёт всегда; dossier-блок — только
+            // непустой. В узкой рамке (S2a-4) основной блока нет вовсе: личной подложки в нём не
+            // остаётся, и пустая секция только заняла бы место подборки; одна dossier-секция.
+            var sections = new List<PromptSection>();
+            if (!narrow)
             {
-                new(Key, recall.Text ?? string.Empty),
-            };
+                sections.Add(new(Key, recall.Text ?? string.Empty));
+            }
             if (!string.IsNullOrWhiteSpace(recall.DossierText))
             {
                 sections.Add(new PromptSection("dossier-recall", recall.DossierText!));
             }
+            if (sections.Count == 0) return null;
             return new PromptSectionContribution(sections, items);
         }
         catch (Exception ex)

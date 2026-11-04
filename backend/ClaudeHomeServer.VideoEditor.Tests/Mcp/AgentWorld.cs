@@ -77,7 +77,10 @@ internal sealed class AgentWorld : IDisposable
             Scenes, F.Service, Saver, Assembler, withGate ? Gate.Object : null, config);
 
         // Ручки человека поверх тех же сервисов: гейт — настоящий, поверх подставных справочников
-        var scopeGate = new VideoEditScopeGate(projects.Object, F.Directory.Object);
+        var access = new Mock<ClaudeHomeServer.Services.Access.IProjectAccess>();
+        access.Setup(a => a.Resolve(Owner, ProjectId, It.IsAny<ClaudeHomeServer.Services.Access.ProjectRight>()))
+            .Returns(new ClaudeHomeServer.Services.Access.RequestScope(Owner, Owner, ClaudeHomeServer.Services.Access.ProjectRole.Owner));
+        var scopeGate = new VideoEditScopeGate(projects.Object, F.Directory.Object, access.Object);
         Rest = new VideoEditorController(scopeGate, [Engine], Jobs, F.JobThreads, Prefs, F.Workspace, Scenes)
             { ControllerContext = UserContext() };
         var music = new FilmMusicComposer(F.Service, F.Side, F.JobThreads, projects.Object, NullLogger<FilmMusicComposer>.Instance);

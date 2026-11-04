@@ -13,6 +13,7 @@ import {
   PRIORITY_LABEL, STATUS_LABEL, updateTask, useTasks,
 } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
+import { TaskUserBadge } from './TaskUserBadge';
 import { AssigneeBadge, DueChip, LabelChip, PriorityFlag, SubtaskCheck } from './bits';
 import { useUserScrollGate } from '../../lib/userScrollGate';
 
@@ -98,7 +99,9 @@ export function HoverCard({ anchor, onKeepAlive, onLeave, onClose }: {
         }}>
           {task.title}
         </span>
-        <AssigneeBadge assignee={task.assignee} />
+        {task.assigneeUserId
+          ? <TaskUserBadge projectId={task.projectId} assigneeUserId={task.assigneeUserId} fallback={<AssigneeBadge assignee={task.assignee} />} />
+          : <AssigneeBadge assignee={task.assignee} />}
       </div>
 
       {/* Чипы: приоритет, срок, метки */}

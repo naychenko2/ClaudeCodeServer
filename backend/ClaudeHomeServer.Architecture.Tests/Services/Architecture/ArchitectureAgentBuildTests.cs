@@ -48,11 +48,13 @@ public class ArchitectureAgentBuildTests : IDisposable
     private sealed class FakeExecutor : ITaskExecutor
     {
         public List<TaskItem> Started { get; } = [];
+        public List<string?> Actors { get; } = [];
         public bool Fail { get; init; }
-        public Task ExecuteAsync(TaskItem task, bool auto)
+        public Task ExecuteAsync(TaskItem task, bool auto, string? actorUserId)
         {
             if (Fail) throw new InvalidOperationException("не стартовал");
             Started.Add(task);
+            Actors.Add(actorUserId);
             return Task.CompletedTask;
         }
         public Task CheckStalledExecutorAsync(TaskItem task, DateTime nowUtc) => Task.CompletedTask;
@@ -92,7 +94,7 @@ public class ArchitectureAgentBuildTests : IDisposable
         var (adapter, tasks, personas, exec) = Adapter();
         MkPersona(personas, "Кодер", PersonaSpecialty.None);
 
-        var launch = await adapter.LaunchAsync("p1", "u1", Brief, default);
+        var launch = await adapter.LaunchAsync("p1", "u1", Brief, default, createdByUserId: null);
 
         launch.Error.Should().BeNull();
         launch.PersonaId.Should().BeNull();
@@ -104,6 +106,23 @@ public class ArchitectureAgentBuildTests : IDisposable
         exec.Started.Should().ContainSingle(t => t.Id == task.Id);
     }
 
+    // F-9: создатель сборки — человек, нажавший «Собрать»; автозапуск наследует его актора,
+    // а владелец/вызов без человека идёт как раньше (актор не передаётся)
+    [Fact]
+    public async Task Создатель_сборки_становится_актором_автозапуска()
+    {
+        var (adapter, tasks, _, exec) = Adapter();
+
+        var byEditor = await adapter.LaunchAsync("p1", "u1", Brief, default, createdByUserId: "editor-1");
+        tasks.GetById(byEditor.TaskId!)!.CreatedByUserId.Should().Be("editor-1");
+        exec.Actors.Should().Equal("editor-1");
+
+        tasks.Update(byEditor.TaskId!, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        var byOwner = await adapter.LaunchAsync("p1", "u1", Brief, default, createdByUserId: "u1");
+        tasks.GetById(byOwner.TaskId!)!.CreatedByUserId.Should().Be("u1");
+        exec.Actors.Should().Equal("editor-1", null);
+    }
+
     [Fact]
     public async Task Планировщик_проекта_предпочтительнее_глобального()
     {
@@ -111,7 +130,7 @@ public class ArchitectureAgentBuildTests : IDisposable
         MkPersona(personas, "Глобальный", PersonaSpecialty.Planner, PersonaScope.Global);
         var local = MkPersona(personas, "Максим", PersonaSpecialty.Planner);
 
-        var launch = await adapter.LaunchAsync("p1", "u1", Brief, default);
+        var launch = await adapter.LaunchAsync("p1", "u1", Brief, default, createdByUserId: null);
 
         launch.PersonaId.Should().Be(local.Id);
         tasks.GetById(launch.TaskId!)!.PersonaId.Should().Be(local.Id);
@@ -127,7 +146,7 @@ public class ArchitectureAgentBuildTests : IDisposable
         MkPersona(personas, "Только чтение", PersonaSpecialty.Planner, access: PersonaAccess.ReadOnly);
         gate.Off.Add(MkPersona(personas, "Без привязки", PersonaSpecialty.Planner).Id);
 
-        var launch = await adapter.LaunchAsync("p1", "u1", Brief, default);
+        var launch = await adapter.LaunchAsync("p1", "u1", Brief, default, createdByUserId: null);
 
         launch.PersonaId.Should().BeNull();
         tasks.GetById(launch.TaskId!)!.PersonaId.Should().BeNull();
@@ -141,16 +160,16 @@ public class ArchitectureAgentBuildTests : IDisposable
         var global = MkPersona(personas, "Глобальный", PersonaSpecialty.Planner, PersonaScope.Global);
         gate.Off.Add(MkPersona(personas, "Проектный без привязки", PersonaSpecialty.Planner).Id);
 
-        (await adapter.LaunchAsync("p1", "u1", Brief, default)).PersonaId.Should().Be(global.Id);
+        (await adapter.LaunchAsync("p1", "u1", Brief, default, createdByUserId: null)).PersonaId.Should().Be(global.Id);
     }
 
     [Fact]
     public async Task Повторный_запуск_при_незавершённой_сборке__build_in_progress_с_id_идущей_задачи()
     {
         var (adapter, tasks, _, exec) = Adapter();
-        var first = await adapter.LaunchAsync("p1", "u1", Brief, default);
+        var first = await adapter.LaunchAsync("p1", "u1", Brief, default, createdByUserId: null);
 
-        var second = await adapter.LaunchAsync("p1", "u1", Brief, default);
+        var second = await adapter.LaunchAsync("p1", "u1", Brief, default, createdByUserId: null);
 
         second.Error.Should().Be("build_in_progress");
         second.TaskId.Should().Be(first.TaskId, "UI даёт ссылку на идущую сборку");
@@ -166,13 +185,13 @@ public class ArchitectureAgentBuildTests : IDisposable
     public async Task Остановленная_и_брошенная_задача__по_прежнему_блокирует()
     {
         var (adapter, tasks, _, _) = Adapter();
-        var first = await adapter.LaunchAsync("p1", "u1", Brief, default);
+        var first = await adapter.LaunchAsync("p1", "u1", Brief, default, createdByUserId: null);
         var task = tasks.GetById(first.TaskId!)!;
         task.ExecutorStoppedAt = DateTime.UtcNow;
         task.DroppedByHumanAt = DateTime.UtcNow;
 
         adapter.IsBuildInProgress("p1", "u1").Should().Be(first.TaskId);
-        (await adapter.LaunchAsync("p1", "u1", Brief, default)).TaskId.Should().Be(first.TaskId);
+        (await adapter.LaunchAsync("p1", "u1", Brief, default, createdByUserId: null)).TaskId.Should().Be(first.TaskId);
         tasks.GetByProject("p1").Should().ContainSingle();
     }
 
@@ -181,7 +200,7 @@ public class ArchitectureAgentBuildTests : IDisposable
     {
         var (adapter, tasks, _, _) = Adapter(failExec: true);
 
-        var launch = await adapter.LaunchAsync("p1", "u1", Brief, default);
+        var launch = await adapter.LaunchAsync("p1", "u1", Brief, default, createdByUserId: null);
 
         launch.Error.Should().Be("launch_failed");
         tasks.GetById(launch.TaskId!).Should().NotBeNull();
@@ -200,7 +219,7 @@ public class ArchitectureAgentBuildTests : IDisposable
     {
         public List<ArchitectureAgentBrief> Briefs { get; } = [];
         public string? IsBuildInProgress(string projectId, string ownerId) => inProgress;
-        public Task<ArchitectureAgentLaunch> LaunchAsync(string projectId, string ownerId, ArchitectureAgentBrief brief, CancellationToken ct)
+        public Task<ArchitectureAgentLaunch> LaunchAsync(string projectId, string ownerId, ArchitectureAgentBrief brief, CancellationToken ct, string? createdByUserId)
         {
             Briefs.Add(brief);
             return Task.FromResult(answer);
@@ -212,7 +231,8 @@ public class ArchitectureAgentBuildTests : IDisposable
         var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var projects = new ProjectManager(_config, users, new AppSettingsService(_config));
         var project = projects.Create("Alice", _root, "alice", "alice", createDirectory: false);
-        var controller = new ArchitectureController(projects, users, NullLogger<ArchitectureController>.Instance,
+        var controller = new ArchitectureController(projects, new OwnerOnlyAccess(projects), users,
+            NullLogger<ArchitectureController>.Instance,
             new ArchitectureModelGenerator(NullLogger<ArchitectureModelGenerator>.Instance),
             new ArchitectureModelStore(), new EmptyGraph(), agents)
         {

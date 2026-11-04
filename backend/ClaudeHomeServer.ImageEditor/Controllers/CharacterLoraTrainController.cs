@@ -32,14 +32,14 @@ public class CharacterLoraTrainController(
 
     [HttpGet("training-photos")]
     public IActionResult Photos(string projectId, string slug) =>
-        Character(projectId, slug, out _, out var denied) ? Ok(PhotosDto(projectId, slug)) : denied;
+        Character(projectId, slug, out var project, out var denied) ? Ok(PhotosDto(ImageEditScope.TenantOf(project), projectId, slug)) : denied;
 
     [HttpPost("training-photos")]
     [RequestSizeLimit(MaxBodyBytes)]
     [RequestFormLimits(MultipartBodyLengthLimit = MaxBodyBytes)]
     public async Task<IActionResult> AddPhotos(string projectId, string slug, CancellationToken ct)
     {
-        if (!Character(projectId, slug, out _, out var denied)) return denied;
+        if (!Character(projectId, slug, out var project, out var denied)) return denied;
         // Файлы берём из формы вручную: пустое тело — наш 400 invalid_request, а не ProblemDetails биндера
         IReadOnlyList<IFormFile> files = [];
         try
@@ -64,10 +64,10 @@ public class CharacterLoraTrainController(
             await file.CopyToAsync(ms, ct);
             uploads.Add(new PhotoUpload(file.FileName, ms.ToArray()));
         }
-        var result = uploads.Count > 0 ? photos.Add(UserId, projectId, slug, uploads) : null;
+        var result = uploads.Count > 0 ? photos.Add(ImageEditScope.TenantOf(project), projectId, slug, uploads) : null;
         return Ok(new
         {
-            photos = PhotosDto(projectId, slug),
+            photos = PhotosDto(ImageEditScope.TenantOf(project), projectId, slug),
             rejected = tooBig.Concat(result?.Rejected ?? []).Select(r => new { r.FileName, r.Reason }),
         });
     }
@@ -75,8 +75,8 @@ public class CharacterLoraTrainController(
     [HttpGet("training-photos/{name}")]
     public IActionResult Photo(string projectId, string slug, string name)
     {
-        if (!Character(projectId, slug, out _, out var denied)) return denied;
-        if (photos.PathOf(UserId, projectId, slug, name) is not { } path) return PhotoNotFound();
+        if (!Character(projectId, slug, out var project, out var denied)) return denied;
+        if (photos.PathOf(ImageEditScope.TenantOf(project), projectId, slug, name) is not { } path) return PhotoNotFound();
         var type = Path.GetExtension(path).ToLowerInvariant() switch
         {
             ".png" => "image/png",
@@ -89,8 +89,8 @@ public class CharacterLoraTrainController(
     [HttpDelete("training-photos/{name}")]
     public IActionResult DeletePhoto(string projectId, string slug, string name)
     {
-        if (!Character(projectId, slug, out _, out var denied)) return denied;
-        return photos.Remove(UserId, projectId, slug, name) ? NoContent() : PhotoNotFound();
+        if (!Character(projectId, slug, out var project, out var denied)) return denied;
+        return photos.Remove(ImageEditScope.TenantOf(project), projectId, slug, name) ? NoContent() : PhotoNotFound();
     }
 
     // ── Обучение ───────────────────────────────────────────────────────────────────
@@ -101,14 +101,14 @@ public class CharacterLoraTrainController(
         if (!Character(projectId, slug, out var project, out var denied)) return denied;
         if (trainer is null) return NoSeam();
         // Итог обучения, завершившегося между кругами доводчика, подбираем до ответа
-        if (finisher is not null) await finisher.SettleAsync(UserId, projectId, slug, ct);
-        var busy = trainer.Busy(UserId);
+        if (finisher is not null) await finisher.SettleAsync(ImageEditScope.TenantOf(project), projectId, slug, ct);
+        var busy = trainer.Busy(ImageEditScope.TenantOf(project));
         var all = runs.List(project.RootPath, slug);
         var training = all.FirstOrDefault(r => r.Status == CharacterLoraRuns.Status.Training);
         object? current = null;
         if (training is not null)
         {
-            var state = training.JobId is null ? null : await trainer.GetAsync(UserId, training.JobId, ct);
+            var state = training.JobId is null ? null : await trainer.GetAsync(ImageEditScope.TenantOf(project), training.JobId, ct);
             current = new
             {
                 runId = training.RunId,
@@ -123,7 +123,7 @@ public class CharacterLoraTrainController(
         }
         var active = CharacterStore.Get(project.RootPath, slug)?.ReadLora()?.Name;
         var connected = all.FirstOrDefault(r => CharacterLoraRuns.IsConnected(r, active));
-        var changed = connected is not null && connected.PhotosHash != CurrentHash(projectId, slug);
+        var changed = connected is not null && connected.PhotosHash != CurrentHash(ImageEditScope.TenantOf(project), projectId, slug);
         return Ok(new
         {
             enabled = trainer.Enabled,
@@ -151,14 +151,14 @@ public class CharacterLoraTrainController(
         var trigger = string.IsNullOrWhiteSpace(req.Trigger) ? DefaultTrigger(slug) : req.Trigger.Trim();
         if (!LoraTrigger.IsValid(trigger))
             return Error(StatusCodes.Status400BadRequest, "bad_trigger", "Триггерное слово: латиница, цифры и «_», 3–24 символа, первая буква");
-        using var startLock = await runs.LockKeyAsync($"{UserId}|{projectId}|{slug}", ct);
+        using var startLock = await runs.LockKeyAsync($"{ImageEditScope.TenantOf(project)}|{projectId}|{slug}", ct);
         // Идущее обучение этого персонажа видно по записи training — не полагаемся на ответ сервиса
         if (runs.List(project.RootPath, slug).Any(r => r.Status == CharacterLoraRuns.Status.Training))
             return Error(StatusCodes.Status409Conflict, "owner_busy", "У вас уже идёт обучение");
         if (runs.CountTowardsLimit(project.RootPath, slug) >= CharacterLoraRuns.MaxVersions)
             return Error(StatusCodes.Status409Conflict, "version_limit",
                 $"У персонажа уже {CharacterLoraRuns.MaxVersions} версий LoRA — удалите лишнюю");
-        var list = photos.List(UserId, projectId, slug);
+        var list = photos.List(ImageEditScope.TenantOf(project), projectId, slug);
         if (list.Count < CharacterTrainingPhotos.MinPhotos)
             return Error(StatusCodes.Status400BadRequest, "too_few_photos",
                 $"Для обучения нужно не меньше {CharacterTrainingPhotos.MinPhotos} фото");
@@ -166,12 +166,12 @@ public class CharacterLoraTrainController(
         var trainPhotos = new List<LoraTrainPhoto>(list.Count);
         foreach (var p in list)
         {
-            if (photos.PathOf(UserId, projectId, slug, p.Name) is not { } path) continue;
+            if (photos.PathOf(ImageEditScope.TenantOf(project), projectId, slug, p.Name) is not { } path) continue;
             trainPhotos.Add(new LoraTrainPhoto(p.Name, path));
         }
         var runId = Guid.NewGuid().ToString("N")[..12];
         var started = await trainer.StartAsync(
-            new LoraTrainStart(UserId, projectId, slug, runId, preset, trigger, trainPhotos), ct);
+            new LoraTrainStart(ImageEditScope.TenantOf(project), projectId, slug, runId, preset, trigger, trainPhotos), ct);
         if (started.Error is { } error) return MapStartError(error, started);
 
         var run = new CharacterLoraRun(1, runId, started.JobId, CharacterLoraRuns.Status.Training, null, preset, trigger,
@@ -189,7 +189,7 @@ public class CharacterLoraTrainController(
         var training = runs.List(project.RootPath, slug)
             .FirstOrDefault(r => r.Status == CharacterLoraRuns.Status.Training && r.JobId is not null);
         if (training is null) return NotTraining();
-        var result = await trainer.CancelAsync(UserId, training.JobId!, asAdmin: false, ct);
+        var result = await trainer.CancelAsync(ImageEditScope.TenantOf(project), training.JobId!, asAdmin: false, ct);
         return result == LoraCancelResult.NotFound ? NotTraining() : NoContent();
     }
 
@@ -213,9 +213,9 @@ public class CharacterLoraTrainController(
         };
     }
 
-    private object PhotosDto(string projectId, string slug)
+    private object PhotosDto(string tenantId, string projectId, string slug)
     {
-        var list = photos.List(UserId, projectId, slug);
+        var list = photos.List(tenantId, projectId, slug);
         return new
         {
             items = list.Select(p => new { p.Name, p.Bytes, p.Width, p.Height }),
@@ -226,8 +226,8 @@ public class CharacterLoraTrainController(
         };
     }
 
-    private string CurrentHash(string projectId, string slug) =>
-        CharacterTrainingPhotos.PhotosHash(photos.List(UserId, projectId, slug).Select(p => p.Name));
+    private string CurrentHash(string tenantId, string projectId, string slug) =>
+        CharacterTrainingPhotos.PhotosHash(photos.List(tenantId, projectId, slug).Select(p => p.Name));
 
     // "ccs" + slug без дефисов, до 24 символов: по регэкспу триггера всегда валиден
     private static string DefaultTrigger(string slug)

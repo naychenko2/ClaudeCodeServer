@@ -125,9 +125,11 @@ public class WikiChatsController : ControllerBase
 
     /// <summary>GET /api/wiki/chats — список отбора по своей вики: запись стора на каждый
     /// существующий свой чат, с причиной и сигналами; counts — число чатов по каждой
-    /// ПОКАЗАННОЙ зоне (ShownZone). Записи несуществующего или уже чужого чата из списка
-    /// выпадают (список — про чаты, а не про файл), но на counts несуществующего чата нет.
-    /// Нечитаемый стор — 409 с кодом: список не притворяется пустым там, где файл сломан.</summary>
+    /// ПОКАЗАННОЙ зоне (ShownZone). Записи несуществующего, уже чужого или приватного чата
+    /// (PrivateToUserId, FIN3-3) из списка выпадают (список — про чаты, а не про файл), на
+    /// counts их тоже нет: имя, зона и причина приватного чата — машинная производная от его
+    /// содержания, а машинные потребители приватный чат не читают. Нечитаемый стор — 409 с
+    /// кодом: список не притворяется пустым там, где файл сломан.</summary>
     [HttpGet]
     public IActionResult List()
     {
@@ -143,7 +145,10 @@ public class WikiChatsController : ControllerBase
         foreach (var e in read.Entries)
         {
             var session = _sessions.GetById(e.SessionId);
-            if (session is null || _sessions.ResolveOwnerId(session) != userId)
+            // Приватный чат (FIN3-3): запись о нём выпадает из списка и из counts так же, как
+            // запись несуществующего, — при любом запросившем (тот же фильтр, что у BuildQueue
+            // и AnalyzeAsync: машинные потребители приватный чат не читают).
+            if (session is null || _sessions.ResolveOwnerId(session) != userId || session.PrivateToUserId is not null)
                 continue;
             var zone = ShownZone(e);
             counts[zone] = counts.TryGetValue(zone, out var c) ? c + 1 : 1;

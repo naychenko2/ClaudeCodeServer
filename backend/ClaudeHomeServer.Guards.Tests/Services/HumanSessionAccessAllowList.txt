@@ -1,0 +1,16 @@
+# Allow-list сторожа HumanSessionAccessGuardTests (разрез 4bc3d04f, строка 5; S2d-3d).
+# Формат строки: «путь|число» — по ФАЙЛУ со счётчиком. В /Controllers/ и /Hubs/ разрешены
+# только GetOwnedVisible( и записи здесь — вызовы GetOwned(, которые НЕ являются путём
+# к чату общего проекта. Поднять счётчик или добавить файл можно только осознанно, с вердиктом
+# в дифе. Все человеческие пути к чату переведены на GetOwnedVisible в S2d-3a–3c; здесь —
+# остаток, проверенный чтением.
+#
+# Онбординг-чаты — собственные чаты вызывающего: id берётся из me.OnboardingSessionId /
+# project.OnboardingSessionId (своё поле пользователя / своего проекта), GetOwned здесь проходит
+# только когда вызывающий и есть владелец чата (сверено чтением OnboardingController.cs:66,109,159,200:
+# обе сессии создаются этим же путём, CreateChatAsync(UserId) / CreateAsync(projectId)); автор
+# чата — вызывающий, приватность PrivateToUserId в эти вызовы войти не может.
+backend/ClaudeHomeServer/Controllers/OnboardingController.cs|4
+# Сферы — не чаты: spheres.GetOwned — персональные сущности пользователя (SphereManager),
+# ни SessionManager, ни приватность чатов в них не участвуют; инвариант S2d о владении чатом.
+backend/ClaudeHomeServer/Controllers/SpheresController.cs|5

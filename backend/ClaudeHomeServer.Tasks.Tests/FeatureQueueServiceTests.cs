@@ -447,7 +447,7 @@ public class FeatureQueueServiceTests : IDisposable
     // Исполнитель-заглушка шва ITaskExecutor: сверку отдаёт сервису очереди, как адаптер в проде.
     private sealed class ReconcilingExecutor(FeatureQueueService queue) : ITaskExecutor
     {
-        public Task ExecuteAsync(TaskItem task, bool auto) => Task.CompletedTask;
+        public Task ExecuteAsync(TaskItem task, bool auto, string? actorUserId) => Task.CompletedTask;
         public Task CheckStalledExecutorAsync(TaskItem task, DateTime nowUtc) => Task.CompletedTask;
         public Task ReconcileFeatureQueuesAsync(string ownerId) => queue.ReconcileAsync(ownerId);
     }

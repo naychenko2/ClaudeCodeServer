@@ -57,13 +57,23 @@ public class TasksFeatureChatBindingDoorTests : IClassFixture<TestWebApplication
         return (isError, result.GetProperty("content")[0].GetProperty("text").GetString()!);
     }
 
-    private async Task<(bool IsError, string Text)> Mcp(string chatId, string tool, object args) =>
-        await ParseMcp(await _client.PostAsync($"/mcp/tasks/{chatId}",
-            new StringContent(JsonSerializer.Serialize(new
+    // Вызов боевого хода (S2a-3a): конфиг хода ставит X-Caller-Session-Id = id чата (ClaudeSession),
+    // по нему решается рамка хода (TasksToolset.cs:116 → SessionManager.GetTurnFrame). Без заголовка
+    // рамка Narrow (fail-closed) и чат вне проекта закрыт полностью (TasksToolset.NarrowDenied:
+    // projectId null) — проверяемые здесь двери для личного чата были бы недостижимы.
+    private async Task<(bool IsError, string Text)> Mcp(string chatId, string tool, object args)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Post, $"/mcp/tasks/{chatId}")
+        {
+            Content = new StringContent(JsonSerializer.Serialize(new
             {
                 jsonrpc = "2.0", id = 1, method = "tools/call",
                 @params = new { name = tool, arguments = args },
-            }), Encoding.UTF8, "application/json")));
+            }), Encoding.UTF8, "application/json"),
+        };
+        req.Headers.Add("X-Caller-Session-Id", chatId);
+        return await ParseMcp(await _client.SendAsync(req));
+    }
 
     [Fact]
     public async Task RestCreate_ChatOfFeatureA_CreatesTaskOfB_Conflict_CountUnchanged()

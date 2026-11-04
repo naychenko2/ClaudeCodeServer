@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Hubs;
+﻿using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
 using FluentAssertions;
@@ -18,6 +18,32 @@ namespace ClaudeHomeServer.Tests.Services.Composition;
 // Эти тесты — единственное место, где склейка остаётся под контролем.
 public class SessionHubBroadcasterTests
 {
+    // S2d-7a: вышибание из session-группы — все соединения перечисленных пользователей снимаются
+    // с группы с именем sessionId; соединения остальных (автора) не трогаются.
+    [Fact]
+    public async Task EvictUsersFromSessionGroup_СнимаетТолькоСоединенияПеречисленных()
+    {
+        var groups = new Moq.Mock<IGroupManager>();
+        groups.Setup(g => g.RemoveFromGroupAsync(Moq.It.IsAny<string>(), Moq.It.IsAny<string>(), Moq.It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        var hub = new Moq.Mock<IHubContext<SessionHub>>();
+        hub.SetupGet(h => h.Groups).Returns(groups.Object);
+        var registry = new UserConnectionRegistry();
+        registry.Add("author", "c-author");
+        registry.Add("member", "c-m1");
+        registry.Add("member", "c-m2");
+        var services = new Moq.Mock<IServiceProvider>();
+        services.Setup(p => p.GetService(typeof(UserConnectionRegistry))).Returns(registry);
+        var broadcaster = new SessionHubBroadcaster(hub.Object, services.Object);
+
+        var evicted = await broadcaster.EvictUsersFromSessionGroup("sess-1", ["member"]);
+
+        evicted.Should().BeEquivalentTo(["c-m1", "c-m2"]);
+        groups.Verify(g => g.RemoveFromGroupAsync("c-m1", "sess-1", Moq.It.IsAny<CancellationToken>()), Moq.Times.Once);
+        groups.Verify(g => g.RemoveFromGroupAsync("c-m2", "sess-1", Moq.It.IsAny<CancellationToken>()), Moq.Times.Once);
+        groups.Verify(g => g.RemoveFromGroupAsync("c-author", Moq.It.IsAny<string>(), Moq.It.IsAny<CancellationToken>()), Moq.Times.Never);
+    }
+
     [Fact]
     public async Task ToSession_ШлётВГруппуСИменемРавнымSessionId()
     {

@@ -3,6 +3,7 @@ using System.Security.Claims;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Git;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -15,6 +16,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/git")]
+[ProjectScope]
 public class GitController(GitService git, GitServerService gitServer, GitAiService gitAi, ProjectManager projects, UserStore users, Services.Git.IForgejoAccountStore forgejoAccounts, SessionManager sessions, IHubContext<SessionHub> hub, CommitAttributionService commitAttribution) : ControllerBase
 {
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
@@ -22,11 +24,13 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     // Рабочее дерево запроса: ?sessionId= чата в отдельном worktree переводит операцию в его
     // дерево (бар чата обязан слать его во ВСЕ вызовы — иначе коммит/дискард уйдёт в корень
     // проекта). Чужая/несуществующая сессия → 404; сессия без worktree — корень проекта.
+    // S2d-3c: чужой приватный чат не виден даже владельцу (GetOwnedVisible) — та же 404,
+    // неотличимая от «нет такого чата».
     private string RootFor(Models.Project p)
     {
         var sessionId = Request.Query["sessionId"].ToString();
         if (string.IsNullOrEmpty(sessionId)) return p.RootPath;
-        var s = UserId is null ? null : sessions.GetOwned(sessionId, UserId);
+        var s = UserId is null ? null : sessions.GetOwnedVisible(sessionId, UserId);
         if (s is null || s.ProjectId != p.Id)
             throw new KeyNotFoundException($"Сессия не найдена: {sessionId}");
         return s.WorktreePath ?? p.RootPath;
@@ -50,11 +54,11 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         return gitServer.OwnsUrl(fetchUrl) && gitServer.OwnsUrl(pushUrl) ? new GitCredentials(u, t) : null;
     }
 
-    // Проект текущего пользователя; чужой/несуществующий → 404 (как в FilesController)
+    // Проект запроса (доступ проверил [ProjectScope], чужой — 404); несуществующий → 404 тоже
     private Models.Project GetProject(string projectId)
     {
         var p = projects.GetById(projectId);
-        if (p is null || p.OwnerId != UserId)
+        if (p is null)
             throw new KeyNotFoundException($"Проект не найден: {projectId}");
         return p;
     }
@@ -72,7 +76,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     }
 
     private Task NotifyChanged(string projectId) =>
-        hub.Clients.Group("user_" + UserId).SendAsync("message", new GitStatusChangedMessage(projectId));
+        hub.Clients.Group(SessionHubBroadcaster.ProjectGroup(projectId)).SendAsync("message", new GitStatusChangedMessage(projectId));
 
     [HttpGet("status")]
     public async Task<IActionResult> Status(string projectId, CancellationToken ct)
@@ -172,33 +176,40 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     }
 
     [HttpPost("stage")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public Task<IActionResult> Stage(string projectId, [FromBody] GitPathRequest body, CancellationToken ct) =>
         Mutate(projectId, (p) => git.StageAsync(Owner(p), RootFor(p), body.Path, ct));
 
     [HttpPost("unstage")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public Task<IActionResult> Unstage(string projectId, [FromBody] GitPathRequest body, CancellationToken ct) =>
         Mutate(projectId, (p) => git.UnstageAsync(Owner(p), RootFor(p), body.Path, ct));
 
     [HttpPost("stage-all")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public Task<IActionResult> StageAll(string projectId, CancellationToken ct) =>
         Mutate(projectId, (p) => git.StageAllAsync(Owner(p), RootFor(p), ct));
 
     // Откат правок файла к HEAD — теряет несохранённые изменения (подтверждение на фронте)
     [HttpPost("discard")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public Task<IActionResult> Discard(string projectId, [FromBody] GitPathRequest body, CancellationToken ct) =>
         Mutate(projectId, (p) => git.DiscardAsync(Owner(p), RootFor(p), body.Path, ct));
 
     // Откат ВСЕХ изменений рабочего дерева (опасно — фронт гейтит подтверждением)
     [HttpPost("discard-all")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public Task<IActionResult> DiscardAll(string projectId, CancellationToken ct) =>
         Mutate(projectId, (p) => git.DiscardAllAsync(Owner(p), RootFor(p), ct));
 
     // Зернистый stage: патч хунка/выбранных строк (синтезирует фронт)
     [HttpPost("stage-hunk")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public Task<IActionResult> StageHunk(string projectId, [FromBody] GitPatchRequest body, CancellationToken ct) =>
         Mutate(projectId, (p) => git.StageHunkAsync(Owner(p), RootFor(p), body.Patch, ct));
 
     [HttpPost("unstage-hunk")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public Task<IActionResult> UnstageHunk(string projectId, [FromBody] GitPatchRequest body, CancellationToken ct) =>
         Mutate(projectId, (p) => git.UnstageHunkAsync(Owner(p), RootFor(p), body.Patch, ct));
 
@@ -230,20 +241,24 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     }
 
     [HttpPost("stash")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public Task<IActionResult> StashPush(string projectId, [FromBody] GitStashRequest body, CancellationToken ct) =>
         Mutate(projectId, (p) => git.StashPushAsync(Owner(p), RootFor(p), body.Message, ct));
 
     [HttpPost("stash/{index:int}/pop")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public Task<IActionResult> StashPop(string projectId, int index, CancellationToken ct) =>
         Mutate(projectId, (p) => git.StashPopAsync(Owner(p), RootFor(p), index, ct));
 
     // Удаление стэша необратимо — фронт спрашивает подтверждение
     [HttpDelete("stash/{index:int}")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public Task<IActionResult> StashDrop(string projectId, int index, CancellationToken ct) =>
         Mutate(projectId, (p) => git.StashDropAsync(Owner(p), RootFor(p), index, ct));
 
     // Безопасная отмена коммита: git revert — новый коммит, история не переписывается
     [HttpPost("commits/{sha}/revert")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public Task<IActionResult> RevertCommit(string projectId, string sha, CancellationToken ct) =>
         Mutate(projectId, (p) => git.RevertCommitAsync(Owner(p), RootFor(p), sha, ct));
 
@@ -264,6 +279,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
 
     // Сброс пароля Forgejo (утерян — например аккаунт создан до хранения паролей)
     [HttpPost("forgejo-credentials/reset")]
+    [ProjectScope(Right = ProjectRight.Configure)]
     public async Task<IActionResult> ResetForgejoPassword(string projectId, CancellationToken ct)
     {
         try
@@ -310,6 +326,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     // Документный режим: вернуть файл к версии из коммита. При авто-режиме возврат
     // сразу фиксируется отдельным коммитом (человеку не нужен «индекс»)
     [HttpPost("commits/{sha}/restore-file")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> RestoreFile(string projectId, string sha, [FromBody] GitPathRequest body, CancellationToken ct)
     {
         try
@@ -321,7 +338,8 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
                 await git.StageAsync(Owner(p), RootFor(p), body.Path, ct);
                 var fileName = body.Path.Replace('\\', '/').Split('/')[^1];
                 var shortSha = sha.Length > 7 ? sha[..7] : sha;
-                await git.CommitAsync(Owner(p), RootFor(p), $"Возврат: {fileName} к версии {shortSha}", ct: ct);
+                await git.CommitAsync(Owner(p), RootFor(p), $"Возврат: {fileName} к версии {shortSha}",
+                    ct: ct, author: AuthorOfRequestUser(p));
             }
             await NotifyChanged(projectId);
             return Ok(await git.StatusAsync(Owner(p), RootFor(p), ct));
@@ -334,6 +352,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     // Документный режим: «Сохранить сейчас» — всё с авто-сообщением (✨ по диффу;
     // не вышло — честный таймстемп), при GitAutoPush — отправить
     [HttpPost("save-now")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> SaveNow(string projectId, CancellationToken ct)
     {
         try
@@ -353,7 +372,8 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
                     : (string.IsNullOrWhiteSpace(s.Description) ? s.Summary : $"{s.Summary}\n\n{s.Description}");
             }
             catch { message = $"Сохранение: {DateTime.Now:dd.MM.yyyy HH:mm}"; }
-            var sha = await git.CommitAsync(Owner(p), RootFor(p), message, ct: ct);
+            var sha = await git.CommitAsync(Owner(p), RootFor(p), message, ct: ct,
+                author: AuthorOfRequestUser(p));
 
             if (p.GitAutoPush && p.GitRemoteUrl is not null)
             {
@@ -376,6 +396,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
 
     // LLM-помощь: сообщение коммита по staged-диффу / название стэша по правкам
     [HttpPost("ai/commit-message")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> AiCommitMessage(string projectId, CancellationToken ct)
     {
         try
@@ -415,6 +436,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     // Сохранить оба промпта: глобальный (User) пишем всегда; проектный override — только
     // если useProject=true (иначе снимаем, активным становится глобальный).
     [HttpPut("commit-prompt")]
+    [ProjectScope(Right = ProjectRight.Configure)]
     public IActionResult SetCommitPrompt(string projectId, [FromBody] GitCommitPromptRequest body)
     {
         try
@@ -429,6 +451,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
 
     // Определить стиль коммитов по истории репы → инструкция для поля настройки (не сохраняет)
     [HttpPost("ai/detect-commit-style")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> DetectCommitStyle(string projectId, CancellationToken ct)
     {
         try
@@ -443,6 +466,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     }
 
     [HttpPost("ai/stash-name")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> AiStashName(string projectId, CancellationToken ct)
     {
         try
@@ -470,6 +494,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     }
 
     [HttpPost("commit")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> Commit(string projectId, [FromBody] GitCommitRequest body, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(body.Message))
@@ -478,7 +503,8 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         {
             var p = GetProject(projectId);
             var message = AppendDossierTrailer(body.Message);
-            var sha = await git.CommitAsync(Owner(p), RootFor(p), message, body.Amend, ct);
+            var sha = await git.CommitAsync(Owner(p), RootFor(p), message, body.Amend, ct,
+                author: AuthorOfRequestUser(p));
             await NotifyChanged(projectId);
             return Ok(new CommitResponse(sha));
         }
@@ -498,18 +524,37 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         var session = sessions.GetById(callerSessionId);
         if (session is null) return message;
         var trailer = $"CCS-Session: {session.Id}" + (session.TaskId is null ? "" : $"\nCCS-Task: {session.TaskId}");
-        return message.TrimEnd() + "\n\n" + trailer;
+        // Один блок с существующими трейлерами сообщения (ревью R-S3-1): отдельный абзац
+        // вывел бы Co-Authored-By/CCS-Session из блока — git читает трейлеры только в последнем
+        return GitService.AppendTrailerBlock(message, trailer);
+    }
+
+    // Автор коммита общего проекта (S3-1b): текущий пользователь запроса (sub JWT), имя и
+    // логин — из UserStore. Личный проект — автора нет: git-конфиг репозитория и есть сам
+    // владелец, поведение прежнее. Нет пользователя или записи в сторе — тоже автора нет
+    // (fail-closed, как остальной авторство-путь).
+    private GitCommitAuthor? AuthorOfRequestUser(Models.Project p)
+    {
+        if (p.Members is not { Count: > 0 }) return null;
+        var userId = UserId;
+        if (userId is null) return null;
+        var user = users.GetById(userId);
+        if (user is null) return null;
+        return new GitCommitAuthor(userId, user.DisplayName ?? user.Username, user.Username);
     }
 
     [HttpPost("fetch")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public Task<IActionResult> Fetch(string projectId, CancellationToken ct) =>
         Mutate(projectId, async (p) => await git.FetchAsync(Owner(p), RootFor(p), await CredsFor(p, ct), ct));
 
     [HttpPost("pull")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public Task<IActionResult> Pull(string projectId, CancellationToken ct) =>
         Mutate(projectId, async (p) => await git.PullAsync(Owner(p), RootFor(p), await CredsFor(p, ct), ct));
 
     [HttpPost("push")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> Push(string projectId, CancellationToken ct)
     {
         try
@@ -533,6 +578,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     // «Подтянуть и опубликовать»: rebase на origin + push одним действием. Нужен, когда ветка
     // разошлась — обычный push отклоняется, а pull (--ff-only) в этом случае не проходит.
     [HttpPost("sync")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> Sync(string projectId, CancellationToken ct = default)
     {
         try
@@ -556,6 +602,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
 
     // Инициализация git в папке проекта + (при настроенном Forgejo) создание remote-репозитория
     [HttpPost("init")]
+    [ProjectScope(Right = ProjectRight.Configure)]
     public async Task<IActionResult> Init(string projectId, CancellationToken ct)
     {
         try
@@ -614,6 +661,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     // Подключить/обновить origin вручную введённым адресом. Всегда про КОРЕНЬ проекта:
     // worktree чата делит с ним общий .git, своего origin у него нет.
     [HttpPost("remote")]
+    [ProjectScope(Right = ProjectRight.Configure)]
     public async Task<IActionResult> SetRemote(string projectId, [FromBody] GitSetRemoteRequest body, CancellationToken ct)
     {
         try
@@ -638,6 +686,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     // Завести репозиторий на встроенном Forgejo для уже инициализированной репы и подключить
     // его как origin (у /git/init это делается заодно с созданием репозитория)
     [HttpPost("remote/server")]
+    [ProjectScope(Right = ProjectRight.Configure)]
     public async Task<IActionResult> CreateServerRepo(string projectId, CancellationToken ct)
     {
         try
@@ -655,6 +704,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
 
     // Режим документов: авто-commit (и опционально push) после каждого хода Claude
     [HttpPut("auto-commit")]
+    [ProjectScope(Right = ProjectRight.Configure)]
     public IActionResult SetAutoCommit(string projectId, [FromBody] GitAutoCommitRequest body)
     {
         try
@@ -667,10 +717,12 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     }
 
     [HttpPost("checkout")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public Task<IActionResult> Checkout(string projectId, [FromBody] GitCheckoutRequest body, CancellationToken ct) =>
         Mutate(projectId, (p) => git.CheckoutAsync(Owner(p), RootFor(p), body.Branch, ct));
 
     [HttpPost("branches")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public Task<IActionResult> CreateBranch(string projectId, [FromBody] GitCreateBranchRequest body, CancellationToken ct) =>
         Mutate(projectId, (p) => git.CreateBranchAsync(Owner(p), RootFor(p), body.Name, body.From, ct));
 

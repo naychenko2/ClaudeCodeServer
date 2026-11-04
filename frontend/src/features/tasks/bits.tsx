@@ -4,7 +4,11 @@ import type { ReactNode } from 'react';
 import {
   Calendar, Repeat, LayoutGrid, List, CalendarDays, CalendarRange, Rows3, CalendarCheck,
 } from 'lucide-react';
-import type { Task, TaskAssignee, TaskPriority } from '../../types';
+import { Users } from 'lucide-react';
+import type { Project, Task, TaskAssignee, TaskPriority } from '../../types';
+import { Badge } from '../../components/ui';
+import { ICON_PROPS, ICON_SIZE } from '../../components/ui/icons';
+import { isParticipant } from '../projects/members/participantGate';
 import { C, FONT, R, TB } from '../../lib/design';
 import { PRIORITY_COLOR, PRIORITY_FILL, dueLabel, isDueUrgent } from '../../lib/tasks';
 
@@ -187,6 +191,31 @@ export function DueChip({ task, withTime, fontSize = 11 }: { task: Task; withTim
     }}>
       <CalendarIcon size={fontSize} />
       {label}
+    </span>
+  );
+}
+
+// Задача чужого общего проекта (я — участник): признак — роль вызывающего в проекте
+// (myRole editor/reader). У своих задач и личных чипа нет.
+export function isSharedTask(task: Pick<Task, 'projectId'>, projectsById: Map<string, Project>): boolean {
+  return !!task.projectId && isParticipant(projectsById.get(task.projectId));
+}
+
+export const SHARED_TASK_LABEL = 'Общие';
+
+// Чип «Общие» в календаре. compact — только значок (тесные клетки сетки месяца)
+export function SharedTaskChip({ compact }: { compact?: boolean }) {
+  if (compact) {
+    return (
+      <span data-testid="shared-task-chip" role="img" title={SHARED_TASK_LABEL} aria-label={SHARED_TASK_LABEL}
+        style={{ display: 'inline-flex', flexShrink: 0, color: C.info }}>
+        <Users {...ICON_PROPS} size={ICON_SIZE.xs} />
+      </span>
+    );
+  }
+  return (
+    <span data-testid="shared-task-chip" style={{ display: 'inline-flex', flexShrink: 0 }}>
+      <Badge tone="info" size="xs" icon={<Users {...ICON_PROPS} size={ICON_SIZE.xs} />}>{SHARED_TASK_LABEL}</Badge>
     </span>
   );
 }

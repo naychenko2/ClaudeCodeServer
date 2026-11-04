@@ -1,4 +1,5 @@
-﻿using ClaudeHomeServer.Services.Composition;
+﻿using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.Composition;
 // WikiPaths — тип сборки Core.dll в namespace Services.Notes, а не вертикали Notes:
 // граница Files проверяется по сборке (IsCoreAssembly в SubsystemBoundaryTests), ADR-014
 // (Files не зовёт Notes) не затронут.
@@ -105,7 +106,18 @@ public class FileService(
         throw new UnauthorizedAccessException("В вики пишет только Хранитель");
     }
 
-    public IEnumerable<FileEntry> List(string rootPath, string relativePath = "", bool showHidden = false)
+    /// <summary>
+    /// Листинг названной папки. viewerUserId — ЗРИТЕЛЬ (S2d-6b-2 доработка 1, ревью f24f7533): чужие
+    /// приватные вложения (.cc-attachments/private/{другой}/…, S2d-6b-1) из ответа выпадают — ни имён,
+    /// ни id автора, ни количества. null — вызов не про зрителя: поведение существующих вызывающих
+    /// не меняется (WebDAV, MCP files_*, ProjectFiles решают сами: у них свой актор или актора нет
+    /// в контракте, и их тесты держат «своё видно»); пустая строка — явный вызов без зрителя
+    /// (Files-ручка без JWT): любое private закрыто, fail-closed, как сам IsForeign.
+    /// TreeExcludes режет ОБХОД, а не названный путь: прямая ссылка на .cc-attachments или private/
+    /// отдаёт их содержимое — поэтому фильтр стоит по записям, а не по стартовому каталогу.
+    /// </summary>
+    public IEnumerable<FileEntry> List(string rootPath, string relativePath = "", bool showHidden = false,
+        string? viewerUserId = null)
     {
         var dir = SafeJoin(rootPath, relativePath);
         if (!Directory.Exists(dir))
@@ -142,6 +154,8 @@ public class FileService(
             }
             if (TreeExcludes.Contains(name)) continue;
             if (!showHidden && name.StartsWith('.')) continue;
+            // S2d-6b-2 доработка 1: каталог чужого автора (и чужой private выше по дереву) — не в ответе, см. doc метода
+            if (viewerUserId is not null && PrivateAttachments.IsForeign(relDir, viewerUserId)) continue;
             entries.Add(new FileEntry(name, relDir, true, null, modifiedAt, false));
         }
 
@@ -166,6 +180,7 @@ public class FileService(
                 continue;
             }
             if (!showHidden && name.StartsWith('.')) continue;
+            if (viewerUserId is not null && PrivateAttachments.IsForeign(rel, viewerUserId)) continue;
             entries.Add(new FileEntry(name, rel, false, size, modifiedAt,
                 modified.Contains(rel), IsNew: newFiles.Contains(rel)));
         }
@@ -189,11 +204,22 @@ public class FileService(
                norm.StartsWith("notes/", StringComparison.OrdinalIgnoreCase);
     }
 
-    public IEnumerable<FileEntry> Search(string rootPath, string query)
+    /// <summary>
+    /// Поиск по имени файла по всему дереву. viewerUserId — ЗРИТЕЛЬ (S2d-6b-2, разрез 4bc3d04f
+    /// §1 путь 19): чужие приватные вложения (.cc-attachments/private/{другой}/…, S2d-6b-1) из
+    /// выдачи выпадают — ни именем, ни количеством; фильтр стоит ДО Take(100), поэтому чужой
+    /// материал не съедает слоты своих результатов. Свои private, общие вложения и любые прочие
+    /// пути — без изменений. Без id зрителя (машинный шов ProjectFiles: актора в контракте
+    /// IProjectFiles нет) — fail-closed, всё private закрыто, как IsForeign по пустому userId;
+    /// чтение вложений агентом — шаг 6b-3.
+    /// </summary>
+    public IEnumerable<FileEntry> Search(string rootPath, string query, string? viewerUserId = null)
     {
         var (modified, newFiles) = GetGitStatus(rootPath);
         return Directory.EnumerateFiles(rootPath, "*", SearchOption.AllDirectories)
             .Where(f => Path.GetFileName(f).Contains(query, StringComparison.OrdinalIgnoreCase))
+            .Where(f => !PrivateAttachments.IsForeign(
+                Path.GetRelativePath(rootPath, f).Replace('\\', '/'), viewerUserId))
             .Take(100)
             .Select(f =>
             {
@@ -217,7 +243,21 @@ public class FileService(
 
     // Рекурсивный листинг всего поддерева — для prefetch офлайн-снапшота и синхронизации папок.
     // Исключает тяжёлые папки (TreeExcludes), ограничен TreeMaxEntries.
-    public IEnumerable<FileEntry> Tree(string rootPath, string relativePath = "", bool showHidden = false)
+    // viewerUserId — ЗРИТЕЛЬ (S2d-6b-2 доработка 1, ревью f24f7533): чужое private-поддерево из
+    // результата выпадает — ни имён, ни id автора, ни количества; в чужой каталог автора не идём
+    // (его содержимое не съедает слоты своих по TreeMaxEntries — тот же порядок, что фильтр до
+    // Take(100) в Search). null — вызов не про зрителя: поведение существующих вызывающих не
+    // меняется (WebDAV/MCP/ProjectFiles, см. doc List); пустая строка — без зрителя: любое private
+    // закрыто (fail-closed). TreeExcludes режет ОБХОД, а не названный старт: путь внутрь
+    // .cc-attachments вызывающий назвал явно — фильтр по записям, не по стартовому каталогу.
+    // virtual — тестовый шов (S2d-6b-8, хвост ревью R-S2d-6b-6): передача зрителя в обход
+    // (KnowledgeController.IndexFolder) не наблюдаема извне — из разрешённых IndexFolder стартов
+    // чужое private фильтром не достигается (обход ниже .cc-attachments не спускается), и мутация
+    // «снять аргумент UserId» не краснит ни один поведенческий тест (проба А ревьюера: 6/6 зелёные).
+    // Белый тест на шов требует подменного FileService, пишущего переданного зрителя, — тот же
+    // приём, что virtual-шов у EgressConnector/MockupCatalog.
+    public virtual IEnumerable<FileEntry> Tree(string rootPath, string relativePath = "", bool showHidden = false,
+        string? viewerUserId = null)
     {
         var start = SafeJoin(rootPath, relativePath);
         if (!Directory.Exists(start)) throw new DirectoryNotFoundException();
@@ -251,6 +291,8 @@ public class FileService(
                 if (TreeExcludes.Contains(name)) continue;
                 if (!showHidden && name.StartsWith('.')) continue;
                 if (IsWorktreesPath(relDir)) continue;
+                // S2d-6b-2 доработка 1: чужой каталог автора — ни в список, ни в обход (см. doc метода)
+                if (viewerUserId is not null && PrivateAttachments.IsForeign(relDir, viewerUserId)) continue;
                 result.Add(new FileEntry(name, relDir, true, null, modifiedAt, false));
                 Walk(d);
             }
@@ -277,6 +319,7 @@ public class FileService(
                     continue;
                 }
                 if (!showHidden && name.StartsWith('.')) continue;
+                if (viewerUserId is not null && PrivateAttachments.IsForeign(rel, viewerUserId)) continue;
                 result.Add(new FileEntry(name, rel, false, size, modifiedAt,
                     modified.Contains(rel), IsNew: newFiles.Contains(rel)));
             }

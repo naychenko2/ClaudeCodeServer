@@ -252,6 +252,20 @@ public class TestsToolsetTests : IDisposable
         env.Launchers.Calls.Should().Be(0);
     }
 
+    [Theory]
+    [InlineData("/etc")]
+    [InlineData("копия-без-пути")]
+    public async Task Tree_ПроизвольныйПуть_ОтказБезЗапуска(string tree)
+    {
+        var env = Build();
+
+        var result = await Call(env, new JsonObject { ["tree"] = tree });
+
+        result.IsError.Should().BeTrue();
+        result.Text.Should().Contain("копи");
+        env.Launchers.Calls.Should().Be(0);
+    }
+
     [Fact]
     public async Task АбсолютнаяЦель_Отказ()
     {
@@ -710,7 +724,7 @@ public class TestsToolsetTests : IDisposable
         var run = TestsToolset.Tools.Single(t => t.Name == TestsToolset.ToolName);
         var schema = run.InputSchema["properties"]!.AsObject();
 
-        schema.Select(p => p.Key).Should().BeEquivalentTo("kind", "target", "filter", "files", "env", "no_build");
+        schema.Select(p => p.Key).Should().BeEquivalentTo("kind", "tree", "target", "filter", "files", "env", "no_build");
         schema["kind"]!["enum"]!.AsArray().Select(v => v!.GetValue<string>()).Should().Equal("dotnet", "vitest", "playwright");
         run.Description.Should().Contain("target");
     }

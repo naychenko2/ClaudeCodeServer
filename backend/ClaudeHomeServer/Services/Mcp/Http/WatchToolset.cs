@@ -65,7 +65,8 @@ public sealed class WatchToolset(
                     name, command,
                     NullableIntArg(arguments, "interval_seconds"),
                     NullableIntArg(arguments, "timeout_minutes"),
-                    out var createError);
+                    out var createError,
+                    actorUserId: sessions.GetTurnActor(session.Id, context.OwnerId));
                 if (created is null) return Deny(createError!);
                 return Json(new
                 {

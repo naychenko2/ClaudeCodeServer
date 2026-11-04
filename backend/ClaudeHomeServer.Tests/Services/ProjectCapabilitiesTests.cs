@@ -58,6 +58,16 @@ public class ProjectCapabilitiesTests
         caps.Exec.Available.Should().BeTrue();
     }
 
+    // --- S1-1: общий проект (shared-projects, разрез §2.6): только серверный
+
+    [Fact]
+    public void Shareable_СерверныйПроектДа_ЛокальныйНет()
+    {
+        // Файлы локального проекта живут на машине владельца: общий он быть не может
+        ProjectCapabilities.Shareable(Server()).Should().BeTrue();
+        ProjectCapabilities.Shareable(Local()).Should().BeFalse();
+    }
+
     [Fact]
     public void ГруппыПокрываютВсеКлючиФичРовноОдинРаз()
     {

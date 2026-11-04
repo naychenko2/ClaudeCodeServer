@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Plugins;
 using FluentAssertions;
@@ -102,6 +103,34 @@ public class PluginDirSourceTests : IDisposable
         var localProject = new Project { Id = "p1", DeviceId = "device-1" };
         source.GetPluginDirs("owner-a", null, localProject).Should().BeEmpty(
             "у локального проекта в MVP плагинов нет (ProjectCapabilities.PluginsFor)");
+    }
+
+    // S2a-8: общий проект (есть участники) — рамка хода в нём узкая для всех, включая
+    // арендатора (TurnFrame), и пакеты владельца в старт общего чата не идут. Мутация
+    // «убрать проверку рамки в GetPluginDirs» → этот тест красный. Личный проект (без
+    // участников) и чат вне проекта — прежние тесты выше: GetPluginDirs_КаталогСуществует_Включён,
+    // GetPluginDirs_ProjectNull_ВсеВключённые.
+    [Fact]
+    public void GetPluginDirs_ОбщийПроект_НеДаетКаталоги()
+    {
+        var pkg = _store.PackageDir("owner-a", "local-a/x", "1.0.0");
+        Directory.CreateDirectory(pkg);
+        _store.SaveInstalled("owner-a",
+        [
+            new PluginInstall { Id = "local-a/x", Version = "1.0.0", Sha256 = "a", Enabled = true, Source = "draft" },
+        ]);
+
+        var source = new PluginDirSource(_store, Mock.Of<IPersonaSkillBindingLookup>());
+        // Тот же проект, что в «КаталогСуществует_Включён», но с участником: общий.
+        var sharedProject = new Project
+        {
+            Id = "p1",
+            RootPath = "/srv/p1",
+            Members = [new ProjectMember { UserId = "user-2", Role = ProjectRole.Editor, AddedBy = "owner-a" }],
+        };
+
+        source.GetPluginDirs("owner-a", null, sharedProject).Should().BeEmpty(
+            "общий проект — рамка хода узкая для всех, --plugin-dir владельца в старт не идёт (S2a-8)");
     }
 
     // C1: привязка, созданная в формате пикера «plugin:{id}/{skill}», ОБЯЗАНА дать каталог

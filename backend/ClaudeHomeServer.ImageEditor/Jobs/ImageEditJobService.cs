@@ -51,6 +51,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     private readonly ConcurrentDictionary<string, Job> _jobs = new();
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Lock _startLock = new();
+    private readonly ISessionDirectory? _sessions;
 
     public ImageEditJobService(
         IEnumerable<IImageEditor> editors,
@@ -59,8 +60,10 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         ISpendCollector? spend = null,
         ISessionBroadcaster? broadcaster = null,
         TimeProvider? time = null,
-        IImageRaster? raster = null)
+        IImageRaster? raster = null,
+        ISessionDirectory? sessions = null)
     {
+        _sessions = sessions;
         _fitter = raster is null ? null : new InputFitter(raster);
         _editors = editors;
         _spend = spend;
@@ -598,7 +601,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             sizeNote = job.SizeNote;
         }
         await NotifyFinishedAsync(job);
-        await Broadcast(job.OwnerId, new ImageEditCompletedMessage(job.Id, job.ProjectId, [.. job.Variants], cost,
+        await Broadcast(job.OwnerId, ImageEditScope.ProjectIdOf(job.ProjectId), job.ChatSessionId, new ImageEditCompletedMessage(job.Id, job.ProjectId, [.. job.Variants], cost,
             job.ChatSessionId, job.Initiator, sizeNote, job.ThreadId));
     }
 
@@ -630,7 +633,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 job.Cost = new EditCost(amount, editor.PriceUnit);
         }
         await NotifyFinishedAsync(job);
-        await Broadcast(job.OwnerId,
+        await Broadcast(job.OwnerId, ImageEditScope.ProjectIdOf(job.ProjectId), job.ChatSessionId,
             new ImageEditFailedMessage(job.Id, job.ProjectId, result.Outcome, charged, result.Error, retry,
                 job.ChatSessionId, job.Initiator, job.ThreadId));
     }
@@ -660,7 +663,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             job.Error = result.Error;
         }
         await NotifyFinishedAsync(job);
-        await Broadcast(job.OwnerId,
+        await Broadcast(job.OwnerId, ImageEditScope.ProjectIdOf(job.ProjectId), job.ChatSessionId,
             new ImageEditFailedMessage(job.Id, job.ProjectId, EditOutcome.Cancelled, charged, result.Error, null,
                 job.ChatSessionId, job.Initiator, job.ThreadId));
     }
@@ -827,19 +830,19 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 job.Gpu = value.Gpu;
                 elapsed = owner.RunElapsedSeconds(job);
             }
-            _ = owner.Broadcast(job.OwnerId,
+            _ = owner.Broadcast(job.OwnerId, ImageEditScope.ProjectIdOf(job.ProjectId), job.ChatSessionId,
                 new ImageEditProgressMessage(job.Id, job.ProjectId, value.Stage, value.QueuePosition,
                     job.ChatSessionId, job.Initiator, job.ThreadId, value.Run, value.Runs, value.EtaSeconds,
                     elapsed, value.Gpu));
         }
     }
 
-    private async Task Broadcast(string ownerId, ServerMessage message)
+    private async Task Broadcast(string ownerId, string? projectId, string? chatSessionId, ServerMessage message)
     {
         if (_broadcaster is null) return;
         try
         {
-            await _broadcaster.ToOwner(ownerId, message);
+            await _broadcaster.ToChatAudience(_sessions, ownerId, projectId, chatSessionId, message);
         }
         catch (Exception ex)
         {

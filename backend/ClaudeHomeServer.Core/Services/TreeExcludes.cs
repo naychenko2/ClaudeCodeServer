@@ -51,4 +51,31 @@ public static class TreeExcludes
     // а .git — единственный надёжный маркер «здесь начинается отдельное git-дерево».
     public static bool HasOwnGit(string dir) =>
         File.Exists(Path.Combine(dir, ".git")) || Directory.Exists(Path.Combine(dir, ".git"));
+
+    // Служебный файл атомарной записи (FilesController.WriteAtomic): «.имя.файла.<guid>.tmp» в
+    // том же каталоге, что цель: подменяет её через File.Move и живёт доли секунды. Это не
+    // правка пользователя: наблюдатель глушит его события — ни в filesChanged, ни в синк
+    // знаний он не должен попадать (доработка S2c-1 п.2). Имя и признак держатся вместе:
+    // построение имени и фильтр не разъезжаются, тест строит имя этой же функцией.
+    public static string AtomicTempName(string targetFileName) =>
+        "." + targetFileName + "." + Guid.NewGuid().ToString("N") + ".tmp";
+
+    // Признак по форме имени, а не списком: guid уникален на каждую запись.
+    // «.» + непустое имя + '.' + ровно 32 hex (формат Guid «N») + ".tmp".
+    // Обычный пользовательский «.foo.tmp» под признак не попадает — он остаётся наблюдаемым.
+    public static bool IsAtomicTempWrite(string fileName)
+    {
+        // Минимальная длина признака: "." + 1 символ имени + "." + 32 hex + ".tmp" = 39.
+        if (fileName.Length < 39 || !fileName.StartsWith('.') ||
+            !fileName.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase))
+            return false;
+        var g = fileName.Length - 36; // старт guid: ровно 32 hex перед ".tmp"
+        if (fileName[g - 1] != '.') return false; // разделитель после имени: имя непусто (g ≥ 3)
+        for (var i = g; i < g + 32; i++)
+            if (!IsHexDigit(fileName[i])) return false;
+        return true;
+    }
+
+    private static bool IsHexDigit(char c) =>
+        (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }

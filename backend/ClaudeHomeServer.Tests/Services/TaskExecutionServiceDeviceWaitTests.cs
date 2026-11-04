@@ -110,6 +110,38 @@ public class TaskExecutionServiceDeviceWaitTests : IDisposable
         started.LinkedSessionId.Should().NotBeNull();
     }
 
+    // F-9: возобновление после «ждёт устройство» несёт актора-создателя задачи (TaskLaunchActor.For),
+    // а не «неизвестного». Актор хода читаем из реестра сессии: SubmitActor/RunActor (white-box, как StubProcess).
+    // Мутация: убрать actorUserId в ResumeDeviceWaitAsync — случай участника краснеет.
+    private string? TurnActorOf(string sessionId)
+    {
+        var field = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var entry = ((System.Collections.IDictionary)field.GetValue(_sessions)!)[sessionId]!;
+        var actor = (string?)entry.GetType().GetField("SubmitActor")!.GetValue(entry);
+        return string.IsNullOrEmpty(actor) ? null : actor; // "" — «неизвестный» актор, как в GetTurnActor
+    }
+
+    [Theory]
+    [InlineData("editor", true)]    // создатель — участник-редактор: он и актор хода
+    [InlineData("owner", false)]    // создатель — владелец: ход без актора, как раньше
+    [InlineData(null, false)]       // старая запись без создателя: считается владельцем
+    public async Task OnDeviceOnline_ЖдавшаяЗадача_АкторХодаЭтоСоздательЗадачи(string? creator, bool expectEditor)
+    {
+        var (owner, project) = LocalProject();
+        var editor = _userStore.Add("device-editor", "password123", "user");
+        var task = ClaudeTask(owner, project);
+        _tasks.GetById(task.Id)!.CreatedByUserId = creator switch { "editor" => editor.Id, "owner" => owner.Id, _ => null };
+        await _sut.ExecuteAsync(task, auto: true);
+
+        _gate.GoOnline();
+        await _sut.OnDeviceOnlineAsync(owner.Id, "dev-1");
+
+        var started = _tasks.GetById(task.Id)!;
+        started.LinkedSessionId.Should().NotBeNull("устройство в сети — исполнитель стартовал");
+        TurnActorOf(started.LinkedSessionId!).Should().Be(expectEditor ? editor.Id : null,
+            "возобновление автоматикой наследует создателя задачи, а не неизвестного актора");
+    }
+
     [Fact]
     public async Task OnDeviceOnline_ДругоеУстройство_ЗадачаЖдётДальше()
     {

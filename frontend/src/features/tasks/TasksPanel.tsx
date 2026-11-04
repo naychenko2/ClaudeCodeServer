@@ -14,12 +14,15 @@ import {
   STATUS_DOT, STATUS_LABEL, daysFromToday, ensureTasksLoaded, useTasks,
 } from '../../lib/tasks';
 import type { BoardGroupBy } from '../../lib/tasks';
+import { useMe } from '../../lib/defaultPersona';
 import { TaskCard } from './TaskCard';
 import { NewTaskDialog } from './NewTaskDialog';
 import { BoardToolbar } from './board/BoardToolbar';
 import { BoardIcon, ByDateIcon, ListIcon, PillViewSwitcher } from './bits';
+import { useProjectPeople } from './TaskUserBadge';
 import {
-  TasksListFilterButton, applyTaskFilters, EMPTY_TASK_FILTERS, type TaskListFilters,
+  TasksListFilterButton, applyTaskFilters, isOwnerProjectView, isSharedProjectView,
+  memberOptionName, EMPTY_TASK_FILTERS, type AssigneePersonOption, type TaskListFilters,
 } from './TasksListFilter';
 
 // Группировки доски внутри проекта (без «по проекту»)
@@ -124,6 +127,20 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
   const filters = filtersProp ?? localFilters;
   const onFilters = onFiltersProp ?? setLocalFilters;
 
+  // Общий проект (S2b-F5): список участников для «Участников» в фильтре и на тулбаре
+  // доски; контекст взгляда для «Я» (assigneeUserId = я, старый Me — только у владельца).
+  const me = useMe();
+  const shared = isSharedProjectView(project);
+  const { view } = useProjectPeople(project.id, shared);
+  const people = useMemo<AssigneePersonOption[]>(
+    () => view ? view.members.map(m => ({ userId: m.userId, name: memberOptionName(m) })) : [],
+    [view],
+  );
+  const filterCtx = useMemo(
+    () => ({ currentUserId: me.userId, isOwner: isOwnerProjectView(project, me.userId) }),
+    [me.userId, project],
+  );
+
   // Панель в карточке с шапкой — контролы уезжают туда (компактный ряд иконок);
   // без шапки (мобила) остаётся полноразмерная строка действий в теле панели.
   const inHeader = useHasPanelHeader();
@@ -150,8 +167,8 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
   // Фильтры применяются ДО группировки (работают в обеих — «Список» и «По дате»).
   // В режиме доски не применяются: там свой BoardToolbar.
   const filteredTasks = useMemo(
-    () => boardMode ? tasks : applyTaskFilters(tasks, filters),
-    [tasks, filters, boardMode],
+    () => boardMode ? tasks : applyTaskFilters(tasks, filters, filterCtx),
+    [tasks, filters, boardMode, filterCtx],
   );
 
   const groups = useMemo(
@@ -195,6 +212,7 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
               onFilters={onFilters}
               total={tasks.length}
               found={filteredTasks.length}
+              people={people}
             />
           )}
           <IconSegmented<PanelTab>
@@ -248,6 +266,7 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
                 total={tasks.length}
                 found={filteredTasks.length}
                 isMobile={isMobile}
+                people={people}
               />
             )}
           </div>
@@ -287,7 +306,7 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
           ) : (
             // Десктоп: управление доской (группировка/фильтры/поиск/колонки) — в сайдбаре
             <div style={{ padding: '10px 2px' }}>
-              <BoardToolbar layout="sidebar" groupOptions={PROJECT_GROUP_OPTIONS} onEditColumns={onEditColumns} />
+              <BoardToolbar layout="sidebar" groupOptions={PROJECT_GROUP_OPTIONS} onEditColumns={onEditColumns} people={people} />
             </div>
           )
         ) : loading ? (

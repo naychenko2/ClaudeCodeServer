@@ -14,11 +14,13 @@ namespace ClaudeHomeServer.Tests.Controllers;
 [Trait("Category", "Host")]
 public class NotesControllerTests : IClassFixture<TestWebApplicationFactory>
 {
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;     // владелец
     private readonly HttpClient _stranger;   // второй юзер
 
     public NotesControllerTests(TestWebApplicationFactory factory)
     {
+        _factory = factory;
         _client = factory.CreateAuthenticatedClient();
         _stranger = factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
@@ -93,6 +95,33 @@ public class NotesControllerTests : IClassFixture<TestWebApplicationFactory>
         var list = await (await _client.GetAsync("/api/notes")).Content.ReadFromJsonAsync<JsonElement>();
         list.EnumerateArray().Should()
             .Contain(n => n.GetProperty("title").GetString() == "Заметка в списке");
+    }
+
+    // ─── Осиротевшая заметка: источник-проект удалён ─────────────────────────
+
+    // Дефект приёмки e2e вики (W4): DELETE заметки, у которой удалён проект-источник,
+    // отвечал 500 вместо 404. Осиротевшая заметка = «несуществующая»: тот же 404,
+    // что для чужого id (файл на диске остался, записи проекта — нет).
+    [Fact]
+    public async Task Delete_ЗаметкаСУдалённымПроектом_404()
+    {
+        var dir = Path.Combine(_factory.TempDir, "orphan_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var created = await _client.PostAsJsonAsync("/api/projects",
+            new { name = "Осиротевший" + Guid.NewGuid().ToString("N")[..6], rootPath = dir, createDirectory = true });
+        created.EnsureSuccessStatusCode();
+        var projectId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        var noteResp = await _client.PostAsJsonAsync("/api/notes",
+            new { title = "Заметка в проекте", content = "тело", source = projectId });
+        noteResp.EnsureSuccessStatusCode();
+        var id = (await noteResp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        // Удаляем проект-источник; сам файл заметки на диске остаётся (проект не сносит свою папку)
+        (await _client.DeleteAsync($"/api/projects/{projectId}")).StatusCode
+            .Should().Be(HttpStatusCode.NoContent);
+
+        (await _client.DeleteAsync(Url(id))).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     // ─── S2c-2 · хеш содержимого и 409 при сохранении (К8) ───────────────────

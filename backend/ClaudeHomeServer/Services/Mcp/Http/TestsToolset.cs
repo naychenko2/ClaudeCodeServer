@@ -76,6 +76,9 @@ public sealed class TestsToolset(
         if (!_caller.TryResolveProject(session, context.OwnerId, Refusals, out var project, out error)) return Deny(error);
 
         var root = ProjectRunCaller.RootOf(session, project);
+        // tree: прогон в копии мутации ЭТОГО дерева; корень запуска меняется, очередь и счётчик те же
+        if (!MutationCopyTree.TryResolve(StringArg(arguments, MutationCopyTree.ParamName), root, out root, out error))
+            return Deny(error);
         if (!TryParseKind(StringArg(arguments, "kind"), out var kind, out error)) return Deny(error);
         var filter = StringArg(arguments, "filter");
         if (TestRunService.LooksLikeOption(filter))
@@ -627,6 +630,11 @@ public sealed class TestsToolset(
                         ["type"] = "string",
                         ["enum"] = new JsonArray("dotnet", "vitest", "playwright"),
                         ["description"] = "Вид прогона; по умолчанию dotnet",
+                    },
+                    [MutationCopyTree.ParamName] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = MutationCopyTree.ParamDescription,
                     },
                     ["target"] = new JsonObject
                     {

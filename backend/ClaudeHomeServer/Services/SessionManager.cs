@@ -6855,6 +6855,27 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // _turnLock свободен, транзрипт закрыт, новый ход стартует свежим процессом. Только для
         // отложенной доставки (из Pending): свежий ход человека через SendDirectAsync сюда не попадает.
         await AwaitPreviousTurnExitAsync(sessionId, entry);
+
+        // F2-O3 доработка 2 (дельта-ревью 627bd324): гонка «отзыв против уже начатой доставки».
+        // Сообщение изымается из очереди под PendingLock (DrainNextPendingAsync), а доставляется
+        // вне замка: в окне между изъятием и стартом хода может прийти отзыв участника.
+        // StopChatsOfRevokedMember чистит очередь, но до уже изъятых сообщений не дотягивается.
+        // Без перепроверки здесь стартует ход-сирота в приватном чате отозванного: его события
+        // ушли бы в user_{id}, а сам автор чата его больше не видит. Перепроверяем перед стартом:
+        // автор приватного чата всё ещё участник проекта. Нет — ход не начинаем, сообщение уже
+        // вычерпано. Образец — «Стоп успел снять цикл — ход-сироту не шлём» (ContinueWorkLoopAsync).
+        // Обычный (не приватный) чат и чат неотозванного участника не затронуты: гейт срабатывает
+        // только когда автор приватного чата выведен из проекта.
+        if (PrivateChatAuthorRevoked(entry))
+        {
+            // Ход не стартовал. При активном цикле drain выставил LoopTurnInFlight до отправки —
+            // гасим, иначе цикл завис бы на мёртвой итерации (тот же финализирующий путь, что в
+            // catch ниже). После отзыва цикла уже нет (StopChatsOfRevokedMember его снимает),
+            // поэтому ветка доходит только до общего пути.
+            if (entry.Info.WorkLoop is not null) entry.LoopTurnInFlight = false;
+            return false;
+        }
+
         try
         {
             if (next.Kind == PendingKind.User)
@@ -6887,6 +6908,17 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             Console.Error.WriteLine($"[SessionManager] Доставка отложенного сообщения ({sessionId}): {ex.Message}");
             return false;
         }
+    }
+
+    // F2-O3 доработка 2: автор приватного чата больше не участник проекта (или проекта нет).
+    // Приватный чат виден только автору (SessionAccess.CanSee): после его отзыва сообщения и
+    // ходы в этом чате некому ни показать, ни начать. Только для приватных чатов
+    // (PrivateToUserId != null): общий чат принадлежит проекту и доставляется как раньше.
+    private bool PrivateChatAuthorRevoked(SessionEntry entry)
+    {
+        if (entry.Info.PrivateToUserId is not { } author) return false;
+        var project = entry.Info.ProjectId is not null ? _projects.GetById(entry.Info.ProjectId) : null;
+        return Access.ProjectAccess.Check(project, author) is null;
     }
 
     // Клиенту уходят только видимые элементы: silent — ход-реакция на доклад, чей текст

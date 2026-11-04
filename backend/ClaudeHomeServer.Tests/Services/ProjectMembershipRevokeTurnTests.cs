@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Tests.Helpers;
@@ -127,5 +128,110 @@ public class ProjectMembershipRevokeTurnTests : SessionManagerTestBase
 
         _sut.GetPending(sharedChat.Id).Should().ContainSingle();
         _sut.GetPending(otherPrivate.Id).Should().ContainSingle();
+    }
+
+    // ── доработка 2 (дельта-ревью 627bd324): гонка «отзыв против уже начатой доставки» ──
+
+    /// <summary>
+    /// Сообщение изымается из очереди под PendingLock, а доставляется вне замка: в окне между
+    /// изъятием и стартом хода (здесь — на бродкасте очереди перед DeliverPendingAsync) приходит
+    /// отзыв участника. StopChatsOfRevokedMember чистит очередь, но до уже изъятых сообщений не
+    /// дотягивается. Перепроверка в DeliverPendingAsync гасит ход-сироту: в процесс отозванного
+    /// не уходит ни одного нового хода, очередь остаётся пустой. Окно держит TaskCompletionSource.
+    /// </summary>
+    [Fact]
+    public async Task ОтзывВОкнеМеждуИзятиемИСтартомНеПоднимаетХодСироту()
+    {
+        var (project, chat) = await SharedProjectWithPrivateChatOfMemberAsync("race");
+        var entry = GetEntry(chat.Id);
+        var adapter = StubAdapter(entry); // живой «previous»-процесс: без перепроверки ход пошёл бы в него
+        SetProcess(entry, adapter.Object);
+        EnqueueUser(entry, "изъято из очереди до отзыва");
+
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Окно: доставка застревает на бродкасте очереди (сразу после изъятия, до DeliverPendingAsync).
+        // Гейт ловит только PendingMessagesMessage — служебные бродкасты отзыва (composer_restore)
+        // проходят, иначе отзыв, которого ждёт этот же тест, уткнулся бы в свой же гейт (deadlock).
+        _broadcaster.Gate = async msg =>
+        {
+            if (msg is PendingMessagesMessage)
+            {
+                entered.TrySetResult();
+                await release.Task;
+            }
+        };
+        try
+        {
+            var drain = (Task)InvokePrivate("DrainNextPendingAsync", chat.Id)!;
+
+            await WaitForConditionAsync(() => entered.Task.IsCompleted, TimeSpan.FromSeconds(5));
+            entered.Task.IsCompleted.Should().BeTrue("drain не дошёл до окна между изъятием и стартом");
+
+            // Отзыв — ровно в этом окне: сообщение уже вне очереди, ход ещё не начат.
+            (await NewMembershipService().RemoveAsync(TestUserId, project.Id, MemberId)).Ok.Should().BeTrue();
+
+            release.SetResult(); // отпускаем окно: доставка доходит до перепроверки
+            await drain;
+
+            // Ход-сирота не поднят: в процесс отозванного не ушло ни одного нового сообщения.
+            adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<int>(), It.IsAny<bool>()), Times.Never(),
+                "после отзыва стартует ход-сирота в приватном чате отозванного");
+            _sut.GetPending(chat.Id).Should().BeEmpty("изъятое до отзыва сообщение не возвращается в очередь");
+        }
+        finally { _broadcaster.Gate = null; }
+    }
+
+    /// <summary>
+    /// Граница: отзыв одного участника не глушит доставку в приватный чат другого — он остаётся
+    /// участником проекта, перепроверка его пропускает. Тот же ход событий, что в тесте гонки,
+    /// но целевой чат принадлежит неотозванному: ход стартует, очередь разбирается.
+    /// </summary>
+    [Fact]
+    public async Task ДоставкаВПриватныйЧатДругогоУчастникаПроходитПриОтзывеПервого()
+    {
+        var (project, _) = await SharedProjectWithPrivateChatOfMemberAsync("other");
+        _projectManager.SetMembers(project.Id, [
+            new ProjectMember { UserId = MemberId, Role = ProjectRole.Editor, AddedBy = TestUserId },
+            new ProjectMember { UserId = OtherMemberId, Role = ProjectRole.Editor, AddedBy = TestUserId },
+        ]);
+        var otherChat = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        otherChat.PrivateToUserId = OtherMemberId; // автор — неотозванный участник
+        var entry = GetEntry(otherChat.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        EnqueueUser(entry, "доставить в чат другого участника");
+
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _broadcaster.Gate = async msg =>
+        {
+            if (msg is PendingMessagesMessage)
+            {
+                entered.TrySetResult();
+                await release.Task;
+            }
+        };
+        try
+        {
+            var drain = (Task)InvokePrivate("DrainNextPendingAsync", otherChat.Id)!;
+
+            await WaitForConditionAsync(() => entered.Task.IsCompleted, TimeSpan.FromSeconds(5));
+            entered.Task.IsCompleted.Should().BeTrue("drain не дошёл до окна");
+
+            // В окне доставки в чат ДРУГОГО участника отзывается ПЕРВЫЙ — целевого чата это не касается.
+            (await NewMembershipService().RemoveAsync(TestUserId, project.Id, MemberId)).Ok.Should().BeTrue();
+
+            release.SetResult();
+            await drain;
+
+            // Доставка в чат неотозванного участника прошла: ход стартовал в его процесс.
+            adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<int>(), It.IsAny<bool>()), Times.Once(),
+                "перепроверка не должна глушить доставку в чат участника, который не отозван");
+            _sut.GetPending(otherChat.Id).Should().BeEmpty();
+        }
+        finally { _broadcaster.Gate = null; }
     }
 }

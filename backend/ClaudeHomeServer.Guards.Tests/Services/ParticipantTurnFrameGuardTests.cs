@@ -626,6 +626,16 @@ public sealed class ParticipantFrameFixture : IDisposable
             });
     }
 
+    /// <summary>
+    /// Реестр актора фикстуры: для чата, указанного источником (общий чат), актор — тот, кто и
+    /// вызывает: арендатор (клиент фикстуры — его аутентифицированный клиент). Для остальных
+    /// чатов — null: их вызовы идут из личного проекта, где рамка Wide и гейт актора не при чём.
+    /// </summary>
+    private sealed class NamedActorForChatsOf(Func<string?> of) : ClaudeHomeServer.Services.Access.ITurnActorRegistry
+    {
+        public string? Actor(string sessionId, string ownerId) => of() == sessionId ? ownerId : null;
+    }
+
     public ParticipantFrameFixture()
     {
         var dify = new DifyStub(Tag);
@@ -639,6 +649,14 @@ public sealed class ParticipantFrameFixture : IDisposable
             // отработать (M1), платных запросов тест не делает. Состав websearch-tools/list
             // зависит от настройки (WebSearchToolset.cs:71) — с test-key он полный.
             ExtraServices = services => services
+                // Реестр актора — подмена (после О2 финального ревью «Общих проектов»): в продукте
+                // вызов тулсета идёт ВНУТРИ хода и актор у хода есть; в фикстуре хода нет, и
+                // безымянный вызов отказывал бы ГЕЙТ АКТОРА, а не рамка — сторож мерил бы не то.
+                // Называется тот, кто реально вызывает: владелец (его клиент, его токен).
+                // Рамка (ITurnFrameSource) остаётся живой: Narrow для общего чата — ровно то,
+                // что проверяется этим сторожем.
+                .AddSingleton<ClaudeHomeServer.Services.Access.ITurnActorRegistry>(
+                    new NamedActorForChatsOf(() => SharedChat))
                 .AddSingleton(new ClaudeHomeServer.Services.WebSearch.PerplexityOptions { ApiKey = "test-key" })
                 .AddSingleton<ClaudeHomeServer.Services.WebSearch.PerplexitySearchService>(sp =>
                     new ClaudeHomeServer.Services.WebSearch.PerplexitySearchService(

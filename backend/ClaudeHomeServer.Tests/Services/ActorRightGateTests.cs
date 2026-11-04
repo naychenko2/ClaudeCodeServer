@@ -20,7 +20,11 @@ namespace ClaudeHomeServer.Tests.Services;
 /// Мутации (каждая — красный названный тест, откат — зелёный):
 /// • ActorRightGate.Denied: вернуть null сразу после определения актора — «РедакторГитЗапись…» и
 ///   «ЧитательЛюбаяЗапись…» краснеют;
-/// • убрать default-deny (строки нет → null) — «НеизвестныйИнструментУУчастника_Отказ» краснеет.
+/// • убрать default-deny (строки нет → null) — «НеизвестныйИнструментУУчастника_Отказ» краснеет;
+/// • вернуть прежнюю алиасу «IsNullOrEmpty(actor) → права арендатора» (до О2) —
+///   «ОбщийПроект_НеизвестныйАктор_ВсёЧтоТребуетПрава_Отказ» краснеет на первом инструменте;
+/// • убрать ветку рамки (отказывать неизвестному актору и в личном проекте) —
+///   «ЛичныйПроект_НеизвестныйАктор_КакРаньше_ГейтНеОтказывает» краснеет.
 /// </summary>
 public class ActorRightGateUnitTests
 {
@@ -42,13 +46,22 @@ public class ActorRightGateUnitTests
         public RequestScope? ResolveSession(string? callerUserId, string? sessionId, ProjectRight right = ProjectRight.Read) => null;
     }
 
+    // Рамка хода — тот же вердикт по той же модели, что у SessionManager.GetTurnFrame:
+    // общий проект (есть участники) — Narrow, личный или чат вне проекта — Wide.
+    private sealed class PureFrames(Project project) : ITurnFrameSource
+    {
+        public TurnFrameKind Frame(string? sessionId, string ownerId) =>
+            project.Members is { Count: > 0 } ? TurnFrameKind.Narrow : TurnFrameKind.Wide;
+    }
+
     private const string Owner = "owner";
     private const string Editor = "editor";
     private const string Reader = "reader";
 
-    private static (ActorRightGate Gate, Actors Actors, Project Project) Arrange()
+    // По умолчанию — общий проект владельца (с редактором и читателем).
+    private static (ActorRightGate Gate, Actors Actors, Project Project) Arrange(Project? project = null)
     {
-        var project = new Project
+        project ??= new Project
         {
             OwnerId = Owner,
             Members =
@@ -58,8 +71,10 @@ public class ActorRightGateUnitTests
             ],
         };
         var actors = new Actors();
-        return (new ActorRightGate(actors, new PureAccess(project)), actors, project);
+        return (new ActorRightGate(actors, new PureAccess(project), new PureFrames(project)), actors, project);
     }
+
+    private static Project PersonalProject() => new() { OwnerId = Owner };
 
     [Theory]
     [InlineData("wsp", "files_write")]
@@ -145,18 +160,76 @@ public class ActorRightGateUnitTests
         gate.Denied("wsp", "files_read", "chat", Owner, project.Id).Should().BeNull();
     }
 
+    // Названный арендатор — разрешающее короткое замыкание гейта: его собственные вызовы не
+    // читаются через таблицу (иtools вне таблицы ему открыты).
     [Fact]
-    public void ВладелецИНеизвестныйАктор_ПраваАрендатора_Проходит()
+    public void НазванныйВладелец_ПраваАрендатора_Проходит()
     {
         var (gate, actors, project) = Arrange();
         actors.Map["owner-chat"] = Owner;
-        actors.Map["bg-chat"] = null;
-        foreach (var chat in new[] { "owner-chat", "bg-chat", "no-such-chat" })
+        foreach (var (server, tool) in new (string, string)[]
         {
-            gate.Denied("wsp", "git_commit", chat, Owner, project.Id).Should().BeNull(chat);
-            gate.Denied("wsp", "some_new_write_tool", chat, Owner, project.Id).Should().BeNull(chat);
-        }
+            ("wsp", "git_commit"), ("wsp", "some_new_write_tool"), ("watch", "watch_start"),
+            ("memory", "memory_remember"), ("tasks", "tasks_complete"),
+        })
+            gate.Denied(server, tool, "owner-chat", Owner, project.Id).Should().BeNull($"{server}/{tool}");
+
         gate.Denied("wsp", "git_commit", null, Owner, project.Id).Should().BeNull("вызова без чата-вызывателя нет актора");
+    }
+
+    // О2 финального ревью «Общих проектов» (892deb00): неизвестный актор общего проекта
+    // резолвится как «самое узкое» (контракт ITurnActorRegistry) — отказано всё, что требует
+    // права, и всё, чего нет в таблице. Мутация: вернуть «IsNullOrEmpty(actor) → null» строкой
+    // до О2 — этот тест краснеет на первом же инструменте.
+    [Theory]
+    [InlineData("wsp", "git_commit")]
+    [InlineData("wsp", "chats_send")]
+    [InlineData("wsp", "deploy_start")]
+    [InlineData("watch", "watch_start")]
+    [InlineData("memory", "memory_remember")]
+    [InlineData("image-editor", "image_generate")]
+    [InlineData("tasks", "tasks_complete")]
+    [InlineData("notes", "notes_create")]
+    [InlineData("wsp", "some_new_write_tool")]
+    public void ОбщийПроект_НеизвестныйАктор_ВсёЧтоТребуетПрава_Отказ(string server, string tool)
+    {
+        var (gate, actors, project) = Arrange();
+        // и чат с обнулённым реестром (после рестарта, дренаж), и чужой/удалённый чат —
+        // рамка у обоих Narrow (fail-closed, как GetTurnFrame)
+        foreach (var chat in new[] { "bg-chat", "no-such-chat" })
+        {
+            actors.Map[chat] = null;
+            gate.Denied(server, tool, chat, Owner, project.Id)
+                .Should().Be(ActorRightGate.DeniedText, $"{chat}: {server}/{tool}");
+        }
+    }
+
+    // Открыто только то, что права не требует: его держат рамка хода и доступ участника,
+    // а не догадка гейта о ранге безымянного актора.
+    [Theory]
+    [InlineData("notes", "notes_read")]
+    [InlineData("tasks", "tasks_list")]
+    [InlineData("wsp", "files_read")]
+    [InlineData("watch", "watch_list")]
+    public void ОбщийПроект_НеизвестныйАктор_Чтение_Проходит(string server, string tool)
+    {
+        var (gate, actors, project) = Arrange();
+        actors.Map["bg-chat"] = null;
+        gate.Denied(server, tool, "bg-chat", Owner, project.Id).Should().BeNull($"{server}/{tool}");
+    }
+
+    // Критерий 2: в личном (необщем) проекте разведение TurnFrame — поведение не изменилось.
+    [Theory]
+    [InlineData("wsp", "git_commit")]
+    [InlineData("watch", "watch_start")]
+    [InlineData("memory", "memory_remember")]
+    [InlineData("tasks", "tasks_complete")]
+    [InlineData("wsp", "some_new_write_tool")]
+    public void ЛичныйПроект_НеизвестныйАктор_КакРаньше_ГейтНеОтказывает(string server, string tool)
+    {
+        var (gate, actors, project) = Arrange(PersonalProject());
+        actors.Map["bg-chat"] = null;
+        gate.Denied(server, tool, "bg-chat", Owner, project.Id).Should().BeNull($"{server}/{tool}");
     }
 
     // Мутация: убрать default-deny — тест краснеет
@@ -208,10 +281,13 @@ public class ActorRightGateUnitTests
 /// <summary>
 /// S2c-6, проводка: реальные тулсеты через /mcp/{server}/{chat} с подменённым реестром актора.
 /// Ход редактора: заметки/файлы/задачи проходят, git и настройки — отказ; ход читателя — любая
-/// запись отказ; ход владельца и фон — как раньше.
+/// запись отказ; ход названного владельца — как раньше. Ход без инициатора в общем проекте
+/// (О2 финального ревью): отказано всё, что требует права, включая запись контента; чтение
+/// открыто. В личном проекте тот же безымянный фон — как раньше (разведение TurnFrame).
 ///
 /// Мутации: убрать вызов actorGate.Denied из одного тулсета — его тест краснеет
-/// («Редактор…»/«Читатель…» по серверу).
+/// («Редактор…»/«Читатель…» по серверу); вернуть алиасу «unknown → права арендатора» —
+/// краснеют «Фон_ВОбщемПроект…».
 /// </summary>
 [Trait("Category", "Host")]
 public class ActorRightMcpWiringTests : IDisposable
@@ -329,18 +405,70 @@ public class ActorRightMcpWiringTests : IDisposable
     }
 
     [Fact]
-    public async Task ВладелецИФон_КакРаньше_ГейтНеОтказывает()
+    public async Task НазванныйВладелец_КакРаньше_ГейтНеОтказывает()
     {
         var (projectId, chat) = await ArrangeAsync("editor");
+        _actors.Map[chat] = OwnerId;
 
-        foreach (var actor in new string?[] { OwnerId, null })
-        {
-            _actors.Map[chat] = actor;
-            var (n, nErr) = await CallAsync("notes", chat, "notes_create", new { title = "Владелец " + actor, content = "x" });
-            nErr.Should().BeFalse(n);
-            var (git, _) = await CallAsync("wsp", chat, "git_stage", new { projectId, path = "a.txt" });
-            git.Should().NotBe(ActorRightGate.DeniedText, "актор неизвестен или арендатор — права арендатора");
-        }
+        var (n, nErr) = await CallAsync("notes", chat, "notes_create", new { title = "Владелец", content = "x" });
+        nErr.Should().BeFalse(n);
+        var (git, _) = await CallAsync("wsp", chat, "git_stage", new { projectId, path = "a.txt" });
+        git.Should().NotBe(ActorRightGate.DeniedText, "названный арендатор — права арендатора");
+    }
+
+    // О2 финального ревью: ход без инициатора в общем проекте (реестр молчит) не получает
+    // прав арендатора — отказано всё, что требует права. Мутация: алиаса «unknown → права
+    // арендатора» — этот тест и «Фон…ЗаписьКонтентаТожеОтказана» краснеют.
+    [Theory]
+    [MemberData(nameof(ЗакрытыеУчастнику))]
+    public async Task Фон_ВОбщемПроект_ВсёЧтоТребуетПрава_Отказ(string server, string tool)
+    {
+        var (_, chat) = await ArrangeAsync("editor");
+        _actors.Map[chat] = null;
+        var (text, isError) = await CallAsync(server, chat, tool, new { });
+        isError.Should().BeTrue($"{server}/{tool}: {text}");
+        text.Should().Be(ActorRightGate.DeniedText, $"{server}/{tool}");
+    }
+
+    // Запись контента (открытая участнику по Q1) безымянному актору общего проекта тоже
+    // отказана: права нет ни у чего. Чтение — открыто (права не требует).
+    [Fact]
+    public async Task Фон_ВОбщемПроект_ЗаписьКонтентаОтказана_ЧтениеПроходит()
+    {
+        var (_, chat) = await ArrangeAsync("editor");
+        _actors.Map[chat] = null;
+
+        var (n, nErr) = await CallAsync("notes", chat, "notes_create", new { title = "Фон", content = "x" });
+        nErr.Should().BeTrue(n);
+        n.Should().Be(ActorRightGate.DeniedText);
+
+        var (list, listErr) = await CallAsync("notes", chat, "notes_list", new { });
+        listErr.Should().BeFalse(list);
+        var (watch, watchErr) = await CallAsync("watch", chat, "watch_list", new { });
+        watchErr.Should().BeFalse(watch);
+    }
+
+    // Критерий 2 в живом потоке: чат личного проекта (участников нет) — то же разведение,
+    // что у TurnFrame: поведение не изменилось.
+    [Fact]
+    public async Task ЛичныйПроект_Фон_КакРаньше_ГейтНеОтказывает()
+    {
+        var dir = Path.Combine(_factory.TempDir, "ar_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var created = await Owner().PostAsJsonAsync("/api/projects",
+            new { name = "Личный" + Guid.NewGuid().ToString("N")[..6], rootPath = dir, createDirectory = true });
+        created.EnsureSuccessStatusCode();
+        var projectId = IdOf(await created.Content.ReadAsStringAsync());
+
+        var session = await Owner().PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "acceptEdits" });
+        session.EnsureSuccessStatusCode();
+        var chat = IdOf(await session.Content.ReadAsStringAsync());
+        _actors.Map[chat] = null;
+
+        var (w, wErr) = await CallAsync("watch", chat, "watch_start", new { name = "стор", poll_command = "exit 0" });
+        wErr.Should().BeFalse(w);
+        var (n, nErr) = await CallAsync("notes", chat, "notes_create", new { title = "Фон личного проекта", content = "x" });
+        nErr.Should().BeFalse(n);
     }
 
     // Пишущие и исполняющие инструменты ДРУГИХ серверов: единая точка в McpTransportController отказывает
@@ -374,15 +502,12 @@ public class ActorRightMcpWiringTests : IDisposable
 
     [Theory]
     [MemberData(nameof(ЗакрытыеУчастнику))]
-    public async Task ВладелецИФон_ПишущееДругихСерверов_ГейтНеОтказывает(string server, string tool)
+    public async Task НазванныйВладелец_ПишущееДругихСерверов_ГейтНеОтказывает(string server, string tool)
     {
         var (_, chat) = await ArrangeAsync("editor");
-        foreach (var actor in new string?[] { OwnerId, null })
-        {
-            _actors.Map[chat] = actor;
-            var (text, _) = await CallAsync(server, chat, tool, new { });
-            text.Should().NotBe(ActorRightGate.DeniedText, $"{actor ?? "фон"}: {server}/{tool}");
-        }
+        _actors.Map[chat] = OwnerId;
+        var (text, _) = await CallAsync(server, chat, tool, new { });
+        text.Should().NotBe(ActorRightGate.DeniedText, $"названный арендатор: {server}/{tool}");
     }
 
     // Отзыв участника во время хода: запись до отзыва проходит, после — отказ (проверка идёт на каждый вызов)

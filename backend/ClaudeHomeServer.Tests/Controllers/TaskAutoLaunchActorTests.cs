@@ -24,12 +24,17 @@ namespace ClaudeHomeServer.Tests.Controllers;
 ///
 /// • (а) задача создана агентом редактора общего проекта → ход исполнителя идёт с актором-редактором,
 ///   закрытый ему watch_start отказан;
-/// • (б) создана владельцем → как раньше (права арендатора, гейт не применяется);
-/// • (в) старая запись без создателя → владелец, ход без актора (как раньше);
-/// • (г) личный проект/задача без проекта → без изменений.
+/// • (б) создана владельцем → актором называется владелец (после О2 финального ревью безымянный
+///   актор общего проекта не имел бы ни одного права и не мог бы выполнить свою задачу);
+///   поведение то же, что раньше: права арендатора, watch_start открыт;
+/// • (в) старая запись без создателя → считается созданной владельцем буквально: его имя;
+/// • (г) личный проект/задача без проекта → поведение прежнее (там безымянный актор был бы
+///   разрешён), но имя тоже называется явно.
 ///
-/// Мутация (в отчёте задачи): вернуть в TaskSchedulerService передачу «неизвестного» актора
-/// (null вместо TaskLaunchActor.For) — тест (а) краснеет, (б)–(г) остаются зелёными.
+/// Мутации (в отчёте задачи): вернуть в TaskSchedulerService передачу «неизвестного» актора
+/// (null вместо TaskLaunchActor.For) — тест (а) краснеет; вернуть в TaskLaunchActor null для
+/// создателя-владельца (алиаса до О2) — в (б) и (в) краснеют оба утверждения: и про актора,
+/// и про watch_start (безымянный ход общего проекта лишён всех прав).
 /// </summary>
 [Trait("Category", "Host")]
 public class TaskAutoLaunchActorTests : IDisposable
@@ -168,8 +173,9 @@ public class TaskAutoLaunchActorTests : IDisposable
 
         var executorSession = await AutoLaunchAsync(taskId);
 
-        Sessions.GetTurnActor(executorSession, ownerId).Should().BeNull("создатель — владелец: ход без актора, как раньше");
-        (await WatchStartDeniedAsync(executorSession)).Should().BeFalse();
+        Sessions.GetTurnActor(executorSession, ownerId).Should().Be(ownerId,
+            "создатель — владелец: его имя называется явно (безымянный ход общего проекта после О2 не имеет прав)");
+        (await WatchStartDeniedAsync(executorSession)).Should().BeFalse("права арендатора — как раньше");
     }
 
     [Fact]
@@ -183,7 +189,8 @@ public class TaskAutoLaunchActorTests : IDisposable
 
         var executorSession = await AutoLaunchAsync(taskId);
 
-        Sessions.GetTurnActor(executorSession, ownerId).Should().BeNull();
+        Sessions.GetTurnActor(executorSession, ownerId).Should().Be(ownerId,
+            "старая запись считается созданной владельцем буквально: её актор — владелец записи");
         (await WatchStartDeniedAsync(executorSession)).Should().BeFalse("legacy — права владельца, как раньше");
     }
 
@@ -203,6 +210,9 @@ public class TaskAutoLaunchActorTests : IDisposable
 
         var executorSession = await AutoLaunchAsync(taskId);
 
-        Sessions.GetTurnActor(executorSession, ownerId).Should().BeNull();
+        // Поведение личного проекта не изменилось (там безымянный актор был бы разрешён), но
+        // имя называется тем же порядком: актор исполнителя задачи владельца — владелец.
+        Sessions.GetTurnActor(executorSession, ownerId).Should().Be(ownerId);
+        (await WatchStartDeniedAsync(executorSession)).Should().BeFalse("личный проект — как раньше");
     }
 }

@@ -29,12 +29,16 @@ public class TaskLaunchActorTests : IDisposable
         Directory.Delete(_dir, recursive: true);
     }
 
+    // После О2 финального ревью «Общих проектов» null в акторе значит «никаких прав» (общий
+    // проект), поэтому создатель-владелец и legacy-запись называются именем владельца
+    // буквально; безымянной остаётся только запись без владельца.
     [Theory]
     [InlineData("editor", "owner", "editor")]   // создатель — участник: он и актор
-    [InlineData("owner", "owner", null)]        // создатель — владелец: как раньше
-    [InlineData(null, "owner", null)]           // старая запись / фон: считаем владельцем
-    [InlineData("", "owner", null)]
-    [InlineData("  ", "owner", null)]
+    [InlineData("owner", "owner", "owner")]     // создатель — владелец: его имя
+    [InlineData(null, "owner", "owner")]        // старая запись / фон: считаем владельцем буквально
+    [InlineData("", "owner", "owner")]
+    [InlineData("  ", "owner", "owner")]
+    [InlineData(null, "", null)]               // записи нет → актора нет (fail-closed)
     public void For_СоздательУчастникИлиВладелецИлиНеизвестен(string? creator, string owner, string? expected)
     {
         var task = new TaskItem { Title = "t", OwnerId = owner, CreatedByUserId = creator };
@@ -90,7 +94,9 @@ public class TaskLaunchActorTests : IDisposable
         await scheduler.TickAsync(new DateTime(2026, 7, 3, 12, 30, 0, DateTimeKind.Utc));
 
         exec.Calls.Should().Contain((byEditor.Id, true, "editor"));
-        exec.Calls.Should().Contain((byOwner.Id, true, (string?)null));
-        exec.Calls.Should().Contain((legacy.Id, true, (string?)null));
+        // владельца и legacy называем явно: безымянный ход общего проекта (О2) не имел бы
+        // ни одного права и не мог бы выполнить свою задачу
+        exec.Calls.Should().Contain((byOwner.Id, true, "owner"));
+        exec.Calls.Should().Contain((legacy.Id, true, "owner"));
     }
 }

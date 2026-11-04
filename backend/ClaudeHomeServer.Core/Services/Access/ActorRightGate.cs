@@ -169,15 +169,18 @@ public interface IActorRightGate
 {
     /// <summary>
     /// Текст отказа или null — вызов разрешён. Актор берётся на сервере из реестра хода по
-    /// <paramref name="callerSessionId"/>, не из заголовка клиента. Актор неизвестен (фон, исполнитель
-    /// без инициатора) или совпадает с арендатором — права арендатора, null. Иначе: инструмента нет
-    /// в таблице — отказ (default-deny); есть право — <c>IProjectAccess.Resolve(actor, project, right)</c>.
+    /// <paramref name="callerSessionId"/>, не из заголовка клиента. Актор совпадает с арендатором —
+    /// права арендатора, null. Актор неизвестен (фон, внутренний ход без инициатора): в общем
+    /// проекте он резолвится как «самое узкое» — отказано всё, что требует права (О2 финального
+    /// ревью), открыто только не требующее права; в личном проекте — права арендатора, как раньше.
+    /// Иначе: инструмента нет в таблице — отказ (default-deny); есть право —
+    /// <c>IProjectAccess.Resolve(actor, project, right)</c>.
     /// </summary>
     string? Denied(string server, string tool, string? callerSessionId, string ownerId, string? projectId);
 }
 
 /// <inheritdoc cref="IActorRightGate"/>
-public sealed class ActorRightGate(ITurnActorRegistry actors, IProjectAccess access) : IActorRightGate
+public sealed class ActorRightGate(ITurnActorRegistry actors, IProjectAccess access, ITurnFrameSource frames) : IActorRightGate
 {
     public const string DeniedText =
         "Недоступно: в общем проекте у вашей роли нет права на это действие. Попросите владельца проекта.";
@@ -186,7 +189,23 @@ public sealed class ActorRightGate(ITurnActorRegistry actors, IProjectAccess acc
     {
         if (string.IsNullOrEmpty(callerSessionId)) return null;
         var actor = actors.Actor(callerSessionId, ownerId);
-        if (string.IsNullOrEmpty(actor) || actor == ownerId) return null;
+        if (actor == ownerId) return null;
+
+        // О2 финального ревью «Общих проектов» (892deb00): неизвестный актор не получает прав
+        // арендатора — он резолвится как «самое узкое» (контракт ITurnActorRegistry). Разведение —
+        // то же, что у TurnFrame: общий проект строже, личный — как было.
+        // Актор неизвестен — внутренний ход без инициатора (дренаж очереди, продолжение после
+        // рестарта): в общем проекте у него нет ни одного права, поэтому отказано всё, что права
+        // требует (и всё, чего нет в таблице — default-deny). Открыты только инструменты «без
+        // права» (чтение): их держат рамка хода и доступ участника, а не догадка о ранге актора.
+        // Инициатор, известный по другой линии (создатель задачи, человек с JWT), называется ЯВНО
+        // своими вызывающими (TaskLaunchActor, TasksController) — гейт о ранге не догадывается.
+        if (string.IsNullOrEmpty(actor))
+        {
+            if (frames.Frame(callerSessionId, ownerId) != TurnFrameKind.Narrow) return null;
+            if (!ActorToolRights.TryGet(server, tool, out var unknownActorRule)) return DeniedText;
+            return unknownActorRule.Requires is null ? null : DeniedText;
+        }
 
         if (!ActorToolRights.TryGet(server, tool, out var rule)) return DeniedText;
         if (rule.Requires is not { } right) return null;

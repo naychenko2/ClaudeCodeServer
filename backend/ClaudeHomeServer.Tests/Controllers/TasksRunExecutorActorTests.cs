@@ -25,8 +25,9 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// Три случая приёмки:
 /// • актор — редактор: исполнитель наследует редактора, watch_start (OwnerOnly) ему отказан;
 /// • актор — владелец: как раньше, правы арендатора, гейт не при чём;
-/// • актор неизвестен (ход в чате ещё не начинался): исполнитель запускается БЕЗ повышения
-///   до арендатора — его ход не записывается на владельца (fail-closed).
+/// • актор неизвестен (ход в чате ещё не начинался): после О2 финального ревью «Общих проектов»
+///   такой ход общего проекта не имеет ни одного права — сам запуск отказан, чата исполнителя
+///   нет (повышения до арендатора не происходит по построению).
 ///
 /// Мутация (в отчёте задачи): вернуть в TasksToolset передачу арендатора вместо актора —
 /// первый и третий тесты краснеют, второй остаётся зелёным.
@@ -175,18 +176,26 @@ public class TasksRunExecutorActorTests : IDisposable
     }
 
     /// <summary>
-    /// Актор неизвестен (в чате ещё не было хода — вызов из фона): сам запуск легален
-    /// (неизвестный актор идёт с правами арендатора), но исполнитель НЕ записывается на
-    /// арендатора: его ход остаётся без актора — fail-closed, без повышения.
+    /// Актор неизвестен (в чате ещё не было хода — вызов из фона). После О2 финального ревью
+    /// «Общих проектов» (892deb00) безымянный ход общего проекта не имеет ни одного права,
+    /// поэтому сам запуск отказан ГЕЙТОМ АКТОРА (tasks_run_executor требует RunTurn).
+    /// Прежнее свойство «исполнитель не повышается до арендатора» держется раньше: безымянный
+    /// вызов вообще не порождает хода — чата исполнителя у задачи не появляется.
     /// </summary>
     [Fact]
-    public async Task RunExecutor_АкторНеизвестен_ИсполнительБезПовышенияДоАрендатора()
+    public async Task RunExecutor_АкторНеизвестен_ВОбщемПроект_ЗапускОтказан_ЧатаИсполнителяНет()
     {
         var (chatId, taskId, ownerId, _) = await ArrangeSharedAsync();
 
-        var executorSessionId = await RunExecutorAsync(chatId, taskId);
+        var answer = await CallToolAsync(_owner, "tasks", chatId, "tasks_run_executor", new { taskId });
+        var isError = answer.GetProperty("result").TryGetProperty("isError", out var flag) && flag.GetBoolean();
+        isError.Should().BeTrue($"безымянный ход общего проекта: {ToolText(answer)}");
+        ToolText(answer).Should().Contain(ActorRightGate.DeniedText);
 
-        Sessions.GetTurnActor(executorSessionId, ownerId).Should().BeNull(
-            "актор неизвестен — исполнитель не повышается до арендатора");
+        var stored = await _owner.GetAsync($"/api/tasks/{taskId}");
+        stored.EnsureSuccessStatusCode();
+        (await stored.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("linkedSessionId").GetString().Should().BeNull(
+                "повышения до арендатора нет: исполнитель не был запущен вовсе");
     }
 }

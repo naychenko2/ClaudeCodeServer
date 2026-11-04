@@ -130,7 +130,7 @@ public sealed class McpChatsPrivateVisibilityTests : IDisposable
             _projects, null!, _sessions, _personas, null!, null!, null!, null!, null!, null!,
             null!, null!, _users, null!, null!, new SessionMessagingService(_sessions, _projects, _tasks),
             _tasks, null!, null!, null!, null!,
-            access, new WideFrame(), _actors, new ActorRightGate(_actors, access));
+            access, new WideFrame(), _actors, new ActorRightGate(_actors, access, new WideFrame()));
     }
 
     public void Dispose()

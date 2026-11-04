@@ -22,9 +22,12 @@
          - ClaudeHomeServer.Tests: NotesTaskSyncIntegrationTests дергает
            NoteTaskSyncService через DI-контейнер, нужны внутренние поля.
          - ClaudeHomeServer.Notes.Tests: юниты самой вертикали.
-         - ClaudeHomeServer.Guards.Tests: сторож состава tools/list (McpToolsetStabilityTests)
-           читает схемы тулсета как данные — тем же способом, что парностный сторож читает
-           CoreTools/AnnotationTools. Прецедент — Llm/Docs/Tests дают этот атрибут гейту. -->
+         - ClaudeHomeServer.Guards.Tests: ParticipantTurnFrameGuardTests (S2a-5, ревью
+           R-S2a-5 M2) сверяет манифест с ПОЛНЫМ составом тулсета — читает
+           NotesToolset.CoreTools/AnnotationTools: без допуска новый инструмент в
+           модуле комментариев не покраснил бы сторожа (в тестовом хосте его нет).
+           Сторож состава tools/list (McpToolsetStabilityTests) читает схемы тулсета
+           как данные тем же способом. Прецедент — Llm/Docs/Tests дают этот атрибут гейту. -->
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
     </AssemblyAttribute>

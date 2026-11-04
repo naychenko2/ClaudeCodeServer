@@ -1,0 +1,15 @@
+# Снимок дверей WriteContent (S2c-8, разрез f899602f §6/§7): каждое HTTP-действие контроллера
+# с [ProjectScope(Right = WriteContent)] названо строкой «Контроллер.Действие». Право записи
+# контента открывается участнику ПОИМЁННО: новая дверь — только новой строкой здесь с вердиктом
+# в дифе (сторож WriteContentDoorsGuardTests красный на двери вне снимка); мёртвая строка —
+# убрать с вердиктом (дверь снята с WriteContent или переименована).
+# На Write остаются (в снимок НЕ входят): Revert, SaveFromUrl, OfficeConfig, OfficeDiscard,
+# OfficeForceSave, удаление папки (явная проверка Write в ветке папки Delete), office-callback
+# (не ProjectScope-дверь: защищён office-токеном + явным Resolve(Write) в GetProjectByOfficeToken).
+FilesController.SaveContent
+FilesController.CreateFile
+FilesController.CreateDir
+FilesController.Rename
+FilesController.Upload
+FilesController.Delete
+FilesController.ToMarkdown

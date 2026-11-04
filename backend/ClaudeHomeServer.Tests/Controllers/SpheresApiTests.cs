@@ -224,9 +224,11 @@ public class SpheresApiTests : IClassFixture<SpheresApiTests.Hosts>
         (await _client.GetAsync("/api/spheres/нет/overview")).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
+    // Вызов «от лица чата» (S2a-3a): рамка хода читается по заголовку X-Caller-Session-Id,
+    // вызов без него — узкая рамка (fail-closed), projects_* отказываются раньше гейта сферы
     private async Task<JsonElement> CallToolAsync(string sessionId, string tool, object args)
     {
-        var resp = await _client.PostAsJsonAsync($"/mcp/wsp/{sessionId}", new
+        var resp = await _client.AsCaller(sessionId).PostAsJsonAsync($"/mcp/wsp/{sessionId}", new
         {
             jsonrpc = "2.0", id = 1, method = "tools/call",
             @params = new { name = tool, arguments = args },

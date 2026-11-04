@@ -478,6 +478,13 @@ public sealed record LlmSessionContext(
     // Проект чата (null — чат вне проекта): уходит в IPluginDirSource для проверки локальности
     // (у локального проекта в MVP плагинов нет, ADR-016/ADR-031 §5.8).
     Project? Project = null,
+    // Источник вердикта рамки хода (S2a-4): тот же шов ITurnFrameSource (S2a-1), которым
+    // рамку применяют платформенные тулсеты (S2a-3). ClaudeSession зовёт его на каждый ход
+    // и кладет вердикт в PromptSessionContext.Frame; вердикт — свойство проекта, а не хода:
+    // рамка входит в сигнатуру запуска (доработка по ревью R-S2a-4 Major 2) — пока она
+    // не менялась, живой процесс постоялен, смена рамки поднимает новый процесс с
+    // подборкой новой рамки. null (тесты без SessionManager) — рамка не применяется.
+    ClaudeHomeServer.Services.Access.ITurnFrameSource? FrameSource = null,
     // Корень data/ из конфигурации сервера (тот же резолв, что у sessions.json в SessionManager).
     // Нужен встроенному deny {data}/wiki/** для CLI-агента (ADR-035 §2): предикату WikiPaths в
     // DecidePermissionAsync и статическому deny в настройках запуска CLI (ClaudeRuntimeSettings).

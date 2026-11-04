@@ -3,6 +3,7 @@ using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
@@ -101,7 +102,7 @@ public class SpendControllerTests : IDisposable
 
     // --- Хелперы ---
 
-    private SpendController NewController(SpendStore store, string userId, bool admin)
+    private SpendController NewController(SpendStore store, string userId, bool admin, IProjectAccess? access = null)
     {
         var analytics = new SpendAnalyticsService(store,
             new SessionDirectoryAdapter(_sessions),
@@ -111,7 +112,8 @@ public class SpendControllerTests : IDisposable
         var ctl = new SpendController(analytics,
             new SessionDirectoryAdapter(_sessions),
             _taskLookup,
-            new TaskPromptMetricsStore(Path.Combine(_dir, "spend_metrics_" + Guid.NewGuid().ToString("N"))));
+            new TaskPromptMetricsStore(Path.Combine(_dir, "spend_metrics_" + Guid.NewGuid().ToString("N"))),
+            access ?? new OwnerOnlyProjectAccess(_sessions, _projectManager));
         ctl.ControllerContext = new ControllerContext
         {
             HttpContext = new DefaultHttpContext { User = Principal(userId, admin) },
@@ -230,16 +232,18 @@ public class SpendControllerTests : IDisposable
         or.StatusCode.Should().Be(403);
     }
 
+    // S2a-6b: разрез «user» не-админу открыт — в его срезе (Me принудителен) это разбивка
+    // по участникам его общих проектов; чужих данных она не даёт.
     [Fact]
-    public void Gate_НеАдмин_GroupByUser_Pivot_403()
+    public void Gate_НеАдмин_GroupByUser_Pivot_200()
     {
         var store = NewStore("gate_gb");
+        store.Record(Rec(DateTime.UtcNow, "u1"));
         var ctl = NewController(store, "u1", admin: false);
 
         var result = ctl.Pivot(groupBy: "user");
 
-        var or = result.Should().BeOfType<ObjectResult>().Which;
-        or.StatusCode.Should().Be(403);
+        result.Should().BeOfType<OkObjectResult>();
     }
 
     [Fact]
@@ -299,6 +303,43 @@ public class SpendControllerTests : IDisposable
         var result = ctl.Badge(sessionId: session1.Id);
 
         result.Should().BeOfType<OkObjectResult>();
+    }
+
+    // Участник общего проекта (рубильник включён, роль есть) расход чужого чата не видит
+    [Fact]
+    public async Task Badge_УчастникОбщегоПроекта_НеАдмин_Forbidden()
+    {
+        var store = NewStore("badge_member");
+        var owner = _userStore.Add("badge-m-owner", "pw-123456", "user");
+        var member = _userStore.Add("badge-m-member", "pw-123456", "user");
+        var dir = Directory.CreateDirectory(Path.Combine(_dir, "proj_badge_member")).FullName;
+        var proj = _projectManager.Create("BadgeMember", dir, owner.Id, owner.Username);
+        var session = await _sessions.CreateAsync(proj.Id, ClaudeMode.Auto);
+        var access = new Mock<IProjectAccess>();
+        access.Setup(a => a.ResolveSession(member.Id, session.Id, ProjectRight.Read))
+            .Returns(new RequestScope(member.Id, owner.Id, ProjectRole.Reader));
+
+        var result = NewController(store, member.Id, admin: false, access.Object).Badge(session.Id);
+
+        result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(403);
+    }
+
+    // Выключенный рубильник: IProjectAccess не отдаёт области — расход не виден даже владельцу-по-ключу чужого
+    [Fact]
+    public async Task Badge_ГейтНеДаётОбласти_НеАдмин_Forbidden()
+    {
+        var store = NewStore("badge_gate_off");
+        var u1 = _userStore.Add("badge-gate-off", "pw-123456", "user");
+        var dir = Directory.CreateDirectory(Path.Combine(_dir, "proj_badge_gate_off")).FullName;
+        var proj = _projectManager.Create("BadgeGateOff", dir, u1.Id, u1.Username);
+        var session = await _sessions.CreateAsync(proj.Id, ClaudeMode.Auto);
+        var access = new Mock<IProjectAccess>();
+        access.Setup(a => a.ResolveSession(It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<ProjectRight>()))
+            .Returns((RequestScope?)null);
+
+        var result = NewController(store, u1.Id, admin: false, access.Object).Badge(session.Id);
+
+        result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(403);
     }
 
     [Fact]
@@ -478,5 +519,16 @@ public class SpendControllerTests : IDisposable
 
         r0.Items.First().Should().Be(rNeg.Items.First(),
             "offset=-5 → Math.Max(-5,0)=0 → тот же первый элемент, что offset=0");
+    }
+
+    // Доступ «только владелец» без рубильника общих проектов: то же решение, что у ProjectAccessService для владельца
+    private sealed class OwnerOnlyProjectAccess(SessionManager sessions, ProjectManager projects) : IProjectAccess
+    {
+        public RequestScope? Resolve(string? callerUserId, string? projectId, ProjectRight right = ProjectRight.Read) =>
+            ProjectAccess.Check(projects.GetById(projectId ?? ""), callerUserId) is ProjectRole.Owner
+                ? new RequestScope(callerUserId!, callerUserId!, ProjectRole.Owner) : null;
+
+        public RequestScope? ResolveSession(string? callerUserId, string? sessionId, ProjectRight right = ProjectRight.Read) =>
+            sessions.GetById(sessionId ?? "") is { ProjectId: { } pid } ? Resolve(callerUserId, pid, right) : null;
     }
 }

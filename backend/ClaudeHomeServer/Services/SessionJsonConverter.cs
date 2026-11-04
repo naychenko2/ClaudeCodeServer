@@ -43,12 +43,22 @@ internal sealed class SessionJsonConverter(IServiceProvider services) : JsonConv
     public override Session? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
         JsonSerializer.Deserialize<Session>(ref reader, OptionsWithoutSelf(options));
 
+    // Личное состояние чата (S1-7): участнику общего проекта вместо значений владельца уходят его
+    // собственные отметки. Тот же довод, что у связей: мимо конвертера Session на wire не уходит.
+    private ChatUserStateService? UserState => services.GetService(typeof(ChatUserStateService)) as ChatUserStateService;
+
     public override void Write(Utf8JsonWriter writer, Session value, JsonSerializerOptions options)
     {
         var tasks = Tasks;
         var json = (JsonObject)JsonSerializer.SerializeToNode(value, OptionsWithoutSelf(options))!;
         json["parentSessionId"] = SessionTaskLinks.ParentSessionId(value, tasks);
         json["taskDone"] = SessionTaskLinks.IsTaskDone(value, tasks);
+        if (UserState?.ViewFor(value) is { } own)
+        {
+            json["lastReadAt"] = JsonSerializer.SerializeToNode(own.LastReadAt, OptionsWithoutSelf(options));
+            json["isPinned"] = own.IsPinned;
+            json["notificationsMuted"] = own.NotificationsMuted;
+        }
         foreach (var field in ServerOnlyFields) json.Remove(field);
         json.WriteTo(writer);
     }

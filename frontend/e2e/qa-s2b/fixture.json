@@ -1,0 +1,18 @@
+{
+ "projectId": "433434e7-12d2-4541-8101-ffd9c58bfed4",
+ "bId": "f51d47c8-b031-4bdf-9877-0d6c4c807cb1",
+ "cId": "ad8b4c32-b7cd-4cbb-894a-53ad57a48450",
+ "eId": "063d9e6d-870c-49ab-a2a6-3f2c8464e50c",
+ "adminId": "b7ef2679-5958-4e11-a50b-85cae4ac03c1",
+ "tasks": {
+  "owner": "6d5ce76c-9896-4de3-9652-85c5ecd75b1d",
+  "b": "238f342b-285a-4831-8361-f384e5cb6768",
+  "claude": "2fa09d6b-390f-4040-805a-64e7c33d7405",
+  "c": "570505f4-a3cf-4f2e-af3c-d1e550d381fb",
+  "e": "9fa747d7-d2b5-4dfd-a9bc-870c3140eca3",
+  "ya": "1029aa81-7e1e-453e-8f46-0b45b043d4e7"
+ },
+ "bPersonalProject": "bc01dcf6-bff0-4d21-9e7e-d5dfd25f5f4d",
+ "bGroup": "9056ac0c-e748-471f-a71b-594ab9d566bb",
+ "bPersonalTask": "aabbee94-5299-477e-8a87-45ca30aaa0cd"
+}

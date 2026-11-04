@@ -2,6 +2,7 @@ using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Knowledge;
@@ -206,6 +207,31 @@ public class ChatArchivedEventTests : IDisposable
         var candidates = sut.GetArchiveRuleCandidates(_ownerId, project.Id, days: 30, DateTime.UtcNow);
 
         candidates.Select(c => c.Id).Should().BeEquivalentTo([inProject.Id]);
+    }
+
+    // S2d-4h: правило проекта не действует над приватным чатом — ни чужим, ни своим своим
+    // (свой архивирует автор ручкой); общий чат проекта — кандидат как раньше
+    [Fact]
+    public async Task Кандидаты_ПриватныйЧатИсключёнИзПравила()
+    {
+        var (sut, projects) = BuildSut();
+        var dir = Directory.CreateDirectory(Path.Combine(_tempDir, "proj_private")).FullName;
+        var project = projects.Create("Проект приватных", dir, _ownerId, TestUsername);
+        var editor = _userStoreForBuild!.Add("archive-editor-" + Guid.NewGuid().ToString("N")[..8], "pw-123456", "user");
+        projects.SetMembers(project.Id, [new ProjectMember { UserId = editor.Id, Role = ProjectRole.Editor, AddedBy = _ownerId }]);
+        var common = await sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        AgeOut(sut, common.Id);
+        var foreignPrivate = await sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        sut.GetById(foreignPrivate.Id)!.PrivateToUserId = editor.Id;
+        AgeOut(sut, foreignPrivate.Id);
+        var ownPrivate = await sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        sut.GetById(ownPrivate.Id)!.PrivateToUserId = _ownerId;
+        AgeOut(sut, ownPrivate.Id);
+
+        var candidates = sut.GetArchiveRuleCandidates(_ownerId, project.Id, days: 30, DateTime.UtcNow);
+
+        candidates.Select(c => c.Id).Should().BeEquivalentTo([common.Id],
+            "тот же отбор, что считает archive-preview и архивирует тик: приватных в нём нет");
     }
 
     // --- Сборка ---

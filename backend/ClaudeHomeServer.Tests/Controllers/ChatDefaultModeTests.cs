@@ -99,7 +99,7 @@ public class ChatDefaultModeTests : IClassFixture<ChatDefaultModeTests.Hosts>
     public async Task McpChatsCreate_СПерсоной_AcceptEdits()
     {
         var caller = await PostAsync("/api/chats", new { personaId = NewPersona("Вызывающая") });
-        var resp = await _client.PostAsJsonAsync($"/mcp/wsp/{caller}", new
+        var resp = await _client.AsCaller(caller).PostAsJsonAsync($"/mcp/wsp/{caller}", new
         {
             jsonrpc = "2.0", id = 1, method = "tools/call",
             @params = new { name = "chats_create", arguments = new { personaId = NewPersona("Целевая") } },
@@ -107,6 +107,7 @@ public class ChatDefaultModeTests : IClassFixture<ChatDefaultModeTests.Hosts>
         resp.EnsureSuccessStatusCode();
         var rpc = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
         var text = rpc.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString()!;
+        text.Should().StartWith("{", "тело инструмента — JSON, иначе это отказ: " + text);
         var id = JsonSerializer.Deserialize<JsonElement>(text).GetProperty("id").GetString()!;
 
         ModeOf(id).Should().Be(ClaudeMode.AcceptEdits);

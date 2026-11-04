@@ -20,6 +20,7 @@ import { prunedHeadline, prunedDetails, prunedIcon } from '../../lib/contextPrun
 import { Button } from '../ui/Button';
 import { useIsMobile } from '../../lib/breakpoints';
 import { useModelLabel } from '../../lib/models';
+import { MessageAuthorLine } from '../../features/projects/members/MessageAuthorLine';
 import { formatPostTime, formatPostTimeFull } from '../../lib/postTime';
 import { relPathTree, stripRootTree } from '../../lib/paths';
 import { hasUltraworkKeyword } from '../../lib/ultrawork';
@@ -1285,6 +1286,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       }
       return (
         <div style={{ alignSelf: 'flex-end', maxWidth: '80%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+          <MessageAuthorLine senderUserId={item.senderUserId} ts={item.ts} />
           <UserMessageBubble text={item.text} ts={item.ts} onBranch={onBranch}
           >
             {teamInfo ? (

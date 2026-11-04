@@ -163,7 +163,9 @@ public class ChatArchiveFlagTests : IDisposable
         chat.UpdatedAt = DateTime.UtcNow.AddMinutes(-5);
         var updatedAt0 = chat.UpdatedAt;
 
-        sut.SetExcludeFromDossiers(chat.Id, true)!.ExcludeFromDossiers.Should().BeTrue();
+        // S2d-6c: метод стал TrySet… (отказ по приватности); общий чат — принимается
+        sut.TrySetExcludeFromDossiers(chat.Id, true).Should().BeTrue();
+        chat.ExcludeFromDossiers.Should().BeTrue();
 
         chat.UpdatedAt.Should().Be(updatedAt0, "тумблер «Не сохранять решения» — настройка, а не активность");
     }

@@ -54,7 +54,7 @@ public class WikiNightlyServiceTests : IDisposable
             .Build();
         var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _projects = new ProjectManager(_config, users, new AppSettingsService(_config));
-        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, _flag);
+        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, flags: _flag);
         _keeper = new WikiKeeper(_notes, _config);
         _apply = new WikiApplyService(_notes, _keeper, new NoSpheres(), _config);
         foreach (var owner in new[] { User, Other })

@@ -51,7 +51,7 @@ public class WikiChatScorerTests : IDisposable
             .Build();
         var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var projects = new ProjectManager(_config, users, new AppSettingsService(_config));
-        var notes = new NotesService(projects, _config, NullLogger<NotesService>.Instance, null, new WikiFlagOn());
+        var notes = new NotesService(projects, _config, NullLogger<NotesService>.Instance, null, flags: new WikiFlagOn());
         var keeper = new WikiKeeper(notes, _config);
         _chat = new WikiChatIngestService(
             new WikiSourceCapture(notes, projects, _sessions, _config, keeper),

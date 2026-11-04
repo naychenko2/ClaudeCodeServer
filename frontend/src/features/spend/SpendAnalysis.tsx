@@ -44,6 +44,7 @@ interface Props {
   patch: (p: Partial<SpendState>) => void;
   range: { from: string; to: string };
   showUsers: boolean;
+  userReadOnly?: boolean;                   // не-админ: уровень «пользователь» без фильтра и раскрытия (бэк режет user → 403)
   isMobile: boolean;
   isTablet?: boolean;                       // 601–1199: вертикальный стек вместо двух колонок
   emptyKind: SpendEmptyKind;                // чем объяснять пустоту: срез / период / трат не было вообще
@@ -53,7 +54,7 @@ interface Props {
   onCloseScreen: () => void;
 }
 
-export function SpendAnalysis({ st, patch, range, showUsers, isMobile, isTablet = false, emptyKind, overview, overviewError, onRetryOverview, onCloseScreen }: Props) {
+export function SpendAnalysis({ st, patch, range, showUsers, userReadOnly = false, isMobile, isTablet = false, emptyKind, overview, overviewError, onRetryOverview, onCloseScreen }: Props) {
   // Планшет: экран растянут на вьюпорт, значит панелям деталей потолок высоты не нужен —
   // они тянутся сами (цепочка определённой высоты описана в SpendScreen)
   const fill = isTablet;
@@ -277,7 +278,7 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, isTablet 
 
   // ================= Фильтр-бар =================
   const filterDims = (Object.keys(DIM_LABELS) as SpendDim[])
-    .filter(d => (showUsers || !ADMIN_ONLY_DIMS.includes(d)) && !st.filters.some(f => f.dim === d));
+    .filter(d => (showUsers || !ADMIN_ONLY_DIMS.includes(d)) && !(userReadOnly && d === 'user') && !st.filters.some(f => f.dim === d));
   const addFilter = (f: SpendFilter) => {
     patch({ filters: [...st.filters, f], selKey: null });
     setSelNode(null);
@@ -435,7 +436,8 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, isTablet 
           const nextIdx = levelIdx + 1;
           // Узел «заперт» только перед уровнем ходов: агрегаты дают разрезы, но не ходы
           const lockedForTurns = !n.hasDetail && levels[nextIdx] === 'turn';
-          const hasKids = nextIdx < levels.length && !lockedForTurns;
+          const userLocked = userReadOnly && dim === 'user';
+          const hasKids = nextIdx < levels.length && !lockedForTurns && !userLocked;
           const open = expanded.has(key) && hasKids;
           const sel = st.selKey === key;
           const share = total > 0 ? n.tokens.total / total : 0;
@@ -446,10 +448,10 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, isTablet 
           return (
             <div key={key} style={{ opacity: !n.hasDetail ? 0.72 : 1 }}>
               <div
-                onClick={() => clickNode({ key, dim, name, node: n, filters, path: ancPath, parentTotal: total }, hasKids, key, nextIdx)}
+                onClick={userLocked ? undefined : () => clickNode({ key, dim, name, node: n, filters, path: ancPath, parentTotal: total }, hasKids, key, nextIdx)}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 8, padding: isTablet ? `${SP.md}px 10px` : '8px 10px', borderRadius: R.lg,
-                  cursor: 'pointer', position: 'relative',
+                  cursor: userLocked ? 'default' : 'pointer', position: 'relative',
                   background: sel ? C.accentLight : undefined,
                   outline: sel ? `1px solid ${C.accentMuted}` : 'none',
                 }}

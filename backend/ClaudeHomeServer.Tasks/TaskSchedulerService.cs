@@ -1,5 +1,6 @@
 ﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Tasks;
@@ -15,10 +16,15 @@ public class TaskSchedulerService(
     IDailyBriefingRunner briefing,
     IPersonaAutomationRunner automation,
     ITaskNotificationDispatcher notif,
-    ILogger<TaskSchedulerService> log) : BackgroundService
+    ILogger<TaskSchedulerService> log,
+    // Нужен, чтобы адресат напоминания был действующим участником проекта (отозванный
+    // участник уведомлений не получает). null — проверка недоступна, адресат — владелец
+    // (fail-closed: без резолва доступа чужому человеку не пишем).
+    IProjectAccess? access = null) : BackgroundService
 {
     // Подписчик ходов фичи (Б8c) больше НЕ побочный эффект этого hosted-сервиса: он
     // регистрируется явным AddGatedHostedService в TasksSubsystem.Register (Tasks, не Main).
+    private readonly object _reminderLock = new();
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(30);
     // Автозапуск только для сроков, наступивших недавно: защита от лавины сессий
     // по старым просроченным задачам при включении флага или долгом простое сервера
@@ -97,7 +103,9 @@ public class TaskSchedulerService(
 
         try
         {
-            await executor.ExecuteAsync(task, auto: true);
+            // Автозапуск без инициатора: ход наследует создателя задачи, а не «неизвестного»
+            // (иначе гейт актора открыл бы исполнителю права арендатора — F-9)
+            await executor.ExecuteAsync(task, auto: true, TaskLaunchActor.For(task));
         }
         catch (Exception ex)
         {
@@ -148,27 +156,52 @@ public class TaskSchedulerService(
 
     private async Task ProcessReminderAsync(TaskItem task, TimeZoneInfo tz, DateTime nowUtc)
     {
-        if (!ShouldRemind(task, tz, nowUtc)) return;
+        // Проверка и отметка — одна критическая секция: два тика (ручной вызов и таймер)
+        // не должны оба пройти ShouldRemind до того, как первый выставит ReminderSentAt.
+        // Срок считаем в таймзоне АДРЕСАТА (исполнителя), а не владельца; нет данных — владельца.
+        var recipient = ResolveRecipient(task);
+        if (recipient != task.OwnerId
+            && users.GetById(recipient)?.TimeZone is { } recipientZone)
+            tz = TaskDueCalculator.ResolveTimeZone(recipientZone);
 
-        var updated = tasks.MarkReminderSent(task.Id, nowUtc);
+        TaskItem? updated;
+        lock (_reminderLock)
+        {
+            if (!ShouldRemind(task, tz, nowUtc)) return;
+            updated = tasks.MarkReminderSent(task.Id, nowUtc);
+        }
         if (updated is null) return; // задача удалена между чтением и отметкой
 
         var dueText = task.DueTime is null ? task.DueDate : $"{task.DueDate} {task.DueTime}";
-        await SendNotificationAsync(updated, new NotificationMessage(
+        await SendNotificationAsync(recipient, new NotificationMessage(
             Title: "Напоминание о задаче",
             Body: $"{updated.Title} — срок {dueText}",
             Url: TaskUrl.Of(updated),
             Kind: "reminder"));
         // Синхронизируем сторы клиентов (ReminderSentAt изменился)
-        await broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
+        await broadcaster.ToTaskBoard(updated.OwnerId!, updated.ProjectId, new TaskChangedMessage("updated", updated));
 
         log.LogInformation("Напоминание отправлено: задача {TaskId} «{Title}»", updated.Id, updated.Title);
     }
 
-    // Тост + сторадж + web push через единый NotificationService
-    private async Task SendNotificationAsync(TaskItem task, NotificationMessage message)
+    // Адресат напоминания: исполнитель-человек, пока он ДЕЙСТВУЮЩИЙ участник проекта задачи;
+    // отозванный участник (как и личная/Claude-задача) — владелец. Та же политика доступа
+    // (IProjectAccess.Resolve), что у MyTasksQuery: назначение отозванного не даёт ни напоминаний, ни выдачи.
+    private string ResolveRecipient(TaskItem task)
     {
-        await notif.SendNotificationMessageAsync(task.OwnerId!, message, sendPush: true);
+        var owner = task.OwnerId!;
+        var assignee = TaskManager.ResolveMeUserId(task);
+        if (assignee is null || assignee == owner) return owner;
+        if (task.ProjectId is null) return owner;
+        return access?.Resolve(assignee, task.ProjectId, ProjectRight.Read) is null ? owner : assignee;
+    }
+
+    // Тост + сторадж + web push через единый NotificationService. Адресат — человек-исполнитель
+    // (общий проект: участник; личные и Claude-задачи — владелец, как раньше). Один адресат —
+    // одно уведомление: владельцу параллельно не дублируем.
+    private async Task SendNotificationAsync(string recipient, NotificationMessage message)
+    {
+        await notif.SendNotificationMessageAsync(recipient, message, sendPush: true);
     }
 
     // Hash-диплинк на задачу вынесен в Core (`Services/TaskUrl.Of`) — Этап 5, вынос Tasks.

@@ -239,7 +239,7 @@ public sealed class ImageProjectPrefsService(
         {
             try
             {
-                await broadcaster.ToOwner(ownerId, new ImageProjectPrefsChangedMessage(scope.Key, saved));
+                await broadcaster.ToProjectOrOwner(ownerId, ImageEditScope.ProjectIdOf(scope.Key), new ImageProjectPrefsChangedMessage(scope.Key, saved));
             }
             catch (Exception ex)
             {
@@ -266,7 +266,7 @@ public sealed class ImageProjectPrefsService(
         {
             try
             {
-                await broadcaster.ToOwner(ownerId, new ImageProjectPrefsChangedMessage(scope.Key, after));
+                await broadcaster.ToProjectOrOwner(ownerId, ImageEditScope.ProjectIdOf(scope.Key), new ImageProjectPrefsChangedMessage(scope.Key, after));
             }
             catch (Exception ex)
             {

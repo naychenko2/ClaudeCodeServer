@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Crown, Folder, GitBranch, Lock, Sparkles, X } from 'lucide-react';
-import type { Project, ProjectGroup, PermissionRule, SystemPromptPart } from '../../../types';
+import { Crown, Folder, GitBranch, Info, Lock, Sparkles, X } from 'lucide-react';
+import type { Project, ProjectGroup, ProjectMember, PermissionRule, SystemPromptPart } from '../../../types';
 import { ProjectFeature } from '../../../types';
 import { useProjectFeature } from '../../../lib/projectCapabilities';
 import { api } from '../../../lib/api';
 import { useOnline } from '../../../hooks/useOnline';
 import { C, FONT, FS, R, SP } from '../../../lib/design';
 import { FLAGS, useFeature } from '../../../lib/featureFlags';
-import { Modal, ModalActions, TextArea, Field, Button, Toggle } from '../../../components/ui';
+import { Modal, ModalActions, TextArea, Field, Button, Toggle, Notice } from '../../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { useIsMobile } from '../../../lib/breakpoints';
 import { useMe } from '../../../lib/defaultPersona';
@@ -18,6 +18,8 @@ import { GroupSelect } from '../GroupSelect';
 import { GIT_BODY_H, GIT_CARD_H, GitModeCard, GitPushRow } from '../components/GitModeCards';
 import { ProjectSyncToggle } from '../../../components/ProjectSyncToggle';
 import { ProjectIconSection } from '../ProjectIconSection';
+import { ProjectIcon } from '../ProjectIcon';
+import { MembersSection } from '../members/MembersSection';
 import { McpProjectSection } from '../../mcp/McpProjectSection';
 import { PluginsProjectSection } from '../../plugins/PluginsProjectSection';
 import { DeviceSection } from '../../desktop/DeviceSection';
@@ -236,11 +238,13 @@ interface Props {
   // повторное открытие диалога показывало состояние до клика (устаревший project prop)
   onProjectUpdated?: (updated: Project) => void;
   onClose: () => void;
+  // Раскрыть секцию «Участники» (вход по стопке аватаров в шапке проекта)
+  openMembers?: boolean;
 }
 
 type View = 'main' | 'prompt' | 'rules';
 
-export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onProjectUpdated, onClose }: Props) {
+export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onProjectUpdated, onClose, openMembers }: Props) {
   const online = useOnline();
   // Фон проекта — только владельцу: участник без прав владельца фон менять не может
   // (ADR-008 §7, постановка задачи). Бэк тоже гейтит (404), кнопки прячем за тем же
@@ -249,6 +253,9 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
   const mapAvail = useProjectFeature(project, ProjectFeature.MapHygiene);
   const me = useMe();
   const isOwner = project.ownerId === me.userId;
+  // Вид участника общего проекта: роль приходит с бэка (myRole); без неё — обычный вид
+  const isParticipant = project.myRole === 'editor' || project.myRole === 'reader';
+  const sharedEnabled = useFeature(FLAGS.sharedProjects);
   const [view, setView] = useState<View>('main');
   const [name, setName] = useState(project.name);
   const [groupId, setGroupId] = useState(project.groupId ?? '');
@@ -485,6 +492,64 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
     );
   }
 
+  // Список участников изменился — проект в сторе узнаёт о них (метка «общий» в списках).
+  // project.members — сводка формы бэка (ProjectMembersSummary: count + первые трое),
+  // полный список MembersSection к нам и приходит — сводим к сводке здесь.
+  const handleMembersChanged = (members: ProjectMember[]) =>
+    onProjectUpdated?.({
+      ...project,
+      members: {
+        count: members.length,
+        first: members.slice(0, 3).map(({ userId, username, displayName }) => ({ userId, username, displayName })),
+      },
+    });
+
+  if (isParticipant) {
+    const ownerName = project.ownerDisplayName?.trim();
+    return (
+      <Modal
+        title={ownerName ? `Проект ${ownerName}` : 'Общий проект'}
+        width={500}
+        onClose={onClose}
+        footer={<Button variant="secondary" size="md" fullWidth onClick={onClose}>Закрыть</Button>}
+      >
+        <Notice tone="info" icon={Info}>
+          Ходы здесь идут по настройкам владельца проекта и за его счёт.
+        </Notice>
+        {/* Значок, имя и путь — только чтение: менять проект может владелец */}
+        <div style={{
+          background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, overflow: 'hidden',
+        }}>
+          <SettingsRow>
+            <div style={{ display: 'flex', alignItems: 'center', gap: SP.md, minWidth: 0 }}>
+              <ProjectIcon project={project} size={36} />
+              <span style={{
+                fontSize: FS.base, fontWeight: 600, color: C.textHeading,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {project.name}
+              </span>
+            </div>
+          </SettingsRow>
+          <SettingsRow last title={project.rootPath}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+              <Folder size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, color: C.textMuted }} />
+              <span style={{
+                fontFamily: 'JetBrains Mono, monospace', fontSize: 12.5, color: C.textSecondary,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {project.rootPath}
+              </span>
+            </div>
+          </SettingsRow>
+        </div>
+        <MembersSection project={project} mode="member"
+          onMembersChanged={handleMembersChanged}
+          onLeft={() => { invalidateProjectsCache(); onClose(); }} />
+      </Modal>
+    );
+  }
+
   return (
     <Modal
       title="Редактировать проект"
@@ -568,6 +633,11 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
         </SettingsRow>
       </div>
       {showLeadSection && <ProjectLeadSection project={project} onClose={onClose} />}
+      {/* Участники (shared-projects, S1-F3): приглашать и менять роли — только владелец
+          и только за флагом «Общие проекты» */}
+      {isOwner && sharedEnabled && (
+        <MembersSection project={project} mode="owner" defaultOpen={openMembers} onMembersChanged={handleMembersChanged} />
+      )}
       <McpProjectSection project={project} onUpdated={onProjectUpdated} />
       {/* Плагины (ADR-031): секция сама решает, рисовать ли список (серверный проект)
           или info-плашку «для локальных проектов пока недоступны»; без флага plugins-mvp — null */}

@@ -52,7 +52,7 @@ public class WikiAdoptTransferTests : IDisposable
         var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _projects = new ProjectManager(_config, users, new AppSettingsService(_config));
         _pages = WikiPaths.Pages(_dir, User);
-        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, new Flags(true, true));
+        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, flags: new Flags(true, true));
         _keeper = new WikiKeeper(_notes, _config);
         _apply = new WikiApplyService(_notes, _keeper, new NoSpheres(), _config);
         _transfer = new WikiNoteTransfer(_notes, _apply, _projects);

@@ -70,6 +70,49 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         return await response.Content.ReadFromJsonAsync<JsonElement>();
     }
 
+    // Эпик (задача) с чатом-источником — агентским путём, как тулсет хода: человеческий REST
+    // id чата из тела не принимает (S2d-7b-2, приватный чат не привязывается к фиче мимо
+    // двери), поэтому ключевой чат фичи в фикстуре ставится напрямую через TaskManager.
+    private Task<JsonElement> CreateAgentTaskAsync(object body, string? projectId = null)
+    {
+        var req = JsonSerializer.Deserialize<CreateTaskRequest>(JsonSerializer.Serialize(body), TaskCreateJson.Options)!;
+        var task = _factory.Services.GetRequiredService<TaskManager>().Create(projectId, OwnerId, req);
+        return Task.FromResult(JsonSerializer.SerializeToElement(task, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+    }
+
+    // Ось «чат-исполнитель» (ExecutorLaunchedBySessionId) ставит сервер (ExecutorLauncher), не тело
+    // человеческого PUT (S2d-7b-2) — фикстура ставит её тем же серверным путём TaskManager.Update.
+    private void SetExecutorLauncherChat(string taskId, string chatId) =>
+        _factory.Services.GetRequiredService<TaskManager>()
+            .Update(taskId, new UpdateTaskRequest(ExecutorLaunchedBySessionId: chatId)).Should().NotBeNull();
+
+    // Автор (S2b-1, доработка 2): оба человеческих пути TasksController (проектная и личная
+    // ветки Create) ставят CreatedByHuman = true сами — признак не едет из тела запроса.
+    // Мутация: убрать `req with { CreatedByHuman = true }` в строке 98 или 329 — createdByUserId
+    // станет null, соответствующий тест краснеет.
+    [Fact]
+    public async Task Create_ПроектнаяВетка_АвторЧеловек()
+    {
+        var projectId = CreateProject("author-project");
+        var me = await _client.GetFromJsonAsync<JsonElement>("/api/auth/me");
+
+        var task = await CreateProjectTaskAsync(projectId, new { title = "Проектная с автором" });
+
+        (task.TryGetProperty("createdByUserId", out var author) ? author.GetString() : null)
+            .Should().Be(me.GetProperty("userId").GetString());
+    }
+
+    [Fact]
+    public async Task Create_ЛичнаяВетка_АвторЧеловек()
+    {
+        var me = await _client.GetFromJsonAsync<JsonElement>("/api/auth/me");
+
+        var task = await CreateTaskAsync(new { title = "Личная с автором" });
+
+        (task.TryGetProperty("createdByUserId", out var author) ? author.GetString() : null)
+            .Should().Be(me.GetProperty("userId").GetString());
+    }
+
     // ─── Персона-исполнитель ─────────────────────────────────────────────────
 
     private async Task<string> CreatePersonaAsync(HttpClient client, object body)
@@ -539,7 +582,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         // FeatureChatMembership, оно fail-closed по снимку владельца — несуществующего
         // чата в нём быть не может (прежня фикстура использовала синтетический id).
         var sessionId = await CreatePersonalChatAsync(OwnerId);
-        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = sessionId });
+        var epic = await CreateAgentTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = sessionId });
         var epicId = epic.GetProperty("id").GetString();
         await CreateTaskAsync(new { title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1" });
 
@@ -565,7 +608,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
     public async Task GetFeatures_Список_ЧатыИсполнителей_КакВСтранице()
     {
         var sessionId = await CreatePersonalChatAsync(OwnerId);
-        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = sessionId });
+        var epic = await CreateAgentTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = sessionId });
         var epicId = epic.GetProperty("id").GetString();
         var step = await CreateTaskAsync(new
         {
@@ -669,7 +712,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         await _client.PutAsJsonAsync($"/api/tasks/{stepId}", new { linkedSessionId = chatId });
         // UpdateTaskRequest не имеет SourceSessionId — связываем эпик с чатом через
         // ExecutorLaunchedBySessionId (тот же признак, что читает ProjectForSession, §2).
-        await _client.PutAsJsonAsync($"/api/tasks/{epicId}", new { executorLaunchedBySessionId = chatId });
+        SetExecutorLauncherChat(epicId!, chatId);
 
         var list = await (await _client.GetAsync($"/api/tasks/features?sessionId={chatId}"))
             .Content.ReadFromJsonAsync<JsonElement>();
@@ -1123,7 +1166,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         // Чат реальный: список фич чата (W4-CHT-B) — по единому правилу FeatureChatMembership,
         // fail-closed по снимку владельца; синтетический id в нём не резолвится.
         var sessionId = await CreatePersonalChatAsync(OwnerId);
-        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = sessionId });
+        var epic = await CreateAgentTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = sessionId });
         var epicId = epic.GetProperty("id").GetString();
         await CreateTaskAsync(new { title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1" });
 
@@ -1313,7 +1356,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
     public async Task GetFeature_Brief_ИндексИСписокБез()
     {
         var sessionId = await CreatePersonalChatAsync(OwnerId);
-        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = sessionId });
+        var epic = await CreateAgentTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = sessionId });
         var epicId = epic.GetProperty("id").GetString()!;
 
         // Страница: brief на месте (страховка от «brief нигде не появляется»).
@@ -1934,6 +1977,10 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
             var description = task.GetProperty("description").GetString()!;
             description.Should().Contain("Эпик не закрывать")
                 .And.NotContain("закрыть эпик");
+            // F-9: мерж ставит человек по кнопке — он записан создателем (для владельца это равно OwnerId записи,
+            // эффекта на автозапуске нет; инициатор-участник дал бы «понижение» актора, не повышение)
+            var stored = _factory.Services.GetRequiredService<TaskManager>().GetById(task.GetProperty("id").GetString()!)!;
+            stored.CreatedByUserId.Should().Be(OwnerId, "создатель merge-задачи — человек-инициатор");
         }
         finally
         {
@@ -3373,8 +3420,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
     {
         var keyChat = await CreatePersonalChatAsync(OwnerId);
         var projectId = CreateProject("queue-card");
-        var epic = await CreateProjectTaskAsync(projectId,
-            new { title = "фича в очередь", role = "feature", sourceSessionId = keyChat });
+        var epic = await CreateAgentTaskAsync(new { title = "фича в очередь", role = "feature", sourceSessionId = keyChat }, projectId);
         var epicId = epic.GetProperty("id").GetString()!;
         var cardSent = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
         _factory.LlmAdapters.Adapters[keyChat].FirstMessageTcs = cardSent;
@@ -3757,7 +3803,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
     public async Task ClearHold_DraftReason_WakesKeyChatWithStartedCard()
     {
         var keyChat = await CreatePersonalChatAsync(OwnerId);
-        var epic = await CreateTaskAsync(new
+        var epic = await CreateAgentTaskAsync(new
         {
             title = "фича в черновике", role = "feature", sourceSessionId = keyChat,
         });
@@ -4155,7 +4201,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
     public async Task GetFeaturesIndex_ЧужойЧат_НеВChats_НеКлючевой()
     {
         var foreignChat = await CreatePersonalChatAsync(SecondOwnerId);
-        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = foreignChat });
+        var epic = await CreateAgentTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = foreignChat });
         var epicId = epic.GetProperty("id").GetString();
 
         var index = await GetIndexAsync();
@@ -4177,10 +4223,10 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         var liveChat = await CreateProjectSessionAsync(project);
         var deletedChat = "deleted-chat-" + Guid.NewGuid().ToString("N")[..8];
 
-        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = deletedChat });
+        var epic = await CreateAgentTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = deletedChat });
         var epicId = epic.GetProperty("id").GetString();
         // CreateTaskRequest ExecutorLaunchedBySessionId не несёт — второе звено ставим через PUT.
-        await _client.PutAsJsonAsync($"/api/tasks/{epicId}", new { executorLaunchedBySessionId = liveChat });
+        SetExecutorLauncherChat(epicId!, liveChat);
 
         var index = await GetIndexAsync();
         var row = index.GetProperty("features").EnumerateArray()
@@ -4197,7 +4243,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         var chat = await CreateProjectSessionAsync(project);
         Sessions.SetArchived(chat, archived: true, by: OwnerId);
 
-        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = chat });
+        var epic = await CreateAgentTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = chat });
         var epicId = epic.GetProperty("id").GetString();
 
         var index = await GetIndexAsync();
@@ -4214,7 +4260,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         var otherProject = CreateProject("key-other-project");
         var chat = await CreateProjectSessionAsync(otherProject);
 
-        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = chat });
+        var epic = await CreateAgentTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = chat });
         var epicId = epic.GetProperty("id").GetString();
 
         var index = await GetIndexAsync();
@@ -4233,7 +4279,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         var personalChat = await CreatePersonalChatAsync(OwnerId);
 
         // Эпик: куратор — личный чат, исполнитель шага — проектный чат.
-        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = personalChat });
+        var epic = await CreateAgentTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = personalChat });
         var epicId = epic.GetProperty("id").GetString();
         var step = await CreateTaskAsync(new { title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1" });
         var stepId = step.GetProperty("id").GetString();
@@ -4255,8 +4301,8 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         var chatA = await CreateProjectSessionAsync(projectA);
         var chatB = await CreateProjectSessionAsync(projectB);
 
-        var epicA = await CreateProjectTaskAsync(projectA, new { title = "эпик A", role = "feature", sourceSessionId = chatA });
-        var epicB = await CreateProjectTaskAsync(projectB, new { title = "эпик B", role = "feature", sourceSessionId = chatB });
+        var epicA = await CreateAgentTaskAsync(new { title = "эпик A", role = "feature", sourceSessionId = chatA }, projectA);
+        var epicB = await CreateAgentTaskAsync(new { title = "эпик B", role = "feature", sourceSessionId = chatB }, projectB);
 
         var index = await GetIndexAsync(projectId: projectA);
 
@@ -4476,7 +4522,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         // Фича B: эпик, у которого оркестраторский чат = тот же чат C.
         var epicB = await CreateTaskAsync(new { title = "эпик-sp-2f-B", role = "feature" });
         var epicBId = epicB.GetProperty("id").GetString()!;
-        await _client.PutAsJsonAsync($"/api/tasks/{epicBId}", new { executorLaunchedBySessionId = chatC });
+        SetExecutorLauncherChat(epicBId!, chatC);
 
         // Запись расхода: без taskId, sessionId = общий чат C.
         var (_, reader) = SpendStoreWith(SpendRecord(OwnerId, null, chatC, "claude-opus-4", 100, 50, 1.5));
@@ -4595,7 +4641,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         // Фича B: эпик, оркестраторский чат = тот же C + идущая задача.
         var epicB = await CreateTaskAsync(new { title = "эпик-b9c-B", role = "feature" });
         var epicBId = epicB.GetProperty("id").GetString()!;
-        await _client.PutAsJsonAsync($"/api/tasks/{epicBId}", new { executorLaunchedBySessionId = chatC });
+        SetExecutorLauncherChat(epicBId!, chatC);
         var stepB = await CreateTaskAsync(new { title = "шаг-b9c-B", featureId = epicBId, role = "step" });
         var stepBId = stepB.GetProperty("id").GetString()!;
         tasks.GetById(stepBId)!.ClaudeStartedAt = DateTime.UtcNow.AddHours(-2);
@@ -4651,7 +4697,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         // Фича B: эпик, оркестраторский чат = C, НО задач нет (B не активна).
         var epicB = await CreateTaskAsync(new { title = "эпик-b9c-1a-B", role = "feature" });
         var epicBId = epicB.GetProperty("id").GetString()!;
-        await _client.PutAsJsonAsync($"/api/tasks/{epicBId}", new { executorLaunchedBySessionId = chatC });
+        SetExecutorLauncherChat(epicBId!, chatC);
 
         var rec = new SpendRecord
         {
@@ -4748,7 +4794,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
             var step = await CreateTaskAsync(new { title = $"шаг-bench-{i}", featureId = epicId, role = "step" });
             stepIds.Add(step.GetProperty("id").GetString()!);
             // Оркестраторский чат = тот же C.
-            await _client.PutAsJsonAsync($"/api/tasks/{epicId}", new { executorLaunchedBySessionId = chatC });
+            SetExecutorLauncherChat(epicId!, chatC);
         }
 
         // 10k записей расхода: 500 на каждую фичу (taskId = шаг), даты равномерно по 30 дням.

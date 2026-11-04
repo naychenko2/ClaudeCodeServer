@@ -112,7 +112,8 @@ public class NotesToolsetWikiTests : IDisposable
         _sessions.All.Add(session);
         return (
             new NotesToolset(new AllowAllPersonas(), new AllowAllBindings(), new OwnSession(session),
-                new TestSessionBroadcaster(), _notes, _kb, _ai, _noteTasks,
+                new ClaudeHomeServer.Tests.Helpers.NotesNoopHubNotifier(), new ClaudeHomeServer.Tests.Helpers.NotesWideTurnFrame(),
+                new ClaudeHomeServer.Tests.Helpers.NotesNoActorDenials(), _notes, _kb, _ai, _noteTasks,
                 _config, _ingest, _capture, _chatIngest, _sessions, _spheres, _projects,
                 flags ?? new WikiFlagOn()),
             new McpToolCallContext(User, sessionId, sessionId));
@@ -584,8 +585,8 @@ public class NotesToolsetWikiTests : IDisposable
 
     private sealed class NoopNotesNotifier : INotesHubNotifier
     {
-        public Task BroadcastNotesChangedAsync(string userId, string action, string noteId) => Task.CompletedTask;
-        public Task BroadcastTaskChangedAsync(string userId, string action, string taskId) => Task.CompletedTask;
+        public Task BroadcastNotesChangedAsync(string userId, string action, string noteId, string? projectId = null) => Task.CompletedTask;
+        public Task BroadcastTaskChangedAsync(string userId, string action, string taskId, string? projectId = null) => Task.CompletedTask;
     }
 
     private sealed class NoopCheapRunner : ICheapTextRunner

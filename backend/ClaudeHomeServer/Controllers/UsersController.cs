@@ -14,7 +14,7 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize(Roles = "admin")]
 public class UsersController(UserStore users, SessionManager sessions,
     UserKnowledgeCascade knowledgeCascade, DefaultAssistantProvisioner provisioner,
-    ILogger<UsersController> logger) : ControllerBase
+    ProjectMembershipService membership, ILogger<UsersController> logger) : ControllerBase
 {
     private static readonly Regex UsernameRegex = new(@"^[a-zA-Z0-9_-]+$", RegexOptions.Compiled);
 
@@ -100,6 +100,14 @@ public class UsersController(UserStore users, SessionManager sessions,
         var currentUserId = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
         if (id == currentUserId)
             return BadRequest(new { error = "Нельзя удалить собственную учётную запись" });
+
+        // Владелец общих проектов с живыми участниками: пока они есть, учётку не удаляем
+        if (membership.OwnerHasMembers(id))
+            return Conflict(new
+            {
+                error = "У пользователя есть общие проекты с участниками: сначала уберите участников.",
+                code = "owner_has_members",
+            });
 
         var user = users.GetById(id);
         try

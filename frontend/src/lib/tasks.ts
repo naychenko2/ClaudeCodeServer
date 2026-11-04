@@ -978,10 +978,20 @@ const DUE_BUCKET_COLOR: Record<DueBucket, string> = {
 
 export const ASSIGNEE_LABEL: Record<string, string> = { me: 'Я', claude: 'AI', none: 'Не назначен' };
 
+// Имена дорожек «по исполнителю» для ОБЩЕГО проекта (S2b-F5): userId → имя.
+// Вызывающий строит их из вида участников (владелец первым, затем участники).
+// Без этого контекста дорожки прежние (Я/AI/Не назначен) — личный проект и хаб.
+export interface BoardAssigneePeople {
+  names: Map<string, string>;
+  // id владельца: старый 'me' без assigneeUserId относится к нему (К9)
+  ownerUserId?: string | null;
+}
+
 // Разбить задачи на дорожки согласно groupBy. Порядок дорожек фиксирован
 // (приоритет/срок — по важности), у проектов — личные первыми. Пустые дорожки не рисуем.
 export function boardLanes(
   tasks: Task[], groupBy: BoardGroupBy, projectsById: Map<string, { name: string }>,
+  assigneePeople?: BoardAssigneePeople,
 ): BoardLane[] {
   if (groupBy === 'none') return [{ key: 'all', label: '', tasks }];
 
@@ -996,6 +1006,30 @@ export function boardLanes(
       .map(p => ({ key: p, label: PRIORITY_LABEL[p], color: PRIORITY_COLOR[p], tasks: byKey.get(p)! }));
   }
   if (groupBy === 'assignee') {
+    if (assigneePeople) {
+      // Общий проект (S2b-F5): дорожки разведены по assigneeUserId. AI — 'claude';
+      // участник — дорожка с его именем; любая человеческая задача без id — дорожка
+      // владельца: и старый 'me' без id (К9), и задача вообще без assignee — бэк
+      // (TaskManager.ResolveMeUserId) читает Assignee=null как Me без id, т.е. владельца;
+      // 'none' («Без исполнителя») остаётся для id, которого нет в names (ушедший/неизвестный)
+      tasks.forEach(t => {
+        if (t.assignee === 'claude') { push('claude', t); return; }
+        const uid = t.assigneeUserId ?? assigneePeople.ownerUserId ?? undefined;
+        const name = uid ? assigneePeople.names.get(uid) : undefined;
+        push(name ? 'u:' + uid : 'none', t);
+      });
+      const lanes: BoardLane[] = [];
+      if (byKey.has('claude')) lanes.push({ key: 'claude', label: ASSIGNEE_LABEL.claude, tasks: byKey.get('claude')! });
+      // Дорожки участников — в порядке списка имён (владелец первым)
+      for (const [uid, name] of assigneePeople.names) {
+        const k = 'u:' + uid;
+        if (byKey.has(k)) lanes.push({ key: k, label: name, tasks: byKey.get(k)! });
+      }
+      // В общем проекте подпись строки — «Без исполнителя» (тот же термин, что в карточке),
+      // а не прежнее «Не назначен» личного вида
+      if (byKey.has('none')) lanes.push({ key: 'none', label: 'Без исполнителя', tasks: byKey.get('none')! });
+      return lanes;
+    }
     tasks.forEach(t => push(t.assignee ?? 'none', t));
     return ['claude', 'me', 'none'].filter(k => byKey.has(k))
       .map(k => ({ key: k, label: ASSIGNEE_LABEL[k], tasks: byKey.get(k)! }));

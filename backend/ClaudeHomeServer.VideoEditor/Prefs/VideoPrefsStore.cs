@@ -110,7 +110,7 @@ public sealed class VideoPrefsService(
         if (broadcaster is null) return;
         try
         {
-            _ = broadcaster.ToOwner(ownerId, new VideoPrefsChangedMessage(scopeKey, prefs))
+            _ = broadcaster.ToProjectOrOwner(ownerId, VideoEditScope.ProjectIdOf(scopeKey), new VideoPrefsChangedMessage(scopeKey, prefs))
                 .ContinueWith(t => log?.LogWarning(t.Exception, "Видео: префы области {ScopeKey} не разосланы", scopeKey),
                     TaskContinuationOptions.OnlyOnFaulted);
         }

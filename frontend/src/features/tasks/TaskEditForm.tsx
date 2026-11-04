@@ -16,7 +16,10 @@ import { api } from '../../lib/api';
 import { NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, PRIORITY_ORDER, RECURRENCE_TYPE_LABEL, REMINDER_PRESETS, markEditing, projectColor, reminderLabel, unmarkEditing } from '../../lib/tasks';
 import { ExtBadge, PriorityFlag, SubtaskCheck } from './bits';
 import { DueDatePicker } from './DueDatePicker';
-import { ExecutorPicker } from './ExecutorPicker';
+import { ExecutorPicker, type ExecutorMemberOption } from './ExecutorPicker';
+import { useProjectPeople } from './TaskUserBadge';
+import { isSharedProjectView, memberOptionName } from './TasksListFilter';
+import { useMe } from '../../lib/defaultPersona';
 import { parseTier, TIER_ORDER, TIER_TITLE, type ModelTierKey } from '../../lib/modelTiers';
 import { useTaskPreview } from './useTaskPreview';
 import { formatEffectiveLine } from '../../lib/presets';
@@ -88,6 +91,9 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
   const [assignee, setAssignee] = useState<TaskAssignee>(task.assignee ?? 'me');
   // Персона-исполнитель ('' — обычный Claude); выбирается единым пикером исполнителя
   const [personaId, setPersonaId] = useState(task.personaId ?? '');
+  // Человек-исполнитель общего проекта (S2b-F1): id участника; '' — никого.
+  // В личном/локальном проекте поле не участвует (DTO прежний)
+  const [assigneeUserId, setAssigneeUserId] = useState(task.assigneeUserId ?? '');
   // Уровень модели исполнителя ('' — по назначению места «Исполнитель задач»)
   const [modelTier, setModelTier] = useState<ModelTierKey | ''>(parseTier(task.modelTier));
   // Время жизни чата исполнения (актуально только при исполнителе Claude/персона)
@@ -123,6 +129,26 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
     const def = projects.find(p => p.id === cur);
     return def ? [def, ...projects.filter(p => p.id !== cur)] : projects;
   }, [projects, task.projectId]);
+  // Общий целевой проект (S2b-F1): группа «Участники» в пикере и поле assigneeUserId
+  // в DTO — только в нём. Список — тем же путём, что на доске (useProjectPeople):
+  // владелец — участник, если это не текущий человек (тот в пикере «Я»), читатели
+  // не назначаются (бэк: reader_not_assignable), дубль текущего человека убран
+  const me = useMe();
+  const targetProject = projectId ? projects.find(p => p.id === projectId) : undefined;
+  const sharedProject = !!targetProject && isSharedProjectView(targetProject);
+  const { view: membersView } = useProjectPeople(projectId ?? undefined, sharedProject);
+  const memberOptions = useMemo<ExecutorMemberOption[]>(() => {
+    if (!membersView) return [];
+    const list: ExecutorMemberOption[] = [];
+    if (membersView.owner && membersView.owner.userId !== me.userId) {
+      list.push({ userId: membersView.owner.userId, displayName: memberOptionName(membersView.owner) });
+    }
+    for (const m of membersView.members) {
+      if (m.role === 'reader' || m.userId === me.userId) continue;
+      list.push({ userId: m.userId, displayName: memberOptionName(m) });
+    }
+    return list;
+  }, [membersView, me.userId]);
   const [subtasks, setSubtasks] = useState<TaskSubtask[]>(task.subtasks);
   const [newSubtask, setNewSubtask] = useState('');
   const [labels, setLabels] = useState<string[]>(task.labels);
@@ -238,6 +264,9 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
         // Повторение тоже требует срока; type 'none' = убрать на бэке
         recurrence: dueDate && recurrence ? recurrence : { type: 'none', interval: 1 },
         assignee,
+        // Человек-исполнитель общего проекта (контракт S2b-2a): id — назначить (вместе
+        // с assignee='me'), '' — снять. В личном/локальном проекте поле не шлём (прежнее)
+        ...(sharedProject ? { assigneeUserId } : {}),
         // Персона-исполнитель имеет смысл только у Claude; '' = убрать на бэке
         personaId: assignee === 'claude' && personaId ? personaId : '',
         // Уровень модели — тоже только у Claude-исполнителя; '' = сбросить на бэке
@@ -631,15 +660,18 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
             </>
           )}
 
-          {/* Исполнитель — единый пикер (Я / Claude / персона). projectId = целевой
-              проект (state), чтобы список персон обновлялся при смене проекта ниже */}
+          {/* Исполнитель — единый пикер (Я / Claude / персона / участник). projectId = целевой
+              проект (state), чтобы список персон обновлялся при смене проекта ниже.
+              Участники — только в общем проекте (memberOptions пуст до загрузки списка) */}
           <div style={fieldLabelStyle()}>Исполнитель</div>
           <div style={{ marginBottom: 22 }}>
             <ExecutorPicker
               assignee={assignee}
               personaId={personaId || null}
               projectId={projectId}
-              onChange={v => { setAssignee(v.assignee); setPersonaId(v.personaId ?? ''); }}
+              members={sharedProject ? memberOptions : undefined}
+              assigneeUserId={assigneeUserId}
+              onChange={v => { setAssignee(v.assignee); setPersonaId(v.personaId ?? ''); setAssigneeUserId(v.assigneeUserId ?? ''); }}
             />
           </div>
 

@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Skills;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -22,26 +23,26 @@ public class SkillsController(
     PersonaManager personas,
     PersonaBindingsService bindings,
     ProjectManager projects,
+    IProjectAccess access,
     IProjectFiles projectFiles) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
-    // Владельца сверяем ЗДЕСЬ: ProjectManager.GetById проверяет только существование, и без
-    // этой сверки по чужому projectId читались и перезаписывались агенты чужого проекта
-    // (а текст агента — инструкции, которые попадут в ход его владельца). 404, а не 403:
-    // существование чужого проекта не подтверждаем. Форма — как у соседей (KnowledgeController,
-    // DocsController, FilesController).
-    private Project OwnedProject(string projectId)
+    // Доступ сверяем ЗДЕСЬ явным Resolve (projectId бывает и в теле — [ProjectScope] его не видит):
+    // ProjectManager.GetById проверяет только существование, и без этой сверки по чужому projectId
+    // читались и перезаписывались агенты чужого проекта (а текст агента — инструкции, которые
+    // попадут в ход его владельца). 404, а не 403: существование чужого проекта не подтверждаем.
+    private Project ScopedProject(string projectId, ProjectRight right)
     {
-        var p = projects.GetById(projectId);
-        if (p is null || p.OwnerId != UserId)
+        var p = access.Resolve(UserId, projectId, right) is null ? null : projects.GetById(projectId);
+        if (p is null)
             throw new KeyNotFoundException($"Проект не найден: {projectId}");
         return p;
     }
 
     private string GetRoot(string projectId) =>
         // projectId бывает и в теле запроса — атрибут группы его не видит, отказ здесь
-        ProjectCapabilityGuard.ServerRoot(OwnedProject(projectId));
+        ProjectCapabilityGuard.ServerRoot(ScopedProject(projectId, ProjectRight.Write));
 
     // Список скиллов: глобальные + проектные + агенты проекта + workflow-скрипты + плагины.
     // Проектная часть — через шов файлов тем же кодом, что у агента устройства (ADR-016)
@@ -50,7 +51,7 @@ public class SkillsController(
     {
         try
         {
-            var project = OwnedProject(projectId);
+            var project = ScopedProject(projectId, ProjectRight.Read);
             return Ok(new
             {
                 skills = skills.GetGlobalSkills(),
@@ -255,7 +256,7 @@ public class SkillsController(
     {
         try
         {
-            var content = await skills.GetAgentContentAsync(projectFiles, OwnedProject(projectId), agentName, ct);
+            var content = await skills.GetAgentContentAsync(projectFiles, ScopedProject(projectId, ProjectRight.Read), agentName, ct);
             if (content is null) return NotFound();
             return Ok(new { content });
         }
@@ -267,7 +268,7 @@ public class SkillsController(
     {
         try
         {
-            await skills.SaveProjectAgentAsync(projectFiles, OwnedProject(projectId), agentName, req.Content, ct);
+            await skills.SaveProjectAgentAsync(projectFiles, ScopedProject(projectId, ProjectRight.Write), agentName, req.Content, ct);
             return Ok();
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -282,7 +283,7 @@ public class SkillsController(
             return BadRequest(new { error = "Имя агента не может быть пустым" });
         try
         {
-            await skills.SaveProjectAgentAsync(projectFiles, OwnedProject(projectId), req.Name.Trim(), req.Content, ct);
+            await skills.SaveProjectAgentAsync(projectFiles, ScopedProject(projectId, ProjectRight.Write), req.Name.Trim(), req.Content, ct);
             return Ok(new { name = req.Name.Trim() });
         }
         catch (KeyNotFoundException) { return NotFound(); }

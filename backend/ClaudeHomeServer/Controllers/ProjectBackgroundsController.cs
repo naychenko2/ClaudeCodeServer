@@ -1,7 +1,6 @@
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Backgrounds;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -14,6 +13,7 @@ namespace ClaudeHomeServer.Controllers;
 /// и отдача собранного сервером тайла. Генерация и сброс — только владельцу проекта.
 /// </summary>
 [ProjectCapability(ProjectCapabilityArea.Platform, ProjectKey = "id")]
+[ProjectScope(Key = "id", Right = ProjectRight.Write)]
 [ApiController]
 [Authorize]
 [Route("api/projects/{id}/background")]
@@ -21,14 +21,8 @@ public class ProjectBackgroundsController(
     ProjectManager projects, ProjectBackgroundService backgrounds)
     : ControllerBase
 {
-    private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
-
-    // Чужой проект — 404, а не 403: подтверждать его существование незачем
-    private Project? Owned(string id)
-    {
-        var project = projects.GetById(id);
-        return project is null || project.OwnerId != UserId ? null : project;
-    }
+    // Доступ к проекту проверил [ProjectScope] (чужой — 404, а не 403: существование не подтверждаем)
+    private Project? Scoped(string id) => projects.GetById(id);
 
     private static object Payload(BackgroundResult r) => new
     {
@@ -42,7 +36,7 @@ public class ProjectBackgroundsController(
     [HttpPost("generate")]
     public async Task<ActionResult> Generate(string id, CancellationToken ct)
     {
-        if (Owned(id) is not { } project) return NotFound();
+        if (Scoped(id) is not { } project) return NotFound();
 
         return Ok(Payload(await backgrounds.GenerateAsync(project, ct)));
     }
@@ -50,7 +44,7 @@ public class ProjectBackgroundsController(
     [HttpPost("reset")]
     public ActionResult Reset(string id)
     {
-        if (Owned(id) is null) return NotFound();
+        if (Scoped(id) is null) return NotFound();
 
         return Ok(Payload(backgrounds.Reset(id)));
     }
@@ -59,9 +53,10 @@ public class ProjectBackgroundsController(
     // браузер не поставит (приём GET {id}/icon). Параметр v в запросе — только cache-buster:
     // имя файла берётся из стора, из запроса путь не строится никогда.
     [HttpGet("tile.svg")]
+    [ProjectScope(Key = "id")]
     public IActionResult Tile(string id)
     {
-        if (Owned(id) is not { Background: { Kind: ProjectBackgroundKind.Generated, TileFile: { } file } })
+        if (Scoped(id) is not { Background: { Kind: ProjectBackgroundKind.Generated, TileFile: { } file } })
             return NotFound();
 
         var full = Path.Combine(projects.BackgroundsDir, id, file);

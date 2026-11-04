@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -19,7 +20,8 @@ namespace ClaudeHomeServer.Services.Spend.Controllers;
 [Route("api/spend")]
 [Authorize]
 public class SpendController(SpendAnalyticsService analytics, ISessionDirectory sessions,
-    ITaskLookup tasks, TaskPromptMetricsStore promptMetrics) : ControllerBase
+    ITaskLookup tasks, TaskPromptMetricsStore promptMetrics,
+    IProjectAccess access) : ControllerBase
 {
     private string CurrentUserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub) ?? "";
     private bool IsAdmin => User.IsInRole("admin");
@@ -48,7 +50,7 @@ public class SpendController(SpendAnalyticsService analytics, ISessionDirectory 
         if (!SpendAnalyticsService.PivotLevels.Contains(groupBy))
             return BadRequest(new { error = $"Неизвестный разрез: {groupBy}" });
         var res = SpendAccess.Resolve(IsAdmin, CurrentUserId, scope,
-            user, project, chat, task, persona, provider, model, source, groupBy);
+            user, project, chat, task, persona, provider, model, source);
         if (res.Error is not null) return Forbidden(res.Error);
         var (f, t) = Period(from, to);
         return Ok(new { nodes = analytics.Pivot(groupBy, f, t, res.Filter) });
@@ -103,7 +105,9 @@ public class SpendController(SpendAnalyticsService analytics, ISessionDirectory 
     {
         var session = sessions.GetById(sessionId);
         if (session is null) return NotFound();
-        if (!IsAdmin && sessions.ResolveOwnerId(session) != CurrentUserId)
+        // Расход — только владельцу чата: решение о доступе принимает IProjectAccess (рубильник общих
+        // проектов, роль), участнику общего проекта расход чужого чата не открыт (S2a-6b)
+        if (!IsAdmin && access.ResolveSession(CurrentUserId, sessionId) is not { Role: ProjectRole.Owner })
             return Forbidden("Чужой чат доступен только администратору");
         return Ok(analytics.Badge(sessionId));
     }

@@ -12,7 +12,8 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace ClaudeHomeServer.Tests.Services.Architecture;
 
 // Хранилище модели раздела «Архитектура»: файл docs/architecture/model.viaduct.json
-// в проекте, запись байт-в-байт, версия SHA-256 → конфликт; контроллер — владение проектом.
+// в проекте, запись байт-в-байт, версия SHA-256 → конфликт; доступ к проекту держит
+// [ProjectScope] (его поведение — в SharedProjectReadTests), тело действия владение не сверяет.
 public class ArchitectureModelStoreTests : IDisposable
 {
     private const string ModelV1 = """{"state":{"model":{"systems":[],"viewLevel":"system"}},"version":0}""";
@@ -199,7 +200,7 @@ public class ArchitectureModelStoreTests : IDisposable
             .Build();
         var users = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var projects = new ProjectManager(config, users, new AppSettingsService(config));
-        var controller = new ArchitectureController(projects, users,
+        var controller = new ArchitectureController(projects, new OwnerOnlyAccess(projects), users,
             NullLogger<ArchitectureController>.Instance,
             generator ?? new ArchitectureModelGenerator(NullLogger<ArchitectureModelGenerator>.Instance), _store)
         {
@@ -214,15 +215,17 @@ public class ArchitectureModelStoreTests : IDisposable
         return (controller, projects);
     }
 
+    // Точка доступа не раскрывает существование чужого проекта: 404, а не 403 (S1-3c;
+    // 403 остаётся тому, кому проект виден на чтение, — см. SharedProjectReadTests)
     [Fact]
-    public async Task Чужой_проект__403_и_файл_не_создан()
+    public async Task Чужой_проект__404_и_файл_не_создан()
     {
         var (controller, projects) = Controller("mallory");
         var project = projects.Create("Alice", _root, "alice", "alice", createDirectory: false);
 
-        (await controller.GetModel(project.Id, default)).Should().BeOfType<ForbidResult>();
+        (await controller.GetModel(project.Id, default)).Should().BeOfType<NotFoundResult>();
         (await controller.PutModel(project.Id, new ArchitectureModelPutRequest(ModelV1, null), default))
-            .Should().BeOfType<ForbidResult>();
+            .Should().BeOfType<NotFoundResult>();
         File.Exists(ModelPath).Should().BeFalse();
     }
 
@@ -279,16 +282,16 @@ public class ArchitectureModelStoreTests : IDisposable
         File.Exists(ModelPath).Should().BeFalse();
     }
 
-    // Владение проверяется раньше шва: чужой проект получает 403, а не 503 —
+    // Точка доступа проверяется раньше шва: чужой проект получает 404, а не 503 —
     // иначе по коду ответа можно было бы узнать о существовании чужого проекта
     [Fact]
-    public async Task Сборка_без_шва_CodeGraph__чужой_проект__403()
+    public async Task Сборка_без_шва_CodeGraph__чужой_проект__404()
     {
         var (controller, projects) = Controller("mallory",
             new ArchitectureModelGenerator(NullLogger<ArchitectureModelGenerator>.Instance));
         var project = projects.Create("Alice", _root, "alice", "alice", createDirectory: false);
 
-        (await controller.Generate(project.Id, null, default)).Should().BeOfType<ForbidResult>();
+        (await controller.Generate(project.Id, null, default)).Should().BeOfType<NotFoundResult>();
         File.Exists(ModelPath).Should().BeFalse();
     }
 }

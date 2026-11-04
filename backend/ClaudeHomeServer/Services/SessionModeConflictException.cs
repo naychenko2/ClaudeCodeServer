@@ -6,3 +6,8 @@ namespace ClaudeHomeServer.Services;
 // лезет в правку, получает отказ инструмента, а активный цикл «до готово» долбит «Продолжай»
 // все итерации впустую. Текст — человеку, показывается как есть.
 public sealed class SessionModeConflictException(string message) : Exception(message);
+
+// Приватный чат не принимает режимы общего контура (состав персон, штаб) — S2d-7b-3, доработка 1.
+// Бросается из-под VisibilityLock в тот же момент, когда проверена приватность: отказ и запись
+// состава/штаба не разделены окном гонки с тумблером видимости. Контроллер отвечает 409 private_chat_mode.
+public sealed class PrivateChatModeException(string message) : Exception(message);

@@ -39,7 +39,7 @@ public class WikiKeeperTests : IDisposable
         // Флаг llm-wiki включён: «граф видит страницу сразу» (решение 4, шаг 6) — свойство
         // графа с включённым флагом; без него источник wiki не отдаётся вовсе (хвост ревью S2e,
         // проверка — в NotesWikiSourceTests).
-        _notes = new NotesService(projects, config, NullLogger<NotesService>.Instance, _events, new WikiFlagOn());
+        _notes = new NotesService(projects, config, NullLogger<NotesService>.Instance, _events, flags: new WikiFlagOn());
         _sut = new WikiKeeper(_notes, config, _events);
     }
 
@@ -410,7 +410,7 @@ public class WikiKeeperTests : IDisposable
         public List<ProjectEvent> Appended { get; } = [];
 
         public ProjectEvent? Append(string projectId, string ownerId, string type, string actor,
-            string summary, string? entityRef = null)
+            string summary, string? entityRef = null, string? actorUserId = null)
         {
             var e = new ProjectEvent { ProjectId = projectId, OwnerId = ownerId, Type = type, Actor = actor, Summary = summary, EntityRef = entityRef };
             Appended.Add(e);

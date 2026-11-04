@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Files;
@@ -161,8 +162,9 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
     // write-операций те же ls-files/rev-parse идут обычным RunAsync под семафором.
     private Task<GitResult> RunReadAsync(
         string? ownerId, string root, IReadOnlyList<string> args,
+        string? stdin = null,
         int timeoutMs = DefaultTimeoutMs, CancellationToken ct = default) =>
-        RunAsync(ownerId, root, args,
+        RunAsync(ownerId, root, args, stdin: stdin,
             env: new Dictionary<string, string> { [OptionalLocksEnv] = "0" },
             timeoutMs: timeoutMs, ct: ct);
 
@@ -890,7 +892,17 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         return lines;
     }
 
-    public async Task<string> CommitAsync(string? ownerId, string root, string message, bool amend = false, CancellationToken ct = default)
+    // author (S3-1) — человек-автор коммита: тогда git берёт автора из env GIT_AUTHOR_*,
+    // а коммиттер остаётся прежний (конфиг репозитория — GIT_COMMITTER_* не ставим). Без автора
+    // — ровно как раньше: ни env, ни трейлера. Параметр после ct сознательно: все существующие
+    // вызовы должны оставаться валидными без правки, включая позиционный
+    // (DeviceAgent/Composition/LocalApi.cs передаёт amend и ct позиционно).
+    // paths (S3-3) — коммит только этих путей (pathspec), StageAll не нужен; пустой результат —
+    // коммитить было нечего.
+    public async Task<string> CommitAsync(
+        string? ownerId, string root, string message, bool amend = false,
+        CancellationToken ct = default, GitCommitAuthor? author = null,
+        IReadOnlyList<string>? paths = null)
     {
         var sem = LockFor(root);
         await sem.WaitAsync(ct);
@@ -899,11 +911,95 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             // Сообщение — через stdin (-F -), не в argv: избегаем экранирования кавычек/переводов строк
             var args = new List<string> { "commit", "-F", "-" };
             if (amend) args.Add("--amend");
-            await RunOkAsync(ownerId, root, args, stdin: message, ct: ct);
+            if (paths is not null)
+            {
+                // Коммит ТОЛЬКО перечисленных путей (S3-3): сначала в индекс идут именно они
+                // (новые файлы без add в --only не попали бы), потом `commit --only -- пути`
+                // игнорирует всё остальное, что лежит в индексе (staged агента). Всё под
+                // одним замком репозитория; пути, где нечего коммитить (содержимое совпало с
+                // HEAD, создан и удалён до коммита), отсеиваются — иначе `add` по несовпавшему
+                // pathspec валит весь вызов. Нечего коммитить вовсе — пустая строка вместо sha.
+                var specs = new List<string>();
+                foreach (var p in paths)
+                {
+                    var spec = LiteralSpec(ValidateRel(root, p));
+                    var st = await RunAsync(ownerId, root, ["status", "--porcelain", "--", spec], ct: ct);
+                    if (st.Ok && !string.IsNullOrWhiteSpace(st.Stdout)) specs.Add(spec);
+                }
+                if (specs.Count == 0) return "";
+                await RunOkAsync(ownerId, root, ["add", "-A", "--", .. specs], ct: ct);
+                args.Add("--only");
+                args.Add("--");
+                args.AddRange(specs);
+            }
+            var body = message;
+            IReadOnlyDictionary<string, string>? authorEnv = null;
+            if (author is not null)
+            {
+                // Идентичность автора — env-подменой на вызов, по образцу WriteSnapshotAsync:
+                // без этого конфигурационный user.name/user.email репозитория ушёл бы в
+                // коммит, и человек в истории коммитов не появился бы.
+                authorEnv = new Dictionary<string, string>
+                {
+                    ["GIT_AUTHOR_NAME"] = author.DisplayName,
+                    ["GIT_AUTHOR_EMAIL"] = $"{author.Username}@users.invalid",
+                };
+                body = WithUserTrailer(message, author.UserId);
+            }
+            await RunOkAsync(ownerId, root, args, stdin: body, env: authorEnv, ct: ct);
             var head = await RunAsync(ownerId, root, ["rev-parse", "HEAD"], ct: ct);
             return head.Stdout.Trim();
         }
         finally { sem.Release(); }
+    }
+
+    // Строка `CCS-User:` в начале строки — тот же формат, что читает разбор чужих трейлеров
+    // (CommitTrailers: `^CCS-Session:`), поэтому и проверка дубля — по началу строки, а не
+    // по вхождению в текст: «CCS-User:» внутри абзаца трейлером не является.
+    private static readonly Regex UserTrailerLineRx = new(@"(?m)^CCS-User:", RegexOptions.Compiled);
+
+    // Строка git-трейлера: `Токен: значение`. Токен — латинские буквы, цифры и дефис;
+    // пробел после двоеточия не обязателен. Так же, как определяет git (пробы
+    // `git interpret-trailers --parse` на git 2.53: «Key:value» — трейлер, «Key:» — трейлер).
+    private static readonly Regex TrailerLineRx = new(@"^[A-Za-z0-9-]+:.*$", RegexOptions.Compiled);
+
+    // Трейлер автора — в конец тела. Если в сообщении уже есть строка `CCS-User:`,
+    // не добавляем: источник правды о человеке — существующий трейлер, ровно один.
+    private static string WithUserTrailer(string message, string userId) =>
+        UserTrailerLineRx.IsMatch(message) ? message : AppendTrailerBlock(message, $"CCS-User: {userId}");
+
+    // Дописать серверные трейлерные строки в конец тела ОДНИМ блоком (S3-1b, ревью R-S3-1):
+    // если тело уже заканчивается блоком трейлеров — дописываем в него одной строкой, иначе
+    // отдельным абзацем через пустую строку. Отдельный абзац вывел бы существующие трейлеры
+    // (Co-Authored-By, CCS-Session, CCS-Task) из блока — git читает трейлеры только в
+    // последнем абзаце. Общая точка для всех, кто дописывает трейлеры к чужому сообщению
+    // (здесь и AppendDossierTrailer у вызывающих из Main), — чтобы блок не рвался нигде.
+    public static string AppendTrailerBlock(string message, string trailerLines)
+    {
+        var trimmed = message.TrimEnd();
+        return EndsInTrailerBlock(trimmed)
+            ? trimmed + "\n" + trailerLines
+            : trimmed + "\n\n" + trailerLines;
+    }
+
+    // Блок трейлеров — непустой абзац после последней пустой строки, целиком из строк-
+    // трейлеров. Пустая строка обязательна: одноабзацное сообщение (даже из одних
+    // `Токен: значение`) git блока не видит — проба p2 на git 2.53. Пустые строки —
+    // и состоящие из пробелов/табов: git разделяет абзацы и ими (пробы w1/w2).
+    private static bool EndsInTrailerBlock(string message)
+    {
+        var lines = message.Split('\n');
+        var start = -1;
+        for (var i = lines.Length - 1; i >= 0; i--)
+        {
+            if (string.IsNullOrWhiteSpace(lines[i])) { start = i + 1; break; }
+        }
+        if (start < 0 || start >= lines.Length) return false;
+        for (var i = start; i < lines.Length; i++)
+        {
+            if (!TrailerLineRx.IsMatch(lines[i])) return false;
+        }
+        return true;
     }
 
     public Task CheckoutAsync(string? ownerId, string root, string branch, CancellationToken ct = default)
@@ -1363,6 +1459,16 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
 
         """;
 
+    // Строки нашего блока в DefaultGitignore: комментарий и строка игнора заметок.
+    // EnsureNotesVersionedAsync удаляет ТОЛЬКО их (см. WithoutOurNotesBlock). Текст обязан
+    // совпадать с DefaultGitignore: расход ловит тест HumanEditCommitterTests «Заметки общего
+    // проекта после Ensure…» — его .gitignore пишет InitAsync, и без совпадения заметки не
+    // доезжают до коммита. Строки, а не склеенный блок: файл мог быть записан с CRLF
+    // (Windows-чекаут до *.cs text eol=lf в .gitattributes), склейка с «\n» тогда не
+    // совпадала никогда и Ensure молча ничего не делал (возврат ревью bc33193f, MAJOR).
+    private const string NotesIgnoreComment = "# Заметки и комментарии проекта — живут в приложении, не в истории документов";
+    private const string NotesIgnoreRule = "/notes/";
+
     public async Task InitAsync(string? ownerId, string root, CancellationToken ct = default)
     {
         // Дефолтный .gitignore кладём и в уже существующий репозиторий, если файла нет:
@@ -1389,6 +1495,134 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             .Select(f => f.Trim('\r')).Where(f => f.Length > 0).ToList();
         foreach (var batch in files.Chunk(50))
             await RunAsync(ownerId, root, ["rm", "-r", "--cached", "--ignore-unmatch", "--", .. batch.Select(LiteralSpec)], ct: ct);
+    }
+
+    // Снятие игнора заметок в общем проекте (QA-D1, решение (б) разреза 2cc7578d): в общем
+    // проекте notes/ версионируются наравне с файлами — иначе журнал правок человека
+    // (HumanEditCommitter) молча теряет каждую правку заметки: git не берёт игнорируемый
+    // путь в index, и коммит по pathspec выходит пустым. Идемпотентно: нет точного блока —
+    // no-op без коммита. Свой .gitignore пользователя правится ТОЛЬКО совпадением строк
+    // нашего блока (с любым переводом строки, см. WithoutOurNotesBlock): его «notes/» без
+    // нашего комментария — его правило, оно остаётся (для такого проекта журнала заметок
+    // не будет — это видно по Warning в журнале). Чужие правила файла не трогать — ни
+    // содержимого, ни их перевода строки. Личные проекты этот метод не вызывает: у них
+    // остаётся DefaultGitignore.
+    // Коммит .gitignore отдельный, по pathspec [".gitignore"], автор — владелец (приходит
+    // явным author: серверный git-конфиг может не иметь user.name, см. DossierBranch.cs).
+    // Чтение-проверка-запись — под замком репозитория: две гонящиеся Ensure дают один коммит
+    // (вторая видит уже очищенный файл и выходит no-op). Коммит — вне замка: CommitAsync
+    // берёт тот же семафор, а он не реентрантный. Возврат — sha; "" — нечего коммитить
+    // (нет файла, нет совпадения, содержимое совпало с HEAD).
+    public async Task<string> EnsureNotesVersionedAsync(
+        string? ownerId, string root, CancellationToken ct = default, GitCommitAuthor? author = null)
+    {
+        var sem = LockFor(root);
+        await sem.WaitAsync(ct);
+        try
+        {
+            var gitignore = Path.Combine(root, ".gitignore");
+            // Файла нет — заметки не игнорируются, удалять нечего. InitAsync пишет шаблон
+            // всегда; отсутствие — руками заведённый репозиторий, его не заводим к своему.
+            if (!File.Exists(gitignore)) return "";
+            var text = await File.ReadAllTextAsync(gitignore, ct);
+            var cleaned = WithoutOurNotesBlock(text);
+            if (cleaned is null) return "";
+            await File.WriteAllTextAsync(gitignore, cleaned, ct);
+        }
+        finally { sem.Release(); }
+        return await CommitAsync(ownerId, root, "Настройка .gitignore: проектные заметки версионируются",
+            ct: ct, author: author, paths: [".gitignore"]);
+    }
+
+    // Удаление нашего блока; нет совпадения — null (файл не трогается). Блок ищется по
+    // тексту его строк (комментарий, следом «/notes/») с любым переводом строки: файл мог
+    // быть записан и с \n (наш шаблон), и с \r\n (InitAsync на Windows-чекауте до
+    // *.cs text eol=lf) — побайтовая склейка с \n на CRLF-файле не совпадала никогда,
+    // и Ensure на таких репозиториях молча ничего не делал (возврат ревью bc33193f).
+    // Всё остальное остаётся байт-в-байт: чужие правила сохраняют свой перевод строки.
+    // Удаляются все вхождения: блок попал в файл дважды — оба раза он наш. Перевод строки
+    // блока убирается вместе с ним, пустой строки на его месте не остаётся.
+    private static string? WithoutOurNotesBlock(string text)
+    {
+        var sb = new StringBuilder();
+        var removed = false;
+        var i = 0;
+        while (i < text.Length)
+        {
+            var end = EndOfLine(text, i);
+            if (LineEquals(text, i, end, NotesIgnoreComment) && end < text.Length)
+            {
+                var end2 = EndOfLine(text, end);
+                if (LineEquals(text, end, end2, NotesIgnoreRule))
+                {
+                    removed = true;
+                    i = end2;
+                    continue;
+                }
+            }
+            sb.Append(text, i, end - i);
+            i = end;
+        }
+        return removed ? sb.ToString() : null;
+    }
+
+    // Конец строки, начинающейся в i: позиция за '\n' или конец текста ('\r' перед '\n'
+    // принадлежит строке — LineEquals его не считает содержимым).
+    private static int EndOfLine(string text, int i)
+    {
+        var nl = text.IndexOf('\n', i);
+        return nl < 0 ? text.Length : nl + 1;
+    }
+
+    // Сравнение содержимого строки text[from..end) (без её перевода строки) с текстом
+    // блока. Посимвольно и без аллокаций: содержимое обязано совпасть точно — «наш
+    // комментарий с хвостом» или «/notes/ с отступом» уже не наш блок.
+    private static bool LineEquals(string text, int from, int end, string content)
+    {
+        var len = end - from;
+        if (len > 0 && text[end - 1] == '\n') len--;
+        if (len > 0 && text[from + len - 1] == '\r') len--;
+        return len == content.Length && text.AsSpan(from, len).SequenceEqual(content.AsSpan());
+    }
+
+    // Пути, которые .gitignore не пускает в индекс (QA-D1): git check-ignore, пути через
+    // stdin под NUL (с -z и вход, и вывод с NUL-разделителями — проверено пробой). Уже
+    // отслеживаемые пути не возвращаются (их git коммитит и под маской): тихая потеря
+    // журнала — ровно не-отслеживаемый случай. Коды возврата check-ignore: 0 — хотя бы
+    // один путь игнорируется, 1 — ни одного (не ошибка), прочее — ошибка git.
+    // Проверка защитная (её зовёт журнал правок человека): сбой git — НЕ исключение
+    // вертикали наружу, а признак: null = проверка не состоялась (сбой назван Warning
+    // здесь, с текстом stderr), [] = проверено, ничего не игнорируется. Вызывающий сам
+    // решает, что значит сбой (для журнала — Warning и обычный коммит). Так корень не
+    // ссылается на GitCommandException (сторож RootSubsystemBoundary, доработка QA-D1);
+    // тот же образец, что у RefExists в этом классе: защитная проверка гасится внутри вертикали.
+    // Отказ запуска процесса и таймаут — GitCommandException из RunAsync, а не exit-код:
+    // они гасятся здесь же (возврат ревью e706043c: иначе корень ловил бы их только общим
+    // catch журнала и терял группу правок без попытки коммита).
+    public async Task<List<string>?> TryIgnoredPathsAsync(
+        string? ownerId, string root, IReadOnlyList<string> relPaths, CancellationToken ct = default)
+    {
+        if (relPaths.Count == 0 || !IsGitRepo(root)) return [];
+        try
+        {
+            var specs = relPaths.Select(p => ValidateRel(root, p)).ToList();
+            var stdin = string.Join('\0', specs) + '\0';
+            var r = await RunReadAsync(ownerId, root, ["check-ignore", "-z", "--stdin"], stdin: stdin, ct: ct);
+            if (r.ExitCode == 1) return [];
+            if (!r.Ok)
+            {
+                logger?.LogWarning("git check-ignore для {Root} завершился с ошибкой: {Error}",
+                    root, FirstLine(r.Stderr) ?? "текста в stderr нет");
+                return null;
+            }
+            return r.Stdout.Split('\0', StringSplitOptions.RemoveEmptyEntries)
+                .Select(p => p.Trim()).Where(p => p.Length > 0).ToList();
+        }
+        catch (GitCommandException ex)
+        {
+            logger?.LogWarning(ex, "git check-ignore для {Root} не состоялся: {Error}", root, ex.Message);
+            return null;
+        }
     }
 
     // Подключить/обновить origin (идемпотентно)

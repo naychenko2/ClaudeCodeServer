@@ -80,7 +80,7 @@ public class AudioVoicesController(
         var sessionId = req.SessionId.Trim();
         if (!gate.TryProjectChat(UserId, projectId, sessionId, out var scope, out var denied)) return denied;
 
-        var thread = threads.Store.Get(UserId, sessionId).Threads.FirstOrDefault(t => t.Id == req.ThreadId?.Trim());
+        var thread = threads.Store.Get(AudioEditorEndpoints.Owner(scope), sessionId).Threads.FirstOrDefault(t => t.Id == req.ThreadId?.Trim());
         if (thread is null)
             return Error(StatusCodes.Status404NotFound, AudioEditErrorCodes.ThreadNotFound, "Звук не найден в этом чате");
         var version = string.IsNullOrWhiteSpace(req.VersionId) ? thread.CurrentVersion : thread.Version(req.VersionId.Trim());
@@ -92,8 +92,8 @@ public class AudioVoicesController(
         if (model is null || index is null)
             return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
                 "В версии нет пары модели RVC: нужны .pth и .index");
-        var modelPath = AudioVersionFiles.Resolve(workspace, UserId, scope, version, model);
-        var indexPath = AudioVersionFiles.Resolve(workspace, UserId, scope, version, index);
+        var modelPath = AudioVersionFiles.Resolve(workspace, AudioEditorEndpoints.Owner(scope), scope, version, model);
+        var indexPath = AudioVersionFiles.Resolve(workspace, AudioEditorEndpoints.Owner(scope), scope, version, index);
         if (modelPath is null || indexPath is null)
             return Error(StatusCodes.Status404NotFound, AudioEditErrorCodes.FileNotFound,
                 "Файлы модели больше не найдены — рабочая папка очищена");
@@ -143,13 +143,13 @@ public class AudioVoicesController(
         if (voices.Get(scope, slug) is null) return VoiceNotFound();
         if (string.IsNullOrWhiteSpace(quoteId))
         {
-            var quote = await jobs.QuoteVoiceCloneAsync(UserId, scope, slug, provider ?? "", ct);
+            var quote = await jobs.QuoteVoiceCloneAsync(AudioEditorEndpoints.Owner(scope), scope, slug, provider ?? "", ct);
             return quote.Value is { } q ? Ok(q) : JobError(quote.ErrorCode, quote.Error);
         }
         // Запуск — только по котировке пересоздания ЭТОГО голоса
-        if (jobs.FindQuote(UserId, scope.Key, quoteId.Trim()) is not { } found || found.RecreateVoice != slug)
+        if (jobs.FindQuote(AudioEditorEndpoints.Owner(scope), scope.Key, quoteId.Trim()) is not { } found || found.RecreateVoice != slug)
             return Error(StatusCodes.Status404NotFound, AudioEditErrorCodes.QuoteNotFound, AudioEditJobService.QuoteExpiredText);
-        var started = await jobs.StartAsync(UserId, scope,
+        var started = await jobs.StartAsync(AudioEditorEndpoints.Owner(scope), scope,
             new AudioJobInput(quoteId.Trim(), Voice: AudioVoiceRefs.Prefix + slug), ct);
         return started.Value is { } created
             ? StatusCode(StatusCodes.Status202Accepted, created)

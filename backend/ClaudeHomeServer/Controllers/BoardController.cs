@@ -16,8 +16,10 @@ public class BoardController(BoardService board, SessionManager sessions, TaskEx
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
-    // Сессия текущего пользователя (владелец резолвится в SessionManager)
-    private Session? OwnedSession(string sessionId) => sessions.GetOwned(sessionId, UserId);
+    // Сессия текущего пользователя, видимая ему (S2d-3b): чужой приватный чат не виден
+    // даже владельцу проекта — отказ неотличим от «нет такого чата» (404).
+    // Владелец резолвится в SessionManager.
+    private Session? OwnedSession(string sessionId) => sessions.GetOwnedVisible(sessionId, UserId);
 
     /// <summary>
     /// GET /api/board/agents — доска агентов: все задачи с исполнителем Claude/персона,

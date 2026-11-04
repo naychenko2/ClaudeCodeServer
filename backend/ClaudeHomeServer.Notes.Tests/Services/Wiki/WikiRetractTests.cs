@@ -98,7 +98,7 @@ public class WikiRetractTests : IDisposable
         _projects = new ProjectManager(_config, _users, new AppSettingsService(_config));
         // Флаг llm-wiki включён: состояние читается моделью (BuildFresh), источник wiki в модель
         // попадает только с ним (тот же приём, что в WikiRevertTests).
-        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, _events, new WikiFlagOn());
+        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, _events, flags: new WikiFlagOn());
         _keeper = new WikiKeeper(_notes, _config, _events);
         _apply = new WikiApplyService(_notes, _keeper, new NoSpheres(), _config, _events);
         _revert = new WikiPackageRevert(_notes, _keeper, _config);
@@ -128,7 +128,7 @@ public class WikiRetractTests : IDisposable
     private sealed class RecordingEventLog : IProjectEventLogService
     {
         public ProjectEvent? Append(string projectId, string ownerId, string type, string actor,
-            string summary, string? entityRef = null) => null;
+            string summary, string? entityRef = null, string? actorUserId = null) => null;
     }
 
     // Шов S6i (ISessionDirectory): тест видит каждый вызов SetWikiMark и состав каталога.

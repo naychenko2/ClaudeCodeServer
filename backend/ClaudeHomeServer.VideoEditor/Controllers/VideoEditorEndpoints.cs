@@ -32,16 +32,21 @@ public abstract class VideoEditorEndpoints(
 
     protected string UserId => User.FindFirstValue(SubClaim)!;
 
+    // Ключ хранилищ вертикали (нити, префы, задачи, клипы) — арендатор области, а не вызывающий: в общем проекте
+    // они расходятся. UserId остаётся только в гейте (право доступа) и в личной рабочей папке кадров
+    protected static string Tenant(VideoEditScope scope) =>
+        scope.TenantOwnerId ?? throw new InvalidOperationException("Область без арендатора: её выдаёт только VideoEditScopeGate");
+
     // ── Состояние, каталог, префы ────────────────────────────────────────────────
 
     protected IActionResult StateIn(VideoEditScope scope, string sessionId) =>
-        Ok(new VideoStateDto(threads.View(UserId, sessionId),
-            VideoCatalogView.Build(engines, scope, preferLocal: true), prefs.Get(UserId, scope)));
+        Ok(new VideoStateDto(threads.View(Tenant(scope), sessionId),
+            VideoCatalogView.Build(engines, scope, preferLocal: true), prefs.Get(Tenant(scope), scope)));
 
     protected IActionResult CatalogIn(VideoEditScope scope) =>
         Ok(VideoCatalogView.Build(engines, scope, preferLocal: true));
 
-    protected IActionResult PrefsIn(VideoEditScope scope) => Ok(prefs.Get(UserId, scope));
+    protected IActionResult PrefsIn(VideoEditScope scope) => Ok(prefs.Get(Tenant(scope), scope));
 
     protected IActionResult PutPrefsIn(VideoEditScope scope, VideoPrefsDto? req)
     {
@@ -54,8 +59,8 @@ public abstract class VideoEditorEndpoints(
             return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Длительность должна быть положительной");
         if (VideoSceneFormat.Validate(req.Format) is { } badFormat)
             return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, badFormat);
-        prefs.Save(UserId, scope, req);
-        return Ok(prefs.Get(UserId, scope));
+        prefs.Save(Tenant(scope), scope, req);
+        return Ok(prefs.Get(Tenant(scope), scope));
     }
 
     // ── Котировка, запуск, отмена ────────────────────────────────────────────────
@@ -66,7 +71,7 @@ public abstract class VideoEditorEndpoints(
         if (req is null || string.IsNullOrWhiteSpace(req.SessionId)
             || (req.ContextRevision is null && string.IsNullOrWhiteSpace(req.SceneId)))
             return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Не указана сцена");
-        return Map(await jobs.QuoteAsync(UserId, scope,
+        return Map(await jobs.QuoteAsync(Tenant(scope), scope,
             req with { SessionId = req.SessionId.Trim(), SceneId = req.SceneId?.Trim() ?? "" }, ct), Ok);
     }
 
@@ -76,7 +81,7 @@ public abstract class VideoEditorEndpoints(
         if (req is null || string.IsNullOrWhiteSpace(req.QuoteId) || string.IsNullOrWhiteSpace(req.SessionId)
             || (req.ContextRevision is null && string.IsNullOrWhiteSpace(req.SceneId)))
             return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Не указаны котировка и сцена");
-        if (jobs.FindQuote(UserId, scope.Key, req.QuoteId.Trim()) is null)
+        if (jobs.FindQuote(Tenant(scope), scope.Key, req.QuoteId.Trim()) is null)
             return Error(StatusCodes.Status404NotFound, VideoEditorErrors.QuoteNotFound, VideoEditJobService.QuoteExpiredText);
 
         var input = req with
@@ -84,23 +89,23 @@ public abstract class VideoEditorEndpoints(
             QuoteId = req.QuoteId.Trim(), SessionId = req.SessionId.Trim(), SceneId = req.SceneId?.Trim() ?? "",
             Initiator = VideoInitiators.Human,
         };
-        return Map(await jobs.StartAsync(UserId, scope, input, ct), created => StatusCode(StatusCodes.Status202Accepted, created));
+        return Map(await jobs.StartAsync(Tenant(scope), scope, input, ct), created => StatusCode(StatusCodes.Status202Accepted, created));
     }
 
     protected IActionResult JobIn(VideoEditScope scope, string jobId) =>
-        jobs.Get(UserId, scope.Key, jobId) is { } job ? Ok(job) : JobNotFound();
+        jobs.Get(Tenant(scope), scope.Key, jobId) is { } job ? Ok(job) : JobNotFound();
 
     protected async Task<IActionResult> CancelIn(VideoEditScope scope, string jobId, CancellationToken ct) =>
-        await jobs.CancelAsync(UserId, scope.Key, jobId, ct) is { } job ? Ok(job) : JobNotFound();
+        await jobs.CancelAsync(Tenant(scope), scope.Key, jobId, ct) is { } job ? Ok(job) : JobNotFound();
 
     // «Отменить увеличение»: только вторая стадия «Макс» local H3, запуск остаётся
     protected async Task<IActionResult> CancelUpscaleIn(VideoEditScope scope, string jobId, CancellationToken ct) =>
-        Map(await jobs.CancelUpscaleAsync(UserId, scope.Key, jobId, ct), Ok);
+        Map(await jobs.CancelUpscaleAsync(Tenant(scope), scope.Key, jobId, ct), Ok);
 
     // «Повторить увеличение» версии с upscaleError: новая задача (стадия upscaling), удачный итог — новая версия 1440p
     protected async Task<IActionResult> RetryUpscaleIn(VideoEditScope scope, string sessionId, string sceneId, string versionId,
         CancellationToken ct) =>
-        Map(await jobs.RetryUpscaleAsync(UserId, scope, sessionId, sceneId, versionId, VideoInitiators.Human, ct),
+        Map(await jobs.RetryUpscaleAsync(Tenant(scope), scope, sessionId, sceneId, versionId, VideoInitiators.Human, ct),
             result => StatusCode(StatusCodes.Status202Accepted, result));
 
     // dryRun подрезки кадров под пропорции сцены: ничего не пишет и не тратит
@@ -108,13 +113,13 @@ public abstract class VideoEditorEndpoints(
     {
         if (req is null || string.IsNullOrWhiteSpace(req.SessionId) || string.IsNullOrWhiteSpace(req.SceneId))
             return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Не указана сцена");
-        return Map(await jobs.PreviewFramesAsync(UserId, scope,
+        return Map(await jobs.PreviewFramesAsync(Tenant(scope), scope,
             req with { SessionId = req.SessionId.Trim(), SceneId = req.SceneId.Trim() }, ct), Ok);
     }
 
     // ── Сцены ────────────────────────────────────────────────────────────────────
 
-    protected IActionResult ScenesIn(string sessionId) => Ok(threads.View(UserId, sessionId));
+    protected IActionResult ScenesIn(VideoEditScope scope, string sessionId) => Ok(threads.View(Tenant(scope), sessionId));
 
     // Новая сцена: папка — внутри video/** проекта (у личного чата — только пустая), кадры в настройках
     // проверяются так же, как при правке настроек. Тело — VideoSceneService, общий с тулсетом агента
@@ -123,21 +128,21 @@ public abstract class VideoEditorEndpoints(
     {
         if (req is null)
             return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Пустой запрос");
-        return Reply(sessionId, await scenes.AddAsync(UserId, scope, sessionId, req.Folder, req.Settings, req.Name, req.Revision, ct));
+        return Reply(scope, sessionId, await scenes.AddAsync(Tenant(scope), scope, sessionId, req.Folder, req.Settings, req.Name, req.Revision, ct));
     }
 
     protected async Task<IActionResult> FocusIn(VideoEditScope scope, string sessionId, VideoSceneFocusRequest? req)
     {
         if (req?.Focus is not { } focus)
             return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Не указан фокус");
-        return Reply(sessionId, await scenes.FocusAsync(UserId, scope, sessionId, focus, req.Revision));
+        return Reply(scope, sessionId, await scenes.FocusAsync(Tenant(scope), scope, sessionId, focus, req.Revision));
     }
 
     // Убрать сцену, где нечего терять; у сцены с версиями или идущим запуском — 400
     protected async Task<IActionResult> RemoveIn(VideoEditScope scope, string sessionId, string sceneId, long revision)
     {
-        var written = threads.Store.Remove(UserId, sessionId, sceneId, revision);
-        if (written.Status == VideoThreadWriteStatus.Ok) threads.Forget(UserId, sessionId, sceneId);
+        var written = threads.Store.Remove(Tenant(scope), sessionId, sceneId, revision);
+        if (written.Status == VideoThreadWriteStatus.Ok) threads.Forget(Tenant(scope), sessionId, sceneId);
         return await ResultAsync(scope, sessionId, written);
     }
 
@@ -146,7 +151,7 @@ public abstract class VideoEditorEndpoints(
     {
         if (req?.Settings is not { } settings)
             return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Пустые настройки");
-        return Reply(sessionId, await scenes.SettingsAsync(UserId, scope, sessionId, sceneId, settings, req.Revision, req.Force == true));
+        return Reply(scope, sessionId, await scenes.SettingsAsync(Tenant(scope), scope, sessionId, sceneId, settings, req.Revision, req.Force == true));
     }
 
     // «Продолжить от версии»: версия становится текущей, сцена — в работе. Ничего не удаляет
@@ -155,19 +160,19 @@ public abstract class VideoEditorEndpoints(
     {
         if (req is null || string.IsNullOrWhiteSpace(req.VersionId))
             return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Не указана версия");
-        return Reply(sessionId, await scenes.CurrentAsync(UserId, scope, sessionId, sceneId, req.VersionId, req.Revision));
+        return Reply(scope, sessionId, await scenes.CurrentAsync(Tenant(scope), scope, sessionId, sceneId, req.VersionId, req.Revision));
     }
 
     // Клип версии для плеера: Range — перемотка без скачивания целиком. Только файлы своих сцен; токен для
     // <video src> — через ?access_token=, как у картинок и звука
-    protected IActionResult VersionFileIn(string sessionId, string sceneId, string versionId, bool download)
+    protected IActionResult VersionFileIn(VideoEditScope scope, string sessionId, string sceneId, string versionId, bool download)
     {
-        var scene = threads.Store.Get(UserId, sessionId).Scenes.FirstOrDefault(s => s.SceneId == sceneId);
+        var scene = threads.Store.Get(Tenant(scope), sessionId).Scenes.FirstOrDefault(s => s.SceneId == sceneId);
         if (scene is null) return SceneNotFound();
         var version = scene.Versions.FirstOrDefault(v => v.VersionId == versionId);
         if (version is null) return VersionNotFound();
         string? path;
-        try { path = workspace.FindClip(UserId, version.JobId, version.Variant); }
+        try { path = workspace.FindClip(Tenant(scope), version.JobId, version.Variant); }
         catch (ArgumentException) { path = null; }
         if (path is null || !System.IO.File.Exists(path))
             return Error(StatusCodes.Status404NotFound, VideoEditorErrors.FileNotFound,
@@ -178,10 +183,10 @@ public abstract class VideoEditorEndpoints(
     }
 
     private async Task<IActionResult> ResultAsync(VideoEditScope scope, string sessionId, VideoThreadWrite written) =>
-        Reply(sessionId, await scenes.PublishedAsync(UserId, scope, sessionId, written));
+        Reply(scope, sessionId, await scenes.PublishedAsync(Tenant(scope), scope, sessionId, written));
 
     // Отказ проверки входа — 400 с кодом; запись хранилища — по статусу
-    private IActionResult Reply(string sessionId, VideoSceneService.Call call)
+    private IActionResult Reply(VideoEditScope scope, string sessionId, VideoSceneService.Call call)
     {
         if (call.Locked is { } locked)
             return StatusCode(StatusCodes.Status409Conflict, new VideoFormatLockedError(call.Error!, call.ErrorCode!, locked));
@@ -189,12 +194,12 @@ public abstract class VideoEditorEndpoints(
             return Error(StatusCodes.Status400BadRequest, call.ErrorCode ?? VideoEditorErrors.InvalidRequest, call.Error ?? "Запрос не выполнен");
         return written.Status switch
         {
-            VideoThreadWriteStatus.Ok => Ok(threads.Dto(UserId, sessionId, written.State)),
+            VideoThreadWriteStatus.Ok => Ok(threads.Dto(Tenant(scope), sessionId, written.State)),
             VideoThreadWriteStatus.Conflict => StatusCode(StatusCodes.Status409Conflict, new
             {
                 error = "Сцены чата уже поменялись — перечитайте их",
                 code = VideoEditorErrors.RevisionConflict,
-                state = threads.Dto(UserId, sessionId, written.State),
+                state = threads.Dto(Tenant(scope), sessionId, written.State),
             }),
             VideoThreadWriteStatus.VersionNotFound => VersionNotFound(),
             VideoThreadWriteStatus.Invalid => Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest,
@@ -226,7 +231,7 @@ public abstract class VideoEditorEndpoints(
     protected IActionResult VersionNotFound() =>
         Error(StatusCodes.Status404NotFound, VideoEditorErrors.VersionNotFound, "Версии нет в этой сцене");
 
-    private IActionResult JobNotFound() =>
+    protected IActionResult JobNotFound() =>
         Error(StatusCodes.Status404NotFound, VideoEditorErrors.JobNotFound, "Задача не найдена");
 
     protected IActionResult Map<T>(VideoEditCallResult<T> result, Func<T, IActionResult> ok)

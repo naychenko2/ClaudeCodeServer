@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.CodeGraph;
 using ClaudeHomeServer.Services.Composition;
 using Microsoft.AspNetCore.Authorization;
@@ -17,8 +18,9 @@ namespace ClaudeHomeServer.Services.Architecture;
 /// POST /api/projects/{projectId}/architecture/generate — кнопка «Собрать из кода»:
 /// стартовая модель из снимка графа кода + проектов-маркеров, слияние с уже лежащим
 /// файлом без затирания ручных описаний.
-/// Контроллер живёт в вертикали и ходит наружу только через Core-швы: владение
-/// проектом (<see cref="IProjectManager"/>), имя автора (<see cref="IUserStore"/>) и
+/// Контроллер живёт в вертикали и ходит наружу только через Core-швы: точку доступа
+/// (<see cref="IProjectAccess"/>: видимость и право, включая рубильник общих проектов),
+/// модель проекта (<see cref="IProjectManager"/>), имя автора (<see cref="IUserStore"/>) и
 /// снимок графа кода (<see cref="IArchitectureCodeSource"/>, форвардер в Main).
 /// Выключенная Архитектура (<c>Subsystems:architecture:Enabled=false</c>) до контроллера
 /// не доходит вовсе: ModuleLoader не зовёт Register и не подключает сборку частью MVC,
@@ -32,6 +34,10 @@ namespace ClaudeHomeServer.Services.Architecture;
 [Route("api/projects/{projectId}/architecture")]
 public class ArchitectureController(
     IProjectManager projects,
+    // Точка доступа: видимость проекта и право действия решает она, а не сравнение владения в
+    // теле действия — иначе здесь не было бы ни рубильника/флага общих проектов, ни ролей
+    // участников (S1: право записи только у владельца)
+    IProjectAccess access,
     IUserStore users,
     ILogger<ArchitectureController> logger,
     ArchitectureModelGenerator generator,
@@ -48,12 +54,13 @@ public class ArchitectureController(
     /// <summary>
     /// 200 — <c>{ exists, content, version, updatedAt, updatedBy, warnings }</c>, где content —
     /// байты файла как есть (null, если модели ещё нет), warnings — находки
-    /// <see cref="ArchitectureModelValidator"/>; 404/403 — нет проекта / чужой.
+    /// <see cref="ArchitectureModelValidator"/>; 404 — нет проекта или он не виден вызывающему
+    /// (посторонний, участник с выключенным рубильником/флагом).
     /// </summary>
     [HttpGet("model")]
     public async Task<IActionResult> GetModel(string projectId, CancellationToken ct)
     {
-        if (OwnedProject(projectId, out var denied) is not { } project) return denied!;
+        if (ScopedProject(projectId, ProjectRight.Read, out var denied) is not { } project) return denied!;
 
         var snapshot = await store.ReadAsync(project.RootPath, ct);
         if (snapshot.Version is not null) Response.Headers.ETag = $"\"{snapshot.Version}\"";
@@ -64,13 +71,14 @@ public class ArchitectureController(
     /// Запись модели. <c>baseVersion</c> — версия, от которой шли правки (null — «модели
     /// ещё не было»). 200 — новая версия; 409 <c>version_conflict</c> — файл успели
     /// поменять (другая вкладка, персона, «Собрать из кода»), в теле его текущее состояние;
-    /// 400 — тело не JSON-объект; 413 — модель больше потолка.
+    /// 400 — тело не JSON-объект; 413 — модель больше потолка; 403 — участник общего проекта
+    /// (в S1 право записи только у владельца); 404 — проект не виден вызывающему.
     /// </summary>
     [HttpPut("model")]
     [RequestSizeLimit(ArchitectureModelStore.MaxContentBytes * 2)]
     public async Task<IActionResult> PutModel(string projectId, [FromBody] ArchitectureModelPutRequest body, CancellationToken ct)
     {
-        if (OwnedProject(projectId, out var denied) is not { } project) return denied!;
+        if (ScopedProject(projectId, ProjectRight.Write, out var denied) is not { } project) return denied!;
         if (body.Content is null) return BadRequest(new { code = "model_invalid", message = "Нет содержимого модели" });
 
         var user = UserId is { } id ? users.GetById(id) : null;
@@ -98,9 +106,9 @@ public class ArchitectureController(
     }
 
     /// <summary>
-    /// 200 — модель собрана и записана (счётчики + время снимка графа); 404 — нет проекта;
-    /// 403 — чужой проект; 409 — файл модели повреждён (не перезаписываем);
-    /// 503 — граф кода построить не удалось.
+    /// 200 — модель собрана и записана (счётчики + время снимка графа); 404 — нет проекта или
+    /// он не виден вызывающему; 403 — участник общего проекта (запись в S1 только у владельца);
+    /// 409 — файл модели повреждён (не перезаписываем); 503 — граф кода построить не удалось.
     /// </summary>
     /// <remarks>
     /// Тело <c>{ withAgent }</c> необязательно (пусто = без агента). С агентом проход 1
@@ -117,7 +125,7 @@ public class ArchitectureController(
         [FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] ArchitectureGenerateRequest? body,
         CancellationToken ct)
     {
-        if (OwnedProject(projectId, out var denied) is not { } project) return denied!;
+        if (ScopedProject(projectId, ProjectRight.Write, out var denied) is not { } project) return denied!;
         if (graphs is null) return GraphUnavailable();
         var root = project.RootPath;
 
@@ -174,7 +182,7 @@ public class ArchitectureController(
             meta?["elements"] as System.Text.Json.Nodes.JsonObject);
 
         var launch = await agents.LaunchAsync(project.Id, project.OwnerId!,
-            ArchitectureAgentPrompt.Build(result, manual), ct);
+            ArchitectureAgentPrompt.Build(result, manual), ct, createdByUserId: UserId);
         if (launch.Error == "build_in_progress")
             return BuildInProgress(launch.TaskId, result);
 
@@ -187,12 +195,28 @@ public class ArchitectureController(
     private ConflictObjectResult BuildInProgress(string? agentTaskId, ArchitectureGenerateResult? result) =>
         Conflict(new { code = "build_in_progress", message = "Агент уже собирает архитектуру этого проекта", agentTaskId, result });
 
-    // Проект есть и принадлежит вызывающему — иначе готовый 404/403 в denied
-    private Project? OwnedProject(string projectId, out IActionResult? denied)
+    // Проект есть и вызывающему доступно право right — иначе готовый 404/403 в denied.
+    // Решение о видимости и праве принимает точка доступа: она держит рубильник/флаг общих
+    // проектов и то, что в S1 пишет только владелец. 403/404 различаются как у [ProjectScope]:
+    // право чтения есть, а запрошенного нет — 403 (существование проекта вызывающему уже
+    // известно), права чтения нет — 404 (не раскрываем).
+    private Project? ScopedProject(string projectId, ProjectRight right, out IActionResult? denied)
     {
         var project = projects.GetById(projectId);
-        denied = project is null ? NotFound() : project.OwnerId != UserId ? Forbid() : null;
-        return denied is null ? project : null;
+        if (project is null)
+        {
+            denied = NotFound();
+            return null;
+        }
+        if (access.Resolve(UserId, projectId, right) is not null)
+        {
+            denied = null;
+            return project;
+        }
+        denied = access.Resolve(UserId, projectId, ProjectRight.Read) is not null
+            ? StatusCode(403, new { error = "Нет права на запись", code = ProjectScopeAttribute.ErrorCode })
+            : NotFound();
+        return null;
     }
 
     private static object ToDto(ArchitectureModelSnapshot s) => new

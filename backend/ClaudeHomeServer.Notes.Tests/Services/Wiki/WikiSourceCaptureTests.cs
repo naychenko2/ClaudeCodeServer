@@ -49,7 +49,7 @@ public class WikiSourceCaptureTests : IDisposable
         _projects = new ProjectManager(config, users, new AppSettingsService(config));
         // Флаг llm-wiki: состояние раздела читается моделью (BuildFresh) — нужно проверке
         // применения в тесте дефекта d144bb0f (тот же фиксатор, что в WikiApplyCheckTests).
-        _notes = new NotesService(_projects, config, NullLogger<NotesService>.Instance, null, new WikiFlagOn());
+        _notes = new NotesService(_projects, config, NullLogger<NotesService>.Instance, null, flags: new WikiFlagOn());
         _sessions = new FakeSessions();
         // Замок раздела и запись карточки в манифест — у Хранителя; проверка применения —
         // настоящая (тест «первый Prepare после захвата — Ready»).

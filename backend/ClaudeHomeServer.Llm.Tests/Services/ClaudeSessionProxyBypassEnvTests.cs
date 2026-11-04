@@ -101,7 +101,8 @@ public class ClaudeSessionProxyBypassEnvTests : IDisposable
 
     private async Task<Dictionary<string, string>?> RunTurnAsync(bool sandboxed, bool useHttp,
         WidgetsMcpContext? widgets = null, PersonaAgentsContext? personaAgents = null,
-        Func<bool>? httpEnabled = null, LlmProviderRegistry? providers = null, string? model = null)
+        Func<bool>? httpEnabled = null, LlmProviderRegistry? providers = null, string? model = null,
+        string? privateToUserId = null)
     {
         var exited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -126,7 +127,7 @@ public class ClaudeSessionProxyBypassEnvTests : IDisposable
             HttpMcpActive: useHttp,
             HttpMcpEnabledProvider: httpEnabled,
             Launcher: launcher);
-        var session = new ClaudeSession(new Session { Model = model ?? "" }, context,
+        var session = new ClaudeSession(new Session { Model = model ?? "", PrivateToUserId = privateToUserId }, context,
             providers: providers);
 
         var prev = Environment.GetEnvironmentVariable("NO_PROXY");
@@ -279,5 +280,26 @@ public class ClaudeSessionProxyBypassEnvTests : IDisposable
         env!["NO_PROXY"].Split(',').Should().Contain("ccs-pmem-host",
             "запрос mcp__pmem_* идёт от того же CLI — его хост не смеет уезжать в прокси");
         env["no_proxy"].Should().Be(env["NO_PROXY"]);
+    }
+
+    /// <summary>
+    /// S2d-5c: приватный чат общего проекта выключает авто-память CLI (иначе факты из него
+    /// осели бы в общей папке памяти проекта). Только значение 1 — 0 включило бы принудительно.
+    /// </summary>
+    [Fact]
+    public async Task ПриватныйЧат_АвтопамятьCliВыключена()
+    {
+        var env = await RunTurnAsync(sandboxed: false, useHttp: true, privateToUserId: "u-1");
+
+        env!["CLAUDE_CODE_DISABLE_AUTO_MEMORY"].Should().Be("1");
+    }
+
+    /// <summary>Общий (не приватный) чат автопамять не трогает — поведение непричастных ходов прежнее.</summary>
+    [Fact]
+    public async Task ОбщийЧат_АвтопамятьCliНеТрогается()
+    {
+        var env = await RunTurnAsync(sandboxed: false, useHttp: true);
+
+        env!.ContainsKey("CLAUDE_CODE_DISABLE_AUTO_MEMORY").Should().BeFalse();
     }
 }

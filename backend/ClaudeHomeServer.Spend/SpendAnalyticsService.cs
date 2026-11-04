@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Services.Spend;
 // Detailed=false — строка из свёрнутого дня, листьев-ходов под ней нет.
 public sealed record SpendSlice(
     DateOnly Date, string OwnerId, string? ProjectId, string? SessionId, string? TaskId,
-    string? PersonaId, string Provider, string? Model, string Source,
+    string? PersonaId, string? ActorUserId, string Provider, string? Model, string Source,
     long Input, long Output, long CacheRead, long CacheCreation,
     double Cost, double Rub, int Generations, int Turns, bool Detailed,
     string Tier = "");
@@ -80,14 +80,14 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
         foreach (var r in store.DetailsBetween(from, to))
             if (Match(r, f))
                 result.Add(new SpendSlice(r.Date, r.OwnerId, r.ProjectId, r.SessionId, r.TaskId,
-                    r.PersonaId, r.Provider, ResolveModel(r.Model, r.Provider), r.Source,
+                    r.PersonaId, r.ActorUserId, r.Provider, ResolveModel(r.Model, r.Provider), r.Source,
                     r.InputTokens, r.OutputTokens, r.CacheReadTokens, r.CacheCreationTokens,
                     r.CostUsd ?? 0, r.CostRub ?? 0, r.Generations, 1, Detailed: true,
                     Tier: SpendCostTiers.Of(r.Source, r.Provider, r.Model)));
         foreach (var d in store.DailyBetween(from, to))
             if (Match(d, f) && DateOnly.TryParse(d.Date, out var date))
                 result.Add(new SpendSlice(date, d.OwnerId, d.ProjectId, d.SessionId, d.TaskId,
-                    d.PersonaId, d.Provider, ResolveModel(d.Model, d.Provider), d.Source,
+                    d.PersonaId, d.ActorUserId, d.Provider, ResolveModel(d.Model, d.Provider), d.Source,
                     d.InputTokens, d.OutputTokens, d.CacheReadTokens, d.CacheCreationTokens,
                     d.CostUsd, d.CostRub, d.Generations, d.Turns, Detailed: false,
                     Tier: SpendCostTiers.Of(d.Source, d.Provider, d.Model)));
@@ -108,7 +108,9 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
         && (f.Persona is null || (r.PersonaId ?? "") == f.Persona)
         && (f.Provider is null || r.Provider == f.Provider)
         && (f.Model is null || ResolveModel(r.Model, r.Provider) == f.Model)
-        && (f.Source is null || r.Source == f.Source);
+        && (f.Source is null || r.Source == f.Source)
+        && (f.Me is null || Owns(r, f.Me))
+        && (f.User is null || UserKey(r) == f.User);
 
     private bool Match(DailySpendRow r, SpendFilter f) =>
         (f.Owner is null || r.OwnerId == f.Owner)
@@ -118,7 +120,24 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
         && (f.Persona is null || (r.PersonaId ?? "") == f.Persona)
         && (f.Provider is null || r.Provider == f.Provider)
         && (f.Model is null || ResolveModel(r.Model, r.Provider) == f.Model)
-        && (f.Source is null || r.Source == f.Source);
+        && (f.Source is null || r.Source == f.Source)
+        && (f.Me is null || Owns(r, f.Me))
+        && (f.User is null || UserKey(r) == f.User);
+
+    // «Своя запись» человека (S2a-6b): он её арендатор (свой проект, включая чужие ходы в
+    // нём) или её актор (свой ход в чужом общем проекте). Записи без актора относятся
+    // владельцу — тот же порядок «нет поля → владелец», что у SenderUserId в К4.
+    private static bool Owns(SpendRecord r, string userId) =>
+        r.OwnerId == userId || r.ActorUserId == userId;
+
+    private static bool Owns(DailySpendRow r, string userId) =>
+        r.OwnerId == userId || r.ActorUserId == userId;
+
+    // Ключ оси «user»: актор, а без актора — владелец. Им же группировался этот уровень
+    // до общих проектов (актора не было никогда) — поведение старых записей не меняется.
+    private static string UserKey(SpendRecord r) => r.ActorUserId ?? r.OwnerId;
+
+    private static string UserKey(DailySpendRow r) => r.ActorUserId ?? r.OwnerId;
 
     // --- обзор ---
 
@@ -278,7 +297,9 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
 
     private static string KeyOf(SpendSlice s, string groupBy) => groupBy switch
     {
-        "user" => s.OwnerId,
+        // Актор, а без актора — владелец (S2a-6b): разбивка «пользователь» для владельца
+        // общего проекта даёт его участников; старые записи (актора нет) остаются владельцу.
+        "user" => s.ActorUserId ?? s.OwnerId,
         "project" => s.ProjectId ?? "",
         "chat" => s.SessionId ?? "",
         "task" => s.TaskId ?? "",
@@ -358,7 +379,8 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
     {
         var r = store.FindTurn(id);
         if (r is null) return null;
-        if (!isAdmin && r.OwnerId != currentUserId) return null;
+        // Свой ход — по тем же правам, что и список (S2a-6b): арендатор или актор
+        if (!isAdmin && (currentUserId is null || !Owns(r, currentUserId))) return null;
 
         var neighbors = new List<SpendNeighborDto>();
         if (r.SessionId is not null)
@@ -376,7 +398,8 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
     {
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var weekAgo = today.AddDays(-6);
-        var f = new SpendFilter(Owner: userId);
+        // «Свои» записи (S2a-6b): свои проекты и свои ходы в чужих общих проектах
+        var f = new SpendFilter(Me: userId);
         var slices = Slices(weekAgo, today, f);
 
         var todayAcc = new Acc();
@@ -440,7 +463,7 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
             new SpendTokensDto(r.InputTokens, r.OutputTokens, r.CacheReadTokens,
                 r.CacheCreationTokens, r.TotalTokens),
             r.Generations, r.DurationMs,
-            Own: currentUserId is not null && r.OwnerId == currentUserId,
+            Own: currentUserId is not null && Owns(r, currentUserId),
             Tier: SpendCostTiers.Of(r.Source, r.Provider, r.Model));
     }
 

@@ -27,6 +27,11 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //   зону с «да» ступени 2; TaskExecution отсекается в очереди, AnalyzeAsync отказывает сам,
 //   ступень 2 такой чат не вердиктит.
 // - skip побеждает балл: чат с пометкой «не разбирать» в очередь не попадает при любом балле.
+// - Приватный чат (PrivateToUserId) не разбирается: приватный чат виден только автору, машинные
+//   потребители чата его не читают вовсе (FIN3-3; образец — автообучение памяти,
+//   TeamMemoryAutolearnService). Очередь отсекает его в BuildQueue (ResolveOwnerId резолвит
+//   чат участника на владельца проекта — одного владения для допуска мало), AnalyzeAsync
+//   отказывает его как несуществующий (not_found).
 // - Отказ ступени 2 → серая зона: серый чат без «да» ночь не берёт, следующая ночь спросит снова.
 //   Вердикт «да» устаревает так же: ≥3 новых реплик человека — ступень 2 переспрашивается
 //   симметрично «нет», чат берётся только по новому «да».
@@ -449,15 +454,18 @@ public sealed class WikiNightlyService : BackgroundService
     }
 
     // Очередь прохода: чаты владельца, которые ночь вообще может взять. Чат исполнения задач,
-    // чат с пометкой «не разбирать» и личный раздел отсекаются здесь (skip побеждает балл);
-    // берутся «важные» (минуя ступени 1–2), зона triage и серые (их судит ступень 2 на подходе
-    // очереди). Порядок: «важные», затем по UpdatedAt убыв.
+    // чат с пометкой «не разбирать», приватный чат и личный раздел отсекаются здесь
+    // (skip побеждает балл); берутся «важные» (минуя ступени 1–2), зона triage и серые
+    // (их судит ступень 2 на подходе очереди). Порядок: «важные», затем по UpdatedAt убыв.
     private List<Candidate> BuildQueue(string ownerId, IReadOnlyDictionary<string, WikiChatTriageEntry> entries)
     {
         var result = new List<Candidate>();
         foreach (var s in _sessions.GetAll().Where(x => _sessions.ResolveOwnerId(x) == ownerId))
         {
-            if (s.TaskExecution || s.WikiMark == WikiMarks.Skip) continue;
+            // Приватный чат (FIN3-3, инвариант в шапке): PrivateToUserId != null — виден только
+            // автору; чат участника общего проекта резолвится на владельца, но в его очередь
+            // не входит ни под каким баллом (тот же фильтр, что у автообучения памяти).
+            if (s.TaskExecution || s.WikiMark == WikiMarks.Skip || s.PrivateToUserId is not null) continue;
             var home = WikiChatIngestService.HomeOf(s);
             if (home == WikiSections.Personal) continue;
             entries.TryGetValue(s.Id, out var e);

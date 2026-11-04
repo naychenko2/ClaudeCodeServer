@@ -473,4 +473,97 @@ public class ChatContinueServiceTests : IDisposable
         created.Model.Should().Be("opus");
         created.Effort.Should().Be("high");
     }
+
+    // --- S2d-7b-1: приватность преемника ---
+
+    private const string Участник = "u-participant";
+
+    // Общий проект с участником и приватный чат автора (по умолчанию — владелец проекта)
+    private async Task<(Session Source, Project Project)> SeedPrivateChatAsync(string suffix, string author = TestUserId)
+    {
+        var (source, project) = await SeedChatAsync(suffix);
+        project.Members = [new ProjectMember { UserId = Участник, Role = ClaudeHomeServer.Services.Access.ProjectRole.Editor, AddedBy = TestUserId }];
+        source.CreatedByUserId = author;
+        source.PrivateToUserId = author;
+        source.ExcludeFromDossiers = true;
+        return (source, project);
+    }
+
+    [Fact]
+    public async Task Продолжение_ПриватныйЧат_ПреемникПриватныйУАвтора_УчастникНеВидит_ЗаметкиНет()
+    {
+        var (source, _) = await SeedPrivateChatAsync("priv-continue");
+        var log = new List<Sent>();
+
+        var result = await NewService(log).ContinueAsync(TestUserId, source.Id, null);
+
+        var created = _sut.GetById(result.NewSessionId)!;
+        created.PrivateToUserId.Should().Be(TestUserId, "продолжение приватного чата остаётся приватным у автора");
+        created.CreatedByUserId.Should().Be(TestUserId);
+        created.ExcludeFromDossiers.Should().BeTrue();
+        result.HandoffNoteId.Should().BeNull("записка в notes/ проекта — общее место, у приватного чата её нет");
+        _sut.IsVisibleTo(created.Id, Участник).Should().BeFalse("участник не видит продолжение приватного чата");
+        _sut.IsVisibleTo(created.Id, TestUserId).Should().BeTrue();
+        _sut.GetAllOwnedVisibleBy(Участник).Should().NotContain(x => x.Id == created.Id);
+    }
+
+    [Fact]
+    public async Task Продолжение_ОбщийЧат_ПреемникОбщий_ЗаметкаСоздаётся()
+    {
+        var (source, project) = await SeedChatAsync("shared-continue");
+        project.Members = [new ProjectMember { UserId = Участник, Role = ClaudeHomeServer.Services.Access.ProjectRole.Editor, AddedBy = TestUserId }];
+
+        var result = await NewService(new List<Sent>()).ContinueAsync(TestUserId, source.Id, null);
+
+        _sut.GetById(result.NewSessionId)!.PrivateToUserId.Should().BeNull();
+        result.HandoffNoteId.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task Продолжение_ЧужойПриватныйЧат_ВладелецПроекта_404_ПреемникаНет()
+    {
+        var (source, _) = await SeedPrivateChatAsync("priv-foreign", author: Участник);
+        var before = _sut.GetAll().Count();
+        var log = new List<Sent>();
+
+        var act = () => NewService(log).ContinueAsync(TestUserId, source.Id, null);
+
+        await act.Should().ThrowAsync<KeyNotFoundException>();
+        log.Should().BeEmpty("платный ход передачи в чужом приватном чате не запускается");
+        _sut.GetAll().Count().Should().Be(before);
+        source.ContinuedInSessionId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Продолжение_МашинныйВход_АкторАвтор_ПреемникПриватныйУАвтора_АкторНеизвестен_404()
+    {
+        var (source, _) = await SeedPrivateChatAsync("priv-actor", author: Участник);
+
+        // Арендатор — владелец проекта, актор хода — автор приватного чата (MCP chats_continue)
+        var ok = await NewService(new List<Sent>()).ContinueAsync(TestUserId, source.Id, null, actorUserId: Участник);
+        var created = _sut.GetById(ok.NewSessionId)!;
+        created.PrivateToUserId.Should().Be(Участник);
+        created.CreatedByUserId.Should().Be(Участник);
+
+        // Чужой актор — отказ
+        var (other, _) = await SeedPrivateChatAsync("priv-actor-2", author: Участник);
+        var act = () => NewService(new List<Sent>())
+            .ContinueAsync(TestUserId, other.Id, null, actorUserId: "u-stranger");
+        await act.Should().ThrowAsync<KeyNotFoundException>();
+    }
+
+    [Fact]
+    public async Task Перенос_ПриватныйЧат_ПреемникПриватныйУАвтора_ОбщийОстаётсяОбщим()
+    {
+        var (priv, _) = await SeedPrivateChatAsync("priv-handoff");
+        var (shared, project) = await SeedChatAsync("shared-handoff");
+
+        var fromPrivate = await _sut.CreateHandoffChatAsync(priv, TestUserId, "перенос");
+        var fromShared = await _sut.CreateHandoffChatAsync(shared, TestUserId, "перенос");
+
+        fromPrivate.PrivateToUserId.Should().Be(TestUserId);
+        fromPrivate.CreatedByUserId.Should().Be(TestUserId);
+        fromPrivate.ExcludeFromDossiers.Should().BeTrue();
+        fromShared.PrivateToUserId.Should().BeNull();
+    }
 }

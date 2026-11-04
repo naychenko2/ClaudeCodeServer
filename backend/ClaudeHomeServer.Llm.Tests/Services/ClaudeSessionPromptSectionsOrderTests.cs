@@ -227,6 +227,51 @@ public class ClaudeSessionPromptSectionsOrderTests : ClaudeSessionPromptSections
         }
     }
 
+    // S2a-4 (дыра А2: same-process ход промпт живого процесса НЕ обновляет, recall остаётся
+    // со старта прогона): в общем проекте узкая рамка сама по себе не пускает личных секций
+    // (гейты контрибьюторов), а нестабильные — и проектные тоже — всегда уезжают хвостом хода
+    // при любой ручке RecallInTurnText. Иначе в системном блоке живого процесса замерла бы
+    // подборка того хода, что поднял процесс: стал бы чат общим посреди прогона — участник
+    // получил бы личную подборку владельца. Вердикт доходит до подборки через
+    // PromptSessionContext.Frame (тот же шов ITurnFrameSource, что у тулсетов S2a-3).
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NarrowFrame_НестабильныеСекцииВсегдаХвостом_ПриЛюбойРучкеПровайдера(bool recallInTurnText)
+    {
+        var (systemPrompt, sections) = await RunTailTurnAsync(recallInTurnText, "МАРКЕР_СОСТОЯНИЯ",
+            bus => bus.OnFilter<PromptAssembling>(200, (e, next) =>
+            {
+                e.Session.Frame.Should().Be(ClaudeHomeServer.Services.Access.TurnFrameKind.Narrow,
+                    "ClaudeSession переводит вердикт ITurnFrameSource в контекст подборки хода");
+                e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                    "recall-notes", "МАРКЕР_RECALL_NOTES"));
+                e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                    "recall-memory", "МАРКЕР_RECALL_MEMORY"));
+                e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                    "dossier-recall", "МАРКЕР_DOSSIER_RECALL"));
+                e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                    "persona-bindings", "МАРКЕР_PERSONA_BINDINGS"));
+                e.Sections.Add(new ClaudeHomeServer.Services.Turn.PromptSection(
+                    "code-graph", "МАРКЕР_CODE_GRAPH"));
+                return next();
+            }, "Test.PersonalSelection"),
+            ProjectChat(),
+            c => c with { FrameSource = new AlwaysNarrowFrame() });
+
+        foreach (var marker in new[]
+                 { "МАРКЕР_RECALL_NOTES", "МАРКЕР_RECALL_MEMORY", "МАРКЕР_DOSSIER_RECALL",
+                   "МАРКЕР_PERSONA_BINDINGS", "МАРКЕР_CODE_GRAPH" })
+            systemPrompt.Should().NotContain(marker,
+                "в общем проекте нестабильная подборка не стоит в системном блоке ни при какой " +
+                "настройке провайдера: same-process ход его не обновляет");
+
+        var tailKeys = sections.Where(s => s.Kind == "turn").Select(s => s.Key).ToList();
+        tailKeys.Should().Contain("recall-notes").And.Contain("recall-memory")
+            .And.Contain("dossier-recall").And.Contain("persona-bindings").And.Contain("code-graph",
+                "нестабильные секции доезжают хвостом хода — текст хода доезжает всегда");
+    }
+
     // Сторож 2026-10-09: ручка RecallInTurnText провайдера действует и у персоны с ВЫКЛЮЧЕННЫМ
     // облегчённым контекстом (LightProfileFor → null). Иначе рабочий фокус и recall памяти
     // персоны (они меняются между чатами) стояли в середине системного блока и рвали prefix
@@ -289,5 +334,13 @@ public class ClaudeSessionPromptSectionsOrderTests : ClaudeSessionPromptSections
         foreach (var marker in new[] { "МАРКЕР_RECALL_NOTES", "МАРКЕР_ФОКУС", "МАРКЕР_RECALL_MEMORY", "МАРКЕР_PERSONA_BINDINGS" })
             prompt.Should().NotContain(marker,
                 "ручка провайдера уводит нестабильную секцию хвостом хода и без облегчённого контекста персоны");
+    }
+
+    // Рамка «всегда узкая» — общий проект без живого ProjectManager в тесте: вердикт чата
+    // здесь задаёт источник, а не свойства проекта (их проверяет TurnFrameTests).
+    private sealed class AlwaysNarrowFrame : ClaudeHomeServer.Services.Access.ITurnFrameSource
+    {
+        public ClaudeHomeServer.Services.Access.TurnFrameKind Frame(string? sessionId, string ownerId) =>
+            ClaudeHomeServer.Services.Access.TurnFrameKind.Narrow;
     }
 }

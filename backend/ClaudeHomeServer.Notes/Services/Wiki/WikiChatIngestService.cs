@@ -95,11 +95,11 @@ public sealed class WikiChatIngestService
     public const string OutcomeUpToDate = "up_to_date";
 
     /// <summary>Машинные коды отказа (S7b0a): вызывающий различает отказы по коду, а не
-    /// подстрокой причины (текст причины — человеку и модели). not_found — чужой и
-    /// несуществующий чат неразличимы вызывающим: per-owner, без утечки существования
-    /// чужого. Остальные — ступень 0 и незаведённая вики. Кодов, не названных контрактом,
-    /// service не выдумывает: прочие отказы остаются без кода (вызывающий различает их
-    /// по исходу rejected).</summary>
+    /// подстрокой причины (текст причины — человеку и модели). not_found — чужой, приватный
+    /// (FIN3-3) и несуществующий чат неразличимы вызывающим: per-owner и приватность чата не
+    /// дают утечки существования. Остальные — ступень 0 и незаведённая вики. Кодов, не
+    /// названных контрактом, service не выдумывает: прочие отказы остаются без кода
+    /// (вызывающий различает их по исходу rejected).</summary>
     public const string CodeNotFound = "not_found";
     public const string CodeTaskExecution = "task_execution";
     public const string CodeMarkedSkip = "marked_skip";
@@ -195,6 +195,13 @@ public sealed class WikiChatIngestService
         // нет; различить их может только владелец (он их и не различает).
         var session = _sessions.GetById(sessionId);
         if (session is null || _sessions.ResolveOwnerId(session) != ownerId)
+            return RefusedRecorded(CodeNotFound, "чат не существует");
+
+        // Приватный чат (FIN3-3) — то же слово «не существует»: приватный чат виден только
+        // автору, а этот разбор — машинный потребитель (кнопка, ночь, wiki_ingest), ему он
+        // не виден вовсе (образец — автообучение памяти, TeamMemoryAutolearnService). Отказ
+        // неотличим от несуществующего: приватность не выдавала бы существования чата.
+        if (session.PrivateToUserId is not null)
             return RefusedRecorded(CodeNotFound, "чат не существует");
 
         // Ступень 0 (ADR-035 §12а) — исключения кода до обращения к модели.

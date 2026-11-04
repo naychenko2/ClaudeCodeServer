@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services.Plugins;
@@ -15,7 +16,12 @@ namespace ClaudeHomeServer.Services.Plugins;
 //   2) проект: в MVP у локального проекта плагинов нет (ProjectCapabilities,
 //      инвариант 8) — каталог пакетов и секреты на устройство не едут;
 //   3) персона: плагин персоне открывает Skill-биндинг с target plugin:{id}
-//      (ADR-031 §2.5); персона задана, но биндинга нет — пакет не открыт.
+//      (ADR-031 §2.5); персона задана, но биндинга нет — пакет не открыт;
+//   4) рамка: общий проект (S2a-8) — рамка хода в нём узкая для всех, включая
+//      арендатора (TurnFrame): в старт общего чата не идёт весь набор каталогов —
+//      не только личные пакеты арендатора, но и пакеты участника (вердикт не
+//      зависит от актора). Рамка — свойство проекта, не хода: вердикт считается по
+//      проекту, без сессии и актора, — состав остаётся в сигнатуре запуска (инв. 4).
 public class PluginDirSource : IPluginDirSource
 {
     private readonly PluginStore _store;
@@ -33,6 +39,14 @@ public class PluginDirSource : IPluginDirSource
         // у локального проекта в MVP плагины выключены, каталог на устройство не едет;
         // project null (ход без привязки) — все включённые пакеты владельца.
         if (!ProjectCapabilities.PluginsFor(project).Available) return [];
+
+        // Общий проект (S2a-8): рамка хода в нём узкая для всех, включая арендатора
+        // (решение 29.10), — в старт общего чата не идёт весь набор: ни личные пакеты
+        // арендатора, ни пакеты участника (вердикт не зависит от актора). Рамка —
+        // свойство проекта, не хода: вердикт берётся по проекту, без сессии и актора
+        // (состав входит в сигнатуру запуска, инвариант 4). Личный проект и чат вне
+        // проекта — Wide, поведение прежнее.
+        if (TurnFrame.Resolve(project, null, ownerId, null) == TurnFrameKind.Narrow) return [];
 
         var records = _store.LoadInstalled(ownerId);
         if (records.Count == 0) return [];

@@ -527,9 +527,15 @@ public class DevToolsetTests : IDisposable
 
         // Какая именно ветка оборвалась — видно по рассылке статуса: «started» (порт принят,
         // пошла проба) и ни одного «error» (иначе это подъём, оборванный на старте, — другая ветка).
+        // После S1-5 статус стенда идёт в журнал проектной рассылки (ToProject): читаем его там
+        // и требуем адресата — этого проекта и этого стенда (после StandId в корне id = id сервиса).
         // Граница замера: проба уперлась в потолок, а не выбрала свой HealthTimeout
-        env.Statuses.Owner.Select(m => m.Message).OfType<PreviewStatusMessage>().Select(m => m.Status)
-            .Should().Contain("started").And.NotContain("error");
+        var statuses = env.Statuses.Project
+            .Where(m => m.ProjectId == env.Project.Id)
+            .Select(m => m.Message).OfType<PreviewStatusMessage>().ToList();
+        statuses.Should().NotBeEmpty("статус стенда рассылается в журнал проекта — он обязан быть виден")
+            .And.OnlyContain(m => m.ServiceId == svc.Id, "статус относится к этому стенду");
+        statuses.Select(m => m.Status).Should().Contain("started").And.NotContain("error");
         watch.Elapsed.Should().BeLessThan(DevStand.HealthTimeout, "проба входит в бюджет потолка, а не ждёт свои 30 с");
         result.IsError.Should().BeTrue(result.Text);
         result.Text.Should().NotContain("Стоп").And.Contain("потолок");

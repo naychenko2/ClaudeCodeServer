@@ -23,6 +23,8 @@ public sealed class SummaryUnavailableException(string message) : Exception(mess
 // «Итог сессии»: по явному запросу пользователя собирает транскрипт сессии,
 // one-shot вызовом claude --print строит конспект и сохраняет его заметкой
 // (проектная сессия → notes/Сессии проекта, чат вне проекта → личный vault).
+// Приватный чат (S2d-6a): сводит только его автор, заметка — в личный vault автора,
+// в notes/ проекта такая заметка не появляется ни при каком вызове.
 // Повторный вызов обновляет ту же заметку (Session.SummaryNoteId), а не плодит дубли.
 public class SessionSummaryService(
     SessionManager sessions, ProjectManager projects,
@@ -45,11 +47,31 @@ public class SessionSummaryService(
     {
         var session = sessions.GetById(sessionId)
             ?? throw new KeyNotFoundException("Сессия не найдена");
+
+        // Приватность читается ОДИН РАЗ здесь — до _inFlight и до платного LLM-вызова:
+        // всё решение ниже идёт по этому снимку. Если приватность снимут посреди генерации,
+        // заметка всё равно уйдёт автору (обратный переход закрыт самим чатом:
+        // chat_has_messages). Пустая строка — «не видит никто» (fail-closed, как в
+        // SessionManager.CreateAsync): она не совпадает ни с одним userId.
+        var author = session.PrivateToUserId;
+        // Чужой приватный чат для вызывающего не существует: тот же отказ, что у read-ручек
+        // чатов (404 «нет такого чата», а не 403 «нет права») — приватность не должна
+        // различать «чужое» и «несуществующее».
+        if (author is not null && author != userId)
+            throw new KeyNotFoundException("Сессия не найдена");
+
         var ownerId = session.ProjectId is not null
             ? projects.GetById(session.ProjectId)?.OwnerId
             : session.OwnerId;
-        if (ownerId is null || ownerId != userId)
+        // Гейт владельца остаётся только за общим чатом: приватный сводит его автор, и доступ
+        // к проекту ему не нужен — заметка идёт в его личный vault, а не в notes/ проекта.
+        if (author is null && (ownerId is null || ownerId != userId))
             throw new UnauthorizedAccessException("Сессия принадлежит другому пользователю");
+
+        // Владелец заметки: приватный чат — автор (личный vault, Source: null); общий —
+        // владелец, как раньше (проектный чат → notes/Сессии проекта, чат вне проекта →
+        // его личный vault). Оплата LLM (ownerId ниже) не меняется: её платит владелец проекта.
+        var noteOwner = author ?? ownerId!;
 
         if (!_inFlight.TryAdd(sessionId, 0))
             throw new SummaryInProgressException();
@@ -85,27 +107,29 @@ public class SessionSummaryService(
             // Существующая заметка-итог обновляется (заголовок не трогаем — пользователь мог переименовать)
             NoteDetail note;
             var isUpdate = session.SummaryNoteId is not null
-                && notes.GetDetail(ownerId, session.SummaryNoteId) is not null;
+                && notes.GetDetail(noteOwner, session.SummaryNoteId) is not null;
             if (isUpdate)
             {
-                note = notes.Update(ownerId, session.SummaryNoteId!, new UpdateNoteRequest(Content: summary))
+                note = notes.Update(noteOwner, session.SummaryNoteId!, new UpdateNoteRequest(Content: summary))
                     ?? throw new SummaryGenerationException("Заметка-итог не обновилась");
             }
             else
             {
-                note = notes.Create(ownerId, new CreateNoteRequest(
+                note = notes.Create(noteOwner, new CreateNoteRequest(
                     Title: BuildTitle(session),
                     Content: summary,
-                    Source: session.ProjectId,   // null → личный vault (чат вне проекта)
+                    // Приватный чат — всегда личный vault автора (Source: null). Общий — как раньше:
+                    // id проекта → notes/Сессии проекта, null (чат вне проекта) → личный vault.
+                    Source: author is null ? session.ProjectId : null,
                     Folder: "Сессии"));
                 sessions.SetSummaryNoteId(sessionId, note.Id);
             }
 
-            kb?.QueueSync(ownerId);
-            await broadcaster.ToOwner(ownerId,
+            kb?.QueueSync(noteOwner);
+            await broadcaster.ToOwner(noteOwner,
                 new NotesChangedMessage(isUpdate ? "updated" : "created", note.Id));
 
-            await notif.SendNotificationMessageAsync(ownerId, new NotificationMessage(
+            await notif.SendNotificationMessageAsync(noteOwner, new NotificationMessage(
                 Title: "Итог сессии готов",
                 Body: note.Title,
                 Url: "#/notes/" + Uri.EscapeDataString(note.Id),

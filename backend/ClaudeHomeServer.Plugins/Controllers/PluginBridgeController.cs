@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -34,7 +35,8 @@ public class PluginBridgeController(
     // контейнере, и без явного значения по умолчанию активация контроллера падала (500, а не 503).
     PluginStore? store = null,
     PluginBridge? bridge = null,
-    IProjectManager? projects = null) : ControllerBase
+    IProjectManager? projects = null,
+    IProjectAccess? access = null) : ControllerBase
 {
     // Claim'ы — литералы (как в PluginsController): MapInboundClaims=false оставляет raw-имена.
     private const string SubClaim = "sub";
@@ -181,7 +183,8 @@ public class PluginBridgeController(
         if (context.ProjectId is not null)
         {
             var project = projects?.GetById(context.ProjectId);
-            if (project is null || project.OwnerId != UserId)
+            // право читать проект решает IProjectAccess (роль и рубильник общих проектов); без него — отказ
+            if (project is null || access?.Resolve(UserId, project.Id, ProjectRight.Read) is null)
                 return StatusCode(404, new { error = "Проект слота не найден" });
             var caps = ProjectCapabilities.PluginsFor(project);
             if (!caps.Available)

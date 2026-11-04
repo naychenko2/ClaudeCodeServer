@@ -135,10 +135,13 @@ public class NotesToolsetWikiTests : IDisposable
         return obj;
     }
 
+    /// <summary>Отказ проверяется дословно (Be, а не Contain): ожидаемая строка — весь текст
+    /// отказа из кода вызывающего. Через Contain прошла бы любая формулировка, содержащая
+    /// фразу, — и молча нарушила бы неразличимость отказов (хвост R-WIKI-PRIV, п.2).</summary>
     private static void AssertDenied(McpToolCallResult res, string because)
     {
         res.IsError.Should().BeTrue($"отказ обязан быть отказом: {res.Text}");
-        res.Text.Should().Contain(because, $"причина отказа: {res.Text}");
+        res.Text.Should().Be(because, $"причина отказа: {res.Text}");
     }
 
     // ── состояние вики: страницы в четырёх разделах и их каталоги ──
@@ -284,7 +287,7 @@ public class NotesToolsetWikiTests : IDisposable
         var res = await toolset.CallAsync("wiki_ingest",
             Args(("source", note.Id), ("target", "common")), ctx, CancellationToken.None);
 
-        AssertDenied(res, "проектный источник не идёт в 'common'");
+        AssertDenied(res, "проектный источник не идёт в 'common': в «Общее» только повышением");
         // Отказ — до записи: карточки в «Общем» не появилось.
         File.Exists(SafePath.Join(Root, "pages/Общее/Источники")).Should().BeFalse();
     }
@@ -304,7 +307,7 @@ public class NotesToolsetWikiTests : IDisposable
 
         var res = Call(toolset, ctx, "wiki_ingest", Args(("source", note.Id)));
 
-        AssertDenied(res, "разберите Входящие");
+        AssertDenied(res, "Открытых пакетов уже 20: разберите Входящие, потом повторяй заявку.");
     }
 
     // ── S7b0a: «разобрать этот чат» (session:{id} без диапазона) — только свой чат ──
@@ -394,7 +397,7 @@ public class NotesToolsetWikiTests : IDisposable
         {
             var res = Call(toolset, ctx, tool, Args(("question", Question), ("fact", "ф"), ("quote", "цитата из чата"),
                 ("sessionRange", "m1-2")));
-            AssertDenied(res, "не заведена");
+            AssertDenied(res, "Вики этого владельца не заведена: её инструменты работают только с заведённой.");
         }
         // Состав tools/list при этом не изменился: инструменты вики в нём остаются.
         var (toolset2, _) = McpEnv("p1");
@@ -453,7 +456,8 @@ public class NotesToolsetWikiTests : IDisposable
             ("quote", "Никогда не было такой фразы в этом чате"),
             ("sessionRange", "m1-2")), ctx, CancellationToken.None);
 
-        AssertDenied(res, "цитаты нет");
+        AssertDenied(res, "цитаты нет в выдержке этого чата: факт обязан быть её дословным фрагментом; "
+            + "страницу выводит Хранитель по этой выдержке");
         WikiPackageStore.CountOpen(Root).Should().Be(0, "отказанная заявка не оставила пакета");
     }
 
@@ -470,7 +474,7 @@ public class NotesToolsetWikiTests : IDisposable
                 ("fact", "Нарезку выдержки делает код"),
                 ("quote", "Решили: нарезку делает код"),
                 ("sessionRange", bad)), ctx, CancellationToken.None);
-            AssertDenied(res, "sessionRange");
+            AssertDenied(res, "sessionRange — та же форма, что в ссылке на чат: m{a}-{b}, например m12-17");
         }
         Directory.Exists(SafePath.Join(Root, "pages/Проекты/p1/Источники")).Should().BeFalse();
     }
@@ -600,7 +604,7 @@ public class NotesToolsetWikiTests : IDisposable
 
         var res = Call(toolset, ctx, "wiki_ingest", Args(("source", note.Id)));
 
-        AssertDenied(res, "выключена");
+        AssertDenied(res, "Функция выключена: включите «LLM-вики» в экспериментальных функциях.");
         PackageCount().Should().Be(before, "при выключенном флаге пакет не создаётся");
         File.Exists(SafePath.Join(Root, "pages/Проекты/p1/Источники")).Should().BeFalse();
     }
@@ -615,7 +619,7 @@ public class NotesToolsetWikiTests : IDisposable
         var res = Call(toolset, ctx, "wiki_add_fact", Args(
             ("fact", "Нарезку делает код"), ("quote", "Решили: нарезку делает код"), ("sessionRange", "m1-2")));
 
-        AssertDenied(res, "выключена");
+        AssertDenied(res, "Функция выключена: включите «LLM-вики» в экспериментальных функциях.");
         PackageCount().Should().Be(before);
     }
 

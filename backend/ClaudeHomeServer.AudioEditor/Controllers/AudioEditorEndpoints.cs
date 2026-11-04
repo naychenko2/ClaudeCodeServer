@@ -254,7 +254,7 @@ public abstract class AudioEditorEndpoints(
         if (req.File is not null)
         {
             if (scope.Project is not { } project) return NoProjectFiles();
-            if (ProjectLinkGuard.ResolveInside(project.RootPath, req.File) is not { } full || !System.IO.File.Exists(full))
+            if (ProjectLinkGuard.ResolveInsideAs(project.RootPath, req.File, UserId) is not { } full || !System.IO.File.Exists(full))
                 return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Файл не найден в проекте");
             file = Relative(project.RootPath, full);
         }

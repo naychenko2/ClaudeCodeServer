@@ -175,7 +175,7 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         {
             // У личной области файлов проекта нет — отказ до обращения к диску
             if (scope.Project is not { } project) return Deny(NoProjectFiles);
-            if (ProjectAudioPath(project, file) is not { } path)
+            if (ProjectAudioPath(project, file, ownerId) is not { } path)
                 return Deny($"Звуковой файл не найден в проекте: {file}");
             written = _threads.Tracked(ownerId, session.Id, () => Store.Open(ownerId, session.Id, path, null, null), ContextActor.Agent);
             if (written is { Status: AudioThreadWriteStatus.Ok, Existing: false, Thread: { } created })
@@ -240,10 +240,10 @@ public sealed partial class AudioEditorToolset : IMcpParameterizedToolset
         "В чате вне проекта нет файлов проекта: заведи новый звук (audio_new) или возьми звук этого чата по threadId.";
 
     // Путь звукового файла проекта от корня через «/»: строго внутри и без ссылки наружу
-    private static string? ProjectAudioPath(Project project, string file)
+    private static string? ProjectAudioPath(Project project, string file, string ownerId)
     {
         var rel = Normalize(file);
-        if (rel.Length == 0 || ProjectLinkGuard.ResolveInside(project.RootPath, rel) is not { } full || !File.Exists(full))
+        if (rel.Length == 0 || ProjectLinkGuard.ResolveInsideAs(project.RootPath, rel, ownerId) is not { } full || !File.Exists(full))
             return null;
         return AudioVersionFiles.ContentTypeOf(full).StartsWith("audio/", StringComparison.Ordinal)
             ? Path.GetRelativePath(project.RootPath, full).Replace('\\', '/')

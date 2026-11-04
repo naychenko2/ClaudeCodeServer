@@ -78,14 +78,14 @@ public sealed class FilmAssembler(
         // Файлы и размеры — сразу и до заявки: человек видит причину ответом, а не провалом в фоне
         foreach (var item in doc.Items)
         {
-            var clip = Resolve(film.Project, item.File);
+            var clip = Resolve(film.Project, item.File, ownerId);
             if (!clip.IsOk) return FilmCallResult<FilmBuildStatusDto>.Fail(clip.ErrorCode!, clip.Error!);
             if (new FileInfo(clip.Value!.Full).Length > SafeMediaDownloader.VideoMaxBytes)
                 return FilmCallResult<FilmBuildStatusDto>.Fail(VideoEditorErrors.InvalidRequest, $"Клип больше 300 МБ: {item.File}");
         }
         if (doc.Music is { } music)
         {
-            var track = Resolve(film.Project, music.File);
+            var track = Resolve(film.Project, music.File, ownerId);
             if (!track.IsOk) return FilmCallResult<FilmBuildStatusDto>.Fail(track.ErrorCode!, track.Error!);
         }
 
@@ -115,9 +115,9 @@ public sealed class FilmAssembler(
         await Task.WhenAll(pending);
     }
 
-    private static FilmCallResult<FilmService.Resolved> Resolve(Project project, string relative)
+    private static FilmCallResult<FilmService.Resolved> Resolve(Project project, string relative, string ownerId)
     {
-        var inside = FilmService.ResolveInside(project, relative);
+        var inside = FilmService.ResolveInside(project, relative, ownerId);
         if (!inside.IsOk) return inside;
         return File.Exists(inside.Value!.Full)
             ? inside
@@ -133,7 +133,7 @@ public sealed class FilmAssembler(
         string? error = null, outFile = null;
         try
         {
-            var planned = await PlanAsync(film, doc, entry.Cts.Token);
+            var planned = await PlanAsync(film, doc, ownerId, entry.Cts.Token);
             if (planned.Error is not null) { error = planned.Error; return; }
 
             // doc.Aspect — кеш пропорций первой сцены: сборка его обновляет, и хеш входов считается уже с ним, иначе
@@ -177,13 +177,13 @@ public sealed class FilmAssembler(
     }
 
     // План по документу: клипы пробуются (длина, звук, размер), обрезка укладывается в длину клипа
-    private async Task<(FilmPlan? Plan, string? Error, string Aspect)> PlanAsync(FilmService.Resolved film, FilmDocument doc, CancellationToken ct)
+    private async Task<(FilmPlan? Plan, string? Error, string Aspect)> PlanAsync(FilmService.Resolved film, FilmDocument doc, string ownerId, CancellationToken ct)
     {
         var clips = new List<FilmPlanClip>();
         VideoDspInfo? first = null;
         foreach (var item in doc.Items)
         {
-            var clip = Resolve(film.Project, item.File);
+            var clip = Resolve(film.Project, item.File, ownerId);
             if (!clip.IsOk) return (null, clip.Error, doc.Aspect);
             var info = await dsp!.ProbeAsync(clip.Value!.Full, ct);
             if (info is null) return (null, $"Клип не разобран как видео: {item.File}", doc.Aspect);
@@ -196,7 +196,7 @@ public sealed class FilmAssembler(
         FilmPlanMusic? music = null;
         if (doc.Music is { } m)
         {
-            var track = Resolve(film.Project, m.File);
+            var track = Resolve(film.Project, m.File, ownerId);
             if (!track.IsOk) return (null, track.Error, doc.Aspect);
             music = new FilmPlanMusic(track.Value!.Full, m.Volume, m.FadeOut);
         }

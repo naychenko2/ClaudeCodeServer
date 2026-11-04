@@ -54,15 +54,15 @@ public sealed class FilmService(
             return FilmCallResult<Resolved>.Fail(
                 FilmPaths.IsAllowed(relative) ? VideoEditorErrors.InvalidRequest : VideoEditorErrors.OutsideAllowedFolders,
                 "Фильм — файл .film в папке video/<фильм>/");
-        return ResolveInside(project.Value!, relative);
+        return ResolveInside(project.Value!, relative, scope.TenantOwnerId);
     }
 
     // Путь внутри проекта (не через ссылку наружу), уже по allow-list video/** и music/**
-    public static FilmCallResult<Resolved> ResolveInside(Project project, string relative)
+    public static FilmCallResult<Resolved> ResolveInside(Project project, string relative, string? actor = null)
     {
         if (!FilmPaths.IsAllowed(relative))
             return FilmCallResult<Resolved>.Fail(VideoEditorErrors.OutsideAllowedFolders, "Писать можно только в video/ и music/");
-        return ProjectLinkGuard.ResolveInside(project.RootPath, relative) is { } full
+        return ProjectLinkGuard.ResolveInsideAs(project.RootPath, relative, actor) is { } full
             ? FilmCallResult<Resolved>.Ok(new Resolved(project, relative, full))
             : FilmCallResult<Resolved>.Fail(VideoEditorErrors.OutsideAllowedFolders,
                 "Путь идёт через символическую ссылку или вне проекта");
@@ -259,7 +259,7 @@ public sealed class FilmService(
         var ops = new List<FilmPatchOp>();
         foreach (var op in patch.Ops)
         {
-            var prepared = await PrepareAsync(film.Project, op, ct);
+            var prepared = await PrepareAsync(film.Project, op, ownerId, ct);
             if (!prepared.IsOk) return FilmCallResult<FilmStateDto>.Fail(prepared.ErrorCode!, prepared.Error!);
             ops.Add(prepared.Value!);
         }
@@ -267,7 +267,7 @@ public sealed class FilmService(
         if (applied.Document is null)
             return FilmCallResult<FilmStateDto>.Fail(VideoEditorErrors.InvalidRequest, applied.Error ?? "Правка не подходит фильму");
         // doc.Aspect — кеш: формат фильма задаёт первая сцена, и когда на её место встал другой клип, кеш пересчитывается
-        applied = applied with { Document = await RefreshAspectAsync(film.Project, read.Document!, applied.Document, ct) };
+        applied = applied with { Document = await RefreshAspectAsync(film.Project, read.Document!, applied.Document, ownerId, ct) };
 
         var written = films.WriteFile(film.Full, applied.Document, patch.ExpectedRevision, create: false);
         switch (written.Status)
@@ -286,11 +286,11 @@ public sealed class FilmService(
         return StateOf(ownerId, scope, film, written.Current);
     }
 
-    private async Task<FilmDocument> RefreshAspectAsync(Project project, FilmDocument before, FilmDocument after, CancellationToken ct)
+    private async Task<FilmDocument> RefreshAspectAsync(Project project, FilmDocument before, FilmDocument after, string ownerId, CancellationToken ct)
     {
         if (dsp is not { Available: true } || after.Items.Count == 0 || before.Items.Count > 0 && before.Items[0].File == after.Items[0].File)
             return after;
-        var clip = ResolveInside(project, after.Items[0].File);
+        var clip = ResolveInside(project, after.Items[0].File, ownerId);
         if (!clip.IsOk || !File.Exists(clip.Value!.Full)) return after;
         var info = await dsp.ProbeAsync(clip.Value.Full, ct);
         return info is { Width: > 0, Height: > 0 } ? after with { Aspect = FilmFormat.AspectOfSize(info.Width, info.Height) } : after;
@@ -325,7 +325,7 @@ public sealed class FilmService(
 
     // Операция до патчера: файлы add и music существуют внутри проекта, у add без обрезки длина — по пробе клипа
     // (шов IVideoDsp) либо по снимку сцены
-    private async Task<FilmCallResult<FilmPatchOp>> PrepareAsync(Project project, FilmPatchOp op, CancellationToken ct)
+    private async Task<FilmCallResult<FilmPatchOp>> PrepareAsync(Project project, FilmPatchOp op, string ownerId, CancellationToken ct)
     {
         switch (op.Op)
         {
@@ -333,7 +333,7 @@ public sealed class FilmService(
             {
                 if (FilmPaths.Normalize(op.File) is not { } file)
                     return FilmCallResult<FilmPatchOp>.Fail(VideoEditorErrors.InvalidRequest, "Не указан файл сцены");
-                var inside = ResolveInside(project, file);
+                var inside = ResolveInside(project, file, ownerId);
                 if (!inside.IsOk) return FilmCallResult<FilmPatchOp>.Fail(inside.ErrorCode!, inside.Error!);
                 if (!File.Exists(inside.Value!.Full))
                     return FilmCallResult<FilmPatchOp>.Fail(VideoEditorErrors.FileNotFound, $"Файл сцены не найден: {file}");
@@ -354,7 +354,7 @@ public sealed class FilmService(
             {
                 if (FilmPaths.Normalize(music.File) is not { } file)
                     return FilmCallResult<FilmPatchOp>.Fail(VideoEditorErrors.InvalidRequest, "Не указан файл музыки");
-                var inside = ResolveInside(project, file);
+                var inside = ResolveInside(project, file, ownerId);
                 if (!inside.IsOk) return FilmCallResult<FilmPatchOp>.Fail(inside.ErrorCode!, inside.Error!);
                 if (!File.Exists(inside.Value!.Full))
                     return FilmCallResult<FilmPatchOp>.Fail(VideoEditorErrors.FileNotFound, $"Файл музыки не найден: {file}");

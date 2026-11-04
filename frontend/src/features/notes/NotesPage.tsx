@@ -3,7 +3,7 @@ import { MessageCircle, Plus } from 'lucide-react';
 import type { AuthState, NoteDetail, NoteSemanticHit, NoteSummary } from '../../types';
 import { NewNoteDialog } from './NewNoteDialog';
 import {
-  subsystemTabValue, HubHeader, PillSwitch, C, FONT, ISLAND, R, CHAT_MAX_W, FAB_CLEAR_PAD,
+  subsystemTabValue, HubHeader, PillSwitch, C, FONT, ISLAND, R, TB, CHAT_MAX_W, FAB_CLEAR_PAD,
   api, useNotes, ensureNotesLoaded, existingTitleSet, bumpNotes, isFavorite, FAVORITE_TAG,
   useOnline, OfflineError, createNoteOffline,
   parseHash, navPush, navReplace, getNav,
@@ -453,12 +453,17 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
           )}
         </CollapseGroup>
       )}
+      {/* Тач-цели на мобиле — не меньше TB.iconHitMobile (40 px): высота обеих кнопок,
+          ширина — иконочной («Дневниковая заметка»): без подписи её ширина держится
+          только на паддингах. На десктопе размеры те же, что и были */}
       <div style={{ display: 'flex', gap: 6 }}>
-        <button onClick={() => setNewDialog({})} style={{ ...newBtn, flex: 1, justifyContent: 'center' }}>
+        <button onClick={() => setNewDialog({})}
+          style={{ ...newBtn, flex: 1, justifyContent: 'center', ...(isMobile ? { minHeight: TB.iconHitMobile } : {}) }}>
           <IconPlus />Новая
         </button>
         <button onClick={openDaily} title="Дневниковая заметка на сегодня"
-          style={{ ...newBtn, background: 'transparent', color: C.textSecondary, border: `1px solid ${C.border}` }}>
+          style={{ ...newBtn, background: 'transparent', color: C.textSecondary, border: `1px solid ${C.border}`,
+            ...(isMobile ? { minWidth: TB.iconHitMobile, minHeight: TB.iconHitMobile, justifyContent: 'center' } : {}) }}>
           <IconCalendarDay />
         </button>
       </div>

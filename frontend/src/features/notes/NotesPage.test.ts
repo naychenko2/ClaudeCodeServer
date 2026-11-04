@@ -13,6 +13,8 @@ import type { NoteDetail, NoteSummary } from '../../types';
 import { NotesPage } from './NotesPage';
 import { findNodeByAttr, installFakeDom, mount, reactProps, uninstallFakeDom } from '../../components/chat/__tests__/fakeDom';
 import { setAllFlags } from '../../lib/featureFlags';
+// порог тач-цели мобилы — тот же токен, что в коде страницы (сверяем не магическое число)
+import { TB } from '../../lib/design';
 // очередь запроса «открыть страницу» — настоящая (не моканная): тестам прямой импорт разрешён
 import { __test as wikiStore, consumeOpenWikiPage, requestOpenWikiPage } from '../../lib/wiki';
 
@@ -774,5 +776,94 @@ describe('NotesPage: запрос «Открыть хронику» (OPEN-1)', (
     expect(hasText(container, 'Содержание хроники chat-x')).toBe(false);
     expect(findButtonByText(container, 'Вики'), 'переключателя «Вики» нет, как и без запроса').toBeNull();
     root.unmount();
+  });
+});
+
+// ─── Тач-цели кнопок создания: порог 40 px на мобиле ───
+// «Новая» и «Дневниковая заметка» рисует sidebarControls NotesPage — она стоит и в
+// списке заметок (мобильный сайдбар), и в мобильной шторке дерева (drawerTree WikiTab).
+// Порог — TB.iconHitMobile (docs/design/guidelines.md, п.4 чек-листа «тач-цели не
+// меньше 40px»). Мутации (вывод прогона — в отчёте задачи): (1) убрать minHeight у
+// «Новой» → краснеет «мобильный список»; (2) убрать minHeight/minWidth у иконочной →
+// краснеет та же; (3) ставить их всегда, без isMobile → краснеет десктопный тест.
+
+const DAILY_TITLE = 'Дневниковая заметка на сегодня';
+const HIT_PX = `${TB.iconHitMobile}px`;
+
+// Кнопки блока создания: «Новая» — по подписи; «Дневниковая заметка» — по title
+// (текста у неё нет, только иконка)
+function createButtons(scope: AnyNode) {
+  return {
+    newNote: findButtonByText(scope, 'Новая'),
+    daily: findNodeByAttr(scope as never, 'title', DAILY_TITLE),
+  };
+}
+
+describe('NotesPage: тач-цели «Новая» / «Дневниковая заметка» ≥ 40 px на мобиле', () => {
+  beforeEach(() => {
+    prepareEnv();
+    notesMock.length = 0;
+    wikiMock.tree = WIKI_TREE;
+    wikiMock.catalog = WIKI_CATALOG;
+  });
+  afterEach(() => {
+    setAllFlags({});
+    wikiMock.tree = null;
+    wikiMock.catalog = null;
+    notesMock.length = 0;
+    vi.unstubAllGlobals();
+    uninstallFakeDom();
+  });
+
+  it('мобильный список: «Новая» ≥ 40 px по высоте, «Дневниковая заметка» ≥ 40×40', () => {
+    const { root, container } = mountNotes();
+    const { newNote, daily } = createButtons(container);
+    expect(newNote, 'кнопка «Новая» есть').not.toBeNull();
+    expect(daily, 'кнопка «Дневниковая заметка» есть').not.toBeNull();
+    expect(newNote!.style.minHeight, '«Новая» — высота по тач-порогу').toBe(HIT_PX);
+    expect(daily!.style.minHeight, 'иконочная — высота по тач-порогу').toBe(HIT_PX);
+    expect(daily!.style.minWidth, 'иконочная — и ширина по тач-порогу (без подписи её держат только паддинги)').toBe(HIT_PX);
+    root.unmount();
+  });
+
+  it('мобильная шторка дерева (unified, режим «Вики»): те же цели внутри шторки', async () => {
+    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+    const { root, container } = mountNotes();
+    clickNode(findButtonByText(container, 'Вики')!);
+    await settle();
+    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-open-tree')!);
+    await settle();
+    const drawer = findNodeByAttr(container, 'data-testid', 'wiki-drawer-left');
+    expect(drawer, 'шторка дерева открыта').not.toBeNull();
+    const { newNote, daily } = createButtons(drawer as unknown as AnyNode);
+    expect(newNote, '«Новая» в шторке есть').not.toBeNull();
+    expect(daily, '«Дневниковая заметка» в шторке есть').not.toBeNull();
+    expect(newNote!.style.minHeight).toBe(HIT_PX);
+    expect(daily!.style.minHeight).toBe(HIT_PX);
+    expect(daily!.style.minWidth).toBe(HIT_PX);
+    root.unmount();
+  });
+
+  it('десктоп 1280: размеров-исключений нет — кнопки как прежде', () => {
+    envMock.isMobile = false;
+    envMock.width = 1280;
+    // Путь десктопа — через PanelZone/PanelShell (documentElement, ResizeObserver,
+    // requestAnimationFrame): те же стабы, что в десктопном описании S5d-доработки
+    const d = (globalThis as { document: Record<string, unknown> }).document;
+    d.documentElement = { style: { setProperty: () => {}, removeProperty: () => {} } };
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+    (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame = (cb: () => void) => { cb(); return 1; };
+    (globalThis as { cancelAnimationFrame?: unknown }).cancelAnimationFrame = () => {};
+    const { root, container } = mountNotes();
+    const { newNote, daily } = createButtons(container);
+    expect(newNote, 'кнопка «Новая» есть').not.toBeNull();
+    expect(daily, 'кнопка «Дневниковая заметка» есть').not.toBeNull();
+    expect(newNote!.style.minHeight, 'на десктопе высоты-исключения нет').toBeUndefined();
+    expect(daily!.style.minHeight, 'на десктопе высоты-исключения нет').toBeUndefined();
+    expect(daily!.style.minWidth, 'на десктопе ширины-исключения нет').toBeUndefined();
+    root.unmount();
+    delete (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame;
+    delete (globalThis as { cancelAnimationFrame?: unknown }).cancelAnimationFrame;
+    delete (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
   });
 });

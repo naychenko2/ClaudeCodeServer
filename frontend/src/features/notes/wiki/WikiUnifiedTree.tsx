@@ -10,7 +10,7 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { ChevronDown, ChevronRight, Folder, Globe, Lock, Search } from 'lucide-react';
+import { ChevronDown, ChevronRight, Folder, Globe, Layers, Lock, Search } from 'lucide-react';
 import {
   C, FONT, FS, R, SP, useIsMobile, ensureWikiLoaded, loadWikiCatalog, groupSectionsByKind,
   wikiAuthorshipOf, WikiError,
@@ -35,6 +35,9 @@ const OTHER_KEY = '__other__';
 const PERSONAL_KEY = 'personal';
 // Служебные карточки источников лежат в папке «Источники» раздела: открываются сноской, в дереве не нужны
 const SOURCE_CARD_DIR = 'Источники';
+// Раздел сферы — место зарезервировано, запись в него отказана ('wiki_sphere_reserved', ADR-036 §7),
+// наполнение — отдельная фича. В раскрытом пустом узле вместо строк — только это пояснение.
+const SPHERE_EMPTY_HINT = 'Страниц пока нет — раздел сферы наполняется отдельной фичей';
 
 export type OriginFilter = 'all' | 'note' | 'ai' | 'together' | 'me';
 
@@ -58,8 +61,8 @@ export interface UnifiedItem {
 export interface UnifiedGroup {
   key: string;
   label: string;
-  /** Тип узла — иконка и порядок: проекты, общее, личное, прочие */
-  kind: 'project' | 'common' | 'personal' | 'other';
+  /** Тип узла — иконка и порядок: проекты, сферы, общее, личное, прочие */
+  kind: 'project' | 'sphere' | 'common' | 'personal' | 'other';
   orphan: boolean;
   items: UnifiedItem[];
 }
@@ -95,16 +98,19 @@ export function buildUnifiedGroups(
   const text = queryText(query);
   const by = groupSectionsByKind(sections as WikiSectionDto[]);
   const groups = new Map<string, UnifiedGroup>();
-  const order: WikiSectionDto[] = [...by.project, ...by.common, ...by.personal];
-  for (const s of order) {
-    if (s.local) continue;
-    groups.set(s.key, {
-      key: s.key, orphan: s.orphan,
-      kind: s.key === 'common' ? 'common' : s.key === PERSONAL_KEY ? 'personal' : 'project',
-      label: s.key === 'common' ? 'Общее' : s.key === PERSONAL_KEY ? 'Личное' : s.name ?? 'Удалённый проект',
-      items: [],
-    });
-  }
+  const addAll = (list: readonly WikiSectionDto[], kind: UnifiedGroup['kind'], label: (s: WikiSectionDto) => string) => {
+    for (const s of list) {
+      if (s.local) continue;
+      groups.set(s.key, { key: s.key, orphan: s.orphan, kind, label: label(s), items: [] });
+    }
+  };
+  // Порядок узлов: проекты → сферы → «Общее» → «Личное» (решение Андрея 04.11); «Другие заметки» — после них.
+  // Сфера — узел-раздел с живым именем (у сироты имени нет — заместитель, как в WikiSectionTree).
+  // Заметки в узел сферы не раскладываются: noteSectionKey знает только проектные и личные разделы.
+  addAll(by.project, 'project', s => s.name ?? 'Удалённый проект');
+  addAll(by.sphere, 'sphere', s => s.name ?? 'Сфера');
+  addAll(by.common, 'common', () => 'Общее');
+  addAll(by.personal, 'personal', () => 'Личное');
   const other: UnifiedGroup = { key: OTHER_KEY, label: 'Другие заметки', kind: 'other', orphan: false, items: [] };
 
   for (const g of groups.values()) {
@@ -257,6 +263,9 @@ export function WikiUnifiedTree({
 
   const groupIcon = (g: UnifiedGroup) => {
     const p = { size: ICON_SIZE.xs, strokeWidth: ICON_STROKE, style: { flexShrink: 0, color: C.textMuted } };
+    // Своей иконки сфера в DTO нет (её значок из SphereTile — выбор пользователя, в раздел не едет);
+    // Layers — стопка слоёв, читается как группа проектов
+    if (g.kind === 'sphere') return <Layers {...p} />;
     return g.kind === 'common' ? <Globe {...p} /> : g.kind === 'personal' ? <Lock {...p} /> : <Folder {...p} />;
   };
 
@@ -284,6 +293,14 @@ export function WikiUnifiedTree({
           </span>
         </button>
         {open && g.items.map(itemRow)}
+        {open && g.kind === 'sphere' && !g.items.length && (
+          <div
+            data-testid="unified-sphere-hint"
+            style={{ padding: `${SP.xs}px ${SP.sm}px`, paddingLeft: SP.xl, fontSize: FS.sm, color: C.textMuted }}
+          >
+            {SPHERE_EMPTY_HINT}
+          </div>
+        )}
       </Fragment>
     );
   };
@@ -301,7 +318,8 @@ export function WikiUnifiedTree({
         </div>
       );
     }
-    if (!all.some(g => g.items.length) && !searching) {
+    // Узел сферы — тоже содержимое дерева: он не должен прятаться за общей подсказкой
+    if (!all.some(g => g.items.length || g.kind === 'sphere') && !searching) {
       return (
         <div data-testid="unified-empty" style={{ padding: SP.md, fontSize: FS.sm, color: C.textMuted }}>
           Здесь будут ваши заметки и страницы, которые ведёт ИИ.

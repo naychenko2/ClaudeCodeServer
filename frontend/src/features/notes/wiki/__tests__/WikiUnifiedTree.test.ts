@@ -7,7 +7,8 @@
 //  (1) снять сверку ключа запроса в useSectionCatalogs → «гонка» краснеет;
 //  (2) читать отсутствующее authorship не как 'ai' (wikiAuthorshipOf) → «без authorship — ИИ» краснеет;
 //  (3) не фильтровать по происхождению (filterGroups возвращает всё) → «фильтр» краснеет;
-//  (4) передавать ключ узла и для OTHER_KEY (без null) → «Другие заметки» краснеет.
+//  (4) передавать ключ узла и для OTHER_KEY (без null) → «Другие заметки» краснеет;
+//  (5) убрать ветку сфер в buildUnifiedGroups (строку addAll(by.sphere, …)) → «узел сферы» краснеет.
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -78,6 +79,11 @@ const note = (id: string, title: string, source: string): NoteSummary => ({
 
 const NOTES = [note('n1', 'Идея про граф', 'personal'), note('n2', 'Заметка проекта', PROJECT_ID), note('n3', 'Чужая', 'unknown-src')];
 
+// Раздел сферы: ключ «spheres/{id}», запись резервирована (ADR-036 §7), страниц нет
+const SPHERE_ID = 'c0d1e2f3-a4b5-c6d7-e8f9-0a1b2c3d4e5f';
+const SPHERE_KEY = `spheres/${SPHERE_ID}`;
+const SPHERE = sec(SPHERE_KEY, { name: 'Дом и семья', sphereReserved: true });
+
 const sectionFromUrl = (url: string) => decodeURIComponent(url.split('section=')[1] ?? '');
 
 const OTHER = '__other__';
@@ -134,6 +140,15 @@ const clickChip = (c: C, label: string) => {
 // Заявленный minHeight кнопки чипа: на мобиле — тач-цель, на десктопе его нет
 const chipMinHeight = (c: C, label: string) =>
   (reactProps(chipNode(c, label)) as { style?: { minHeight?: number } }).style?.minHeight;
+
+// Заголовок узла по подписи (для узлов сфер)
+const groupHead = (c: C, label: string) => {
+  const hit = allByAttr(c, 'data-testid', 'unified-group').find(n => textNodes(n!).join('').includes(label));
+  if (!hit) throw new Error(`нет узла ${label}`);
+  return hit;
+};
+const hasGroup = (c: C, label: string) =>
+  allByAttr(c, 'data-testid', 'unified-group').some(n => textNodes(n!).join('').includes(label));
 
 const rowTitles = (c: C) => allByAttr(c, 'data-testid', 'unified-row').map(r => String(reactProps(r!)?.title));
 const clickRow = (c: C, title: string) => {
@@ -361,6 +376,62 @@ describe('Дерево в интерфейсе', () => {
     const { container } = render(baseProps({ notes: [] }));
     await settle();
     expect(findNodeByAttr(container, 'data-testid', 'unified-skeleton')).not.toBeNull();
+  });
+});
+
+describe('Узлы сфер (решение Андрея 04.11)', () => {
+  // Мутация: убрать addAll(by.sphere, …) в buildUnifiedGroups → «узел сферы» и «пустое дерево» краснеют
+  it('сфера — узел-раздел после проектов, с именем; заметки в неё не раскладываются', () => {
+    const notes = [...NOTES, note('n4', 'Заметка о доме', SPHERE_ID)];
+    const groups = buildUnifiedGroups([...SECTIONS, SPHERE], notes, CATALOGS as never, '');
+    expect(groups.map(g => g.label)).toEqual(['AI Home', 'Дом и семья', 'Общее', 'Личное', 'Другие заметки']);
+    const sphere = groups.find(g => g.kind === 'sphere')!;
+    expect(sphere.key).toBe(SPHERE_KEY);
+    expect(sphere.items.length).toBe(0);
+    // источник-сфера для заметки — не раздел вики: заметка остаётся в «Других заметках»
+    expect(groups.find(g => g.key === OTHER)!.items.map(i => i.title)).toContain('Заметка о доме');
+    expect(countByOrigin(groups).note).toBe(4);
+  });
+
+  it('без разделов сферы — дерева с узлом «сфера» нет, порядок прежний', () => {
+    const groups = buildUnifiedGroups(SECTIONS, NOTES, CATALOGS as never, '');
+    expect(groups.some(g => g.kind === 'sphere')).toBe(false);
+    expect(groups.map(g => g.key)).toEqual([PROJECT_KEY, 'common', 'personal', OTHER]);
+  });
+
+  it('фильтр по происхождению выбрасывает пустой узел сферы; «Все» — оставляет', () => {
+    const groups = buildUnifiedGroups([...SECTIONS, SPHERE], [], CATALOGS as never, '');
+    expect(filterGroups(groups, 'all').some(g => g.kind === 'sphere')).toBe(true);
+    expect(filterGroups(groups, 'note').some(g => g.kind === 'sphere')).toBe(false);
+  });
+
+  it('узел сферы: имя и пояснение внутри; клик по заголовку onSelectNote не зовёт', async () => {
+    const props = baseProps({ sections: [...SECTIONS, SPHERE] });
+    const { container } = render(props);
+    await settle();
+    expect(hasGroup(container, 'Дом и семья')).toBe(true);
+    expect(has(container, 'Страниц пока нет — раздел сферы наполняется отдельной фичей')).toBe(true);
+    const head = groupHead(container, 'Дом и семья');
+    act(() => { (reactProps(head) as { onClick: () => void }).onClick(); });
+    expect(props.onSelectNote).not.toHaveBeenCalled();
+    expect(props.onOpenPage).not.toHaveBeenCalled();
+  });
+
+  it('фильтр «Заметки»: узел сферы и его пояснение скрыты', async () => {
+    const { container } = render(baseProps({ sections: [...SECTIONS, SPHERE] }));
+    await settle();
+    clickChip(container, 'Заметки');
+    await settle();
+    expect(hasGroup(container, 'Дом и семья')).toBe(false);
+    expect(has(container, 'Страниц пока нет')).toBe(false);
+  });
+
+  it('дерево только с узлом сферы: узел с пояснением, а не общая подсказка', async () => {
+    const { container } = render(baseProps({ notes: [], sections: [SPHERE] }));
+    await settle();
+    expect(hasGroup(container, 'Дом и семья')).toBe(true);
+    expect(has(container, 'Страниц пока нет — раздел сферы наполняется отдельной фичей')).toBe(true);
+    expect(has(container, 'Здесь будут ваши заметки')).toBe(false);
   });
 });
 

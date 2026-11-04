@@ -930,10 +930,12 @@ public sealed class NotesToolset(
 
         if (WikiPage.TryParseSessionRef(source, out var sessionId, out var from, out var to))
         {
+            // Чужой и несуществующий — одно слово на двоих (тот же инвариант, что у AnalyzeAsync):
+            // «принадлежит другому владельцу» выдавало бы существование чужого чата.
             if (sessionsDir?.GetById(sessionId) is not { } chat)
                 return Deny("чат не существует");
             if (sessionsDir.ResolveOwnerId(chat) != ownerId)
-                return Deny("чат принадлежит другому владельцу: источник — тому же владельцу, что вики");
+                return Deny("чат не существует");
             var home = chat.ProjectId is { Length: > 0 } projectId
                 ? WikiSections.ProjectsPrefix + projectId
                 : WikiSections.Personal;

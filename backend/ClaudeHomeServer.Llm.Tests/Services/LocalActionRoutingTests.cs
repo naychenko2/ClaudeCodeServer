@@ -2,6 +2,7 @@
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition.Llm;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Llm.Claude;
 using ClaudeHomeServer.Tests.Helpers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -2181,6 +2182,85 @@ public class LocalActionRoutingTests
             previewModel.Should().Be(combatChain.FirstOrDefault(),
                 $"модель превью чата = первый шаг боевой цепочки (sessionModel={sessionModel})");
         }
+    }
+
+    // --- Ключ владельца цепочки: владелец хода, а не пустой владелец сессии (DEC-FALLBACK 3f2f33fb) ---
+    // У проектной сессии Session.OwnerId пуст по контракту, владелец хода приходит через
+    // LlmSessionContext.OwnerId. ClaudeSession обязан резолвить модель и хвост цепочки по
+    // владельцу хода (_turnOwnerId): иначе старт заморожен из личного слота арендатора
+    // (SessionManager), а хвост и пустая Info.Model уходят на общий слот инстанса — правило
+    // «старт и фолбэк одним ключом» (инцидент 26.08) нарушен.
+
+    // Инстансовый сильный слот — «instance-opus»; личный сильный слот владельца — пресет
+    // «owner» → ["owner-kimi","owner-glm"]. Два разных слота: по цепочке видно, каким ключом
+    // прошёл резолв.
+    private static (ModelAssignmentResolver Resolver, string OwnerId) BuildOwnerSlotFixture()
+    {
+        var (resolver, app, users, _, specialty, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "instance-opus" });
+        specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            Presets = { Preset("owner", "owner-kimi", "owner-glm") },
+        });
+        var owner = users.Add("owner", "p", "user");
+        users.SetModelTiers(owner.Id, strong: "preset:owner", null, null);
+        return (resolver, owner.Id);
+    }
+
+    private static ClaudeSession BuildSessionWithResolver(ModelAssignmentResolver resolver,
+        string? sessionOwnerId, string? contextOwnerId, string? model)
+    {
+        var context = new LlmSessionContext(
+            RootPath: Path.GetTempPath(),
+            OnMessage: _ => Task.CompletedTask,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ProjectManager.BuiltInSystemPrompt,
+            PermissionRules: null,
+            TasksMcp: null)
+        { OwnerId = contextOwnerId };
+        return new ClaudeSession(new Session { Model = model, OwnerId = sessionOwnerId },
+            context, assignments: resolver);
+    }
+
+    [Fact]
+    public void ПроектнаяСессия_ЦепочкаФолбэка_ПоВладельцуХода_АНеПоПустомуВладельцуСессии()
+    {
+        // c2: Info.OwnerId пуст (проектная сессия), владелец хода — в контексте. Хвост цепочки
+        // продолжается личным пресетом владельца, пустая Info.Model резолвится тем же ключом.
+        // До правки обе точки шли по Info.OwnerId=null → общий слот инстанса («instance-opus»).
+        var (resolver, ownerId) = BuildOwnerSlotFixture();
+
+        // Старт заморожен из личного пресета владельца (как делает SessionManager для чата
+        // проекта): хвост обязан идти тем же пресетом, а не слотом инстанса.
+        var frozen = BuildSessionWithResolver(resolver, sessionOwnerId: null, contextOwnerId: ownerId,
+            model: "owner-kimi");
+        frozen.EffectiveTurnChain.Should().Equal("owner-kimi", "owner-glm");
+
+        // Пустая Info.Model: старт резолвится по личному слоту владельца (первый шаг его
+        // пресета), а не по слоту инстанса.
+        var empty = BuildSessionWithResolver(resolver, sessionOwnerId: null, contextOwnerId: ownerId,
+            model: null);
+        empty.EffectiveTurnModel.Should().Be("owner-kimi");
+    }
+
+    [Fact]
+    public void ЧатВнеПроекта_ЦепочкаФолбэка_НеМеняется_ВладелецНаСессии()
+    {
+        // c3 (регрессия): у чата вне проекта владелец — на сессии: context.OwnerId == Info.OwnerId
+        // (обычный путь SessionManager) или контекст его не несёт вовсе (старый контракт/тесты).
+        // _turnOwnerId = context.OwnerId ?? info.OwnerId даёт тот же ключ — цепочка не меняется.
+        var (resolver, ownerId) = BuildOwnerSlotFixture();
+
+        var sameKey = BuildSessionWithResolver(resolver, sessionOwnerId: ownerId, contextOwnerId: ownerId,
+            model: "owner-kimi");
+        sameKey.EffectiveTurnChain.Should().Equal("owner-kimi", "owner-glm");
+
+        var onSession = BuildSessionWithResolver(resolver, sessionOwnerId: ownerId, contextOwnerId: null,
+            model: "owner-kimi");
+        onSession.EffectiveTurnChain.Should().Equal("owner-kimi", "owner-glm");
+
+        var emptyModel = BuildSessionWithResolver(resolver, sessionOwnerId: ownerId, contextOwnerId: null,
+            model: null);
+        emptyModel.EffectiveTurnModel.Should().Be("owner-kimi");
     }
 
     private sealed class SingleFactory(System.Net.Http.HttpMessageHandler handler) : IHttpClientFactory

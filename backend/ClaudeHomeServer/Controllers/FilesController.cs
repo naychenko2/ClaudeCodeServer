@@ -74,12 +74,21 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // приватного — тот же приём, что GetOwnedSession ниже на чужом приватном чате. Автор своего
     // private, общие вложения (.cc-attachments/{guid}/…) и любые прочие пути — как раньше; без JWT
     // (UserId null) любое private чужое — fail-closed, как сам IsForeign. Путь берётся в том виде,
-    // в котором его назвал клиент: обходы («./», «..», %2F, слеши, регистр) канонизирует IsForeign.
+    // в котором его назвал клиент: обходы («./», «..», %2F, слеши, регистр) канонизирует предикат.
     // S2d-6b-5 (дефект e5d55007, асимметрия с MCP/WebDAV): тот же гейт закрыл и пишущие ручки
     // (SaveContent/Create/mkdir/Rename/Delete/Upload/ToMarkdown-цель/Revert/SaveFromUrl) —
     // до любого эффекта: до замка пути, до CreateDirectory, до загрузки.
-    private bool IsForeignPrivate(string? path) => PrivateAttachments.IsForeign(path, UserId);
-    private IActionResult? ForeignPrivateDenied(string? path) => IsForeignPrivate(path) ? NotFound() : null;
+    // Хвост a6f5cb15: предикат канонический (IsForeignResolved) — корень нужен, чтобы
+    // разыменить символьные ссылки: симлинк «L» → .cc-attachments в корне даёт то же чужое
+    // private, что и прямой путь, и текстовый гейт о нём молчал.
+    // TAIL-ROOTS-GATE (DEC-ROOTS 5c8a4705): закрытое поддерево живёт не только в корне
+    // проекта, а в рабочем дереве чата (EffectiveRoot = WorktreePath ?? RootPath), и чужесть
+    // судится по сегменту канона, а не по префиксу относительно корня. Гейт по корню проекта
+    // остаётся первой линией всех ручек; в multi-root точках (?featureId=/?sessionId=) он
+    // повторяется по ФАКТИЧЕСКОМУ корню операции — после резолва дерева, до чтения: ссылка
+    // в читаемом дереве разыменовывается там, а не в корне проекта (defect f1c60d82).
+    private bool IsForeignPrivate(string root, string? path) => PrivateAttachments.IsForeignResolved(root, path, UserId);
+    private IActionResult? ForeignPrivateDenied(string root, string? path) => IsForeignPrivate(root, path) ? NotFound() : null;
 
     // Контейнеры закрытого поддерева — корень проекта, .cc-attachments, .cc-attachments/private
     // (IsForeign их не видит: нет сегмента-автора), — для РАЗРУШИТЕЛЬНЫХ Rename/Delete — 404,
@@ -87,9 +96,10 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // предикат, что у MCP files_rename/files-delete и WebDAV COPY/MOVE, S2d-6b-3 доработка 2).
     // Свой {id}-каталог автора и общие {guid}-каталоги — не контейнеры: с ними как раньше.
     // Читающим ручкам и листингу контейнер НЕ ставится: List(.cc-attachments) и корень —
-    // открыты (закреплено тестом S2d-6b-2 доработки 1).
-    private IActionResult? PrivateContainerDenied(string? path) =>
-        PrivateAttachments.IsPrivateContainerPath(path) ? NotFound() : null;
+    // открыты (закреплено тестом S2d-6b-2 доработки 1). Через ссылку — те же контейнеры
+    // (IsContainerResolved, a6f5cb15).
+    private IActionResult? PrivateContainerDenied(string root, string? path) =>
+        PrivateAttachments.IsContainerResolved(root, path) ? NotFound() : null;
 
     // Гейт «в вики пишет только Хранитель» (ADR-035, решение 2): Upload и SaveFromUrl пишут
     // FileStream мимо FileService, поэтому их часть проверки стоит здесь, а не в сервисе.
@@ -116,7 +126,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // читающие ручки; зритель передаётся в List: каталог чужого автора и чужие файлы ответа
             // не дают — ни имён, ни id автора, ни количества. Без JWT — пустая строка: любое private
             // закрыто (fail-closed, как IsForeign по пустому id). Свой private — как раньше.
-            if (ForeignPrivateDenied(path) is { } denied) return denied;
+            if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
             var p = GetProject(projectId);
             return Ok(Annotate(projectId, files.List(p.RootPath, path, p.ShowHiddenFiles, UserId ?? "")));
         }
@@ -136,7 +146,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // а не названный путь — прямая ссылка внутрь .cc-attachments отдаёт содержимое, поэтому
             // фильтр по записям стоит в FileService.Tree до рекурсии: чужое поддерево не съедает
             // слоты своих по TreeMaxEntries
-            if (ForeignPrivateDenied(path) is { } denied) return denied;
+            if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
             var p = GetProject(projectId);
             return Ok(Annotate(projectId, files.Tree(p.RootPath, path, showHidden ?? p.ShowHiddenFiles, UserId ?? "")));
         }
@@ -162,9 +172,10 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     {
         try
         {
-            // S2d-6b-2: чужое private-вложение — 404 до резолва дерева и до чтения (и в чужом
-            // worktree относительная форма пути та же)
-            if (ForeignPrivateDenied(path) is { } denied) return denied;
+            // S2d-6b-2: чужое private-вложение — 404 до резолва дерева и до чтения — первая
+            // линия по корню проекта; после резолва дерева гейт повторяется по фактическому
+            // корню операции (TAIL-ROOTS-GATE, см. IsForeignPrivate)
+            if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
             var p = GetProject(projectId);
             // W4-5B2 (п.5.2): ?featureId= остаётся СТРОГИМ: чтение из проверенного дерева
             // эпика по правилу TreeRootForAsync, без поиска по чужим деревьям (тест
@@ -181,6 +192,10 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             {
                 root = await FeatureTreeRootForAsync(p, featureId);
                 if (root is null) return NotFound(new { error = "Дерево не найдено" });
+                // TAIL-ROOTS-GATE (DEC-ROOTS): вторая линия — по фактическому корню операции
+                // (дерево эпика): ссылка в нём разыменовывается там, а не в корню проекта;
+                // проверка по GetRoot выше остаётся первой линией
+                if (ForeignPrivateDenied(root, path) is { } treeDenied) return treeDenied;
             }
             else if (!string.IsNullOrEmpty(sessionId))
             {
@@ -191,6 +206,9 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                 root = hit.Root;
                 branch = hit.Branch;
                 isAnchor = hit.IsAnchor;
+                // TAIL-ROOTS-GATE: то же по дереву, из которого реально читаем (EffectiveRoot
+                // чата / выбранный локатором worktree), до чтения и до ETag
+                if (ForeignPrivateDenied(root, path) is { } treeDenied) return treeDenied;
             }
             else root = p.RootPath;
 
@@ -314,7 +332,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         try
         {
             // S2d-6b-2: конвертация отдаёт содержимое документа — читающая ручка
-            if (ForeignPrivateDenied(path) is { } denied) return denied;
+            if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
             if (DocumentAbsPath(projectId, path) is not { } abs)
                 return BadRequest(new { error = "Это не документ (pdf/docx/xlsx/pptx)" });
             var md = await docAi.ConvertAsync(abs, ct);
@@ -333,7 +351,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         try
         {
             // S2d-6b-2: выжимка строится из содержимого файла — читающая ручка
-            if (ForeignPrivateDenied(path) is { } denied) return denied;
+            if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
             var text = await GetAiTextAsync(projectId, path, ct);
             if (text is null) return BadRequest(new { error = "Файл не поддерживается (нужен документ или текст)" });
             var summary = await docAi.SummaryAsync(UserId, text, ct);
@@ -350,7 +368,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         try
         {
             // S2d-6b-2: структурная выжимка строится из содержимого файла — читающая ручка
-            if (ForeignPrivateDenied(path) is { } denied) return denied;
+            if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
             var text = await GetAiTextAsync(projectId, path, ct);
             if (text is null) return BadRequest(new { error = "Файл не поддерживается (нужен документ или текст)" });
             var r = await docAi.ExtractAsync(UserId, text, ct);
@@ -376,7 +394,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         {
             // S2d-6b-2: по ИСТОЧНИКУ — конвертация отдаёт его содержимым (целевой .md — свой
             // путь и своя дверь, п.1/F-4 ниже них не меняется)
-            if (ForeignPrivateDenied(req.Path) is { } foreign) return foreign;
+            if (ForeignPrivateDenied(GetRoot(projectId), req.Path) is { } foreign) return foreign;
             var root = GetRoot(projectId);
             var abs = FileService.SafeJoinPublic(root, req.Path);
             if (!System.IO.File.Exists(abs))
@@ -391,7 +409,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                 ? (System.IO.Path.GetDirectoryName(req.Path.Replace('\\', '/')) ?? "")
                 : req.TargetDir.Replace('\\', '/').Trim('/');
             var targetRel = string.IsNullOrEmpty(dir) ? baseName : $"{dir}/{baseName}";
-            if (ForeignPrivateDenied(targetRel) is { } targetDenied) return targetDenied;
+            if (ForeignPrivateDenied(root, targetRel) is { } targetDenied) return targetDenied;
 
             var md = await docAi.ConvertAsync(abs, ct);
             if (md is null)
@@ -444,7 +462,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         try
         {
             // S2d-6b-2: теги строятся из содержимого файла — читающая ручка
-            if (ForeignPrivateDenied(path) is { } denied) return denied;
+            if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
             var text = await GetAiTextAsync(projectId, path, ct);
             if (text is null) return BadRequest(new { error = "Файл не поддерживается (нужен документ или текст)" });
             var tags = await docAi.TagsAsync(UserId, text, ct);
@@ -468,7 +486,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         {
             // S2d-6b-5 (дефект e5d55007): запись в чужое private — 404 до любого эффекта:
             // до проверки пути и до замка. Обе ветки (с If-Match и без) — за гейтом.
-            if (ForeignPrivateDenied(path) is { } denied) return denied;
+            if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
             var root = GetRoot(projectId);
             if (IsDirectoryPath(root, path)) return NotFound();
 
@@ -794,7 +812,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         try
         {
             // S2d-6b-2: дифф отдаёт содержимое файла по относительному пути — читающая ручка
-            if (ForeignPrivateDenied(path) is { } denied) return denied;
+            if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
             return Ok(new DiffResponse(await files.GetDiffAsync(GetRoot(projectId), path)));
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -841,7 +859,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         {
             // S2d-6b-5: откат чужого private — 404 до git-операции (как отказ чтения:
             // чужой файл неотличим от несуществующего)
-            if (ForeignPrivateDenied(req.Path) is { } denied) return denied;
+            if (ForeignPrivateDenied(GetRoot(projectId), req.Path) is { } denied) return denied;
             var ok = files.RevertFile(GetRoot(projectId), req.Path);
             return ok ? Ok() : BadRequest(new { error = "Не удалось откатить (не git-репозиторий?)" });
         }
@@ -858,7 +876,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         try
         {
             // S2d-6b-5: создание файла в чужом private — 404 до создания
-            if (ForeignPrivateDenied(req.Path) is { } denied) return denied;
+            if (ForeignPrivateDenied(GetRoot(projectId), req.Path) is { } denied) return denied;
             var root = GetRoot(projectId);
             files.CreateFile(root, req.Path, req.Content ?? "");
             RecordHumanEdit(projectId, root, req.Path);   // S3-3b: коллизия имени — выше, до этой строки
@@ -880,7 +898,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         // (.cc-attachments, private/) — не «чужой» и не разрушителен: mkdir над ним, как раньше
         try
         {
-            if (ForeignPrivateDenied(req.Path) is { } denied) return denied;
+            if (ForeignPrivateDenied(GetRoot(projectId), req.Path) is { } denied) return denied;
             files.CreateDirectory(GetRoot(projectId), req.Path);
             return Ok();
         }
@@ -907,10 +925,10 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // .cc-attachments/private) — 404 до замков и до любого эффекта. Контейнерный
             // предикат — тот же, что у MCP files_rename и WebDAV MOVE; владельцу тоже.
             // Свой {id}-каталог автора и общие {guid}-каталоги — не контейнеры, как раньше.
-            if (ForeignPrivateDenied(req.OldPath) is { } dOld) return dOld;
-            if (ForeignPrivateDenied(req.NewPath) is { } dNew) return dNew;
-            if (PrivateContainerDenied(req.OldPath) is { } cOld) return cOld;
-            if (PrivateContainerDenied(req.NewPath) is { } cNew) return cNew;
+            if (ForeignPrivateDenied(GetRoot(projectId), req.OldPath) is { } dOld) return dOld;
+            if (ForeignPrivateDenied(GetRoot(projectId), req.NewPath) is { } dNew) return dNew;
+            if (PrivateContainerDenied(GetRoot(projectId), req.OldPath) is { } cOld) return cOld;
+            if (PrivateContainerDenied(GetRoot(projectId), req.NewPath) is { } cNew) return cNew;
             var root = GetRoot(projectId);
             var absOld = FileService.SafeJoinPublic(root, req.OldPath);
             var absNew = FileService.SafeJoinPublic(root, req.NewPath);
@@ -995,8 +1013,8 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // .cc-attachments, .cc-attachments/private) — 404 и владельцу: удаление контейнера
             // сносит всё private-поддерево (тот же предикат, что у MCP files_delete и WebDAV).
             // Гейт — до ветки файл/папка, до замка, до files.Delete.
-            if (ForeignPrivateDenied(path) is { } denied) return denied;
-            if (PrivateContainerDenied(path) is { } container) return container;
+            if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
+            if (PrivateContainerDenied(GetRoot(projectId), path) is { } container) return container;
             var root = GetRoot(projectId);
             if (IsDirectoryPath(root, path))
                 return CallerIsProjectOwner(projectId)
@@ -1060,7 +1078,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
 
             // S2d-6b-5 (дефект e5d55007): каталог назначения под чужим private — 404 до
             // SafeJoin/CreateDirectory: отказанная загрузка не должна создавать каталог назначения
-            if (ForeignPrivateDenied(relativePath) is { } foreign) return foreign;
+            if (ForeignPrivateDenied(root, relativePath) is { } foreign) return foreign;
 
             // S2c-10 (хвост ревью R-S2c-8, карточка 1ac0075a п.1): та же дверь, что у SaveContent:
             // замок на путь, If-Match по тому же контракту, запись через временный файл. Без замка
@@ -1104,7 +1122,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         try
         {
             // S2d-6b-2: поток отдаёт содержимое файла — читающая ручка (тот же 404, что у content)
-            if (ForeignPrivateDenied(path) is { } denied) return denied;
+            if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
             string abs;
             if (!string.IsNullOrEmpty(sessionId))
             {
@@ -1113,6 +1131,10 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                 if (s is null) return NotFound(new { error = "Чат не найден" });
                 var hit = await locator.LocateAsync(TenantId, p, path, ChatTreeRootForAsync(p, s));
                 if (hit is null) return NotFound();
+                // TAIL-ROOTS-GATE (DEC-ROOTS): вторая линия — по дереву, где локатор нашёл файл:
+                // PhysicalFile отдаёт разыменованный путь, и ссылка в worktree читалась бы
+                // мимо гейта по корню проекта
+                if (ForeignPrivateDenied(hit.Root, path) is { } treeDenied) return treeDenied;
                 abs = hit.FullPath;
             }
             else
@@ -1152,7 +1174,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // S2d-6b-2: чужие private-вложения выпадают из ЗАПРОСА до локатора: в ответе нет ни их
             // имён, ни их количества (своё private автора остаётся; потолок п.50 — по присланному
             // пакету, как раньше: отказ зависит от запроса, а не от выдачи)
-            var mine = paths.Where(r => !IsForeignPrivate(r)).ToList();
+            var mine = paths.Where(r => !IsForeignPrivate(p.RootPath, r)).ToList();
             return Ok(await locator.LocateManyAsync(TenantId, p, mine, anchor, ct));
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -1173,9 +1195,10 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // S2d-6b-2: читающая ручка (отдаёт байты файла); зрителя нет JWT, а подписанный
             // office-токен выдал конкретный человек — им и меряется: чужое private — 404,
             // своё — как раньше (иначе анонимный вход глушил бы и своё, и office-config не
-            // смог бы открыть свой документ)
-            if (PrivateAttachments.IsForeign(path, ownerId)) return NotFound();
+            // смог бы открыть свой документ). Корень нужен каноническому гейту (a6f5cb15):
+            // он разыменяет ссылки, поэтому берётся до решения, а не после.
             var root = GetProjectByOfficeToken(projectId, ownerId).RootPath;
+            if (PrivateAttachments.IsForeignResolved(root, path, ownerId)) return NotFound();
             var safePath = FileService.SafeJoinPublic(root, path);
             if (!System.IO.File.Exists(safePath)) return NotFound();
             var mime = files.GetDocumentInfo(path)?.Mime ?? "application/octet-stream";
@@ -1196,7 +1219,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         {
             // S2d-6b-2: конфиг редактора называет имя, тип и время файла и выдаёт download-URL
             // с его содержимым — ручка метаданных чужого private закрыта тем же 404
-            if (ForeignPrivateDenied(path) is { } denied) return denied;
+            if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
             var root = GetRoot(projectId);
             var safePath = FileService.SafeJoinPublic(root, path);
             var modTime = System.IO.File.GetLastWriteTimeUtc(safePath).Ticks;
@@ -1364,7 +1387,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // меняет файл под чужим private» держился здесь только git-исключением .cc-attachments
             // (git не знает такого pathspec → отказ); теперь — тем же гейтом, до снятия edit-ключа
             // и до RevertFile. Своё private автора — открыто, как в Revert.
-            if (ForeignPrivateDenied(path) is { } denied) return denied;
+            if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
             var root = GetRoot(projectId);
             if (_activeEditKeys.TryRemove($"{projectId}/{path}", out var editKey))
                 _discardedKeys.TryAdd(editKey, 0);
@@ -1436,7 +1459,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         try
         {
             // S2d-6b-2: версия файла — его метаданные; чужое private не существует и здесь
-            if (ForeignPrivateDenied(path) is { } denied) return denied;
+            if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
             var root = GetRoot(projectId);
             var safePath = FileService.SafeJoinPublic(root, path);
             if (!System.IO.File.Exists(safePath))
@@ -1462,7 +1485,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
 
         // S2d-6b-5: цель под чужим private — 404 до сетевой работы и до CreateDirectory:
         // скачивать ответ ради отказанной цели не за чем
-        if (ForeignPrivateDenied(req.Path) is { } foreign) return foreign;
+        if (ForeignPrivateDenied(GetRoot(projectId), req.Path) is { } foreign) return foreign;
 
         // SSRF: не даём серверу скачивать с внутренних адресов (localhost, приватные сети,
         // cloud metadata). Клиент "safe-download" без авто-редиректов — редирект на приватный

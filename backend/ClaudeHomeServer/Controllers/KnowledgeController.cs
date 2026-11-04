@@ -112,7 +112,9 @@ public class KnowledgeController(
         // вложение (S2d-6b-1) — 404 до индексации, неотличимо от несуществующего файла — тот же
         // приём, что у читающих и пишущих ручек FilesController (S2d-6b-2/6b-5). Своё private,
         // общие вложения (.cc-attachments/{guid}/…) и обычные файлы — как раньше.
-        if (PrivateAttachments.IsForeign(req.RelativePath, UserId)) return NotFound();
+        // Гейт канонический (хвост a6f5cb15): путь через симлинк в корне проекта — тот же чужой
+        // private на диске, и индексироваться он не должен.
+        if (PrivateAttachments.IsForeignResolved(p.RootPath, req.RelativePath, UserId)) return NotFound();
 
         if (!KnowledgeService.IsKnowledgeIndexable(req.RelativePath))
             return BadRequest(new { error = $"Формат файла не поддерживается для индексирования: {Path.GetExtension(req.RelativePath)}" });
@@ -199,12 +201,14 @@ public class KnowledgeController(
         // тот же разбор, что у Rename/Delete (S2d-6b-3 доработка 2), поэтому сам .cc-attachments
         // и .cc-attachments/private — 404. Корень проекта здесь НЕ контейнер: обход TreeExcludes
         // в .cc-attachments не спускается, и индексация всего проекта — штатная цель метода,
-        // поэтому IsAttachmentsContainer (тот же предикат без корня), а не IsPrivateContainerPath.
-        if (PrivateAttachments.IsAttachmentsContainer(rel)) return NotFound();
+        // поэтому IsAttachmentsContainer без корня (IsAttachmentsContainerResolved), а не
+        // IsContainerResolved. Канонический вариант (хвост a6f5cb15): «L» → .cc-attachments и
+        // «L/private» в корне проекта — те же контейнеры на диске, и индексировать их нельзя.
+        if (PrivateAttachments.IsAttachmentsContainerResolved(p.RootPath, rel)) return NotFound();
 
         // Явно названный чужой private — 404 до обхода: неотличим от несуществующей папки/файла,
-        // тот же приём, что у ручек FilesController (S2d-6b-2/6b-5).
-        if (PrivateAttachments.IsForeign(rel, UserId)) return NotFound();
+        // тот же приём, что у ручек FilesController (S2d-6b-2/6b-5); через симлинк — та же запись.
+        if (PrivateAttachments.IsForeignResolved(p.RootPath, rel, UserId)) return NotFound();
 
         IEnumerable<FileEntry> allFiles;
         try

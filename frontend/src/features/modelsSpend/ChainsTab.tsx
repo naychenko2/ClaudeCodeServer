@@ -10,9 +10,11 @@ import { isChainStepDimmed, reloadPresetSettings,
   stepsWord, substitutionsWord, usePresets, useSubstitutionBudget } from '../../lib/presets';
 import type { LayerReducer } from '../../lib/presets';
 import { newPresetId, withNewPreset } from '../../lib/specialties';
+import { useAllProjects } from '../projects/useAllProjects';
+import { isParticipant } from '../projects/members/participantGate';
 import type { ModelOption } from '../../lib/models';
 import type { TierKey } from '../../lib/modelProvidersShared';
-import type { PresetUsageResponse, ScopedPreset, SpecialtySettingsLayer } from '../../types';
+import type { PresetUsageResponse, Project, ScopedPreset, SpecialtySettingsLayer } from '../../types';
 
 // === Четвёртая вкладка раздела «Модели и расход» (спекa B1–B3, C2, C4) ===
 // Здесь живут цепочки целиком: список, бейдж слоя, диалоги создания/переименования/
@@ -20,6 +22,19 @@ import type { PresetUsageResponse, ScopedPreset, SpecialtySettingsLayer } from '
 // isChainStepDimmed и substitutionsWord перестали быть «мёртвым кодом» — они здесь и читаются.
 
 const HARD_MAX_STEPS = 5;
+
+// TAIL-SUBST-UI-HINT (DEC-SUBST-UI, п.1): в чате общего проекта подмены считаются по
+// потолку владельца проекта. Здесь — экран настроек вне чата: свой потолок остаётся,
+// но под полем бюджета показываем одно статическое правило — только тем, кто состоит
+// хотя бы в одном общем проекте с чужим владельцем. Число лимита не выводим.
+export const OWNER_LIMIT_HINT_TEXT = 'В общих проектах других владельцев действует лимит владельца проекта';
+
+// Признак из уже загруженного списка проектов (useAllProjects), новой ручки нет:
+// участник (myRole editor/reader) — это ровно «общий проект, где владелец не я».
+// Свой проект (myRole owner) и личный (myRole отсутствует) — не признак.
+export function hasForeignOwnedProject(projects: Pick<Project, 'myRole'>[]): boolean {
+  return projects.some(p => isParticipant(p));
+}
 
 // ADR-012 снял owner/user-слои: цепочка бывает только общей, писать её может лишь админ.
 // Прежние scope-ветки звали удалённые маршруты (GET /settings/user/{id},
@@ -49,6 +64,9 @@ export function ChainsTab({ isAdmin, contextUserId, savingScope, onSaveLayer,
   void contextUserId;
   const presets = usePresets();
   const budget = useSubstitutionBudget();
+  // Подсказка о лимите владельца — по уже загруженному списку проектов (общий кэш
+  // useAllProjects, отдельного запроса здесь нет: при холодном кэше его греет он сам)
+  const showOwnerLimitHint = hasForeignOwnedProject(useAllProjects());
   const [creating, setCreating] = useState<CreateDraft | null>(null);
   // rename — редактирование имени существующей цепочки (диалог открыт)
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
@@ -138,6 +156,7 @@ export function ChainsTab({ isAdmin, contextUserId, savingScope, onSaveLayer,
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.lg, paddingBottom: SP.xl }}>
       <HeaderBlock budget={budget} canEdit={isAdmin}
+        showOwnerLimitHint={showOwnerLimitHint}
         onBudgetChange={handleBudgetChange} />
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP.sm, flexWrap: 'wrap' }}>
@@ -240,12 +259,16 @@ export function ChainsTab({ isAdmin, contextUserId, savingScope, onSaveLayer,
 }
 
 // === Подзаголовок + бюджет подмен ===
-function HeaderBlock({ budget, canEdit, onBudgetChange }: {
+// Экспортирован для теста показа подсказки (ownerLimitHint.test.ts)
+export function HeaderBlock({ budget, canEdit, showOwnerLimitHint, onBudgetChange }: {
   budget: number;
   // Бюджет подмен после ADR-012 только общий (PUT /settings/fallback/global, admin-only).
   // Не-админу показываем значение текстом: прежний ползунок звал снятый .../fallback/owner
   // и молча откатывался.
   canEdit: boolean;
+  // Статическая строка-подсказка под полем бюджета (TAIL-SUBST-UI-HINT): видна только
+  // участнику чужого общего проекта; без переключателя и без кликов.
+  showOwnerLimitHint: boolean;
   onBudgetChange: (v: number) => void;
 }) {
   const [showHint, setShowHint] = useState(false);
@@ -296,6 +319,11 @@ function HeaderBlock({ budget, canEdit, onBudgetChange }: {
         style={{ marginTop: SP.xs }}
       >
         {body}
+        {showOwnerLimitHint && (
+          <div style={{ marginTop: SP.sm, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.5 }}>
+            {OWNER_LIMIT_HINT_TEXT}
+          </div>
+        )}
         {showHint && (
           <div style={hintStyle}>
             Бюджет считает только смены поставщика. Первый шаг цепочки — базовая модель уровня, не

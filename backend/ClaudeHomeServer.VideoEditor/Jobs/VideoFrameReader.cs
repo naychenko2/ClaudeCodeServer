@@ -5,7 +5,8 @@ using ClaudeHomeServer.Services.VideoEditor.Contracts;
 namespace ClaudeHomeServer.Services.VideoEditor.Jobs;
 
 // Читает кадры сцены в байты для драйвера (драйвер диска проекта не касается). Кадр-файл — только из
-// проекта и только через ProjectLinkGuard (символическая ссылка наружу — отказ); у личной области проекта
+// проекта и только через ProjectLinkGuard.ResolveInsideAs (ссылка наружу и чужое private участника — тот же
+// отказ, что «вне проекта»: наличие не раскрываем); у личной области проекта
 // нет — отказ ДО диска. Кадр из «Картинок» (image) берётся ТОЛЬКО швом IImageFrameSource: хранилища нитей
 // картинок модуль не читает. Нет шва (редактор картинок выключен) или версии нет — frame_unavailable.
 public sealed class VideoFrameReader(IImageFrameSource? images = null, VideoEditWorkspace? workspace = null,
@@ -83,7 +84,7 @@ public sealed class VideoFrameReader(IImageFrameSource? images = null, VideoEdit
         if (scope.Project is not { } project)
             return await ReadPersonalFileAsync(ownerId, frame.Path, ct);
 
-        if (ProjectLinkGuard.ResolveInside(project.RootPath, frame.Path) is not { } full || !File.Exists(full))
+        if (ProjectLinkGuard.ResolveInsideAs(project.RootPath, frame.Path, ownerId) is not { } full || !File.Exists(full))
             return Frame.Fail($"Кадр «{frame.Path}» не найден в проекте");
         var contentType = ContentTypeOf(full);
         if (contentType is null) return Frame.Fail($"Кадр «{frame.Path}» — не png, jpg или webp");

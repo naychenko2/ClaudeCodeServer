@@ -532,6 +532,38 @@ public class SharedProjectTaskWriteRightsTests : IClassFixture<TestWebApplicatio
         Tasks.GetById(stepId)!.Verification?.Notes.Should().Be("вердикт владельца");
     }
 
+    // ── мерж фичи: дверь по вызывающему, не по проекту (пункт 2 дельта-ревью 94ef33f0) ──
+
+    [Fact]
+    public async Task РедакторНеМержитФичуАрендатора_404_МержЗадачаНеСоздана()
+    {
+        // MergeFeature ищет эпик среди задач ВЫЗЫВАЮЩЕГО (TasksController.cs:1481 →
+        // FeatureProjector.Project → TaskManager.GetByOwner, TaskManager.cs:338). Проектная
+        // задача всегда лежит под арендатором (тот же ключ, что у задачи редактора выше),
+        // поэтому редактор общего проекта не доходит ни до гарда финала, ни до записи
+        // мерж-задачи (:1587): ключ «UserId» в мерже достижим только владельцу фичи.
+        var (projectId, _) = await ArrangeAsync(Editor);
+        var epicId = await SharedEpicAsync(projectId);
+
+        var denied = await SecondClient().PostAsync($"/api/tasks/features/{epicId}/merge", null);
+        var deniedBody = await denied.Content.ReadFromJsonAsync<JsonElement>();
+
+        denied.StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "чужая фича для редактора — «нет», тот же 404 и то же тело, что у GET features/{id}");
+        deniedBody.GetProperty("error").GetString().Should().Be("Фича не найдена");
+        Tasks.GetByProject(projectId).Should().NotContain(t => t.Role == TaskRoles.Merge,
+            "отказанное действие не заводит мерж-задачу");
+
+        // Тот же вызов владельцу — не 404, а 409 «финал не принят»: редактору отказывает не
+        // состояние фичи и не состав гардов, а то, что фича не его (дверь по актору).
+        var owner = await OwnerClient().PostAsync($"/api/tasks/features/{epicId}/merge", null);
+        var ownerBody = await owner.Content.ReadFromJsonAsync<JsonElement>();
+        owner.StatusCode.Should().Be(HttpStatusCode.Conflict, $"эпик свой для владельца: {ownerBody}");
+        ownerBody.GetProperty("error").GetString().Should().Contain("Финал не принят");
+        Tasks.GetByProject(projectId).Should().NotContain(t => t.Role == TaskRoles.Merge,
+            "преждевременный мерж тоже ничего не пишет");
+    }
+
     // ── мост «чекбокс заметки → задача»: агентская дверь по актору хода (возврат ревью R-F2-D1) ──
 
     private static async Task<(string Text, bool IsError)> NotesMcpCallAsync(

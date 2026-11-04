@@ -34,6 +34,25 @@ public sealed class AudioConcatServiceTests : IDisposable
         Directory.CreateDirectory(Path.Combine(projectRoot, "sfx"));
         File.WriteAllBytes(Path.Combine(projectRoot, "sfx", "jingle.wav"), "JINGLE"u8.ToArray());
         File.WriteAllBytes(Path.Combine(_root, "secret.wav"), "SECRET"u8.ToArray());
+        // Closed-поддерево участников в корне проекта: чужое и своё (F2-P2b)
+        var foreign = Path.Combine(projectRoot, ".cc-attachments", "private", "other-user", "g1");
+        var own = Path.Combine(projectRoot, ".cc-attachments", "private", Owner, "g1");
+        Directory.CreateDirectory(foreign);
+        Directory.CreateDirectory(own);
+        File.WriteAllBytes(Path.Combine(foreign, "secret.wav"), "FOREIGN"u8.ToArray());
+        File.WriteAllBytes(Path.Combine(own, "mine.wav"), "MINE"u8.ToArray());
+        // та же раскладка в глубине дерева, не под .cc-attachments корня
+        var nested = Path.Combine(projectRoot, "nested", ".cc-attachments", "private", "other-user");
+        Directory.CreateDirectory(nested);
+        File.WriteAllBytes(Path.Combine(nested, "deep.wav"), "NESTED"u8.ToArray());
+        // ссылка на корень чужого проекта (без права создавать ссылку путь просто не существует —
+        // отказ остаётся тем же)
+        var otherRoot = Path.Combine(_root, "other-project");
+        var otherPrivate = Path.Combine(otherRoot, ".cc-attachments", "private", "other-user", "g1");
+        Directory.CreateDirectory(otherPrivate);
+        File.WriteAllBytes(Path.Combine(otherPrivate, "secret.wav"), "OTHER"u8.ToArray());
+        try { Directory.CreateSymbolicLink(Path.Combine(projectRoot, "other"), otherRoot); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         _project = new Project { Id = "p-1", RootPath = projectRoot };
         _scope = AudioEditScope.Of(_project);
     }
@@ -180,6 +199,39 @@ public sealed class AudioConcatServiceTests : IDisposable
 
         result.Error.Should().StartWith("Кусок 2:");
         _dsp.Calls.Should().Be(0);
+    }
+
+    // F2-P2b: чужое private участника не читается куском склейки — общий предикат
+    // (ProjectLinkGuard.ResolveInsideAs → PrivateAttachments.IsForeignResolved). Отказ — тот же
+    // «путь вне проекта»: наличие чужого файла не раскрываем
+    [Theory]
+    [InlineData(".cc-attachments/private/other-user/g1/secret.wav")]
+    [InlineData(".cc-attachments/PRIVATE/other-user/g1/../g1/secret.wav")]
+    [InlineData("nested/.cc-attachments/private/other-user/deep.wav")]
+    [InlineData("other/.cc-attachments/private/other-user/g1/secret.wav")]
+    public async Task Кусок_из_чужого_private_отказ_без_байтов(string file)
+    {
+        var (threadId, _) = ThreadWithVersion("A");
+        var result = await Service().ConcatAsync(Owner, _scope, new AudioConcatInput(Session,
+            [new AudioConcatPiece(threadId), new AudioConcatPiece(ProjectFile: file)]), CancellationToken.None);
+
+        result.Error.Should().Be("Кусок 2: путь вне проекта", file);
+        _dsp.Calls.Should().Be(0);
+        _store.Get(Owner, Session).Threads.Should().HaveCount(1, "отказанная склейка нить не заводит");
+    }
+
+    // Свой private и обычный файл проекта читаются как раньше
+    [Fact]
+    public async Task Кусок_из_своего_private_и_обычного_файла_читается()
+    {
+        var (threadId, _) = ThreadWithVersion("A");
+        var result = await Service().ConcatAsync(Owner, _scope, new AudioConcatInput(Session,
+            [new AudioConcatPiece(threadId),
+             new AudioConcatPiece(ProjectFile: $".cc-attachments/private/{Owner}/g1/mine.wav"),
+             new AudioConcatPiece(ProjectFile: "sfx/jingle.wav")]), CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        _dsp.Pieces.Select(System.Text.Encoding.UTF8.GetString).Should().Equal("A", "MINE", "JINGLE");
     }
 
     [Fact]

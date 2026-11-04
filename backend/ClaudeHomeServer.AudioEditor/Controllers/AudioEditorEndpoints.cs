@@ -447,12 +447,13 @@ public abstract class AudioEditorEndpoints(
 
     // ── Помощники ────────────────────────────────────────────────────────────────
 
-    // Файл проекта для входа запуска: у личной области — 400 до диска, путь — только ResolveInside
+    // Файл проекта для входа запуска: у личной области — 400 до диска, путь — только ResolveInsideAs
+    // (чужое private участника — тот же отказ, что «вне проекта»: наличие не раскрываем)
     private async Task<(byte[]? Bytes, string? Path, IActionResult? Denied)> ProjectFileAsync(
         AudioEditScope scope, string rel, CancellationToken ct)
     {
         if (scope.Project is not { } project) return (null, null, NoProjectFiles());
-        if (ProjectLinkGuard.ResolveInside(project.RootPath, rel) is not { } full || !System.IO.File.Exists(full))
+        if (ProjectLinkGuard.ResolveInsideAs(project.RootPath, rel, UserId) is not { } full || !System.IO.File.Exists(full))
             return (null, null, Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
                 "Файл не найден в проекте или путь идёт через символическую ссылку"));
         return await ReadAsync(full, ct) is { } bytes ? (bytes, full, null) : (null, null, TooLarge());

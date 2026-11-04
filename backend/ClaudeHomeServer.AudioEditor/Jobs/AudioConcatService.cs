@@ -37,7 +37,8 @@ public sealed record AudioConcatResultDto(string ThreadId, string VersionId, str
 //
 // Инварианты:
 // - в личной области файлы проекта запрещены — отказ ДО обращения к диску (как ScopeRefusal);
-// - путь проекта — только через ProjectLinkGuard.ResolveInside, путь версии — только внутри папки её задачи;
+// - путь проекта — только через ProjectLinkGuard.ResolveInsideAs (чужое private — тот же отказ),
+//   путь версии — только внутри папки её задачи;
 // - версия-результат несёт jobId (рабочая папка не чистит её по TTL) и лицензии кусков: склейка трека
 //   YuE2 остаётся CC BY-NC.
 public sealed class AudioConcatService(
@@ -146,7 +147,7 @@ public sealed class AudioConcatService(
         if (hasFile)
         {
             var file = piece.ProjectFile!.Trim();
-            return await ReadProjectAsync(scope, file, file, null, ct);
+            return await ReadProjectAsync(ownerId, scope, file, file, null, ct);
         }
 
         var thread = threads.Store.Get(ownerId, sessionId).Threads.FirstOrDefault(t => t.Id == piece.ThreadId!.Trim());
@@ -156,7 +157,7 @@ public sealed class AudioConcatService(
         var label = $"{AudioJobThreads.Name(thread)} {(version.IsOrigin ? "исходник" : $"в{version.Number}")}";
 
         // Исходник — файл проекта: те же правила, что у куска-файла
-        if (version.IsOrigin) return await ReadProjectAsync(scope, main.Path, label, version.License, ct);
+        if (version.IsOrigin) return await ReadProjectAsync(ownerId, scope, main.Path, label, version.License, ct);
         // Версия запуска и правки без ИИ (DspAudioEngine) — файл в папке своей задачи. Без jobId — только
         // старые записи до этапа 5: файла на диске у них нет
         if (version.JobId is not { } jobId) return (null, "у этой версии нет файла на сервере");
@@ -164,12 +165,13 @@ public sealed class AudioConcatService(
         return await ReadAsync(full, label, version.License, ct);
     }
 
-    // Отказ личной области — до диска: Project у неё нет, RootPath не читаем
+    // Отказ личной области — до диска: Project у неё нет, RootPath не читаем. Чужое private
+    // (.cc-attachments/private/{X}) отдаёт тот же отказ, что «путь вне проекта»: наличие не раскрываем
     private static async Task<(Piece? Piece, string? Error)> ReadProjectAsync(
-        AudioEditScope scope, string relative, string label, string? license, CancellationToken ct)
+        string ownerId, AudioEditScope scope, string relative, string label, string? license, CancellationToken ct)
     {
         if (scope.IsPersonal || scope.Project is not { } project) return (null, PersonalProjectFileText);
-        return await ReadAsync(ProjectLinkGuard.ResolveInside(project.RootPath, relative), label, license, ct);
+        return await ReadAsync(ProjectLinkGuard.ResolveInsideAs(project.RootPath, relative, ownerId), label, license, ct);
     }
 
     private static async Task<(Piece? Piece, string? Error)> ReadAsync(string? full, string label, string? license, CancellationToken ct)

@@ -26,6 +26,11 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// пути, а не на форму имени). 403 на запись — контракт WebDAV (WebDavPrivateAttachmentTests);
 /// в FilesController запись чужого private — 404 (S2d-6b-5), здесь проверяется он.
 ///
+/// TAIL-ROOTS-GATE (DEC-ROOTS 5c8a4705) добавил здесь два guard'а на новой формуле чужести
+/// (сегмент канона, а не префикс относительно корня): чужое private в worktree ПОД корнем
+/// проекта — 404 и своему автору там же — 200; легальная ссылка наружу на не-private путь —
+/// чтение и запись проходят (отвергнутый вариант «канон обязан остаться под корнем»).
+///
 /// Стенд бесхостовый (образец FilesControllerPrivateAttachmentsReadTests). Ссылка на каталог
 /// требует привилегий на Windows, поэтому тест идёт только на Linux (образец
 /// PrivateAttachmentsResolvedTests).
@@ -132,6 +137,54 @@ public sealed class FilesControllerPrivateAttachmentsSymlinkTests : IDisposable
         }).Build();
 
     // --- контракт через ссылку ---
+
+    /// <Named мутации: «IsForeignResolved судит чужость префиксом относительно корня
+    /// (прежняя формула)» краснит этот тест: файл чужого автора в worktree ПОД корнем
+    /// проекта (segments[0]="worktrees", канон не под private/ корня) читался бы 200.</Named>
+    [Fact]
+    public async Task ВложенныйWorktreeПодКорнем_ЧужоеPrivate_404_СвоёАвтору_200()
+    {
+        var (projectId, root) = Project();
+        // worktree под корнем проекта (worktreePath задач трекера): private образуется там
+        // сам, без всякой символьной ссылки — та же дыра DEC-ROOTS на поверхности REST
+        var foreign = "worktrees/x/" + PrivateOf(_authorId, "чужое.txt");
+        Write(root, foreign, "чужое во вложенном дереве");
+        var own = "worktrees/x/" + PrivateOf(_editorId, "своё.txt");
+        Write(root, own, "своё во вложенном дереве");
+
+        var c = As(_editorId, projectId);
+        (await c.GetContent(projectId, foreign)).Should().BeOfType<NotFoundResult>(
+            "чужое private на глубине ниже корня — тот же 404, что у прямого .cc-attachments/private/{автор}");
+        var ownView = (await c.GetContent(projectId, own)).Should().BeOfType<OkObjectResult>().Subject;
+        ((FileContentView)ownView.Value!).Content.Should().Be("своё во вложенном дереве",
+            "свой автор во вложенном дереве — своё: сегмент канона судится по автору, а не по глубине");
+
+        var asAuthor = As(_authorId, projectId);
+        var theirView = (await asAuthor.GetContent(projectId, foreign)).Should().BeOfType<OkObjectResult>().Subject;
+        ((FileContentView)theirView.Value!).Content.Should().Be("чужое во вложенном дереве",
+            "автор читает своё private в worktree, как и в корне проекта");
+    }
+
+    /// <Named мутации: «предикат отказывает любой канон, вышедший за opRoot (отвергнутый
+    /// вариант «канон обязан остаться под корнем»)» краснит этот тест: легальная ссылка
+    /// наружу на не-private путь — чтение и запись — отказались бы вместе с
+    /// frontend/node_modules → primary checkout из worktree-setup.sh.</Named>
+    [Fact]
+    public async Task СсылкаНаружуНаНеPrivate_ЧтениеИЗаписьПроходят()
+    {
+        if (OperatingSystem.IsWindows()) return; // ссылка на каталог требует привилегий (образец)
+        var (projectId, root) = Project();
+        var outside = Directory.CreateDirectory(Path.Combine(_dir, "outside_" + Guid.NewGuid().ToString("N")[..8])).FullName;
+        File.WriteAllText(Path.Combine(outside, "x.txt"), "внешнее содержимое");
+        Directory.CreateSymbolicLink(Path.Combine(root, "out"), outside); // тот же класс, что node_modules → checkout
+
+        var c = As(_ownerId, projectId);
+        var view = (await c.GetContent(projectId, "out/x.txt")).Should().BeOfType<OkObjectResult>().Subject;
+        ((FileContentView)view.Value!).Content.Should().Be("внешнее содержимое",
+            "ссылка наружу сама по себе — не причина отказывать: чужость судится по сегменту, а не по месту канона");
+        (await c.SaveContent(projectId, "out/x.txt", new SaveContentRequest("правка"))).Should().BeOfType<OkResult>();
+        File.ReadAllText(Path.Combine(outside, "x.txt")).Should().Be("правка", "запись через легальную ссылку дошла до цели");
+    }
 
     /// <Named мутации: «гейт FilesController текстовый (IsForeignResolved заменён на IsForeign)»
     /// краснит этот тест: чужое private через «L» читается и перечисляется, чужой каталог

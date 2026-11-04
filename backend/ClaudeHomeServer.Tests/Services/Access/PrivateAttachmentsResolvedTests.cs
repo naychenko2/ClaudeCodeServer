@@ -46,9 +46,11 @@ public sealed class PrivateAttachmentsResolvedTests : IDisposable
         try { Directory.Delete(_tempDir, recursive: true); } catch { /* временная папка */ }
     }
 
-    private void Write(string relPath, string content)
+    private void Write(string relPath, string content) => WriteAt(_root, relPath, content);
+
+    private static void WriteAt(string dir, string relPath, string content)
     {
-        var abs = Path.Combine(_root, relPath);
+        var abs = Path.Combine(dir, relPath);
         Directory.CreateDirectory(Path.GetDirectoryName(abs)!);
         File.WriteAllText(abs, content);
     }
@@ -148,6 +150,80 @@ public sealed class PrivateAttachmentsResolvedTests : IDisposable
 
         // своё имя — своё: текстовая линия не закрывает и своё private
         PrivateAttachments.IsForeignResolved(_root, $".cc-attachments/private/{Me}/x.txt", Me).Should().BeFalse();
+    }
+
+    // --- TAIL-ROOTS-GATE (DEC-ROOTS 5c8a4705): чужесть по сегменту канона, не по префиксу
+    // относительно корня. closed-поддерево живёт в рабочем дереве чата (EffectiveRoot),
+    // поэтому три формы одного чужого: вложенный worktree под корнем проекта (без всякой
+    // ссылки), ссылка из корня в worktree, ссылка внутри worktree (гейт по фактическому
+    // корню операции). Мутация «предикат судит префиксом относительно корня (прежняя
+    // формула)» краснит первые два теста: в обоих канон не под .cc-attachments/private
+    // корня, и файл читался бы. ---
+
+    /// <Named мутации: «IsForeignResolved судит чужость префиксом относительно корня
+    /// (прежняя формула)» краснит этот тест: segments[0]="worktrees", а канон не под
+    /// private/ корня — чужое private вложенного дерева читалось бы прямым именем.</Named>
+    [Fact]
+    public void ВложенныйWorktreeПодКорнем_ЧужоеPrivate_Чужое_СвоёСвоё()
+    {
+        // worktree под корнем проекта (worktreePath задач трекера): private образуется там
+        // сам, без всякой символьной ссылки (DEC-ROOTS: «новая дыра, которой нет у Дениса»)
+        Write($"worktrees/x/.cc-attachments/private/{Other}/nested.txt", "чужое во вложенном дереве");
+        PrivateAttachments.IsForeignResolved(_root, $"worktrees/x/.cc-attachments/private/{Other}/nested.txt", Me)
+            .Should().BeTrue("сегмент .cc-attachments/private/{X} на любой глубине канона — то же чужое");
+
+        // свой автор во вложенном дереве — своё: сегмент судит по автору, а не по глубине
+        Write($"worktrees/x/.cc-attachments/private/{Me}/mine.txt", "своё во вложенном дереве");
+        PrivateAttachments.IsForeignResolved(_root, $"worktrees/x/.cc-attachments/private/{Me}/mine.txt", Me)
+            .Should().BeFalse();
+
+        // обычный файл вложенного дерева — обычный путь
+        Write("worktrees/x/docs/plain.txt", "обычное во вложенном дереве");
+        PrivateAttachments.IsForeignResolved(_root, "worktrees/x/docs/plain.txt", Me).Should().BeFalse();
+    }
+
+    /// <Named мутации: «IsForeignResolved судит чужость префиксом относительно корня
+    /// (прежняя формула)» краснит этот тест: канон цели уходит за корень и не под
+    /// private/ корня — чужое через W читалось бы.</Named>
+    [Fact]
+    public void СсылкаИзКорняВWorktree_КанонЗаПределомКорня_ВсёРавноЧужое()
+    {
+        if (OperatingSystem.IsWindows()) return; // ссылка на каталог требует привилегий
+        // worktree вне корня проекта (штатное размещение: {home}/.worktrees/{slug}) +
+        // ссылка W → wt, посаженная в main: для гейта по GetRoot она «не наше дело»
+        var wt = Directory.CreateDirectory(Path.Combine(_tempDir, "wt")).FullName;
+        WriteAt(wt, $".cc-attachments/private/{Other}/x.txt", "чужое в worktree");
+        WriteAt(wt, $".cc-attachments/private/{Me}/own.txt", "своё в worktree");
+        WriteAt(wt, "docs/plain.txt", "обычное в worktree");
+        Directory.CreateSymbolicLink(Path.Combine(_root, "W"), wt);
+
+        PrivateAttachments.IsForeignResolved(_root, $"W/.cc-attachments/private/{Other}/x.txt", Me)
+            .Should().BeTrue("канон вышел за opRoot — сегмент чужого автора в нём остаётся");
+        PrivateAttachments.IsForeignResolved(_root, $"W/.cc-attachments/private/{Me}/own.txt", Me)
+            .Should().BeFalse("свой автор за пределами корня — своё: чужесть судится по X, не по месту канона");
+        PrivateAttachments.IsForeignResolved(_root, "W/docs/plain.txt", Me)
+            .Should().BeFalse("легальная ссылка наружу на не-private путь остаётся разрешённой " +
+                "(frontend/node_modules → primary checkout у worktree-setup.sh — тот же класс)");
+    }
+
+    /// <Named: вариант A — opRoot фактический корень операции: multi-root ручки FilesController
+    /// (?featureId=/?sessionId=) гейтятся по дереву, из которого читают (defect f1c60d82).
+    /// На чужом корне этот кейс не проверяем: ссылка «L» в worktree в нём не существует, и
+    /// предикат по нему молчит — именно это и есть дыра, закрытая переносом корня.</Named>
+    [Fact]
+    public void СсылкаВнутриWorktree_ГейтПоФактическомуКорню_Чужое()
+    {
+        if (OperatingSystem.IsWindows()) return; // ссылка на каталог требует привилегий
+        var wt = Directory.CreateDirectory(Path.Combine(_tempDir, "wt2")).FullName;
+        WriteAt(wt, $".cc-attachments/private/{Other}/x.txt", "чужое в worktree");
+        WriteAt(wt, $".cc-attachments/private/{Me}/own.txt", "своё в worktree");
+        Directory.CreateSymbolicLink(Path.Combine(wt, "L"), ".cc-attachments");
+
+        PrivateAttachments.IsForeignResolved(wt, $"L/private/{Other}/x.txt", Me)
+            .Should().BeTrue("ссылка внутри worktree + корень операции = worktree — то же чужое");
+        PrivateAttachments.IsForeignResolved(wt, $".cc-attachments/private/{Other}/x.txt", Me)
+            .Should().BeTrue("прямой путь в worktree — тот же исход");
+        PrivateAttachments.IsForeignResolved(wt, $"L/private/{Me}/own.txt", Me).Should().BeFalse();
     }
 
     // --- контейнеры через ссылку ---

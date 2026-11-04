@@ -121,16 +121,27 @@ public static class PrivateAttachments
 
     // ─────────────────────────────────────────────────────────────────────────
     // Канонический (по РАЗЫМЕНОВАННОМУ пути) гейт того же поддерева — для точек,
-    // которые действуют на диске (дефект a6f5cb15, ревью R-QA-W1 03.11).
+    // которые действуют на диске (дефект a6f5cb15, ревью R-QA-W1 03.11; формула чужести —
+    // DEC-ROOTS 5c8a4705 + DEC-TAIL п.1 c83ff66d, 04.11).
     // IsForeign/IsPrivateContainerPath/IsAttachmentsContainer выше судят по СТРОКОВЫМ
     // сегментам: они держат обходы («..», «./», %2F, слеши, регистр) без обращения к диску,
     // но символьные ссылки не разыменовывают. Операция же идёт по разыменованному пути
     // (ядро разыменовывает компонент-ссылку на любом syscall): симлинк «L» → .cc-attachments
     // в корне проекта делает «L/private/{other}/…» тем же чужым private, и текстовый гейт о
     // нём молчит — чужое читается, пишется, переносится и сносится через ссылку.
-    // Здесь — сравнение канонических форм по образцу WikiPaths.IsWikiPath: путь и сами
-    // контейнеры канонизируются одним обходом SafePath.Canonical — иначе «L/private» и
-    // настоящий .cc-attachments/private описывают разные деревья (MAJOR 2 ревью S1a).
+    // ЧУЖЕСТЬ (DEC-ROOTS): сегмент .cc-attachments/private/{X} на ЛЮБОЙ глубине канонического
+    // АБСОЛЮТНОГО пути цели, X ≠ актор — а не префикс относительно корня. Канон при этом
+    // вправе выйти за opRoot: closed-поддерево живёт не только в корне проекта, а в рабочем
+    // дереве чата (EffectiveRoot = WorktreePath ?? RootPath, SessionManager.GetChatRoot), и
+    // ссылка из корня в worktree (W → wt), ссылка внутри worktree и вложенный worktree под
+    // корнем проекта (worktrees/x/.cc-attachments/private/…, без всякой ссылки) — то же
+    // чужое private. opRoot нужен только для SafeJoin и канонизации, а не для того, чтобы
+    // назначить «правильный» private. Легальные ссылки наружу на не-private путь
+    // (frontend/node_modules → primary checkout у worktree-setup.sh) такого сегмента не
+    // содержат и остаются разрешены: вариант «канон обязан остаться под opRoot» отклонён —
+    // он отказал бы им всем. Ложное срабатывание возможно только на пользовательском
+    // каталоге с буквальным .cc-attachments/private внутри дерева — риск принят: это
+    // служебное имя продукта.
     // Путь сначала проходит SafePath.Join — ровно так же, как его пропустит сама операция
     // (FileService открывает уже свёрнутый по «..» путь). Но это равенство предиката и
     // операции, а не «свёртка ничего не меняет»: «..» сворачивается текстово ДО
@@ -143,16 +154,29 @@ public static class PrivateAttachments
     // здесь разные пути. За пределами корня — false: там вызывающий отдаёт свой отказ раньше
     // (SafeJoin), как и в текстовой ветке. Canonical == null (цикл ссылок, превышен бюджет)
     // — true: предикат fail-closed, как IsWikiPath — отказ возможной операции безопаснее
-    // действия по неразрешённому пути. Регистр — по правилам ФС хоста (SafePath.ComparisonFor),
-    // как у канонических проверок MOVE.
+    // действия по неразрешённому пути. Регистр автора — по правилам ФС хоста
+    // (SafePath.ComparisonFor), как у канонических проверок MOVE.
     // Вызывающим, которые открывают файл (WebDAV, FilesController, MCP, Knowledge), нужен
     // этот вариант; текстовый остаётся там, где пути не идут на диск (перенос раскладки,
     // фильтр обхода FileService по относительным путям).
+    // Границы, принятые намеренно и этим предикатом НЕ закрытые (DEC-ROOTS «D», зафиксировано
+    // в docs/research/shared-projects-cut-2026-10.md §И.2; guard-тесты —
+    // PrivateAttachmentsResolvedTests):
+    // D.1 — hardlink файла из private под другим именем не ловит ни один предикат: суд идёт
+    //     по пути, а не по inode; закрыть можно только на уровне ФС (права или отдельный
+    //     mount), в эту волну не входит.
+    // D.2 — записи и чтения агента (Bash/Write/Read) идут в его cwd = EffectiveRoot и
+    //     предикат продукта не проходят: private — граница API и UI продукта, а не ФС для
+    //     агента. Настоящее закрытие требует изоляции ФС — отдельная фича (карточка
+    //     бэклога 66407b5f, с ADR-заметкой).
 
     /// <summary>
-    /// Чужое ли это приватное вложение по разыменованному пути: каноническая форма пути лежит
-    /// под каноническим .cc-attachments/private/ и первый сегмент под ним — не userId. Сам
-    /// контейнер private/ — не «чужой автор»: его решает <see cref="IsContainerResolved"/>.
+    /// Чужое ли это приватное вложение по разыменованному пути: канонический абсолютный путь
+    /// цели содержит сегмент <c>.cc-attachments/private/{X}</c> на любой глубине и X ≠ userId
+    /// (DEC-ROOTS 5c8a4705; opRoot — фактический корень операции, нужен для SafeJoin и
+    /// канонизации, а не для выбора «правильного» private: канон вправе уйти за opRoot —
+    /// ссылка в worktree, ссылка из корня в worktree, вложенный worktree). Сам контейнер
+    /// private/ — не «чужой автор»: его решает <see cref="IsContainerResolved"/>.
     /// Пустой userId — «своего» нет: любое приватное чужое (fail-closed, как <see cref="IsForeign"/>).
     /// Неразрешимый путь (цикл ссылок) — true: тот же fail-closed, что у IsWikiPath.
     /// Чужой по СТРОКЕ путь (<see cref="IsForeign"/>) — true и когда он разрешается наружу:
@@ -160,24 +184,42 @@ public static class PrivateAttachments
     /// (инвариант «closed-поддерево отказано по любому имени», ревью 6db670ff; ручная ссылка
     /// .cc-attachments/private/{other} на каталог вне поддерева не обходит гейт). На путях без
     /// ссылок и с обходами («..») вторая линия ничего не добавляет: Normalize сворачивает «..»
-    /// так же, как SafeJoin (тест «ОбходыЧерезСсылку» — те же исходы).
+    /// так же, как SafeJoin (тест «ОбходыЧерезСсылку» — те же исходы). За пределами opRoot
+    /// (SafeJoin бросает) — false: тот же порядок, что у текстовой ветки, свой отказ отдаёт
+    /// вызывающий. Легальная ссылка наружу на не-private путь остаётся не-чужой (guard-тест
+    /// «СсылкаНаружу…» и «СсылкаИзКорняВWorktree…»: отказ по сегменту, а не по месту канона).
     /// </summary>
-    public static bool IsForeignResolved(string root, string? relPath, string? userId)
+    public static bool IsForeignResolved(string opRoot, string? relPath, string? userId)
     {
-        // Текстовый гейт — второй линией, ДО канонического (ревью 6db670ff, п.2): чужесть
+        // Текстовый гейт — первой линией, ДО канонического (ревью 6db670ff, п.2): чужесть
         // судится и по имени, не только по разыменованному пути
         if (IsForeign(relPath, userId)) return true;
-        var (inRoot, target) = CanonicalWithinRoot(root, relPath);
-        if (!inRoot) return false;
+        string abs;
+        try { abs = SafePath.Join(opRoot, relPath ?? ""); }
+        catch (UnauthorizedAccessException) { return false; } // за пределами корня — свой отказ вызывающего
+        var target = CanonicalOf(abs);
         if (target is null) return true; // неразрешимый путь: fail-closed
-        var privateDir = CanonicalOf(Path.Combine(root, TreeExcludes.AttachmentsDir, PrivateRoot));
-        if (privateDir is null) return true; // сам контейнер неразрешим — тот же fail-closed
+        return HasForeignPrivateSegment(target, userId);
+    }
+
+    // Чужесть по СЕГМЕНТУ канона (DEC-ROOTS): .cc-attachments/private/{X} на любой глубине
+    // абсолютного канонического пути, независимо от того, под каким корнем цель оказалась
+    // после разыменования. Имена служебных каталогов — регистронезависимо (тот же приём, что
+    // у текстовой линии и у TreeExcludes); автор — по правилам ФС хоста (SafePath.ComparisonFor),
+    // как у канонических проверок MOVE. Сам контейнер (.cc-attachments, .cc-attachments/private)
+    // автора не несёт — не чужой: его решает IsContainerResolved.
+    private static bool HasForeignPrivateSegment(string canonical, string? userId)
+    {
         var comparison = SafePath.ComparisonFor(OperatingSystem.IsWindows());
-        if (!target.StartsWith(privateDir + "/", comparison)) return false; // не под closed-поддеревом
-        var author = target[(privateDir.Length + 1)..].Split('/')[0];
-        if (author.Length == 0) return false; // сам private/ — контейнер, не автор
-        if (string.IsNullOrEmpty(userId)) return true;
-        return !author.Equals(userId, comparison);
+        var segments = canonical.Split('/');
+        for (var i = 0; i + 2 < segments.Length; i++)
+        {
+            if (!string.Equals(segments[i], TreeExcludes.AttachmentsDir, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!string.Equals(segments[i + 1], PrivateRoot, StringComparison.OrdinalIgnoreCase)) continue;
+            if (string.IsNullOrEmpty(userId)) return true; // «своего» нет: любое приватное чужое
+            if (!segments[i + 2].Equals(userId, comparison)) return true;
+        }
+        return false;
     }
 
     /// <summary>
@@ -220,9 +262,10 @@ public static class PrivateAttachments
         yield return Path.Combine(root, TreeExcludes.AttachmentsDir, PrivateRoot);
     }
 
-    // Путь запроса → каноническая форма внутри корня проекта. Отметка inRoot=false — путь за
-    // пределами корня: его отклоняет SafeJoin у вызывающего, здесь он ни чужой, ни контейнер
-    // (тот же порядок, что у текстовой ветки). Canonical=null при inRoot=true — путь неразрешим
+    // Путь запроса → каноническая форма внутри корня проекта (только для контейнерных
+    // предикатов ниже; чужесть судится по сегменту канона, см. IsForeignResolved). Отметка
+    // inRoot=false — путь за пределами корня: его отклоняет SafeJoin у вызывающего, здесь
+    // он не контейнер (тот же порядок, что у текстовой ветки). Canonical=null при inRoot=true — путь неразрешим
     // (цикл ссылок, превышен бюджет): вызывающие трактают это fail-closed. Форма — с «/», без
     // завершающего разделителя: «L» и «L/» — одна цель (сравнение идёт по равенству и префиксу).
     private static (bool InRoot, string? Canonical) CanonicalWithinRoot(string root, string? relPath)

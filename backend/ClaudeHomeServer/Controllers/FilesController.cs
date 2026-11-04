@@ -78,11 +78,15 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // S2d-6b-5 (дефект e5d55007, асимметрия с MCP/WebDAV): тот же гейт закрыл и пишущие ручки
     // (SaveContent/Create/mkdir/Rename/Delete/Upload/ToMarkdown-цель/Revert/SaveFromUrl) —
     // до любого эффекта: до замка пути, до CreateDirectory, до загрузки.
-    // Хвост a6f5cb15: предикат канонический (IsForeignResolved) — корень проекта нужен, чтобы
+    // Хвост a6f5cb15: предикат канонический (IsForeignResolved) — корень нужен, чтобы
     // разыменить символьные ссылки: симлинк «L» → .cc-attachments в корне даёт то же чужое
-    // private, что и прямой путь, и текстовый гейт о нём молчал. Ручки, которые читают файл из
-    // чужого worktree (?featureId/?sessionId), гейтятся по корню проекта: закрытое поддерево
-    // живёт в нём, а относительная форма пути в worktree та же (как и было).
+    // private, что и прямой путь, и текстовый гейт о нём молчал.
+    // TAIL-ROOTS-GATE (DEC-ROOTS 5c8a4705): закрытое поддерево живёт не только в корне
+    // проекта, а в рабочем дереве чата (EffectiveRoot = WorktreePath ?? RootPath), и чужесть
+    // судится по сегменту канона, а не по префиксу относительно корня. Гейт по корню проекта
+    // остаётся первой линией всех ручек; в multi-root точках (?featureId=/?sessionId=) он
+    // повторяется по ФАКТИЧЕСКОМУ корню операции — после резолва дерева, до чтения: ссылка
+    // в читаемом дереве разыменовывается там, а не в корне проекта (defect f1c60d82).
     private bool IsForeignPrivate(string root, string? path) => PrivateAttachments.IsForeignResolved(root, path, UserId);
     private IActionResult? ForeignPrivateDenied(string root, string? path) => IsForeignPrivate(root, path) ? NotFound() : null;
 
@@ -168,8 +172,9 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     {
         try
         {
-            // S2d-6b-2: чужое private-вложение — 404 до резолва дерева и до чтения (и в чужом
-            // worktree относительная форма пути та же)
+            // S2d-6b-2: чужое private-вложение — 404 до резолва дерева и до чтения — первая
+            // линия по корню проекта; после резолва дерева гейт повторяется по фактическому
+            // корню операции (TAIL-ROOTS-GATE, см. IsForeignPrivate)
             if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
             var p = GetProject(projectId);
             // W4-5B2 (п.5.2): ?featureId= остаётся СТРОГИМ: чтение из проверенного дерева
@@ -187,6 +192,10 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             {
                 root = await FeatureTreeRootForAsync(p, featureId);
                 if (root is null) return NotFound(new { error = "Дерево не найдено" });
+                // TAIL-ROOTS-GATE (DEC-ROOTS): вторая линия — по фактическому корню операции
+                // (дерево эпика): ссылка в нём разыменовывается там, а не в корню проекта;
+                // проверка по GetRoot выше остаётся первой линией
+                if (ForeignPrivateDenied(root, path) is { } treeDenied) return treeDenied;
             }
             else if (!string.IsNullOrEmpty(sessionId))
             {
@@ -197,6 +206,9 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                 root = hit.Root;
                 branch = hit.Branch;
                 isAnchor = hit.IsAnchor;
+                // TAIL-ROOTS-GATE: то же по дереву, из которого реально читаем (EffectiveRoot
+                // чата / выбранный локатором worktree), до чтения и до ETag
+                if (ForeignPrivateDenied(root, path) is { } treeDenied) return treeDenied;
             }
             else root = p.RootPath;
 
@@ -1119,6 +1131,10 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                 if (s is null) return NotFound(new { error = "Чат не найден" });
                 var hit = await locator.LocateAsync(TenantId, p, path, ChatTreeRootForAsync(p, s));
                 if (hit is null) return NotFound();
+                // TAIL-ROOTS-GATE (DEC-ROOTS): вторая линия — по дереву, где локатор нашёл файл:
+                // PhysicalFile отдаёт разыменованный путь, и ссылка в worktree читалась бы
+                // мимо гейта по корню проекта
+                if (ForeignPrivateDenied(hit.Root, path) is { } treeDenied) return treeDenied;
                 abs = hit.FullPath;
             }
             else

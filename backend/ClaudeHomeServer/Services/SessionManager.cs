@@ -7586,9 +7586,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // возврат glm-чата к «По умолчанию» (при назначении на glm) выглядел бы как переезд
             // на claude и упирался бы в guard, а переход claude-чата на «По умолчанию» с чужой
             // моделью, наоборот, проскакивал бы мимо guard и ломал транскрипт.
+            // Ключ владельца — тот, от чьего имени идёт правка (тот же, что проверяет
+            // MigrateProviderAsync), а не entry.Info.OwnerId: у проектной сессии он пуст по
+            // контракту (Models/Session.cs:382), и резолв уходил на общий слот инстанса, тогда
+            // как следующий ход резолвит модель по владельцу хода (LlmSessionContext.OwnerId —
+            // владелец проекта, SessionManager.cs:7242). Разъезд концов и есть ложная миграция:
+            // «По умолчанию» в чате проекта выглядело бы переездом на claude.
             var usageKey = UsageKeyFor(entry.Info.TaskExecution, entry.Info.TaskId, entry.Info.PersonaId);
-            var effectiveNew = _assignments.Resolve(usageKey, newModel, entry.Info.OwnerId);
-            var effectiveCur = _assignments.Resolve(usageKey, entry.Info.Model, entry.Info.OwnerId);
+            var effectiveNew = _assignments.Resolve(usageKey, newModel, ownerId);
+            var effectiveCur = _assignments.Resolve(usageKey, entry.Info.Model, ownerId);
 
             // Смена провайдера: контекст сессии живёт у провайдера (транскрипт эндпоинта),
             // и «переехавшая» сессия молча потеряла бы его. Прежний запрет «нельзя у начатой

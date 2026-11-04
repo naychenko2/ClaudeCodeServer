@@ -36,8 +36,14 @@ public static class TreeExcludes
     // (`.omc/state/sessions`, `session-end-jobs/runs`) и на этом репозитории к 2026-09-27
     // съело 426 из 1013 слежек. В дереве файлов `.omc` по умолчанию и так скрыт, поэтому в
     // Names его нет, а правки на каждый вызов инструмента гнали бы filesChanged впустую.
+    // Сверх Names — `data-qa`: рабочие данные QA-стенда (свой DataPath, `.gitignore:173`),
+    // 1520 каталогов в этом worktree к 04.11 — 2260 слежек при бюджете 1000. Их правки —
+    // состояние стенда, а не проект человека: в events они не нужны вовсе.
+    // Имя точное, а не признак `data-*`: настоящий `data/` продукта наблюдаться должен, а под
+    // любой префиксный признак он попал бы. Новый стенд с другим именем каталога добавляется
+    // сюда так же явно — молчаливое «похоже на служебное» здесь стоит наблюдения за данными.
     public static readonly HashSet<string> WatchNames =
-        new([.. Names, ".omc"], StringComparer.OrdinalIgnoreCase);
+        new([.. Names, ".omc", "data-qa"], StringComparer.OrdinalIgnoreCase);
 
     public static bool WatchContains(string name) => WatchNames.Contains(name);
 

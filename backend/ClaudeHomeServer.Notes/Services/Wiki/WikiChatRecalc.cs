@@ -19,7 +19,9 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // Приватные чаты (PrivateToUserId, FIN3-3) в пересчёт не входят: тот же инвариант, что у
 // очереди ночи (BuildQueue) и разбора (AnalyzeAsync) — машинный потребитель не читает их
 // вовсе. Их балл/зона/причина не пишутся в стор и не попадают в counts ответа: данные о
-// чужих чатах не оседают в сторе разбора владельца.
+// чужих чатах не оседают в сторе разбора владельца. Старые записи приватных чатов — те,
+// что попали в стор до правила приватности, — вычищаются в конце успешного пересчёта:
+// несчитаемые данные не должны оставаться и в самом файле (хвост R-WIKI-PRIV, п.3).
 public sealed class WikiChatRecalc
 {
     private readonly ISessionDirectory _sessions;
@@ -54,7 +56,9 @@ public sealed class WikiChatRecalc
     /// машинный потребитель их не читает). Результат — в стор по каждому чату. Отказ стора
     /// (нечитаемый файл или сбой записи посреди цикла) — RecalcResult с кодом и причиной:
     /// уже записанные чаты на диске остаются (запись шла по одному чату под блоком корня),
-    /// цикл на отказе останавливается. Исключения наружу нет.</summary>
+    /// цикл на отказе останавливается. Успешный пересчёт дополнительно вычищает из стора
+    /// старые записи приватных чатов этого владельца (попавшие в него до правила
+    /// приватности, хвост R-WIKI-PRIV п.3). Исключения наружу нет.</summary>
     public async Task<RecalcResult> RecalculateAsync(string ownerId)
     {
         var root = WikiPaths.Root(_dataDir, ownerId);
@@ -70,8 +74,10 @@ public sealed class WikiChatRecalc
         int counted = 0;
         // Приватный чат (FIN3-3) отсекается здесь — до чтения истории и до записи в стор:
         // тот же фильтр, что у BuildQueue (WikiNightlyService) и AnalyzeAsync (WikiChatIngestService).
-        foreach (var session in _sessions.GetAll().Where(s =>
-                   _sessions.ResolveOwnerId(s) == ownerId && s.PrivateToUserId is null))
+        var mine = _sessions.GetAll().Where(s => _sessions.ResolveOwnerId(s) == ownerId).ToList();
+        var privateIds = mine.Where(s => s.PrivateToUserId is not null)
+            .Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
+        foreach (var session in mine.Where(s => s.PrivateToUserId is null))
         {
             var history = await _sessions.GetHistoryAsync(session.Id);
             var res = WikiChatScorer.Score(new WikiChatScorer.WikiChatInput(
@@ -89,6 +95,19 @@ public sealed class WikiChatRecalc
                 return new RecalcResult(false, up.Code, up.Reason, 0, counts);
             counts[res.Zone] = counts.TryGetValue(res.Zone, out var c) ? c + 1 : 1;
             counted++;
+        }
+
+        // Хвост R-WIKI-PRIV (п.3): записи приватных чатов этого владельца, попавшие в стор до
+        // правила приватности, вычищаются после успешного цикла — их не читает ни один
+        // потребитель (List, BuildQueue), и в файле им не место. Касается только приватных
+        // чатов этого владельца: обычные записи (и записи исчезнувших чатов) не трогаются.
+        // Отказ удаления — тот же, что у отказа записи: уже посчитанные чаты остаются на диске.
+        foreach (var e in read.Entries)
+        {
+            if (!privateIds.Contains(e.SessionId)) continue;
+            var rm = WikiChatTriageStore.Remove(root, e.SessionId, _log);
+            if (!rm.Ok)
+                return new RecalcResult(false, rm.Code, rm.Reason, counted, counts);
         }
         return new RecalcResult(true, null, null, counted, counts);
     }

@@ -263,6 +263,38 @@ public static class WikiChatTriageStore
         });
     }
 
+    /// <summary>Удалить запись чата (чистка стора пересчётом, хвост R-WIKI-PRIV п.3): записи
+    /// приватных чатов, попавшие в стор до правила приватности, не читаются ни одним
+    /// потребителем (List, BuildQueue) и не должны оставаться в файле. Тот же цикл под блоком
+    /// корня и тот же fail-closed, что у правок: нечитаемый файл — CodeInvalid, файл на диске
+    /// не трогается. Записи нет — удалять нечего: Ok без записи, файл не переписывается.</summary>
+    public static WikiTriageOpResult Remove(string root, string sessionId, ILogger? log = null)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+            return Fail(CodeShape, "у записи нет sessionId — ключа чата");
+
+        return WithRootLock<WikiTriageOpResult>(root, () =>
+        {
+            var (state, nodes, entries) = ReadAll(root);
+            if (state == WikiTriageFileState.Invalid)
+            {
+                log?.LogWarning("Стор разбора чатов нечитаем, удаление невозможно: {Path}", TriageRelPath);
+                return Fail(CodeInvalid, "файл разбора чатов не читается — удаление из него невозможно");
+            }
+
+            var idx = nodes.FindIndex(n => KeyOf(n) == sessionId);
+            if (idx < 0)
+                return Ok(null);
+
+            // Записи соответствуют узлам (тот же порядок ParseEntries): удаляется узел целиком
+            // со всеми его полями — и разбора, и балла: данные чужого чата не остаются в файле.
+            var removed = entries[idx];
+            nodes.RemoveAt(idx);
+            WikiFileWriter.Write(root, TriageRelPath, JsonSerializer.Serialize(nodes, JsonOpts));
+            return Ok(removed);
+        });
+    }
+
     // Чтение и проверка файла: состояния три, но «файла нет» здесь — то же поведение для
     // вызывающего, что пустой список (до первого разбора), поэтому Valid без отдельного
     // Missing: у стора нет операции, зависящей от различия «пустого» и «ещё не созданного».
@@ -422,7 +454,8 @@ public static class WikiChatTriageStore
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return null; }
     }
 
-    private static WikiTriageOpResult Ok(WikiChatTriageEntry entry) => new(true, "", null, entry);
+    // Entry nullable: Remove возвращает Ok без записи, когда удалять нечего (файл не тронут).
+    private static WikiTriageOpResult Ok(WikiChatTriageEntry? entry) => new(true, "", null, entry);
     private static WikiTriageOpResult Fail(string code, string reason) => new(false, code, reason, null);
 }
 

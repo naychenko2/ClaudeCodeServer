@@ -571,15 +571,25 @@ public class NotesToolsetWikiTests : IDisposable
         AddChat("c-participant-private", "p1", privateTo: Participant);
         AddChat("c-owner-private", "p1", privateTo: User);
 
+        // Старые записи приватных чатов в сторе — попавшие туда до правила приватности
+        // (хвост R-WIKI-PRIV, п.3): их не читает ни один потребитель, и пересчёт обязан их
+        // вычистить. Без этой части теста проверка ниже тривиальна: стор был бы пуст.
+        WikiChatTriageStore.Upsert(Root, new WikiChatTriageEntry("c-participant-private", 3, null, null, null, 0, default))
+            .Ok.Should().BeTrue("старая запись приватного чата обязана быть поставлена");
+        WikiChatTriageStore.Upsert(Root, new WikiChatTriageEntry("c-owner-private", 1, null, null, null, 0, default))
+            .Ok.Should().BeTrue("старая запись приватного чата обязана быть поставлена");
+
         var res = await new WikiChatRecalc(_sessions, _config).RecalculateAsync(User);
 
-        res.Ok.Should().BeTrue(res.Reason ?? "стор пуст — пересчёт валиден");
+        res.Ok.Should().BeTrue(res.Reason ?? "пересчёт валиден");
         // Мутация «убрать фильтр PrivateToUserId из цикла пересчёта»: Counted и сумма counts
         // краснеют (3 вместо 1), а в сторе появляются записи приватных чатов.
         res.Counted.Should().Be(1, "приватные чаты не пересчитываются");
         res.Counts.Values.Sum().Should().Be(1, "приватные чаты не попадают в counts ответа");
 
-        // Данные о чужих чатах не оседают в сторе разбора владельца: запись одна — обычная.
+        // Данные о чужих чатах не оседают в сторе разбора владельца: ни новых записей, ни
+        // старых — запись одна, обычная. Мутация «убрать чистку приватных записей из
+        // пересчёта» (WikiChatRecalc): Equal краснеет — две старые записи останутся в файле.
         var store = WikiChatTriageStore.Get(Root);
         store.State.Should().Be(WikiTriageFileState.Valid);
         store.Entries.Select(e => e.SessionId).Should().Equal("c-open");

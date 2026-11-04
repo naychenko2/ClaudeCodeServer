@@ -32,7 +32,7 @@ public class TurnAutoResumeServiceTests
         public readonly TaskCompletionSource MarkersTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int TakeCalls;
         public List<string> Ids = [];
-        public Func<string, bool> FlagOn = _ => true;
+        public Func<string, bool> OwnerResolves = _ => true;
         public Func<string, Task<TurnResumeSendResult>>? OnResume;
         // Id'ы, для которых ResumeAsync возвращает Sent=false (ветка отказа: битый
         // транскрипт / Waiting-статус отбиты Eligibility'ем) — раньше не была покрыта.
@@ -52,7 +52,7 @@ public class TurnAutoResumeServiceTests
         // Владелец резолвится как в боевом адаптере (ResolveOwnerId): у проектной сессии
         // OwnerId пустой — владелец из проекта. Тесты дают OwnerId напрямую, поэтому здесь
         // резолв тривиальный; регресс-тест причины 2 подменяет GetSession на проектный чат.
-        public bool HasResolvableOwner(Session session) => FlagOn(session.OwnerId ?? "");
+        public bool HasResolvableOwner(Session session) => OwnerResolves(session.OwnerId ?? "");
         public bool IsDeviceOnline(Project project) => true;
         public bool LastTurnWasDeployOrRollback(Session session, Project? project) => false;
         public int DrainRestoredCalls;
@@ -116,13 +116,13 @@ public class TurnAutoResumeServiceTests
     }
 
     [Fact]
-    public async Task ФлагВыключен_ОтправокНет()
+    public async Task ВладелецНеРезолвится_ОтправокНет()
     {
         var (svc, host, life, events) = Make(ids: 3);
-        host.FlagOn = _ => false;
+        host.OwnerResolves = _ => false;
         await RunToEndAsync(svc, life);
 
-        events.Should().NotContain(e => e.StartsWith("send:"), "флаг владельца выключен — возобновлять нельзя");
+        events.Should().NotContain(e => e.StartsWith("send:"), "владелец не резолвится — возобновлять нельзя");
     }
 
     // Регресс (ADR-033, причина 2): у проектной сессии OwnerId пустой — владелец берётся
@@ -130,16 +130,16 @@ public class TurnAutoResumeServiceTests
     // резолв владельца в боевом адаптере покрыт SessionManagerTurnResumeHostTests (мутация
     // «session.OwnerId вместо ResolveOwnerId(session)» краснит их, а не этот тест).
     [Fact]
-    public async Task ПроектныйЧат_СПустымOwnerId_ФлагВладельцаПроектаВключён_Возобновляется()
+    public async Task ПроектныйЧат_СПустымOwnerId_ВладелецПроектаРезолвится_Возобновляется()
     {
         var (svc, host, life, events) = Make(ids: 1);
-        // Проектный чат: OwnerId = null, владелец резолвится из проекта (флаг у него включён).
+        // Проектный чат: OwnerId = null, владелец резолвится из проекта.
         host.SessionFactory = id => new Session { Id = id, OwnerId = null, ProjectId = "proj-1" };
-        host.FlagOn = _ => true; // флаг включён у резолвлённого владельца
+        host.OwnerResolves = _ => true; // владелец резолвится
         await RunToEndAsync(svc, life);
 
         events.Should().Contain("send:s1",
-            "проектный чат с пустым OwnerId возобновляется: владелец резолвится из проекта, флаг у него включён");
+            "проектный чат с пустым OwnerId возобновляется: владелец резолвится из проекта");
     }
 
     [Fact]

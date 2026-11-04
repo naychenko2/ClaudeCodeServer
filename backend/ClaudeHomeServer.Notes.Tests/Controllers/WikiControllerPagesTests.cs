@@ -17,7 +17,7 @@ using Microsoft.AspNetCore.Mvc.Infrastructure;
 namespace ClaudeHomeServer.Tests.Controllers;
 
 // B3b (ADR-038): REST правки страницы человеком — POST /api/wiki/pages/edit и /restore.
-// Контракт: svc-токен — 403 до всего; любой из двух флагов выключен — 409 wiki_unified_off;
+// Контракт: svc-токен — 403 до всего; флаг `llm-wiki` выключен — 409 wiki_unified_off;
 // baseHash сверяется под замком раздела (гонка двух сохранений: один 200, один 409
 // wiki_page_changed со свежей страницей); журнал — op edit|restore, actor user; «Вернуть мою»
 // ссылается на исходную карточку и новой не создаёт. Контроллеры строятся напрямую

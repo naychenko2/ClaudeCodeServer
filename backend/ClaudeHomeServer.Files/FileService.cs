@@ -311,28 +311,120 @@ public class FileService(
     /// пути — без изменений. Без id зрителя (машинный шов ProjectFiles: актора в контракте
     /// IProjectFiles нет) — fail-closed, всё private закрыто, как IsForeign по пустому userId;
     /// чтение вложений агентом — шаг 6b-3.
+    /// TAIL-SEARCH-PRIV (хвост ревью 11256e5f): обход — тот же, что у List/Tree: closedPrefix
+    /// на переходе по ссылке (ClosedPrefixOf/ClosedPrefixFor, дефект d07d7054, две линии по
+    /// 180efbfef), текстовый фильтр по относительному пути остаётся первой линией. Чужое
+    /// private, достигнутое ссылкой внутри корня («L» → .cc-attachments), судится по канону,
+    /// а не по имени «L»: текстовый фильтр один его не видел. Явный обход вместо
+    /// EnumerateFiles(AllDirectories): тот не знает, где перешёл по ссылке. В отличие от дерева,
+    /// поиск спускается в скрытые каталоги и в .cc-attachments: общие вложения и своё private
+    /// поиск находит по имени — фильтр по записям, не по стартовому каталогу. Циклы ссылок —
+    /// как у прежнего обхода: в уже открытый по текущему спуску каталог не идём (засечка по
+    /// канону цели — тому же, что ClosedPrefixFor использует для префикса, без второго
+    /// разыменования).
     /// </summary>
     public IEnumerable<FileEntry> Search(string rootPath, string query, string? viewerUserId = null)
     {
         var (modified, newFiles) = GetGitStatus(rootPath);
-        return Directory.EnumerateFiles(rootPath, "*", SearchOption.AllDirectories)
-            .Where(f => Path.GetFileName(f).Contains(query, StringComparison.OrdinalIgnoreCase))
-            .Where(f => !PrivateAttachments.IsForeign(
-                Path.GetRelativePath(rootPath, f).Replace('\\', '/'), viewerUserId))
-            .Take(100)
-            .Select(f =>
+
+        // Тот же канонический старт и closedRoot, что у List/Tree (по одному на операцию):
+        // обычный корень даёт пустой префикс — фильтр по относительным путям, как прежде.
+        var closedRoot = ClosedRootOf(rootPath);
+        var startCanonical = SafePath.Canonical(rootPath);
+        var startPrefix = ClosedPrefixOf(startCanonical, closedRoot);
+
+        // Fuse циклов ссылок: явная рекурсия, в отличие от EnumerateFiles, сама не знает об
+        // уже открытом по текущему спуску каталоге. В засечке только цели ссылок: цикл замыкается
+        // ссылкой, и первый проход по нему оставляет свою цель в засечке; на выходе цель
+        // снимается — две легальные ссылки на одну папку обходятся по каждой, как прежде.
+        var openChain = new HashSet<string>();
+        if (startCanonical is not null) openChain.Add(startCanonical);
+
+        // Найденные файлы — до метаданных: обход ленивый, как прежний, FileInfo только для
+        // совпавших по имени.
+        IEnumerable<(string Abs, string Rel, string Name, FileInfo Info)> Matches(string dir, string parentPrefix)
+        {
+            string[] files;
+            try { files = Directory.GetFiles(dir); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // см. комментарий в List: одна битая запись не должна ронять весь поиск
+                _logger?.LogDebug(ex, "Пропуск каталога при поиске: не удалось прочитать содержимое ({Path})", dir);
+                yield break;
+            }
+            foreach (var f in files)
+            {
+                // см. комментарий в List: битая запись пропускается, иначе упадёт весь поиск
+                var name = Path.GetFileName(f);
+                if (!name.Contains(query, StringComparison.OrdinalIgnoreCase)) continue;
+                FileInfo info;
+                bool isLink;
                 try
                 {
-                    var info = new FileInfo(f);
-                    var rel = Path.GetRelativePath(rootPath, f).Replace('\\', '/');
-                    return new FileEntry(info.Name, rel, false, info.Length, info.LastWriteTimeUtc,
-                        modified.Contains(rel), IsNew: newFiles.Contains(rel));
+                    info = new FileInfo(f);
+                    isLink = (info.Attributes & FileAttributes.ReparsePoint) != 0;
                 }
                 catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
                 {
                     _logger?.LogDebug(ex, "Пропуск файла при поиске: не удалось прочитать метаданные ({Path})", f);
+                    continue;
+                }
+                var prefix = ClosedPrefixFor(parentPrefix, name, f, isLink, closedRoot);
+                var rel = Path.GetRelativePath(rootPath, f).Replace('\\', '/');
+                if (PrivateAttachments.IsForeign(prefix.Length == 0 ? rel : prefix, viewerUserId)) continue;
+                yield return (f, rel, name, info);
+            }
+
+            string[] dirs;
+            try { dirs = Directory.GetDirectories(dir); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger?.LogDebug(ex, "Пропуск каталога при поиске: не удалось прочитать содержимое ({Path})", dir);
+                yield break;
+            }
+            foreach (var d in dirs)
+            {
+                string name;
+                bool isLink;
+                try
+                {
+                    var info = new DirectoryInfo(d);
+                    name = info.Name;
+                    isLink = (info.Attributes & FileAttributes.ReparsePoint) != 0;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _logger?.LogDebug(ex, "Пропуск подкаталога при поиске: не удалось прочитать метаданные ({Path})", d);
+                    continue;
+                }
+                var prefix = ClosedPrefixFor(parentPrefix, name, d, isLink, closedRoot);
+                if (!isLink)
+                {
+                    foreach (var m in Matches(d, prefix)) yield return m;
+                    continue;
+                }
+                var target = SafePath.Canonical(d);
+                if (target is null || !openChain.Add(target)) continue; // неразрешимый или цикл: не спускаемся
+                try
+                {
+                    foreach (var m in Matches(d, prefix)) yield return m;
+                }
+                finally { openChain.Remove(target); }
+            }
+        }
+
+        return Matches(rootPath, startPrefix)
+            .Take(100)
+            .Select(m =>
+            {
+                // см. комментарий в List: одна битая запись не должна ронять весь поиск
+                try
+                {
+                    return new FileEntry(m.Name, m.Rel, false, m.Info.Length, m.Info.LastWriteTimeUtc,
+                        modified.Contains(m.Rel), IsNew: newFiles.Contains(m.Rel));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _logger?.LogDebug(ex, "Пропуск файла при поиске: не удалось прочитать метаданные ({Path})", m.Abs);
                     return null;
                 }
             })

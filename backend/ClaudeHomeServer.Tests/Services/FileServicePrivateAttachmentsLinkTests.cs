@@ -22,6 +22,8 @@ namespace ClaudeHomeServer.Tests.Services;
 /// Разыменование — одно на переход ссылки, не на запись (замечание ревью 6db670ff): это держат
 /// тесты «…КакПриПрямомИмени» — через ссылку тот же набор записей, что прямым именем, поэтому
 /// лишнего обхода нет ни в одну сторону.
+/// TAIL-SEARCH-PRIV (хвост ревью 11256e5f, секция 6): поиск — последний обход без канонического
+/// префикса, сведён к той же схеме; его ожидаемый набор — тот же, что у Tree/List.
 /// Ссылка на каталог требует привилегий на Windows (образец PrivateAttachmentsResolvedTests),
 /// тесты ссылки идут только на Linux.
 /// </summary>
@@ -260,5 +262,126 @@ public sealed class FileServicePrivateAttachmentsLinkTests : IDisposable
         // без зрителя обход не меняется (контракт вызывающих без актора — см. doc Tree)
         PathsOf(_svc.Tree(_root, showHidden: true))
             .Should().Contain($"L/private/{Other}/{_foreignGuid}/foreign.txt");
+    }
+
+    // --- 6. (TAIL-SEARCH-PRIV, хвост ревью 11256e5f) поиск — тот же обход: чужое по ссылке
+    //        не находится, легальное — находится ---
+
+    /// <summary>
+    /// После db1d85fe4 поиск остался единственным обходом без канонического префикса:
+    /// EnumerateFiles(AllDirectories) спускается через «L» в настоящий .cc-attachments, а
+    /// текстовый IsForeign с первым сегментом «L» слепнет на L/private/{чужой} — чужое private
+    /// уходило в выдачу ни именем, ни содержимым (Search ищет только по имени; «содержимое» —
+    /// та запись, через которую оно читалось). Здесь та же expectation, что у Tree/List: чужого нет
+    /// — ни с зрителем, ни без (без зрителя — машинный шов, всё private закрыто); своё и общая
+    /// раскладка находятся по обоим именам (поиск — не дерево: он спускается в .cc-attachments);
+    /// легальные ссылки обходятся как прежде.
+    /// </summary>
+    [Fact]
+    public void Search_ЧерезСсылкуНаКонтейнер_ЧужоеНеНаходится_СвоёОбщееИОбычноеНаходятся()
+    {
+        if (OperatingSystem.IsWindows()) return; // ссылка на каталог требует привилегий
+        Link("L", TreeExcludes.AttachmentsDir);
+
+        // чужого нет ни с зрителем, ни без него: и по прямому пути, и через L
+        PathsOf(_svc.Search(_root, "foreign", Me)).Should().BeEmpty(
+            "содержимое L → .cc-attachments судится по канону, а не по имени L: ни .cc-attachments/…, ни L/… в выдаче");
+        PathsOf(_svc.Search(_root, "foreign")).Should().BeEmpty(
+            "без зрителя: L/private/{чужой} закрыто, как прямой путь (fail-closed машинного шва)");
+
+        // автор своё видит и через ссылку — по обоим именам, как прямым именем
+        PathsOf(_svc.Search(_root, "foreign", Other))
+            .Should().BeEquivalentTo(new[] { ForeignRel, $"L/private/{Other}/{_foreignGuid}/foreign.txt" });
+
+        // своё и общая раскладка через ссылку находятся поиском — поиск не дерево:
+        // он спускается в .cc-attachments, фильтр по чужести, не по каталогу
+        PathsOf(_svc.Search(_root, "own", Me))
+            .Should().BeEquivalentTo(new[] { OwnRel, $"L/private/{Me}/{_ownGuid}/own.txt" });
+        PathsOf(_svc.Search(_root, "common", Me))
+            .Should().BeEquivalentTo(new[] { CommonRel, $"L/{_commonGuid}/common.txt" });
+        PathsOf(_svc.Search(_root, "plain", Me)).Should().Equal("docs/plain.txt");
+
+        // без зрителя своё private тоже закрыто (машинный шов), обычный файл находится
+        PathsOf(_svc.Search(_root, "own")).Should().BeEmpty();
+        PathsOf(_svc.Search(_root, "plain")).Should().Equal("docs/plain.txt");
+    }
+
+    [Fact]
+    public void Search_ЛегальныеСсылкиНаружуНаходятся_ЧужоеЧерезLЗакрыто()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        Link("L", TreeExcludes.AttachmentsDir);
+        var outside = Directory.CreateDirectory(Path.Combine(_tempDir, "outside")).FullName;
+        Write(outside, "keep.txt", "внешнее");
+        Link("ext", outside);
+        // ссылка внутри closed-поддерева наружу: её цель — обычная папка, не чужое private
+        Link($"{TreeExcludes.AttachmentsDir}/outlink", "../docs");
+
+        PathsOf(_svc.Search(_root, "keep", Me)).Should().Equal(new[] { "ext/keep.txt" },
+            "легальная ссылка наружу на не-private путь остаётся доступной для поиска");
+        PathsOf(_svc.Search(_root, "plain", Me)).Should().BeEquivalentTo(
+            new[] { "docs/plain.txt", $"{TreeExcludes.AttachmentsDir}/outlink/plain.txt", "L/outlink/plain.txt" },
+            "обычное дерево, прямой путь к контейнеру и ссылка из closed-поддерева наружу — как прежде");
+        PathsOf(_svc.Search(_root, "foreign", Me)).Should().BeEmpty(
+            "при этом чужое private через L остаётся закрытым");
+    }
+
+    /// <summary>Тот же класс, что у теста 5, на уровне поиска: .cc-attachments — ссылка на
+    /// каталог со своим private/.</summary>
+    [Fact]
+    public void Search_СсылкаКонтейнераНаКаталогСДругимИменем_ЧужоеНеНаходится_СвоёИОбщееНаходятся()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var disk = Directory.CreateDirectory(Path.Combine(_tempDir, "attachments")).FullName;
+        Write(disk, $"private/{Other}/{_foreignGuid}/foreign.txt", "чужое");
+        Write(disk, $"private/{Me}/{_ownGuid}/own.txt", "своё");
+        Write(disk, $"{_commonGuid}/common.txt", "общее");
+        Directory.Delete(Path.Combine(_root, TreeExcludes.AttachmentsDir), recursive: true);
+        Directory.CreateSymbolicLink(Path.Combine(_root, TreeExcludes.AttachmentsDir), disk);
+        Link("L", TreeExcludes.AttachmentsDir);
+
+        PathsOf(_svc.Search(_root, "foreign", Me)).Should().BeEmpty(
+            "closed-поддерево за ссылкой на каталог с другим именем: чужого нет ни по прямому имени, ни через L");
+        PathsOf(_svc.Search(_root, "foreign")).Should().BeEmpty("без зрителя — тот же fail-closed");
+        PathsOf(_svc.Search(_root, "own", Me))
+            .Should().BeEquivalentTo(new[]
+            {
+                $"{TreeExcludes.AttachmentsDir}/private/{Me}/{_ownGuid}/own.txt",
+                $"L/private/{Me}/{_ownGuid}/own.txt",
+            });
+        PathsOf(_svc.Search(_root, "common", Me))
+            .Should().BeEquivalentTo(new[]
+            {
+                $"{TreeExcludes.AttachmentsDir}/{_commonGuid}/common.txt",
+                $"L/{_commonGuid}/common.txt",
+            });
+    }
+
+    /// <summary>Явный обход вместо EnumerateFiles обязан держать и циклы ссылок: в уже
+    /// открытый по текущему спуску каталог не идём — содержимое один раз, без зависания.</summary>
+    [Fact]
+    public void Search_ЦиклСсылок_НеВиснет_СодержимоеОдинРаз()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        Directory.CreateDirectory(Path.Combine(_root, "loopdir"));
+        Directory.CreateSymbolicLink(Path.Combine(_root, "loopdir", "loop"), ".."); // → корень
+        Write(_root, "loopdir/keep.txt", "здесь");
+
+        PathsOf(_svc.Search(_root, "keep", Me)).Should().Equal(new[] { "loopdir/keep.txt" },
+            "цикл через ссылку не порождает повторных обходов и не зацикливает поиск");
+    }
+
+    [Fact]
+    public void Search_ФайлСсылкаВЧужоеPrivate_ЗакрытЗрителю_АвторуОткрыт()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        File.CreateSymbolicLink(Path.Combine(_root, "evilfile"),
+            $"{TreeExcludes.AttachmentsDir}/private/{Other}/{_foreignGuid}/foreign.txt");
+
+        PathsOf(_svc.Search(_root, "evilfile", Me)).Should().BeEmpty(
+            "файл-ссылка в чужое private: через него читалось чужое содержимое");
+        PathsOf(_svc.Search(_root, "evilfile")).Should().BeEmpty("без зрителя — тот же fail-closed");
+        PathsOf(_svc.Search(_root, "evilfile", Other)).Should().Equal(new[] { "evilfile" },
+            "автору — своё и через файл-ссылку, как прямым именем");
     }
 }

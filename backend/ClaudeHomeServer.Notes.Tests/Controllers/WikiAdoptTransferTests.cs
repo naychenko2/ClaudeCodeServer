@@ -23,9 +23,13 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // страницу human и заменяет заметку ссылкой через NotesService. Гонки: дрейф изменился до adopt —
 // 409; двойной перенос одной заметки — одна страница. Контроллеры строятся напрямую — фабрики
 // хоста нет, метка Host не нужна.
+// С LI-2 transfer («перенести в вики») заводит вика заявителя: прежнего 409
+// wiki_not_initialized этой ручки нет; svc (403) и выключенный флаг (409) — раньше заведения.
 public class WikiAdoptTransferTests : IDisposable
 {
     private const string User = "u1";
+    // Владелец без заведённой вики (её заводит только u1): точки LI-2 проверяют его.
+    private const string NoWiki = "u3";
     private const string Statement = "Сервер работает на порту пять тысяч.";
     private const string Edited = "Сервер работает на порту пять тысяч один.";
     private const string Added = "Новый факт принёс человек в Obsidian.";
@@ -250,6 +254,40 @@ public class WikiAdoptTransferTests : IDisposable
             .IngestNote(new WikiIngestNoteRequest(note.Id, null, true)), 409, "wiki_unified_off");
         NoteText(note).Should().Be(before);
         PackageFiles().Should().BeEmpty();
+    }
+
+    // ─── LI-2: перенос заводит вика заявителя ───────────────────────────────
+
+    [Fact]
+    public async Task ПереносНезаведённойВикиЗаводитЕёИСтраницаВЛичном()
+    {
+        // Мутация (критерий c2): вернуть прежний 409 wiki_not_initialized в TransferNote —
+        // u3 остаётся ни с чем (ни страницы, ни вики): тест красный.
+        var note = _notes.Create(NoWiki, new CreateNoteRequest("Мысль u3", "Первое утверждение."));
+
+        var body = Json(await Controller(user: NoWiki).IngestNote(new WikiIngestNoteRequest(note.Id, null, true)), 200);
+        body.GetProperty("outcome").GetString().Should().Be("transferred");
+
+        WikiPaths.IsInitialized(_dir, NoWiki).Should().BeTrue(
+            "«перенести в вики» — действие человека: его вика создаётся сама, кнопки «Завести» нет");
+        File.Exists(Path.Combine(WikiPaths.Pages(_dir, NoWiki), "Личное", "Мысль u3.md")).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Перенос_СервисныйТокенИВыключенныйФлаг_ВикиНеЗаведены()
+    {
+        // svc (403) и любой из двух флагов (409) — раньше заведения: у незаведённого владельца
+        // ни байта в pages/. Мутация «заводить до проверок токена и флага» — красный.
+        var a = _notes.Create(NoWiki, new CreateNoteRequest("Мысль svc", "Первое утверждение."));
+        var svc = await Controller(serviceToken: true, user: NoWiki).IngestNote(new WikiIngestNoteRequest(a.Id, null, true));
+        ((IStatusCodeActionResult)svc).StatusCode.Should().Be(403);
+
+        var b = _notes.Create(NoWiki, new CreateNoteRequest("Мысль флага", "Первое утверждение."));
+        AssertCode(await Controller(flags: new Flags(true, false), user: NoWiki)
+            .IngestNote(new WikiIngestNoteRequest(b.Id, null, true)), 409, "wiki_unified_off");
+
+        WikiPaths.IsInitialized(_dir, NoWiki).Should().BeFalse();
+        Directory.Exists(WikiPaths.Pages(_dir, NoWiki)).Should().BeFalse("ни байта в pages/");
     }
 
     [Fact]
@@ -485,20 +523,20 @@ public class WikiAdoptTransferTests : IDisposable
     private static void AssertCode(IActionResult result, int status, string code) =>
         Json(result, status).GetProperty("code").GetString().Should().Be(code);
 
-    private static ControllerContext Ctx(bool serviceToken)
+    private static ControllerContext Ctx(bool serviceToken, string user = User)
     {
         var http = new DefaultHttpContext();
-        var claims = new List<Claim> { new("sub", User) };
+        var claims = new List<Claim> { new("sub", user) };
         if (serviceToken) claims.Add(new("typ", "svc"));
         http.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
         return new ControllerContext { HttpContext = http };
     }
 
-    private WikiController Controller(bool serviceToken = false, Flags? flags = null) =>
+    private WikiController Controller(bool serviceToken = false, Flags? flags = null, string user = User) =>
         new(_keeper, _projects, new NoSpheres(), null!, null!, flags ?? new Flags(true, true), _config,
             null!, null!, _apply, _transfer)
         {
-            ControllerContext = Ctx(serviceToken),
+            ControllerContext = Ctx(serviceToken, user),
         };
 
     private sealed class Flags(bool llmWiki, bool unified) : IFeatureFlagGate

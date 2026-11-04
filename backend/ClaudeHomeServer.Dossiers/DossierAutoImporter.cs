@@ -34,12 +34,11 @@ public sealed class DossierAutoImporter : BackgroundService
     private readonly DossierCaptureState _state;
     private readonly IGitRefSnapshotStore _git;
     private readonly InstanceSecretsProvider _secrets;
-    private readonly IFeatureFlagGate _flags;
     private readonly DossierImporter _importer;
     private readonly ILogger<DossierAutoImporter>? _log;
 
     public DossierAutoImporter(IProjectManager projects, DossierStore store, DossierCaptureState state,
-        IGitRefSnapshotStore git, InstanceSecretsProvider secrets, IFeatureFlagGate flags,
+        IGitRefSnapshotStore git, InstanceSecretsProvider secrets,
         ILoggerFactory? logFactory = null, ILogger<DossierAutoImporter>? log = null,
         DossierImporter? importer = null)
     {
@@ -48,7 +47,6 @@ public sealed class DossierAutoImporter : BackgroundService
         _state = state;
         _git = git;
         _secrets = secrets;
-        _flags = flags;
         _importer = importer ?? new DossierImporter(store, git, secrets, logFactory?.CreateLogger<DossierImporter>());
         _log = log;
     }
@@ -90,7 +88,6 @@ public sealed class DossierAutoImporter : BackgroundService
         if (!project.AutoImportDossiers || project.OwnerId is not { } ownerId) return;
         // Локальный проект: его git на устройстве, серверного досье нет (ADR-016 §4)
         if (!ProjectCapabilities.ServerContentEnabled(project)) return;
-        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.ChangeDossiersRecall)) return;
         if (!GitRepo.IsRepo(project.RootPath)) return;
 
         // Tip того рефа, из которого импортировал бы ручной вызов (локальная ветка, при

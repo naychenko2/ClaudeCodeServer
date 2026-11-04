@@ -14,7 +14,6 @@ namespace ClaudeHomeServer.Services;
 public sealed class SessionManagerTurnResumeHost(
     SessionManager sessions,
     ProjectManager projects,
-    FeatureFlagService flags,
     IProjectDeviceGate deviceGate) : ITurnAutoResumeHost
 {
     public Task AbortMarkersWritten => sessions.AbortMarkersWritten;
@@ -26,12 +25,8 @@ public sealed class SessionManagerTurnResumeHost(
     public Project? GetProject(string projectId) => projects.GetById(projectId);
 
     // Владелец через ResolveOwnerId: у проектной сессии OwnerId пустой — владелец берётся
-    // из проекта (ADR-033). null (чат/проект без владельца) — флаг считается выключенным.
-    public bool IsEnabledFor(Session session)
-    {
-        var owner = sessions.ResolveOwnerId(session);
-        return owner is not null && flags.IsEnabled(owner, FeatureFlagKeys.TurnAutoResume);
-    }
+    // из проекта (ADR-033). null (чат/проект без владельца) — возобновлять некому.
+    public bool IsEnabledFor(Session session) => sessions.ResolveOwnerId(session) is not null;
 
     // Серверный проект шлюз считает готовым; локальный — по состоянию устройства (матрица ADR-016)
     public bool IsDeviceOnline(Project project) => deviceGate.Check(project).IsReady;

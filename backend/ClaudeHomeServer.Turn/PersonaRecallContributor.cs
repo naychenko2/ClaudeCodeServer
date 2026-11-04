@@ -27,7 +27,6 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
     // на Dossiers.DossierRecallService (её держали только ради проверки на null).
     // Флаги — IFeatureFlagGate (Composition), история — IChatHistoryLoader.
     private readonly IPersonaRecallSource _recall;
-    private readonly IFeatureFlagGate _flags;
     private readonly IChatHistoryLoader _history;
     private readonly IProjectManager _projects;
     private readonly IConfiguration _config;
@@ -40,14 +39,12 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
 
     public PersonaRecallContributor(
         IPersonaRecallSource recall,
-        IFeatureFlagGate flags,
         IChatHistoryLoader history,
         IProjectManager projects,
         IConfiguration config,
         ILogger<PersonaRecallContributor> log)
     {
         _recall = recall;
-        _flags = flags;
         _history = history;
         _projects = projects;
         _config = config;
@@ -87,10 +84,9 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
             var narrow = sessionContext.Frame == ClaudeHomeServer.Services.Access.TurnFrameKind.Narrow;
 
             // Контекст паспортов (ADR-004 §5): проект чата + якоря + текст хода. null —
-            // вне проектного контекста (нет ProjectId у сессии) или выключен флаг.
+            // вне проектного контекста (нет ProjectId у сессии).
             Dossiers.DossierRecallRequest? dossier = null;
-            if (_recall.DossierRecallAvailable && sessionContext.ServerContent && session.ProjectId is { } dossierProjectId
-                && _flags.IsEnabled(sessionContext.OwnerId, FeatureFlagKeys.ChangeDossiersRecall))
+            if (_recall.DossierRecallAvailable && sessionContext.ServerContent && session.ProjectId is { } dossierProjectId)
             {
                 var prevTurnFiles = await LastTurnChangedFilesAsync(session);
                 dossier = new Dossiers.DossierRecallRequest(

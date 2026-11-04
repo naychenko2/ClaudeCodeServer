@@ -64,7 +64,6 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     private readonly ImageEditSteps? _steps;
     private readonly ImageProjectPrefsService? _prefs;
     private readonly ChatContext.ImageContextLaunch? _context;
-    private readonly IFeatureFlagGate? _flags;
     private readonly Faces.FaceDetectionCache? _faces;
     private readonly ILocalImageMedia? _localMedia;
     private readonly ClaudeHomeServer.Services.Llm.IMediaGpuYieldGate? _gpuGate;
@@ -91,7 +90,6 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         IConfiguration? config = null,
         ImageProjectPrefsService? prefs = null,
         ChatContext.ImageContextLaunch? context = null,
-        IFeatureFlagGate? flags = null,
         Faces.FaceDetectionCache? faces = null,
         ILocalImageMedia? localMedia = null,
         ClaudeHomeServer.Services.Llm.IMediaGpuYieldGate? gpuGate = null)
@@ -107,7 +105,6 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         _steps = steps;
         _prefs = prefs;
         _context = context;
-        _flags = flags;
         _faces = faces;
         _localMedia = localMedia;
         _gpuGate = gpuGate;
@@ -257,13 +254,11 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     // ── image_find_faces ───────────────────────────────────────────────────────
 
     // Только чтение: гейта хода и квоты MaxLaunchesPerTurn нет (детекция — не запуск: траты,
-    // версии и записи в ленту не пишет). Флаг, личная область и локальные модели отказывают
+    // версии и записи в ленту не пишет). Личная область и локальные модели отказывают
     // на вызове — состав tools/list от них не зависит (инвариант McpToolsetStabilityTests)
     private async Task<McpToolCallResult> FindFacesAsync(JsonObject args, string ownerId, Session session,
         ImageEditScope scope, CancellationToken ct)
     {
-        if (_flags?.IsEnabled(ownerId, FeatureFlagKeys.CharacterFaceSwap) != true)
-            return Deny("Функция «Подставить персонажа» выключена");
         if (scope.Project is null)
             return Deny("Подстановка персонажа на лицо — только в чате проекта");
         // Локальные модели — опциональная зависимость: нет шва (подсистема images выключена) —

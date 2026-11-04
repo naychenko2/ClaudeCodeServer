@@ -33,7 +33,6 @@ public sealed class ImageEditLaunchAssembler(
     ImageThreadService? threads = null,
     ImageEditSteps? steps = null,
     ImageContextLaunch? context = null,
-    IFeatureFlagGate? flags = null,
     CharacterSceneParser? sceneParser = null,
     CharacterPhotoLabeling? labeling = null,
     Faces.FaceDetectionCache? faces = null,
@@ -174,12 +173,10 @@ public sealed class ImageEditLaunchAssembler(
             var found = CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, slug, maxPhotos, diverse: diverse);
             if (found is null) return Invalid("Персонаж не найден");
             labeling?.Enqueue(ownerId, scope.Project!.RootPath, slug);
-            // Явный список — только при включённом флаге; любое нарушение отказывает целиком
+            // Явный список: любое нарушение отказывает целиком
             if (req.CharacterPhotos is { } chosen)
             {
-                found = flags?.IsEnabled(ownerId, FeatureFlagKeys.CharacterSmartPhotos) == true
-                    ? CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, slug, maxPhotos, explicitPhotos: chosen)
-                    : null;
+                found = CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, slug, maxPhotos, explicitPhotos: chosen);
                 if (found is null) return PhotosInvalid();
             }
             character = found.Ref;
@@ -214,14 +211,13 @@ public sealed class ImageEditLaunchAssembler(
             CharacterPicker: picker));
     }
 
-    // Подбор фото персонажа под сюжет (ADR-027 §7) — только при включённом флаге владельца. Возвращает
+    // Подбор фото персонажа под сюжет (ADR-027 §7). Возвращает
     // делегат, который исполнитель зовёт в задаче перед драйвером: разбор сюжета не держит ответ «запустить».
     // Явный список — Pick=manual без подбора; пустой промпт или нет разбора — подбора нет, запись в запуск тоже
     // diverse — модель берёт фото как одного человека (Klein): набор ракурсов вместо подбора под сюжет
     private Func<int, CancellationToken, Task<CharacterPickOutcome>>? CharacterPicker(
         string ownerId, string root, string slug, ImageEditLaunchRequest req, int count, bool diverse)
     {
-        if (flags?.IsEnabled(ownerId, FeatureFlagKeys.CharacterSmartPhotos) != true) return null;
         if (req.CharacterPhotos is { } chosen)
             return (_, _) => Task.FromResult(new CharacterPickOutcome(null, new ImageThreadCharacter(slug, chosen, CharacterPhotoPick.Manual, null)));
         if (sceneParser is null || string.IsNullOrWhiteSpace(req.Prompt)) return null;
@@ -294,16 +290,12 @@ public sealed class ImageEditLaunchAssembler(
 
     // Подстановка персонажа на лицо (ADR-028, этап 3): контекст чата игнорируется целиком,
     // образцы — только персонаж, маска строится сервером по bbox детектора.
-    // Порядок: a. флаг → b. личная область/входы → c. версия → d. детекция/facesKey →
+    // Порядок: b. личная область/входы → c. версия → d. детекция/facesKey →
     // e. промпт → f. проходы (одна детекция, N масок/кропов, по возрастанию номера лица) →
     // g. входы (N = 1 — старые поля, N > 1 — FacePasses: цепочка проходов в задаче)
     private async Task<ImageEditCallResult<ImageEditJobInput>> AssembleFaceTargetAsync(
         string ownerId, ImageEditScope scope, ImageEditLaunchRequest req, FaceTarget faceTarget, CancellationToken ct)
     {
-        // a. Флаг выключен — как в 7a
-        if (flags?.IsEnabled(ownerId, FeatureFlagKeys.CharacterFaceSwap) != true)
-            return Fail<ImageEditJobInput>(ImageEditErrorCodes.FeatureDisabled, "Подстановка персонажа на лицо выключена");
-
         // b. Личная область, входы
         if (scope.Project is null)
             return Invalid("Подстановка персонажа на лицо — только в проекте");

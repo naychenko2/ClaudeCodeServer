@@ -74,13 +74,6 @@ public class FaceTargetLaunchTests : IDisposable
         return media.Object;
     }
 
-    private static IFeatureFlagGate Flags(bool faceSwapOn)
-    {
-        var flags = new Mock<IFeatureFlagGate>();
-        flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.CharacterFaceSwap)).Returns(faceSwapOn);
-        return flags.Object;
-    }
-
     private static IImageEditJobs QuoteJobs(ImageEditOp op = ImageEditOp.Edit, string? provider = "local")
     {
         var jobs = new Mock<IImageEditJobs>();
@@ -91,14 +84,13 @@ public class FaceTargetLaunchTests : IDisposable
     }
 
     private ImageEditLaunchAssembler Assembler(ILocalImageMedia? media = null,
-        IFeatureFlagGate? flags = null, IImageEditJobs? jobs = null, ImageContextLaunch? context = null)
+        IImageEditJobs? jobs = null, ImageContextLaunch? context = null)
     {
         return new ImageEditLaunchAssembler(
             [HiggsfieldImageEditorTests.Create().Editor],
             jobs ?? QuoteJobs(),
             new SkiaImageRaster(),
             threads: _threads,
-            flags: flags ?? Flags(true),
             faces: new FaceDetectionCache(),
             localMedia: media,
             context: context);
@@ -126,18 +118,6 @@ public class FaceTargetLaunchTests : IDisposable
             ThreadSessionId: Chat, ThreadId: _threadId,
             ContextRevision: contextRevision,
             FaceTarget: faceTarget);
-    }
-
-    // ── a. Флаг выключен ─────────────────────────────────────────────────────────
-
-    [Fact]
-    public async Task Флаг_выключен_даёт_feature_disabled()
-    {
-        var req = Request(_charB, FaceTargetJson(_facesKey));
-        var result = await Assembler(flags: Flags(false)).AssembleAsync(Owner, _scope, req, default);
-
-        result.Value.Should().BeNull();
-        result.ErrorCode.Should().Be("feature_disabled");
     }
 
     // ── b. Личная область ─────────────────────────────────────────────────────────
@@ -558,7 +538,6 @@ public class FaceTargetLaunchTests : IDisposable
             QuoteJobs(),
             new SkiaImageRaster(),
             threads: _threads,
-            flags: Flags(true),
             faces: cache,
             localMedia: media.Object);
 

@@ -122,10 +122,9 @@ public class WikiPagesController : ControllerBase
     private IActionResult ServiceTokenRefusal() =>
         StatusCode(403, new { error = "Сервисный токен: вики решает только пользовательский токен" });
 
-    // Флаг действует только при включённом llm-wiki: без вики нечего править (ADR-038, §9).
+    // Совместная правка идёт только при включённом llm-wiki: без вики нечего править (ADR-038, §9).
     private bool UnifiedOn(string userId) =>
-        _flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) == true
-        && _flags.IsEnabled(userId, FeatureFlagKeys.NotesWikiUnified);
+        _flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) == true;
 
     private IActionResult UnifiedOffRefusal() =>
         StatusCode(409, new { code = CodeUnifiedOff, message = "правка страниц выключена: функция недоступна" });

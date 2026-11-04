@@ -42,7 +42,7 @@ public class SessionManagerTurnResumeHostTests : IDisposable
         _userStore = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _projectManager = new ProjectManager(_config, _userStore, new AppSettingsService(_config));
         _flags = new FeatureFlagService(_userStore);
-        _host = new SessionManagerTurnResumeHost(CreateSessionManager(), _projectManager, _flags,
+        _host = new SessionManagerTurnResumeHost(CreateSessionManager(), _projectManager,
             new Mock<IProjectDeviceGate>().Object);
     }
 
@@ -77,11 +77,10 @@ public class SessionManagerTurnResumeHostTests : IDisposable
             NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, new TestSessionBroadcaster());
     }
 
-    // Проект с владельцем-пользователем; флаг авто-возобновления у владельца — по аргументу
-    private Project MakeOwnedProject(bool flagOn)
+    // Проект с владельцем-пользователем
+    private Project MakeOwnedProject()
     {
         var owner = _userStore.Add("owner-" + Guid.NewGuid().ToString("N")[..8], "pass-123456", "user");
-        owner.FeatureFlags = new Dictionary<string, bool> { [FeatureFlagKeys.TurnAutoResume] = flagOn };
         var root = Path.Combine(_tempDir, "proj-" + Guid.NewGuid().ToString("N")[..8]);
         return _projectManager.Create("p", root, owner.Id, owner.Username, createDirectory: true);
     }
@@ -90,26 +89,18 @@ public class SessionManagerTurnResumeHostTests : IDisposable
         new() { Id = Guid.NewGuid().ToString(), ProjectId = projectId, OwnerId = null };
 
     [Fact]
-    public void ПроектныйЧат_ПустойOwnerId_ФлагВладельцаПроектаВключён_True()
+    public void ПроектныйЧат_ПустойOwnerId_ВладелецПроекта_True()
     {
-        var project = MakeOwnedProject(flagOn: true);
+        var project = MakeOwnedProject();
 
         _host.IsEnabledFor(ProjectChat(project.Id)).Should().BeTrue(
             "владелец берётся из проекта (ResolveOwnerId), а не из пустого Session.OwnerId");
     }
 
     [Fact]
-    public void ПроектныйЧат_ПустойOwnerId_ФлагВладельцаВыключен_False()
-    {
-        var project = MakeOwnedProject(flagOn: false);
-
-        _host.IsEnabledFor(ProjectChat(project.Id)).Should().BeFalse("флаг у владельца проекта выключен");
-    }
-
-    [Fact]
     public void ПроектныйЧат_ПроектНеизвестен_False()
     {
         _host.IsEnabledFor(ProjectChat("нет-такого-проекта")).Should().BeFalse(
-            "владелец не резолвится (null) — флаг считается выключенным");
+            "владелец не резолвится (null) — возобновлять некому");
     }
 }

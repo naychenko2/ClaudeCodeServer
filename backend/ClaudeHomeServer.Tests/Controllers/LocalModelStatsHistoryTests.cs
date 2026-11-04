@@ -84,8 +84,7 @@ public class LocalModelStatsHistoryTests : IClassFixture<LocalModelStatsHistoryT
             };
         }
 
-        // Чистое состояние теста: журнал и индекс пусты, источник и «сейчас» — как просит тест,
-        // флаг local-model-stats у админа включён
+        // Чистое состояние теста: журнал и индекс пусты, источник и «сейчас» — как просит тест
         internal void Use(FakeHistorySource fake, DateTimeOffset? now)
         {
             _source.Target = fake;
@@ -103,9 +102,6 @@ public class LocalModelStatsHistoryTests : IClassFixture<LocalModelStatsHistoryT
                 var thumbs = Path.Combine(index.Dir, "thumbs");
                 if (Directory.Exists(thumbs)) Directory.Delete(thumbs, true);
             }
-
-            var users = Services.GetRequiredService<UserStore>();
-            users.SetFeatureFlag(users.FindByUsername(TestUsername)!.Id, "local-model-stats", true);
         }
     }
 
@@ -438,19 +434,6 @@ public class LocalModelStatsHistoryTests : IClassFixture<LocalModelStatsHistoryT
         respAdmin.StatusCode.Should().Be(HttpStatusCode.OK, "админ не зависит от MediaForUsers");
         var body = await respAdmin.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("scope").GetString().Should().Be("all");
-    }
-
-    // Админ без флага local-model-stats — 404. Мутация: убрать серверную проверку флага — краснеет
-    [Fact]
-    public async Task АдминБезФлага_404()
-    {
-        using var h = new Harness(_hosts.Main, "test-source", null);
-        // Флаг не включён (как у пользователя без override)
-        var users = h.Factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(h.AdminId, "local-model-stats", false);
-
-        var resp = await h.Admin.GetAsync("/api/local-model/history");
-        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     // recordId с «..» — 404 (произвольное чтение диска не раскрываем). Мутация: убрать проверку — краснеет

@@ -1185,8 +1185,8 @@ public class McpToolsetStabilityTests
 
         var body = MethodBody(File.ReadAllText(path!), "private MemoryMcpContext BuildMemoryContext");
 
-        body.Should().Contain("ChangeDossiersRecall",
-            "секция dossier_* гейтится флагом владельца change-dossiers-recall");
+        body.Should().Contain("DossierToolsEnabled: true",
+            "секция dossier_* включена всегда (флаг change-dossiers-recall снят) и не зависит от хода");
         body.Should().Contain("FeatureFlagKeys.Spheres",
             "секция sphere_memory_* гейтится флагом владельца spheres, а не членством проекта");
         body.Should().NotContain("SphereOf",

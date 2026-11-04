@@ -21,14 +21,12 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/projects")]
 public class DossiersController(ProjectManager projects, DossierStore store,
-    CodeGraphService graphs, DossierRecallService recall, FeatureFlagService flags,
+    CodeGraphService graphs, DossierRecallService recall,
     GitService git, IGitRefSnapshotStore snapshotStore, SessionManager sessions, UserStore users,
     InstanceSecretsProvider secrets, DossierDiscussionService discussions,
     DossierCaptureState captureState) : ControllerBase
 {
-    private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
-
-    // Ключ хранилищ — арендатор из RequestScope ([ProjectScope]); UserId остаётся для флагов вызывающего
+    // Ключ хранилищ — арендатор из RequestScope ([ProjectScope])
     private string TenantId => HttpContext.GetRequestScope().TenantOwnerId;
 
     // Помощник: IGitRefSnapshotStore и GitService регистрируются на одном синглтоне
@@ -141,7 +139,6 @@ public class DossiersController(ProjectManager projects, DossierStore store,
     [ProjectScope(Key = "id")]
     public async Task<IActionResult> ExportStatus(string id, CancellationToken ct)
     {
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChangeDossiersRecall)) return NotFound();
         var p = Scoped(id);
         if (p is null) return NotFound();
 
@@ -161,7 +158,6 @@ public class DossiersController(ProjectManager projects, DossierStore store,
     [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public async Task<IActionResult> Export(string id, CancellationToken ct)
     {
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChangeDossiersRecall)) return NotFound();
         var p = Scoped(id);
         if (p is null) return NotFound();
 
@@ -189,7 +185,6 @@ public class DossiersController(ProjectManager projects, DossierStore store,
     [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public async Task<IActionResult> Push(string id, CancellationToken ct)
     {
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChangeDossiersRecall)) return NotFound();
         var p = Scoped(id);
         if (p is null) return NotFound();
 
@@ -225,7 +220,6 @@ public class DossiersController(ProjectManager projects, DossierStore store,
     [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public async Task<IActionResult> Import(string id, CancellationToken ct)
     {
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChangeDossiersRecall)) return NotFound();
         var p = Scoped(id);
         if (p is null) return NotFound();
 

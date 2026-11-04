@@ -326,7 +326,7 @@ public sealed class MemoryToolset(
 
             case "dossier_lookup":
             {
-                if (!team || !DossierToolsEnabled(context)) return DenyDossier();
+                if (!team) return DenyDossier();
                 var found = dossierRecall.Lookup(context.OwnerId, project!.Id,
                     OptionalArg(arguments, "path"), OptionalArg(arguments, "symbol"),
                     OptionalArg(arguments, "query"), 20);
@@ -340,7 +340,7 @@ public sealed class MemoryToolset(
 
             case "dossier_get":
             {
-                if (!team || !DossierToolsEnabled(context)) return DenyDossier();
+                if (!team) return DenyDossier();
                 if (dossiers.GetById(context.OwnerId, project!.Id, StringArg(arguments, "id")) is not { } dossier)
                     return Deny($"Паспорт {StringArg(arguments, "id")} не найден.");
                 var section = (string title, IReadOnlyList<string>? items) =>
@@ -540,16 +540,13 @@ public sealed class MemoryToolset(
         if (project is not null)
         {
             tools.AddRange(TeamTools);
-            if (DossierToolsEnabled(context)) tools.AddRange(DossierTools);
+            tools.AddRange(DossierTools);
         }
         // Память сферы — по флагу владельца, а не по членству проекта: отказ «проект не входит
         // в сферу» выдаёт сам вызов
         if (SphereToolsEnabled(context)) tools.AddRange(SphereTools);
         return tools;
     }
-
-    private bool DossierToolsEnabled(McpToolCallContext context) =>
-        flags.IsEnabled(context.OwnerId, FeatureFlagKeys.ChangeDossiersRecall);
 
     // Гейт записи команды (③-3.4): пишет либо «свой» вызов без персоны (обычный проектный
     // чат), либо персона САМОГО проекта. Вызывающая персона здесь — персона из хвоста
@@ -635,7 +632,7 @@ public sealed class MemoryToolset(
         "Память команды проекта не доступна: чат вне проекта либо проект недоступен.");
 
     private static McpToolCallResult DenyDossier() => Deny(
-        "Паспорта изменений не доступны в этом чате (нет проекта либо выключен флаг владельца change-dossiers-recall).");
+        "Паспорта изменений не доступны в этом чате (нет проекта).");
 
     // --- Аргументы вызова ---
 

@@ -88,7 +88,6 @@ backend/ClaudeHomeServer.VideoEditor/Controllers/VideoEditScopeGate.cs|6
 # арендатор — Project.OwnerId.
 backend/ClaudeHomeServer/Controllers/ChatSubjectsController.cs|1
 backend/ClaudeHomeServer/Controllers/CodeGraphController.cs|1
-backend/ClaudeHomeServer/Controllers/DossiersController.cs|4
 # S2c-8: FilesController 5→6 — ветка папки Delete: id вызывающего входит только в явную проверку
 # права Write (папка остаётся на Write, файл переведён на WriteContent); ключом хранилищ ничто
 # не стало: файл и папка адресуются корнем проекта арендатора (GetRoot), как во всех соседних ветках.

@@ -42,7 +42,6 @@ public sealed class DossierAutoExporter : IHostedService
     private readonly IGitRefSnapshotStore _git;
     private readonly InstanceSecretsProvider _secrets;
     private readonly DossierDiscussionService _discussions;
-    private readonly IFeatureFlagGate _flags;
     private readonly DossierCaptureState _state;
     private readonly DossierAutoExportGate _gate;
     private readonly ILogger<DossierAutoExporter>? _log;
@@ -50,7 +49,7 @@ public sealed class DossierAutoExporter : IHostedService
 
     public DossierAutoExporter(DossierStore store, IProjectManager projects, ISessionDirectory sessions,
         IGitRefSnapshotStore git, InstanceSecretsProvider secrets, DossierDiscussionService discussions,
-        IFeatureFlagGate flags, DossierCaptureState state, IConfiguration config,
+        DossierCaptureState state, IConfiguration config,
         ILogger<DossierAutoExporter>? log = null)
     {
         _store = store;
@@ -59,7 +58,6 @@ public sealed class DossierAutoExporter : IHostedService
         _git = git;
         _secrets = secrets;
         _discussions = discussions;
-        _flags = flags;
         _state = state;
         _gate = new DossierAutoExportGate(projects, git, state);
         _log = log;
@@ -96,9 +94,6 @@ public sealed class DossierAutoExporter : IHostedService
     {
         try
         {
-            // Граница та же, что у ручного экспорта: без флага владельца автовыгрузки нет.
-            // Проверяется В МОМЕНТ выгрузки, а не захвата — тумблер могли успеть выключить.
-            if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.ChangeDossiersRecall)) return;
             var project = _projects.GetById(projectId);
             if (project is null || project.OwnerId != ownerId) return;
             if (!ProjectCapabilities.ServerContentEnabled(project)) return;

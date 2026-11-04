@@ -260,7 +260,7 @@ test('1c общие файлы, чаты и заметки видны обоим
 // 2 · Приватность: чужое личное не течёт (главное)
 // ─────────────────────────────────────────────────────────────────────────────
 
-test('2a приватный чат и вложение владельца не видны участнику: список, прямой адрес, поиск, дерево', async () => {
+test('2a приватный чат и вложение владельца не видны участнику: список, прямой адрес, поиск, дерево', async ({ page }) => {
   await ensureFlags();
   const a = await login('admin');
   const b = await login('qa_b');
@@ -312,6 +312,15 @@ test('2a приватный чат и вложение владельца не �
   const directRead = await api(b, 'GET', `/api/projects/${PROJECT_ID}/files/content?path=${encodeURIComponent(`.cc-attachments/private/${ids.admin}/${secretName}`)}`);
   note(`  прямое чтение чужого private-файла от qa_b: ${directRead.status}`);
   expect(directRead.status, 'чтение чужого приватного файла закрыто').toBe(404);
+
+  // 6. В интерфейсе: приватного чата владельца нет в ленте чатов участника.
+  await uiLogin(page, 'qa_b');
+  await openProject(page);
+  await page.waitForTimeout(1500);
+  const inUi = await page.getByText(chatName, { exact: false }).first().isVisible().catch(() => false);
+  note(`  лента чатов участника: приватный чат владельца виден — ${inUi}`);
+  await page.screenshot({ path: `${SHOTS}/2a-chats-participant.png` });
+  expect(inUi, 'приватный чат владельца не виден в ленте участника').toBeFalsy();
 
   // Уборка: чат каскадно уносит вложение.
   await api(a, 'DELETE', `/api/projects/${PROJECT_ID}/sessions/${chatId}`);
@@ -454,6 +463,19 @@ test('3b выдержка вики (MCP wiki_ingest) отказывает по �
   note(`  wiki_ingest по чужому приватному чату: isError=${res?.result?.isError}, текст «${text}»`);
   expect(res?.result?.isError, 'выдержка чужого приватного чата отказана').toBe(true);
   expect(text, 'отказ не выдаёт существование чата').toContain('не найден');
+
+  // Контроль: тот же вызов по СВОЕМУ общему (не приватному) чату. Если отказ тот же —
+  // MCP-путь отказывает по чату проекта в целом, и приватность им не различается:
+  // гейт по приватному чату доказывает analyze (2a/3a), а не этот вызов.
+  const ctrl = await fetch(`${BASE}/mcp/notes/${callerChat.id}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${b}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'wiki_ingest', arguments: { source: `session:${callerChat.id}` } } }),
+  });
+  const ctrlRes = await ctrl.json();
+  const ctrlText = (ctrlRes?.result?.content ?? []).map((c: any) => c.text).join(' ');
+  note(`  контроль wiki_ingest по своему общему чату: isError=${ctrlRes?.result?.isError}, текст «${ctrlText}»`);
+  note(`  ⇒ MCP-путь отказывает ${ctrlRes?.result?.isError && text === ctrlText ? 'одинаково для общего и приватного (приватность им не различается)' : 'по-разному (значит приватность различается)'}`);
 
   await api(a, 'DELETE', `/api/projects/${PROJECT_ID}/sessions/${chatId}`);
 });

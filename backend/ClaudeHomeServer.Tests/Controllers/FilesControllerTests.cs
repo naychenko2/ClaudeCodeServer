@@ -859,13 +859,25 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
     // параметр запись ни в чьё дерево не переносит. Stream (:1120) не пишет — отдельной линии у
     // него нет. Ссылка на каталог требует привилегий, поэтому тест только на Linux (образец).
     //
+    // sessionId-линия (доработка по дельта-ревью d055b433, п.4 хвоста d24d4238): одна 404 здесь
+    // контракт не различает — SaveContent параметра не принимает, а без дерева у чата корень
+    // операции тот же, что без параметра: та же цель, тот же отказ. Поэтому к чату привязано
+    // проверенное worktree (то же дерево эпика — оно числится в «git worktree list»,
+    // SessionManager.AttachWorktreeAsync), и в нём та же раскладка автора с «L»: при уважении
+    // sessionId записи есть куда дойти до диска. Различает линия МЕСТО: свой файл обязан остаться
+    // в .cc-attachments корня проекта и не появиться в дереве чата.
+    //
     // Мутация (c2): снять строку FilesController.cs:489 — чужая запись проходит (200) и оставляет
-    // файл в чужом каталоге, тест краснеет; откат — зелено.
+    // файл в чужом каталоге, тест краснеет; откат — зелено. Вторая мутация (на sessionId-линию):
+    // дать SaveContent параметр sessionId и вести запись по ChatTreeRootForAsync
+    // (FilesController.cs:272) — своя запись уходит в дерево чата, проверка места в нём краснеет;
+    // откат — зелено. На этом прогоне исходы 404/200 не изменились ни на одном шаге — краснела
+    // ровно проверка места: без неё линия опять не различает контракт.
     [Fact]
     public async Task SaveContent_СсылкаВКорнеОперации_ЧужоеPrivate_404_Своё_Успех_ПараметрыДереваНеПишут()
     {
         if (OperatingSystem.IsWindows()) return;
-        var (epicId, _, projectId, mainRoot) = await CreateEpicWithVerifiedWorktreeAsync("writelink");
+        var (epicId, epicTree, projectId, mainRoot) = await CreateEpicWithVerifiedWorktreeAsync("writelink");
         var (me, other) = TestAuthorIds();
 
         // Ссылка и каталоги авторов — в корне проекта: именно на него идёт запись.
@@ -892,13 +904,37 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
             "запись через ссылку дошла до настоящего каталога автора: 404 выше дал именно гейт, а не «пути нет»");
 
         // Тот же маршрут с заявленным чатом: корень операции записи не меняется ни от какого
-        // параметра дерева — и гейт остаётся тем же.
-        var session = await _factory.Services.GetRequiredService<SessionManager>()
-            .CreateAsync(projectId, ClaudeMode.Auto, name: "chat for the write line");
+        // параметра дерева — и гейт остаётся тем же. Чат привязан к проверенному дереву: если
+        // параметр перенесёт запись, ей будет куда дойти до диска, и молчаливой 404 «негде» уже
+        // не будет — различает только место записи ниже.
+        var sessions = _factory.Services.GetRequiredService<SessionManager>();
+        var session = await sessions.CreateAsync(projectId, ClaudeMode.Auto, name: "chat for the write line");
+        (await sessions.AttachWorktreeAsync(session.Id, epicTree)).Should().BeTrue(
+            "дерево чата — проверенный worktree эпика: при уважении sessionId запись пошла бы в него");
+
         var deniedBySession = await _client.PutAsJsonAsync(
             $"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(newForeignReq)}&sessionId={session.Id}",
             new { content = "чужая правка" });
         deniedBySession.StatusCode.Should().Be(HttpStatusCode.NotFound, "sessionId — тот же корень и тот же гейт");
+
+        // Та же раскладка автора и «L» — в дереве чата: цель своей записи существует в обоих
+        // деревьях, и исход «200» о ней ничего не решает — решает, куда она легла.
+        var ownBySessionReq = own[..own.LastIndexOf('/')] + "/по-чату.txt";
+        var ownBySessionInMain = ThroughLinkTarget(mainRoot, ownBySessionReq);
+        var ownBySessionInTree = ThroughLinkTarget(epicTree, ownBySessionReq);
+        Directory.CreateDirectory(Path.GetDirectoryName(ownBySessionInTree)!);
+        var treeLink = Path.Combine(epicTree, "L");
+        if (!Directory.Exists(treeLink))
+            Directory.CreateSymbolicLink(treeLink, TreeExcludes.AttachmentsDir);
+
+        var okBySession = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(ownBySessionReq)}&sessionId={session.Id}",
+            new { content = "своя правка по чату" });
+        okBySession.StatusCode.Should().Be(HttpStatusCode.OK, "свой автор через ссылку — то же право, что без параметра");
+        File.Exists(ownBySessionInTree).Should().BeFalse(
+            "в дереве чата записи нет: sessionId не переносит корень операции — при переносе краснеет");
+        File.ReadAllText(ownBySessionInMain).Should().Be("своя правка по чату",
+            "запись с sessionId лезла в .cc-attachments корня проекта: параметр дерева запись не переносит");
     }
 
     // ─── Шаг B2b: POST /api/projects/{id}/files/locate — пакетный резолв с alternatives ───

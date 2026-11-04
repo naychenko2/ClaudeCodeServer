@@ -122,7 +122,7 @@ public class WikiNightlyServiceTests : IDisposable
         ClaudeHomeServer.Services.Composition.IFeatureFlagGate? flags = null,
         ClaudeHomeServer.Services.Composition.INotificationSender? notifier = null) =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
-            analyze ?? Done(), _llm, _config, NullLogger<WikiNightlyService>.Instance, flags ?? _flag, () => _now, notifier);
+            analyze ?? Done(), _llm, _config, NullLogger<WikiNightlyService>.Instance, flags ?? _flag, () => _now, notifier, _keeper);
 
     private Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> Done(
         string outcome = WikiChatIngestService.OutcomeNothingNew, int packages = 0) =>
@@ -145,7 +145,7 @@ public class WikiNightlyServiceTests : IDisposable
     private WikiNightlyService RealSut() =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
             (o, c, ct) => RealIngest().AnalyzeAsync(o, c, ct, LocalActionCatalog.WikiNightly),
-            _llm, _config, NullLogger<WikiNightlyService>.Instance, _flag, () => _now);
+            _llm, _config, NullLogger<WikiNightlyService>.Instance, _flag, () => _now, keeper: _keeper);
 
     private List<string> KeeperFiles() =>
         Directory.Exists(Path.Combine(Root(), "keeper"))
@@ -288,6 +288,109 @@ public class WikiNightlyServiceTests : IDisposable
         _analyzed.Should().BeEmpty("умолчания — ночь выключена");
         File.Exists(LastFile()).Should().BeFalse();
         File.ReadAllText(health).Split("нечитаемы").Length.Should().Be(2, "ровно одна строка за сутки, а не по строке на тик");
+    }
+
+    // ─── LI-1: ночь сама заводит вики при включённом тумблере ──────────────
+
+    private const string Fresh = "u3"; // владелец без pages/_schema.md
+
+    private string FreshSchema() => Path.Combine(Root(Fresh), "pages", WikiPaths.SchemaFileName);
+    private string FreshPages() => Path.Combine(Root(Fresh), "pages");
+
+    [Fact]
+    public async Task ТумблерВключён_ВикиНеЗаведена_НочьЗаводитПроходитИУведомляет()
+    {
+        Configure(owner: Fresh);
+        AddChat("c1", owner: Fresh);
+        File.Exists(FreshSchema()).Should().BeFalse();
+        var notifier = new Notifier();
+
+        await Tick(Sut(Done(WikiChatIngestService.OutcomeApplied, packages: 1), notifier: notifier));
+
+        File.Exists(FreshSchema()).Should().BeTrue("ночь завела вики через EnsureInitializedAsync");
+        _analyzed.Should().Equal(new[] { "c1" }, "проход выполнен");
+        WikiNightlyService.ReadLast(Root(Fresh)).Should().NotBeNull();
+        notifier.Sent.Should().ContainSingle("итог ночи доставлен владельцу");
+    }
+
+    [Fact]
+    public async Task НеЗаводит_ВнеОкна()
+    {
+        Configure(owner: Fresh);
+        AddChat("c1", owner: Fresh);
+        _now = At(12);
+
+        await Tick();
+
+        Directory.Exists(FreshPages()).Should().BeFalse();
+        _analyzed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task НеЗаводит_ТумблерВыключен()
+    {
+        Configure(enabled: false, owner: Fresh);
+        AddChat("c1", owner: Fresh);
+
+        await Tick();
+
+        Directory.Exists(FreshPages()).Should().BeFalse();
+        _analyzed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task НеЗаводит_ФлагLlmWikiВыключен()
+    {
+        Configure(owner: Fresh);
+        AddChat("c1", owner: Fresh);
+        _flag.On = false;
+
+        await Tick();
+
+        Directory.Exists(FreshPages()).Should().BeFalse();
+        _analyzed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task НеЗаводит_НевалидныеНастройки_БезСигналаИЗаписи()
+    {
+        Directory.CreateDirectory(Path.Combine(Root(Fresh), "keeper"));
+        File.WriteAllText(Path.Combine(Root(Fresh), "keeper", "settings.json"), "{ не json");
+        AddChat("c1", owner: Fresh);
+
+        await Tick();
+
+        Directory.Exists(FreshPages()).Should().BeFalse("_health.md создал бы pages/ мимо единственного метода заведения");
+        _analyzed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Гонка_НочнойТикИЗаведениеИзВне_ОдинШаблон_ПравкаЧеловекаНеЗатёрта()
+    {
+        Configure(owner: Fresh);
+        AddChat("c1", owner: Fresh);
+        var sut = Sut();
+        var go = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Оба заведения стартуют по одному сигналу — ночь и «PUT settings/analyze».
+        var tick = Task.Run(async () => { await go.Task; await sut.RunNightTickAsync(_now); });
+        var direct = Task.Run(async () => { await go.Task; await _keeper.EnsureInitializedAsync(Fresh); });
+        go.SetResult();
+        await Task.WhenAll(tick, direct);
+
+        File.Exists(FreshSchema()).Should().BeTrue();
+        const string edited = "# Правка человека\n";
+        File.WriteAllText(FreshSchema(), edited);
+
+        _now = At(4, day: 3); // следующая ночь: заведение идёт повторно и параллельно с прямым вызовом
+        AddChat("c2", owner: Fresh);
+        var go2 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tick2 = Task.Run(async () => { await go2.Task; await sut.RunNightTickAsync(_now); });
+        var direct2 = Task.Run(async () => { await go2.Task; await _keeper.EnsureInitializedAsync(Fresh); });
+        go2.SetResult();
+        await Task.WhenAll(tick2, direct2);
+
+        File.ReadAllText(FreshSchema()).Should().Be(edited, "заведение идемпотентно: шаблон поверх правки человека не пишется");
     }
 
     // ─── c1: бюджет, лимиты пакетов и открытых ────────────────────────────

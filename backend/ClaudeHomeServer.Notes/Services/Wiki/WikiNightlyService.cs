@@ -17,7 +17,8 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // просил. Окно полуоткрытое [start, end); start > end — окно через полночь (21→2). Дата прохода —
 // дата НАЧАЛА окна: тик в 01:00 окна 21→2 относится к вчерашней дате, иначе ночь разобралась бы дважды.
 //
-// Проход владельца: флаг llm-wiki → Nightly.Enabled → окно → пересчёт ступени 1 → очередь
+// Проход владельца: флаг llm-wiki → Nightly.Enabled → окно → (вики не заведена — WikiKeeper.EnsureInitializedAsync,
+// единственная запись ночи в незаведённую вики; сбой = error) → пересчёт ступени 1 → очередь
 // («важные», затем по UpdatedAt убыв.) → на каждый чат: перечитать тумблер и окно, лимит открытых
 // пакетов, дельта ≥ 3 реплик человека после курсора, лимиты раздела, ступень 2 для серых (лениво,
 // только когда очередь дошла до чата), бюджет → AnalyzeAsync(…, WikiNightly).
@@ -119,31 +120,34 @@ public sealed class WikiNightlyService : BackgroundService
     private readonly IConfiguration _config;
     private readonly Composition.IFeatureFlagGate? _flags;
     private readonly Composition.INotificationSender? _notifications;
+    private readonly WikiKeeper? _keeper;
     private readonly ILogger<WikiNightlyService> _log;
     private readonly Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> _analyze;
     private readonly Func<DateTimeOffset> _clock;
     private readonly string _dataDir;
 
     public WikiNightlyService(ISessionDirectory sessions, WikiChatRecalc recalc, WikiChatStage2 stage2,
-        WikiChatIngestService ingest, ICheapTextRunner llm, IConfiguration config,
+        WikiChatIngestService ingest, WikiKeeper keeper, ICheapTextRunner llm, IConfiguration config,
         ILogger<WikiNightlyService> log, Composition.IFeatureFlagGate? flags = null,
         Composition.INotificationSender? notifications = null)
         : this(sessions, recalc, stage2,
             // actionKey — только константа места: внешнего ввода у ночи нет.
             (owner, chat, ct) => ingest.AnalyzeAsync(owner, chat, ct, LocalActionCatalog.WikiNightly),
-            llm, config, log, flags, clock: null, notifications: notifications)
+            llm, config, log, flags, clock: null, notifications: notifications, keeper: keeper)
     {
     }
 
     // Шов теста: разбор и часы подменяются (ограничения проверяются без настоящей модели, а окно —
     // без ожидания ночи). В приложении сюда попадает только цепочка из публичного конструктора.
-    // notifications — после clock: существующие вызовы шва (позиционные) не сдвигаются.
+    // notifications и keeper — после clock: существующие вызовы шва (позиционные) не сдвигаются.
+    // keeper == null (тест без шва заведения) — ночь не заводит вики и берёт только заведённых.
     internal WikiNightlyService(ISessionDirectory sessions, WikiChatRecalc recalc, WikiChatStage2 stage2,
         Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> analyze,
         ICheapTextRunner llm, IConfiguration config, ILogger<WikiNightlyService> log,
         Composition.IFeatureFlagGate? flags, Func<DateTimeOffset>? clock,
-        Composition.INotificationSender? notifications = null)
+        Composition.INotificationSender? notifications = null, WikiKeeper? keeper = null)
     {
+        _keeper = keeper;
         _sessions = sessions;
         _recalc = recalc;
         _stage2 = stage2;
@@ -197,7 +201,9 @@ public sealed class WikiNightlyService : BackgroundService
         }
     }
 
-    // Владельцы с заведённой вики: подкаталоги data/wiki/ с pages/_schema.md (как у линта).
+    // Владельцы: подкаталоги data/wiki/ с pages/_schema.md (как у линта) ИЛИ с валидными настройками
+    // и включённым тумблером ночи — вики такого владельца ночь заведёт сама (RunOwnerAsync). Чтение
+    // настроек ничего не пишет.
     private List<string> EnumerateWikiOwners()
     {
         var wikiRoot = Path.Combine(_dataDir, WikiPaths.DirName);
@@ -206,7 +212,8 @@ public sealed class WikiNightlyService : BackgroundService
         {
             return Directory.EnumerateDirectories(wikiRoot)
                 .Select(d => Path.GetFileName(d))
-                .Where(id => !string.IsNullOrWhiteSpace(id) && WikiPaths.IsInitialized(_dataDir, id))
+                .Where(id => !string.IsNullOrWhiteSpace(id)
+                    && (WikiPaths.IsInitialized(_dataDir, id) || WantsAutoInit(id)))
                 .OrderBy(id => id, StringComparer.Ordinal)
                 .ToList();
         }
@@ -214,6 +221,14 @@ public sealed class WikiNightlyService : BackgroundService
         {
             return [];
         }
+    }
+
+    // Незаведённый владелец с включённой ночью: настройки читаются и валидны, Enabled=true.
+    private bool WantsAutoInit(string ownerId)
+    {
+        if (_keeper is null) return false;
+        var (settings, invalid) = WikiSettingsStore.Read(WikiPaths.Root(_dataDir, ownerId));
+        return !invalid && settings.NightlyOrDefaults().Enabled;
     }
 
     private async Task RunOwnerGuardedAsync(string ownerId, DateTimeOffset now, CancellationToken ct)
@@ -246,8 +261,11 @@ public sealed class WikiNightlyService : BackgroundService
 
         var root = WikiPaths.Root(_dataDir, ownerId);
         var (settings, invalid) = WikiSettingsStore.Read(root);
+        var initialized = WikiPaths.IsInitialized(_dataDir, ownerId);
         if (invalid)
         {
+            // У незаведённой вики сигнал создал бы pages/ мимо EnsureInitializedAsync: пропуск без записи.
+            if (!initialized) return;
             // Нечитаемый файл — умолчания (ночь выключена) и строка в _health.md тем же сигналом,
             // что у здоровья классов; разбора нет.
             var today = DateOnly.FromDateTime(now.Date);
@@ -259,6 +277,7 @@ public sealed class WikiNightlyService : BackgroundService
         var cfg = settings.NightlyOrDefaults();
         if (!cfg.Enabled) return;
         if (!InWindow(now.Hour, cfg.WindowStartHour, cfg.WindowEndHour)) return;
+        if (!initialized && _keeper is null) return;
 
         var date = WindowDate(now, cfg.WindowStartHour, cfg.WindowEndHour);
         var key = root;
@@ -274,7 +293,11 @@ public sealed class WikiNightlyService : BackgroundService
             // второй раз за дату не отправляется.
             var errorAlreadyNotified = last is not null && last.Date == FormatDate(date) && last.Outcome == OutcomeError;
 
-            var result = await RunPassAsync(ownerId, root, date, ct);
+            NightResult result;
+            if (!initialized && !await TryEnsureInitializedAsync(ownerId))
+                result = new NightResult(FormatDate(date), 0, 0, 0, 0, 0, OutcomeError);
+            else
+                result = await RunPassAsync(ownerId, root, date, ct);
             // Дата прохода — ПОСЛЕ прохода. Сбой записи итога не отменяет проход (его разборы
             // уже в сторах): следующий тик найдёт курсоры на концах и не разберёт ничего лишнего.
             try { WriteLast(root, result); }
@@ -290,6 +313,22 @@ public sealed class WikiNightlyService : BackgroundService
         finally
         {
             Running.TryRemove(key, out _);
+        }
+    }
+
+    // Единственная точка, где ночь пишет в незаведённую вики: идемпотентный EnsureInitializedAsync
+    // (под замком владельца, с перепроверкой). Сбой — исход error: дату не закрывает, владелец уведомлён.
+    private async Task<bool> TryEnsureInitializedAsync(string ownerId)
+    {
+        try
+        {
+            await _keeper!.EnsureInitializedAsync(ownerId).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            LogSafe(ex, "Ночной разбор {Owner}: вики не заведена", ownerId);
+            return false;
         }
     }
 

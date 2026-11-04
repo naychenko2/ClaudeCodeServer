@@ -104,7 +104,7 @@ public class WikiNightlyNotifyTests : IDisposable
         INotificationSender? notifier = null,
         ILogger<WikiNightlyService>? log = null) =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
-            analyze ?? Done(), _llm, _config, log ?? NullLogger<WikiNightlyService>.Instance, _flag, () => _now, notifier);
+            analyze ?? Done(), _llm, _config, log ?? NullLogger<WikiNightlyService>.Instance, _flag, () => _now, notifier, _keeper);
 
     private static Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> Done() =>
         (owner, chat, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(

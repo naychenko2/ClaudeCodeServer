@@ -9,7 +9,6 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { setAllFlags } from '../../../lib/featureFlags';
 import { audioApi, type AudioCatalog, type AudioModelInfo, type AudioOp, type AudioQuote, type AudioThread } from '../api';
 import {
   isStandDown, cloudCandidate, showCloudButton, isCloudButtonEnabled, showQueueLine, cloudQuoteRequest,
@@ -95,7 +94,6 @@ let quoteSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  setAllFlags({ 'local-model-stats': true });
   getCatalog.mockReturnValue(CATALOG);
   startJobSpy = vi.spyOn(audioApi, 'startJob').mockResolvedValue({ jobId: 'j1' });
   quoteSpy = vi.spyOn(audioApi, 'quote').mockResolvedValue(HOOK_QUOTE);
@@ -121,18 +119,15 @@ describe('cloudCandidate', () => {
 });
 
 describe('showCloudButton (видимость)', () => {
-  it('true: флаг + down + облачный исполнитель', () => {
-    expect(showCloudButton(true, DOWN, CATALOG, 'speak')).toBe(true);
-  });
-  it('false: флаг выключен (мутация «показ с выключенным флагом»)', () => {
-    expect(showCloudButton(false, DOWN, CATALOG, 'speak')).toBe(false);
+  it('true: down + облачный исполнитель', () => {
+    expect(showCloudButton(DOWN, CATALOG, 'speak')).toBe(true);
   });
   it('false: стенд не лежит (мутация «показ без down»)', () => {
-    expect(showCloudButton(true, QUEUED, CATALOG, 'speak')).toBe(false);
+    expect(showCloudButton(QUEUED, CATALOG, 'speak')).toBe(false);
   });
-  it('false: нет gpu', () => expect(showCloudButton(true, null, CATALOG, 'speak')).toBe(false));
+  it('false: нет gpu', () => expect(showCloudButton(null, CATALOG, 'speak')).toBe(false));
   it('false: нет облачного исполнителя (только локальные)', () => {
-    expect(showCloudButton(true, DOWN, LOCAL_ONLY, 'speak')).toBe(false);
+    expect(showCloudButton(DOWN, LOCAL_ONLY, 'speak')).toBe(false);
   });
 });
 
@@ -149,12 +144,11 @@ describe('isCloudButtonEnabled (кликабельность)', () => {
 });
 
 describe('showQueueLine', () => {
-  it('false: флаг выключен', () => expect(showQueueLine(false, QUEUED)).toBe(false));
-  it('false: нет gpu', () => expect(showQueueLine(true, null)).toBe(false));
-  it('true: флаг + gpu', () => expect(showQueueLine(true, QUEUED)).toBe(true));
+  it('false: нет gpu', () => expect(showQueueLine(null)).toBe(false));
+  it('true: есть gpu', () => expect(showQueueLine(QUEUED)).toBe(true));
   // Шаг 2: gpu есть (running) → showQueueLine true → собственная полоса карточки прячется
   it('gpu есть (running) → showQueueLine true → без собственной полосы', () =>
-    expect(showQueueLine(true, { running: true, steps: { step: 4, total: 10 } })).toBe(true));
+    expect(showQueueLine({ running: true, steps: { step: 4, total: 10 } })).toBe(true));
 });
 
 describe('cloudQuoteRequest', () => {
@@ -230,7 +224,7 @@ describe('GpuQueueBlock: запуск только по клику', () => {
     const html = renderToStaticMarkup(
       createElement(GpuQueueBlock, {
         scope: 'p1', sessionId: 's1', thread: THREAD, job: JOB,
-        feature: true, op: 'speak', mode: 'voice', count: 1,
+        op: 'speak', mode: 'voice', count: 1,
       }),
     );
     expect(html).toContain('Сделать в облаке');
@@ -242,7 +236,7 @@ describe('GpuQueueBlock: запуск только по клику', () => {
     const html = renderToStaticMarkup(
       createElement(GpuQueueBlock, {
         scope: 'p1', sessionId: 's1', thread: THREAD, job: null,
-        feature: true, op: 'speak', mode: 'voice', count: 1,
+        op: 'speak', mode: 'voice', count: 1,
       }),
     );
     expect(html).toBe('');
@@ -430,7 +424,7 @@ async function renderBlockDown() {
   vi.useFakeTimers();
   const { root, container } = mount(createElement(GpuQueueBlock, {
     scope: 'p1', sessionId: 's1', thread: THREAD, job: JOB,
-    feature: true, op: 'speak', mode: 'voice', count: 1,
+    op: 'speak', mode: 'voice', count: 1,
   }));
   // Прогоняем 300 мс: таймаут хука срабатывает, audioApi.quote (мок) разрешает котировку,
   // setState перерисовывает кнопку с ценой. Await — чтобы микротаск .then() отработал.
@@ -482,7 +476,7 @@ describe('GpuQueueBlock: M1 (исходный вход)', () => {
     vi.useFakeTimers();
     const { root, container } = mount(createElement(GpuQueueBlock, {
       scope: 'p1', sessionId: 's1', thread, job: JOB,
-      feature: true, op: 'speak', mode: 'voice', count: 1,
+      op: 'speak', mode: 'voice', count: 1,
     }));
     await act(async () => { vi.advanceTimersByTime(300); });
     return { root, container };

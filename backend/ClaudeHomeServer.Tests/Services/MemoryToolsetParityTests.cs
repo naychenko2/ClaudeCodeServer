@@ -126,7 +126,7 @@ public class MemoryToolsetParityTests
 
     /// <summary>
     /// Ось dossier (проект + MEMORY_DOSSIER_TOOLS=1): +2 инструмента паспортов.
-    /// Это связка «проект чата + флаг владельца change-dossiers-recall» из приёмки.
+    /// Это связка «проект чата» из приёмки.
     /// </summary>
     [SkippableFact]
     public void DossierСостав_СовпадаетСоStdioВеткой()

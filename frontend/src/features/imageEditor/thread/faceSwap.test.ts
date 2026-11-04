@@ -185,10 +185,6 @@ describe('facesError: разбор по кодам/статусам', () => {
     expect(facesError(err(404, { code: 'version_not_found' }))).toEqual({ code: 'version_not_found' });
   });
 
-  it('feature_disabled → feature_disabled', () => {
-    expect(facesError(err(409, { code: 'feature_disabled' }))).toEqual({ code: 'feature_disabled' });
-  });
-
   it('404 без кода → not_found (личная область)', () => {
     expect(facesError(err(404, {}))).toEqual({ code: 'not_found' });
   });

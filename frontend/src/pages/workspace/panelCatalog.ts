@@ -28,7 +28,7 @@ import { GEN_PANEL_KEYS } from '../../lib/genPanelKeys';
 // в любой из них.
 export type Zone = 'left' | 'right';
 
-// Панели вики раздела «Заметки» (фича notes-wiki-unified): «Входящие», «Журнал»,
+// Панели вики раздела «Заметки»: «Входящие», «Журнал»,
 // «Здоровье», «Настройки». Ключи живут в общем реестре сразу после графа заметок —
 // вики читается рядом с ними; домашняя зона — правая (см. PANEL_HOME), набор
 // выведен через shell-kit для вклада раздела.
@@ -48,7 +48,7 @@ export const PANEL_KEYS = [
   // Панели подсистем (слот workspace-panel-def): ключ зарезервирован здесь, тело и
   // доступность — у подсистемы; выключена подсистема — нет содержимого, нет и кнопки
   'characters',
-  // «Локальные модели» (фича local-model-stats): только админ, значок — при
+  // «Локальные модели»: только админ, значок — при
   // настроенном локальном провайдере (условие — у фичи, см. manifest)
   'localModel',
   // «Голоса» редактора звука: библиотека voices/ проекта отдельной панелью
@@ -168,7 +168,7 @@ export const PANEL_META: Record<Exclude<PanelKey, 'pluginPanels'>, { title: stri
   toc:      { title: 'Оглавление', Icon: TableOfContents },
   // Персонажи редактора картинок (модуль image-editor): люди с фото для генераций
   characters: { title: 'Персонажи', Icon: Contact },
-  // Локальные модели (фича local-model-stats): статистика локального движка, только админ
+  // Локальные модели: статистика локального движка, только админ
   localModel: { title: 'Локальные модели', Icon: Cpu },
   // Голоса редактора звука (модуль audio-editor): библиотека voices/ проекта
   voices: { title: 'Голоса', Icon: Mic },
@@ -181,7 +181,7 @@ export const PANEL_META: Record<Exclude<PanelKey, 'pluginPanels'>, { title: stri
   // проекта; notesGraph — граф ЗАМЕТОК, а graph — граф зависимостей кода.
   notesList:     { title: 'Заметки',  Icon: NotebookPen },
   notesGraph:    { title: 'Граф',     Icon: Network },
-  // Панели вики раздела «Заметки» (notes-wiki-unified): «Входящие» — очередь
+  // Панели вики раздела «Заметки»: «Входящие» — очередь
   // входящих разборов (ArrowDownToLine — входящее вниз, в очередь), «Журнал» —
   // лента событий вики (History), «Здоровье» — состояние страниц (Activity —
   // живой сигнал), «Настройки» — управление отбором (Settings).
@@ -228,7 +228,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   // Разделы хаба выросли из левого сайдбара — там их дом
   notesList: 'left',
   notesGraph: 'left',
-  // Панели вики (notes-wiki-unified): открытая вики живёт справа от списка
+  // Панели вики: открытая вики живёт справа от списка
   // заметок — туда и их дом
   wikiInbox: 'right',
   wikiJournal: 'right',

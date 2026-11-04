@@ -120,14 +120,14 @@ public class MemoryHttpTransportTests : IClassFixture<TestWebApplicationFactory>
 
         tools.Should().Contain("memory_remember").And.Contain("memory_recall");
         tools.Should().Contain("team_memory_remember").And.Contain("team_memory_list");
-        // Флаг change-dossiers-recall по умолчанию выключен — секции паспортов нет
-        tools.Should().NotContain("dossier_lookup").And.NotContain("dossier_get");
-        tools.Count.Should().Be(15);
+        // Секция паспортов есть всегда (флаг change-dossiers-recall снят)
+        tools.Should().Contain("dossier_lookup").And.Contain("dossier_get");
+        tools.Count.Should().Be(17);
     }
 
     /// <summary>
     /// Приёмка: чат БЕЗ персоны (обычный проектный чат) получает только командные
-    /// инструменты — как сегодня при пустом MEMORY_PERSONA_ID у stdio-сервера.
+    /// инструменты и паспорта (dossier_*) — как сегодня при пустом MEMORY_PERSONA_ID у stdio-сервера.
     /// </summary>
     [Fact]
     public async Task ToolsList_ЧатБезПерсоны_ТолькоИнструментыКоманды()
@@ -135,8 +135,8 @@ public class MemoryHttpTransportTests : IClassFixture<TestWebApplicationFactory>
         var (_, projectId) = await SeedAsync();
         var tools = await ToolNamesAsync(MemoryUrl("-", projectId));
 
-        tools.Should().OnlyContain(t => t.StartsWith("team_memory_", StringComparison.Ordinal));
-        tools.Count.Should().Be(5, "пять командных инструментов, ни одного personal");
+        tools.Should().OnlyContain(t => t.StartsWith("team_memory_", StringComparison.Ordinal) || t.StartsWith("dossier_", StringComparison.Ordinal));
+        tools.Count.Should().Be(7, "пять командных инструментов и два паспорта, ни одного personal");
     }
 
     [Fact]
@@ -147,27 +147,6 @@ public class MemoryHttpTransportTests : IClassFixture<TestWebApplicationFactory>
 
         tools.Should().OnlyContain(t => t.StartsWith("memory_", StringComparison.Ordinal));
         tools.Count.Should().Be(10);
-    }
-
-    /// <summary>
-    /// Секция dossier_* — по флагу ВЛАДЕЛЬЦА change-dossiers-recall (этап 2, ADR-004 §5):
-    /// решается по владельцу токена, а не по ходу — инвариант стабильности состава.
-    /// </summary>
-    [Fact]
-    public async Task ToolsList_DossierСекция_ПоФлагуВладельца()
-    {
-        var (personaId, projectId) = await SeedAsync();
-        var owner = _factory.Services.GetRequiredService<ClaudeHomeServer.Services.UserStore>()
-            .FindByUsername(TestWebApplicationFactory.TestUsername)!;
-        owner.FeatureFlags = new Dictionary<string, bool> { ["change-dossiers-recall"] = true };
-
-        var tools = await ToolNamesAsync(MemoryUrl(personaId, projectId));
-        tools.Should().Contain("dossier_lookup").And.Contain("dossier_get");
-        tools.Count.Should().Be(17);
-
-        // Флаг погашен — секция исчезает (состав зависит от владельца, не от хода)
-        owner.FeatureFlags = new Dictionary<string, bool> { ["change-dossiers-recall"] = false };
-        (await ToolNamesAsync(MemoryUrl(personaId, projectId))).Count.Should().Be(15);
     }
 
     /// <summary>

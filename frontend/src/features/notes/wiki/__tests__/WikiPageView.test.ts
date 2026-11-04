@@ -52,7 +52,7 @@ vi.mock('../../../../lib/offline', async (orig) => ({
 }));
 
 // Флаги управляются тестом: по умолчанию выключены — прежние тесты видят прежний вид;
-// блок F3a включает notes-wiki-unified и llm-wiki
+// блок F3a включает и llm-wiki
 const flags = vi.hoisted(() => ({ on: new Set<string>() }));
 vi.mock('../../../../lib/featureFlags', async (orig) => ({
   ...await orig<typeof import('../../../../lib/featureFlags')>(),
@@ -500,7 +500,7 @@ const authored = (over: Partial<WikiPageAuthoredDto> = {}): WikiPageAuthoredDto 
 
 const cardText = (name: string, ref: string) => `---\ntype: source\nref: ${ref}\n---\n\n# ${name}\n`;
 
-function unifiedOn() { flags.on.add('notes-wiki-unified'); flags.on.add('llm-wiki'); }
+function unifiedOn() { flags.on.add('llm-wiki'); }
 const plates = (c: Cont) => allNodes(c).filter(n => n.getAttribute('data-testid') === 'wiki-footnote');
 const popover = (c: Cont) => findNodeByAttr(c, 'data-testid', 'wiki-footnote-popover');
 function press(node: AnyNode | null, what: string) {

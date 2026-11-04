@@ -23,7 +23,6 @@ public class DossierAutoImportTests : IDisposable
     private readonly IConfiguration _config;
     private readonly UserStore _users;
     private readonly ProjectManager _projects;
-    private readonly FakeFeatureFlagGate _flags;
     private readonly DossierStore _store;
     private readonly DossierCaptureState _state;
     private readonly GitService _git = new(TestLauncherFactory.Instance);
@@ -44,11 +43,10 @@ public class DossierAutoImportTests : IDisposable
         _users = new UserStore(_config,
             new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _projects = new ProjectManager(_config, _users, new AppSettingsService(_config));
-        _flags = new FakeFeatureFlagGate(_users);
         _store = new DossierStore(_config);
         _state = new DossierCaptureState(_config);
         _auto = new DossierAutoImporter(_projects, _store, _state, _git,
-            new InstanceSecretsProvider(_config), _flags);
+            new InstanceSecretsProvider(_config));
     }
 
     public void Dispose()
@@ -59,12 +57,9 @@ public class DossierAutoImportTests : IDisposable
 
     // --- Фикстуры (по образцу DossierImporterTests) ---
 
-    private async Task<(Project Project, string OwnerId)> MkRepoProjectAsync(string name, bool flagOn)
+    private async Task<(Project Project, string OwnerId)> MkRepoProjectAsync(string name)
     {
         var user = _users.Add("autoimp-" + name, "password-123456", "user");
-        if (flagOn)
-            _users.SetFeatureFlag(user.Id, FeatureFlagKeys.ChangeDossiersRecall, true).Should().BeTrue();
-
         var dir = Path.Combine(_temp, name);
         Directory.CreateDirectory(dir);
         await _git.InitAsync(null, dir);
@@ -123,7 +118,7 @@ public class DossierAutoImportTests : IDisposable
     [Fact]
     public async Task НовыйTip_ИмпортируетЗаписиИФиксируетState()
     {
-        var (p, owner) = await MkRepoProjectAsync("repo_tip1", flagOn: true);
+        var (p, owner) = await MkRepoProjectAsync("repo_tip1");
         _projects.Update(p.Id, name: null, rootPath: null, autoImportDossiers: true).AutoImportDossiers
             .Should().BeTrue("тумблер проекта выставлен через Update (проводка эндпоинта PUT)");
         await WriteBranchAsync(p, Dossier(p.Id, "aa11aa11", "feat: паспорт из ветки"));
@@ -143,7 +138,7 @@ public class DossierAutoImportTests : IDisposable
     [Fact]
     public async Task ПовторныйТик_ТогоЖеTip_НичегоНеДобавляет()
     {
-        var (p, owner) = await MkRepoProjectAsync("repo_tip2", flagOn: true);
+        var (p, owner) = await MkRepoProjectAsync("repo_tip2");
         _projects.Update(p.Id, name: null, rootPath: null, autoImportDossiers: true);
         await WriteBranchAsync(p, Dossier(p.Id, "bb22bb22", "feat: паспорт один"));
         await TickAsync();
@@ -161,7 +156,7 @@ public class DossierAutoImportTests : IDisposable
     [Fact]
     public async Task ВеткаВырослаСледующимТиком_ПодтягиваетсяНовое()
     {
-        var (p, owner) = await MkRepoProjectAsync("repo_tip3", flagOn: true);
+        var (p, owner) = await MkRepoProjectAsync("repo_tip3");
         _projects.Update(p.Id, name: null, rootPath: null, autoImportDossiers: true);
         await WriteBranchAsync(p, Dossier(p.Id, "cc33cc33", "feat: паспорт один"));
         await TickAsync();
@@ -182,7 +177,7 @@ public class DossierAutoImportTests : IDisposable
     [Fact]
     public async Task ТумблерВыключен_НичегоНеИмпортируется()
     {
-        var (p, owner) = await MkRepoProjectAsync("repo_off", flagOn: true);
+        var (p, owner) = await MkRepoProjectAsync("repo_off");
         // AutoImportDossiers по умолчанию false — тумблер не включаем
         await WriteBranchAsync(p, Dossier(p.Id, "ee55ee55", "feat: паспорт без тумблера"));
 
@@ -193,28 +188,13 @@ public class DossierAutoImportTests : IDisposable
             "state не фиксируется: после включения тумблера первый тик импортирует ветку целиком");
     }
 
-    // --- (д) флаг владельца выключен: та же граница, что у ручного POST /dossiers/import ---
-
-    [Fact]
-    public async Task ФлагВладельцаВыключен_НичегоНеИмпортируется()
-    {
-        var (p, owner) = await MkRepoProjectAsync("repo_noflag", flagOn: false);
-        _projects.Update(p.Id, name: null, rootPath: null, autoImportDossiers: true);
-        await WriteBranchAsync(p, Dossier(p.Id, "ff66ff66", "feat: паспорт без флага"));
-
-        await TickAsync();
-
-        _store.List(owner, p.Id).Should().BeEmpty("флаг change-dossiers-recall выключен — автоимпорта нет");
-        _state.Get(DossierCaptureState.ImportKey(owner, p.Id)).Should().BeNull();
-    }
-
     // --- (е) ветки нет: тик молчит и не фиксирует state впустую; приезд ветки позже
     // (pull соседа) подхватывается следующим тиком ---
 
     [Fact]
     public async Task ВеткиНет_ПозжеВетка_Импортируется()
     {
-        var (p, owner) = await MkRepoProjectAsync("repo_nobranch", flagOn: true);
+        var (p, owner) = await MkRepoProjectAsync("repo_nobranch");
         _projects.Update(p.Id, name: null, rootPath: null, autoImportDossiers: true);
 
         await TickAsync();   // ветки ещё нет
@@ -282,13 +262,13 @@ public class DossierAutoImportTests : IDisposable
     [Fact]
     public async Task ДолгийИмпорт_ВыгрузкаУспелаПометитьСвойTip_КурсорНеЗатёрт()
     {
-        var (p, owner) = await MkRepoProjectAsync("repo_race", flagOn: true);
+        var (p, owner) = await MkRepoProjectAsync("repo_race");
         _projects.Update(p.Id, name: null, rootPath: null, autoImportDossiers: true);
         await WriteBranchAsync(p, Dossier(p.Id, "ace00001", "feat: чужой паспорт"));
         var foreignTip = await GetTipAsync(_git, owner, p.RootPath);
 
         var auto = new DossierAutoImporter(_projects, _store, _state, _git,
-            new InstanceSecretsProvider(_config), _flags,
+            new InstanceSecretsProvider(_config),
             importer: new RacingImporter(_store, _git, new InstanceSecretsProvider(_config), _state));
         await auto.TickAsync();
 

@@ -10,7 +10,6 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { FeatureBanner, featureRowModel, HOVER_CSS } from './FeatureBanner';
 import { FeatureTruthBody } from './FeatureTruthBody';
-import { FLAGS, setFlagLocal } from '../../../lib/featureFlags';
 import { __test as indexStore } from '../../../lib/featuresIndex';
 import type { FeatureIndexFeature } from '../../../types/featureIndex';
 import type { FeatureRun } from '../../../types/featureRun';
@@ -183,9 +182,7 @@ describe('FeatureTruthBody: сводка (раскрытие В2 = попап П
 // компоненте с индексом стора (run не запрошен: строка честно деградирует до данных
 // индекса). Паспел и раскрытие здесь не проверяются — это FeatureTruthBody выше.
 describe('FeatureBanner: рендер строки В2', () => {
-  function seedIndex(f: FeatureIndexFeature, flagsOn = true): void {
-    setFlagLocal(FLAGS.turnPlanFeatureMode, flagsOn);
-    setFlagLocal(FLAGS.featuresOverview, flagsOn);
+  function seedIndex(f: FeatureIndexFeature): void {
     indexStore.setIndex('p1', {
       features: [f],
       chats: { 's-me': [{ featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш8', lane: 'front' }] },
@@ -231,11 +228,6 @@ describe('FeatureBanner: рендер строки В2', () => {
     expect(html).toContain('data-banner-alarm="stop"');
     expect(html).toContain('Стоит · Глеб');
     expect(html).toContain('Открыть чат');
-  });
-
-  it('флаги выключены — строки нет вовсе (источник не зовётся, слот пустой)', () => {
-    seedIndex(feat({ ...progress, state: 'running', nowPersonaIds: ['p-kira'] }), false);
-    expect(renderRow()).toBe('');
   });
 
   // Дизайн-ревью F2, круг 2: hover — в классе с @media (hover:hover), без инлайнового

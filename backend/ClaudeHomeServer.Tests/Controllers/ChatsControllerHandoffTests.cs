@@ -31,14 +31,6 @@ public class ChatsControllerHandoffTests : IClassFixture<TestWebApplicationFacto
                 new StubRunner("### Цель\nпродолжить настройку значков")),
         };
         _client = _factory.CreateAuthenticatedClient();
-        SetPromptCacheFlag(true);
-    }
-
-    private void SetPromptCacheFlag(bool on)
-    {
-        var users = _factory.Services.GetRequiredService<UserStore>();
-        var user = users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
-        users.SetFeatureFlag(user.Id, FeatureFlagKeys.PromptCache, on);
     }
 
     private async Task<string> CreateSessionAsync(HttpClient client)
@@ -85,37 +77,6 @@ public class ChatsControllerHandoffTests : IClassFixture<TestWebApplicationFacto
         body.GetProperty("chatId").GetString().Should().NotBeNullOrEmpty().And.NotBe(id);
         body.GetProperty("draft").GetString().Should().Contain("продолжить настройку значков");
         body.GetProperty("warm").GetBoolean().Should().BeFalse("без данных кэша — холодный путь");
-    }
-
-    [Fact]
-    public async Task Перенос_ФлагВыключен_403_БезРаннераИБезНовыхЧатов()
-    {
-        // Оба ассерта обязательны: тест только на статус остался бы зелёным и при проверке
-        // флага ПОСЛЕ вызова модели
-        var id = await CreateSessionAsync(_client);
-        SeedAgentTurn(id);
-        SetPromptCacheFlag(false);
-        var runner = (StubRunner)_factory.Services.GetRequiredService<ICheapTextRunner>();
-        var manager = _factory.Services.GetRequiredService<SessionManager>();
-        var before = manager.GetAll().Count;
-
-        var resp = await _client.PostAsync($"/api/chats/{id}/handoff", null);
-
-        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
-        (await resp.Content.ReadAsStringAsync()).Should().Contain("prompt-cache");
-        runner.Calls.Should().Be(0, "модель не вызвана");
-        manager.GetAll().Count.Should().Be(before, "преемник не создан");
-    }
-
-    [Fact]
-    public async Task Перенос_ФлагВыключен_НесуществующийЧат_403_НеЛомаетПорядокПроверок()
-    {
-        // Флаг режет раньше поиска чата: по коду ответа не отличить чужой/несуществующий id
-        SetPromptCacheFlag(false);
-
-        var resp = await _client.PostAsync("/api/chats/no-such-chat/handoff", null);
-
-        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
 
     [Fact]

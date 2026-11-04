@@ -124,7 +124,7 @@ function render(): Cont {
 }
 
 const refusal = (status: number, body: unknown) => Promise.reject(Object.assign(new Error('отказ'), { status, body }));
-function unifiedOn() { flags.on.add('notes-wiki-unified'); flags.on.add('llm-wiki'); }
+function unifiedOn() { flags.on.add('llm-wiki'); }
 
 async function openEditor(c: Cont) {
   click(byId(c, 'wiki-edit-open'), 'Править');

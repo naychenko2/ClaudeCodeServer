@@ -56,7 +56,7 @@ public class WikiAdoptTransferTests : IDisposable
         var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _projects = new ProjectManager(_config, users, new AppSettingsService(_config));
         _pages = WikiPaths.Pages(_dir, User);
-        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, flags: new Flags(true, true));
+        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, flags: new Flags(true));
         _keeper = new WikiKeeper(_notes, _config);
         _apply = new WikiApplyService(_notes, _keeper, new NoSpheres(), _config);
         _transfer = new WikiNoteTransfer(_notes, _apply, _projects);
@@ -89,14 +89,11 @@ public class WikiAdoptTransferTests : IDisposable
         PackageFiles().Should().BeEmpty();
     }
 
-    [Theory]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(false, false)]
-    public async Task Adopt_Mine_ФлагВыключен_409_wiki_unified_off_ДрейфНаМесте(bool llmWiki, bool unified)
+    [Fact]
+    public async Task Adopt_Mine_ФлагВыключен_409_wiki_unified_off_ДрейфНаМесте()
     {
         ExternalEdit();
-        AssertCode(await Controller(flags: new Flags(llmWiki, unified)).Adopt(AdoptReq("mine")), 409, "wiki_unified_off");
+        AssertCode(await Controller(flags: new Flags(false)).Adopt(AdoptReq("mine")), 409, "wiki_unified_off");
         IsDrifted().Should().BeTrue();
         PackageFiles().Should().BeEmpty();
     }
@@ -106,13 +103,13 @@ public class WikiAdoptTransferTests : IDisposable
     {
         ExternalEdit();
         var before = PageBytes();
-        Json(await Controller(flags: new Flags(false, false)).Adopt(AdoptReq("as-is")), 200);
+        Json(await Controller(flags: new Flags(false)).Adopt(AdoptReq("as-is")), 200);
         IsDrifted().Should().BeFalse("«как есть» снимает дрейф без флагов");
         PageBytes().Should().Equal(before, "as-is файл не трогает");
         PackageFiles().Should().BeEmpty();
 
         ExternalEdit(Added + " Второй.");
-        Json(await Controller(flags: new Flags(false, false)).Adopt(AdoptReq(null)), 200);
+        Json(await Controller(flags: new Flags(false)).Adopt(AdoptReq(null)), 200);
         IsDrifted().Should().BeFalse();
     }
 
@@ -243,14 +240,12 @@ public class WikiAdoptTransferTests : IDisposable
         PackageFiles().Should().BeEmpty();
     }
 
-    [Theory]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    public async Task Перенос_ФлагВыключен_409_wiki_unified_off_ЗаметкаЦела(bool llmWiki, bool unified)
+    [Fact]
+    public async Task Перенос_ФлагВыключен_409_wiki_unified_off_ЗаметкаЦела()
     {
         var note = PersonalNote("Моя мысль", "Первое утверждение.");
         var before = NoteText(note);
-        AssertCode(await Controller(flags: new Flags(llmWiki, unified))
+        AssertCode(await Controller(flags: new Flags(false))
             .IngestNote(new WikiIngestNoteRequest(note.Id, null, true)), 409, "wiki_unified_off");
         NoteText(note).Should().Be(before);
         PackageFiles().Should().BeEmpty();
@@ -276,14 +271,14 @@ public class WikiAdoptTransferTests : IDisposable
     [Fact]
     public async Task Перенос_СервисныйТокенИВыключенныйФлаг_ВикиНеЗаведены()
     {
-        // svc (403) и любой из двух флагов (409) — раньше заведения: у незаведённого владельца
+        // svc (403) и выключенный флаг (409) — раньше заведения: у незаведённого владельца
         // ни байта в pages/. Мутация «заводить до проверок токена и флага» — красный.
         var a = _notes.Create(NoWiki, new CreateNoteRequest("Мысль svc", "Первое утверждение."));
         var svc = await Controller(serviceToken: true, user: NoWiki).IngestNote(new WikiIngestNoteRequest(a.Id, null, true));
         ((IStatusCodeActionResult)svc).StatusCode.Should().Be(403);
 
         var b = _notes.Create(NoWiki, new CreateNoteRequest("Мысль флага", "Первое утверждение."));
-        AssertCode(await Controller(flags: new Flags(true, false), user: NoWiki)
+        AssertCode(await Controller(flags: new Flags(false), user: NoWiki)
             .IngestNote(new WikiIngestNoteRequest(b.Id, null, true)), 409, "wiki_unified_off");
 
         WikiPaths.IsInitialized(_dir, NoWiki).Should().BeFalse();
@@ -533,16 +528,15 @@ public class WikiAdoptTransferTests : IDisposable
     }
 
     private WikiController Controller(bool serviceToken = false, Flags? flags = null, string user = User) =>
-        new(_keeper, _projects, new NoSpheres(), null!, null!, flags ?? new Flags(true, true), _config,
+        new(_keeper, _projects, new NoSpheres(), null!, null!, flags ?? new Flags(true), _config,
             null!, null!, _apply, _transfer)
         {
             ControllerContext = Ctx(serviceToken, user),
         };
 
-    private sealed class Flags(bool llmWiki, bool unified) : IFeatureFlagGate
+    private sealed class Flags(bool llmWiki) : IFeatureFlagGate
     {
-        public bool IsEnabled(string userId, string key) =>
-            (key == FeatureFlagKeys.LlmWiki && llmWiki) || (key == FeatureFlagKeys.NotesWikiUnified && unified);
+        public bool IsEnabled(string userId, string key) => key == FeatureFlagKeys.LlmWiki && llmWiki;
     }
 
     private sealed class NoSpheres : ISphereDirectory

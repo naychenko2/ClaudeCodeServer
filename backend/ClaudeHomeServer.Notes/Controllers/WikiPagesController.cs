@@ -20,8 +20,8 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // из claim sub; сервисный токен хода (typ=svc) отказан 403 ДО разбора тела и до любых
 // состояний — иначе агент `curl`-ом подделал бы правку человека, написал утверждения без
 // цитат и обошёл цитатный контракт. Инструмента MCP для правки от имени человека нет.
-// Серверный гейт `wiki_unified_off` — 409, когда выключен любой из двух флагов: llm-wiki
-// (без вики нечего править) или notes-wiki-unified (вложенный флаг, ADR-038 §9).
+// Серверный гейт `wiki_unified_off` — 409, когда выключен флаг llm-wiki
+// (без вики нечего править; флаг notes-wiki-unified снят и сведён к llm-wiki, ADR-038 §9).
 //
 // Конкурентность оптимистическая, по baseHash (sha256 байтов страницы, как в манифесте):
 // страница изменилась после открытия редактора (чужое сохранение, применённый пакет ИИ) —
@@ -122,10 +122,9 @@ public class WikiPagesController : ControllerBase
     private IActionResult ServiceTokenRefusal() =>
         StatusCode(403, new { error = "Сервисный токен: вики решает только пользовательский токен" });
 
-    // Флаг действует только при включённом llm-wiki: без вики нечего править (ADR-038, §9).
+    // Совместная правка идёт только при включённом llm-wiki: без вики нечего править (ADR-038, §9).
     private bool UnifiedOn(string userId) =>
-        _flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) == true
-        && _flags.IsEnabled(userId, FeatureFlagKeys.NotesWikiUnified);
+        _flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) == true;
 
     private IActionResult UnifiedOffRefusal() =>
         StatusCode(409, new { code = CodeUnifiedOff, message = "правка страниц выключена: функция недоступна" });

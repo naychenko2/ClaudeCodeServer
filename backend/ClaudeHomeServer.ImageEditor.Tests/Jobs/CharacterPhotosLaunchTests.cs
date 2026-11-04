@@ -32,23 +32,21 @@ public class CharacterPhotosLaunchTests : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private ImageEditLaunchAssembler Assembler(bool flagOn)
+    private ImageEditLaunchAssembler Assembler()
     {
         var jobs = new Mock<IImageEditJobs>();
         jobs.Setup(j => j.QuoteInfo(Owner, "p1", "q1")).Returns(new ImageEditQuoteInfo(ImageEditOp.Edit, null));
-        var flags = new Mock<IFeatureFlagGate>();
-        flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.CharacterSmartPhotos)).Returns(flagOn);
         return new ImageEditLaunchAssembler([HiggsfieldImageEditorTests.Create().Editor], jobs.Object,
-            new SkiaImageRaster(), flags: flags.Object);
+            new SkiaImageRaster());
     }
 
     private static ImageEditLaunchRequest Request(string? slug, IReadOnlyList<string>? photos) =>
         new("q1", "", null, null, null, null, null, [], [], slug, CharacterPhotos: photos);
 
     [Fact]
-    public async Task Флаг_включён_образцы_идут_в_заданном_порядке()
+    public async Task Образцы_идут_в_заданном_порядке()
     {
-        var result = await Assembler(true).AssembleAsync(Owner, _scope, Request("anya", [_files[2], _files[0]]), default);
+        var result = await Assembler().AssembleAsync(Owner, _scope, Request("anya", [_files[2], _files[0]]), default);
 
         result.Value.Should().NotBeNull(result.Error);
         result.Value!.References.Select(r => Characters.CharacterStoreTests.Hex(r.Bytes)).Should().Equal(
@@ -57,18 +55,9 @@ public class CharacterPhotosLaunchTests : IDisposable
     }
 
     [Fact]
-    public async Task Флаг_выключен_явный_список_отклоняется()
-    {
-        var result = await Assembler(false).AssembleAsync(Owner, _scope, Request("anya", [_files[0]]), default);
-
-        result.Value.Should().BeNull();
-        result.ErrorCode.Should().Be(ImageEditErrorCodes.CharacterPhotosInvalid);
-    }
-
-    [Fact]
     public async Task Чужое_имя_файла_даёт_character_photos_invalid()
     {
-        var result = await Assembler(true).AssembleAsync(Owner, _scope, Request("anya", [_files[0], "../x.png"]), default);
+        var result = await Assembler().AssembleAsync(Owner, _scope, Request("anya", [_files[0], "../x.png"]), default);
 
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.CharacterPhotosInvalid);
@@ -79,7 +68,7 @@ public class CharacterPhotosLaunchTests : IDisposable
     {
         File.WriteAllText(Path.Combine(_root, CharacterStore.Folder, "anya", _files[1]), "это не картинка");
 
-        var result = await Assembler(true).AssembleAsync(Owner, _scope, Request("anya", [_files[0], _files[1]]), default);
+        var result = await Assembler().AssembleAsync(Owner, _scope, Request("anya", [_files[0], _files[1]]), default);
 
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.CharacterPhotosInvalid);
@@ -88,15 +77,15 @@ public class CharacterPhotosLaunchTests : IDisposable
     [Fact]
     public async Task Список_без_персонажа_отклоняется()
     {
-        var result = await Assembler(true).AssembleAsync(Owner, _scope, Request(null, [_files[0]]), default);
+        var result = await Assembler().AssembleAsync(Owner, _scope, Request(null, [_files[0]]), default);
 
         result.ErrorCode.Should().Be(ImageEditErrorCodes.CharacterPhotosInvalid);
     }
 
     [Fact]
-    public async Task Без_списка_при_выключенном_флаге_запуск_как_раньше()
+    public async Task Без_списка_запуск_как_раньше()
     {
-        var result = await Assembler(false).AssembleAsync(Owner, _scope, Request("anya", null), default);
+        var result = await Assembler().AssembleAsync(Owner, _scope, Request("anya", null), default);
 
         result.Value.Should().NotBeNull(result.Error);
         result.Value!.References.Should().HaveCount(3);

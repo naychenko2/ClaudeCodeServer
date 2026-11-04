@@ -42,7 +42,7 @@ namespace ClaudeHomeServer.Services.Dossiers;
 //   `IGitCommitInspector` (инспекция коммитов при захвате), `ICodeGraphInspector`
 //   (обогащение паспортов графом кода), `ICheapTextRunner` (выжимка паспортов и
 //   конспектов), `ISessionDirectory`/`IProjectManager`/`IUserStore`/`ITaskLookup`,
-//   `IFeatureFlagGate` (гейт флага `change-dossiers-recall`), `IKnowledgeIndex`
+//   `IFeatureFlagGate` (шов проверки фич-флагов), `IKnowledgeIndex`
 //   (клиент Dify) и `IKnowledgeSyncParticipant` (участие в реконсайлере),
 //   `SessionIdGuard` (валидация id из трейлера коммита), `SessionTranscript`
 //   (сборка транскрипта под паспорт), `SessionChangedPaths` (нормализация якорей),

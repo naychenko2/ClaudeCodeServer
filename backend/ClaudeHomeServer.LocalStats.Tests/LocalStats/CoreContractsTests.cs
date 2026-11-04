@@ -7,7 +7,7 @@ using Xunit;
 
 namespace ClaudeHomeServer.Tests.LocalStats;
 
-// Контракты Core для флага local-model-stats: SessionId без дубля в record-конструкторе
+// Контракты Core для статистики локальных моделей: SessionId без дубля в record-конструкторе
 // и OwnerId вне сериализации (JsonIgnore на positional-параметре).
 public class CoreContractsTests
 {

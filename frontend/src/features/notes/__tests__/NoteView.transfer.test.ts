@@ -1,5 +1,5 @@
 // «Перенести в вики» на экране заметки (F5b, ADR-038 «Контракт для фронта»).
-// Кнопка — только при обоих флагах (llm-wiki И notes-wiki-unified): без любого — ни кнопки,
+// Кнопка — только при обоих флагах (llm-wiki): без любого — ни кнопки,
 // ни запросов. Клик — подтверждение текстом записки notes-wiki-unified-v1 (§«е. Заметка»,
 // дословно, кроме «✎ вы» вместо имени макета); до подтверждения — ни одного запроса.
 // Подтверждение → POST /api/wiki/ingest/note {noteId, transfer:true}; 200 → Notice «Перенесено»
@@ -20,7 +20,7 @@
 //     return;`) → «ответ после смены заметки отбрасывается» краснеет;
 // (2) снять busy-гард doTransfer → «двойной клик — один запрос» краснеет;
 // (3) рендерить кнопку при одном llm-wiki (убрать unifiedOn из условия) → «без флага
-//     notes-wiki-unified кнопки нет» краснеет;
+//     llm-wiki кнопки нет» краснеет;
 // (4) не звать requestOpenWikiPage после 200 → «200 … и открытие страницы» краснеет;
 // (5) показать сырой код вместо текста → «отказ — русским текстом» краснеет;
 // (6) вернуть действия после успеха внутрь try переноса (bumpNotes/requestOpenWikiPage/
@@ -205,7 +205,7 @@ beforeEach(() => {
   req.mockReset();
   req.mockImplementation(() => Promise.resolve(null));
   wikiStore.reset();
-  setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+  setAllFlags({ 'llm-wiki': true });
 });
 
 afterEach(() => {
@@ -216,15 +216,11 @@ afterEach(() => {
 });
 
 describe('«Перенести в вики» на экране заметки (F5b)', () => {
-  it('без флагов кнопки нет: ни при выключенном llm-wiki, ни при одном llm-wiki', async () => {
+  it('без llm-wiki кнопки нет и запросов нет', async () => {
     setAllFlags({});
     const { container } = renderNote(NOTE_A.id);
     await settle();
-    expect(transferBtn(container), 'при выключенных флагах').toBeNull();
-    // один llm-wiki — тоже нет: перенос относится к «Заметкам и Вики»
-    setAllFlags({ 'llm-wiki': true });
-    await settle();
-    expect(transferBtn(container), 'при одном llm-wiki').toBeNull();
+    expect(transferBtn(container), 'при выключенном llm-wiki').toBeNull();
     expect(req.mock.calls.filter(([u]) => String(u).endsWith('/wiki/ingest/note'))).toHaveLength(0);
   });
 

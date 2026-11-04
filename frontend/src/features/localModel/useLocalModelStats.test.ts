@@ -20,29 +20,14 @@ const { fetchLocalModelStats, fetchLocalModelMedia } = vi.hoisted(() => ({
 vi.mock('./api', () => ({ fetchLocalModelStats, fetchLocalModelMedia }));
 
 describe('isLocalModelPanelVisible: видимость панели', () => {
-  // Админ: флаг + configured (как раньше)
-  it('admin: флаг + configured — показывается', () => {
-    expect(isLocalModelPanelVisible({ flag: true, isAdmin: true, configured: true })).toBe(true);
+  it('configured: true — показывается', () => {
+    expect(isLocalModelPanelVisible(true)).toBe(true);
   });
-  it('admin: без флага — не показывается', () => {
-    expect(isLocalModelPanelVisible({ flag: false, isAdmin: true, configured: true })).toBe(false);
+  it('configured: false — нет', () => {
+    expect(isLocalModelPanelVisible(false)).toBe(false);
   });
-  it('admin: configured: false — нет', () => {
-    expect(isLocalModelPanelVisible({ flag: true, isAdmin: true, configured: false })).toBe(false);
-  });
-  it('admin: configured: null — сервер ещё не ответил, нет', () => {
-    expect(isLocalModelPanelVisible({ flag: true, isAdmin: true, configured: null })).toBe(false);
-  });
-  // Не-админ: только configured (флаг local-model-stats его не гейтит)
-  it('не admin: configured: true — показывается, флаг не важен', () => {
-    expect(isLocalModelPanelVisible({ flag: true, isAdmin: false, configured: true })).toBe(true);
-    expect(isLocalModelPanelVisible({ flag: false, isAdmin: false, configured: true })).toBe(true);
-  });
-  it('не admin: configured: false — нет', () => {
-    expect(isLocalModelPanelVisible({ flag: true, isAdmin: false, configured: false })).toBe(false);
-  });
-  it('не admin: configured: null — нет', () => {
-    expect(isLocalModelPanelVisible({ flag: true, isAdmin: false, configured: null })).toBe(false);
+  it('configured: null — сервер ещё не ответил, нет', () => {
+    expect(isLocalModelPanelVisible(null)).toBe(false);
   });
 });
 

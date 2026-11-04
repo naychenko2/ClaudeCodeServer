@@ -742,15 +742,10 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     // чаты владельца, чужой id — 404, не 500); 409 — группа/штаб/worktree, пустой чат,
     // место назначено на локаль, повторный клик, чат занят другим ходом (тёплый путь);
     // 502 — модель не дала записку или холодный путь не уложился в потолок (4 мин);
-    // 403 — флаг prompt-cache выключен у владельца (проверка до любого обращения к сервису).
     [HttpPost("{id}/handoff")]
     public async Task<IActionResult> Handoff(string id, CancellationToken ct,
-        [FromServices] ChatHandoffService handoff, [FromServices] IFeatureFlagGate flags)
+        [FromServices] ChatHandoffService handoff)
     {
-        // Флаг режет ручку ДО сервиса: иначе прямой вызов тратит ход модели и плодит чаты
-        // у владельца, не включавшего фичу (dark launch не должен прятать только интерфейс)
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.PromptCache))
-            return StatusCode(403, new { error = "Флаг prompt-cache выключен" });
         // Тело обязательно и у 404: без него фронт подставляет свой «Not Found» (минор ревью F-4)
         if (sessions.DenyOwnerTurn(id, UserId) is { } denied)
             return denied is NotFoundResult ? NotFound(new { error = "Чат не найден или удалён" }) : denied;

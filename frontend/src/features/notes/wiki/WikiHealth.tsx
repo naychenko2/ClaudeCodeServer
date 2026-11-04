@@ -392,8 +392,7 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
   // второй вызов пропускается при выключенном первом, и переключение флага при открытом
   // «Здоровье» меняло бы число хуков между рендерами (rules-of-hooks).
   const wikiFlag = useFeature(FLAGS.llmWiki);
-  const unifiedFlag = useFeature(FLAGS.notesWikiUnified);
-  const canAdoptMine = wikiFlag && unifiedFlag;
+  const canAdoptMine = wikiFlag;
   const [mineAsk, setMineAsk] = useState<string | null>(null); // путь страницы под подтверждением
   const [mineUi, setMineUi] = useState<{ id: string; busy: boolean; notice: MineNotice | null } | null>(null);
   // Текущий ключ действия «раздел\nпуть»: ref пишется в эффектах и обработчиках, не во время

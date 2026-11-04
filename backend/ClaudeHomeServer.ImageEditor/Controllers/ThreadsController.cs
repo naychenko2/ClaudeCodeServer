@@ -211,7 +211,6 @@ public class ThreadsController(
     ImageEditSteps? steps = null,
     IProjectManager? projects = null,
     ILocalImageMedia? localMedia = null,
-    IFeatureFlagGate? flags = null,
     Faces.FaceDetectionCache? faces = null) : ImageThreadEndpoints(threads, jobs)
 {
     [HttpGet]
@@ -275,11 +274,6 @@ public class ThreadsController(
         CancellationToken ct)
     {
         if (!Gate(projectId, sessionId, out var scope, out var denied)) return denied;
-
-        // Флаг выключен — 404 с телом feature_disabled (фича скрыта)
-        if (flags?.IsEnabled(UserId, FeatureFlagKeys.CharacterFaceSwap) != true)
-            return StatusCode(StatusCodes.Status404NotFound,
-                new { error = "Подстановка персонажа на лицо выключена", code = ImageEditErrorCodes.FeatureDisabled });
 
         // Локальные модели — опциональная зависимость: нет шва (подсистема images выключена) —
         // provider_unavailable, не 500

@@ -12,7 +12,7 @@ using Xunit;
 namespace ClaudeHomeServer.Tests.Controllers;
 
 // GET /api/local-model/hardware (вкладка «Железо», Б1): только admin (роль на действии → 403 не-админу),
-// плюс серверный флаг local-model-stats (без него 404); неверное window → 400. Поле hardware в stats и
+// неверное window → 400. Поле hardware в stats и
 // stats/media — только у админа (у не-админа scope "self" его нет).
 [Trait("Category", "Host")]
 public class HardwareEndpointTests : IClassFixture<HardwareEndpointTests.Host>, IDisposable
@@ -54,10 +54,6 @@ public class HardwareEndpointTests : IClassFixture<HardwareEndpointTests.Host>, 
     public HardwareEndpointTests(Host host)
     {
         _factory = host;
-        // Знамя флага поднимается перед каждым тестом: «БезФлага_404» снимает его на своём,
-        // а общий хост состояние между тестами помнит.
-        var users = host.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id, "local-model-stats", true);
         _admin = host.CreateAuthenticatedClient();
         _user = host.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
@@ -91,14 +87,6 @@ public class HardwareEndpointTests : IClassFixture<HardwareEndpointTests.Host>, 
         body.GetProperty("level").GetString().Should().Be("ok");
         body.GetProperty("nodes").GetArrayLength().Should().Be(0);
         body.GetProperty("stepMs").GetInt64().Should().BeGreaterThan(0);
-    }
-
-    [Fact]
-    public async Task БезФлага_404()
-    {
-        var users = _factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id, "local-model-stats", false);
-        (await _admin.GetAsync("/api/local-model/hardware")).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     // hardware есть у админа в stats и stats/media...

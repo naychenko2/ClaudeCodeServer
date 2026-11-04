@@ -326,14 +326,10 @@ flowchart LR
 
 ## Фич-флаги
 
-Оба — dark launch, выключены по умолчанию, стадия `dev`
-([FeatureFlag.cs](../../backend/ClaudeHomeServer.Core/Models/FeatureFlag.cs)):
-
-- `features-overview` — фасет «Фичи» в списке сессий и плашка фичи в чате;
-- `turn-plan-feature-mode` — режим «Исполнение фичи» в «Плане хода» (карточка фичи в чате).
-
-Флагами закрыт только UI: эндпоинты `features`, `features/index`, `features/{id}` от
-них не зависят, а журнал пишется всегда.
+Оба флага — `features-overview` (фасет «Фичи» в списке сессий и плашка фичи в чате) и
+`turn-plan-feature-mode` (режим «Исполнение фичи» в «Плане хода») — сняты 2026-11-04:
+фичи работают у всех, гейтов в коде нет. Эндпоинты `features`, `features/index`,
+`features/{id}` от флагов не зависели никогда, журнал пишется всегда.
 
 ## Где что в коде
 

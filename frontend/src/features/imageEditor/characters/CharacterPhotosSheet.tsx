@@ -1,9 +1,8 @@
 // Шторка «Фото» персонажа (спека character-panel-final-spec §8.1): два раздела — «Лицо для узнавания»
 // и «Для обучения». Фото лица уходят на сервер сразу, а свежий персонаж едет наверх через onChanged.
-// Метки фото (ADR-027) — только при включённом character-smart-photos; выключен — блок как в master.
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Modal, C, MODAL_W, SP, FLAGS, useFeature } from 'aihome_shell/kit';
+import { Modal, C, MODAL_W, SP } from 'aihome_shell/kit';
 import type { ImageEditCharacter, ImageEditorApi } from '../api';
 import { CharacterFacePhotos, type FacePhoto } from './CharacterFacePhotos';
 import { CharacterTrainingPhotos } from './CharacterTrainingPhotos';
@@ -13,10 +12,9 @@ import { hasPendingLabels, PhotoLabelCaption, PhotoLabelEditor, type PhotoLabelS
 // Правка одной метки: {файл: {angle, pitch, emotion}}; null в поле — не менять
 type LabelEdit = { angle?: string | null; pitch?: string | null; emotion?: string | null };
 
-// Пропсы блока «Лицо для узнавания», зависящие от флага. Чистая функция — тестируется без Modal
-// (порталы server-renderer не умеют): выключен → {} (ровно как master), включён → подписи, нажим,
-// редактор и новое согласие.
-export function faceSection(smart: boolean, ctx: {
+// Пропсы блока «Лицо для узнавания»: подписи, нажим, редактор и согласие. Чистая функция —
+// тестируется без Modal (порталы server-renderer не умеют).
+export function faceSection(ctx: {
   labels: Map<string, PhotoLabelState>;
   selected: string | null;
   setSelected: (fn: (cur: string | null) => string | null) => void;
@@ -32,7 +30,6 @@ export function faceSection(smart: boolean, ctx: {
   selectedKey?: string | null;
   labelsEditor?: ReactNode;
 } {
-  if (!smart) return {};
   const { selected, labels } = ctx;
   const selectedLabel = selected != null ? labels.get(selected) : undefined;
   return {
@@ -62,8 +59,6 @@ export function CharacterPhotosSheet({ api, projectId, character, onChanged, onC
 }) {
   const [busy, setBusy] = useState(false);
   const trainRef = useRef<HTMLDivElement>(null);
-  // Метки фото — только при включённом character-smart-photos (ADR-027 §10)
-  const smart = useFeature(FLAGS.characterSmartPhotos);
   // Выбранное для правки фото (ключ = имя файла); null — редактор закрыт
   const [selected, setSelected] = useState<string | null>(null);
   const [savingLabel, setSavingLabel] = useState<string | null>(null);
@@ -127,7 +122,7 @@ export function CharacterPhotosSheet({ api, projectId, character, onChanged, onC
     }
   };
 
-  const face = faceSection(smart, {
+  const face = faceSection({
     labels, selected,
     setSelected: fn => setSelected(fn),
     savingLabel, labelError,

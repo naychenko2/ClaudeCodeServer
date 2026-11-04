@@ -371,7 +371,7 @@ public class WikiController : ControllerBase
     /// <summary>Системная операция adopt (ADR-035, решение 6): текущий файл на диске
     /// принимается в манифест раздела, дрейф снимается, файл не трогается. Режимы (ADR-038, §6):
     /// `as-is` (по умолчанию, без флага) — как выше; `mine` («Принять как мою правку») — дифф
-    /// «манифест → диск» собирается в пакет human, под флагами llm-wiki и notes-wiki-unified,
+    /// «манифест → диск» собирается в пакет human, под флагом llm-wiki,
     /// baseHash обязателен (sha256 файла, каким его видел человек).</summary>
     [HttpPost("adopt")]
     public async Task<IActionResult> Adopt([FromBody] WikiAdoptRequest? req)
@@ -395,10 +395,9 @@ public class WikiController : ControllerBase
         return MineResult(userId, await _apply.AdoptMineAsync(userId, key!, req.Page, req.BaseHash), req.Page);
     }
 
-    // Гейт совместной правки: выключен любой из двух флагов — 409 (как в WikiPagesController).
+    // Гейт совместной правки: llm-wiki выключен — 409 (как в WikiPagesController).
     private bool UnifiedOn(string userId) =>
-        _flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) == true
-        && _flags.IsEnabled(userId, FeatureFlagKeys.NotesWikiUnified);
+        _flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) == true;
 
     private IActionResult UnifiedOffRefusal() =>
         StatusCode(409, new { code = CodeUnifiedOff, message = "правка страниц выключена: функция недоступна" });
@@ -493,7 +492,7 @@ public class WikiController : ControllerBase
         if (req.Target is not null)
             return BadRequest(new { code = CodeTransferTarget, message = "перенос идёт в раздел заметки: target не задаётся" });
         // LI-2: «перенести в вики» — действие человека: вика заводится сама вместо прежнего
-        // 409 wiki_not_initialized. Оба флага (UnifiedOn) и валидация тела проверяются выше;
+        // 409 wiki_not_initialized. Гейт UnifiedOn и валидация тела проверяются выше;
         // svc — в контроллере. Гейт IsInitialized в _transfer остаётся второй линией защиты.
         await _keeper.EnsureInitializedAsync(userId);
 

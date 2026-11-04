@@ -13,14 +13,13 @@ namespace ClaudeHomeServer.Controllers;
 // История медиа-генераций (ADR-030): 7 дней на диске. Админ видит промпты, параметры,
 // результаты и логин владельца; не-админ — только свои записи (логин не раскрывается, чужая
 // запись — 404, не 403: не подтверждаем существование чужой). Обе ручки — [Authorize] (любой
-// аутентифицированный) плюс серверная проверка: админ — флаг local-model-stats (как раньше),
+// аутентифицированный) плюс серверная проверка: админ — всегда,
 // не-админ — рубильник MediaForUsers (без него — 404). Название чужого чата/проекта и переход
 // в чат скрыты: наружу только логин (у админа).
 [ApiController]
 [Route("api/local-model/history")]
 public class MediaHistoryController(
     MediaHistoryIndex index,
-    FeatureFlagService flags,
     IEnumerable<IMediaHistoryResultSource> sources,
     MediaHistoryThumbService thumbs,
     IOptions<LocalModelStatsMediaOptions> mediaOptions,
@@ -32,17 +31,15 @@ public class MediaHistoryController(
 
     private bool IsAdmin => User.IsInRole("admin");
 
-    // Доступ (ADR-030, 2026-10-18): админ — серверный флаг local-model-stats (как раньше);
-    // не-админ — флаг не требуется, доступ даёт рубильник MediaForUsers. Без доступа — 404
+    // Доступ (ADR-030, 2026-10-18): админ — всегда;
+    // не-админ — доступ даёт рубильник MediaForUsers. Без доступа — 404
     // (UI-гейта мало: наружу чужие файлы). fail-closed: не-админ без непустого sub — 404
     // (та же общая проверка, что и в /stats/media, через MediaSelfScope).
     private bool Enabled()
     {
-        if (UserId is not { } id) return false;
+        if (UserId is null) return false;
         if (!MediaSelfScope.HasOwner(User)) return false;
-        return IsAdmin
-            ? flags.IsEnabled(id, FeatureFlagKeys.LocalModelStats)
-            : mediaOptions.Value.MediaForUsers;
+        return IsAdmin || mediaOptions.Value.MediaForUsers;
     }
 
     // Список: фильтры (вид, модель, исход, логин, период) + курсорная пагинация (50 на страницу).

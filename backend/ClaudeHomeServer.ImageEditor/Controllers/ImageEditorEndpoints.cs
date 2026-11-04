@@ -28,8 +28,7 @@ public abstract class ImageEditorEndpoints(
     ImageEditSteps? steps,
     IConfiguration? config,
     IImageRaster? raster,
-    ImageContextLaunch? context = null,
-    IFeatureFlagGate? flags = null) : ControllerBase
+    ImageContextLaunch? context = null) : ControllerBase
 {
     // Потолок файла проекта, который ручка transform читает в память; дальше решает растр (100 Мп)
     private const long MaxTransformFileBytes = 100L * 1024 * 1024;
@@ -46,7 +45,6 @@ public abstract class ImageEditorEndpoints(
     protected IImageEditJobs? Jobs => jobs;
     protected ImageEditSteps? Steps => steps;
     protected IImageRaster? Raster => raster;
-    protected IFeatureFlagGate? Flags => flags;
 
     protected IActionResult CatalogOf()
     {
@@ -128,8 +126,6 @@ public abstract class ImageEditorEndpoints(
         // Подстановка персонажа на лицо (ADR-028, этап 2): проверки a, b; детекция — только на запуске
         if (req.FaceTarget is not null)
         {
-            if (flags?.IsEnabled(UserId, FeatureFlagKeys.CharacterFaceSwap) != true)
-                return Error(StatusCodes.Status404NotFound, "feature_disabled", "Подстановка персонажа на лицо выключена");
             if (scope.Project is null)
                 return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
                     "Подстановка персонажа на лицо — только в проекте");
@@ -359,7 +355,7 @@ public abstract class ImageEditorEndpoints(
     protected IActionResult JobNotFound() =>
         Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.JobNotFound, "Задача не найдена");
 
-    // Единый контракт: provider_unavailable — 409 везде; busy — 503; feature_disabled — 404
+    // Единый контракт: provider_unavailable — 409 везде; busy — 503
     protected IActionResult Map<T>(ImageEditCallResult<T> result, Func<T, IActionResult> ok)
     {
         if (result.ErrorCode is null && result.Value is not null) return ok(result.Value);
@@ -371,8 +367,7 @@ public abstract class ImageEditorEndpoints(
                 => StatusCodes.Status409Conflict,
             ImageEditErrorCodes.QuoteNotFound or ImageEditErrorCodes.JobNotFound
                 or ImageEditErrorCodes.CharacterNotFound or ImageEditErrorCodes.StepNotFound
-                or ImageEditErrorCodes.ThreadNotFound or ImageEditErrorCodes.VersionNotFound
-                or ImageEditErrorCodes.FeatureDisabled => StatusCodes.Status404NotFound,
+                or ImageEditErrorCodes.ThreadNotFound or ImageEditErrorCodes.VersionNotFound =>StatusCodes.Status404NotFound,
             ImageEditErrorCodes.TooManyJobs => StatusCodes.Status429TooManyRequests,
             ImageEditErrorCodes.Unavailable or ImageEditErrorCodes.RasterUnavailable
                 or ImageEditErrorCodes.Busy => StatusCodes.Status503ServiceUnavailable,

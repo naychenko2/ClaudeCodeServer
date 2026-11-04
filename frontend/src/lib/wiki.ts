@@ -1624,8 +1624,8 @@ export async function transferWikiNote(noteId: string): Promise<WikiNoteTransfer
 // непосредственно перед запросом — единственный источник хэша на этом экране. Между чтением
 // и применением файл мог быть правлен ещё раз — это ровно 409 wiki_page_changed, бэк ничего
 // не пишет. Ответы как у edit: 200 applied/unchanged; 409 wiki_page_changed (файл правили
-// ещё раз), 409 wiki_drift (дрейф других страниц раздела), 409 wiki_unified_off (любой из
-// флагов выключен — UnifiedOffRefusal до ветки), 400 wiki_edit_invalid (.violations/.issues),
+// ещё раз), 409 wiki_drift (дрейф других страниц раздела), 409 wiki_unified_off (флаг
+// llm-wiki выключен — UnifiedOffRefusal до ветки), 400 wiki_edit_invalid (.violations/.issues),
 // 400 wiki_adopt_mode. Чистый транспорт (тот же порядок, что analyzeWikiChat/transferWikiNote):
 // состояния стора не трогает, ничего не перечитывает — перечитку здоровья и отбивку ответа
 // по пути страницы делает вызывающий.

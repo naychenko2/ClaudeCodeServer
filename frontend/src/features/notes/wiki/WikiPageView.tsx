@@ -325,10 +325,9 @@ export function WikiPageView({ section, pageKey, onBack }: Props) {
   const page = useMemo(() => parseWikiPage(content), [content]);
   const [adoptBusy, setAdoptBusy] = useState(false);
   const [adoptError, setAdoptError] = useState<unknown>(null);
-  // Авторство и поповер сносок — только с флагом единых «Заметок и Вики» и включённой вики
-  const unifiedFlag = useFeature(FLAGS.notesWikiUnified);
+  // Авторство и поповер сносок — только с включённой вики
   const wikiFlag = useFeature(FLAGS.llmWiki);
-  const unified = unifiedFlag && wikiFlag;
+  const unified = wikiFlag;
   const [openFn, setOpenFn] = useState<{ view: FootnoteView; anchor: DOMRect | null; pageId: string } | null>(null);
 
   // Дрейф — поле ответа (его считает бэк сверкой файла с манифестом). Шапка status: drift

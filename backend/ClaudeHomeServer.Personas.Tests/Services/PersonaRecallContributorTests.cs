@@ -26,7 +26,7 @@ public class PersonaRecallContributorTests
                 (_, _, _, _, _, _, s, _, _) => split = s)
             .ReturnsAsync(new PersonaRecallBlock("память", "досье", [], [], []));
 
-        var sut = new PersonaRecallContributor(recall.Object, Mock.Of<IFeatureFlagGate>(),
+        var sut = new PersonaRecallContributor(recall.Object,
             Mock.Of<IChatHistoryLoader>(), Mock.Of<IProjectManager>(),
             new ConfigurationBuilder().Build(), NullLogger<PersonaRecallContributor>.Instance);
 
@@ -55,7 +55,7 @@ public class PersonaRecallContributorTests
             .ReturnsAsync(new PersonaRecallBlock(
                 "МАРКЕР_ЛИЧНОЙ_ПАМЯТИ запись владельца", "МАРКЕР_ДОСЬЕ_ПРОЕКТА паспорт", [], [], []));
 
-        var sut = new PersonaRecallContributor(recall.Object, Mock.Of<IFeatureFlagGate>(),
+        var sut = new PersonaRecallContributor(recall.Object,
             Mock.Of<IChatHistoryLoader>(), Mock.Of<IProjectManager>(),
             new ConfigurationBuilder().Build(), NullLogger<PersonaRecallContributor>.Instance);
 

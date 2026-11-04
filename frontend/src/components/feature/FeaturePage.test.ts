@@ -293,7 +293,6 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     indexTest.reset();
     backNavTest.reset();
     personaMap.clear();
-    setAllFlags({ 'features-overview': true });
     mockIndex.features = [feat()];
     mockIndex.chats = {};
     mockChats.clear();
@@ -919,7 +918,6 @@ describe('Ш5: ветка и ведущий в сводке', () => {
     indexTest.reset();
     backNavTest.reset();
     personaMap.clear();
-    setAllFlags({ 'features-overview': true });
     personaMap.set('p-sofya', 'Софья (локальная)');
     mockIndex.features = [feat({ orchestratorPersonaId: 'p-sofya' })];
     mockIndex.chats = {};
@@ -1127,7 +1125,6 @@ describe('W4-HOLD-F2: пауза и черновик в шапке и блоке
     indexTest.reset();
     backNavTest.reset();
     personaMap.clear();
-    setAllFlags({ 'features-overview': true });
     personaMap.set('p-kira', 'Кира');
     mockIndex.features = [feat()];
     mockIndex.chats = {};
@@ -1390,7 +1387,6 @@ describe('F2: «Закрыть фичу» — пункт ⋯ (Ш4: кнопки 
     indexTest.reset();
     backNavTest.reset();
     personaMap.clear();
-    setAllFlags({ 'features-overview': true });
     mockIndex.features = [feat()];
     mockIndex.chats = {};
     mockChats.clear();
@@ -1654,7 +1650,6 @@ describe('F3: кнопка «Возобновить» на закрытой фи
     indexTest.reset();
     backNavTest.reset();
     personaMap.clear();
-    setAllFlags({ 'features-overview': true });
     mockIndex.features = [feat()];
     mockIndex.chats = {};
     mockChats.clear();
@@ -1794,7 +1789,6 @@ describe('Q5B: очередь фич в шапке', () => {
     indexTest.reset();
     backNavTest.reset();
     personaMap.clear();
-    setAllFlags({ 'features-overview': true });
     personaMap.set('p-kira', 'Кира');
     mockIndex.features = [feat()];
     mockIndex.chats = {};
@@ -1952,7 +1946,6 @@ describe('Q5I-2: блок «Фича в очереди» на странице �
     indexTest.reset();
     backNavTest.reset();
     personaMap.clear();
-    setAllFlags({ 'features-overview': true });
     mockIndex.features = [feat()];
     mockIndex.chats = {};
     mockChats.clear();
@@ -2143,7 +2136,6 @@ describe('F6: блок «Сводка» на вкладке «Хронологи
     indexTest.reset();
     backNavTest.reset();
     personaMap.clear();
-    setAllFlags({ 'features-overview': true });
     personaMap.set('p-sofya', 'Софья');
     mockIndex.features = [feat()];
     mockIndex.chats = {};
@@ -2342,7 +2334,6 @@ describe('Ш8-wire: риски мержа в диалоге подтвержде
     indexTest.reset();
     backNavTest.reset();
     personaMap.clear();
-    setAllFlags({ 'features-overview': true });
     mockIndex.features = [feat()];
     mockIndex.chats = {};
     mockChats.clear();
@@ -2448,7 +2439,6 @@ describe('GC-F11R4: окно возврата и страница', () => {
     indexTest.reset();
     backNavTest.reset();
     personaMap.clear();
-    setAllFlags({ 'features-overview': true });
     mockIndex.features = [feat()];
     mockIndex.chats = {};
     mockChats.clear();
@@ -2533,7 +2523,6 @@ describe('Ш2: тег этапа в тулбаре — из brief.now.stage', ()
     indexTest.reset();
     backNavTest.reset();
     personaMap.clear();
-    setAllFlags({ 'features-overview': true });
     mockIndex.features = [feat()];
     mockIndex.chats = {};
     mockChats.clear();

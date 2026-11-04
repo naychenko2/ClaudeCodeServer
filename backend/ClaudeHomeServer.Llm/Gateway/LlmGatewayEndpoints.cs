@@ -174,7 +174,7 @@ public static class LlmGatewayEndpoints
             var buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
             var filtered = sse is null ? null : new ArrayBufferWriter<byte>();
 
-            // Наблюдатель метрик локальной модели (флаг local-model-stats): создаётся только
+            // Наблюдатель метрик локальной модели (статистика локальных моделей): создаётся только
             // в ветке БЕЗ нормализатора (sse is null) и только когда ответ — SSE, маршрут
             // локальный и метрики включены; иначе поведение шлюза не меняется ни на байт.
             // Копия каждого куска идёт наблюдателю ПОСЛЕ записи клиенту (клиент — первым).
@@ -277,7 +277,7 @@ public static class LlmGatewayEndpoints
     private static readonly System.Text.RegularExpressions.Regex DumpFileName =
         new(@"^gw-normalized-\d{8}-\d{6}-\d{3}-[0-9a-f]{32}\.json$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
-    // Наблюдатель метрик локальной модели (флаг local-model-stats): создаётся только когда
+    // Наблюдатель метрик локальной модели (статистика локальных моделей): создаётся только когда
     // (а) ответ — SSE, (б) маршрут локальный (ResolveByModel → IsLocal) и (в) метрики
     // включены (IOptionsMonitor<LocalModelStatsOptions>.Enabled). Иначе null — поведение
     // шлюза не меняется ни на байт и ни на аллокацию. Нормализатор (sse != null) здесь

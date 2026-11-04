@@ -17,7 +17,6 @@ import { Modal, ModalActions, Button, IconButton, Chip } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { ChatGroupHeader } from './ChatGroupHeader';
 import { FeatureGroupHeader } from './FeatureGroupHeader';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 import { useFeaturesIndex } from '../lib/featuresIndex';
 import { LIST_FLASH_CLASS, LIST_FLASH_MS } from './ListDateDivider';
 import {
@@ -98,8 +97,8 @@ interface Props {
 }
 
 // Режимы группировки списка проекта: «Темы» есть только здесь, у глобального списка их
-// нет. «Фичи» — пятый пункт, появляется только при флаге features-overview (см.
-// featureGroupByOptions(true, featuresOn) в теле компонента); глобальный список его не
+// нет. «Фичи» — пятый пункт, есть всегда (см.
+// featureGroupByOptions(true) в теле компонента); глобальный список его не
 // получает (реестра фич у него нет).
 // Зазор под секцией группы (дни, теги, темы). Нижний padding списка его вычитает
 // (не больше SP.sm − ROW_GAP, иначе padding уйдёт в минус)
@@ -727,22 +726,19 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // hierarchy в сторе осталась ради совместимости записей и здесь не читается
   const { filters, patch } = useChatFilters(project.id);
   const { sortOrder } = filters;
-  // Режим «Фичи»: фасет по индексу фич (флаг features-overview, dark launch).
-  // Пункт «Фичи» в группировке появляется только при флаге; индекс фич проекта
-  // источник правды (бэк считает bucket/порядок/членство/ключевой чат), фронт
-  // только показывает. Флаг выключен — источник не зовётся (EMPTY, фасет не рисуется)
-  const featuresOn = useFeature(FLAGS.featuresOverview);
-  const groupByOptions = featureGroupByOptions(true, featuresOn);
-  // groupBy из хранилища может быть недоступен этому списку: 'features' при
-  // выключенном флаге (пункта «Фичи» в тулбаре нет, а режим фичи показал бы
-  // «Фич пока нет»). Клампим к опциям — как 'subjects' в глобальном списке
+  // Режим «Фичи»: фасет по индексу фич.
+  // Индекс фич проекта — источник правды (бэк считает bucket/порядок/членство/ключевой
+  // чат), фронт только показывает
+  const groupByOptions = featureGroupByOptions(true);
+  // groupBy из хранилища может быть недоступен этому списку (например, 'subjects').
+  // Клампим к опциям — как 'subjects' в глобальном списке
   // (ChatList.tsx) — иначе ни одна ветка рендера не сработала бы. Хранилище не
   // перезаписываем: первый явный выбор пользователя всё починит сам.
   const groupBy: ChatGroupBy = groupByOptions.includes(filters.groupBy) ? filters.groupBy : 'days';
   const subjectsMode = groupBy === 'subjects';
   const subjectRun = useSubjectRun(project.id, subjectsMode);
   const featuresMode = groupBy === 'features';
-  const featuresIndex = useFeaturesIndex(project.id, featuresOn);
+  const featuresIndex = useFeaturesIndex(project.id);
   // Раскрытые группы фич (по featureId). Пусто = все свёрнуты: группа свёрнута по
   // умолчанию, наружу выведены ключевой и живые/вставшие чаты, остальное — «ещё N»
   const [expandedFeatureGroups, setExpandedFeatureGroups] = useState<Set<string>>(new Set());

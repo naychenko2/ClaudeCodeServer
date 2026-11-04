@@ -85,8 +85,8 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // страница заметок ровно такая, какой была — ни вкладки, ни переключателя на десктопе
   const wikiEnabled = useFeature(FLAGS.llmWiki);
   // Единая раскладка (ADR-038, F1): дерево слева, рельса и панель справа, шторки на 360;
-  // только вместе с вики — без флага остаются прежние вкладки
-  const wikiUnified = useFeature(FLAGS.notesWikiUnified) && wikiEnabled;
+  // только вместе с вики
+  const wikiUnified = wikiEnabled;
   // Теги всех заметок по частоте — чипы-фильтры списка (клик = оператор tag: в поиске).
   // Тег избранного среди них не показываем: у него свой чип над группой фильтров.
   const allTags = useMemo(() => {

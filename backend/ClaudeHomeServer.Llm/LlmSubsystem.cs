@@ -405,7 +405,7 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton(sp => new Gateway.TurnTokenService(
             sp.GetRequiredService<Turn.ITurnEventBus>(),
             log: sp.GetService<ILogger<Gateway.TurnTokenService>>()));
-        // Счётчик хода локальной модели (флаг local-model-stats): реализует ILocalModelRequestSink
+        // Счётчик хода локальной модели (статистика локальных моделей): реализует ILocalModelRequestSink
         // (шлюз отводит ему копию SSE) и подписан на шину хода (TurnCompleted/SessionDeleted).
         // Ленивая фабрика: подписка на шину (Subscribe) — в момент первого резолва, когда все
         // швы на месте. Если убрать фабрику (простая регистрация без Subscribe) — ходы не

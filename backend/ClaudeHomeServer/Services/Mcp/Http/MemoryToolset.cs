@@ -31,7 +31,7 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// отказ с текстом, а не пустая память (McpHttpOwnerIsolationTests + MemoryHttpTransportTests).
 ///
 /// ИНВАРИАНТ состава (IMcpToolset): tools/list зависит только от хвоста и владельца
-/// (персона/проект/флаг change-dossiers-recall) — всё это закреплено конфигом хода на
+/// (персона/проект) — всё это закреплено конфигом хода на
 /// жизнь адаптера и от свойств хода не зависит. Сторож парности со stdio-веткой отката —
 /// MemoryToolsetParityTests.
 /// </summary>
@@ -326,7 +326,7 @@ public sealed class MemoryToolset(
 
             case "dossier_lookup":
             {
-                if (!team || !DossierToolsEnabled(context)) return DenyDossier();
+                if (!team) return DenyDossier();
                 var found = dossierRecall.Lookup(context.OwnerId, project!.Id,
                     OptionalArg(arguments, "path"), OptionalArg(arguments, "symbol"),
                     OptionalArg(arguments, "query"), 20);
@@ -340,7 +340,7 @@ public sealed class MemoryToolset(
 
             case "dossier_get":
             {
-                if (!team || !DossierToolsEnabled(context)) return DenyDossier();
+                if (!team) return DenyDossier();
                 if (dossiers.GetById(context.OwnerId, project!.Id, StringArg(arguments, "id")) is not { } dossier)
                     return Deny($"Паспорт {StringArg(arguments, "id")} не найден.");
                 var section = (string title, IReadOnlyList<string>? items) =>
@@ -530,8 +530,7 @@ public sealed class MemoryToolset(
     }
 
     // Состав по хвосту: personal — при своей персоне, team — при своём проекте,
-    // dossier — при проекте и флаге владельца change-dossiers-recall (решается по
-    // владельцу, стабильно в рамках сессии — инвариант IMcpToolset)
+    // dossier — при проекте (стабильно в рамках сессии — инвариант IMcpToolset)
     private IReadOnlyList<McpToolSchema> BuildTools(McpToolCallContext context)
     {
         if (!TryResolve(context, out var persona, out var project, out _)) return [];
@@ -540,16 +539,13 @@ public sealed class MemoryToolset(
         if (project is not null)
         {
             tools.AddRange(TeamTools);
-            if (DossierToolsEnabled(context)) tools.AddRange(DossierTools);
+            tools.AddRange(DossierTools);
         }
         // Память сферы — по флагу владельца, а не по членству проекта: отказ «проект не входит
         // в сферу» выдаёт сам вызов
         if (SphereToolsEnabled(context)) tools.AddRange(SphereTools);
         return tools;
     }
-
-    private bool DossierToolsEnabled(McpToolCallContext context) =>
-        flags.IsEnabled(context.OwnerId, FeatureFlagKeys.ChangeDossiersRecall);
 
     // Гейт записи команды (③-3.4): пишет либо «свой» вызов без персоны (обычный проектный
     // чат), либо персона САМОГО проекта. Вызывающая персона здесь — персона из хвоста
@@ -635,7 +631,7 @@ public sealed class MemoryToolset(
         "Память команды проекта не доступна: чат вне проекта либо проект недоступен.");
 
     private static McpToolCallResult DenyDossier() => Deny(
-        "Паспорта изменений не доступны в этом чате (нет проекта либо выключен флаг владельца change-dossiers-recall).");
+        "Паспорта изменений не доступны в этом чате (нет проекта).");
 
     // --- Аргументы вызова ---
 

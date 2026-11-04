@@ -95,6 +95,10 @@ internal sealed class RecordingBroadcaster : ISessionBroadcaster
     // Сигнал для тестов: срабатывает после каждой записи в ToOwnerCalls — ожидание по событию вместо опроса
     public event Action? OwnerMessageSent;
 
+    // Тот же сигнал для обеих адресаций (ToOwner и ToProject) с самим сообщением: тест ждёт конкретное
+    // событие по JobId, а не опрашивает журнал
+    public event Action<ServerMessage>? MessageSent;
+
     public Task ToSession(string sessionId, ServerMessage message) => Task.CompletedTask;
     public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) => Task.CompletedTask;
     public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) => Task.CompletedTask;
@@ -102,6 +106,7 @@ internal sealed class RecordingBroadcaster : ISessionBroadcaster
     public Task ToProject(string projectId, ServerMessage message)
     {
         ToProjectCalls.Enqueue((projectId, message));
+        MessageSent?.Invoke(message);
         return Task.CompletedTask;
     }
 
@@ -109,6 +114,7 @@ internal sealed class RecordingBroadcaster : ISessionBroadcaster
     {
         ToOwnerCalls.Enqueue((ownerId, message));
         OwnerMessageSent?.Invoke();
+        MessageSent?.Invoke(message);
         return Task.CompletedTask;
     }
 }

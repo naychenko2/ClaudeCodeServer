@@ -10,6 +10,7 @@ using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.CodeGraph;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Files;
@@ -729,6 +730,211 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
         var response = await _client.GetAsync($"/api/projects/{projectId}/files/stream?path=clip.mp4&sessionId={session.Id}");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         (await response.Content.ReadAsStringAsync()).Should().Be("from chat tree", "stream — тот же резолв дерева, что content");
+    }
+
+    // ─── TAIL-ROOTS-GATE (доработка по ревью 44e1219c к 8b56ba3db): вторая линия гейта по фактическому корню операции ───
+
+    // Ссылка ВНУТРИ рабочего дерева: «L» → .cc-attachments лежит в worktree, а не в корне проекта.
+    // Первая линия (по корню проекта) о ней молчит: «L» там даже нет на диске, и канон
+    // <mainRoot>/L/private/… не содержит сегмент-пары .cc-attachments/private/{X}. Ловит вторая
+    // линия — по фактическому корню операции (корень дерева эпика / hit.Root): в своём дереве «L»
+    // разыменовывается в <wt>/.cc-attachments, и чужое private через неё — тот же 404, что
+    // прямым именем. Именно эта линия закрывает дефект f1c60d82: без неё регресс вернулся бы молча.
+    //
+    // Пара самопроверяющаяся: своё через ту же ссылку — 200 ровно как прямым именем. Это доказывает,
+    // что путь через ссылку РЕАЛЬНО находится и читается в этом дереве (для featureId — дерево
+    // эпика, для sessionId — анкер локатора), т.е. 404 на чужом даёт именно гейт, а не «файла нет».
+    // Прямые имена .cc-attachments/private/… — юрисдикция первой линии, проверены
+    // FilesControllerPrivateAttachmentsReadTests/SymlinkTests; здесь их нет, чтобы тест не был
+    // зелёным не по своей причине.
+    //
+    // Мутация (критерий c2 карточки 3df09cd9, по вердикту 44e1219c): снять строки FilesController.cs:198/:211/:1137 — чужое
+    // читается 200, оба теста краснеют. Ссылка на каталог требует привилегий на Windows, поэтому
+    // тесты идут только на Linux (образец FilesControllerPrivateAttachmentsSymlinkTests).
+
+    // Приватное вложение автора в рабочем дереве + ссылка «L» → .cc-attachments в этом же дереве.
+    // Путь запроса — та же раскладка, но с префиксом каталога, заменённым на «L» (ссылка УЖЕ есть
+    // .cc-attachments, двойной сегмент дал бы 404 отсутствующего пути). Возвращает путь запроса.
+    private static string WritePrivateThroughLink(string worktree, string authorId, string name, string content)
+    {
+        var rel = PrivateAttachments.Build(authorId, Guid.NewGuid(), name)!;
+        var abs = Path.Combine(worktree, rel);
+        Directory.CreateDirectory(Path.GetDirectoryName(abs)!);
+        File.WriteAllText(abs, content);
+        var link = Path.Combine(worktree, "L");
+        if (!Directory.Exists(link))
+            Directory.CreateSymbolicLink(link, TreeExcludes.AttachmentsDir);
+        return "L/" + rel[(TreeExcludes.AttachmentsDir.Length + 1)..];
+    }
+
+    // id автора JWT-клиента и второго тестового пользователя — тот же характер, что у id авторов
+    // в бою (Guid), и та же санация PrivateAttachments.Build
+    private (string Me, string Other) TestAuthorIds()
+    {
+        var users = _factory.Services.GetRequiredService<UserStore>();
+        return (users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id,
+                users.FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id);
+    }
+
+    // Настоящий путь записи «L/…»: та же цель на диске, которую откроет операция (для проверки,
+    // что запись лёгла в каталог автора, а не в каталог с именем «L»).
+    private static string ThroughLinkTarget(string root, string viaLink) =>
+        Path.Combine(root, TreeExcludes.AttachmentsDir, viaLink[2..]);
+
+    [Fact]
+    public async Task GetContent_FeatureId_СсылкаВнутриWorktree_ЧужоеPrivate_404_Своё_200()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var (epicId, worktree, projectId, _) = await CreateEpicWithVerifiedWorktreeAsync("tailgate");
+        var (me, other) = TestAuthorIds();
+
+        var foreign = WritePrivateThroughLink(worktree, other, "чужое.txt", "чужое в дереве эпика");
+        var own = WritePrivateThroughLink(worktree, me, "своё.txt", "своё в дереве эпика");
+
+        var denied = await _client.GetAsync(
+            $"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(foreign)}&featureId={epicId}");
+        denied.StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "ссылка внутри рабочего дерева не обходит гейт: чужое private через «L» — тот же путь, что прямым именем");
+
+        var ok = await _client.GetAsync(
+            $"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(own)}&featureId={epicId}");
+        ok.StatusCode.Should().Be(HttpStatusCode.OK, "свой автор через ссылку в своём дереве — своё");
+        var body = JsonSerializer.Deserialize<JsonElement>(await ok.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString().Should().Be("своё в дереве эпика",
+            "своё через ссылку читается так же, как прямым именем: чтение идёт из дерева эпика");
+    }
+
+    [Fact]
+    public async Task GetContentИStream_SessionId_СсылкаВнутриWorktree_ЧужоеPrivate_404_Своё_200()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var (sessionId, worktree, branch, projectId, _) = await CreateChatWithTaskWorktreeAsync("tailgate");
+        var (me, other) = TestAuthorIds();
+
+        var foreign = WritePrivateThroughLink(worktree, other, "чужое.txt", "чужое в дереве задачи");
+        var own = WritePrivateThroughLink(worktree, me, "своё.txt", "своё в дереве задачи");
+
+        // content (:211) и stream (:1137) — обе multi-root точки с hit.Root: PhysicalFile отдаёт
+        // разыменованный путь, и ссылка в worktree читалась бы мимо гейта по корню проекта
+        var deniedContent = await _client.GetAsync(
+            $"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(foreign)}&sessionId={sessionId}");
+        deniedContent.StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "ссылка внутри рабочего дерева не обходит гейт: чужое private через «L» — тот же путь, что прямым именем");
+        var deniedStream = await _client.GetAsync(
+            $"/api/projects/{projectId}/files/stream?path={Uri.EscapeDataString(foreign)}&sessionId={sessionId}");
+        deniedStream.StatusCode.Should().Be(HttpStatusCode.NotFound, "stream — тот же гейт по hit.Root");
+
+        var ok = await _client.GetAsync(
+            $"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(own)}&sessionId={sessionId}");
+        ok.StatusCode.Should().Be(HttpStatusCode.OK, "свой автор через ссылку в дереве чата — своё");
+        var body = JsonSerializer.Deserialize<JsonElement>(await ok.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString().Should().Be("своё в дереве задачи");
+        // Путь через ссылку найден именно в заявленном дереве: значит, 404 выше дал гейт, а не «файла нет»
+        body.GetProperty("isAnchor").GetBoolean().Should().BeTrue("прочитано из заявленного дерева задачи");
+        body.GetProperty("branch").GetString().Should().Be(branch);
+
+        var stream = await _client.GetAsync(
+            $"/api/projects/{projectId}/files/stream?path={Uri.EscapeDataString(own)}&sessionId={sessionId}");
+        stream.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await stream.Content.ReadAsStringAsync()).Should().Be("своё в дереве задачи",
+            "своё через ссылку отдаётся потоком так же, как прямым именем");
+    }
+
+    // Запись через ссылку. Фактический корень операции записи — корень проекта: SaveContent ни
+    // featureId, ни sessionId не принимает и пишет в GetRoot (FilesController.cs:483, :283), поэтому
+    // «ссылка внутри рабочего дерева» для записи — это ссылка в том самом корне, на который запись
+    // идёт: вторая линия здесь совпадает с первой, и она обязана стоять до любого эффекта — до
+    // SafeJoin, до замка пути, до файла на диске. Отказ — 404: контракт пишущих ручек REST
+    // (S2d-6b-5, дефект e5d55007); 403 на запись — контракт WebDAV, не этот маршрут.
+    //
+    // Пара самопроверяющаяся, как и чтение выше: своё через ту же ссылку — успех, и файл лёг в
+    // настоящий каталог автора. Значит 404 на чужом дал именно гейт по автору пути, а не «пути нет».
+    // Новый файл берётся в УЖЕ существующем каталоге автора: без гейта запись дошла бы до диска
+    // (FileService.WriteFile создаёт файл, но не каталог — FileService.cs:575-582), и тест краснеет
+    // на обоих утверждениях — и на коде, и на «файла нет».
+    //
+    // Прямой контракт через корневую ссылку на уровне контроллера держит
+    // FilesControllerPrivateAttachmentsSymlinkTests.ЧужоеPrivateЧерезСимлинкВКорне…; здесь — HTTP
+    // -маршрут с параметром дерева (то, о чём спрашивал п.3 ревью 6db670ff) и проверка, что
+    // параметр запись ни в чьё дерево не переносит. Stream (:1120) не пишет — отдельной линии у
+    // него нет. Ссылка на каталог требует привилегий, поэтому тест только на Linux (образец).
+    //
+    // sessionId-линия (доработка по дельта-ревью d055b433, п.4 хвоста d24d4238): одна 404 здесь
+    // контракт не различает — SaveContent параметра не принимает, а без дерева у чата корень
+    // операции тот же, что без параметра: та же цель, тот же отказ. Поэтому к чату привязано
+    // проверенное worktree (то же дерево эпика — оно числится в «git worktree list»,
+    // SessionManager.AttachWorktreeAsync), и в нём та же раскладка автора с «L»: при уважении
+    // sessionId записи есть куда дойти до диска. Различает линия МЕСТО: свой файл обязан остаться
+    // в .cc-attachments корня проекта и не появиться в дереве чата.
+    //
+    // Мутация (c2): снять строку FilesController.cs:489 — чужая запись проходит (200) и оставляет
+    // файл в чужом каталоге, тест краснеет; откат — зелено. Вторая мутация (на sessionId-линию):
+    // дать SaveContent параметр sessionId и вести запись по ChatTreeRootForAsync
+    // (FilesController.cs:272) — своя запись уходит в дерево чата, проверка места в нём краснеет;
+    // откат — зелено. На этом прогоне исходы 404/200 не изменились ни на одном шаге — краснела
+    // ровно проверка места: без неё линия опять не различает контракт.
+    [Fact]
+    public async Task SaveContent_СсылкаВКорнеОперации_ЧужоеPrivate_404_Своё_Успех_ПараметрыДереваНеПишут()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var (epicId, epicTree, projectId, mainRoot) = await CreateEpicWithVerifiedWorktreeAsync("writelink");
+        var (me, other) = TestAuthorIds();
+
+        // Ссылка и каталоги авторов — в корне проекта: именно на него идёт запись.
+        var foreign = WritePrivateThroughLink(mainRoot, other, "якорь.txt", "чужое в корне");
+        var own = WritePrivateThroughLink(mainRoot, me, "якорь.txt", "своё в корне");
+        // Тот же каталог автора, новый файл: место записи существует, отказа «нет пути» быть не может
+        var newForeignReq = foreign[..foreign.LastIndexOf('/')] + "/новый.txt";
+        var newOwnReq = own[..own.LastIndexOf('/')] + "/новый.txt";
+        var newForeignAbs = Path.Combine(Path.GetDirectoryName(ThroughLinkTarget(mainRoot, foreign))!, "новый.txt");
+        var newOwnAbs = Path.Combine(Path.GetDirectoryName(ThroughLinkTarget(mainRoot, own))!, "новый.txt");
+
+        var denied = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(newForeignReq)}&featureId={epicId}",
+            new { content = "чужая правка" });
+        denied.StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "ссылка в корне операции не обходит гейт: чужое private через «L» — тот же путь, что прямым именем");
+        File.Exists(newForeignAbs).Should().BeFalse("отказанная запись не дошла до диска");
+
+        var ok = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(newOwnReq)}&featureId={epicId}",
+            new { content = "своя правка" });
+        ok.StatusCode.Should().Be(HttpStatusCode.OK, "свой автор через ссылку в своём корне — своё");
+        File.ReadAllText(newOwnAbs).Should().Be("своя правка",
+            "запись через ссылку дошла до настоящего каталога автора: 404 выше дал именно гейт, а не «пути нет»");
+
+        // Тот же маршрут с заявленным чатом: корень операции записи не меняется ни от какого
+        // параметра дерева — и гейт остаётся тем же. Чат привязан к проверенному дереву: если
+        // параметр перенесёт запись, ей будет куда дойти до диска, и молчаливой 404 «негде» уже
+        // не будет — различает только место записи ниже.
+        var sessions = _factory.Services.GetRequiredService<SessionManager>();
+        var session = await sessions.CreateAsync(projectId, ClaudeMode.Auto, name: "chat for the write line");
+        (await sessions.AttachWorktreeAsync(session.Id, epicTree)).Should().BeTrue(
+            "дерево чата — проверенный worktree эпика: при уважении sessionId запись пошла бы в него");
+
+        var deniedBySession = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(newForeignReq)}&sessionId={session.Id}",
+            new { content = "чужая правка" });
+        deniedBySession.StatusCode.Should().Be(HttpStatusCode.NotFound, "sessionId — тот же корень и тот же гейт");
+
+        // Та же раскладка автора и «L» — в дереве чата: цель своей записи существует в обоих
+        // деревьях, и исход «200» о ней ничего не решает — решает, куда она легла.
+        var ownBySessionReq = own[..own.LastIndexOf('/')] + "/по-чату.txt";
+        var ownBySessionInMain = ThroughLinkTarget(mainRoot, ownBySessionReq);
+        var ownBySessionInTree = ThroughLinkTarget(epicTree, ownBySessionReq);
+        Directory.CreateDirectory(Path.GetDirectoryName(ownBySessionInTree)!);
+        var treeLink = Path.Combine(epicTree, "L");
+        if (!Directory.Exists(treeLink))
+            Directory.CreateSymbolicLink(treeLink, TreeExcludes.AttachmentsDir);
+
+        var okBySession = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(ownBySessionReq)}&sessionId={session.Id}",
+            new { content = "своя правка по чату" });
+        okBySession.StatusCode.Should().Be(HttpStatusCode.OK, "свой автор через ссылку — то же право, что без параметра");
+        File.Exists(ownBySessionInTree).Should().BeFalse(
+            "в дереве чата записи нет: sessionId не переносит корень операции — при переносе краснеет");
+        File.ReadAllText(ownBySessionInMain).Should().Be("своя правка по чату",
+            "запись с sessionId лезла в .cc-attachments корня проекта: параметр дерева запись не переносит");
     }
 
     // ─── Шаг B2b: POST /api/projects/{id}/files/locate — пакетный резолв с alternatives ───

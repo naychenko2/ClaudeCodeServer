@@ -40,8 +40,15 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// 4. Обычные папки и общая раскладка .cc-attachments/{guid}/… — без изменений.
 /// 5. (хвост ревью R-S2d-6b-6) Белый тест на шов передачи зрителя: подменный FileService пишет
 ///    переданный viewerUserId обхода — тест требует id вызывающего; мутация «снять аргумент»
-///    краснит этот тест (поведенческие тесты его не ловят: из разрешённых стартов фильтр
-///    чужого private недостижим).
+///    краснит этот тест (поведенческие тесты его не ловят: из разрешённых стартов без ссылки
+///    фильтр чужого private недостижим).
+/// 6. (дефект d07d7054) Обход через символьную ссылку в контейнер («L» → .cc-attachments):
+///    содержимое чужих приватных не уходит в датасет — его режет канонический префикс обхода
+///    (FileService.ClosedPrefixOf), тот же гейт, что у читающих ручек; обычные файлы, своё
+///    private и общая раскладка — без изменений.
+/// 7. (доработка по ревью 6c2e1385) Тот же обход, когда сам .cc-attachments — ссылка на каталог
+///    с другим именем: префикс строится обеими линиями предиката, содержимое чужих приватных
+///    в датасет не уходит; легальная ссылка наружу на не-private путь — обычное содержимое.
 ///
 /// Стенд бесхостовый (образец FilesControllerPrivateAttachmentsReadTests): контроллер собирается
 /// напрямую с настоящими ProjectManager/FileService/WorkspaceKnowledgeStore/ProjectKnowledgeSyncService;
@@ -408,6 +415,122 @@ public sealed class KnowledgeControllerPrivateAttachmentsIndexTests : IDisposabl
         recorder.Viewers.Should().Equal(new[] { _authorId, _authorId },
             "обход своего каталога — тоже от имени зрителя");
         IndexedNames().Should().Equal(new[] { ownFile }, "своё индексируется, чужое — нет");
+    }
+
+    // --- 8. (дефект d07d7054) индексация через символьную ссылку в контейнер: содержимое
+    //        чужих приватных вложений не уходит в датасет; обычные файлы и своё — как раньше ---
+
+    /// <summary>
+    /// Обход FileService был текстовым: «L» → .cc-attachments в корне проекта ни не исключён по
+    /// имени (имя «L»), ни не отфильтрован (первый сегмент «L») — обход спускался в настоящий
+    /// .cc-attachments, и IndexFolder корня относил L/private/{чужой}/… в датасет, доступный
+    /// всем: утечка содержимого, а не имён. Гейт названного пути (пп. 2–3 этого файла) был
+    /// каноническим (шаг 0859cdb5) и названный «L» отбивал; за пределами названного пути —
+    /// обход (FileService.Tree, канонический префикс на переход ссылки).
+    /// </summary>
+    [Fact]
+    public async Task ИндексацияКорняЧерезСсылку_СодержимоеЧужихПриватныхНеИндексируется()
+    {
+        if (OperatingSystem.IsWindows()) return; // ссылка на каталог требует привилегий
+        var (projectId, root) = Project();
+        var plain = "docs/обычный.md";
+        var (foreignGuid, ownGuid, sharedGuid) = (Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N"));
+        var foreign = $"{TreeExcludes.AttachmentsDir}/private/{_authorId}/{foreignGuid}/чужое.md";
+        var own = $"{TreeExcludes.AttachmentsDir}/private/{_editorId}/{ownGuid}/своё.md";
+        var shared = $"{TreeExcludes.AttachmentsDir}/{sharedGuid}/общее.md";
+        // та же запись относительно ссылки L: то, что обязан (не)относить обход корня
+        static string ViaL(string rel) => "L/" + rel[(TreeExcludes.AttachmentsDir.Length + 1)..];
+        Write(root, plain, "обычное");
+        Write(root, foreign, "чужое");
+        Write(root, own, "своё");
+        Write(root, shared, "общее");
+        Directory.CreateSymbolicLink(Path.Combine(root, "L"), TreeExcludes.AttachmentsDir);
+
+        var asEditor = As(_editorId, projectId);
+
+        _dify.Clear();
+        (await asEditor.IndexFolder(projectId, new IndexFileRequest("")))
+            .Should().BeOfType<OkObjectResult>("корень — штатная цель индексации");
+        IndexedNames().Should().NotContain(p => p.Contains($"/private/{_authorId}/"),
+            "через ссылку содержимое чужих приватных не индексируется: ни чужого id, ни его файлов");
+        IndexedNames().Should().BeEquivalentTo(new[] { plain, ViaL(shared), ViaL(own) },
+            "обход не стал пустым: обычные файлы — как прежде; своё и общая раскладка через ссылку " +
+            "видны так же, как от названного контейнера (п. 5) — их фильтр не касается");
+
+        // Тот же контейнер через ссылку — тот же отказ, что прямым именем (п. 4): и «L», и «L/private»
+        (await asEditor.IndexFolder(projectId, new IndexFileRequest("L")))
+            .Should().BeOfType<NotFoundResult>("«L» → .cc-attachments — тот же контейнер на диске");
+        (await asEditor.IndexFolder(projectId, new IndexFileRequest("L/private")))
+            .Should().BeOfType<NotFoundResult>();
+
+        // Явно названный чужой каталог через ссылку — 404 (тот же путь, что прямым именем, п. 3)
+        (await asEditor.IndexFolder(projectId, new IndexFileRequest($"L/private/{_authorId}")))
+            .Should().BeOfType<NotFoundResult>();
+
+        // Свой каталог через ссылку — индексируется своё, чужое под ним не достигается
+        _dify.Clear();
+        (await asEditor.IndexFolder(projectId, new IndexFileRequest($"L/private/{_editorId}")))
+            .Should().BeOfType<OkObjectResult>("свой каталог автора — не контейнер и не чужой, и через ссылку");
+        IndexedNames().Should().Equal(new[] { ViaL(own) });
+    }
+
+    // --- 9. (доработка по ревью 6c2e1385) сам .cc-attachments — ссылка на каталог с другим
+    //        именем: содержимое чужих приватных в датасет не уходит, легальная ссылка наружу — как прежде ---
+
+    /// <summary>
+    /// Вердикт ревью 6c2e1385 (MAJOR 1) к шагу 212886b1: префикс обхода выводился только из
+    /// литерального сегмента .cc-attachments в каноне цели. Когда сам .cc-attachments — ссылка
+    /// на каталог с другим именем (вложения унесены на другой диск), такой пары в каноне нет, и
+    /// IndexFolder корня снова относил L/private/{чужой}/… в датасет, доступный всем, — хотя
+    /// IsForeignResolved второй линией (IsUnderCanonicalPrivate) тот же путь отказывает
+    /// (guard «СсылкаНаКаталогСДругимИменем…», PrivateAttachmentsResolvedTests).
+    /// </summary>
+    [Fact]
+    public async Task ИндексацияКорняЧерезСсылкуНаКаталогСДругимИменем_СодержимоеЧужихПриватныхНеИндексируется()
+    {
+        if (OperatingSystem.IsWindows()) return; // ссылка на каталог требует привилегий
+        var (projectId, root) = Project();
+        // closed-поддерево — за ссылкой на каталог, чьё имя не .cc-attachments
+        var disk = Directory.CreateDirectory(Path.Combine(_dir, "att_" + Guid.NewGuid().ToString("N")[..8])).FullName;
+        var plain = "docs/обычный.md";
+        var (foreignGuid, ownGuid, sharedGuid) = (Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N"), Guid.NewGuid().ToString("N"));
+        // пути относительно closed-поддерева (запись идёт в каталоге за ссылкой)
+        var foreign = $"private/{_authorId}/{foreignGuid}/чужое.md";
+        var own = $"private/{_editorId}/{ownGuid}/своё.md";
+        var shared = $"{sharedGuid}/общее.md";
+        static string ViaL(string rel) => "L/" + rel;
+        Write(root, plain, "обычное");
+        Write(disk, foreign, "чужое");
+        Write(disk, own, "своё");
+        Write(disk, shared, "общее");
+        Directory.CreateSymbolicLink(Path.Combine(root, TreeExcludes.AttachmentsDir), disk);
+        Directory.CreateSymbolicLink(Path.Combine(root, "L"), TreeExcludes.AttachmentsDir);
+        // инвариант той же раскладки: легальная ссылка наружу на не-private путь под тем же
+        // корнем (frontend/node_modules → primary checkout у worktree-setup.sh) — обычное содержимое
+        var outside = Directory.CreateDirectory(Path.Combine(_dir, "out_" + Guid.NewGuid().ToString("N")[..8])).FullName;
+        Write(outside, "keep.md", "внешнее");
+        Directory.CreateSymbolicLink(Path.Combine(root, "ext"), outside);
+
+        var asEditor = As(_editorId, projectId);
+
+        _dify.Clear();
+        (await asEditor.IndexFolder(projectId, new IndexFileRequest("")))
+            .Should().BeOfType<OkObjectResult>("корень — штатная цель индексации");
+        IndexedNames().Should().NotContain(p => p.Contains($"/private/{_authorId}/"),
+            "closed-поддерево за ссылкой на каталог с другим именем — то же closed-поддерево: " +
+            "содержимое чужих приватных в датасет не уходит");
+        IndexedNames().Should().BeEquivalentTo(new[] { plain, "ext/keep.md", ViaL(own), ViaL(shared) },
+            "обход не стал пустым и не стал закрытым: обычные файлы и легальная ссылка наружу — как прежде, " +
+            "своё private и общая раскладка через ссылку — как от названного контейнера (пп. 2, 5, 8)");
+
+        // Явно названный чужой каталог через обе ссылки — тот же отказ, что прямым именем (п. 3)
+        (await asEditor.IndexFolder(projectId, new IndexFileRequest($"L/private/{_authorId}")))
+            .Should().BeOfType<NotFoundResult>();
+        // свой каталог через обе ссылки — индексируется своё
+        _dify.Clear();
+        (await asEditor.IndexFolder(projectId, new IndexFileRequest($"L/private/{_editorId}")))
+            .Should().BeOfType<OkObjectResult>();
+        IndexedNames().Should().Equal(new[] { ViaL(own) });
     }
 
     private sealed class NoopKnowledgeNotifier : IKnowledgeHubNotifier

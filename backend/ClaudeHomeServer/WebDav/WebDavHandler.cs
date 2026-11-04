@@ -169,7 +169,9 @@ public static class WebDavHandler
             // раскрывается), запись — 403 как запись не-владельца (S1-гейт выше): чужой путь не
             // создаётся и не перезаписывается. Актор здесь — сам аутентифицированный пользователь
             // (в WebDAV нет «хода»: он и есть действующее лицо).
-            if (IsForeignPrivatePath(root, relPath, davUserId))
+            // Хвост a6f5cb15: гейт канонический (по разыменованному пути) — симлинк в корне
+            // проекта («L» → .cc-attachments) даёт то же чужое private, что и прямой путь.
+            if (PrivateAttachments.IsForeignResolved(root, relPath, davUserId))
             {
                 ctx.Response.StatusCode = IsWriteMethod(method) ? 403 : 404;
                 ctx.Response.ContentLength = 0;
@@ -436,8 +438,10 @@ public static class WebDavHandler
         {
             foreach (var entry in files.List(root, relPath))
             {
-                // S2d-6b-3: чужие private-вложения в листинге не показываются (свои и общие — как раньше)
-                if (PrivateAttachments.IsForeign(entry.Path, davUserId)) continue;
+                // S2d-6b-3: чужие private-вложения в листинге не показываются (свои и общие — как раньше).
+                // Канонический гейт: запись через симлинк («L/private/{other}») — та же чужая запись
+                // на диске, что и прямая (a6f5cb15)
+                if (PrivateAttachments.IsForeignResolved(root, entry.Path, davUserId)) continue;
                 var childAbs = FileService.SafeJoinPublic(root, entry.Path);
                 var childHref = BuildHref(ctx, projectName, entry.Path, entry.IsDirectory);
                 AppendResponse(sb, childHref, childAbs, entry.IsDirectory, GetActiveLock($"{projectName}/{entry.Path}"));
@@ -572,9 +576,9 @@ public static class WebDavHandler
         if (Directory.Exists(absPath))
         {
             // HTML-листинг для браузеров. S2d-6b-3: чужие private-вложения в список не попадают
-            // (свои и общие — как раньше)
+            // (свои и общие — как раньше); канонический гейт — тот же, что у PROPFIND (a6f5cb15)
             var entries = files.List(root, relPath)
-                .Where(e => !PrivateAttachments.IsForeign(e.Path, davUserId))
+                .Where(e => !PrivateAttachments.IsForeignResolved(root, e.Path, davUserId))
                 .ToList();
             var sb = new StringBuilder();
             sb.Append("<html><head><meta charset='utf-8'><title>");
@@ -822,46 +826,35 @@ public static class WebDavHandler
         }
 
         // S2d-6b-3: назначение внутри чужого private — отказ, как запись в тот путь: чужой путь не
-        // создаётся и не перезаписывается (источник за пределами чужого private — свой путь, разрешён)
-        if (IsForeignPrivatePath(root, destRel, davUserId))
+        // создаётся и не перезаписывается (источник за пределами чужого private — свой путь, разрешён).
+        // Хвост a6f5cb15: и через симлинк («L/private/{other}/x.txt» при L → .cc-attachments) — та же
+        // цель на диске, поэтому гейт канонический.
+        if (PrivateAttachments.IsForeignResolved(root, destRel, davUserId))
         {
             ctx.Response.StatusCode = 403;
             ctx.Response.ContentLength = 0;
             return;
         }
 
-        // S2d-6b-3 доработка (ревью 426b21ad): источник-контейнер, под которым лежит closed-поддерево
-        // private/, — 403: CopyDirectory (:831) копирует поддерево без исключений и чужой private
-        // оказался бы копией вне .cc-attachments/private/{id}. Точный путь чужого private уже отказан
-        // диспетчером (:168); этот гейт — только контейнеры (способ выбран: запрет операции, а не
-        // фильтрация копии — копия без чужих поддеревьев была бы молча НЕполной копией запроса)
-        if (IsPrivateContainerPath(root, relPath))
+        // S2d-6b-3 доработка (ревью 426b21ad) + QA-W1 (дефект 6690314e) + доработка (ревью 16cc5042,
+        // MAJOR) + хвост a6f5cb15: источник и цель-контейнер, под которым лежит closed-поддерево
+        // private/, — 403 при любом Overwrite и до любого следа на диске. CopyDirectory (ниже)
+        // копирует поддерево без исключений и идёт по разыменованному пути: источник-контейнер дал бы
+        // чужое private копией вне .cc-attachments/private/{id}, а цель через ссылку («L/private» при
+        // L → .cc-attachments) слила бы поддерево источника в настоящий private/. Способ выбран —
+        // запрет операции, а не фильтрация копии: копия без чужих поддеревьев была бы молча НЕполной
+        // копией запроса. Единый канонический предикат Core (PrivateAttachments.IsContainerResolved)
+        // судит обе формы сразу — текстовую («.cc-attachments/private», «docs/..») и разыменованную
+        // («L/private»), — и fail-closed на неразрешимом пути (цикл ссылок). Каталоги автора и
+        // {guid}-каталоги — не контейнеры и через ссылку: копия в свой private разрешена.
+        if (PrivateAttachments.IsContainerResolved(root, relPath))
         {
             ctx.Response.StatusCode = 403;
             ctx.Response.ContentLength = 0;
             return;
         }
 
-        // QA-W1 (дефект 6690314e): цель-контейнер private — тот же отказ, что источник-контейнер:
-        // CopyDirectory (ниже) сливает поддерево источника в контейнер, и private/ под целью
-        // оказывается слитым с чужими файлами. Изоляция контейнера приоритетнее Overwrite:F (412):
-        // операция запрещена при любом Overwrite, как и IsForeignPrivatePath выше. Отказ — до
-        // любого следа на диске. Каталоги авторов — не контейнеры: копия в свой private разрешена.
-        if (IsPrivateContainerPath(root, destRel))
-        {
-            ctx.Response.StatusCode = 403;
-            ctx.Response.ContentLength = 0;
-            return;
-        }
-
-        // QA-W1 доработка (ревью 16cc5042, MAJOR): тот же гейт по РАЗЫМЕНОВАННОМУ пути цели.
-        // Текстовый IsPrivateContainerPath выше молчит на цели через симлинк: ссылка «L» →
-        // .cc-attachments, Destination «L/private» — текстово не контейнер, а на диске это
-        // .cc-attachments/private: CopyDirectory (ниже) идёт по разыменованному и слил бы
-        // поддерево источника в настоящий private/. Сравнение — по каноническим формам обеих
-        // сторон (IsPrivateContainerDestinationResolved ниже), по образцу WikiPaths.IsWikiPath.
-        // Отказ — до любого следа на диске, при любом Overwrite.
-        if (IsPrivateContainerDestinationResolved(root, destRel))
+        if (PrivateAttachments.IsContainerResolved(root, destRel))
         {
             ctx.Response.StatusCode = 403;
             ctx.Response.ContentLength = 0;
@@ -929,47 +922,37 @@ public static class WebDavHandler
         }
 
         // S2d-6b-3: назначение внутри чужого private — отказ, как запись в тот путь: чужой путь не
-        // создаётся и не перезаписывается (источник за пределами чужого private — свой путь, разрешён)
-        if (IsForeignPrivatePath(root, destRel, davUserId))
+        // создаётся и не перезаписывается (источник за пределами чужого private — свой путь, разрешён).
+        // Хвост a6f5cb15: и через симлинк — та же цель на диске, поэтому гейт канонический.
+        if (PrivateAttachments.IsForeignResolved(root, destRel, davUserId))
         {
             ctx.Response.StatusCode = 403;
             ctx.Response.ContentLength = 0;
             return;
         }
 
-        // S2d-6b-3 доработка (ревью 426b21ad): источник-контейнер под private/ — 403: MOVE переносит
-        // каталог целиком, и чужое private ушло бы из-под .cc-attachments/private/{id} вместе с ним
-        if (IsPrivateContainerPath(root, relPath))
+        // S2d-6b-3 доработка (ревью 426b21ad) + QA-W1 (дефект 6690314e) + доработка (ревью 16cc5042,
+        // MAJOR) + хвост a6f5cb15: источник и цель-контейнер, под которым лежит closed-поддерево
+        // private/, — 403. MOVE переносит каталог целиком: источник-контейнер унёс бы чужое private
+        // из-под .cc-attachments/private/{id}. Цель-контейнер опаснее раньше самого сноса:
+        // Directory.Delete(dstAbs, true) (ниже) сносит цель до files.Rename — при Destination =
+        // .cc-attachments/private (или «L/private» при L → .cc-attachments, что на диске тот же
+        // private/) сносился весь private/ со всеми авторами, и только потом падал или «проходил» сам
+        // rename. Отказ здесь — до любого следа на диске: две подряд операции в контейнер не оставляют
+        // частично снесённого каталога. Корень проекта — тоже контейнер (тот же 403, что даёт
+        // JoinBelowRoot ниже; он остаётся для запределья). Единый канонический предикат Core
+        // (PrivateAttachments.IsContainerResolved) судит текстовую и разыменованную форму одним
+        // сравнением канонических форм и fail-closed на цикле ссылок — до JoinBelowRoot и до сноса.
+        // Каталоги автора и {guid}-каталоги — не контейнеры и через ссылку: перенос в свой private
+        // разрешён, чужой отказан гейтом выше.
+        if (PrivateAttachments.IsContainerResolved(root, relPath))
         {
             ctx.Response.StatusCode = 403;
             ctx.Response.ContentLength = 0;
             return;
         }
 
-        // QA-W1 (дефект 6690314e): цель-контейнер private — тот же отказ, что источник-контейнер.
-        // MOVE сносит существующую цель до files.Rename (Directory.Delete(dstAbs, true), ниже):
-        // при Destination = .cc-attachments/private сносался весь private/ со всеми авторами,
-        // и только потом падал или «проходил» сам rename (файл становился каталогом на месте
-        // снесённого контейнера). Отказ здесь — до любого следа на диске: две подряд операции
-        // в контейнер не оставляют частично снесённого каталога. Корень проекта — тоже контейнер
-        // (тот же 403, что даёт JoinBelowRoot ниже; он остаётся для запределья). Каталоги авторов
-        // — не контейнеры: перенос в свой private разрешён, чужой отказан IsForeignPrivatePath выше.
-        if (IsPrivateContainerPath(root, destRel))
-        {
-            ctx.Response.StatusCode = 403;
-            ctx.Response.ContentLength = 0;
-            return;
-        }
-
-        // QA-W1 доработка (ревью 16cc5042, MAJOR): тот же гейт по РАЗЫМЕНОВАННОМУ пути цели.
-        // Текстовый IsPrivateContainerPath выше молчит на цели через симлинк: ссылка «L» →
-        // .cc-attachments, Destination «L/private» — текстово не контейнер, а на диске это
-        // .cc-attachments/private: Directory.Delete(dstAbs, true) (ниже) снесёт настоящий
-        // private/ со всеми авторами. Разыменование — SafePath.Canonical, тот же примитив,
-        // что у проверок «сам в себе» ниже, и по образцу WikiPaths.IsWikiPath: корень и
-        // контейнеры канонизируются тем же обходом; неразрешимый путь (цикл ссылок) —
-        // fail-closed здесь, до JoinBelowRoot и до сноса.
-        if (IsPrivateContainerDestinationResolved(root, destRel))
+        if (PrivateAttachments.IsContainerResolved(root, destRel))
         {
             ctx.Response.StatusCode = 403;
             ctx.Response.ContentLength = 0;
@@ -1235,85 +1218,13 @@ public static class WebDavHandler
     /// Извлекает относительный путь назначения из заголовка Destination.
     /// Заголовок содержит полный URL: http://host/projects/{projectName}/{path}
     /// </summary>
-    // S2d-6b-3: чужое ли это приватное вложение (S2d-6b-1, раскладка .cc-attachments/private/{author}/…).
-    // Решение по нормализованному пути: SafeJoin разрешает «..», «./», обратные слеши и двойные
-    // разделители так же, как их раскрывают обработчики при открытии файла — гейт судит ровно о том
-    // пути, который будет открыт. Путь за пределами корня — не чужое (обработчик отдаёт ему свой
-    // 403/404 как раньше). Пустой relPath — корень проекта, он никогда не private.
-    // Актор — сам аутентифицированный пользователь: в WebDAV нет отдельного «хода».
-    private static bool IsForeignPrivatePath(string root, string relPath, string davUserId)
-    {
-        if (string.IsNullOrEmpty(relPath)) return false;
-        string abs;
-        try { abs = FileService.SafeJoinPublic(root, relPath); }
-        catch (UnauthorizedAccessException) { return false; }
-        return PrivateAttachments.IsForeign(
-            Path.GetRelativePath(Path.GetFullPath(root), abs).Replace('\\', '/'), davUserId);
-    }
-
-    // S2d-6b-3 доработка (ревью 426b21ad): контейнер, под которым лежит закрытое поддерево private/:
-    // сам .cc-attachments, .cc-attachments/private или корень проекта (пустой путь — под ним всё).
-    // IsForeignPrivatePath их не видит: у них нет сегмента-автора (IsForeign требует ≥3), а операция
-    // над каталогом относится ко всему поддереву. Нормализация — та же, что у IsForeignPrivatePath
-    // (SafeJoin раскрывает «..», «./», слеши так, как их раскроет операция на диске). Каталоги
-    // авторов — дети private/, не контейнеры: свой private-каталог автор переносит, как раньше.
-    // Доработка 2 (дельта-ревью 24c92aef): сама формула вынесена в Core (PrivateAttachments.
-    // IsPrivateContainerPath) — одна для WebDAV и MCP; здесь остаётся только нормализация пути
-    // SafeJoin, поведение ветки не меняется.
-    private static bool IsPrivateContainerPath(string root, string relPath)
-    {
-        string rel;
-        try
-        {
-            rel = Path.GetRelativePath(Path.GetFullPath(root),
-                relPath.Length == 0 ? Path.GetFullPath(root) : FileService.SafeJoinPublic(root, relPath));
-        }
-        catch (UnauthorizedAccessException) { return false; }
-        return PrivateAttachments.IsPrivateContainerPath(rel.Replace('\\', '/'));
-    }
-
-    // QA-W1 доработка (ревью 16cc5042, MAJOR): цель-контейнер по РАЗЫМЕНОВАННОМУ пути.
-    // IsPrivateContainerPath выше судит по текстовому пути: SafeJoin раскрывает «..», «./»,
-    // слеши — но не символьные ссылки, а COPY/MOVE работают на диске по разыменованному.
-    // Симлинк «L» → .cc-attachments делает «L/private» тем же .cc-attachments/private: MOVE
-    // снёс бы настоящий private/ со всеми авторами, COPY слил бы поддерево источника в него.
-    // Здесь — сравнение канонических форм обеих сторон по образцу WikiPaths.IsWikiPath:
-    // и путь цели, и сами контейнеры (корень, .cc-attachments, .cc-attachments/private)
-    // канонизируются одним обходом SafePath.Canonical — иначе «L/private» и настоящий
-    // .cc-attachments/private описывают разные деревья (тот же MAJOR 2 ревью S1a: стороны
-    // гейта обязаны быть в одном пространстве имён). Canonical == null (цикл ссылок, бюджет)
-    // — true: предикат fail-closed, как IsWikiPath; отказ возможной операции безопаснее
-    // действия по неразрешённому пути. Регистр — по правилам ФС хоста (ComparisonFor), как у
-    // канонических проверок MOVE ниже. Текстовый гейт выше остаётся первой линией обороны:
-    // он держит «..»/%2F/регистр без ссылок и дешевле обхода по диску. Каталоги автора и
-    // {guid}-каталоги — не контейнеры и через ссылку: их канонический путь не равен ни
-    // одному контейнеру, операция разрешена (та же граница, что у IsAttachmentsContainer).
-    private static bool IsPrivateContainerDestinationResolved(string root, string relPath)
-    {
-        string dstAbs;
-        try
-        {
-            dstAbs = relPath.Length == 0 ? Path.GetFullPath(root) : FileService.SafeJoinPublic(root, relPath);
-        }
-        catch (UnauthorizedAccessException) { return false; } // за пределом корня — свой отказ ниже по потоку
-        var target = SafePath.Canonical(dstAbs);
-        if (target is null) return true; // неразрешимый путь (цикл ссылок): fail-closed
-        // Корневая форма Canonical отдаёт с завершающим разделителем — равенство не сдваиваем.
-        target = target.TrimEnd('/');
-        var comparison = SafePath.ComparisonFor(OperatingSystem.IsWindows());
-        foreach (var container in new[]
-        {
-            root,
-            Path.Combine(root, TreeExcludes.AttachmentsDir),
-            Path.Combine(root, TreeExcludes.AttachmentsDir, PrivateAttachments.PrivateRoot),
-        })
-        {
-            var canonical = SafePath.Canonical(container);
-            if (canonical is null) return true; // контейнер неразрешим — тот же fail-closed
-            if (target.Equals(canonical.TrimEnd('/'), comparison)) return true;
-        }
-        return false;
-    }
+    // Гейты чужого private и контейнеров были здесь текстовыми (IsForeignPrivatePath,
+    // IsPrivateContainerPath, IsPrivateContainerDestinationResolved) и судили строковые сегменты:
+    // симлинк в корне проекта («L» → .cc-attachments) обходил их, хотя операция шла по
+    // разыменованному пути (дефект a6f5cb15). Формула перенесена в Core, рядом с PrivateAttachments
+    // (IsForeignResolved / IsContainerResolved) — одна каноническая для WebDAV, FilesController,
+    // MCP и Knowledge. Здесь остаются только статусы: 404 на чтение чужого private, 403 на
+    // запись/перенос/копирование/снос — до любого следа на диске.
 
     private static string? ParseDestination(HttpContext ctx, string projectName)
     {

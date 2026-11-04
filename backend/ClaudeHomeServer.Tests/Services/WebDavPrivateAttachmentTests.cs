@@ -30,6 +30,11 @@ namespace ClaudeHomeServer.Tests.Services;
 /// (SafePath.Canonical): цель через символьную ссылку на контейнер — тот же 403; неразрешимый
 /// путь (цикл ссылок) — fail-closed; каталог автора и {guid}-каталог через ссылку — разрешены.
 ///
+/// Хвост a6f5cb15: канонический предикат стал единым для всех поверхностей (Core), и текстовые
+/// гейты заменены им: чужое private через симлинк в корне — 404 на чтение и 403 на запись/снос
+/// (проба карточки), источник-контейнер через ссылку — 403, цель внутри чужого private через
+/// ссылку — 403, цикл-цель — 403 и в COPY (преьше был тест только для MOVE).
+///
 /// Проверяется без хоста по образцу WebDavPutTests: HandleAsync с настоящим UserStore/ProjectManager/
 /// FileService на временном дереве (Basic-заголовок, путь запроса — как их приносит клиент).
 /// </summary>
@@ -517,6 +522,166 @@ public class WebDavPrivateAttachmentTests : IDisposable
         r.Response.StatusCode.Should().Be(403, "неразрешимый путь — fail-closed, не 404 и не 500");
         AssertPrivateUnchanged(snapshot, "отказ до любого следа на диске");
         File.ReadAllText(AbsOf(PlainPath)).Should().Be("обычное", "источник цел");
+    }
+
+    // ── хвост a6f5cb15: чужое private и контейнеры ЧЕРЕЗ СИМЛИНК в корне проекта ──
+    // Гейты выше судили текстовый путь; операция идёт по разыменованному, поэтому ссылка
+    // «L» → .cc-attachments давала чужое private на любой поверхности. Теперь — единый
+    // канонический предикат Core (PrivateAttachments.IsForeignResolved / IsContainerResolved).
+
+    [Fact]
+    public async Task ЧужоеPrivateЧерезСимлинкВКорне_Get404_Put403_ЛистингНеПоказывает()
+    {
+        if (OperatingSystem.IsWindows()) return; // см. предыдущий тест
+        Directory.CreateSymbolicLink(AbsOf("L"), ".cc-attachments");
+
+        var foreignId = _foreignPath.Split('/')[2];
+        var guid = _foreignPath.Split('/')[3];
+        var ownId = _ownPath.Split('/')[2];
+        var ownGuid = _ownPath.Split('/')[3];
+
+        // Проба из карточки: раньше GET отдавал содержимое чужого вложения (текстовый гейт
+        // сегмент «L» не узнавал), теперь — 404, как прямым путём: существования не раскрывается
+        var r = await RunAsync(Req("GET", $"L/private/{foreignId}/{guid}/foreign.txt"));
+        r.Response.StatusCode.Should().Be(404, "тот же чужой файл через ссылку — та же изоляция");
+        BodyOf(r).Should().NotContain("чужое");
+        File.ReadAllText(AbsOf(_foreignPath)).Should().Be("чужое", "файл на диске не тронут");
+
+        r = await RunAsync(Req("HEAD", $"L/private/{foreignId}/{guid}/foreign.txt"));
+        r.Response.StatusCode.Should().Be(404);
+
+        r = await RunAsync(Req("PUT", $"L/private/{foreignId}/new.txt", body: "новое в чужом"));
+        r.Response.StatusCode.Should().Be(403, "чужой путь не создаётся — ни прямым путём, ни через ссылку");
+        File.Exists(AbsOf($".cc-attachments/private/{foreignId}/new.txt")).Should().BeFalse();
+
+        r = await RunAsync(Req("DELETE", $"L/private/{foreignId}/{guid}/foreign.txt"));
+        r.Response.StatusCode.Should().Be(403);
+        File.Exists(AbsOf(_foreignPath)).Should().BeTrue("чужой файл цел");
+
+        r = await RunAsync(Req("MKCOL", $"L/private/{foreignId}/newdir"));
+        r.Response.StatusCode.Should().Be(403);
+        Directory.Exists(AbsOf($".cc-attachments/private/{foreignId}/newdir")).Should().BeFalse();
+
+        // листинг через ссылку: каталог чужого автора скрыт, свой и общий — видны (тот же
+        // фильтр, что у прямого пути, но на разыменованной записи)
+        r = await RunAsync(Req("PROPFIND", "L/private", depth: "1"));
+        r.Response.StatusCode.Should().Be(207);
+        var xml = BodyOf(r);
+        xml.Should().Contain(_davId, "свой private-каталог через ссылку — как раньше");
+        xml.Should().NotContain(_otherId, "каталог чужого автора через ссылку — не показывается");
+
+        r = await RunAsync(Req("GET", "L/private"));
+        r.Response.StatusCode.Should().Be(200);
+        BodyOf(r).Should().Contain(_davId).And.NotContain(_otherId);
+
+        // своё и общее через ссылку — как без ссылки
+        r = await RunAsync(Req("GET", $"L/private/{ownId}/{ownGuid}/own.txt"));
+        r.Response.StatusCode.Should().Be(200);
+        BodyOf(r).Should().Be("своё");
+
+        r = await RunAsync(Req("PUT", $"L/private/{ownId}/{ownGuid}/own.txt", body: "правка своего"));
+        r.Response.StatusCode.Should().BeOneOf(200, 201, 204);
+        File.ReadAllText(AbsOf(_ownPath)).Should().Be("правка своего");
+
+        r = await RunAsync(Req("GET", "L/" + _commonPath.Split('/')[1] + "/" + _commonPath.Split('/')[2]));
+        r.Response.StatusCode.Should().Be(200);
+        BodyOf(r).Should().Be("общее");
+    }
+
+    [Fact]
+    public async Task MoveICopy_ЦельВнутриЧужогоPrivateЧерезСимлин_403_ЧужойПутьНеСоздан()
+    {
+        if (OperatingSystem.IsWindows()) return; // см. предыдущий тест
+        Directory.CreateSymbolicLink(AbsOf("L"), ".cc-attachments");
+
+        var foreignId = _foreignPath.Split('/')[2];
+        var guid = _foreignPath.Split('/')[3];
+        var ownId = _ownPath.Split('/')[2];
+        var snapshot = SnapshotPrivate();
+
+        // Дыра, подтверждённая дельта-ревью: текстовый гейт цели путь через ссылку не узнавал,
+        // и запись в чужое private через ссылку была разрешена, хотя текстово отказана
+        var r = await RunAsync(Req("COPY", PlainPath, destination: Dest($"L/private/{foreignId}/{guid}/copy.txt")));
+        r.Response.StatusCode.Should().Be(403, "цель через ссылку — тот же чужой private на диске");
+        File.Exists(AbsOf($".cc-attachments/private/{foreignId}/{guid}/copy.txt")).Should().BeFalse();
+        File.ReadAllText(AbsOf(PlainPath)).Should().Be("обычное", "источник не скопирован");
+        AssertPrivateUnchanged(snapshot);
+
+        r = await RunAsync(Req("MOVE", PlainPath, destination: Dest($"L/private/{foreignId}/moved.txt")));
+        r.Response.StatusCode.Should().Be(403);
+        File.ReadAllText(AbsOf(PlainPath)).Should().Be("обычное", "источник не сдвинут");
+        AssertPrivateUnchanged(snapshot);
+
+        // граница правила та же и через ссылку: своё private — разрешено, чужой автор не тронут
+        r = await RunAsync(Req("COPY", PlainPath, destination: Dest($"L/private/{ownId}/copied.txt")));
+        r.Response.StatusCode.Should().BeOneOf(201, 204);
+        File.ReadAllText(AbsOf($".cc-attachments/private/{ownId}/copied.txt")).Should().Be("обычное");
+        File.ReadAllText(AbsOf(_foreignPath)).Should().Be("чужое", "чужой автор не тронут разрешённой операцией");
+    }
+
+    [Fact]
+    public async Task MoveICopy_ИсточникКонтейнерЧерезСимлин_403_PrivateОстаётсяПодСвоимКорнем()
+    {
+        if (OperatingSystem.IsWindows()) return; // см. предыдущий тест
+        Directory.CreateSymbolicLink(AbsOf("L"), ".cc-attachments");
+        var ownId = _ownPath.Split('/')[2];
+        var snapshot = SnapshotPrivate();
+
+        // Вторая дыра: текстовые гейты источника («L/private» — сегмент «L») молчали, и MOVE
+        // переносил настоящий .cc-attachments/private из-под контейнера
+        var r = await RunAsync(Req("MOVE", "L/private", destination: Dest("moved-private")));
+        r.Response.StatusCode.Should().Be(403, "источник через ссылку — тот же private/ на диске");
+        Directory.Exists(AbsOf("moved-private")).Should().BeFalse();
+        AssertPrivateUnchanged(snapshot);
+        new DirectoryInfo(AbsOf("L")).LinkTarget.Should().NotBeNull("ссылка цела: отказ до любого следа на диске");
+
+        r = await RunAsync(Req("COPY", "L/private", destination: Dest("copied-private")));
+        r.Response.StatusCode.Should().Be(403);
+        Directory.Exists(AbsOf("copied-private")).Should().BeFalse();
+        AssertPrivateUnchanged(snapshot);
+
+        // сама ссылка-контейнер как источник — тот же отказ
+        r = await RunAsync(Req("MOVE", "L", destination: Dest("moved-att")));
+        r.Response.StatusCode.Should().Be(403);
+        Directory.Exists(AbsOf("moved-att")).Should().BeFalse();
+        AssertPrivateUnchanged(snapshot);
+
+        // граница: каталог своего автора через ссылку — не контейнер (копия, чтобы не ломать
+        // фикстуру соседним тестам)
+        r = await RunAsync(Req("COPY", $"L/private/{ownId}", destination: Dest("mycopy")));
+        r.Response.StatusCode.Should().BeOneOf(200, 201, 204);
+        File.ReadAllText(AbsOf($"mycopy/{_ownPath.Split('/')[3]}/own.txt")).Should().Be("своё");
+        AssertPrivateUnchanged(snapshot, "разрешённая копия своего каталога чужого не тронула");
+    }
+
+    [Fact]
+    public async Task Copy_ЦиклСимлинковВЦели_403_СлиянияНет_ИсточникиЦелы()
+    {
+        if (OperatingSystem.IsWindows()) return; // см. предыдущий тест
+        Directory.CreateSymbolicLink(AbsOf("a"), "b");
+        Directory.CreateSymbolicLink(AbsOf("b"), "a");
+        Write("docs/sub/nested.txt", "вложенное");
+
+        var snapshot = SnapshotPrivate();
+
+        // Подзадача карточки: цикл-цель была проверена только для MOVE — гейт COPY его
+        // покрывал по коду, теста в наборе не было. Неразрешимый путь цели — fail-closed 403,
+        // не 404 и не 500, и до CopyDirectory: слияния поддерева в неразрешённый путь нет.
+        // Честно о покрытии: этот случай держат сразу два fail-closed гейта — приватный
+        // (IsForeignResolved) и вики (IsUnderDataWiki ниже по потоку, он тоже fail-closed на
+        // неразрешимом пути), поэтому мутация одного приватного предиката этот тест не краснит:
+        // он про observable-контракт (403, ни следа на диске, источники целы), а не про один гейт.
+        var r = await RunAsync(Req("COPY", "docs", destination: Dest("a/sub"), overwrite: "T"));
+        r.Response.StatusCode.Should().Be(403);
+        AssertPrivateUnchanged(snapshot, "отказ до CopyDirectory: слияния нет");
+        File.ReadAllText(AbsOf("docs/sub/nested.txt")).Should().Be("вложенное", "источник цел");
+        new DirectoryInfo(AbsOf("a")).LinkTarget.Should().NotBeNull("ссылки целы");
+
+        // файл в неразрешимую цель — тот же отказ
+        r = await RunAsync(Req("COPY", PlainPath, destination: Dest("a/x.txt"), overwrite: "T"));
+        r.Response.StatusCode.Should().Be(403);
+        AssertPrivateUnchanged(snapshot);
+        File.Exists(AbsOf(PlainPath)).Should().BeTrue();
     }
 
     [Fact]

@@ -24,7 +24,7 @@
 #     праву Read, сравнение выбирает форму ответа (свой элемент / проекция участника TaskView),
 #     ключом хранилищ не служит; карточка GetById резолвится только через IProjectAccess.Resolve;
 #     в списке проекта «владелец или участник» берётся из RequestScope ([ProjectScope]), не сравнением.
-#   • ModelsController|4 — задачи (S2b) и личные персоны;
+#   • ModelsController|2 — задачи (S2b) и личные персоны;
 #   • PersonasController|2 — до S4;
 #   • TtsController|1 — владение чатом при записи расхода (чат — S1-3a, личный расход);
 #   • MediaHistoryController|1 — запись личной истории медиа (ADR-030), не проект;
@@ -35,6 +35,11 @@
 # Дельта S0-5: −9 совпадений в −6 файлах (контроллеры вертикалей): Architecture, PluginBridge и три
 # *ScopeGate (Image/Audio/Video) переведены на ProjectAccess/SessionAccess, SpendController −1 (бейдж
 # чата; остаток — task.OwnerId, S2b). Тулсеты (*Toolset.cs) — S2a, не входят.
+# Дельта хвоста FIN3 (дефект 6c037429): −2 совпадения в 0 файлах: ModelsController.cs 4→2 — обе ветки
+# превью модели по sessionId (контекст чата и чип сабагента) переведены с ResolveOwnerId на
+# GetOwnedVisible (арендатор + SessionAccess.CanSee), как соседние человеческие ручки
+# (SessionsController.SetPersona): на чужом приватном чате владелец проекта получает 404.
+# Остаток — task.OwnerId (S2b) и p.OwnerId (личные персоны), они не про чат.
 
 backend/ClaudeHomeServer.Architecture/Services/Architecture/ArchitectureToolset.cs|1
 backend/ClaudeHomeServer.AudioEditor/Mcp/AudioEditorToolset.cs|1
@@ -45,7 +50,7 @@ backend/ClaudeHomeServer/Controllers/DossiersController.cs|1
 backend/ClaudeHomeServer/Controllers/FeatureChatDoor.cs|1
 backend/ClaudeHomeServer/Controllers/LocalModelStatsController.cs|8
 backend/ClaudeHomeServer/Controllers/MediaHistoryController.cs|1
-backend/ClaudeHomeServer/Controllers/ModelsController.cs|4
+backend/ClaudeHomeServer/Controllers/ModelsController.cs|2
 backend/ClaudeHomeServer/Controllers/PersonasController.cs|2
 backend/ClaudeHomeServer/Controllers/ProjectGroupsController.cs|2
 backend/ClaudeHomeServer/Controllers/ProjectRelayController.cs|1

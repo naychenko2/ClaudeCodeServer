@@ -35,8 +35,11 @@ public class ClaudeSession : ILlmSessionAdapter
     // со следующего хода, чат её не «замораживает». Итоговый null = слот пуст, решает CLI.
     // _turnModelOverride (голосовой ход на модели места chat-voice) — явная модель: она
     // сильнее Info.Model и места, поэтому подставляется в резолв как explicit.
+    // Ключ владельца — _turnOwnerId (владелец хода), а не Info.OwnerId: у проектной сессии
+    // тот пуст по контракту и резолв по нему падал на общий слот инстанса, хотя старт
+    // заморожен из личного слота арендатора (DEC-FALLBACK 3f2f33fb).
     private string? EffectiveModel =>
-        _assignments?.Resolve(UsageKey, _turnModelOverride ?? Info.Model, Info.OwnerId)
+        _assignments?.Resolve(UsageKey, _turnModelOverride ?? Info.Model, _turnOwnerId)
         ?? (_turnModelOverride ?? Info.Model);
 
     // Эффективная модель для слоя фолбэка (FallbackLlmSessionAdapter): пара «модель × подписка»
@@ -82,9 +85,11 @@ public class ClaudeSession : ILlmSessionAdapter
     // цепочка нужна оркестратору, чтобы при сбое шагать по ней, а не автоподбирать. Без резолвера
     // (тесты) — один элемент (эффективная модель), т.е. цепочки нет. Персона передаётся в резолв:
     // хвост тира строится по её узким матрицам (персона → специальность), а не по общему слоту
-    // владельца — старт и фолбэк идут по одним правилам.
+    // владельца — старт и фолбэк идут по одним правилам. Ключ владельца — тот же, что у старта:
+    // _turnOwnerId; по Info.OwnerId хвост чата проекта брался из общего слота инстанса
+    // (DEC-FALLBACK 3f2f33fb).
     internal IReadOnlyList<string> EffectiveTurnChain =>
-        _assignments?.ResolveChain(UsageKey, _turnModelOverride ?? Info.Model, Info.OwnerId, _personaProvider?.Invoke())
+        _assignments?.ResolveChain(UsageKey, _turnModelOverride ?? Info.Model, _turnOwnerId, _personaProvider?.Invoke())
         ?? (EffectiveModel is { } m ? new[] { m } : Array.Empty<string>());
 
     // Размер контекста последнего запроса для слоя фолбэка (оценка заполнения окна): при

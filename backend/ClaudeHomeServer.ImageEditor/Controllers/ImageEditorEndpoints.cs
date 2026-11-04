@@ -355,7 +355,7 @@ public abstract class ImageEditorEndpoints(
     protected IActionResult JobNotFound() =>
         Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.JobNotFound, "Задача не найдена");
 
-    // Единый контракт: provider_unavailable — 409 везде; busy — 503; feature_disabled — 404
+    // Единый контракт: provider_unavailable — 409 везде; busy — 503
     protected IActionResult Map<T>(ImageEditCallResult<T> result, Func<T, IActionResult> ok)
     {
         if (result.ErrorCode is null && result.Value is not null) return ok(result.Value);

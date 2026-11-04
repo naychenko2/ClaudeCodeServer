@@ -422,7 +422,6 @@ public class FaceTargetLaunchTests : IDisposable
         var result = await Assembler().AssembleAsync(Owner, _scope, req, default);
 
         // Без FaceTarget — обычный запуск (может быть Ok или Invalid по другим причинам)
-        result.ErrorCode.Should().NotBe("feature_disabled");
         result.ErrorCode.Should().NotBe("faces_changed");
     }
 

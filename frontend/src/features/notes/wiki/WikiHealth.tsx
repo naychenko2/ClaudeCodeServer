@@ -39,6 +39,7 @@ import { EmptyState } from '../../../components/ui/EmptyState';
 import { Notice } from '../../../components/ui/Notice';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { sectionPrefix, wikiErrorText } from './wikiLabels';
+import { refreshWikiRailCounts } from './useWikiRailCounts';
 
 // ─── Разбор _health.md (зеркало бэкового RenderHealth/FindingLine) ───
 
@@ -368,6 +369,8 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
       try {
         await runWikiLint();
         ranOk = true;
+        // Счётчик «Здоровья» на рельсе (W12): прогон переписал отчёты разделов — числа перечитываются
+        refreshWikiRailCounts();
         if (seq.current !== mine) return;
         const d = await getWikiHealth(selectedKey);
         if (seq.current === mine) { setNoReport(false); setReport(parseHealth(d.content)); }

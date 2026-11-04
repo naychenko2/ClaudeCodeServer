@@ -28,6 +28,7 @@ import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { sectionPrefix, wikiErrorText } from './WikiTab';
 import { INBOX_TEXT, ORIGIN_META, isHumanTargetClass, wikiInboxReasonText } from './wikiLabels';
 import { WikiPackageView } from './WikiPackageView';
+import { refreshWikiRailCounts } from './useWikiRailCounts';
 
 // Отказы «Входящих» — русским текстом по коду бэка (тот же порядок, что wikiErrorText для
 // страниц; здесь свои коды, их в словаре страниц нет). Формулировки — черновые, тексты
@@ -163,6 +164,8 @@ export function WikiInbox({ sectionScope }: { sectionScope?: string | null | 'al
   const closePackage = useCallback(() => {
     setOpened(null);
     load();
+    // Счётчик «Входящих» на рельсе (W12): решённый пакет мог выйти из inbox — число перечитывается
+    refreshWikiRailCounts();
   }, [load]);
 
   if (opened) return <WikiPackageView pkg={opened} onBack={closePackage} />;

@@ -1,7 +1,8 @@
 // Рендер-тест вкладки «Вики» (S5c): дерево разделов из четырёх групп с живыми именами и
-// пометкой сироты; пустая вики — «Вики не заведена» с кнопкой «Завести вики»; каталог
-// выбранного раздела (тип, summary, бейдж статуса, число источников); отказ контракта —
-// русским текстом, не сырым кодом.
+// пометкой сироты; пустая вики — «Вики пока пустая» без кнопки (вики заводится сама,
+// LI-3) и тот же экран при заведённой пустой вики; перечитывание дерева при показе
+// пустого экрана; каталог выбранного раздела (тип, summary, бейдж статуса, число
+// источников); отказ контракта — русским текстом, не сырым кодом.
 //
 // Стор S5a НЕ мокан: мокан только его транспорт (offline.request) и signalr — так проверка
 // идёт по настоящему потоку «ответ REST → стор → экран».
@@ -167,33 +168,25 @@ describe('Вкладка «Вики» (S5c)', () => {
     expect(has(c, 'Удалённый проект')).toBe(true);
   });
 
-  it('незаведённая вики: «Вики не заведена» с кнопкой «Завести вики»', async () => {
+  it('пустая вики: «Вики пока пустая» без кнопки «Завести вики» (LI-3)', async () => {
     const c = render(EMPTY_TREE);
     await settle();
-    expect(has(c, 'Вики не заведена')).toBe(true);
-    const btn = findNodeByAttr(c, 'data-testid', 'wiki-init-btn');
-    expect(btn).not.toBeNull();
-    expect(textNodes(btn!).join('')).toContain('Завести вики');
+    expect(has(c, 'Вики пока пустая')).toBe(true);
+    expect(has(c, 'Она наполнится сама, когда вы разберёте чат или перенесёте заметку')).toBe(true);
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-empty')).not.toBeNull();
+    // вики заводится сама (решение Андрея 04.11): кнопки и её POST здесь нет
+    expect(has(c, 'Завести вики')).toBe(false);
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-init-btn')).toBeNull();
+    expect(req.mock.calls.some(([u]) => String(u).startsWith('/wiki/initialize'))).toBe(false);
   });
 
-  it('отказ контракта показан русским текстом, а не сырым кодом', async () => {
-    route(EMPTY_TREE);
-    req.mockImplementation((url: string) => {
-      if (url.startsWith('/wiki/tree')) return Promise.resolve(EMPTY_TREE);
-      // 409 {code,message} — форма отказа S2f (не 401/404, у них тело пустое)
-      if (url.startsWith('/wiki/initialize')) {
-        return Promise.reject({ status: 409, body: { code: 'wiki_section_off', message: 'локальный проект' } });
-      }
-      return Promise.resolve(null);
-    });
-    installFakeDom();
-    const { root, container } = mount(createElement(WikiTab));
-    roots.push(root);
+  it('заведённая вики без разделов — то же пустое состояние, не голый каталог (LI-3)', async () => {
+    const c = render({ ...TREE, initialized: true, sections: [] });
     await settle();
-    clickTestId(container, 'wiki-init-btn');
-    await settle();
-    expect(has(container, 'Вики локальных проектов — отдельной фичей')).toBe(true);
-    expect(has(container, 'wiki_section_off')).toBe(false);
+    expect(has(c, 'Вики пока пустая')).toBe(true);
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-empty')).not.toBeNull();
+    // прежний «Раздел не выбран» при пустом дереве не показывается: выбирать не из чего
+    expect(has(c, 'Раздел не выбран')).toBe(false);
   });
 
   it('флаг llmWiki выключен — вкладки нет вовсе', async () => {
@@ -335,24 +328,23 @@ function StubInbox({ selectedKey }: { selectedKey: string | null }) {
 
 describe('Вкладка «Вики»: ошибки и подвкладки (доработка S5c)', () => {
   it('у ошибки действия — «Закрыть» (сбрасывает), «Повторить» нет', async () => {
-    req.mockImplementation((url: string) => {
-      if (url.startsWith('/wiki/tree')) return Promise.resolve(EMPTY_TREE);
-      if (url.startsWith('/wiki/initialize')) {
-        return Promise.reject({ status: 409, body: { code: 'wiki_section_off', message: 'x' } });
-      }
-      return Promise.resolve(null);
-    });
-    installFakeDom();
-    const { root, container } = mount(createElement(WikiTab));
-    roots.push(root);
+    // отказ действия — DELETE сироты 409: прежний путь через «Завести вики» убран (LI-3),
+    // поведение отказа действия тот же
+    const c = mountWithDelete(() => Promise.reject({ status: 409, body: { code: 'wiki_not_orphan', message: 'x' } }));
     await settle();
-    clickTestId(container, 'wiki-init-btn');
+    selectOrphan(c);
     await settle();
-    expect(has(container, 'Вики локальных проектов — отдельной фичей')).toBe(true);
-    expect(buttonByText(container, 'Повторить')).toBeNull();
-    click(buttonByText(container, 'Закрыть'), 'Закрыть');
+    click(findNodeByAttr(c, 'data-testid', 'wiki-delete-section-btn'), 'Удалить раздел');
     await settle();
-    expect(has(container, 'Вики локальных проектов — отдельной фичей')).toBe(false);
+    const confirmBtn = allNodes(bodyRoot()).filter(n => n.nodeName === 'BUTTON'
+      && textNodes(n).join('').includes('Удалить раздел')).pop() ?? null;
+    click(confirmBtn, 'подтвердить');
+    await settle();
+    expect(has(c, 'Удалить можно только раздел удалённого проекта')).toBe(true);
+    expect(buttonByText(c, 'Повторить')).toBeNull();
+    click(buttonByText(c, 'Закрыть'), 'Закрыть');
+    await settle();
+    expect(has(c, 'Удалить можно только раздел удалённого проекта')).toBe(false);
   });
 
   it('у ошибки загрузки «Повторить» перечитывает дерево', async () => {
@@ -874,5 +866,43 @@ describe('Единая раскладка (F1, unified)', () => {
     // прежние вкладки живы: их PillSwitch подписан именами подвкладок (иконки — вне текста)
     expect(has(c, 'Страницы') && has(c, 'Журнал'), 'вкладки подвкладок на месте').toBe(true);
     expect(findNodeByAttr(c, 'data-testid', 'wiki-tree'), 'дерево прежней раскладки — в центре').not.toBeNull();
+  });
+});
+
+// ─── LI-3: перечитывание дерева при показе пустого экрана ───
+// Пока вики не заведена, сервер заводит её при действиях человека вне этой вкладки
+// («Разобрать этот чат», перенос заметки): повторный показ обязан перечитать дерево
+// (дешёвый GET), иначе человек увидит устаревшее пустое состояние. Заведённую вики
+// повторный показ не перечитывает: там нет устаревшего пустого снимка.
+describe('Перечитывание дерева при показе пустого экрана (LI-3)', () => {
+  const treeCalls = () => req.mock.calls.filter(([u]) => String(u).startsWith('/wiki/tree')).length;
+
+  it('пустая вики перечитывается при каждом показе; заведённая — нет', async () => {
+    route(EMPTY_TREE);
+    installFakeDom();
+    const m1 = mount(createElement(WikiTab));
+    await settle();
+    expect(has(m1.container, 'Вики пока пустая')).toBe(true);
+    expect(treeCalls(), 'первый показ: ровно один GET дерева').toBe(1);
+    act(() => m1.root.unmount());
+    // второй показ той же пустой вики: снимок устарел — экран перечитывает
+    const m2 = mount(createElement(WikiTab));
+    await settle();
+    expect(treeCalls(), 'повторный показ пустой вики: дерево перечитан').toBe(2);
+    expect(has(m2.container, 'Вики пока пустая')).toBe(true);
+    act(() => m2.root.unmount());
+
+    // заведённая вики: повторный показ не перечитывает — своего пустого состояния нет
+    wikiStore.reset();
+    req.mockClear();
+    route(TREE);
+    const m3 = mount(createElement(WikiTab));
+    await settle();
+    expect(treeCalls()).toBe(1);
+    act(() => m3.root.unmount());
+    const m4 = mount(createElement(WikiTab));
+    await settle();
+    expect(treeCalls(), 'заведённая вики при повторном показе не перечитывается').toBe(1);
+    act(() => m4.root.unmount());
   });
 });

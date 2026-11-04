@@ -33,7 +33,7 @@ import { AlertTriangle, Clock, Inbox, Lock } from 'lucide-react';
 import {
   C, FONT, FS, R, SHADOW, SP, useIsMobile,
   WikiError,
-  loadWikiSettings, putWikiNightly, useWikiSettings,
+  loadWikiSettings, putWikiNightly, useWikiSettings, useWikiTree,
   type WikiLastNight, type WikiNightlyOutcome, type WikiNightlyPatch, type WikiSettingsSnapshot,
 } from 'aihome_shell/kit';
 import { Button } from '../../../components/ui/Button';
@@ -194,6 +194,10 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
   onOpenJournal?: () => void;
 }) {
   const snapshot = useWikiSettings();
+  // Состояние заведённости вики — из стора дерева (LI-3): поля «initialized» в DTO
+  // настроек нет, и второго источника здесь быть не должно; null — дерево ещё не читали,
+  // состояния не знаем, подписи нет
+  const tree = useWikiTree();
   const isMobile = useIsMobile();
   const [loadError, setLoadError] = useState<unknown>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -353,6 +357,14 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
           onChange={(v) => { void runAction(() => putWikiNightly({ enabled: v })); }}
         />
       </div>
+
+      {/* Вики ещё не заведена (LI-3): включение разбора само по себе заведёт вики —
+          первая ночь её создаст. Подпись называет это, а не просит действия: кнопки здесь нет */}
+      {tree && !tree.initialized && (
+        <div data-testid="wiki-nightly-uninitialized" style={{ fontSize: FS.sm, color: C.textMuted, marginTop: SP.xs }}>
+          Вики ещё не создана — она создастся при первом разборе.
+        </div>
+      )}
 
       {!nightly.enabled && (
         <div style={{ marginTop: SP.md }}>

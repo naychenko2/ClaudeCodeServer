@@ -48,7 +48,7 @@ vi.mock('../../../../lib/offline', async (orig) => ({
 }));
 
 import { request } from '../../../../lib/offline';
-import { __test as wikiStore, getWikiSettingsSnapshot } from '../../../../lib/wiki';
+import { __test as wikiStore, getWikiSettingsSnapshot, loadWikiTree } from '../../../../lib/wiki';
 
 type MockFn = ReturnType<typeof vi.fn>;
 const req = request as unknown as MockFn;
@@ -391,5 +391,38 @@ describe('блок «Ночной разбор» (F2)', () => {
     expect(puts.length).toBe(2); // второе поле — второй PUT, первый не повторился
     expect(sentBody(puts[1])).toEqual({ nightly: { maxPackagesPerSection: 8 } });
     expect(getWikiSettingsSnapshot()!.nightly.maxPackagesPerSection).toBe(8);
+  });
+});
+
+// ─── LI-3: подпись о незаведённой вики под тумблером ───
+// Состояние — из стора дерева (поля «initialized» в DTO настроек нет): пока вики нет,
+// включение разбора само по себе заведёт её при первом проходе — подпись называет это.
+// Дерево ещё не читали — состояния не знаем, подписи нет (выдумывать нечем).
+describe('подпись «вики ещё не создана» (LI-3)', () => {
+  function serveTree(initialized: boolean): void {
+    req.mockImplementation(async (url: string) => {
+      if (url === '/wiki/settings') return server;
+      if (url.startsWith('/wiki/tree')) return { initialized, sections: [] };
+      return null;
+    });
+  }
+
+  it('дерево не заведено — подпись под тумблером; после заведения — нет', async () => {
+    serveTree(false);
+    await act(async () => { await loadWikiTree(); });
+    const c = render();
+    await settle();
+    expect(has(c, 'Вики ещё не создана — она создастся при первом разборе.')).toBe(true);
+    // вики появилась (так же, как её заведёт сервер при первом разборе): подпись уходит
+    serveTree(true);
+    await act(async () => { await loadWikiTree(); });
+    await settle();
+    expect(has(c, 'Вики ещё не создана')).toBe(false);
+  });
+
+  it('дерево ещё не читали — подписи нет', async () => {
+    const c = render();
+    await settle();
+    expect(has(c, 'Вики ещё не создана')).toBe(false);
   });
 });

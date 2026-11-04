@@ -656,7 +656,7 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     root.unmount();
   });
 
-  it('TL-8: пустая вики — «Страницы» на рельсе ведут к «Завести вики»; панель вики открывается без заведённой вики', async () => {
+  it('TL-8: пустая вики — «Страницы» на рельсе ведут к «Вики пока пустая» без кнопки; панель вики открывается без заведённой вики', async () => {
     setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
     wikiMock.tree = { initialized: false, sections: [] };
     const { root, container } = mountNotes();
@@ -666,12 +666,14 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     expect(findNodeByAttr(container, 'data-testid', 'wiki-panel'), 'панель «Настройки» открыта при пустой вики').not.toBeNull();
     clickNode(findNodeByAttr(container, 'data-testid', 'wiki-rail-pages')!);
     await settle();
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-init-btn'), '«Завести вики» достижима').not.toBeNull();
+    // LI-3: вики заводится сама — пустое состояние без кнопки «Завести вики»
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-empty'), 'пустое состояние вики достижимо').not.toBeNull();
+    expect(findButtonByText(container, 'Завести вики'), 'кнопки «Завести вики» нет').toBeNull();
     expect(rails(container as unknown as AnyNode).length, 'в режиме «Вики» рельса ровно одна').toBe(1);
     // повторное нажатие «Страниц» возвращает к заметкам
     clickNode(findNodeByAttr(container, 'data-testid', 'wiki-rail-pages')!);
     await settle();
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-init-btn')).toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-empty')).toBeNull();
     root.unmount();
   });
 

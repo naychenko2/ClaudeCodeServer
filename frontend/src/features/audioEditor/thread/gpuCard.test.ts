@@ -95,7 +95,6 @@ let quoteSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  setAllFlags({ 'local-model-stats': true });
   getCatalog.mockReturnValue(CATALOG);
   startJobSpy = vi.spyOn(audioApi, 'startJob').mockResolvedValue({ jobId: 'j1' });
   quoteSpy = vi.spyOn(audioApi, 'quote').mockResolvedValue(HOOK_QUOTE);

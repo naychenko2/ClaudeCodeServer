@@ -31,7 +31,6 @@ vi.mock('./signalr', async (importOriginal) => {
   return { ...orig, onMessage: () => () => {} };
 });
 
-const FLAG = 'features-overview';
 // Фикстура — по утверждённому контракту: все bucket, закрытая с summary.mergedAt,
 // мультифичевый куратор, ключевой архивный и в другом проекте.
 const FIXTURE = fixture as unknown as FeaturesIndex;
@@ -179,7 +178,6 @@ describe('live-режим: перезапрос затронутого прое�
   beforeEach(() => {
     vi.useFakeTimers();
     __test.reset();
-    setAllFlags({ [FLAG]: true });
     // Шпион на REST-запрос: доказываем, что именно этот проект был перезапрошен.
     featuresIndexSpy = vi.spyOn(api.tasks, 'featuresIndex').mockResolvedValue(FIXTURE);
   });
@@ -263,18 +261,6 @@ describe('live-режим: перезапрос затронутого прое�
     expect(featuresIndexSpy).not.toHaveBeenCalled();
   });
 
-  it('флаг выключен — событие проигнорировано (нет перезапроса)', () => {
-    setAllFlags({ [FLAG]: false });
-    upsertTaskLocal(task({ id: 'epic-4', role: 'feature', projectId: 'p1' }));
-    __test.setActive('p1');
-
-    __test.handleTaskChanged({ type: 'task_changed', action: 'updated', task: task({ id: 'epic-4', role: 'feature', projectId: 'p1' }) });
-
-    expect(__test.pending().has('p1')).toBe(false);
-    vi.advanceTimersByTime(1500);
-    expect(featuresIndexSpy).not.toHaveBeenCalled();
-  });
-
   it('m2: deleted — перезапрос (удалённый эпик/шаг должен обновить индекс)', () => {
     upsertTaskLocal(task({ id: 'epic-5', role: 'feature', projectId: 'p1' }));
     __test.setActive('p1');
@@ -332,7 +318,6 @@ describe('несколько потребителей: выключенный н
   beforeEach(() => {
     installFakeDom();
     __test.reset();
-    setAllFlags({ [FLAG]: true });
     featuresIndexSpy = vi.spyOn(api.tasks, 'featuresIndex').mockResolvedValue(FIXTURE);
   });
   afterEach(() => {

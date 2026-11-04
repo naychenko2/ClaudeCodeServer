@@ -190,12 +190,6 @@ describe('nav: страница фичи (#/project/{id}/feature/{fid})', () => 
     expect(parseHash('#/project/p1/feature/f1')).toEqual({ screen: 'project', projectId: 'p1', featureId: 'f1' });
   });
 
-  it('флаг выключен (загружен): navPush НЕ кладёт сегмент фичи (адрес = проект)', () => {
-    setAllFlags({ [FLAGS.featuresOverview]: false });
-    navPush({ screen: 'project', project: minimalProject, feature: 'f1' });
-    expect(pushStateMock.mock.calls[0][2]).toBe('#/project/p1');
-  });
-
   // M1: parseHash НЕ гейтит по флагу — featureId сохраняется, даже когда флаг выключен.
   // Мутация «вернуть гейт по флагу в parseHash» красит этот тест (featureId пропадает).
   it('M1: parseHash сохраняет featureId при выключенном флаге (гейт — в toHash/WorkspacePage)', () => {

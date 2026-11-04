@@ -85,21 +85,15 @@ beforeEach(() => {
   featuresIndexTest.reset();
 });
 
-describe('SessionList: кламп groupBy при выключенном флаге (Минор 1)', () => {
-  it('флаг выключен + groupBy=features в хранилище → режим «Дни», «Фич пока нет» нет', () => {
-    const html = renderList(false, 'features');
-    // Режим фичи не включился: её пустого состояния нет
-    expect(html).not.toContain('Фич пока нет');
-  });
-
-  it('флаг включён + groupBy=features → режим фич («Фич пока нет» при пустом индексе)', () => {
+describe('SessionList: groupBy из хранилища', () => {
+  it('groupBy=features → режим фич («Фич пока нет» при пустом индексе)', () => {
     const html = renderList(true, 'features');
     // Режим фичи включился: пустой индекс → её пустое состояние
     expect(html).toContain('Фич пока нет');
   });
 
-  it('флаг выключен + groupBy=days (обычное значение) → режим «Дни», без «Фич пока нет»', () => {
-    const html = renderList(false, 'days');
+  it('groupBy=days (обычное значение) → режим «Дни», без «Фич пока нет»', () => {
+    const html = renderList(true, 'days');
     expect(html).not.toContain('Фич пока нет');
   });
 });
@@ -233,7 +227,6 @@ describe('SessionList: M4 закрытые фичи раскрываются', (
   } as Session);
 
   it('закрытая фича: по умолчанию свёрнута, после toggle — раскрыта (aria-expanded)', async () => {
-    setAllFlags({ 'features-overview': true });
     featuresIndexTest.reset();
     const idx = { features: [closedFeat('c1')], chats: { 'c1-chat': [{ featureId: 'c1', kind: 'executor', taskRole: null, stepRef: null, lane: null }] } };
     featuresIndexTest.setIndex('p1', idx);
@@ -325,7 +318,6 @@ describe('SessionList: Ф-2.2 режим фич по оси featureKinds', () =>
     opts: { features?: ReturnType<typeof feat>[]; sessions?: Session[] } = {},
   ): Promise<_FakeNode> {
     const idxNow = { ...idx, features: opts.features ?? idx.features };
-    setAllFlags({ 'features-overview': true });
     featuresIndexTest.reset();
     indexCalls = 0;
     featuresIndexTest.setIndex('p1', idxNow);
@@ -539,7 +531,6 @@ describe('SessionList: Ф-2.2 режим фич по оси featureKinds', () =>
   // при выбранном «Закрытом» на оси независимо от индекса (в SSR effects не идут).
   // Мутация: убрать minHeight:40 из style кнопки → на мобиле height/minHeight по xs (24), тест красный.
   it('m1: «Сбросить» minHeight 40 на 360 (десктоп — 24)', () => {
-    setAllFlags({ 'features-overview': true });
     featuresIndexTest.reset();
     // featureKinds:['closed'] → shownFiltersModel не null → строка «Показаны» с «Сбросить»
     store.clear();
@@ -614,7 +605,6 @@ describe('SessionList: общий чат фич — в обеих группах
 
   // Рендер режима «Фичи» и раскрытие обеих групп (общий чат «живой» — выведен наружу)
   const renderAndExpandAll = async () => {
-    setAllFlags({ 'features-overview': true });
     featuresIndexTest.reset();
     featuresIndexTest.setIndex('p1', idx);
     mockIndex = idx;

@@ -62,7 +62,6 @@ let startJobSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   vi.clearAllMocks();
   __resetVideoStore();
-  setAllFlags({ 'local-model-stats': true });
   __setScopeData('p1', CATALOG, PREFS);
   quoteSpy = vi.spyOn(videoApi, 'quote').mockResolvedValue(CLOUD_QUOTE);
   startJobSpy = vi.spyOn(videoApi, 'startJob').mockResolvedValue({ jobId: 'j-cloud' });

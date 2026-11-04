@@ -10,7 +10,6 @@ import { Cpu } from 'lucide-react';
 import type {
   SubsystemManifest, WorkspacePanelDefApi, WorkspacePanelDefCtx,
 } from '../../lib/subsystems/registryCore';
-import { FLAGS, getFlag } from '../../lib/featureFlags';
 import { C, ISLAND } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { getLocalModelAdmin, isLocalModelPanelVisible } from './useLocalModelStats';
@@ -60,20 +59,20 @@ export const manifest: SubsystemManifest = {
           // Геттеры вне React: isAvailable вызывается из рендера страницы.
           // «движок без vLLM тоже configured» (макет §8.6, разрез принял «да»): когда
           // основная дорожка не настроена, значим и configured из лёгкого опроса второй
-          // дорожки — значок есть вход в стенд на Video. Для не-админа и админа без флага
-          // опроса второй движок нет вовсе — здесь по-прежнему только настроенный ComfyUI.
+          // дорожки — значок есть вход в стенд на Video. Для не-админа опроса второй
+          // движок нет вовсе — здесь по-прежнему только настроенный ComfyUI.
           isAvailable: (_projectId: string | null) => isLocalModelPanelVisible({
-            flag: getFlag(FLAGS.localModelStats),
+            flag: true,
             isAdmin: getLocalModelAdmin(),
             configured: isLocalModelConfiguredAny(),
           }),
           // Точка состояния на значке рельса (Ф6): состояние второй модели из лёгкого
           // опроса сторожа, а НЕ из снимка текущего стенда — точка горит и при закрытой
           // панели, а тяжёл опрос живёт только пока она открыта (ревью Ф2, MAJOR 2).
-          // Состояние известно только админу с флагом (не-админ /stats не спрашивает) —
+          // Состояние известно только админу (не-админ /stats не спрашивает) —
           // для остальных точки нет; формата состояния нет (опрос ещё не ответил) — тоже нет.
           indicator: () => {
-            if (!getLocalModelAdmin() || !getFlag(FLAGS.localModelStats)) return null;
+            if (!getLocalModelAdmin()) return null;
             const data = getLocalModelEngineStats();
             if (!data) return null;
             const dot = standDot(data);

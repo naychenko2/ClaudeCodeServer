@@ -20,7 +20,6 @@ import { BRIEF } from './featurePage.contract';
 // транзитного импорта (сам стор фичи тост больше не шлёт).
 vi.mock('./toast', () => ({ showToast: () => {} }));
 
-const FLAG = 'features-overview';
 
 function task(over: Partial<Task>): Task {
   return {
@@ -53,7 +52,6 @@ describe('состояния страницы фичи', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     __test.reset();
-    setAllFlags({ [FLAG]: true });
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -108,7 +106,6 @@ describe('живое обновление по task_changed', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     __test.reset();
-    setAllFlags({ [FLAG]: true });
     getFeatureSpy = vi.spyOn(api.tasks, 'getFeature').mockResolvedValue(page('epic-1'));
   });
   afterEach(() => {
@@ -170,15 +167,6 @@ describe('живое обновление по task_changed', () => {
     expect(getFeatureSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('флаг выключен — событие проигнорировано (нет перезапроса)', () => {
-    setAllFlags({ [FLAG]: false });
-    __test.setFid('epic-1');
-    __test.handleTaskChanged({ type: 'task_changed', action: 'updated', task: task({ id: 'step-1', featureId: 'epic-1' }) });
-    expect(__test.pending()).toBe(false);
-    vi.advanceTimersByTime(1500);
-    expect(getFeatureSpy).not.toHaveBeenCalled();
-  });
-
   it('страница закрыта (fid = null) — событие не перезапрашивает', () => {
     __test.setFid(null);
     __test.handleTaskChanged({ type: 'task_changed', action: 'updated', task: task({ id: 'step-1', featureId: 'epic-1' }) });
@@ -201,7 +189,6 @@ describe('мутация: сломанный фильтр красит «чуж�
   beforeEach(() => {
     vi.useFakeTimers();
     __test.reset();
-    setAllFlags({ [FLAG]: true });
     getFeatureSpy = vi.spyOn(api.tasks, 'getFeature').mockResolvedValue(page('epic-1'));
   });
   afterEach(() => {
@@ -240,7 +227,6 @@ describe('смена fid: устаревший запрос отменяется
   beforeEach(() => {
     vi.useFakeTimers();
     __test.reset();
-    setAllFlags({ [FLAG]: true });
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -287,7 +273,6 @@ describe('brief: ответ страницы с brief и без него', () =>
   beforeEach(() => {
     vi.useFakeTimers();
     __test.reset();
-    setAllFlags({ [FLAG]: true });
   });
   afterEach(() => {
     vi.restoreAllMocks();

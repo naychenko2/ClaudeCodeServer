@@ -10,37 +10,17 @@ import { api } from './api';
 // приходят с сервера — здесь только ключи.
 export const FLAGS = {
   workspaceDestructive: 'workspace-destructive',
-  changeDossiersRecall: 'change-dossiers-recall',
   // Сферы: группы проектов с общей командой персон и хартией; зона персоны «Сфера».
   spheres: 'spheres',
-  // Умный подбор фото персонажа под сюжет (ADR-027): метки ракурса/эмоции, подбор, «Заменить».
-  characterSmartPhotos: 'character-smart-photos',
-  // «Подставить персонажа» на лицо (этап 2): тап по лицу на картинке версии → выбор персонажа.
-  characterFaceSwap: 'character-face-swap',
-  // Статистика локальных моделей: живые метрики в чипе Ctx + панель админа по медиа-стенду ComfyUI.
-  localModelStats: 'local-model-stats',
-  // Режим «Исполнение фичи» в «Плане хода»: переключатель + карточка фичи (этап 2).
-  turnPlanFeatureMode: 'turn-plan-feature-mode',
   // Плагины (ADR-031): установка пакетов владельца, skills/команды, панели.
   pluginsMvp: 'plugins-mvp',
   // Плагины (ADR-031): build-it-yourself — агент собирает пакет (черновики) через MCP-тулсет.
   pluginsBuildYourself: 'plugins-build-yourself',
-  // «Обзор фич»: фасет «Фичи» в списке сессий + плашка фичи в чате (волна 1, dark launch).
-  featuresOverview: 'features-overview',
-  // «Авто-возобновление ходов»: после рестарта сервера прерванные активные ходы дотягиваются
-  // через Claude CLI resume. Dark launch, выключено по умолчанию.
-  turnAutoResume: 'turn-auto-resume',
-  // «Индикатор prompt cache и перенос в новый чат»: регистрация (шаг B-1), фича обвязывается
-  // следующими шагами. Dark launch, выключено по умолчанию.
-  promptCache: 'prompt-cache',
   sharedProjects: 'shared-projects',
   // LLM-wiki (ADR-035/036): база знаний, которую ведёт Хранитель. Флаг прячет UI (вкладку
   // «Вики») и источник wiki от агентов; гейт записи в заведённую вику от него не зависит.
   // Dark launch, выключено по умолчанию. Ключ дублирует бэковый FeatureFlagCatalog.
   llmWiki: 'llm-wiki',
-  // «Заметки и вики вместе» (вложен в llm-wiki): один раздел для заметок и вики. Работает
-  // при включённом llm-wiki. Dark launch, выключено по умолчанию.
-  notesWikiUnified: 'notes-wiki-unified',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

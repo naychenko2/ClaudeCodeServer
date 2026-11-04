@@ -428,7 +428,6 @@ describe('WorkspacePage: центр — страница фичи соседом
     sessionListMock.onSessionUpdated = null;
     sessionListMock.onSelect = null;
     personasPanelMock.onShowTeam = null;
-    setAllFlags({ 'features-overview': true });
     const idx = { features: [feat()], chats: {} } as FeaturesIndex;
     indexTest.setIndex('p1', idx);
     mockData.index = idx;
@@ -585,22 +584,6 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(back, '«Закрыть» страницы фичи не найдена (диплинк не открыл страницу)').not.toBeNull();
     // ChatPanel НЕ размонтирован (display:none): testid в DOM.
     expect(findNodeByAttr(container, 'data-testid', 'chat-panel'), 'ChatPanel не в DOM (диплинк)').not.toBeNull();
-  });
-
-  it('диплинк при выключенном флаге: сегмент feature игнорируется (страница не открывается)', async () => {
-    setAllFlags({ 'features-overview': false });
-    (globalThis as any).window.location.hash = '#/project/p1/feature/f1';
-    (globalThis as any).window.history.state = null;
-    const { container } = mount(createElement(WorkspacePage, {
-      project,
-      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
-      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
-    } as any));
-    await act(async () => { vi.advanceTimersByTime(100); });
-
-    // Страница не открыта: ни «Закрыть», ни testid feature-page (сегмент игнорируется).
-    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), '«Закрыть» есть при выключенном флаге').toBeNull();
-    expect(findNodeByAttr(container, 'data-testid', 'feature-page'), 'страница фичи открыта при выключенном флаге').toBeNull();
   });
 
   it('«Закрыть»: navReplace синхронизирует URL (feature исчезает из хэша), «назад» ведёт туда же', async () => {
@@ -801,51 +784,6 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect(text, '«Закрыть» ведёт в активный (не открытый) чат (M3)').not.toContain('К чату');
   });
 
-  // === M1: диплинк — флаги приходят ПОЗЖЕ разбора адреса ===
-  // (а) адрес с feature разбирается при НЕЗАГРУЖЕННЫХ флагах (featureId сохранён),
-  //     затем флаги приходят ВКЛЮЧЕННЫМИ → страница открывается.
-  it('M1(а): диплинк при незагруженных флагах → флаги пришли включёнными → страница открывается', async () => {
-    // Флаги ещё НЕ загружены (до ответа /me): parseHash сохраняет featureId, toHash не
-    // схлопывает адрес. Инициализатор openFeatureId берёт featureId из хэша (без гейта).
-    flagsTest.reset();
-    (globalThis as any).window.location.hash = '#/project/p1/feature/f1';
-    (globalThis as any).window.history.state = null;
-    const { container } = mount(createElement(WorkspacePage, {
-      project,
-      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
-      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
-    } as any));
-    await act(async () => { vi.advanceTimersByTime(100); });
-    // Пока флаги не загружены — страница ещё не показана (гейт по флагу), но адрес цел.
-    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'страница открыта до прихода флагов').toBeNull();
-
-    // Флаги «пришли» включёнными (ответ /me): страница открывается, «Закрыть» есть.
-    act(() => { setAllFlags({ 'features-overview': true }); });
-    await act(async () => { vi.advanceTimersByTime(100); });
-    const back = findNodeByAttr(container, 'data-testid', 'feature-page-close');
-    expect(back, '«Закрыть» не появилась после прихода флагов (M1: страница не открылась)').not.toBeNull();
-    expect(findNodeByAttr(container, 'data-testid', 'chat-panel'), 'ChatPanel не в DOM (M1)').not.toBeNull();
-  });
-
-  // (б) флаги пришли ВЫКЛЮЧЕННЫМИ → страница не открывается, адрес приводится к проекту.
-  it('M1(б): диплинк, флаги пришли выключенными → страница не открывается, адрес = проект', async () => {
-    flagsTest.reset();
-    (globalThis as any).window.location.hash = '#/project/p1/feature/f1';
-    (globalThis as any).window.history.state = null;
-    const { container } = mount(createElement(WorkspacePage, {
-      project,
-      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
-      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
-    } as any));
-    await act(async () => { vi.advanceTimersByTime(100); });
-
-    // Флаги «пришли» выключенными: страница не открывается, адрес приводится к проекту.
-    act(() => { setAllFlags({ 'features-overview': false }); });
-    await act(async () => { vi.advanceTimersByTime(100); });
-    expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), '«Закрыть» есть при выключенном флаге (M1б)').toBeNull();
-    expect(findNodeByAttr(container, 'data-testid', 'feature-page'), 'страница открыта при выключенном флаге (M1б)').toBeNull();
-  });
-
   // === M1-360: диплинк/перезагрузка на 360 — страница (вид chat) видна, а не список ===
   it('M1-360: диплинк на 360 — контейнер центра (страница) виден display:flex, не display:none', async () => {
     (globalThis as any).window.location.hash = '#/project/p1/feature/f1';
@@ -909,77 +847,6 @@ describe('WorkspacePage: центр — страница фичи соседом
     // КЛЮЧЕВОЕ (m5): index=0 (history.back() снял запись страницы). Мутация «navReplace»
     // красит: index остался бы 1 (дубль [список, список]), первое «назад» — пустой шаг.
     expect(index, '«Закрыть» не сняла запись страницы (m5: navReplace дал дубль, index=1)').toBe(0);
-  });
-
-  // === m7: 360, флаг выключен, тёплый браузер (mobileView=sidebar) — адрес не обещает /chat/{id} ===
-  it('m7: 360, тёплый браузер, флаг выключен, вид sidebar — адрес = #/project/p1 (без /chat/{id})', async () => {
-    const win = globalThis as any;
-    // Фейк-история: navReplace пишет hash (toHash), чтобы проверить, что /chat/{id} не появился
-    win.window.history = {
-      state: null,
-      pushState: (s: any, _t: string, h: string) => { win.window.history.state = s; win.window.location.hash = h; },
-      replaceState: (s: any, _t: string, h: string) => { win.window.history.state = s; win.window.location.hash = h; },
-      back: () => {}, go: () => {}, forward: () => {}, length: 1,
-    };
-    // Тёплый браузер: пользователь в СПИСКЕ (mobileView='sidebar', без featureId в адресе),
-    // но openFeatureId задан из снимка (feature в history.state). Адрес — проект (без feature).
-    win.window.location.hash = '#/project/p1';
-    win.window.history.state = { screen: 'project', project, view: 'sidebar', feature: 'f1' };
-    // Флаги ещё НЕ загружены (до ответа /me)
-    flagsTest.reset();
-    const { container } = mount(createElement(WorkspacePage, {
-      project,
-      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
-      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
-    } as any));
-    await act(async () => { vi.advanceTimersByTime(100); });
-
-    // Флаги «пришли» выключенными → эффект «один раз» приводит адрес к проекту
-    act(() => { setAllFlags({ 'features-overview': false }); });
-    await act(async () => { vi.advanceTimersByTime(100); });
-
-    // m7: mobileView='sidebar' (список) — адрес НЕ должен обещать /chat/{id} (экран — список).
-    // Мутация «всегда chatId» красит: адрес /chat/chatA, а на экране список.
-    expect(win.window.location.hash, 'адрес обещает /chat/{id}, а на экране список (m7)').toBe('#/project/p1');
-    void container;
-  });
-
-  // === m7b: 360, ХОЛОДНЫЙ браузер (feature в адресе → mobileView='chat'), флаг выключен →
-  // mobileView сбрасывается в 'sidebar' (адрес #/project/p1 = список, центр скрыт) ===
-  it('m7b: 360, холодный браузер (feature в адресе), флаг выключен → mobileView=sidebar (центр скрыт)', async () => {
-    const win = globalThis as any;
-    // Фейк-история: navReplace пишет hash (toHash), чтобы проверить, что /chat/{id} не появился.
-    win.window.history = {
-      state: null,
-      pushState: (s: any, _t: string, h: string) => { win.window.history.state = s; win.window.location.hash = h; },
-      replaceState: (s: any, _t: string, h: string) => { win.window.history.state = s; win.window.location.hash = h; },
-      back: () => {}, go: () => {}, forward: () => {}, length: 1,
-    };
-    // Холодный браузер: feature В АДРЕСЕ → mobileView инициализирован 'chat' (линия 613-615).
-    win.window.location.hash = '#/project/p1/feature/f1';
-    win.window.history.state = null;
-    // Флаги ещё НЕ загружены (до ответа /me)
-    flagsTest.reset();
-    const { container } = mount(createElement(WorkspacePage, {
-      project,
-      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
-      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
-    } as any));
-    await act(async () => { vi.advanceTimersByTime(100); });
-
-    // Флаги «пришли» выключенными → эффект «один раз» приводит адрес к проекту
-    act(() => { setAllFlags({ 'features-overview': false }); });
-    await act(async () => { vi.advanceTimersByTime(100); });
-
-    // m7b: mobileView сброслен в 'sidebar' → центр (страница/чат) скрыт (display:none),
-    // на экране список. Мутация «не сбрасывать mobileView» красит: центр display:flex,
-    // хотя адрес #/project/p1 (список).
-    const center = findNodeByAttr(container, 'data-testid', 'workspace-center-container');
-    expect(center, 'контейнер центра не найден (m7b)').not.toBeNull();
-    expect((center as any).style?.display, 'центр виден (display:flex), а mobileView должен быть sidebar (m7b)').toBe('none');
-    // Адрес — проект (без feature, без chat): список.
-    expect(win.window.location.hash, 'адрес не #/project/p1 (m7b)').toBe('#/project/p1');
-    void container;
   });
 
   // === «Последнее действие выигрывает» — сквозная защита на НАСТОЯЩЕЙ десктопной

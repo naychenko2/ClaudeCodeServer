@@ -23,13 +23,9 @@ const ctx = {
   ordered: [{ file: 'a.jpg' }, { file: 'b.jpg' }],
 };
 
-describe('faceSection (флаг character-smart-photos)', () => {
-  it('выключен — пустой объект: как master (без согласия-меток, без нажима, без редактора)', () => {
-    expect(faceSection(false, ctx)).toEqual({});
-  });
-
-  it('включён, редактор закрыт — новое согласие + нажим + подписи, редактора нет', () => {
-    const r = faceSection(true, { ...ctx, selected: null });
+describe('faceSection', () => {
+  it('редактор закрыт — новое согласие + нажим + подписи, редактора нет', () => {
+    const r = faceSection({ ...ctx, selected: null });
     expect(r.notice).toBe(CHARACTER_PHOTOS_NOTICE_LABELS);
     expect(typeof r.onSelectPhoto).toBe('function');
     expect(typeof r.renderCaption).toBe('function');
@@ -37,15 +33,15 @@ describe('faceSection (флаг character-smart-photos)', () => {
     expect(r.labelsEditor).toBeUndefined();
   });
 
-  it('включен, фото выбрано — редактор меток на месте', () => {
-    const r = faceSection(true, { ...ctx, selected: 'b.jpg' });
+  it('фото выбрано — редактор меток на месте', () => {
+    const r = faceSection({ ...ctx, selected: 'b.jpg' });
     expect(r.selectedKey).toBe('b.jpg');
     expect(r.labelsEditor).toBeTruthy();
   });
 
   it('onSelectPhoto переключает выбор: повторный тап по тому же фото закрывает', () => {
     let cur: string | null = null;
-    const r = faceSection(true, { ...ctx, selected: null, setSelected: fn => { cur = fn(cur); } });
+    const r = faceSection({ ...ctx, selected: null, setSelected: fn => { cur = fn(cur); } });
     r.onSelectPhoto!({ key: 'b.jpg', url: '/b.jpg', primary: false });
     expect(cur).toBe('b.jpg');
     r.onSelectPhoto!({ key: 'b.jpg', url: '/b.jpg', primary: false });

@@ -10,7 +10,6 @@
 // не спрашивает, состояние неизвестно, точка врал бы.
 
 import { useEffect, useSyncExternalStore } from 'react';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import {
   getLocalModelConfigured, setLocalModelAdmin, configuredSource, useLocalModelAdmin,
   useLocalModelConfigured, useLocalModelConfiguredPolling,
@@ -78,15 +77,14 @@ export function startEngineStatePolling(
 }
 
 export function useLocalModelWatcher(isAdmin: boolean): void {
-  const flag = useFeature(FLAGS.localModelStats);
   useEffect(() => { setLocalModelAdmin(isAdmin); }, [isAdmin]);
-  // Админ — /stats (флаг гейтит), не-админ — /stats/media (без флага)
-  useLocalModelConfiguredPolling(configuredSource(flag, isAdmin));
-  // Состояние второй модели — только админу с флагом: точка на значке тоже только для них
+  // Админ — /stats, не-админ — /stats/media
+  useLocalModelConfiguredPolling(configuredSource(true, isAdmin));
+  // Состояние второй модели — только админу: точка на значке тоже только для него
   useEffect(() => {
-    if (!isAdmin || !flag) return;
+    if (!isAdmin) return;
     return startEngineStatePolling();
-  }, [isAdmin, flag]);
+  }, [isAdmin]);
   // Подписка страницы на сторы (значение не нужно — нужен ререндер, чтобы рельса
   // перечитала геттеры): configured, роль и состояние второй движок
   useLocalModelConfigured();

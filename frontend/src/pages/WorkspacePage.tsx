@@ -53,7 +53,7 @@ import { recordBackNav, clearBackNav, getBackNav } from '../lib/featureBackNav';
 import { focusFeatureStage, setFeaturePageTab } from '../lib/featurePage';
 import { centerFingerprint as computeCenterFingerprint } from '../lib/centerOccupancy';
 import type { CenterOccupancy } from '../lib/centerOccupancy';
-import { useFeature, useFlagsLoaded, FLAGS } from '../lib/featureFlags';
+import { useFeature, FLAGS } from '../lib/featureFlags';
 import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { OwnerSettingsNotice } from '../features/projects/members/OwnerSettingsNotice';
 import { isParticipant } from '../features/projects/members/participantGate';
@@ -564,8 +564,6 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // Флаг «Обзор фич»: страница показана, только когда он включён (dark launch). До прихода
   // флагов (не загружены) getFlag читает «выключено», но адрес ещё не схлопываем — этим
   // занимается эффект «привести к проекту один раз» (ниже, рядом с handleFeatureBack).
-  const featuresOn = useFeature(FLAGS.featuresOverview);
-  const flagsLoaded = useFlagsLoaded();
   // Холодный старт: страница открыта при монтировании из хэша/снимка (диплинк) — её seq
   // ставится при монтировании. Восстановленный файл (openFile из workspaceState) событием
   // «открыли» не является (fileOpenedAt = 0), поэтому страница выигрывает.
@@ -982,7 +980,7 @@ const windowWidth = useWindowWidth();
   // открытое. Открытие окна центра забирает страницу через переходный эффект (ниже,
   // настоящее закрытие), а явное открытие страницы рисует её ПОВЕРХ любого окна (центр
   // display:none, чат в DOM); Esc/«Закрыть» возвращают к тому, что было под ней.
-  const featurePageOpen = openFeatureId != null && featuresOn;
+  const featurePageOpen = openFeatureId != null;
   // Мобила: «последнее действие выигрывает» (как на десктопе, DesktopWorkspace.yielded) —
   // файл, открытый ПОСЛЕ страницы, вытесняет её (страница остаётся смонтированной, display:none).
   const pageYieldsToFile = featurePageOpen && pageYieldsCenterToFile(openFile, featureOpenedAt, fileOpenedAt);
@@ -1061,12 +1059,9 @@ const windowWidth = useWindowWidth();
       pageStampRef.current = stampCounterRef.current;
     }
   }, [openFeatureId]);
-  // Гейт flagsLoaded && featuresOn: пока флаги НЕ пришли (featuresOn=false) страница ещё
-  // не открылась — чистить openFeatureId рано (M1(а): диплинк ждёт ответа /me).
-  // Выключенный флаг ведёт отдельный эффект (нормализация адреса, mobileView=sidebar).
   useEffect(() => {
-    // Страница не открыта или флаги ещё не пришли — не чиним.
-    if (openFeatureId == null || !flagsLoaded || !featuresOn) return;
+    // Страница не открыта — не чиним.
+    if (openFeatureId == null) return;
     // Окно НЕ позже страницы (штамп окна ≤ штампа страницы) → страница ПОВЕРХ (M2), не чиним.
     if (windowStampRef.current <= pageStampRef.current) return;
     setOpenFeatureId(null);
@@ -1086,15 +1081,15 @@ const windowWidth = useWindowWidth();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- срабатывает только на
     // «окно позже страницы»; project/mobileView/activeSessionId в замыкании — текущие,
     // deps плодили бы лишние записи истории
-  }, [openFeatureId, flagsLoaded, featuresOn, centerFingerprintNoFile]);
+  }, [openFeatureId, centerFingerprintNoFile]);
 
   // Мобила (MAJOR-2): уход в список/сайдбар (mobileView='sidebar') при открытой странице
   // закрывает её ПО-НАСТОЯЩЕМУ (сброс openFeatureId, адрес без /feature/), а не гасит
   // молча: на мобиле страница живёт в центре (chat), а sidebar = список — «висящая в
   // воздухе» невидимая страница (адрес /feature/) противоречила бы «закрывается настоящим
-  // закрытием». Гейт flagsLoaded && featuresOn: пока флаги не пришли, страницу ещё нет.
+  // закрытием».
   useEffect(() => {
-    if (!isMobile || mobileView !== 'sidebar' || openFeatureId == null || !flagsLoaded || !featuresOn) return;
+    if (!isMobile || mobileView !== 'sidebar' || openFeatureId == null) return;
     setOpenFeatureId(null);
     clearBackNav();
     navReplace({
@@ -1103,7 +1098,7 @@ const windowWidth = useWindowWidth();
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- срабатывает только на уход
     // в список при открытой странице; project/activeSessionId в замыкании — текущие
-  }, [mobileView, openFeatureId, flagsLoaded, featuresOn]);
+  }, [mobileView, openFeatureId]);
 
   const handleProjectBoard = (on: boolean) => {
     setProjectBoard(on);
@@ -2106,28 +2101,6 @@ const windowWidth = useWindowWidth();
       window.dispatchEvent(new Event('cc-pending-project-chat'));
     }
   };
-
-  // Флаги «Обзор фич» пришли выключенными, а в адресе/снимке ещё есть feature (диплинк,
-  // или флаг выключили через админ-панель, пока страница была открыта) — ОДИН РАЗ безопасно
-  // приводим адрес к проекту: navReplace на снимок БЕЗ feature (toHash схлопнет его, т.к.
-  // «загружено и выключено»), и сбрасываем openFeatureId, чтобы страница не открылась потом.
-  // Пока флаги НЕ загружены (flagsLoaded=false) не схлопываем — адрес ждёт ответа /me.
-  useEffect(() => {
-    if (!flagsLoaded || featuresOn || !openFeatureId) return;
-    // m7: на мобиле вид sidebar = список — адрес не должен обещать /chat/{id} (экран — список).
-    // m7b: нормализация (флаг выключен, feature в адресе) → экран = список: mobileView
-    // сбрасываем в 'sidebar', иначе адрес #/project/{pid} (список) остаётся в виде chat
-    // (mobileView инициализирован 'chat' из feature-сегмента адреса). view/chatId — по
-    // РЕЗУЛЬТИРУЮЩЕМУ виду (sidebar), не по устаревшему mobileView.
-    const view = 'sidebar';
-    const chatShown = !isMobile; // на десктопе чат в центре всегда; на мобиле — список
-    if (isMobile && mobileView === 'chat') setMobileView('sidebar');
-    navReplace({ screen: 'project', project, view, file: null, task: null, chatId: chatShown ? (activeSessionId ?? undefined) : undefined, feature: null });
-    setOpenFeatureId(null);
-    setFeatureOpenedAt(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- срабатывает только на переход
-    // в «загружено и выключено»; project/mobileView/activeSessionId в замыкании — текущие
-  }, [flagsLoaded, featuresOn, openFeatureId]);
 
   // Командный центр активен → фиксируем в истории (persona: null), чтобы «назад» из
   // любого диплинка (задача/чат/персона) возвращал именно в командный центр

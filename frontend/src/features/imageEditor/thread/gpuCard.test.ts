@@ -89,7 +89,6 @@ vi.mock('./useJobStatus', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  setAllFlags({ 'local-model-stats': true });
   (useQuote as ReturnType<typeof vi.fn>).mockReturnValue({ quote: null, loading: false });
   (useCatalog as ReturnType<typeof vi.fn>).mockReturnValue(null);
   (useBoxWidth as ReturnType<typeof vi.fn>).mockReturnValue(0);

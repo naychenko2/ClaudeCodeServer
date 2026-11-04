@@ -8,7 +8,6 @@ import { useState, type ReactNode } from 'react';
 import { AlertTriangle, ChevronLeft, ChevronRight, Download, Image as ImageIcon, Pencil, RotateCcw, X } from 'lucide-react';
 import {
   Badge, Button, Dot, IconButton, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, isCardPick, useIsMobile,
-  FLAGS, useFeature,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { imageEditorApi } from '../api';
@@ -90,7 +89,6 @@ export function JobBlock({ projectId, sessionId, thread, inEditor, onPreview }: 
   const { status, cancel } = useJobStatus(projectId, jobId);
   const [picked, setPicked] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
-  const feature = useFeature(FLAGS.localModelStats);
   const phase = status?.phase ?? 'run';
   const progress = useProgress(status, phase === 'run');
   const count = thread.settings?.count ?? status?.count ?? 1;
@@ -109,9 +107,9 @@ export function JobBlock({ projectId, sessionId, thread, inEditor, onPreview }: 
           <Button size="xs" variant="ghost" leftIcon={ic(X)} onClick={() => { void cancel(); }}>Отменить</Button>
         </Acts>
         {/* Собственная полоса: прячем, когда есть строка GPU (ровно одна полоса, не дубль) */}
-        {!showQueueLine(feature, status?.gpu ?? null) && <ProgressBar value={progress.percent} transition="width .5s linear" />}
+        {!showQueueLine(true, status?.gpu ?? null) && <ProgressBar value={progress.percent} transition="width .5s linear" />}
         <GpuQueueBlock projectId={projectId} sessionId={sessionId} thread={thread} status={status}
-          feature={feature} count={count} />
+          feature count={count} />
         <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(count, 4)}, minmax(0, 1fr))`, gap: SP.xs }}>
           {Array.from({ length: Math.min(count, 4) }, (_, i) => (
             <div key={i} style={{ aspectRatio: '1 / 1', borderRadius: R.md, background: C.bgInset }} />

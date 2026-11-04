@@ -187,7 +187,6 @@ describe('Таймлайн-элементы карточки «Сводка» ч
     pageTest.reset();
     indexTest.reset();
     backNavTest.reset();
-    setAllFlags({ 'features-overview': true });
     mockIndex.features = [feat()];
     mockIndex.chats = {};
     mockGetFeature.pending = false;

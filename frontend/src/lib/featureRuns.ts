@@ -36,7 +36,6 @@ import { useEffect, useSyncExternalStore } from 'react';
 import { api } from './api';
 import { onMessage } from './signalr';
 import { getTaskById } from './tasks';
-import { getFlag, FLAGS } from './featureFlags';
 import type { FeatureRun } from '../types/featureRun';
 import type { ServerMessage } from '../types';
 
@@ -366,10 +365,8 @@ function affectedSessionId(msg: ServerMessage): string | null {
   return null;
 }
 
-// M2: обработчик task_changed. Фича выключена — событие проигнорировать; затронутая
-// сессия не «активна» (никто не смотрит её) — тоже.
+// M2: обработчик task_changed. Затронутая сессия не «активна» (никто не смотрит её) — игнорируем.
 function handleTaskChanged(msg: ServerMessage) {
-  if (!getFlag(FLAGS.turnPlanFeatureMode)) return;
   const sessionId = affectedSessionId(msg);
   if (!sessionId) return;
   if (!_active.has(sessionId)) return;

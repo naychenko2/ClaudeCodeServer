@@ -27,7 +27,6 @@ import { displayNameOf, type AuthState } from '../../types';
 import { api } from '../../lib/api';
 import { basename } from '../../lib/paths';
 import { C, FONT, FS, R, SP } from '../../lib/design';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { Button, Dot, EmptyState, IconButton, TextField } from '../../components/ui';
 import { PanelHeaderSlot, useHasPanelHeader } from '../../components/ui';
@@ -439,7 +438,6 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
   // hasDossierBranch — наличие локальной refs/heads/ccs/dossiers/v1: пока ветки нет,
   // импорт из неё бессмыслен, и «Загрузить» гейтим отдельно от «Выгрузить» —
   // выгрузить можно и когда ветки ещё нет, именно так она и создаётся.
-  const recallEnabled = useFeature(FLAGS.changeDossiersRecall);
   const [exportStatus, setExportStatus] = useState<{
     isGitRepo: boolean;
     sharedFolder: boolean;
@@ -450,20 +448,14 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
   const [importOpen, setImportOpen] = useState(false);
 
   useEffect(() => {
-    if (!recallEnabled) {
-      // Сбрасываем на null и закрываем модалку, если флаг мигнул во время открытого диалога
-      setExportStatus(null);
-      setExportOpen(false);
-      return;
-    }
     let cancelled = false;
     api.dossiers.exportStatus(project.id)
       .then(s => { if (!cancelled) setExportStatus(s); })
       .catch(() => { if (!cancelled) setExportStatus({ isGitRepo: false, sharedFolder: false, hasDossierBranch: false, autoExport: null }); });
     return () => { cancelled = true; };
-  }, [project.id, recallEnabled]);
+  }, [project.id]);
 
-  const showExportButton = recallEnabled && exportStatus?.isGitRepo === true;
+  const showExportButton = exportStatus?.isGitRepo === true;
   // Импорт дополнительно требует существующую ветку ccs/dossiers/v1: без неё
   // «Загрузить» упрётся в «Загружать пока нечего». «Выгрузить» этой зависимости
   // не имеет — выгрузка как раз и создаёт ветку.

@@ -169,7 +169,7 @@ function mockHealth(content: string) {
 
 // ─── Помощники блока F5c ───
 
-const bothFlags = () => { flags.on.add('llm-wiki'); flags.on.add('notes-wiki-unified'); };
+const bothFlags = () => { flags.on.add('llm-wiki'); };
 
 const docBody = (): AnyNode => (globalThis as { document: { body: AnyNode } }).document.body;
 const docText = (): string => textNodes(docBody()).map(t => t.trim()).filter(Boolean).join(' ');
@@ -667,15 +667,11 @@ describe('«Здоровье» раздела (S5f)', () => {
 //      («Should have a queue. You are likely calling Hooks conditionally»).
 
 describe('«Принять как мою правку» на строке дрейфа (F5c)', () => {
-  it('кнопка — только на строке «дрейфа» и только при обоих флагах', async () => {
+  it('кнопка — только на строке «дрейфа» и только при включённом llm-wiki', async () => {
     mockHealth(HEALTH);
     const c0 = render();
     await settle();
-    expect(adoptBtn(c0), 'при выключенных флагах').toBeNull();
-    flags.on.add('llm-wiki');
-    const c1 = render();
-    await settle();
-    expect(adoptBtn(c1), 'при одном llm-wiki').toBeNull();
+    expect(adoptBtn(c0), 'при выключенном llm-wiki').toBeNull();
     bothFlags();
     const c2 = render();
     await settle();

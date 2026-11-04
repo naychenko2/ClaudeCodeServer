@@ -71,6 +71,9 @@ beforeEach(() => {
   // node-окружение: rAF/cAF для PanelZone и др. — прогоняем в микротаске
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0) as unknown as number);
   vi.stubGlobal('cancelAnimationFrame', (id: number) => clearTimeout(id as unknown as ReturnType<typeof setTimeout>));
+  // Сторож «настроена ли локальная модель» опрашивает по таймеру через window.setInterval — в fake-DOM его нет
+  (window as unknown as { setInterval: unknown }).setInterval = () => 0;
+  (window as unknown as { clearInterval: unknown }).clearInterval = () => {};
   // ResizeObserver (centerOffset/PanelZone) — no-op: observe/disconnect не вызывают колбэк
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
   // window.history (nav: replaceState/pushState/state) — no-op; fakeDom-окно его не имеет

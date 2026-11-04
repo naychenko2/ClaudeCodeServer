@@ -584,10 +584,6 @@ function ContextActions({ estimate, isWaiting, isCompacting, canCompact, compact
 function PromptCacheSection({ state, isWaiting, sessionId }: { state: PromptCacheState; isWaiting: boolean; sessionId: string }) {
   const warn = useCacheWarnThresholds();
   const [showWarn, setShowWarn] = useState(false);
-  // Вся секция монтируется только за фич-флагом prompt-cache (гейт в RingPillBadge,
-  // дефект QA) — и кнопка переноса (F-4), и кнопка порогов за ним по построению.
-  // Флаг здесь читается ещё раз как страховка самой кнопки, а не как единственный гейт.
-  const promptCacheOn = useFeature(FLAGS.promptCache);
   // «Перенести в новый чат» (F-4): тёплый путь — записку пишет сам чат (видимый ход до
   // 5 мин), холодный — быстрый раннер по транскрипту. Успех: переход в новый чат,
   // черновик — в поле ввода (префилл тот же, что у «Попросить агента исправить»,
@@ -650,16 +646,12 @@ function PromptCacheSection({ state, isWaiting, sessionId }: { state: PromptCach
       <BadgeRow k="В кэше" v={`${fmtTokens(live.readTokens)} токенов`} />
       <BadgeRow k="Срок кэша" v={ttlText} />
       <BadgeRow k="Последний промах" v={miss} />
-      {/* Личный порог предупреждения (F-3) — правится только за фич-флагом, секция
-          и так монтируется за ним */}
       <div style={{ marginTop: SP.sm, display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
-        {promptCacheOn && (
-          <Button variant="ghost" size="xs" disabled={!sessionId || isWaiting} loading={handoffBusy}
-            onClick={() => void runHandoff()}
-            title={isWaiting ? 'Дождитесь завершения текущего хода' : 'Новый чат начнётся с короткой запиской об этом разговоре'}>
-            {handoffBusy ? 'Переношу…' : 'Перенести в новый чат'}
-          </Button>
-        )}
+        <Button variant="ghost" size="xs" disabled={!sessionId || isWaiting} loading={handoffBusy}
+          onClick={() => void runHandoff()}
+          title={isWaiting ? 'Дождитесь завершения текущего хода' : 'Новый чат начнётся с короткой запиской об этом разговоре'}>
+          {handoffBusy ? 'Переношу…' : 'Перенести в новый чат'}
+        </Button>
         <Button variant="ghost" size="xs" onClick={() => setShowWarn(true)} style={{ marginLeft: 'auto' }}
           leftIcon={<SlidersHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>
           Когда предупреждать об остывании
@@ -667,7 +659,7 @@ function PromptCacheSection({ state, isWaiting, sessionId }: { state: PromptCach
       </div>
       {/* Ошибка переноса — текст бэка как есть (409 «чат занят…», 502 «модель не дала
           записку»), не «сбой»: его можно прочитать и повторить клик */}
-      {promptCacheOn && handoffError && (
+      {handoffError && (
         <div style={{ ...meterSubStyle, marginTop: SP.sm, padding: `${SP.xs + 2}px ${SP.sm}px`, background: C.dangerBg, color: C.dangerText, borderRadius: R.md }}>
           {handoffError}
         </div>
@@ -931,9 +923,6 @@ export function RingPillBadge(props: {
   // индикатора. Стор подписочный — поздний засев сам обновит циферблат.
   const warn = useCacheWarnThresholds();
   const cache = usePromptCache(usePromptCacheItems(props.items, props.isWaiting), warn);
-  // Перенос в новый чат (F-4): обе точки входа — подсказка у кольца и кнопка в поповере —
-  // только за фич-флагом prompt-cache. Это предложение, не авто-действие
-  const promptCacheOn = useFeature(FLAGS.promptCache);
 
   // Живые данные локальной модели: хвост + поповер «Локальная модель». Хуки — до раннего
   // return (правило хуков). live=null — чат не на локальной модели (событий нет). Хвост —
@@ -942,15 +931,14 @@ export function RingPillBadge(props: {
   // Витрина: форсированное состояние обходит хук (в витрине нет живых событий)
   const live = props.forceLocalModel ?? hookLive;
   const isAdmin = useLocalModelAdmin();
-  const lmFlag = useFeature(FLAGS.localModelStats);
   // Десктоп: хвост добавляется к лицу через « · »; мобила (вариант А): лицо
   // ЗАМЕНЯЕТСЯ компактным словом состояния (≤ 7 знаков), тревога контекста побеждает.
-  const lmTail = !isMobile && lmFlag ? localModelTail(live) : null;
-  const lmTailCompact = isMobile && lmFlag ? localModelTail(live, true) : null;
+  const lmTail = !isMobile ? localModelTail(live) : null;
+  const lmTailCompact = isMobile ? localModelTail(live, true) : null;
   // Мобила: лицо заменяется словом состояния, только пока контекст в норме (не тревога)
   const lmMobileFace = lmTailCompact != null && estimate.level === 'normal' ? lmTailCompact : null;
   // Раздел «Локальная модель» в поповере: живые данные есть и флаг включён
-  const lmActive = live != null && lmFlag;
+  const lmActive = live != null;
   // Что «озвучивается» в aria-label: на десктопе — хвост, на мобиле — слово-лицо
   // (только когда оно реально заменит лицо, т.е. контекст в норме). Нет активного
   // состояния — null (строку в aria-label не добавляем).
@@ -1043,7 +1031,7 @@ export function RingPillBadge(props: {
   // Только предложение: само действие — кнопка в поповере, за этим же флагом. То же
   // условие, что и у секции кнопки — `cache` (F-4r): в чате без данных кэша обещание
   // без действия — тупик.
-  if (promptCacheOn && showCtx && estimate.level === 'danger' && cache) {
+  if (showCtx && estimate.level === 'danger' && cache) {
     parts.push({ text: 'Контекст почти полон — можно начать новый чат с запиской' });
   }
   // Локальная модель: живой хвост (десктоп) или слово-лицо (мобила) — озвучиваем,
@@ -1062,9 +1050,7 @@ export function RingPillBadge(props: {
     })));
   }
   // Тон пилюли кэш не перекрашивает — у циферблата свой цвет, строка только в подсказке.
-  // Вся обвязка кэша — за фич-флагом prompt-cache (дефект QA): бэкенд присылает
-  // promptCache независимо от флага, при выключенном ничего из этого не показывается.
-  if (promptCacheOn && cache) parts.push({ text: cacheStaticLabel(props.isWaiting), dial: true });
+  if (cache) parts.push({ text: cacheStaticLabel(props.isWaiting), dial: true });
   const title = (parts.length > 0 ? parts.map(p => p.text).join(' · ') : 'Контекст и расход сессии') + ' — нажмите для деталей';
   const tip = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs + 1 }}>
@@ -1114,7 +1100,7 @@ export function RingPillBadge(props: {
         </span>
         {/* Циферблат кэша — справа от лица, через разделитель; сам по себе не кнопка,
             цель клика — вся пилюля (F-1b). Только за фич-флагом prompt-cache (дефект QA) */}
-        {promptCacheOn && cache && <CacheDial state={cache} isWaiting={props.isWaiting} isMobile={isMobile} warnThresholds={warn} />}
+        {cache && <CacheDial state={cache} isWaiting={props.isWaiting} isMobile={isMobile} warnThresholds={warn} />}
       </>}
       isMobile={isMobile}
       isCompact={isCompact}
@@ -1158,7 +1144,7 @@ export function RingPillBadge(props: {
       {showCtx && <ContextActions {...props} />}
       {/* Секция «Кэш промпта» целиком — за фич-флагом prompt-cache (дефект QA): при
           выключенном нет ни секции, ни кнопки порогов, хотя данные кэша приходят с бэка */}
-      {promptCacheOn && cache && (
+      {cache && (
         <div style={(lmActive || wfActive || showCtx || showCost) ? sectionDivider : undefined}>
           <PromptCacheSection state={cache} isWaiting={props.isWaiting} sessionId={props.sessionId ?? ''} />
         </div>

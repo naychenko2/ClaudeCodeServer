@@ -453,31 +453,22 @@ describe('ChatItemView — причина промаха кэша в подва�
   afterEach(() => setAllFlags({}));
 
   it('флаг вкл, промах есть: «кэш не помог: смена модели» и в подсказке «это нормально»', () => {
-    setAllFlags({ 'prompt-cache': true });
     const html = renderMeta(resultWithCache('modelChanged'));
     expect(html, 'строка причины в подвале').toContain('кэш не помог: смена модели');
     expect(html, 'подтверждение пользы, не техники').toContain('Это нормально');
   });
 
-  it('флаг выкл — строки нет, даже с промахом', () => {
-    setAllFlags({ 'prompt-cache': false });
-    expect(renderMeta(resultWithCache('modelChanged')), 'за выключенным флагом ничего нет').not.toContain('кэш не помог');
-  });
-
   it('промаха нет (missReason none) — строки нет', () => {
-    setAllFlags({ 'prompt-cache': true });
     expect(renderMeta(resultWithCache('none'))).not.toContain('кэш');
   });
 
   it('данных кэша нет — строки нет (не-Claude провайдер)', () => {
-    setAllFlags({ 'prompt-cache': true });
     expect(renderMeta(plainResult())).not.toContain('кэш');
   });
 
   // Незнакомая причина (минор ревью F-2): в строке — человекочитательная «другая
   // причина», сырой кода — в подсказке (title).
   it('незнакомая причина: «другая причина» в строке, сырой код — в подсказке', () => {
-    setAllFlags({ 'prompt-cache': true });
     const html = renderMeta(resultWithCache('weirdReason'));
     expect(html).toContain('кэш не помог: другая причина');
     expect(html, 'сырой код не потерян — он в title').toContain('Причина не распознана (weirdReason)');
@@ -487,7 +478,6 @@ describe('ChatItemView — причина промаха кэша в подва�
   // Минор ревью F-2: мета-строка — только у последнего хода. Не последний result с
   // промахом — сегмента нет вовсе.
   it('isLastResult: false и промах — сегмента «кэш не помог» нет', () => {
-    setAllFlags({ 'prompt-cache': true });
     expect(renderMeta(resultWithCache('modelChanged'), false), 'мета только у последнего хода').not.toContain('кэш не помог');
   });
 });
@@ -507,13 +497,6 @@ describe('ChatItemView — строка ожидания слота локаль
     expect(html).toContain('заняты 3 из 3');
     expect(html, 'кнопка остановки хода').toContain('Стоп');
     expect(html).toContain('data-testid="local-turn-queue"');
-  });
-
-  it('строка видна БЕЗ флага local-model-stats (c3): ожидание не привязано к метрикам', () => {
-    setAllFlags({ 'local-model-stats': false });
-    const html = renderItem(queueItem());
-    expect(html).toContain('ждёт свободный слот');
-    expect(html).toContain('2-й в очереди');
   });
 
   it('«занято» и «движок не отвечает» — разные тона: янтарная строка vs красная карточка (c4)', () => {

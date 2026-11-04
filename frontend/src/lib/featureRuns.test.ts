@@ -45,7 +45,6 @@ function task(over: Partial<Task>): Task {
   } as Task;
 }
 
-const FLAG = 'turn-plan-feature-mode';
 
 // ── M1: стор агрегатов по sessionId ───────────────────────────────────────────
 
@@ -98,7 +97,6 @@ describe('M2: live-режим — перезапрос по task_changed', () =>
   beforeEach(() => {
     vi.useFakeTimers();
     __test.reset();
-    setAllFlags({ [FLAG]: true });
     // Шпион на REST-запрос: доказываем, что именно эта сессия была перезапрошена.
     getFeaturesSpy = vi.spyOn(api.tasks, 'getFeatures').mockResolvedValue([]);
   });
@@ -136,17 +134,6 @@ describe('M2: live-режим — перезапрос по task_changed', () =>
     expect(__test.pending().has('C')).toBe(true);
   });
 
-  it('фича выключена — событие проигнорировано (нет перезапроса)', () => {
-    setAllFlags({ [FLAG]: false });
-    upsertTaskLocal(task({ id: 'epic-3', role: 'feature', sourceSessionId: 'D' }));
-    __test.setActive('D');
-
-    __test.handleTaskChanged({ type: 'task_changed', action: 'updated', task: task({ id: 'epic-3', role: 'feature', sourceSessionId: 'D' }) });
-
-    expect(__test.pending().has('D')).toBe(false);
-    expect(getFeaturesSpy).not.toHaveBeenCalled();
-  });
-
   it('обычная задача (без featureId/role) — нет перезапроса', () => {
     __test.setActive('E');
     __test.handleTaskChanged({ type: 'task_changed', action: 'updated', task: task({ id: 'plain' }) });
@@ -175,7 +162,6 @@ describe('Перф-2 B2: троттлинг и дедуп запросов аг�
   beforeEach(() => {
     vi.useFakeTimers();
     __test.reset();
-    setAllFlags({ [FLAG]: true });
     getFeaturesSpy = vi.spyOn(api.tasks, 'getFeatures').mockResolvedValue([]);
     upsertTaskLocal(task({ id: 'epic-t', role: 'feature', sourceSessionId: 'T' }));
     __test.setActive('T');

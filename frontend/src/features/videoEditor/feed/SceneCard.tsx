@@ -10,7 +10,6 @@ import { useState, type KeyboardEvent, type ReactNode } from 'react';
 import { ChevronLeft, ChevronRight, Clapperboard, Download, Film, Info, Save, Target, TriangleAlert, Zap } from 'lucide-react';
 import {
   Badge, Button, ByClaude, C, FS, IconButton, Notice, ProgressBar, R, SHADOW, SP, ICON_SIZE, TextField, isCardPick, useChatContext,
-  FLAGS, useFeature,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { videoApi, type VideoCatalog, type VideoClipVersion, type VideoLaunch, type VideoScene } from '../api';
@@ -367,7 +366,6 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
   const [pos, setPos] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [ask, setAsk] = useState<'save' | 'film' | null>(null);
-  const feature = useFeature(FLAGS.localModelStats);
   const scene = state.scenes.find(s => s.sceneId === sceneId) ?? null;
   if (!scene || !sessionId) return null;
   const jobs = getJobsOf(sessionId, scene.sceneId);
@@ -388,8 +386,8 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
   // за флагом и когда идущая задача несёт живой снимок очереди. Параметры — из тех же источников, что фактический запуск
   const r = currentResolved(sessionId, scope, scene);
   const gpu = jobs[0]?.gpu ?? null;
-  const gpuBlock = !jobId && feature && gpu
-    ? <GpuQueueBlock scope={scope} sessionId={sessionId} sceneId={scene.sceneId} feature={feature} gpu={gpu}
+  const gpuBlock = !jobId && gpu
+    ? <GpuQueueBlock scope={scope} sessionId={sessionId} sceneId={scene.sceneId} feature gpu={gpu}
         params={{ count: r.count, durationSec: r.durationSec, aspect: r.aspect, sound: r.sound }} />
     : null;
   return (

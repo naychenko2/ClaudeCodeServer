@@ -215,7 +215,6 @@ beforeEach(() => {
   indexTest.reset();
   backNavTest.reset();
   personaMap.clear();
-  setAllFlags({ 'features-overview': true });
   mockIndex.features = [feat()];
   mockIndex.chats = {};
   mockChats.clear();

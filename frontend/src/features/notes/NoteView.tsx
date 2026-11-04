@@ -81,9 +81,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   // «Разобрать в базу» (S7b) — за флагом llm-wiki; requestNoteIngest никогда не бросает,
   // поэтому экрану нужен только busy для кнопки и текст для тоста
   const wikiOn = useFeature(FLAGS.llmWiki);
-  // «Перенести в вики» (F5b) — за обоими флагами: llm-wiki и «Заметки и Вики». Без любого
-  // из них кнопки нет (бэк проверяет те же флаги до ветки переноса, UnifiedOffRefusal)
-  const unifiedOn = useFeature(FLAGS.notesWikiUnified);
+  // «Перенести в вики» (F5b) — только при включённом llm-wiki.
   const [ingestBusy, setIngestBusy] = useState(false);
   // Контейнер панели комментариев (портал из DocCommentedMarkdown). Плавающий сайдбар
   // связей справа от текста заметки — как у документов (см. docSide в FileViewer):
@@ -746,7 +744,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
               )}
               {/* «Перенести в вики» (F5b) — та же форма действия, что у соседних: ряд тулбара
                   на 360 не переносится, подписанная кнопка в нём не помещается */}
-              {unifiedOn && wikiOn && can('note.delete') && (
+              {wikiOn && can('note.delete') && (
                 <IconButton title="Перенести в вики" disabled={!online || transferBusy} onClick={() => setTransferConfirm(true)}>
                   <BookMarked size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
                 </IconButton>

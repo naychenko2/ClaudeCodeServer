@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { C, FS, FONT, SP, R } from '../../../lib/design';
-import { useFeature, FLAGS } from '../../../lib/featureFlags';
 import { useFeaturesIndex, featureOf } from '../../../lib/featuresIndex';
 import { useFeatureRuns, useFeatureRunsLoading, useFeatureRunsError, refetchFeatureRuns } from '../../../lib/featureRuns';
 import { openChatById } from '../../../lib/openChat';
@@ -141,16 +140,13 @@ interface FeatureBannerProps {
 }
 
 // Строка фичи в шапке чата (слот featureBar у ChatHeaderBar). Возвращает null, когда
-// строки нет (флаги выключены или чат не принадлежит ни одной фиче).
+// строки нет (чат не принадлежит ни одной фиче).
 export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTaskId, onFocusComposer }: FeatureBannerProps) {
-  const featureMode = useFeature(FLAGS.turnPlanFeatureMode);
-  const featuresOverview = useFeature(FLAGS.featuresOverview);
-  const enabled = featureMode && featuresOverview;
   // Индекс — строки фич и связь «чат × фича» (стор, один запрос на проект).
-  useFeaturesIndex(projectId, enabled);
+  useFeaturesIndex(projectId, true);
   // Run'ы чата — данные полосы («в master»), «Сейчас», расхождений и оценки. Тот же
   // источник, что у попапа пилюли, без догрузки features/{id}.
-  const runs = useFeatureRuns(sessionId, enabled);
+  const runs = useFeatureRuns(sessionId, true);
   const runsLoading = useFeatureRunsLoading(sessionId);
   const runsError = useFeatureRunsError(sessionId);
   const [selIdx, setSelIdx] = useState(0);
@@ -167,7 +163,7 @@ export function FeatureBanner({ sessionId, projectId, isMobile = false, chatTask
   const entry = entries[idx];
   const feature = entry?.feature;
   const link = entry?.link;
-  if (!enabled || entries.length === 0 || !feature || !link) return null;
+  if (entries.length === 0 || !feature || !link) return null;
 
   const run = runs.find(r => r.featureId === feature.featureId) ?? null;
   const model = featureRowModel(feature, run, isMobile);

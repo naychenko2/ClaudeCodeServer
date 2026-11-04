@@ -20,7 +20,6 @@ type ToolItem = Extract<ChatItem, { kind: 'tool_use' }>;
 // fakeDom не экспортирует FNode — тип узла берём из сигнатуры findNodeByAttr
 type FNode = Parameters<typeof findNodeByAttr>[0];
 
-const FLAG = 'turn-plan-feature-mode';
 
 // Мобила — управляемый флаг (SSR window не видит; useIsMobile задаёт minHeight чипа 28/40).
 const { mobileFlag } = vi.hoisted(() => ({ mobileFlag: { value: false } }));
@@ -54,13 +53,11 @@ vi.mock('../../../lib/api', async (importOriginal) => {
 beforeEach(() => {
   __test.reset();
   mobileFlag.value = false;
-  setAllFlags({ [FLAG]: true });
   openTaskSpy.mockClear();
   tasksGetMock.mockReset();
 });
 afterEach(() => {
   __test.reset();
-  setAllFlags({ [FLAG]: false });
 });
 
 // === Фикстуры ===
@@ -91,12 +88,6 @@ const render = (i: ToolItem) =>
 // === Присутствие чипа: флаг + featureId + stepRef ===
 
 describe('F9: чип «Шаг N фичи» — присутствие', () => {
-  it('флаг выключен — чипа нет (даже с featureId/stepRef)', () => {
-    setAllFlags({ [FLAG]: false });
-    const html = render(item(task()));
-    expect(html).not.toContain('Шаг D1 фичи');
-  });
-
   it('нет featureId — чипа нет (Major 3 Глеба: не врать про неразмеченные задачи)', () => {
     const html = render(item(task({ featureId: null })));
     expect(html).not.toContain('Шаг D1 фичи');

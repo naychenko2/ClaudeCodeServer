@@ -24,7 +24,6 @@ import { useEffect, useSyncExternalStore } from 'react';
 import { api } from './api';
 import { onMessage } from './signalr';
 import { getTaskById } from './tasks';
-import { getFlag, FLAGS } from './featureFlags';
 import type { FeaturesIndex, FeatureIndexFeature, FeatureChatLink } from '../types/featureIndex';
 import type { ServerMessage } from '../types';
 
@@ -140,11 +139,9 @@ function affectedProjectKey(msg: ServerMessage): string | null {
   return null;
 }
 
-// Обработчик task_changed. Флаг выключен — событие проигнорировать (стор ничего
-// не грузит и не подписывается); затронутый проект не «активен» (никто его не
-// смотрит) — тоже.
+// Обработчик task_changed. Затронутый проект не «активен» (никто его не
+// смотрит) — событие проигнорировать.
 function handleTaskChanged(msg: ServerMessage) {
-  if (!getFlag(FLAGS.featuresOverview)) return;
   const projectKey = affectedProjectKey(msg);
   if (projectKey === null) return;
   if ((_activeCount.get(projectKey) ?? 0) === 0) return;

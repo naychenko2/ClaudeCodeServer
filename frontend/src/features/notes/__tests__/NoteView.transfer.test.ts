@@ -205,7 +205,7 @@ beforeEach(() => {
   req.mockReset();
   req.mockImplementation(() => Promise.resolve(null));
   wikiStore.reset();
-  setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+  setAllFlags({ 'llm-wiki': true });
 });
 
 afterEach(() => {
@@ -216,15 +216,11 @@ afterEach(() => {
 });
 
 describe('«Перенести в вики» на экране заметки (F5b)', () => {
-  it('без флагов кнопки нет: ни при выключенном llm-wiki, ни при одном llm-wiki', async () => {
+  it('без llm-wiki кнопки нет и запросов нет', async () => {
     setAllFlags({});
     const { container } = renderNote(NOTE_A.id);
     await settle();
-    expect(transferBtn(container), 'при выключенных флагах').toBeNull();
-    // один llm-wiki — тоже нет: перенос относится к «Заметкам и Вики»
-    setAllFlags({ 'llm-wiki': true });
-    await settle();
-    expect(transferBtn(container), 'при одном llm-wiki').toBeNull();
+    expect(transferBtn(container), 'при выключенном llm-wiki').toBeNull();
     expect(req.mock.calls.filter(([u]) => String(u).endsWith('/wiki/ingest/note'))).toHaveLength(0);
   });
 

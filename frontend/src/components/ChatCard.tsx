@@ -33,7 +33,6 @@ import { useCanHover } from '../lib/pointer';
 import { NO_AUTOFILL } from '../lib/noAutofill';
 import { useSlot } from '../lib/subsystems/registry';
 import type { ChatCardBadgeApi, ChatCardBadgeCtx } from '../lib/subsystems/registryCore';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 import { featureOf, useFeaturesIndex } from '../lib/featuresIndex';
 import { featureDisplayState, KEY_SESSION_TOOLTIP } from '../lib/chatGroups';
 import { FeatureGlyph } from './chat/feature/FeatureGlyphs';
@@ -363,13 +362,12 @@ function ChatCardView({
   const mechanic = getLastMechanic(s.id);
   // Значки подсистем в строке названия (чат картинки — миниатюра и «картинка»)
   const badges = useSlot<ChatCardBadgeCtx, ChatCardBadgeApi>('chat-card-badge');
-  // Метка фичи: для чата, принадлежащего фиче, под флагом features-overview.
+  // Метка фичи: для чата, принадлежащего фиче.
   // useFeaturesIndex — реактивная подписка на индекс (один запрос на проект:
   // первичная загрузка при 0→1 потребителях); featureLabelFor — чистое решение
   // «показывать ли метку» (null — нет)
-  const featuresOn = useFeature(FLAGS.featuresOverview);
-  useFeaturesIndex(s.projectId ?? null, featuresOn);
-  const feature = featureLabelFor(s.id, featuresOn);
+  useFeaturesIndex(s.projectId ?? null, true);
+  const feature = featureLabelFor(s.id, true);
   // Открытое меню действий: rect кнопки-триггера (null — закрыто)
   const [menu, setMenu] = useState<DOMRect | null>(null);
   // M1: фокус на карточке-строке — подсказка «что значит ключевой» (Tooltip) поднимается

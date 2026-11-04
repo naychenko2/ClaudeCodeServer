@@ -21,7 +21,7 @@ import { AlertTriangle, ChevronLeft, ChevronRight, Folder, FolderTree, Monitor, 
 import {
   C, FONT, FS, R, SP, useIsMobile, FLAGS, useFeature,
   WikiError, ensureWikiLoaded, deleteWikiSection, groupSectionsByKind,
-  getWikiTreeSnapshot, loadWikiCatalog, loadWikiPage, loadWikiTree,
+  getWikiTreeSnapshot, parseSectionKey, loadWikiCatalog, loadWikiPage, loadWikiTree,
   useWikiCatalog, useWikiPage, useWikiPageGone, useWikiTree,
   consumeOpenWikiPage, useWikiOpenRequest,
   type WikiPageInfoDto, type WikiSectionDto,
@@ -45,6 +45,8 @@ import { PAGE_STATUS, PAGE_TYPE, sectionPrefix, wikiErrorText } from './wikiLabe
 const TREE_W = 300;
 // Строка кнопки «Раздел ▸» — та же тач-высота, что у строк дерева (макет .trow 44)
 const SECTION_SWITCH_H = 44;
+// Кнопки-триггеры шторок — квадрат 40×40 (кадр mob-closed): тач-цель ровно 40
+const DRAWER_BTN = 40;
 // id шторок для aria-controls кнопок-триггеров
 const DRAWER_TREE_ID = 'wiki-drawer-tree';
 const DRAWER_PANEL_ID = 'wiki-drawer-panel';
@@ -69,6 +71,16 @@ export function defaultSectionKey(sections: readonly WikiSectionDto[]): string |
     g.project.find(s => !s.local) ??
     null;
   return pick?.key ?? null;
+}
+
+// Имя раздела для строки в шторке панели — та же короткая форма, что у бейджа шапки на
+// десктопе (записка notes-wiki-panels-v1, п. 1): «Общее», «Личное», имя проекта или
+// сферы; безымянный заместитель — тот же, что в дереве («Удалённый проект», «Сфера»)
+function sectionLabel(s: WikiSectionDto): string {
+  const ref = parseSectionKey(s.key);
+  if (ref?.kind === 'common') return 'Общее';
+  if (ref?.kind === 'personal') return 'Личное';
+  return s.name ?? (ref?.kind === 'sphere' ? 'Сфера' : 'Удалённый проект');
 }
 
 // ─── Куски экрана ───
@@ -504,17 +516,27 @@ export function WikiTab({ unified = false, treeHost = null, drawerTree, onSectio
       <div data-testid="wiki-doc" style={{ flex: 1, minWidth: 0, overflow: 'auto' }}>{center()}</div>
     );
     if (isMobile) {
+      // Раздел для строки под переключателем (записка notes-wiki-panels-v1, п. 1 и таблица
+      // «Шторка 360»): ровно то же значение, по которому тело шторки уже работает —
+      // selectedKey, до выбора — defaultSectionKey. Своего состояния здесь нет: строка —
+      // только чтение раздела панели. Правила п. 1 держит то, что доходит до selectedKey:
+      // строки, у которых есть раздел (строка дерева, открытие страницы). Заметка из
+      // «Других заметок» (OTHER_KEY — ключа нет) и клик по заголовку узла его не меняют.
+      const shownKey = selectedKey ?? defaultSectionKey(sections);
+      const shownSection = shownKey ? sections.find(s => s.key === shownKey) ?? null : null;
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minHeight: 0, height: '100%' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, padding: `0 ${SP.sm}px` }}>
             <Button variant="ghost" size="md" dataTestId="wiki-open-tree" ariaLabel="Дерево разделов" title="Дерево разделов"
               leftIcon={<FolderTree size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />} ariaExpanded={drawer === 'tree'} ariaControls={DRAWER_TREE_ID}
+              style={{ width: DRAWER_BTN, height: DRAWER_BTN, padding: 0 }}
               onClick={() => setDrawer(d => d === 'tree' ? null : 'tree')}>{null}</Button>
             <span style={{ flex: 1 }} />
             <span style={{ position: 'relative', display: 'inline-flex' }}>
             <Button variant="ghost" size="md" dataTestId="wiki-open-panel" ariaLabel="Входящие, журнал, здоровье, настройки"
               title="Входящие, журнал, здоровье, настройки"
               leftIcon={<PanelRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />} ariaExpanded={drawer === 'panel'} ariaControls={DRAWER_PANEL_ID}
+              style={{ width: DRAWER_BTN, height: DRAWER_BTN, padding: 0 }}
               onClick={() => {
                 // Панель открывается на выбранном разделе; не выбран — на первом, и выбор запоминается
                 if (!panelTab) setPanelTab(panelTabs()[0].id);
@@ -541,6 +563,24 @@ export function WikiTab({ unified = false, treeHost = null, drawerTree, onSectio
                   options={panelTabs().map(t => ({ value: t.id, label: t.label, icon: wikiSubTabIcon(t), title: t.label }))}
                 />
               </div>
+              {/* Строка раздела под переключателем (записка п. 1, кадр mob-journal): заменяет
+                  бейдж шапки на мобиле; имя — короткое, как у бейджа; полное — в title */}
+              {shownSection && (
+                <div
+                  data-testid="wiki-drawer-section-line"
+                  title={`Раздел вики: ${sectionLabel(shownSection)}`}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: SP.sm, flexShrink: 0,
+                    padding: `${SP.sm}px ${SP.md}px`, fontSize: FS.sm, color: C.textSecondary,
+                    borderBottom: `1px solid ${C.borderLight}`,
+                  }}
+                >
+                  <Folder size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    Раздел: <b style={{ color: C.textHeading, fontWeight: 600 }}>{sectionLabel(shownSection)}</b>
+                  </span>
+                </div>
+              )}
               <WikiPanelBody tab={panelTab ?? panelTabs()[0].id} selectedKey={selectedKey} />
             </WikiDrawer>
           )}

@@ -494,6 +494,12 @@ public class TasksController(
         // Правка, статус, колонка (перетаскивание), подзадачи и порядок — право WriteContent
         // по проекту задачи (F2-T1): редактор может, читателю 403, невидимому 404.
         if (TaskActionDenied(task, ProjectRight.WriteContent) is { } denied) return denied;
+        // Фичевые поля и жизнь фичи — только владельцу проекта (возврат ревью R-F2-T1): дверь
+        // WriteContent открыта редактору, но она не отдаёт ему ведение фичи арендатора. Отказ
+        // 403 до любой записи и до валидации тела — при отказе хранимый объект не тронут.
+        if (FeatureOwnerGate.Denied(access, UserId, task, req) is { } featureDenied)
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new { error = featureDenied, code = FeatureOwnerGate.ErrorCode });
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
 

@@ -536,6 +536,12 @@ public sealed class TasksToolset(
                     Acceptance: AcceptanceArg(arguments),
                     Evidence: EvidenceArg(arguments),
                     PlanSteps: planSteps);
+                // Фичевые поля и жизнь фичи — только владельцу проекта (возврат ревью R-F2-T1):
+                // тот же предикат, что на REST PUT (FeatureOwnerGate), по актору идущего хода —
+                // агент редактора не может больше человека-редактора. Отказ до первой мутации.
+                if (FeatureOwnerGate.Denied(access, TurnActorId(session.Id, context.OwnerId), existing, req)
+                    is { } featureDenied)
+                    return Deny($"{featureDenied} ({FeatureOwnerGate.ErrorCode})");
                 TaskItem updated;
                 try
                 {
@@ -627,17 +633,25 @@ public sealed class TasksToolset(
                 // не получает Outcome ни при каком раскладе.
                 var outcomeArg = task.Kind == TaskKind.Defect ? OutcomeArg(arguments) : null;
                 var wasDone = task.Status == TaskItemStatus.Done;
+                var completeReq = new UpdateTaskRequest(
+                    Status: TaskItemStatus.Done,
+                    ResultMarkdown: arguments.ContainsKey("resultMarkdown") ? StringArg(arguments, "resultMarkdown") : null,
+                    LinkedFiles: arguments.ContainsKey("linkedFiles") ? LabelsArg(arguments, "linkedFiles") : null,
+                    Verification: verificationEffective,
+                    Outcome: outcomeArg,
+                    // Свидетельства по критериям приёмки; отказ гейта — Deny с перечнем незакрытых
+                    Evidence: EvidenceArg(arguments));
+                // Фичевые поля и жизнь фичи — только владельцу проекта (возврат ревью R-F2-T1):
+                // тот же предикат, что у tasks_update и REST PUT, по актору идущего хода:
+                // закрыть эпик фичи агентом редактора — тот же отказ, что человеку-редактору.
+                // Отказ до первой мутации, задача цела.
+                if (FeatureOwnerGate.Denied(access, TurnActorId(session.Id, context.OwnerId), task, completeReq)
+                    is { } featureDenied)
+                    return Deny($"{featureDenied} ({FeatureOwnerGate.ErrorCode})");
                 TaskItem updated;
                 try
                 {
-                    updated = tasks.Update(id, new UpdateTaskRequest(
-                        Status: TaskItemStatus.Done,
-                        ResultMarkdown: arguments.ContainsKey("resultMarkdown") ? StringArg(arguments, "resultMarkdown") : null,
-                        LinkedFiles: arguments.ContainsKey("linkedFiles") ? LabelsArg(arguments, "linkedFiles") : null,
-                        Verification: verificationEffective,
-                        Outcome: outcomeArg,
-                        // Свидетельства по критериям приёмки; отказ гейта — Deny с перечнем незакрытых
-                        Evidence: EvidenceArg(arguments)),
+                    updated = tasks.Update(id, completeReq,
                         // Агентский путь (MCP): защита от затирания снятой задачи —
                         // tasks_complete на снятой задаче вернёт 400 вместо молчаливого 200 OK
                         isAgentCall: true,
@@ -768,7 +782,7 @@ public sealed class TasksToolset(
                 // редактору (правило «агент не больше человека»). Актор совпадает с арендатором
                 // или неизвестен — права арендатора, как раньше (тот же fail-closed, что у
                 // гейта актора S2c-6). Отказ — тем же машинным кодом, что REST-ответ.
-                var actor = sessions.GetTurnActor(session.Id, context.OwnerId) ?? context.OwnerId;
+                var actor = TurnActorId(session.Id, context.OwnerId);
                 if (actor != context.OwnerId && task.CreatedByUserId != actor)
                     return Deny($"{TaskAuthorGate.DeniedText} ({TaskAuthorGate.ErrorCode})");
                 // W4-HOLD-N (хвост R-N п.3): та же страховка, что у REST-удаления: MCP-путь
@@ -1059,6 +1073,14 @@ public sealed class TasksToolset(
             ? null
             : $"Задача {task.Id} недоступна в этом контексте — она принадлежит другому проекту.";
     }
+
+    // Актор идущего хода чата-вызывателя (тот же реестр SessionManager, что читает гейт актора
+    // S2c-6): агент участника пишет под сервисным токеном арендатора, поэтому решение
+    // «владелец / не владелец» меряется актором хода, а не токеном — иначе агент редактора мог бы
+    // больше человека-редактора. Актор не назван (фон, внутренний ход без инициатора) — права
+    // арендатора, как в двери удаления (F2-T1): их уже держит гейт актора на составе инструментов.
+    private string TurnActorId(string sessionId, string tenantOwnerId) =>
+        sessions.GetTurnActor(sessionId, tenantOwnerId) ?? tenantOwnerId;
 
     // B4 (R-B4 минор 1): право на голос фичи — белый список видов связи {curator, orchestrator}
     // (ADR-031 §4), а не «не executor». «Не executor» молча дал бы право новому виду членства,

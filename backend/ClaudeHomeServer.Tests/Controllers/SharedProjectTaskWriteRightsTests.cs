@@ -27,14 +27,21 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// 403 project_scope (права нет до авторства); задаче без автора — тот же fail-closed, что чату
 /// без автора.
 ///
+/// Фичевые поля и жизненный цикл фичи — отдельная линия (возврат ревью R-F2-T1): дверь
+/// WriteContent открыта редактору, но она не отдаёт ему ведение фичи арендатора. Роль, фичу,
+/// план, связь с ревью, вердикт/свидетельства и статус задачи-эпика правит только владелец
+/// (FeatureOwnerGate — один предикат на REST PUT и на MCP tasks_update/tasks_complete);
+/// статус обычной задачи, заголовок, описание, подзадачи, колонка, порядок, исполнитель и срок
+/// остаются редактору.
+///
 /// Ключ хранилища не меняется: задача, созданная редактором, лежит под арендатором проекта
 /// (TaskItem.OwnerId — владелец проекта), автор — тот, кто поставил (CreatedByUserId). Замок
 /// ProjectAccessService (право Write участнику) и матрица ProjectAccess.RoleHasRight этим шагом
 /// не тронуты: переводятся двери, а не права.
 ///
 /// «Выполнить» проверяется на уже завершённой задаче: прогон исполнителя здесь не нужен (он —
-/// TasksRunExecutorActorTests), а 400 «задача уже завершена» вместо 403 доказывает, что правом не
-/// отшили и до тела ручки дошло.
+/// TasksRunExecutorActorTests), а конкретный 400 «задача уже завершена» (а не «не 403») доказывает,
+/// что правом не отшили и до тела ручки дошло.
 /// </summary>
 [Trait("Category", "Host")]
 public class SharedProjectTaskWriteRightsTests : IClassFixture<TestWebApplicationFactory>
@@ -44,11 +51,9 @@ public class SharedProjectTaskWriteRightsTests : IClassFixture<TestWebApplicatio
     // 200 в ожиданиях значит «любой 2xx»
     private const int Ok2xx = 200;
 
-    // -1 значит «не 403»: гейт права пройден, а дальше ручка отвечает по делу (400 «уже завершена»)
-    private const int PassesGate = -1;
-
     private const string NoRight = ProjectScopeAttribute.ErrorCode;
     private const string NotAuthor = TaskAuthorGate.ErrorCode;
+    private const string NotFeatureOwner = FeatureOwnerGate.ErrorCode;
 
     private readonly TestWebApplicationFactory _factory;
 
@@ -147,8 +152,14 @@ public class SharedProjectTaskWriteRightsTests : IClassFixture<TestWebApplicatio
         new("перетащить", HttpMethod.Put, "/api/tasks/{t}", new { columnId = "inProgress", order = 1500.0 }, Ok2xx, Ok2xx, 403, 404),
         new("подзадачи", HttpMethod.Put, "/api/tasks/{t}",
             new { subtasks = new[] { new { id = "", title = "шаг", isDone = false } } }, Ok2xx, Ok2xx, 403, 404),
-        // запуск исполнителя — право RunTurn: у редактора оно есть с S2a-10, у читателя нет
-        new("выполнить", HttpMethod.Post, "/api/tasks/{t}/execute", null, PassesGate, PassesGate, 403, 404, CloseFirst: true),
+        // статус ОБЫЧНОЙ задачи — исполнительское поле: редактор может (страховка от того, что
+        // фичевая дверь R-F2-T1 не перешла на любой status)
+        new("закрыть", HttpMethod.Put, "/api/tasks/{t}", new { status = "done" }, Ok2xx, Ok2xx, 403, 404),
+        // запуск исполнителя — право RunTurn: у редактора оно есть с S2a-10, у читателя нет.
+        // Ожидание — конкретный 400 «задача уже завершена» (TaskExecutionService), а не «не 403»:
+        // «не 403» прошёл бы и на 404 «ручка не нашла задачу», и на 500 — это не доказательство,
+        // что правом не отшили и до тела ручки дошло (хвост ревью R-F2-T1 п.1-2)
+        new("выполнить", HttpMethod.Post, "/api/tasks/{t}/execute", null, 400, 400, 403, 404, CloseFirst: true),
         // вывод задачи из общего проекта в личные — право Write, только владельцу
         new("перенести в личные", HttpMethod.Put, "/api/tasks/{t}", new { projectId = "" }, Ok2xx, 403, 403, 404),
     ];
@@ -171,9 +182,9 @@ public class SharedProjectTaskWriteRightsTests : IClassFixture<TestWebApplicatio
 
         var expected = action.For(role);
         if (expected == Ok2xx)
+        {
             (status >= 200 && status < 300).Should().BeTrue($"{role}: {actionName} → {status}");
-        else if (expected == PassesGate)
-            status.Should().NotBe(403, $"{role}: {actionName} — право не должно отказать");
+        }
         else
         {
             status.Should().Be(expected, $"{role}: {actionName}");
@@ -182,7 +193,7 @@ public class SharedProjectTaskWriteRightsTests : IClassFixture<TestWebApplicatio
         }
 
         // Отказанное действие не оставило следа: ни правки, ни новой задачи
-        if (expected is 403 or 404)
+        if (expected is 400 or 403 or 404)
         {
             if (action.Method == HttpMethod.Post && action.Path.Contains("/tasks", StringComparison.Ordinal)
                 && !action.Path.Contains("{t}", StringComparison.Ordinal))
@@ -374,5 +385,116 @@ public class SharedProjectTaskWriteRightsTests : IClassFixture<TestWebApplicatio
         status.Should().Be(403);
         code.Should().Be(NoRight);
         Tasks.GetById(taskId)!.ProjectId.Should().Be(projectId, "отказ не переносит задачу");
+    }
+
+    // ── фичевые поля и жизнь фичи — только владельцу проекта (возврат ревью R-F2-T1) ────
+
+    /// <summary>Эпик фичи арендатора в том же общем проекте (role=feature).</summary>
+    private async Task<string> SharedEpicAsync(string projectId)
+    {
+        var epic = await OwnerClient().PostAsJsonAsync($"/api/projects/{projectId}/tasks",
+            new { title = "Эпик фичи" + Guid.NewGuid().ToString("N")[..6], role = "feature" });
+        epic.EnsureSuccessStatusCode();
+        return IdOf(await epic.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task РедакторНеСтавитФичевыеПоля_403featureOwner_ЗаписьНеТронута_ВладелецМожет()
+    {
+        var (projectId, taskId) = await ArrangeAsync(Editor);
+        var epicId = await SharedEpicAsync(projectId);
+
+        var (status, code) = await SendAsync(SecondClient(), HttpMethod.Put, $"/api/tasks/{taskId}",
+            new { role = "final", featureId = epicId });
+
+        status.Should().Be(403);
+        code.Should().Be(NotFeatureOwner, "по коду фронт выключает фичевые контролы с причиной");
+        var untouched = Tasks.GetById(taskId)!;
+        untouched.Role.Should().BeNull("отказ не пишет роль");
+        untouched.FeatureId.Should().BeNull("отказ не привязывает к фиче");
+
+        // Тот же ход владельцу открыт: отказывает роль вызывающего, а не состав полей
+        (await SendAsync(OwnerClient(), HttpMethod.Put, $"/api/tasks/{taskId}",
+            new { role = "final", featureId = epicId })).Status.Should().Be(200, "фичу ведёт владелец");
+        Tasks.GetById(taskId)!.Role.Should().Be("final");
+    }
+
+    [Fact]
+    public async Task РедакторНеЗакрываетЭпикФичи_403featureOwner_ЭпикОткрыт_ВладелецЗакрывает()
+    {
+        var (projectId, _) = await ArrangeAsync(Editor);
+        var epicId = await SharedEpicAsync(projectId);
+
+        var (status, code) = await SendAsync(SecondClient(), HttpMethod.Put, $"/api/tasks/{epicId}",
+            new { status = "done", resultMarkdown = "фичу закрыл участник" });
+
+        status.Should().Be(403);
+        code.Should().Be(NotFeatureOwner);
+        Tasks.GetById(epicId)!.Status.Should().Be(TaskItemStatus.Todo,
+            "закрыть или возобновить эпик — решение владельца: из него FeatureProjector выводит состояние фичи");
+
+        (await SendAsync(OwnerClient(), HttpMethod.Put, $"/api/tasks/{epicId}", new { status = "done" }))
+            .Status.Should().Be(200);
+        Tasks.GetById(epicId)!.Status.Should().Be(TaskItemStatus.Done);
+    }
+
+    [Fact]
+    public async Task АгентРедактора_tasksUpdateФичевыеПоля_ТотЖеОтказ_ЗадачаЦела()
+    {
+        var (projectId, taskId, chatId) = await SharedWithChatAsync();
+        await TurnAsEditorAsync(chatId);
+        var epicId = await SharedEpicAsync(projectId);
+
+        var (text, isError) = await McpCallAsync(OwnerClient(), chatId, "tasks_update",
+            new { id = taskId, role = "final", featureId = epicId });
+
+        isError.Should().BeTrue(text);
+        text.Should().Contain(NotFeatureOwner,
+            "MCP-дверь и REST-дверь отказывают одним предикатом (FeatureOwnerGate): второй точки правды нет");
+        Tasks.GetById(taskId)!.Role.Should().BeNull();
+        Tasks.GetById(taskId)!.FeatureId.Should().BeNull();
+
+        // Исполнительские поля тот же агент правит свободно — отказ ровно по фичевым
+        var (titleText, titleError) = await McpCallAsync(OwnerClient(), chatId, "tasks_update",
+            new { id = taskId, title = "перебил агент" });
+        titleError.Should().BeFalse(titleText);
+        Tasks.GetById(taskId)!.Title.Should().Be("перебил агент");
+    }
+
+    [Fact]
+    public async Task АгентРедактора_tasksCompleteЭпикФичи_ТотЖеОтказ_ЭпикНеЗакрыт()
+    {
+        var (projectId, _, chatId) = await SharedWithChatAsync();
+        await TurnAsEditorAsync(chatId);
+        var epicId = await SharedEpicAsync(projectId);
+
+        var (text, isError) = await McpCallAsync(OwnerClient(), chatId, "tasks_complete",
+            new { id = epicId, resultMarkdown = "фичу закрыл агент" });
+
+        isError.Should().BeTrue(text);
+        text.Should().Contain(NotFeatureOwner, "тот же предикат, что у tasks_update и REST PUT");
+        Tasks.GetById(epicId)!.Status.Should().Be(TaskItemStatus.Todo, "задача цела: отказ до мутации");
+    }
+
+    // ── автор задачи — вызывающий, а не поле из тела (хвост R-F2-T1 п.3) ───────────────
+
+    [Fact]
+    public async Task ТелоСCreatedByActorUserId_НеМеняетАвтора_НаОбехRESTРучках()
+    {
+        var (projectId, _) = await ArrangeAsync(Editor);
+        // Тело называет арендатора: оба человеческих пути это значение перетирают (автора
+        // ставит вызывающий — по нему решается удаление). Без теста следующая дверь могла бы
+        // забыть перетереть и подменить автора чужой записью в теле.
+        var created = await SecondClient().PostAsJsonAsync($"/api/projects/{projectId}/tasks",
+            new { title = "Задача с чужим автором в теле", createdByActorUserId = TenantId });
+        created.StatusCode.Should().Be(HttpStatusCode.OK);
+        Tasks.GetById(IdOf(await created.Content.ReadAsStringAsync()))!
+            .CreatedByUserId.Should().Be(SecondId, "автор — вызывающий, а не значение из тела");
+
+        var own = await SecondClient().PostAsJsonAsync("/api/tasks",
+            new { title = "Личная с чужим автором в теле", createdByActorUserId = TenantId });
+        own.StatusCode.Should().Be(HttpStatusCode.OK);
+        Tasks.GetById(IdOf(await own.Content.ReadAsStringAsync()))!
+            .CreatedByUserId.Should().Be(SecondId, "личной задачи автор — создающий");
     }
 }

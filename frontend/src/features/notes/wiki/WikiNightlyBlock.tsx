@@ -33,7 +33,7 @@ import { AlertTriangle, Clock, Inbox, Lock } from 'lucide-react';
 import {
   C, FONT, FS, R, SHADOW, SP, useIsMobile,
   WikiError,
-  loadWikiSettings, putWikiNightly, useWikiSettings, useWikiTree,
+  loadWikiSettings, loadWikiTree, putWikiNightly, useWikiSettings, useWikiTree,
   type WikiLastNight, type WikiNightlyOutcome, type WikiNightlyPatch, type WikiSettingsSnapshot,
 } from 'aihome_shell/kit';
 import { Button } from '../../../components/ui/Button';
@@ -354,15 +354,28 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
           disabled={busy}
           focusable
           ariaLabel="Разбирать по ночам"
-          onChange={(v) => { void runAction(() => putWikiNightly({ enabled: v })); }}
+          onChange={(v) => {
+            void runAction(async () => {
+              const r = await putWikiNightly({ enabled: v });
+              // Включение заводит вики тем же PUT'ом (LI-2): после подтверждённого
+              // включения перечитываем дерево — подпись уходит без перезагрузки экрана.
+              // Отказ перечитки молчит: настройки уже сохранены, исключение наружу не
+              // идёт (иначе «Не удалось сохранить» на сохранённые настройки); устаревший
+              // ответ или ответ чужого владельца стор отбрасывает сам (поколение и
+              // сверка владельца в loadWikiTree).
+              if (r.ok && v) await loadWikiTree().catch(() => undefined);
+              return r;
+            });
+          }}
         />
       </div>
 
-      {/* Вики ещё не заведена (LI-3): включение разбора само по себе заведёт вики —
-          первая ночь её создаст. Подпись называет это, а не просит действия: кнопки здесь нет */}
+      {/* Вики ещё не заведена (LI-3): её заводит тот же PUT, что включает тумблер (LI-2) —
+          после подтверждённого включения дерево перечитывается, и подпись уходит без
+          перезагрузки экрана. Подпись называет это, а не просит действия: кнопки здесь нет */}
       {tree && !tree.initialized && (
         <div data-testid="wiki-nightly-uninitialized" style={{ fontSize: FS.sm, color: C.textMuted, marginTop: SP.xs }}>
-          Вики ещё не создана — она создастся при первом разборе.
+          Вики ещё не создана — она создастся, как только вы включите ночной разбор.
         </div>
       )}
 

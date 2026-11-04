@@ -26,6 +26,16 @@
 //     тест window_closed/disabled_midway/error краснеет (проверено, вывод — в отчёте F4);
 // — отдельной мутации для «против текущего бюджета» нет: тест смены доказывает это сам —
 //   после PUT проверяется новое значение и отсутствие старого в строке расхода.
+//
+// Доработка LI-3 (дефект Веры a1f88b4a): вики заводится тем же PUT'ом, что включает
+// тумблер (LI-2) — после подтверждённого включения блок перечитывает дерево, и подпись
+// «вики ещё не создана» уходит без перезагрузки; текст подписи называет это же.
+// (6) убрать перечитку дерева после PUT в onChange тумблера → «включение тумблера…»
+//     краснеет (одна запись /wiki/tree + живая подпись);
+// (7) снять .catch у перечитки → «отказ перечитки…» краснеет (плашка «Не удалось
+//     сохранить настройки» на сохранённые настройки);
+// (8) вернуть старый текст подписи («создастся при первом разборе») → тесты подписи
+//     краснеют.
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -48,7 +58,7 @@ vi.mock('../../../../lib/offline', async (orig) => ({
 }));
 
 import { request } from '../../../../lib/offline';
-import { __test as wikiStore, getWikiSettingsSnapshot, loadWikiTree } from '../../../../lib/wiki';
+import { __test as wikiStore, getWikiSettingsSnapshot, getWikiTreeSnapshot, loadWikiTree } from '../../../../lib/wiki';
 
 type MockFn = ReturnType<typeof vi.fn>;
 const req = request as unknown as MockFn;
@@ -395,9 +405,10 @@ describe('блок «Ночной разбор» (F2)', () => {
 });
 
 // ─── LI-3: подпись о незаведённой вики под тумблером ───
-// Состояние — из стора дерева (поля «initialized» в DTO настроек нет): пока вики нет,
-// включение разбора само по себе заведёт её при первом проходе — подпись называет это.
-// Дерево ещё не читали — состояния не знаем, подписи нет (выдумывать нечем).
+// Состояние — из стора дерева (поля «initialized» в DTO настроек нет). Вики заводится
+// тем же PUT'ом, что включает тумблер (LI-2): после подтверждённого включения блок
+// перечитывает дерево, и подпись уходит без перезагрузки экрана. Дерево ещё не читали —
+// состояния не знаем, подписи нет (выдумывать нечем).
 describe('подпись «вики ещё не создана» (LI-3)', () => {
   function serveTree(initialized: boolean): void {
     req.mockImplementation(async (url: string) => {
@@ -407,17 +418,74 @@ describe('подпись «вики ещё не создана» (LI-3)', () => 
     });
   }
 
+  // Мок как бэк LI-2: PUT с nightly.enabled=true заводит вики — с этого момента
+  // GET /wiki/tree отвечает initialized:true. failTreeAfter — с какого по счёту чтения
+  // дерево падает (для «исключение наружу не уходит»)
+  function serveTreeCreatedOnEnable(failTreeAfter = Infinity): void {
+    const base = req.getMockImplementation()!; // serveSettings() уже стоит в beforeEach
+    let treeReads = 0;
+    req.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.startsWith('/wiki/tree')) {
+        treeReads += 1;
+        if (treeReads >= failTreeAfter) throw httpError(500);
+        return { initialized: (server.nightly as Record<string, unknown>).enabled === true, sections: [] };
+      }
+      return base(url, init);
+    });
+  }
+
+  const treeGets = (): unknown[][] => req.mock.calls.filter((c) => String(c[0]).startsWith('/wiki/tree'));
+
   it('дерево не заведено — подпись под тумблером; после заведения — нет', async () => {
     serveTree(false);
     await act(async () => { await loadWikiTree(); });
     const c = render();
     await settle();
-    expect(has(c, 'Вики ещё не создана — она создастся при первом разборе.')).toBe(true);
-    // вики появилась (так же, как её заведёт сервер при первом разборе): подпись уходит
+    expect(has(c, 'Вики ещё не создана — она создастся, как только вы включите ночной разбор.')).toBe(true);
+    // вики появилась (так же, как её заведёт сервер при включении разбора): подпись уходит
     serveTree(true);
     await act(async () => { await loadWikiTree(); });
     await settle();
     expect(has(c, 'Вики ещё не создана')).toBe(false);
+  });
+
+  it('включение тумблера: PUT подтверждён — дерево перечитано, подпись исчезает без перезагрузки', async () => {
+    serveTreeCreatedOnEnable();
+    await act(async () => { await loadWikiTree(); });
+    const c = render();
+    await settle();
+    expect(has(c, 'Вики ещё не создана — она создастся, как только вы включите ночной разбор.')).toBe(true);
+    const sw = findNodeByAttr(c, 'data-testid', 'wiki-nightly-switch')!;
+    const toggle = findNodeByAttr(sw, 'role', 'switch')!;
+    click(toggle, 'Разбирать по ночам');
+    await settle();
+    expect(putCalls().length).toBe(1);
+    expect(sentBody(putCalls()[0])).toEqual({ nightly: { enabled: true } });
+    // мутация (6): без перечитки дерева после PUT здесь одна запись /wiki/tree и
+    // живая подпись — обе строки краснеют
+    expect(treeGets().length).toBe(2);
+    expect(getWikiTreeSnapshot()!.initialized).toBe(true);
+    expect(has(c, 'Вики ещё не создана')).toBe(false);
+  });
+
+  it('отказ перечитки дерева: настройки сохранены, исключение наружу не идёт', async () => {
+    serveTreeCreatedOnEnable(2); // первая перечитка (до рендера) удачна, вторая — после PUT — падает
+    await act(async () => { await loadWikiTree(); });
+    const c = render();
+    await settle();
+    expect(has(c, 'Вики ещё не создана')).toBe(true);
+    const sw = findNodeByAttr(c, 'data-testid', 'wiki-nightly-switch')!;
+    const toggle = findNodeByAttr(sw, 'role', 'switch')!;
+    click(toggle, 'Разбирать по ночам');
+    await settle();
+    // мутация (7): без .catch отказ перечитки вошёл бы в runAction и дал бы плашку
+    // «Не удалось сохранить настройки» на сохранённые настройки
+    expect(getWikiSettingsSnapshot()!.nightly.enabled).toBe(true);
+    expect(has(c, 'Не удалось сохранить настройки')).toBe(false);
+    expect(has(c, 'Не сохранилось')).toBe(false);
+    // дерево осталось неперечитанным: подпись живёт до следующей удачной перечитки
+    expect(getWikiTreeSnapshot()!.initialized).toBe(false);
+    expect(has(c, 'Вики ещё не создана')).toBe(true);
   });
 
   it('дерево ещё не читали — подписи нет', async () => {

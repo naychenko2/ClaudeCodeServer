@@ -331,6 +331,24 @@ public class NotesToolsetWikiTests : IDisposable
         res.Text.Should().Be("чат не существует").And.Be(missing.Text);
     }
 
+    [Fact]
+    public void S7b0a_ВыдержкаЧужогоЧата_ФормаСДиапазоном_ОтказКакНесуществующий()
+    {
+        var (toolset, ctx) = McpEnv("p1");
+        _sessions.All.Add(new Session { Id = "s-foreign", OwnerId = "u2", ProjectId = "p1", Name = "Чужой чат" });
+
+        var res = Call(toolset, ctx, "wiki_ingest", Args(("source", "session:s-foreign#m1-2")));
+        var missing = Call(toolset, ctx, "wiki_ingest", Args(("source", "session:s-none#m1-2")));
+
+        res.IsError.Should().BeTrue($"отказ обязан быть отказом: {res.Text}");
+        missing.IsError.Should().BeTrue($"отказ обязан быть отказом: {missing.Text}");
+        // Тот же инвариант, что у разбора выше, на форме с диапазоном (путь TryParseSessionRef,
+        // NotesToolset.cs:937-938): «принадлежит другому владельцу» выдавало бы существование
+        // чужого чата. Сравнение пословное: любая формулировка, отличающая чужой чат от
+        // несуществующего, краснеет на Be и на Be(missing.Text).
+        res.Text.Should().Be("чат не существует").And.Be(missing.Text);
+    }
+
     private void AddOpenPackages(int count)
     {
         for (var i = 0; i < count; i++)

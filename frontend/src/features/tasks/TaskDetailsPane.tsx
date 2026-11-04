@@ -34,8 +34,9 @@ import { PregateLine } from './PregateLine';
 import { TaskPersonaBadge } from './TaskPersonaBadge';
 import { CreatedByLine, FormerAssigneeLine, TaskUserBadge } from './TaskUserBadge';
 import { ensurePersonasLoaded, getPersonaById, personaLabel } from '../../lib/personas';
-import { taskWriteDeniedReason } from '../projects/members/participantGate';
+import { canDeleteTask, taskWriteDeniedReason } from '../projects/members/participantGate';
 import { getCachedProject } from '../projects/useAllProjects';
+import { readStoredUserId } from '../../lib/offline';
 
 interface Props {
   task: Task;
@@ -153,8 +154,14 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
   // taskWriteDeniedReason. Проект не под рукой (карточка с стены/календаря) — берём из
   // общего кэша (он включает и собственные проекты владельца): у своего проекта myRole нет
   // или 'owner' → canWriteTasks=true, поведение не меняется.
-  const deniedTitle = taskWriteDeniedReason(project ?? (task.projectId ? getCachedProject(task.projectId) : undefined));
+  const scopeProject = project ?? (task.projectId ? getCachedProject(task.projectId) : undefined);
+  const deniedTitle = taskWriteDeniedReason(scopeProject);
   const ro = deniedTitle !== null;
+  // Корзина (доработка F2-Q3, ревью 11716b9b): бэк разрешает удаление автору или владельцу
+  // задачи (TaskDeleteDenied, TasksController.cs:243-248); корзина редактора на чужой задаче —
+  // гарантированный 403 not_task_author, не обещаем её. Гейт покрывает и читателя (отказ
+  // до авторства), прежний !ro здесь не нужен: canDelete ⟹ не читатель.
+  const canDelete = canDeleteTask(scopeProject, task, readStoredUserId());
   // startInEdit у читателя игнорируется: форма правки не открывается ни сразу,
   // ни от скрытых здесь действий
   const [editing, setEditing] = useState(!!startInEdit && !ro);
@@ -838,7 +845,7 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
         {chatContextButton}
         {executeButton}
         {editButton}
-        {!ro && (
+        {canDelete && (
           <IconButton size="md" tone="danger" onClick={() => setConfirmDelete(true)} title="Удалить задачу">
             <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
           </IconButton>

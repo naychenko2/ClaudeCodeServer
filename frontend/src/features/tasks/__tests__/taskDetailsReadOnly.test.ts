@@ -7,6 +7,8 @@
 // TaskDetailsPane поверх linkedom; ширину панели задаём явно (getter clientWidth):
 // 500px < порога 720 — узкая раскладка (случай модалки: сегмент статуса под шапкой),
 // 900px — широкая (рельс «Статус» справа). Форму правки подменяем маркером.
+// Доработка F2-Q3 (ревью 11716b9b): корзина — право автора или владельца задачи (зеркало
+// бэкового TaskDeleteDenied): у редактора корзина только на своей задаче (свой автор).
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -59,6 +61,15 @@ vi.stubGlobal('HTMLElement', win.HTMLElement);
 vi.stubGlobal('Node', win.Node);
 vi.stubGlobal('Event', win.Event);
 vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} });
+// «Я — автор задачи» читается через readStoredUserId: пара токен+id из одного хранилища
+// (sessionStorage первый) — тот же стаб, что в PrivateChatToggle.test
+const ME = 'u-me';
+const sstore = new Map<string, string>([['cc_token', 't'], ['cc_user_id', ME]]);
+vi.stubGlobal('sessionStorage', {
+  getItem: (k: string) => sstore.get(k) ?? null,
+  setItem: (k: string, v: string) => { sstore.set(k, String(v)); },
+  removeItem: (k: string) => { sstore.delete(k); },
+});
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const { TaskDetailsPane } = await import('../TaskDetailsPane');
@@ -197,7 +208,8 @@ describe('панель деталей: читатель только для чт
 describe('панель деталей: редактор общего проекта правит задачи (как владелец)', () => {
   it.each(['editor', 'owner'] as const)('%s: действия на месте, статус кликается без подсказки, AI-действия работают', async (role) => {
     m.project = { myRole: role }; m.width = 500;
-    const host = await mount();
+    // Задача своя (createdByUserId=я): корзина редактора на своей задаче есть (доработка F2-Q3)
+    const host = await mount({ createdByUserId: ME });
     expect(buttonsByText(host, 'Изменить')).toHaveLength(1);
     expect(buttonsByText(host, 'Выполнить с AI')).toHaveLength(1);
     expect(host.querySelector('[title="Удалить задачу"]')).not.toBeNull();
@@ -224,6 +236,35 @@ describe('панель деталей: редактор общего проек�
     expect(btn).toHaveLength(1);
     await clickEl(btn[0]);
     expect(host.querySelector('[data-testid="edit-form"]')).not.toBeNull();
+  });
+});
+
+// Доработка F2-Q3 (ревью 11716b9b): корзина — автору или владельцу (зеркало бэкового
+// TaskDeleteDenied, TasksController.cs:243-248). Читатель покрыт тестами выше (там корзины
+// нет при любом авторе); здесь — остальные инварианты: чужой автор, свой автор, без автора.
+describe('панель деталей: корзина — автору или владельцу', () => {
+  it('редактор: чужой автор — корзины нет (бэк ответил бы 403 not_task_author)', async () => {
+    m.project = { myRole: 'editor' }; m.width = 500;
+    const host = await mount({ createdByUserId: 'u-other' });
+    expect(host.querySelector('[title="Удалить задачу"]')).toBeNull();
+  });
+
+  it('редактор: свой автор — корзина есть', async () => {
+    m.project = { myRole: 'editor' }; m.width = 500;
+    const host = await mount({ createdByUserId: ME });
+    expect(host.querySelector('[title="Удалить задачу"]')).not.toBeNull();
+  });
+
+  it('редактор: задача без автора — корзины нет (fail-closed, как на бэке)', async () => {
+    m.project = { myRole: 'editor' }; m.width = 500;
+    const host = await mount();
+    expect(host.querySelector('[title="Удалить задачу"]')).toBeNull();
+  });
+
+  it('владелец: чужая задача — корзина есть (на любой)', async () => {
+    m.project = { myRole: 'owner' }; m.width = 500;
+    const host = await mount({ createdByUserId: 'u-other' });
+    expect(host.querySelector('[title="Удалить задачу"]')).not.toBeNull();
   });
 });
 

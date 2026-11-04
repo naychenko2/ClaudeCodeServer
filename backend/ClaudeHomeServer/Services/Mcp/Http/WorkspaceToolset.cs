@@ -1515,6 +1515,16 @@ public sealed partial class WorkspaceToolset(
 
     // --- Секция chats ---
 
+    // Чужой приватный чат не виден актору хода ни в одной рамке (FIN3-1, пункт critical FINAL-3):
+    // та же точка, что у chats_list (S2d-4e) и chats_continue (S2d-7b-1). Актор — из реестра хода;
+    // актор неизвестен (фон, исполнитель без инициатора) — приватный не виден (fail-closed).
+    // Отказ неотличим от несуществующего чата: «не найдена», существование не раскрываем.
+    // Владение (GetOwned) и зона (ProjectDenied) остаются как раньше — гейт добавляет только приватность.
+    private string? PrivateChatDenied(Session target, string sessionId, McpToolCallContext context, Session caller) =>
+        target.PrivateToUserId is null || sessions.IsVisibleTo(sessionId, turnActors.Actor(caller.Id, context.OwnerId))
+            ? null
+            : $"Сессия {sessionId} не найдена.";
+
     private async Task<McpToolCallResult> ChatsCall(string tool, JsonObject arguments,
         McpToolCallContext context, Session session, SessionManager.WorkspaceMcpPlan plan)
     {
@@ -1569,6 +1579,8 @@ public sealed partial class WorkspaceToolset(
                 var sid = StringArg(arguments, "sessionId");
                 var target = sessions.GetOwned(sid, context.OwnerId);
                 if (target is null) return Deny($"Сессия {sid} не найдена.");
+                // FIN3-1: чужой приватный — неотличим от несуществующего (PrivateChatDenied)
+                if (PrivateChatDenied(target, sid, context, session) is { } hidden) return Deny(hidden);
                 // Зона сессии: маршрут адресуется по sessionId в обход projectId — суженная
                 // зона не должна читать чаты чужих проектов владельца (как stdio-ветка
                 // по ответу history)
@@ -1649,6 +1661,8 @@ public sealed partial class WorkspaceToolset(
                 if (name.Length == 0) return Deny("Название чата пусто");
                 var target = sessions.GetOwned(sid, context.OwnerId);
                 if (target is null) return Deny($"Сессия {sid} не найдена.");
+                // FIN3-1: чужой приватный — неотличим от несуществующего (PrivateChatDenied)
+                if (PrivateChatDenied(target, sid, context, session) is { } hidden) return Deny(hidden);
                 if (target.ProjectId is { } targetPid
                     && ProjectDenied(context, plan, targetPid) is { } zoneDenied)
                     return Deny(zoneDenied);
@@ -1675,6 +1689,8 @@ public sealed partial class WorkspaceToolset(
                     return Deny("Не указан archived: true — убрать в архив, false — вернуть");
                 var target = sessions.GetOwned(sid, context.OwnerId);
                 if (target is null) return Deny($"Сессия {sid} не найдена.");
+                // FIN3-1: чужой приватный — неотличим от несуществующего (PrivateChatDenied)
+                if (PrivateChatDenied(target, sid, context, session) is { } hidden) return Deny(hidden);
                 if (target.ProjectId is { } targetPid
                     && ProjectDenied(context, plan, targetPid) is { } zoneDenied)
                     return Deny(zoneDenied);
@@ -1704,8 +1720,7 @@ public sealed partial class WorkspaceToolset(
                 // S2d-7b-1: чужой приватный чат не продолжается даже владельцем проекта; актор неизвестен
                 // (фон, исполнитель без инициатора) — приватный чат не виден (fail-closed, как в chats_list)
                 var continueActor = turnActors.Actor(session.Id, context.OwnerId);
-                if (target.PrivateToUserId is not null && !sessions.IsVisibleTo(sid, continueActor))
-                    return Deny($"Сессия {sid} не найдена.");
+                if (PrivateChatDenied(target, sid, context, session) is { } hidden) return Deny(hidden);
                 if (target.ProjectId is { } targetPid
                     && ProjectDenied(context, plan, targetPid) is { } zoneDenied)
                     return Deny(zoneDenied);
@@ -1747,6 +1762,8 @@ public sealed partial class WorkspaceToolset(
                 if (text.Length == 0) return Deny("Текст сообщения пуст");
                 var target = sessions.GetOwned(sid, context.OwnerId);
                 if (target is null) return Deny($"Сессия {sid} не найдена.");
+                // FIN3-1: чужой приватный — неотличим от несуществующего (PrivateChatDenied)
+                if (PrivateChatDenied(target, sid, context, session) is { } hidden) return Deny(hidden);
                 // Зона: при суженной зоне целевой проект проверяем до отправки (как stdio)
                 if (target.ProjectId is { } targetPid
                     && ProjectDenied(context, plan, targetPid) is { } zoneDenied)
@@ -1944,6 +1961,8 @@ public sealed partial class WorkspaceToolset(
                     return Deny("Нельзя удалить собственный чат — chats_delete адресован ДРУГИМ сессиям");
                 var target = sessions.GetOwned(sid, context.OwnerId);
                 if (target is null) return Deny($"Сессия {sid} не найдена.");
+                // FIN3-1: чужой приватный — неотличим от несуществующего (PrivateChatDenied)
+                if (PrivateChatDenied(target, sid, context, session) is { } hidden) return Deny(hidden);
                 if (target.ProjectId is { } targetPid
                     && ProjectDenied(context, plan, targetPid) is { } zoneDenied)
                     return Deny(zoneDenied);

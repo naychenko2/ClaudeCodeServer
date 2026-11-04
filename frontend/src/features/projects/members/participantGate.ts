@@ -146,6 +146,22 @@ export function canCreateChats(project: Pick<Project, 'myRole'> | null | undefin
   return project?.myRole !== 'reader';
 }
 
+// Задачи общего проекта (разрез CONSULT-TASK-RIGHTS, F2-Q3): правят владелец и редактор,
+// читатель только смотрит. Фронт не обещает того, чего он не делает: входы создания
+// скрыты, контролы записи выключены с этой подсказкой, перетаскивание на доске не
+// активируется вовсе. Вне проекта (хаб) и в личном проекте (myRole нет) — как раньше.
+export const TASK_WRITE_DENIED = 'Менять задачи может редактор';
+
+export function canWriteTasks(project: Pick<Project, 'myRole'> | null | undefined): boolean {
+  return project?.myRole !== 'reader';
+}
+
+// null — можно; строка — текст для подсказки выключенного контрола (тот же текст, что
+// в панели «Задачи»: одна строка на весь фронт задач)
+export function taskWriteDeniedReason(project: Pick<Project, 'myRole'> | null | undefined): string | null {
+  return canWriteTasks(project) ? null : TASK_WRITE_DENIED;
+}
+
 // Гейт «запустить ход / ответить на вопрос» для входов вне композера (чипы-подсказки,
 // «Повторить», «Зафиксировать», «Возобновить», сброс режимов). RunTurn есть у редактора,
 // читателю бэк откажет — запрос не шлём вовсе. null — можно; строка — текст отказа для тоста и подсказки кнопки

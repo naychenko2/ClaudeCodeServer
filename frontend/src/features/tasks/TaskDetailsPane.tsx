@@ -34,7 +34,7 @@ import { PregateLine } from './PregateLine';
 import { TaskPersonaBadge } from './TaskPersonaBadge';
 import { CreatedByLine, FormerAssigneeLine, TaskUserBadge } from './TaskUserBadge';
 import { ensurePersonasLoaded, getPersonaById, personaLabel } from '../../lib/personas';
-import { isParticipant } from '../projects/members/participantGate';
+import { taskWriteDeniedReason } from '../projects/members/participantGate';
 import { getCachedProject } from '../projects/useAllProjects';
 
 interface Props {
@@ -59,17 +59,15 @@ const STATUS_SEQUENCE: TaskStatus[] = ['todo', 'inProgress', 'done'];
 // там рельс съедал больше трети ширины, поэтому статус уезжает сегментом под шапку.
 const STATUS_RAIL_MIN_WIDTH = 720;
 
-// Подсказка выключенного статуса для участника общего проекта: задачу меняет владелец (S2c-F4j)
-const STATUS_OWNER_TITLE = 'Задачу меняет владелец проекта';
-
 // S2d-4b (К5): подпись маскированного чата — бэк отдаёт её в linkedChat.title
 // (ChatRef.PrivateFormTitle), показываем как есть; это — запасной текст для ответа без title
 const PRIVATE_CHAT_LABEL = 'Приватный чат участника';
 
 // Сегментированный переключатель статуса: мобила (закреплён снизу) и узкий
-// десктопный контейнер (полоса под шапкой) — одна и та же разметка; у участника сегменты
-// выключены и не кликаются (S2c-F4j)
-function StatusSegment({ status, onSelect, ro }: { status: TaskStatus; onSelect: (s: TaskStatus) => void; ro?: boolean }) {
+// десктопный контейнер (полоса под шапкой) — одна и та же разметка; у читателя сегменты
+// выключены и не кликаются, с подсказкой, кто меняет задачи (F2-Q3)
+function StatusSegment({ status, onSelect, deniedTitle }: { status: TaskStatus; onSelect: (s: TaskStatus) => void; deniedTitle?: string | null }) {
+  const ro = !!deniedTitle;
   return (
     <div style={{ display: 'flex', gap: 3, background: C.bgSelected, borderRadius: R.lg, padding: 3 }}>
       {STATUS_SEQUENCE.map(s => {
@@ -79,7 +77,7 @@ function StatusSegment({ status, onSelect, ro }: { status: TaskStatus; onSelect:
             key={s}
             onClick={() => onSelect(s)}
             disabled={ro}
-            title={ro ? STATUS_OWNER_TITLE : undefined}
+            title={deniedTitle ?? undefined}
             style={{
               flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
               padding: '9px 4px', border: 'none', borderRadius: R.lg - 2, cursor: ro ? 'default' : 'pointer',
@@ -150,12 +148,14 @@ export function TaskDetailsPane(props: Props) {
 }
 
 function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, onClose, onOpenSession, onOpenFile, onDeleted }: Props) {
-  // Участник общего проекта (редактор/читатель): карточка задачи только для чтения —
-  // задачу меняет владелец (S2c-F4j). Проект не под рукой (карточка с стены/календаря) —
-  // берём из общего кэша (он включает и собственные проекты владельца): у своего проекта
-  // владелец не участник по другой причине — myRole не editor/reader → isParticipant=false.
-  const ro = isParticipant(project ?? (task.projectId ? getCachedProject(task.projectId) : undefined));
-  // startInEdit у участника игнорируется: форма правки не открывается ни сразу,
+  // Право править задачу (F2-Q3, разрез CONSULT-TASK-RIGHTS): владелец и редактор — да;
+  // карточка читателя — только для чтения, контролы выключены с подсказкой
+  // taskWriteDeniedReason. Проект не под рукой (карточка с стены/календаря) — берём из
+  // общего кэша (он включает и собственные проекты владельца): у своего проекта myRole нет
+  // или 'owner' → canWriteTasks=true, поведение не меняется.
+  const deniedTitle = taskWriteDeniedReason(project ?? (task.projectId ? getCachedProject(task.projectId) : undefined));
+  const ro = deniedTitle !== null;
+  // startInEdit у читателя игнорируется: форма правки не открывается ни сразу,
   // ни от скрытых здесь действий
   const [editing, setEditing] = useState(!!startInEdit && !ro);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -218,7 +218,7 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
   };
 
   const toggleSubtask = (subtaskId: string) => {
-    // Участник (ro): чекбокс виден, но не кликается — бэк отказал бы 403 (ревью 47fd9dd9)
+    // Читатель (ro): чекбокс виден, но не кликается — менять подзадачи может редактор (ревью 47fd9dd9)
     if (ro) return;
     void updateTask(task.id, {
       subtasks: task.subtasks.map(s => s.id === subtaskId ? { ...s, isDone: !s.isDone } : s),
@@ -306,8 +306,8 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
   // AI-хаб: контекстные действия задачи из палитры/подсказки. «Выполнить» — тот же
   // обработчик, что и кнопка (со стейтом «Запуск…»); генерация — вход в правку + авто-запуск.
   useEffect(() => {
-    // У участника панель не отзывается на AI-действия палитры (S2c-F4j): они меняют задачу,
-    // а её меняет владелец. Слушатель не ставится вовсе.
+    // У читателя панель не отзывается на AI-действия палитры (F2-Q3): они меняют задачу,
+    // а её меняет редактор. Слушатель не ставится вовсе.
     if (ro) return;
     const onRun = (e: Event) => {
       const action = (e as CustomEvent<{ action?: string }>).detail?.action;
@@ -419,7 +419,7 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
     );
   }
 
-  // Кнопка статуса в правой колонке (десктоп) — тот же гейт участника, что у сегмента (S2c-F4j)
+  // Кнопка статуса в правой колонке (десктоп) — тот же гейт читателя, что у сегмента (F2-Q3)
   const statusRailButton = (s: TaskStatus) => {
     const active = task.status === s;
     return (
@@ -427,7 +427,7 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
         key={s}
         onClick={() => setStatus(s)}
         disabled={ro}
-        title={ro ? STATUS_OWNER_TITLE : undefined}
+        title={deniedTitle ?? undefined}
         style={{
           display: 'flex', alignItems: 'center', gap: 9,
           width: '100%', boxSizing: 'border-box',
@@ -545,7 +545,7 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
         {task.assigneeUserId && (
           <>
             <HeaderChip><TaskUserBadge projectId={task.projectId} assigneeUserId={task.assigneeUserId} size={18} /></HeaderChip>
-            {/* Участнику (ro) onAssign не отдаём: «Назначить» не рендерится, форма правки не откроется */}
+            {/* Читателю (ro) onAssign не отдаём: «Назначить» не рендерится, форма правки не откроется */}
             <FormerAssigneeLine projectId={task.projectId} assigneeUserId={task.assigneeUserId} onAssign={ro ? undefined : () => setEditing(true)} />
           </>
         )}
@@ -818,7 +818,7 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
           borderTop: `1px solid ${C.divider}`, background: C.bgMain,
         }}>
           <SectionLabel style={{ marginBottom: 8 }}>Статус задачи</SectionLabel>
-          <StatusSegment status={task.status} onSelect={setStatus} ro={ro} />
+          <StatusSegment status={task.status} onSelect={setStatus} deniedTitle={deniedTitle} />
         </div>
 
         {deleteConfirmModal}
@@ -856,7 +856,7 @@ function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, on
           flexShrink: 0, padding: `${SP.sm}px ${SP.lg}px`,
           borderBottom: `1px solid ${C.divider}`, background: C.bgMain,
         }}>
-          <StatusSegment status={task.status} onSelect={setStatus} ro={ro} />
+          <StatusSegment status={task.status} onSelect={setStatus} deniedTitle={deniedTitle} />
         </div>
       )}
 

@@ -18,7 +18,7 @@
 # Resolve). Остались осознанно (вердикты):
 #   • DossiersController|1 — x.OwnerId != p.OwnerId сравнивает владельцев двух проектов одной папки
 #     (признак «общая папка»), а не вызывающего;
-#   • TasksController|9 — сравнивают task.OwnerId, не проект (S2b). +1 в S1-3c: та же класс
+#   • TasksController|7 — сравнивают task.OwnerId, не проект (S2b). +1 в S1-3c: та же класс
 #     сравнений в отказе записи участника общего проекта («не твоя задача, но проект виден»).
 #     +1 в S2c-9: «своя ли задача» в выдаче GET /api/tasks — MyTasksQuery уже отобрал задачи по
 #     праву Read, сравнение выбирает форму ответа (свой элемент / проекция участника TaskView),
@@ -40,6 +40,14 @@
 # GetOwnedVisible (арендатор + SessionAccess.CanSee), как соседние человеческие ручки
 # (SessionsController.SetPersona): на чужом приватном чате владелец проекта получает 404.
 # Остаток — task.OwnerId (S2b) и p.OwnerId (личные персоны), они не про чат.
+# Дельта F2-T1 (57aa6c829): −2 совпадения в 0 файлах: TasksController.cs 9→7 — сравнения
+# «чужая задача → 404» сняты: право записи меряет TaskAuthorGate (автор или владелец) и
+# IProjectAccess, как названо в разрезе §2.1; вместо них добавлены маски «свой/чужой» по
+# task.OwnerId (тот же класс, что S2c-9: выбирают форму ответа, ключом хранилищ не служат).
+# Дельта F2-T1 (57aa6c829): +1 совпадение: TasksToolset.cs 8→9 — авторский гейт MCP tasks_delete
+# («actor != context.OwnerId»): когда актор хода не арендатор, сверяется автор записи
+# (автор или владелец — то же правило, что REST-удаление). Это право автора, а не ключ хранилищ:
+# задача берётся по id, стор — под арендатором.
 
 backend/ClaudeHomeServer.Architecture/Services/Architecture/ArchitectureToolset.cs|1
 backend/ClaudeHomeServer.AudioEditor/Mcp/AudioEditorToolset.cs|1
@@ -56,7 +64,7 @@ backend/ClaudeHomeServer/Controllers/ProjectGroupsController.cs|2
 backend/ClaudeHomeServer/Controllers/ProjectRelayController.cs|1
 backend/ClaudeHomeServer/Controllers/SessionHandsController.cs|1
 backend/ClaudeHomeServer/Controllers/SessionLocalModelController.cs|1
-backend/ClaudeHomeServer/Controllers/TasksController.cs|9
+backend/ClaudeHomeServer/Controllers/TasksController.cs|7
 backend/ClaudeHomeServer/Controllers/TelemetryController.cs|2
 backend/ClaudeHomeServer/Controllers/TtsController.cs|1
 backend/ClaudeHomeServer.ImageEditor/Mcp/ImageEditorToolset.cs|1
@@ -65,7 +73,7 @@ backend/ClaudeHomeServer/Services/Mcp/Http/DifyToolset.cs|1
 backend/ClaudeHomeServer/Services/Mcp/Http/LocalMediaToolset.cs|1
 backend/ClaudeHomeServer/Services/Mcp/Http/MemoryToolset.cs|1
 backend/ClaudeHomeServer/Services/Mcp/Http/ProjectRunCaller.cs|1
-backend/ClaudeHomeServer/Services/Mcp/Http/TasksToolset.cs|8
+backend/ClaudeHomeServer/Services/Mcp/Http/TasksToolset.cs|9
 backend/ClaudeHomeServer/Services/Mcp/Http/WorkspaceToolset.cs|2
 backend/ClaudeHomeServer/Services/Mcp/LocalMediaProjectAccess.cs|2
 backend/ClaudeHomeServer.Spend/Controllers/SpendController.cs|1

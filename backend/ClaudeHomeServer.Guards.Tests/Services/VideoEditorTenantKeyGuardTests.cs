@@ -30,6 +30,10 @@ public class VideoEditorTenantKeyGuardTests
             {
                 var code = Regex.Replace(lines[i], @"//.*$", "");
                 if (!UserIdUse.IsMatch(code)) continue;
+                // Вызов с ключом-арендатором мог перенестись: строка продолжения допустима,
+                // если строка вызова содержит Tenant(scope) (тот же приём, что у аудио-сторожа)
+                var prev = i > 0 ? Regex.Replace(lines[i - 1], @"//.*$", "") : "";
+                if (Regex.IsMatch(prev, @"\bTenant\(scope\)")) { allowed++; continue; }
                 if (IsAllowed(code)) { allowed++; continue; }
                 violations.Add($"{Path.GetFileName(file)}:{i + 1}: {lines[i].Trim()}");
             }
@@ -40,11 +44,22 @@ public class VideoEditorTenantKeyGuardTests
         violations.Should().BeEmpty("ключ хранилищ — Tenant(scope), а не UserId вызывающего");
     }
 
-    // Объявление свойства, вызов гейта (право доступа) и личная папка кадров владельца
+    // Объявление свойства, вызов гейта (право доступа) и личная папка кадров владельца.
+    // F2-P2e/F2-P2f (98dc1bd57/826d45c07, принято ревью 9d84ad50 → 08e5a4c1): сервисы вертикали
+    // получают (ключ-арендатор, актор приватности): id вызывающего допустим аргументом ПОСЛЕ
+    // ключа арендатора Tenant(scope) на той же строке (или на строке продолжения вызова,
+    // как в AudioEditorTenantKeyGuardTests) — ключ хранилищ остаётся арендатор.
     private static bool IsAllowed(string code) =>
         Regex.IsMatch(code, @"\bUserId\s*=>")
         || Regex.IsMatch(code, @"\bgate\.Try\w+\(\s*UserId\b")
-        || Regex.IsMatch(code, @"\b_workspace\.(SaveFrame|FindFrame|FindFrameName)\(\s*UserId\b");
+        || Regex.IsMatch(code, @"\b_workspace\.(SaveFrame|FindFrame|FindFrameName)\(\s*UserId\b")
+        || AfterTenantKey(code);
+
+    private static bool AfterTenantKey(string code) {
+        var t = Regex.Match(code, @"\bTenant\(scope\)");
+        var u = Regex.Match(code, @"\bUserId\b");
+        return t.Success && u.Success && u.Index > t.Index;
+    }
 
     // .git бывает файлом (worktree), поэтому проверяем и каталог, и файл
     private static string FindRepoRoot()

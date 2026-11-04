@@ -24,6 +24,15 @@ public class ImageEditorTenantKeyGuardTests
         @"string UserId\s*=>|\bgate\.Try\w+\(\s*UserId\b|\b[Ff]lags\?\.IsEnabled\(\s*UserId\b|\bGetOrDetectAsync\(\s*UserId\b",
         RegexOptions.Compiled);
 
+    // F2-P2e/F2-P2f (8416da5f6/826d45c07/98dc1bd57, принято ревью 9d84ad50 → 08e5a4c1): сервисы
+    // вертикали получают (ключ-арендатор, актор приватности): id вызывающего допустим аргументом
+    // ПОСЛЕ ключа арендатора scope.Tenant на той же строке — ключ хранилищ остаётся арендатор;
+    // и как субъект общего предиката приватности (чужое private судится по вызывающему).
+    private static readonly Regex TenantKey = new(@"\bscope\.Tenant", RegexOptions.Compiled);
+    private static readonly Regex PrivacySubject = new(
+        @"ProjectLinkGuard\.ResolveInsideAs|PrivateAttachments\.IsForeignResolved|ReadProjectImageAsync",
+        RegexOptions.Compiled);
+
     [Fact]
     public void КонтроллерыImageEditor_ХранилищаНеКлючуютсяОтВызывающего()
     {
@@ -41,8 +50,12 @@ public class ImageEditorTenantKeyGuardTests
                 var code = Regex.Replace(lines[i], @"//.*$", "");
                 if (!UserIdUse.IsMatch(code)) continue;
                 seen++;
-                if (!Allowed.IsMatch(code))
-                    violations.Add($"{Path.GetFileName(file)}:{i + 1}: {lines[i].Trim()}");
+                if (Allowed.IsMatch(code)) continue;
+                var tenant = TenantKey.Match(code);
+                var caller = UserIdUse.Match(code);
+                if (tenant.Success && caller.Success && caller.Index > tenant.Index) continue;
+                if (PrivacySubject.IsMatch(code)) continue;
+                violations.Add($"{Path.GetFileName(file)}:{i + 1}: {lines[i].Trim()}");
             }
         }
 

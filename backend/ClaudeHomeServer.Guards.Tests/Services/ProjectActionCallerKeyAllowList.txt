@@ -184,7 +184,13 @@ backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
 # ResolveOwnerId по вызывающему выше по телу). Снято ключевание по вызывающему:
 # «tasks.Create(…, UserId)» и «ToTaskBoard(UserId, …)» — ключ записи стал арендатор, адресат —
 # владелец записи; сторож посчитал это снижением.
-backend/ClaudeHomeServer/Controllers/TasksController.cs|97
+# F2-M2 (4686525fa; шаг M2, возврат финала db216f32): TasksController 97→98 — фичевые поля при
+# создании (role/featureId/planSteps/reviewOf) закрыты тем же FeatureOwnerGate, что дверь правки:
+# «FeatureOwnerGate.DeniedForCreate(access, UserId, tenantId, …)» — id вызывающего входит только в
+# проверку права (фичу ведёт владелец проекта), ключ записи — tenantId (арендатор), не вызывающий;
+# тот же класс мест, что «FeatureOwnerGate.Denied(access, UserId, …)» выше. Дверь MCP зовёт тот же
+# гейт через TurnActorId(...) — не имя из словаря регекспов, счётчик TasksToolset не изменился.
+backend/ClaudeHomeServer/Controllers/TasksController.cs|98
 # QA-P1: TurnRightExtensions 6→7 — DenyContentWrite (право записи контента чата: переименование и
 # архив, редактор и выше) идёт тем же уровнем Deny, что RunTurn и Configure: id вызывающего входит
 # только в IProjectAccess.ResolveSession (запрошенное право WriteContent) и GetAccessible (развилка

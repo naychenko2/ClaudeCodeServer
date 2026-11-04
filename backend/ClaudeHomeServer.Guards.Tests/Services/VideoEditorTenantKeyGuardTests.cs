@@ -16,6 +16,11 @@ public class VideoEditorTenantKeyGuardTests
 
     private static readonly Regex UserIdUse = new(@"\bUserId\b", RegexOptions.Compiled);
 
+    // Строка незакрытого вызова с ключом-арендатором: содержит Tenant(scope) и обрывается на
+    // «(» или «,» — начало или середина вызова, но не закрытая запись. Только такая строка
+    // даёт право строке-продолжению (тот же якорь, что у аудио-сторожа: «gate.Try…(» на конце).
+    private static readonly Regex OpenTenantCall = new(@"\bTenant\(scope\)[^\r\n]*[\(,]$", RegexOptions.Compiled);
+
     [Fact]
     public void КонтроллерыVideoEditor_UserId_ТолькоВГейтеИЛичныхКадрах()
     {
@@ -31,9 +36,12 @@ public class VideoEditorTenantKeyGuardTests
                 var code = Regex.Replace(lines[i], @"//.*$", "");
                 if (!UserIdUse.IsMatch(code)) continue;
                 // Вызов с ключом-арендатором мог перенестись: строка продолжения допустима,
-                // если строка вызова содержит Tenant(scope) (тот же приём, что у аудио-сторожа)
-                var prev = i > 0 ? Regex.Replace(lines[i - 1], @"//.*$", "") : "";
-                if (Regex.IsMatch(prev, @"\bTenant\(scope\)")) { allowed++; continue; }
+                // только если предыдущая — незакрытый вызов с Tenant(scope): «(» или «,» на конце,
+                // тот же якорь, что у аудио-сторожа («gate.Try…(» на конце строки). Без якоря
+                // проходила любая строка после закрытой записи: prefs.Get(UserId, scope) сразу за
+                // prefs.Save(Tenant(scope), …); оставалась зелёной (возврат дельта-ревью 94ef33f0).
+                var prev = i > 0 ? Regex.Replace(lines[i - 1], @"//.*$", "").TrimEnd() : "";
+                if (OpenTenantCall.IsMatch(prev)) { allowed++; continue; }
                 if (IsAllowed(code)) { allowed++; continue; }
                 violations.Add($"{Path.GetFileName(file)}:{i + 1}: {lines[i].Trim()}");
             }

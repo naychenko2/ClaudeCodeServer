@@ -714,20 +714,176 @@ async function openWikiPage(page: Page, title: string): Promise<void> {
   await expect(page.getByTestId('wiki-page')).toBeVisible({ timeout: 30000 });
 }
 
-// Рельса работает переключателем: клик по активной вкладке её ЗАКРЫВАЕТ. Повторный вызов
-// (после открытия страницы панель осталась открытой) должен быть холостым.
-async function openPanelTab(page: Page, railTestId: string): Promise<void> {
-  const btn = page.getByTestId(railTestId);
-  if (await btn.getAttribute('aria-pressed') === 'true') return;
-  await btn.click();
+// ─── Панели вики в рельсе зон (W3) ───
+// Панели вики — обычные панели зон: кнопку помечает сам PanelRail (data-rail-item с ключом
+// панели из panelCatalog), карточку рисует PanelShell. Старых ручных testid у них нет —
+// поэтому ищем по штатным меткам.
+
+// Кнопка панели в рельсе зон.
+function railButton(page: Page, key: string) {
+  return page.locator(`[data-rail-item="${key}"] button`);
 }
 
-// Перечитать панель: открытая рельса не перезагружает свой список, поэтому после действия
+// Карточка панели: заголовок в шапке PanelShell (span с font-weight: 600) и ближайший
+// предок-остров (flex-direction: column). Закрытой панели карточки нет вовсе — этим
+// пользуемся и для «панель открыта», и для «панель закрыта».
+function panelCard(page: Page, title: string) {
+  return page.locator(
+    `xpath=//span[contains(@style,"font-weight: 600") and normalize-space()="${title}"]` +
+    `/ancestor::div[contains(@style,"flex-direction: column")][1]`);
+}
+
+// Ключи панелей вики — из panelCatalog (WIKI_PANEL_KEYS).
+type WikiPanelKey = 'wikiInbox' | 'wikiJournal' | 'wikiHealth' | 'wikiSettings';
+const PANEL_KEYS: Record<'inbox' | 'journal' | 'health' | 'settings', WikiPanelKey> = {
+  inbox: 'wikiInbox', journal: 'wikiJournal', health: 'wikiHealth', settings: 'wikiSettings',
+};
+// Заголовки карточек — из panelCatalog (PANEL_META).
+const PANEL_TITLES: Record<WikiPanelKey, string> = {
+  wikiInbox: 'Входящие', wikiJournal: 'Журнал', wikiHealth: 'Здоровье', wikiSettings: 'Настройки',
+};
+
+// Чип раздела в шапке панели (SectionChip): подпись на кнопке и меню выбора раздела.
+function sectionChip(page: Page, key: WikiPanelKey) {
+  return panelCard(page, PANEL_TITLES[key]).first()
+    .locator('button[title="Раздел вики, по которому панель показывает данные"]');
+}
+
+// Меню чипа: портится в body (position: fixed), поэтому берём корень по наличию
+// ОТМЕЧЕННОГО пункта — у него галочка (MenuItem с иконкой Check).
+function chipMenu(page: Page) {
+  return page.locator('div[style*="position: fixed"]')
+    .filter({ has: page.locator('button:has(svg.lucide-check)') })
+    .last();
+}
+
+// Открыть меню чипа (клик по кнопке-чипу) и вернуть его корень.
+async function openChipMenu(page: Page, key: WikiPanelKey) {
+  await sectionChip(page, key).click();
+  await expect(chipMenu(page).locator('button:has(svg.lucide-check)').first(),
+    'меню выбора раздела открылось').toBeVisible({ timeout: 10000 });
+  return chipMenu(page);
+}
+
+// Подпись чипа (имя раздела, «Все разделы» или «Раздел»).
+async function chipLabel(page: Page, key: WikiPanelKey): Promise<string> {
+  return (await sectionChip(page, key).innerText()).trim();
+}
+
+// Отмеченный пункт меню чипа: так видно РЕЖИМ панели (follow / all / конкретный раздел),
+// а не только её подпись.
+async function chipMode(page: Page, key: WikiPanelKey): Promise<string> {
+  const menu = await openChipMenu(page, key);
+  const checked = (await menu.locator('button:has(svg.lucide-check)').first().innerText()).trim();
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(300);
+  return checked;
+}
+
+// Выбрать в меню чипа пункт с точным названием.
+async function chipPick(page: Page, key: WikiPanelKey, option: string): Promise<void> {
+  const menu = await openChipMenu(page, key);
+  await menu.getByRole('button', { name: option, exact: true }).first().click();
+  await page.waitForTimeout(600);
+}
+
+// Точка на кнопке рельсы (dot из RailButton): цвет кружка — тон индикатора.
+async function railDotColor(page: Page, key: string): Promise<string | null> {
+  return page.evaluate((k) => {
+    const item = document.querySelector(`[data-rail-item="${k}"]`);
+    const circle = item ? item.querySelector('svg circle') : null;
+    return circle ? circle.getAttribute('fill') : null;
+  }, key);
+}
+
+// Числа-кружки на кнопках рельсы (CountBadge): у пустой вики их нет.
+async function railNumbers(page: Page): Promise<string[]> {
+  return page.evaluate(() => Array.from(document.querySelectorAll('[data-rail-item]'))
+    .flatMap(item => Array.from(item.querySelectorAll('span'))
+      .map(s => (s.textContent || '').trim())
+      .filter(t => /^\d+$/.test(t))));
+}
+
+// Сплиттер ширины зоны: элемент с курсором col-resize, ближайший слева к карточке панели.
+// Правая зона растёт влево от кромки окна, поэтому тянем сплиттер влево — зона шире.
+async function zoneWidthSplitter(page: Page, title: string): Promise<{ x: number; y: number }> {
+  const point = await page.evaluate((t) => {
+    const header = Array.from(document.querySelectorAll('span'))
+      .find(s => s.textContent === t && s.style.fontWeight === '600');
+    let cardX: number | null = null;
+    if (header) {
+      let e: HTMLElement | null = header as HTMLElement;
+      for (let i = 0; i < 6 && e; i++) {
+        e = e.parentElement;
+        const style = e?.getAttribute('style') || '';
+        const rect = e?.getBoundingClientRect();
+        if (rect && style.includes('flex-direction: column')) { cardX = rect.x; break; }
+      }
+    }
+    if (cardX == null) return null;
+    const splits = Array.from(document.querySelectorAll('div[style*="col-resize"]'))
+      .map(d => d.getBoundingClientRect());
+    const cand = splits.filter(r => r.x <= cardX - 2).sort((a, b) => b.x - a.x)[0];
+    return cand ? { x: cand.x + cand.width / 2, y: cand.y + cand.height / 2 } : null;
+  }, title);
+  if (!point) throw new Error('сплиттер ширины зоны не найден');
+  return point;
+}
+
+// X кнопки рельсы: рельса — вертикальный столбец, поэтому у кнопок одной рельсы x совпадает.
+async function railButtonX(page: Page, key: string): Promise<number> {
+  const box = await page.locator(`[data-rail-item="${key}"]`).boundingBox();
+  return box ? box.x : -1;
+}
+
+// Перечитать дерево вики во вкладке, не перезагружая страницу: так это делает включение
+// ночного разбора (после подтверждённого включения дерево перечитывается — WikiNightlyBlock).
+// Ночь на это время уводим в безопасный час (иначе ночная служба могла бы пройти), а потом
+// возвращаем окно и выключение как было.
+async function refreshWikiTree(page: Page): Promise<void> {
+  const was = await client.get<{ nightly?: { enabled?: boolean; windowStartHour?: number; windowEndHour?: number } }>(
+    '/api/wiki/settings');
+  const hour = new Date().getHours();
+  await client.put('/api/wiki/settings', {
+    nightly: { enabled: false, windowStartHour: (hour + 6) % 24, windowEndHour: (hour + 7) % 24 },
+  });
+  await openPanelTab(page, 'wikiSettings');
+  await closeToasts(page);
+  const toggle = panelCard(page, PANEL_TITLES.wikiSettings).getByRole('switch', { name: 'Разбирать по ночам' });
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  await toggle.click();
+  await expect(toggle, 'ночной разбор включён — дерево перечитано').toHaveAttribute('aria-checked', 'true', { timeout: 15000 });
+  await page.waitForTimeout(1000);
+  await toggle.click();
+  await expect(toggle, 'ночной разбор выключен обратно').toHaveAttribute('aria-checked', 'false', { timeout: 15000 });
+  await client.put('/api/wiki/settings', {
+    nightly: {
+      enabled: was?.nightly?.enabled ?? false,
+      windowStartHour: was?.nightly?.windowStartHour ?? 3,
+      windowEndHour: was?.nightly?.windowEndHour ?? 6,
+    },
+  });
+}
+
+// Рельса зон работает переключателем: клик по кнопке ОТКРЫТОЙ панели её закрывает.
+// Повторный вызов (после открытия страницы панель осталась открытой) должен быть холостым.
+async function openPanelTab(page: Page, key: WikiPanelKey): Promise<void> {
+  const card = panelCard(page, PANEL_TITLES[key]);
+  if (await card.count() > 0) return;
+  await railButton(page, key).click();
+  await expect(card).toBeVisible({ timeout: 20000 });
+}
+
+// Перечитать панель: открытая панель не перезагружает свой список, поэтому после действия
 // на странице её нужно закрыть и открыть заново — иначе видимый список был бы прежним.
-async function reloadPanelTab(page: Page, railTestId: string): Promise<void> {
-  const btn = page.getByTestId(railTestId);
-  if (await btn.getAttribute('aria-pressed') === 'true') await btn.click();
-  await btn.click();
+async function reloadPanelTab(page: Page, key: WikiPanelKey): Promise<void> {
+  const card = panelCard(page, PANEL_TITLES[key]);
+  if (await card.count() > 0) {
+    await railButton(page, key).click();
+    await expect(card).toHaveCount(0);
+  }
+  await railButton(page, key).click();
+  await expect(card).toBeVisible({ timeout: 20000 });
 }
 
 // Снимки ключевых состояний второго круга — в тот же каталог, что и первого
@@ -870,7 +1026,8 @@ test('сценарий 1: флаг «Заметки и Вики» выключе
   // Вкладки вики — в центре (старая раскладка)
   await page.getByRole('button', { name: 'Вики', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Страницы', exact: true })).toBeVisible();
-  await expect(page.getByTestId('wiki-rail')).toHaveCount(0);
+  // Правой рельсы панелей вики нет: без флага у панелей вики нет и содержимого
+  await expect(page.locator('[data-rail-item^="wiki"]')).toHaveCount(0);
 
   // Кнопок совместной правки нет нигде
   await expect(page.getByTestId('wiki-edit-open')).toHaveCount(0);
@@ -906,12 +1063,10 @@ test('сценарий 1: флаг включён — дерево слева, �
 
   await openWikiPage(page, MAIN_PAGE);
 
-  // Правая рельса разделов вики на месте
-  await expect(page.getByTestId('wiki-rail')).toBeVisible();
-  await expect(page.getByTestId('wiki-rail-inbox')).toBeVisible();
-  await expect(page.getByTestId('wiki-rail-journal')).toBeVisible();
-  await expect(page.getByTestId('wiki-rail-health')).toBeVisible();
-  await expect(page.getByTestId('wiki-rail-settings')).toBeVisible();
+  // Правая рельса панелей вики на месте — кнопки зон по именам панелей
+  for (const key of Object.keys(PANEL_KEYS) as (keyof typeof PANEL_KEYS)[]) {
+    await expect(railButton(page, PANEL_KEYS[key]), `кнопка «${PANEL_TITLES[PANEL_KEYS[key]]}» в рельсе`).toBeVisible();
+  }
 
   // В центре — только документ: вкладок каталога и кнопок правки в центре нет.
   // Кнопку проверяем по контейнеру центра: «Страницы» есть на рельсе — её добавил
@@ -1088,18 +1243,22 @@ test('сценарий 6: замена формулировки ИИ — мет�
   await expect(tag).toHaveAttribute('data-kind', 'replaced');
   await expect(tag).toContainText('ИИ заменил вашу формулировку');
 
-  // Точка на «Журнале» горит, пока замена не возвращена
-  await expect(page.getByTestId('wiki-replacement-dot')).toBeVisible();
+  // Точка на «Журнале» горит, пока замена не возвращена. В новой раскладке точка
+  // живёт на кнопке рельсы (в прежней — на кнопке шторки), и над кнопкой открытой
+  // панели рельса рисует крестик, а индикаторы гаснут — курсор с кнопки уводим.
+  await page.mouse.move(10, 10);
+  await page.waitForTimeout(300);
+  expect(await railDotColor(page, 'wikiJournal'), 'точка на кнопке «Журнал» горит').toBe('var(--c-info)');
 
   // «Журнал»: фильтр «ИИ поменял моё» и запись о замене с действием «Вернуть мою»
-  await openPanelTab(page, 'wiki-rail-journal');
+  await openPanelTab(page, 'wikiJournal');
   await expect(page.getByText('ИИ поменял моё').first()).toBeVisible();
   await expect(page.getByTestId('wiki-journal-row').first()).toContainText('заменил');
   // Действие «Вернуть мою» в списке есть (в прогоне QA-4 таких строк несколько — фикстуры TL-4)
   await expect(page.getByTestId('wiki-journal-restore').first()).toContainText('Вернуть мою');
 
   // «Настройки»: строка класса «Замена ваших формулировок»
-  await page.getByTestId('wiki-rail-settings').click();
+  await openPanelTab(page, 'wikiSettings');
   await expect(page.getByTestId('wiki-apply-human-row')).toContainText('Замена ваших формулировок');
   await expect(page.getByTestId('wiki-apply-human-row')).toContainText('ИИ меняет ваше сам');
 
@@ -1108,7 +1267,9 @@ test('сценарий 6: замена формулировки ИИ — мет�
   await page.getByTestId('wiki-restore-btn').click();
   await expect(page.getByTestId('wiki-override-replaced')).toHaveCount(0, { timeout: 15000 });
   await expect(page.getByTestId('wiki-override-tag')).toHaveCount(0);
-  await expect(page.getByTestId('wiki-replacement-dot')).toHaveCount(0);
+  await page.mouse.move(10, 10);
+  await page.waitForTimeout(500);
+  expect(await railDotColor(page, 'wikiJournal'), 'после «Вернуть мою» точка на «Журнале» гаснет').toBeNull();
   await expect(page.getByTestId('wiki-page')).toContainText('Черновики снимаем на локальной GPU.');
 
   // TL-1 (дефект 5efb2060): тот же итог на контракте — GET page больше не отдаёт override
@@ -1503,7 +1664,7 @@ test('QA3 «ИИ оспаривает»: метка на строке челов
 
   // П.5: «Журнал» — вид «оспорил», действие «Открыть страницу», не «Вернуть мою».
   // Строки спора в журнале две (вторая — вариант п.4): проверяем каждую.
-  await reloadPanelTab(page, 'wiki-rail-journal');
+  await reloadPanelTab(page, 'wikiJournal');
   const rows = page.getByTestId('wiki-journal-row').filter({ hasText: 'оспорил' });
   // Строки считаем после ожидания: список «Журнала» грузится запросом, и мгновенный count()
   // на ещё не отрисованном списке даёт ноль — это гонка замера, а не отсутствие строк.
@@ -1667,7 +1828,7 @@ test('сценарий 6: «Входящие» — карточка пакета
   await openApp(page);
   await openWikiPage(page, MAIN_PAGE);
 
-  await openPanelTab(page, 'wiki-rail-inbox');
+  await openPanelTab(page, 'wikiInbox');
   // Строка выбирается по источнику пакета: в прогоне QA-4 в «Входящих» больше одного пакета
   const pkgRow = page.getByTestId('wiki-pkg-row').filter({ hasText: 'session:qa11111111#m1-m9' });
   await expect(pkgRow).toBeVisible();
@@ -1691,7 +1852,7 @@ test('сценарий 7: «Здоровье» — страницу измени
   await openApp(page);
   await openWikiPage(page, MAIN_PAGE);
 
-  await page.getByTestId('wiki-rail-health').click();
+  await openPanelTab(page, 'wikiHealth');
   // Отчёт линта «Проверить сейчас» — источник строк о расхождении
   await page.getByTestId('wiki-health-run').click();
   const driftRow = page.getByTestId('wiki-health-row').filter({ has: page.getByTestId('wiki-health-adopt-mine') });
@@ -1748,7 +1909,7 @@ test('QA4 TL-2/TL-4: журнал ведёт на страницу замены;
   // Рельса панели живёт только при открытой странице вики — открываем её, как человек
   await openWikiPage(page, MAIN_PAGE);
 
-  await openPanelTab(page, 'wiki-rail-journal');
+  await openPanelTab(page, 'wikiJournal');
   const twoRow = page.getByTestId('wiki-journal-row').filter({ hasText: TL4_SRC });
   await expect(twoRow, 'строка пакета с заменами на двух страницах').toBeVisible();
   await expect(twoRow).toContainText('заменил');
@@ -1776,7 +1937,7 @@ test('QA4 TL-2/TL-4: журнал ведёт на страницу замены;
   await shot(page, 'qa4-04-other-page-still-has-button-1280.png');
 
   // В «Журнале»: запись остаётся в списке и в фильтре «ИИ поменял моё», но без метки и кнопки
-  await reloadPanelTab(page, 'wiki-rail-journal');
+  await reloadPanelTab(page, 'wikiJournal');
   const row = page.getByTestId('wiki-journal-row').filter({ hasText: TL4_SRC });
   await expect(row, 'запись осталась в списке').toBeVisible();
   await expect(row).not.toContainText('заменил');
@@ -1810,7 +1971,7 @@ test('QA4 TL-3/TL-7: хроника — строка человека на ме�
   await expect(page.getByTestId('wiki-override-replaced')).toHaveCount(0);
   await shot(page, 'qa4-06-chronicle-human-line-1280.png');
 
-  await openPanelTab(page, 'wiki-rail-inbox');
+  await openPanelTab(page, 'wikiInbox');
   // Строка «Входящих» называет источник (ref), а не страницу: выбираем по ref пакета
   const pkg = page.getByTestId('wiki-pkg-row').filter({ hasText: TL3_SRC });
   await expect(pkg, 'предложение по хронике во «Входящих»').toBeVisible();
@@ -1883,7 +2044,7 @@ test('QA4 п.7: «Журнал» и «Входящие» на 360 и 1280 в о�
       if (width >= 768) {
         await p.locator('[data-testid="unified-row"][data-kind="page"]', { hasText: MAIN_PAGE }).first().click();
         await expect(p.getByTestId('wiki-page')).toBeVisible({ timeout: 20000 });
-        await openPanelTab(p, tab === 'Журнал' ? 'wiki-rail-journal' : 'wiki-rail-inbox');
+        await openPanelTab(p, tab === 'Журнал' ? 'wikiJournal' : 'wikiInbox');
       } else {
         await openMobileTree(p);
         await p.locator('[data-testid="unified-row"][data-kind="page"]', { hasText: MAIN_PAGE }).first().click();
@@ -1940,4 +2101,267 @@ test('сценарий 8: тёмная тема — страница вики р
 
   expect(light, 'светлая тема — светлый фон').not.toBe(dark);
   expect(pageDark, 'текст страницы в тёмной теме задан токеном').not.toBe('');
+});
+
+// ─── W4: штатная рельса зон и шторка (перевод спеков с самодельных testid) ───
+
+test('W4: две панели вики открыты одновременно (1280)', async ({ page, context }) => {
+  const errors = collectConsoleErrors(page);
+  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await setFlags(true);
+  await reseed();
+  await openApp(page);
+  await openWikiPage(page, MAIN_PAGE);
+
+  // Рельса зон: обе кнопки панелей вики на месте и обе открываются вместе
+  await openPanelTab(page, 'wikiJournal');
+  await openPanelTab(page, 'wikiHealth');
+  const journal = panelCard(page, PANEL_TITLES.wikiJournal);
+  const health = panelCard(page, PANEL_TITLES.wikiHealth);
+  await expect(journal, 'карточка «Журнал» открыта').toBeVisible({ timeout: 20000 });
+  await expect(health, 'карточка «Здоровье» открыта').toBeVisible({ timeout: 20000 });
+
+  // Кнопки открытых панелей помечены: подпись меняется на «Скрыть «…»»
+  await expect(railButton(page, 'wikiJournal')).toHaveAttribute('aria-label', /^Скрыть «Журнал»/);
+  await expect(railButton(page, 'wikiHealth')).toHaveAttribute('aria-label', /^Скрыть «Здоровье»/);
+
+  // Карточки не наезжают друг на друга
+  const b1 = await journal.first().boundingBox();
+  const b2 = await health.first().boundingBox();
+  expect(b1 && b2, 'у обеих карточек есть геометрия').toBeTruthy();
+  expect(b1!.y + b1!.height <= b2!.y + 1 || b2!.y + b2!.height <= b1!.y + 1,
+    'карточки панелей не перекрываются').toBeTruthy();
+
+  // Закрытие одной не закрывает другую
+  await railButton(page, 'wikiHealth').click();
+  await expect(health).toHaveCount(0);
+  await expect(journal, 'карточка «Журнал» осталась открытой').toBeVisible();
+
+  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
+});
+
+test('W4: ширина панели меняется перетаскиванием и переживает перезагрузку (1280)', async ({ page, context }) => {
+  const errors = collectConsoleErrors(page);
+  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await setFlags(true);
+  await reseed();
+  await openApp(page);
+  await openWikiPage(page, MAIN_PAGE);
+  await openPanelTab(page, 'wikiJournal');
+
+  const card = panelCard(page, PANEL_TITLES.wikiJournal).first();
+  const before = await card.boundingBox();
+  expect(before, 'карточка «Журнал» измерима').toBeTruthy();
+
+  // Тянем сплиттер ширины зоны влево: правая зона растёт влево от кромки окна
+  const splitter = await zoneWidthSplitter(page, PANEL_TITLES.wikiJournal);
+  await page.mouse.move(splitter.x, splitter.y);
+  await page.mouse.down();
+  await page.mouse.move(splitter.x - 60, splitter.y, { steps: 12 });
+  await page.mouse.up();
+  await page.waitForTimeout(800);
+
+  const after = await card.boundingBox();
+  expect(after!.width, 'после перетаскивания зона стала шире').toBeGreaterThan(before!.width + 30);
+
+  // Ширина переживает перезагрузку — её хранит зона (cc_notes_zones)
+  await openApp(page);
+  await expect(panelCard(page, PANEL_TITLES.wikiJournal), 'панель «Журнал» открыта и после перезагрузки')
+    .toBeVisible({ timeout: 20000 });
+  const reloaded = await panelCard(page, PANEL_TITLES.wikiJournal).first().boundingBox();
+  expect(Math.abs(reloaded!.width - after!.width), 'ширина панели после перезагрузки прежняя')
+    .toBeLessThanOrEqual(2);
+
+  // Раскладка переживает и выключение флага: набор ключей зоны статичный, без флага у
+  // панели вики просто нет содержимого — открытая панель и ширина не выселяются
+  await setFlags(false);
+  await openApp(page);
+  await expect(page.locator('[data-rail-item^="wiki"]'), 'без флага кнопок панелей вики нет').toHaveCount(0);
+  await setFlags(true);
+  await openApp(page);
+  await openWikiPage(page, MAIN_PAGE);
+  await expect(panelCard(page, PANEL_TITLES.wikiJournal), 'после выключения и включения флага «Журнал» открыт')
+    .toBeVisible({ timeout: 20000 });
+  const back = await panelCard(page, PANEL_TITLES.wikiJournal).first().boundingBox();
+  expect(Math.abs(back!.width - after!.width), 'ширина панели пережила выключение флага')
+    .toBeLessThanOrEqual(2);
+
+  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
+});
+
+test('W4: чип раздела — закреплённый и следующий переживают перезагрузку, смена страницы двигает только следующий (1280)', async ({ page, context }) => {
+  const errors = collectConsoleErrors(page);
+  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await setFlags(true);
+  await reseed();
+  await openApp(page);
+  await openWikiPage(page, MAIN_PAGE);
+  await openPanelTab(page, 'wikiJournal');
+  await openPanelTab(page, 'wikiInbox');
+
+  // «Журнал» закрепляем на разделе «Личное», «Входящие» оставляем следующим за страницей
+  await chipPick(page, 'wikiJournal', 'Личное');
+  expect(await chipMode(page, 'wikiJournal'), '«Журнал» закреплён на разделе').toBe('Личное');
+  expect(await chipMode(page, 'wikiInbox'), '«Входящие» идут за открытой страницей')
+    .toBe('Следовать за открытой страницей');
+
+  // Перезагрузка: оба режима на месте
+  await openApp(page);
+  await expect(panelCard(page, PANEL_TITLES.wikiJournal), 'панель «Журнал» открыта').toBeVisible({ timeout: 20000 });
+  await expect(panelCard(page, PANEL_TITLES.wikiInbox), 'панель «Входящие» открыта').toBeVisible({ timeout: 20000 });
+  expect(await chipMode(page, 'wikiJournal'), 'после перезагрузки «Журнал» остался закреплённым').toBe('Личное');
+  expect(await chipMode(page, 'wikiInbox'), 'после перезагрузки «Входящие» остались следующими')
+    .toBe('Следовать за открытой страницей');
+
+  // Открываем страницу другого раздела: двигается только следующий чип
+  await openWikiPage(page, 'Общая страница');
+  await page.waitForTimeout(600);
+  expect(await chipLabel(page, 'wikiInbox'), 'следующий чип перешёл на раздел открытой страницы').toBe('Общее');
+  expect(await chipLabel(page, 'wikiJournal'), 'закреплённый чип остался на своём разделе').toBe('Личное');
+
+  // И обратно: следующий чип опять следует за страницей
+  await openWikiPage(page, MAIN_PAGE);
+  await page.waitForTimeout(600);
+  expect(await chipLabel(page, 'wikiInbox'), 'следующий чип снова на разделе открытой страницы').toBe('Личное');
+  expect(await chipLabel(page, 'wikiJournal'), 'закреплённый чип по-прежнему на своём разделе').toBe('Личное');
+
+  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
+});
+
+test('W4: чип раздела не меняется от выбора заметки из «Другие заметки» (1280)', async ({ page, context }) => {
+  const errors = collectConsoleErrors(page);
+  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await setFlags(true);
+  await reseed();
+
+  // Заметка-сирота: её проект удалён — в дереве вики раздела проекта больше нет,
+  // и заметка попадает в группу «Другие заметки».
+  const projRoot = `/tmp/qa-w4-sirota-${Date.now().toString(36)}`;
+  const proj = await client.post<{ id: string }>('/api/projects', {
+    name: 'QA-W4-Сирота', rootPath: projRoot, createDirectory: true,
+  });
+  const note = await client.post<{ id: string }>('/api/notes', {
+    title: 'Сирота W4', source: proj.id, content: 'Заметка без своего проекта.',
+  });
+  expect(note?.id, 'заметка создана').toBeTruthy();
+
+  await openApp(page);
+  await openWikiPage(page, MAIN_PAGE);
+  await openPanelTab(page, 'wikiJournal');
+
+  expect(await chipLabel(page, 'wikiJournal'), 'чип стоит на разделе открытой страницы').toBe('Личное');
+
+  // Проект удалён: раздела проекта в дереве вики больше нет, а список заметок во
+  // вкладке остаётся прежним (его перечитывает не страница, а сервер по событию).
+  // Чтобы дерево перечиталось, перечитываем его штатным способом — включением
+  // ночного разбора (см. refreshWikiTree).
+  await client.del(`/api/projects/${proj.id}`);
+  await refreshWikiTree(page);
+
+  // Заметка-сирота теперь в группе «Другие заметки»
+  const orphan = page.locator('[data-testid="unified-row"][data-kind="note"]', { hasText: 'Сирота W4' }).first();
+  await expect(orphan, 'заметка-сирота видна в группе «Другие заметки»').toBeVisible({ timeout: 20000 });
+
+  // Выбор такой заметки раздела не меняет: у неё раздела нет
+  await orphan.click();
+  await page.waitForTimeout(800);
+
+  expect(await chipLabel(page, 'wikiJournal'), 'чип не сменил раздел').toBe('Личное');
+  expect(await chipMode(page, 'wikiJournal'), 'режим чипа не сменился').toBe('Следовать за открытой страницей');
+
+  // Клик по заголовку узла другого раздела (сворачивание группы «Общее») раздел чипа не меняет
+  const commonGroup = page.locator('[data-testid="unified-group"]', { hasText: 'Общее' }).first();
+  await commonGroup.click();
+  await page.waitForTimeout(500);
+  expect(await chipLabel(page, 'wikiJournal'), 'клик по заголовку узла не сменил раздел чипа').toBe('Личное');
+  await commonGroup.click();
+
+  // Чистим за собой: проект удалён, поэтому удалить заметку ручкой нельзя (DELETE
+  // источника-проекта без проекта падает 500) — убираем файл заметки и папку проекта.
+  rmSync(path.join(projRoot, 'notes'), { recursive: true, force: true });
+  rmSync(projRoot, { recursive: true, force: true });
+  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
+});
+
+test('W4: панель вики переносится в левую зону (1280)', async ({ page, context }) => {
+  const errors = collectConsoleErrors(page);
+  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await setFlags(true);
+  await reseed();
+  await openApp(page);
+  await openWikiPage(page, MAIN_PAGE);
+  await openPanelTab(page, 'wikiHealth');
+
+  const healthCard = panelCard(page, PANEL_TITLES.wikiHealth);
+  await expect(healthCard, 'карточка «Здоровье» открыта справа').toBeVisible({ timeout: 20000 });
+  const before = await healthCard.first().boundingBox();
+  const inboxXBefore = await railButtonX(page, 'wikiInbox');
+
+  // Меню действий кнопки рельсы: перенос панели в левую зону
+  await railButton(page, 'wikiHealth').hover();
+  await page.waitForTimeout(600);
+  const flip = page.getByRole('button', { name: 'Перенести панель влево' });
+  await expect(flip, 'в меню кнопки есть перенос влево').toBeVisible({ timeout: 10000 });
+  await flip.first().click();
+  await page.waitForTimeout(1200);
+  await closeToasts(page);
+
+  // Карточка уехала в левую зону, а кнопка — в левую рельсу
+  const after = await healthCard.first().boundingBox();
+  expect(after!.x, 'карточка «Здоровье» теперь в левой зоне').toBeLessThan(before!.x - 100);
+  const healthX = await railButtonX(page, 'wikiHealth');
+  const inboxX = await railButtonX(page, 'wikiInbox');
+  expect(Math.abs(healthX - inboxX), 'кнопка «Здоровье» стоит в другой рельсе, чем «Входящие»')
+    .toBeGreaterThan(50);
+  expect(inboxX, 'остальные панели вики остались в правой зоне').toBe(inboxXBefore);
+
+  // И переживает перезагрузку
+  await openApp(page);
+  await expect(healthCard, 'после перезагрузки «Здоровье» всё ещё в левой зоне').toBeVisible({ timeout: 20000 });
+  const reloaded = await healthCard.first().boundingBox();
+  expect(reloaded!.x, 'карточка осталась слева').toBeLessThan(before!.x - 100);
+
+  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
+});
+
+test('W4: флаг выключен — правой рельсы вики нет, прежние под-вкладки на месте (1280)', async ({ page, context }) => {
+  const errors = collectConsoleErrors(page);
+  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await setFlags(false);
+  await openApp(page);
+
+  // Правой рельсы панелей вики нет
+  await expect(page.locator('[data-rail-item^="wiki"]'), 'кнопок панелей вики в рельсе нет').toHaveCount(0);
+
+  // Прежние под-вкладки вики — в центре
+  await page.getByRole('button', { name: 'Вики', exact: true }).click();
+  await page.waitForTimeout(1000);
+  for (const t of ['Страницы', 'Входящие', 'Журнал', 'Здоровье', 'Настройки']) {
+    await expect(page.getByRole('button', { name: t, exact: true }), `прежняя под-вкладка «${t}»`).toBeVisible();
+  }
+
+  await setFlags(true);
+  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
+});
+
+test('W4: точка «Журнала» на кнопке рельсы — инфо-тон (1280)', async ({ page, context }) => {
+  const errors = collectConsoleErrors(page);
+  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await setFlags(true);
+  await reseed();
+  await openApp(page);
+  await openWikiPage(page, MAIN_PAGE);
+
+  // Точка живёт на кнопке РЕЛЬСЫ. Курсор с кнопки уводим: над кнопкой открытой панели
+  // рельса рисует крестик, и индикаторы (точка и число) гаснут — это её устройство.
+  await page.mouse.move(10, 10);
+  await page.waitForTimeout(300);
+
+  // Точка на кнопке «Журнал» — инфо-тон (синий), а не тревожный
+  const dot = await railDotColor(page, 'wikiJournal');
+  expect(dot, 'на кнопке «Журнал» есть точка-индикатор').toBe('var(--c-info)');
+  await expect(railButton(page, 'wikiJournal'), 'подпись точки объясняет, что ИИ что-то заменил')
+    .toHaveAttribute('aria-label', /ИИ заменил ваши формулировки/);
+
+  expect(uiErrors(errors), 'в консоли не должно быть ошибок').toEqual([]);
 });

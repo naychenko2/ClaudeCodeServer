@@ -4503,6 +4503,12 @@ public class ClaudeSession : ILlmSessionAdapter
             envOverrides[ConsumersHookTokenEnv] = ConsumersHookTokenPlaceholder;
         }
 
+        // Признак чата-исполнителя задачи для хука «сборка и тесты — только инструментами»
+        // (ClaudeRuntimeSettings, восьмая обязанность): файл настроек один на все чаты, различие
+        // — только здесь. Свойство сессии, не хода: значение стабильно и сигнатуру не мерцает.
+        if (Info.TaskExecution)
+            envOverrides[ClaudeRuntimeSettings.TaskExecutorEnv] = "1";
+
         // Родной Claude (подписка — основной аккаунт или аккаунт пула): объявляем окно
         // контекста сами, как сторонним провайдерам это делает BuildCliEnv. Считаем по модели
         // ПОСЛЕ ResolveModelForCli — ровно по той, что уедет в --model: срезанный по

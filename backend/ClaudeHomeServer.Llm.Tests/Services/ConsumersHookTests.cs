@@ -128,7 +128,7 @@ public class ConsumersHookTests
         var hooks = JsonDocument.Parse(File.ReadAllText(SettingsPath())).RootElement
             .GetProperty("hooks").GetProperty("PreToolUse");
         hooks.EnumerateArray().Select(h => h.GetProperty("matcher").GetString())
-            .Should().Equal("Bash", "Edit|Write");
+            .Should().Equal("Bash", "Bash", "Edit|Write");
     }
 
     [Fact]

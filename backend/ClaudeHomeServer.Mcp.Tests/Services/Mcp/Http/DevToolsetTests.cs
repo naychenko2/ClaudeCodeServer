@@ -342,7 +342,7 @@ public class DevToolsetTests : IDisposable
     {
         var schema = DevToolset.Tools.Single(t => t.Name == DevToolset.ToolName).InputSchema["properties"]!.AsObject();
 
-        schema.Select(p => p.Key).Should().BeEquivalentTo("kind", "target", "script");
+        schema.Select(p => p.Key).Should().BeEquivalentTo("kind", "tree", "target", "script");
         schema["kind"]!["enum"]!.AsArray().Select(v => v!.GetValue<string>()).Should().Equal("dotnet", "npm");
     }
 

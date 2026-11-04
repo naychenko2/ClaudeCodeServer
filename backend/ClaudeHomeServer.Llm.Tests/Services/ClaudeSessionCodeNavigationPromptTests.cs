@@ -11,11 +11,11 @@ using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Сценарное правило выбора codegraph / LSP / Grep в системном промпте хода (ADR-011 шаг 3):
+// Сценарное правило выбора codegraph / Grep в системном промпте хода (ADR-011 шаг 3):
 // секция "code-navigation" добавляется при том же гейте, что slice графа (CodeGraphProvider
 // не null — проектный чат с включённым codegraph), но, в отличие от slice, НЕ зависит от
 // построения графа. Ключевой кейс: свежий проект без graph.json — slice нет, правило есть;
-// иначе модель не узнала бы про LSP ровно так же, как до ADR-011 (8 вызовов за 14 дней).
+// иначе модель не узнала бы про граф ровно так же, как до ADR-011.
 // Проверяем фактический аргумент --append-system-prompt, ушедший бы модели: гоняем
 // настоящую ClaudeSession с fake-CLI launcher (паттерн ClaudeSessionPromptSectionsOrderTests).
 public class ClaudeSessionCodeNavigationPromptTests : IDisposable
@@ -140,14 +140,13 @@ public class ClaudeSessionCodeNavigationPromptTests : IDisposable
         // а правило обязано доехать: оно статично и не зависит от graph.json
         var prompt = await RunTurnCapturePromptAsync(_ => Task.FromResult<string?>(null));
 
-        prompt.Should().Contain("три уровня, не взаимозаменяемы");
+        prompt.Should().Contain("два уровня, не взаимозаменяемы");
         prompt.Should().Contain("codegraph_hubs");
         prompt.Should().Contain("codegraph_neighbors");
         prompt.Should().Contain("codegraph_find");
-        prompt.Should().Contain("goToDefinition");
-        prompt.Should().Contain("findReferences");
-        // Момент выбора, а не перечень возможностей — формулировка ADR-011
-        prompt.Should().Contain("сначала LSP findReferences, а не Grep");
+        // LSP в CLI отложенный — агенту его не обещаем
+        prompt.Should().NotContain("findReferences");
+        prompt.Should().NotContain("LSP");
         // Slice нет — данные графа не приехали, правило живёт само по себе
         prompt.Should().NotContain("Структура кода проекта", "граф не построен — slice быть не должно");
     }
@@ -159,7 +158,7 @@ public class ClaudeSessionCodeNavigationPromptTests : IDisposable
             _ => Task.FromResult<string?>("## Структура кода проекта (Code Graph)\nМАРКЕР_SLICE"));
 
         var sliceIdx = prompt.IndexOf("МАРКЕР_SLICE", StringComparison.Ordinal);
-        var ruleIdx = prompt.IndexOf("три уровня, не взаимозаменяемы", StringComparison.Ordinal);
+        var ruleIdx = prompt.IndexOf("два уровня, не взаимозаменяемы", StringComparison.Ordinal);
         sliceIdx.Should().BeGreaterThanOrEqualTo(0);
         ruleIdx.Should().BeGreaterThanOrEqualTo(0);
         sliceIdx.Should().BeLessThan(ruleIdx, "правило встаёт следом за данными графа");
@@ -172,7 +171,7 @@ public class ClaudeSessionCodeNavigationPromptTests : IDisposable
         // инструменты, которых в этом ходе нет
         var prompt = await RunTurnCapturePromptAsync(null);
 
-        prompt.Should().NotContain("три уровня, не взаимозаменяемы",
+        prompt.Should().NotContain("два уровня, не взаимозаменяемы",
             "без CodeGraphProvider правила быть не должно");
     }
 

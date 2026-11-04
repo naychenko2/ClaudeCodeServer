@@ -46,18 +46,16 @@ public class SpecialtyPromptPresetsTests
     }
 
     [Fact]
-    public void DefaultText_Навигация_ВсеРолиНесутТриУровняИзЕдинойТочки()
+    public void DefaultText_Навигация_ВсеРолиНесутГрафИGrep_БезLsp()
     {
-        // Секция codeGraph = «Навигация по коду» (ADR-011 шаг 3): типы (codegraph) +
-        // символ (LSP) + текст (Grep). Формулировка LSP-уровня — из CodeNavigationPrompts
-        // (единая точка истины с глобальным блоком хода), свои копии в пресетах запрещены.
+        // Секция codeGraph = «Навигация по коду»: типы (codegraph) + текст (Grep). LSP в CLI
+        // отложенный и агенту не виден — обещать его в промпте нельзя.
         foreach (var specialty in AllSpecialties)
         {
             var text = SpecialtyPromptPresets.DefaultText("codeGraph", specialty);
             text.Should().Contain("codegraph_", $"{specialty} разводит типы в граф");
-            text.Should().Contain(CodeNavigationPrompts.PresetLspLine,
-                $"{specialty} берёт формулировку LSP-уровня из CodeNavigationPrompts, а не пишет свою");
             text.Should().Contain("Grep", $"{specialty} фиксирует и текстовый уровень");
+            text.Should().NotContain("LSP", $"{specialty} не обещает недоступный инструмент");
         }
     }
 

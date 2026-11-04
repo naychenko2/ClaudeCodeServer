@@ -4227,7 +4227,7 @@ public class ClaudeSession : ILlmSessionAdapter
             if (contributorSections.TryGetValue("code-graph", out var codeGraph))
                 Add("code-graph", "Главные узлы кода проекта", codeGraph.Text, stable: false, group: "project");
 
-            // Сценарное правило выбора codegraph / LSP / Grep (ADR-011 шаг 3): slice выше —
+            // Сценарное правило выбора codegraph / Grep (ADR-011 шаг 3): slice выше —
             // данные и могут отсутствовать (граф не построен), правило же статично и доезжает
             // до каждого хода проектного чата. Тот же гейт, что у slice: провайдер не null
             // (проектный чат с включённым codegraph) — правило не советует инструменты,

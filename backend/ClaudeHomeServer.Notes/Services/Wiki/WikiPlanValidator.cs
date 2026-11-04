@@ -302,6 +302,8 @@ public static class WikiPlanValidator
                     TargetAuthor = !isReplacement
                         ? null
                         : humanTarget ? WikiPackage.AuthorHuman : WikiPackage.AuthorAi,
+                    TargetHasNoHistory = op.Op == WikiPackage.OpSupersede
+                        && page.Model is { } model && model.Sections.All(s => s.Name != "История"),
                 });
 
             candidates.Add((i, new()

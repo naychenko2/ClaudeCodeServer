@@ -761,6 +761,50 @@ describe('«Журнал»: «ИИ поменял моё» (F6b)', () => {
     expect(has(c, 'заменил')).toBe(true);
   });
 
+  // TL-4: «Вернуть мою» ведёт на overridePageKey; reverted — без метки и кнопки; без страниц — без кнопки
+  // Мутация (15): вернуть pages[0] в rowOpenPage → тест «замена на второй странице» краснеет
+  async function openOnly(entry: Record<string, unknown>) {
+    req.mockImplementation((url: string) => {
+      if (url.startsWith('/wiki/journal')) {
+        return Promise.resolve(String(url).includes('overrodeHuman=true')
+          ? { entries: [entry], take: 200, linesRead: 1, invalidLines: 0 }
+          : RESP_MIX);
+      }
+      return Promise.resolve(null);
+    });
+    const c = render();
+    await settle();
+    click(chipNode(c), 'чип «ИИ поменял моё»');
+    await settle();
+    return c;
+  }
+
+  it('замена на второй странице: «Вернуть мою» ведёт на overridePageKey, а не на pages[0]', async () => {
+    const c = await openOnly({ ...ENTRY_REPLACED, pages: ['projects/p1/page-a', 'projects/p1/page-b'], overridePageKey: 'projects/p1/page-b', overrideReverted: false });
+    click(buttonByTestId(c, 'wiki-journal-restore'), 'Вернуть мою');
+    expect(consumeOpenWikiPage()).toMatchObject({ section: 'projects/p1', path: 'projects/p1/page-b' });
+  });
+
+  it('overridePageKey = null: ведёт на pages[0], как раньше', async () => {
+    const c = await openOnly({ ...ENTRY_REPLACED, pages: ['projects/p1/page-a', 'projects/p1/page-b'], overridePageKey: null });
+    click(buttonByTestId(c, 'wiki-journal-restore'), 'Вернуть мою');
+    expect(consumeOpenWikiPage()).toMatchObject({ path: 'projects/p1/page-a' });
+  });
+
+  it('overrideReverted: нет метки «заменил» и кнопки, запись остаётся в списке', async () => {
+    const c = await openOnly({ ...ENTRY_REPLACED, overridePageKey: 'projects/p1/page-a', overrideReverted: true });
+    expect(rows(c)).toHaveLength(1);
+    expect(has(c, 'заменил')).toBe(false);
+    expect(buttonByTestId(c, 'wiki-journal-restore')).toBeNull();
+    expect(buttonByTestId(c, 'wiki-journal-open-page')).toBeNull();
+  });
+
+  it('запись без страниц: кнопки «Вернуть мою» нет', async () => {
+    const c = await openOnly({ ...ENTRY_REPLACED, pages: [], overridePageKey: null, overrideReverted: false });
+    expect(rows(c)).toHaveLength(1);
+    expect(buttonByTestId(c, 'wiki-journal-restore')).toBeNull();
+  });
+
   it('нераспознанный вид overrodeHuman остаётся без метки и кнопки: словарь не выдумывает смысл', async () => {
     const UNKNOWN = { ...ENTRY_AUTO, ts: '2026-10-30T05:00:00Z', overrodeHuman: true, overrodeKind: 'future_kind' };
     req.mockImplementation((url: string) => {

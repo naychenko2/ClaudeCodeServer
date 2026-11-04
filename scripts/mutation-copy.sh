@@ -30,7 +30,10 @@
 # Корень копий: ${CCS_MUTATION_ROOT:-$HOME/.cache/ccs-mutation}. Сборку и тесты в копии
 # запускает вызывающий как обычно; скрипт только создаёт и убирает.
 
-set -euo pipefail
+# Под set -e конструкция `cond && cmd` последней в теле цикла, функции или конвейера даёт
+# их код 1 при ложном cond и молча роняет скрипт — писать только `if cond; then cmd; fi`.
+# -E: ловушка ERR видит сбои и внутри функций (нужна create для причины в stderr).
+set -Eeuo pipefail
 
 # Метаданные копии (источник, время создания) — вне самой копии, чтобы не светиться в
 # git status: $CCS_MUTATION_ROOT/.meta/<имя копии>.
@@ -95,7 +98,9 @@ prime_compile_cache() {
   {
     echo '<Project><ItemGroup>'
     find "$dst/backend" \( -name node_modules -o -name bin -o -name obj \) -prune -o -name '*.csproj' -print \
-      | while IFS= read -r f; do [ -d "$(dirname "$f")/obj" ] && echo "  <P Include=\"$f\" />"; done
+      | while IFS= read -r f; do
+          if [ -d "$(dirname "$f")/obj" ]; then echo "  <P Include=\"$f\" />"; fi
+        done
     echo '</ItemGroup><Target Name="Prime">'
     echo "  <MSBuild Projects=\"@(P)\" Targets=\"CcsPrimeCompileCache\" BuildInParallel=\"true\" Properties=\"BuildingProject=true;BuildProjectReferences=false;CustomAfterMicrosoftCommonTargets=$targets\" />"
     echo '</Target></Project>'
@@ -114,7 +119,7 @@ prime_compile_cache() {
   rm -f "$targets" "$trav"
   while IFS= read -r -d '' f; do
     rel="${f#"$dst"/}"
-    [ -f "$src/$rel" ] && touch -r "$src/$rel" "$f"
+    if [ -f "$src/$rel" ]; then touch -r "$src/$rel" "$f"; fi
   done < <(find "$dst/backend" -path '*/obj/*' -type f -name '*.CoreCompileInputs.cache' -print0)
 }
 
@@ -135,7 +140,26 @@ warn_stale_obj() {
   esac
 }
 
+# Недоделанная копия create: путь лежит здесь от mktemp до успешного конца, а ловушка EXIT
+# убирает её при любом выходе раньше (die, сбой под set -e, сигнал). FAIL_AT — первая
+# упавшая команда, её пишет ловушка ERR.
+CREATE_DST=""
+FAIL_AT=""
+
+create_cleanup() {
+  local rc=$?
+  if [ -z "$CREATE_DST" ]; then return 0; fi
+  log "ошибка: create прерван (код $rc${FAIL_AT:+; $FAIL_AT}) — убираю недоделанную копию $CREATE_DST"
+  remove_copy "$CREATE_DST"
+  CREATE_DST=""
+}
+
 cmd_create() {
+  trap 'FAIL_AT="${FAIL_AT:-строка $LINENO: $BASH_COMMAND}"' ERR
+  trap create_cleanup EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   local from=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -153,11 +177,12 @@ cmd_create() {
   case "$src/" in "$root"/*) die "источник $src сам лежит под $root" ;; esac
   name="$(basename "$src")"
   dst="$(mktemp -d "$root/$name-XXXXXX")"
+  CREATE_DST="$dst"
   head="$(git -C "$src" rev-parse HEAD)"
 
   # Пустой каталог git worktree add принимает. --no-checkout: файлы привезёт rsync с mtime.
   git -C "$src" worktree add --quiet --detach --no-checkout "$dst" "$head" >&2 \
-    || { rmdir "$dst" 2>/dev/null; die "git worktree add не удался"; }
+    || die "git worktree add не удался"
   mkdir -p "$root/$META_DIR"
   printf 'source=%s\ncreated=%s\nhead=%s\n' "$src" "$(date +%s)" "$head" > "$root/$META_DIR/$(basename "$dst")"
 
@@ -189,6 +214,7 @@ cmd_create() {
     ln -s "$nm" "$dst/frontend/node_modules"
   fi
 
+  CREATE_DST=""
   echo "$dst"
 }
 

@@ -176,27 +176,40 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     if (transferBusy) return;
     const forNoteId = noteId;
     setTransferBusy(true);
+    // Исход переноса определяет ТОЛЬКО ответ сервера: действия после успеха — вне этого try
+    // (свой защитный catch ниже). Иначе баг в приёмнике 'cc-open-note' показал бы состоявшийся
+    // на сервере перенос как «Не удалось…», а повтор дал бы 409 wiki_note_transferred.
+    let openPage: { section: string; path: string } | null = null;
+    let failure: unknown = null;
     try {
       const res = await transferWikiNote(forNoteId);
-      // Заметка сменилась, пока запрос шёл: плашка и страница — прежней заметки,
-      // ответ отбрасывается по noteId
-      if (forNoteId !== openNoteIdRef.current) return;
-      setTransferConfirm(false);
+      openPage = { section: res.section, path: res.page };
+    } catch (e) {
+      failure = e;
+    }
+    // Заметка сменилась, пока запрос шёл: плашка и страница — прежней заметки,
+    // ответ отбрасывается по noteId; состояние новой заметки (её возможный перенос) не трогаем
+    if (forNoteId !== openNoteIdRef.current) return;
+    setTransferConfirm(false);
+    if (openPage) {
       setTransferFlash({ ok: true, text: TRANSFER_TEXT.done });
+      setTransferBusy(false);
       // На сервере заметка заменена ссылкой — перечитываем список и саму заметку
-      bumpNotes();
       // Открыть созданную страницу: запрос — в стор вики (OPEN-1), смонтированный раздел
       // «Заметки» переключится на «Вики» и откроет её; из встраивания в файлы к разделу
       // ведёт тот же канал 'cc-open-note', что у «[[wikilink]]»
-      requestOpenWikiPage({ section: res.section, path: res.page });
-      window.dispatchEvent(new Event('cc-open-note'));
-    } catch (e) {
-      if (forNoteId !== openNoteIdRef.current) return;
-      setTransferConfirm(false);
-      setTransferFlash({ ok: false, text: transferFailText(e) });
-    } finally {
-      // Запоздалый ответ не трогает состояние новой заметки (там мог идти свой перенос)
-      if (forNoteId === openNoteIdRef.current) setTransferBusy(false);
+      try {
+        bumpNotes();
+        requestOpenWikiPage(openPage);
+        window.dispatchEvent(new Event('cc-open-note'));
+      } catch (e) {
+        // Приёмник 'cc-open-note' упал: перенос уже состоялся — плашка остаётся «Перенесено».
+        // Молча не глотаем: сбой слушателя виден в логе (образец: notesOffline.putOpOrWarn)
+        console.warn('[notes] приёмник cc-open-note упал:', e);
+      }
+    } else {
+      setTransferFlash({ ok: false, text: transferFailText(failure) });
+      setTransferBusy(false);
     }
   };
 

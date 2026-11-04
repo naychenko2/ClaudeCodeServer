@@ -405,6 +405,75 @@ public class WikiPlanValidatorTests
         earlier.Decision.Should().Be(WikiPackage.DecisionInbox);
     }
 
+    // ─── TL-3: на хронике (нет секции «История») ИИ не стирает формулировку человека молча ──
+
+    private const string ChroniclePath = "Проекты/p1/Хроники/Чат.md";
+    private const string HumanCardPath = "Проекты/p1/Карточка-человека.md";
+
+    private static string ChronicleFile(bool withHistory) => $$"""
+        ---
+        type: {{(withHistory ? "topic" : "chronicle")}}
+        status: active
+        ---
+
+        # Чат
+
+        {{(withHistory
+            ? "## Сводка\n- Бюджет на GPU — до 15 тыс. ₽ в месяц [^s1]\n- Лимит поднимать нельзя [^s2]\n\n## Хронология\n\n## Противоречия\n\n## История"
+            : "## О чём\nОбсуждали бюджет.\n\n## Что решили\n- Бюджет на GPU — до 15 тыс. ₽ в месяц [^s1]\n- Лимит поднимать нельзя [^s2]\n\n## Что выяснили\n\n## Открытые вопросы")}}
+
+        [^s1]: [[Карточка человека]] — «Бюджет на GPU — до 15 тыс. ₽ в месяц»
+        [^s2]: [[{{ForeignCardTitle}}]] — «Лимит поднимать нельзя»
+        """;
+
+    private static WikiPlanValidator.Result RunOnChronicle(bool withHistory, string target)
+    {
+        var humanCard = ForeignCardFile.Replace("origin: session", "origin: human")
+            .Replace("ref: session:s0#m1-4", "ref: human:1")
+            .Replace(ForeignCardTitle, "Карточка человека");
+        var aiCard = WithWritten(ForeignCardFile, "2026-10-01T00:00:00+00:00");
+        var humanCardW = WithWritten(humanCard, "2026-10-01T00:00:00+00:00");
+        var snapshot = new WikiGate.Draft[]
+        {
+            new(CardPath, CardFile), new(ForeignCardPath, aiCard), new(HumanCardPath, humanCardW),
+            new(ChroniclePath, ChronicleFile(withHistory)),
+        };
+        return WikiPlanValidator.Validate(
+            Plan(Op(WikiPackage.OpSupersede, "Чат", 0, target)),
+            Claims(GoodClaim), Src, Section, [WikiSections.Common], snapshot,
+            new() { NewSourceTime = DateTimeOffset.Parse("2026-10-27T00:00:00+00:00") });
+    }
+
+    [Fact]
+    public void Validate_ХроникаБезИстории_ЗаменаСтрокиЧеловека_ВоВходящих_СПричиной()
+    {
+        var op = RunOnChronicle(withHistory: false, "Бюджет на GPU — до 15 тыс. ₽ в месяц").Accepted.Single();
+
+        op.Decision.Should().Be(WikiPackage.DecisionInbox);
+        op.Reason.Should().Be("На этой странице нет секции «История», прежняя формулировка не сохранится — решите сами");
+    }
+
+    [Fact]
+    public void Validate_ХроникаБезИстории_ЗаменаСтрокиИИ_Само_КакРаньше()
+    {
+        var op = RunOnChronicle(withHistory: false, "Лимит поднимать нельзя").Accepted.Single();
+
+        op.Decision.Should().Be(WikiPackage.DecisionAuto);
+    }
+
+    [Fact]
+    public void Validate_СтраницаСИсторией_ЗаменаСтрокиЧеловека_Само_СтрокаУходитВИсторию()
+    {
+        var r = RunOnChronicle(withHistory: true, "Бюджет на GPU — до 15 тыс. ₽ в месяц");
+
+        r.Accepted.Single().Decision.Should().Be(WikiPackage.DecisionAuto);
+        var draft = WikiPlanValidator.RenderApply(
+            [new(ChroniclePath, ChronicleFile(true))],
+            r.Accepted.Single(), GoodClaim.Quote!, CardTitle)!.Value;
+        var history = WikiPage.Parse(draft.Content).Model!.Sections.Single(x => x.Name == "История");
+        history.Lines.Should().ContainSingle(l => l.Contains("Бюджет на GPU"));
+    }
+
     // ─── M2 (ревью S6b-2): дословность — только для сносок этого пакета ───────
 
     [Fact]

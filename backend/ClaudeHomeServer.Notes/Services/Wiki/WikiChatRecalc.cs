@@ -15,6 +15,11 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // ночной разбор (Ф2) — не начинает ночь. Причина — строка для человека, прежний message
 // ответа контроллера. Зоны и балл считает WikiChatScorer (чистая функция); показанная зона
 // списка — забота читающего (WikiChatsController.List / ShownZone), здесь её нет.
+//
+// Приватные чаты (PrivateToUserId, FIN3-3) в пересчёт не входят: тот же инвариант, что у
+// очереди ночи (BuildQueue) и разбора (AnalyzeAsync) — машинный потребитель не читает их
+// вовсе. Их балл/зона/причина не пишутся в стор и не попадают в counts ответа: данные о
+// чужих чатах не оседают в сторе разбора владельца.
 public sealed class WikiChatRecalc
 {
     private readonly ISessionDirectory _sessions;
@@ -45,7 +50,8 @@ public sealed class WikiChatRecalc
 
     /// <summary>Пересчёт по владельцу: ступень 0 и балл ступени 1 по всем его чатам, включая
     /// архивные (ADR-035 §12в считает бэклог «по всем чатам владельца»; архивность — способ
-    /// хранения, не признак бессмысленности), результат — в стор по каждому чату. Отказ стора
+    /// хранения, не признак бессмысленности), кроме приватных (PrivateToUserId, FIN3-3 —
+    /// машинный потребитель их не читает). Результат — в стор по каждому чату. Отказ стора
     /// (нечитаемый файл или сбой записи посреди цикла) — RecalcResult с кодом и причиной:
     /// уже записанные чаты на диске остаются (запись шла по одному чату под блоком корня),
     /// цикл на отказе останавливается. Исключения наружу нет.</summary>
@@ -62,7 +68,10 @@ public sealed class WikiChatRecalc
 
         var counts = new Dictionary<string, int>();
         int counted = 0;
-        foreach (var session in _sessions.GetAll().Where(s => _sessions.ResolveOwnerId(s) == ownerId))
+        // Приватный чат (FIN3-3) отсекается здесь — до чтения истории и до записи в стор:
+        // тот же фильтр, что у BuildQueue (WikiNightlyService) и AnalyzeAsync (WikiChatIngestService).
+        foreach (var session in _sessions.GetAll().Where(s =>
+                   _sessions.ResolveOwnerId(s) == ownerId && s.PrivateToUserId is null))
         {
             var history = await _sessions.GetHistoryAsync(session.Id);
             var res = WikiChatScorer.Score(new WikiChatScorer.WikiChatInput(

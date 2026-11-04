@@ -28,7 +28,9 @@ namespace ClaudeHomeServer.Tests.Services;
 ///      21-я открытая заявка → отказ «разберите Входящие»;
 /// c4 — ссылка на раздел вне набора в отданной странице — [скрыто].
 /// Плюс: не заведённая вика — отказ на вызове (состав tools/list от неё не зависит, сторож —
-/// McpToolsetStabilityTests), и дословная цитата как условие факта.
+/// McpToolsetStabilityTests), и дословная цитата как условие факта. Плюс хвосты FIN3-3:
+/// приватный чат не принимает ни один из трёх входов — «Запиши это», форма session:{id}#m{a}-{b}
+/// и пересчёт (WikiChatRecalc) — и отвечает как несуществующий.
 ///
 /// Никакого прямого письма в файлы здесь нет: заявка идёт через захват (S6h) и очередь
 /// разбора (S6b-3, подменённая модель), чтение — каталог и страницы внутренним читателем
@@ -38,6 +40,9 @@ public class NotesToolsetWikiTests : IDisposable
 {
     private const string User = "u1";
     private const string Own = "projects/p1";
+    // Автор приватного чата в общем проекте (FIN3-3): чат резолвится на владельца (OwnerId),
+    // приватность держит PrivateToUserId — как в фикстурах WikiPrivateChatTests.
+    private const string Participant = "u2";
 
     // p1 и q1 — одна сфера s1 (q1 виден из хода p1), q2 — другая сфера s2 (не виден).
     private const string OtherSphere = "projects/q2";
@@ -106,9 +111,10 @@ public class NotesToolsetWikiTests : IDisposable
     // ── обвязка вызова ──
 
     private (NotesToolset Toolset, McpToolCallContext Ctx) McpEnv(string? projectId, string sessionId = "s-call",
-        ClaudeHomeServer.Services.Composition.IFeatureFlagGate? flags = null)
+        ClaudeHomeServer.Services.Composition.IFeatureFlagGate? flags = null, string? privateTo = null)
     {
-        var session = new Session { Id = sessionId, OwnerId = User, ProjectId = projectId, Name = "Чат вызова" };
+        var session = new Session { Id = sessionId, OwnerId = User, ProjectId = projectId, Name = "Чат вызова",
+            PrivateToUserId = privateTo };
         _sessions.All.Add(session);
         return (
             new NotesToolset(new AllowAllPersonas(), new AllowAllBindings(), new OwnSession(session),
@@ -376,9 +382,10 @@ public class NotesToolsetWikiTests : IDisposable
 
     // ── wiki_add_fact: факт без дословной цитаты из этого чата не принимается ──
 
-    private Session AddChat(string id, string? projectId)
+    private Session AddChat(string id, string? projectId, string? privateTo = null)
     {
-        var session = new Session { Id = id, OwnerId = User, ProjectId = projectId, Name = "Чат разбора" };
+        var session = new Session { Id = id, OwnerId = User, ProjectId = projectId, Name = "Чат разбора",
+            PrivateToUserId = privateTo };
         _sessions.All.Add(session);
         _sessions.History[id] =
         [
@@ -445,6 +452,99 @@ public class NotesToolsetWikiTests : IDisposable
             AssertDenied(res, "sessionRange");
         }
         Directory.Exists(SafePath.Join(Root, "pages/Проекты/p1/Источники")).Should().BeFalse();
+    }
+
+    // ── FIN3-3, хвосты: ни один из трёх входов не принимает приватный чат ──
+    // Тот же инвариант, что у WikiPrivateChatTests (очередь ночи, разбор, список): приватный
+    // чат виден только автору, машинные потребители вики не читают его вовсе. Здесь три
+    // оставшихся входа: «Запиши это» и форма session:{id}#m{a}-{b} — оба через общий
+    // chokepoint WikiSourceCapture.CaptureSession — и пересчёт (WikiChatRecalc), который
+    // пишет балл/зону в стор и counts ответа. Отказ неотличим от несуществующего.
+
+    [Fact]
+    public async Task ПриватныйЧат_ЗапишиЭто_ОтказКакНесуществующий_ОбычныйРаботает()
+    {
+        SeedWiki();
+        AddChat("s-priv", "p1", privateTo: User); // чат-вызыватель приватный: его автор — владелец
+        var (toolsetPriv, ctxPriv) = McpEnv("p1", "s-priv", privateTo: User);
+
+        var res = await toolsetPriv.CallAsync("wiki_add_fact", Args(
+            ("fact", "Нарезку выдержки делает код"),
+            ("quote", "Решили: нарезку делает код"),
+            ("sessionRange", "m1-2")), ctxPriv, CancellationToken.None);
+
+        // Мутация «убрать проверку PrivateToUserId в CaptureSession»: выдержка режется,
+        // заявка доходит до модели, карточка ложится на диск — IsError и BeFalse краснеют.
+        AssertDenied(res, "не существует");
+        Directory.Exists(SafePath.Join(Root, "pages/Проекты/p1/Источники")).Should().BeFalse(
+            "отказ — до захвата: карточки выдержки нет");
+
+        // Тот же вызов из обычного чата того же проекта работает как прежде (путь —
+        // AddFact_ЦитатаПодтверждена выше).
+        AddChat("s-open", "p1");
+        var (toolsetOpen, ctxOpen) = McpEnv("p1", "s-open");
+        var ok = await toolsetOpen.CallAsync("wiki_add_fact", Args(
+            ("fact", "Нарезку выдержки делает код"),
+            ("quote", "Решили: нарезку делает код"),
+            ("sessionRange", "m1-2")), ctxOpen, CancellationToken.None);
+        ok.IsError.Should().BeFalse(ok.Text);
+        ok.Text.Should().Contain("нечего добавить");
+    }
+
+    [Fact]
+    public async Task ПриватныйЧат_ФормаВыдержки_ОтказКакНесуществующий_ОбычныйПринят()
+    {
+        SeedWiki();
+        AddChat("s-participant-private", "p1", privateTo: Participant); // чат участника, резолвится на владельца
+        AddChat("s-owner-private", "p1", privateTo: User);              // и свой приватный — тот же отказ
+        var (toolset, ctx) = McpEnv("p1");
+
+        var foreign = await toolset.CallAsync("wiki_ingest",
+            Args(("source", "session:s-participant-private#m1-2")), ctx, CancellationToken.None);
+        AssertDenied(foreign, "не существует");
+
+        var own = await toolset.CallAsync("wiki_ingest",
+            Args(("source", "session:s-owner-private#m1-2")), ctx, CancellationToken.None);
+        AssertDenied(own, "не существует");
+
+        // Несуществующий чат неотличим: та же форма отказа — приватность не выдаёт
+        // существования чата вызывающему.
+        var missing = await toolset.CallAsync("wiki_ingest",
+            Args(("source", "session:s-none#m1-2")), ctx, CancellationToken.None);
+        AssertDenied(missing, "не существует");
+
+        Directory.Exists(SafePath.Join(Root, "pages/Проекты/p1/Источники")).Should().BeFalse(
+            "отказанные выдержки не оставили карточек");
+
+        // Та же форма для обычного чата принимается: карточка на диске.
+        AddChat("s-open", "p1");
+        var ok = await toolset.CallAsync("wiki_ingest",
+            Args(("source", "session:s-open#m1-2")), ctx, CancellationToken.None);
+        ok.IsError.Should().BeFalse(ok.Text);
+        var cards = Directory.GetFiles(SafePath.Join(Root, "pages/Проекты/p1/Источники"), "*.md");
+        cards.Should().NotBeEmpty("выдержка обычного чата стала карточкой источника");
+        File.ReadAllText(cards[0]).Should().Contain("session:s-open#m1-2");
+    }
+
+    [Fact]
+    public async Task ПриватныйЧат_Пересчёт_НеСчитаетИНеПишет_ОбычныйСчитает()
+    {
+        AddChat("c-open", "p1");
+        AddChat("c-participant-private", "p1", privateTo: Participant);
+        AddChat("c-owner-private", "p1", privateTo: User);
+
+        var res = await new WikiChatRecalc(_sessions, _config).RecalculateAsync(User);
+
+        res.Ok.Should().BeTrue(res.Reason ?? "стор пуст — пересчёт валиден");
+        // Мутация «убрать фильтр PrivateToUserId из цикла пересчёта»: Counted и сумма counts
+        // краснеют (3 вместо 1), а в сторе появляются записи приватных чатов.
+        res.Counted.Should().Be(1, "приватные чаты не пересчитываются");
+        res.Counts.Values.Sum().Should().Be(1, "приватные чаты не попадают в counts ответа");
+
+        // Данные о чужих чатах не оседают в сторе разбора владельца: запись одна — обычная.
+        var store = WikiChatTriageStore.Get(Root);
+        store.State.Should().Be(WikiTriageFileState.Valid);
+        store.Entries.Select(e => e.SessionId).Should().Equal("c-open");
     }
 
     // ── гейт флага llm-wiki на входах с расходом модели (хвост финала W1-3) ──

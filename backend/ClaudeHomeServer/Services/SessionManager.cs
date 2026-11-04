@@ -7878,6 +7878,34 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         }
     }
 
+    /// <summary>
+    /// F2-O3 (финальное ревью «Общих проектов»): отзыв участника гасит ходы и очищает очередь
+    /// его приватных чатов в этом проекте. Приватный чат виден только автору (SessionAccess.CanSee),
+    /// а автор после отзыва проекта не видит: стоящие в очереди сообщения ждали бы хода, который
+    /// некому начать, а цикл «до готово» жёг бы итерации, которых никто не увидит. В отличие от
+    /// «Стопа»: очередь ЧИСТИТСЯ, а не морозится — заморозка ждёт возобновления, которого не
+    /// будет; отметки человека и composer_restore нет: это не действие человека. Область — ровно
+    /// приватные чаты отозванного (PrivateToUserId): ходы общих чатов принадлежат проекту и
+    /// продолжаются для владельца.
+    /// </summary>
+    public void StopChatsOfRevokedMember(string projectId, string memberUserId)
+    {
+        foreach (var session in GetByProject(projectId))
+        {
+            if (session.PrivateToUserId != memberUserId) continue;
+            if (!_sessions.TryGetValue(session.Id, out var entry)) continue;
+            // Остановка хода — той же механикой, что «Стоп» (byUser: false — как штабной
+            // InterruptTurn, без отметки в истории): цикл «до готово» снимается синхронно, чтобы
+            // exited не запустил автопродолжение; живой ход прерывается; «зависший» чат
+            // (статус занят, хода нет) реанимируется — иначе остался бы занятым навсегда.
+            // Заморозку очереди InterruptCore снимает ниже этот метод: здесь очередь чистится.
+            InterruptCore(session.Id, byUser: false);
+            lock (entry.PendingLock) entry.Pending.Clear();
+            entry.QueueFrozen = false;
+            PersistPending(entry);
+        }
+    }
+
     // Отметка «Ход остановлен пользователем» в history.json. Пишется ТОЛЬКО на прерывании
     // человеком — в точке, где его намерение известно наверняка: ниже по стеку (адаптер,
     // паспорт хода с исходом interrupted) «Стоп» человека уже не отличить от остановки

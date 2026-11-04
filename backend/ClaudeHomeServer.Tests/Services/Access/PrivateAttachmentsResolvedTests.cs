@@ -125,6 +125,31 @@ public sealed class PrivateAttachmentsResolvedTests : IDisposable
             .Should().BeFalse();
     }
 
+    /// <Named мутации: «IsForeignResolved судит только разыменованный путь (текстовая линия
+    /// снята)» краснит этот тест: .cc-attachments/private/{чужой}, сведённый в ссылку наружу,
+    /// перестал бы быть чужим — GET отдавал бы содержимое, PUT/MKCOL проходили бы.</Named>
+    [Fact]
+    public void IsForeignResolved_ИмяВЧужомPrivate_РазрешаетсяНаржу_ВсёРавноЧужое()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        // .cc-attachments/private/{чужой} — ручная правка ФС: каталог сведён в ссылку на
+        // каталог вне поддерева (достижимо только так; сама ФС таких ссылок не создаёт)
+        var outside = Directory.CreateDirectory(Path.Combine(_tempDir, "outside-priv")).FullName;
+        File.WriteAllText(Path.Combine(outside, "x.txt"), "содержимое внешнего каталога");
+        Directory.Delete(Path.Combine(_root, ".cc-attachments", "private", Other), recursive: true);
+        Directory.CreateSymbolicLink(Path.Combine(_root, ".cc-attachments", "private", Other), outside);
+
+        // Инвариант «closed-поддерево отказано по любому имени» (ревью 6db670ff, п.2):
+        // текстово чужое private остаётся чужим независимо от того, куда оно разыменовалось
+        PrivateAttachments.IsForeignResolved(_root, $".cc-attachments/private/{Other}/x.txt", Me)
+            .Should().BeTrue("текстово чужое private не обходится ссылкой наружу");
+        PrivateAttachments.IsForeignResolved(_root, $".cc-attachments/private/{Other}/{_foreignGuid}/foreign.txt", Me)
+            .Should().BeTrue("тот же исход для прежнего пути: имя ведёт в closed-поддерево");
+
+        // своё имя — своё: текстовая линия не закрывает и своё private
+        PrivateAttachments.IsForeignResolved(_root, $".cc-attachments/private/{Me}/x.txt", Me).Should().BeFalse();
+    }
+
     // --- контейнеры через ссылку ---
 
     /// <Named мутации: «IsContainerResolved сравнивает текстовый путь» краснит этот тест:

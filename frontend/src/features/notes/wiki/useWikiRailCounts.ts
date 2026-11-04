@@ -106,13 +106,16 @@ function subscribe(fn: () => void): () => void {
   };
 }
 
-export function useWikiRailCounts(healthSectionKey: string | null): WikiRailCounts {
+// enabled=false — хук только читает снимок и ничего не запрашивает: рельса вики не показана
+// (флаг выключен, мобила, вики не начата), чужие запросы ей не нужны
+export function useWikiRailCounts(healthSectionKey: string | null, enabled = true): WikiRailCounts {
   const snapshot = useSyncExternalStore(subscribe, () => counts, () => counts);
   useEffect(() => {
+    if (!enabled) return;
     // Перечитка при монтировании и при смене ключа: ключ регистрируется в состоянии модуля —
     // с него health читается для текущего раздела, ключа нет — health=null без запроса
     healthKey = healthSectionKey;
     refreshWikiRailCounts();
-  }, [healthSectionKey]);
+  }, [healthSectionKey, enabled]);
   return snapshot;
 }

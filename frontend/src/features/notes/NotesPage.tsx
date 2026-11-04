@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ComponentProps } from 'react';
 import { MessageCircle, Plus } from 'lucide-react';
 import type { AuthState, NoteDetail, NoteSemanticHit, NoteSummary } from '../../types';
 import { NewNoteDialog } from './NewNoteDialog';
@@ -9,7 +10,8 @@ import {
   parseHash, navPush, navReplace, getNav,
   Button, IslandScaffold, ConfirmDialog, PageCanvas, ICON_SIZE, Chip,
   PanelZone, notesPanels, zoneOf, NOTES_KEYS, useIsMobile, useWindowWidth, useListAutoFocus,
-  SP, FLAGS, useFeature, useWikiOpenRequest, consumeOpenWikiPage, requestOpenWikiPage, useWikiTree,
+  FLAGS, useFeature, useWikiOpenRequest, consumeOpenWikiPage, requestOpenWikiPage, useWikiTree,
+  useWikiReplacementDot,
 } from 'aihome_shell/kit';
 import type { NavSnapshot, WikiSectionDto } from 'aihome_shell/kit';
 import type { HubTabValue } from 'aihome_shell/kit';
@@ -19,8 +21,12 @@ import { NotesGraph, type GraphStats } from './NotesGraph';
 import { GraphSettingsBody } from './graph/GraphSettingsBody';
 import { useGraphSettings } from './graph/graphSettings';
 import { WikiTab, defaultSectionKey } from './wiki/WikiTab';
-import { WikiRail, WikiSidePanel } from './wiki/WikiUnifiedChrome';
-import type { WikiSubTabId } from './wiki/wikiTabs';
+import { WikiZonePanel } from './wiki/WikiUnifiedChrome';
+import { WIKI_SUBTAB_PANEL } from './wiki/wikiTabs';
+import { WikiEmpty } from './wiki/WikiEmpty';
+import { resolveWikiScope, useWikiPanelScope } from './wiki/wikiPanelScope';
+import { useWikiRailCounts } from './wiki/useWikiRailCounts';
+import { OVERRIDE_TEXT } from './wiki/wikiLabels';
 import { WikiUnifiedTree, useEnsureWikiTree } from './wiki/WikiUnifiedTree';
 import { CollapseGroup, IconSearch, IconPlus, IconCalendarDay, SourceDot } from './shared';
 
@@ -117,7 +123,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // Раздел живёт на рельсе панелей: список заметок и настройки графа — две
   // отдельные панели. Ширина, сворачивание и раскладка — в состоянии зон
   // (прежние sidebarMode + общая на все разделы ширина больше не нужны).
-  const { zones, close: closePanel } = notesPanels.use();
+  const { zones, close: closePanel, openIn: openPanelIn } = notesPanels.use();
   // На десктопе режим раздела определяется тем, открыта ли панель графа: она и
   // есть «вход в граф», а центр показывает то, чем сейчас управляют слева.
   const graphPanelOpen = zoneOf(zones, 'notesGraph') != null;
@@ -126,11 +132,27 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const unifiedLeft = wikiUnified && !isMobile && !graphPanelOpen;
   useEnsureWikiTree(unifiedLeft);
   const wikiTree = useWikiTree();
-  // Рельса и панель вики единой раскладки на десктопе — здесь, а не в WikiTab: они видны
-  // в любом режиме центра, в том числе при пустой вики, где в дереве нет страниц и войти
-  // в «Вики» иначе нельзя. Раздел панели — выбранный в WikiTab, до его монтирования — по умолчанию
-  const [railTab, setRailTab] = useState<WikiSubTabId | null>(null);
+  // Панели вики — панели зон раздела (W3): рельсу, раскладку и ширину держит стор notesPanels,
+  // своего состояния открытости здесь нет. Раздел для follow — выбранный в дереве или в WikiTab,
+  // до этого — по умолчанию
   const [wikiSection, setWikiSection] = useState<string | null>(null);
+  const wikiPanelsOn = wikiUnified && !isMobile;
+  const wikiSections = wikiTree?.sections ?? NO_SECTIONS;
+  const wikiStarted = wikiTree?.initialized === true && wikiSections.length > 0;
+  const wikiFollowKey = wikiSection ?? defaultSectionKey(wikiSections);
+  // Числа рельсы «Здоровья» считаются по тому же разделу, что показывает панель
+  const [healthScope] = useWikiPanelScope('wikiHealth');
+  const healthScoped = resolveWikiScope(healthScope, { followKey: wikiFollowKey, sectionKeys: wikiSections.map(x => x.key) });
+  const railCounts = useWikiRailCounts(healthScoped === 'all' ? null : healthScoped, wikiPanelsOn && wikiStarted);
+  const replacementDot = useWikiReplacementDot();
+  const railBadges = useMemo<ComponentProps<typeof PanelZone>['railBadges']>(() => {
+    if (!wikiPanelsOn || !wikiStarted) return undefined;
+    return {
+      ...(railCounts.inbox ? { wikiInbox: { primary: railCounts.inbox, primaryTone: 'accent' as const, hint: `${railCounts.inbox} ждут вашего решения` } } : null),
+      ...(railCounts.health ? { wikiHealth: { primary: railCounts.health, primaryTone: 'warning' as const, hint: `${railCounts.health} проблемы` } } : null),
+      ...(replacementDot ? { wikiJournal: { dot: 'info' as const, hint: OVERRIDE_TEXT.dotTitle } } : null),
+    };
+  }, [wikiPanelsOn, wikiStarted, railCounts.inbox, railCounts.health, replacementDot]);
 
   // Вернуться к заметкам из любого режима: снять панель графа, вкладку «Вики» и мобильный
   // режим. Ссылка стабильна — функцию слушает эффект AI-хаба, и пересоздание
@@ -527,7 +549,9 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
           <WikiUnifiedTree
             sections={wikiTree?.sections ?? NO_SECTIONS} notes={listed} query={query}
             selectedNoteId={wikiOn ? null : selectedId} selectedPage={wikiOn ? openedWiki : null}
-            onSelectNote={selectNote}
+            // Чип панелей вики идёт за разделом выбранной заметки; у узла «Другие заметки» ключа
+            // нет (null) — раздел чипа не меняется
+            onSelectNote={(id, sectionKey) => { if (sectionKey) setWikiSection(sectionKey); selectNote(id); }}
             onOpenPage={(section, page) => {
               setOpenedWiki({ section, page });
               requestOpenWikiPage({ section, path: page });
@@ -537,7 +561,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
       </div>
     ) : (
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
-        {sidebarControls({ withModeSwitch: wikiEnabled, listMode: true })}
+        {sidebarControls({ withModeSwitch: wikiEnabled && !wikiPanelsOn, listMode: true })}
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>{listPane}</div>
       </div>
     ),
@@ -546,6 +570,14 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
         {graphSidebar}
       </div>
     ),
+    // Панели вики: без флага и на мобиле контента нет (null) — набор allowedKeys при этом
+    // статичный, а сохранённая раскладка (открытая панель) переживает выключение флага
+    ...Object.fromEntries((['inbox', 'journal', 'health', 'settings'] as const).map(tab => [
+      WIKI_SUBTAB_PANEL[tab],
+      wikiPanelsOn
+        ? <WikiZonePanel tab={tab} followKey={wikiFollowKey} sections={wikiSections} started={wikiStarted} />
+        : null,
+    ])),
   };
 
   // Центральная зона: заметка/пустое состояние или граф. Десктоп (hero-стиль
@@ -590,6 +622,9 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
           onDeleted={clearNote} />
       // Приветствие раздела — в стиле хаба «Персон»: заголовок как у Календаря,
       // кнопка создания — справа от него, общим Button (как «Проект» и «Задача»)
+      : wikiPanelsOn && wikiTree?.initialized === false
+      // Ничего не выбрано и вики пуста: вместо приветствия «Заметок» — пояснение, что вики наполнится сама
+      ? <WikiEmpty onOpenSettings={() => openPanelIn('right', 'wikiSettings')} />
       : <div style={{ height: '100%', overflowY: 'auto' }}>
           {/* Ширина колонки — как у центра раздела «Проекты» (CHAT_MAX_W) */}
           <div style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', padding: '28px 32px 60px' }}>
@@ -629,24 +664,15 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     // гамбургера разделу больше не нужно.
     <IslandScaffold
       left={<PanelZone side="left" panelStack={notesPanels} allowedKeys={NOTES_KEYS} panels={zonePanels} />}
-      right={<PanelZone side="right" panelStack={notesPanels} allowedKeys={NOTES_KEYS} panels={zonePanels} />}
+      right={<PanelZone side="right" panelStack={notesPanels} allowedKeys={NOTES_KEYS} panels={zonePanels}
+        hat={wikiPanelsOn ? 'Вики' : undefined} hatTitle={wikiPanelsOn ? 'Панели вики' : undefined} railBadges={railBadges} />}
       centerBare
       // Компенсация перекоса зон — только для приветствия: у него колонка
       // фиксированной ширины, и без компенсации оно уезжает вслед за центром, стоит
       // открыть панель с одной стороны. Заметка и граф резиновые (тянутся на всю
       // колонку) — им компенсировать нечего, ширина не передаётся
       centerContentWidth={mode === 'notes' && !selectedId ? CHAT_MAX_W : undefined}
-      center={wikiUnified ? (
-        <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', gap: SP.md }}>
-          <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>
-          {railTab && (
-            <WikiSidePanel tab={railTab} onClose={() => setRailTab(null)}
-              selectedKey={wikiSection ?? defaultSectionKey(wikiTree?.sections ?? NO_SECTIONS)} />
-          )}
-          <WikiRail active={railTab} onSelect={setRailTab}
-            pages={{ active: mode === 'wiki', onClick: () => switchMode(mode === 'wiki' ? 'notes' : 'wiki') }} />
-        </div>
-      ) : <div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>}
+      center={<div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>}
     />
   );
 

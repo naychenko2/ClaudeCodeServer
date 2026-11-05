@@ -21,17 +21,21 @@ export function personaRole(
 // RunTurn; карточка, её память и обычные привязки, ИИ-сборка команды и создание
 // проектной персоны — WriteContent;
 // поля зоны/денег, удаление, руководитель проекта, автоматика, MCP/плагин-привязки,
-// навыки, память↔заметка — Configure (необратимое и деньги арендатора).
+// навыки, память↔заметка — Configure (необратимое и деньги арендатора);
+// правка привязки к цели вне этого проекта (bindingForeignTarget) — закрыта редактору
+// (И-4 разреза: чужие цели — за владельцем), поэтому не входит в EDITOR_ACTIONS.
 // Новое действие над персоной — сюда, а не в вызывающий компонент.
 export type PersonaAction =
   | 'chat' | 'editCard' | 'createPersona' | 'editZoneModel' | 'delete' | 'makeLead' | 'automation'
-  | 'memoryWrite' | 'memoryNote' | 'bindingWrite' | 'bindingMcpPlugin' | 'skills' | 'aiTeam';
+  | 'memoryWrite' | 'memoryNote' | 'bindingWrite' | 'bindingMcpPlugin' | 'skills' | 'aiTeam'
+  | 'bindingForeignTarget';
 
 // Действия, открытые редактору: чат с персоной, правка карточки, создание проектной
 // персоны (WriteContent, §2; доработка ревью c924eecf — читателю бэк откажет, фронт не
 // обещает), запись в память персоны, обычные привязки (без MCP и плагинов — они закрыты
-// отдельно, по И-4) и ИИ-сборка команды. Остальное — Configure: на бэке закрыто редактору,
-// здесь закрыто так же, чтобы фронт не обещал отказ.
+// отдельно, по И-4; и только к целям этого проекта — чужие цели закрыты отдельно,
+// bindingForeignTarget) и ИИ-сборка команды. Остальное — Configure: на бэке закрыто
+// редактору, здесь закрыто так же, чтобы фронт не обещал отказ.
 const EDITOR_ACTIONS: readonly PersonaAction[] = [
   'chat', 'editCard', 'createPersona', 'memoryWrite', 'bindingWrite', 'aiTeam',
 ];

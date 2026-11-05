@@ -4,12 +4,13 @@ import { type PersonaAction, canChangeCompanion, canPersona, personaRole } from 
 
 // Ожидаемая матрица §2 разреза, как данные: нет роли/владелец — всё; читатель — ничего;
 // редактор — только чат, карточка, создание проектной персоны, память персоны, обычные
-// привязки, ИИ-сборка команды.
-// Таблица — 4 роли × 13 действий = 52 проверки; новое действие в PersonaAction без строки
+// привязки этого проекта, ИИ-сборка команды.
+// Таблица — 4 роли × 14 действий = 56 проверок; новое действие в PersonaAction без строки
 // здесь не скомпилируется.
 const ACTIONS: PersonaAction[] = [
   'chat', 'editCard', 'createPersona', 'editZoneModel', 'delete', 'makeLead', 'automation',
   'memoryWrite', 'memoryNote', 'bindingWrite', 'bindingMcpPlugin', 'skills', 'aiTeam',
+  'bindingForeignTarget',
 ];
 
 const EXPECTED: Record<PersonaAction, Record<'none' | 'owner' | 'editor' | 'reader', boolean>> = {
@@ -27,6 +28,10 @@ const EXPECTED: Record<PersonaAction, Record<'none' | 'owner' | 'editor' | 'read
   bindingMcpPlugin: { none: true, owner: true, editor: false, reader: false },
   skills: { none: true, owner: true, editor: false, reader: false },
   aiTeam: { none: true, owner: true, editor: true, reader: false },
+  // Правка привязки к цели вне этого проекта — за владельцем (И-4): редактору закрыта,
+  // поэтому «своя/чужая цель» в панели решается на mayBind/mayBindForeign, а не своей
+  // проверкой роли.
+  bindingForeignTarget: { none: true, owner: true, editor: false, reader: false },
 };
 
 const ROLE_KEYS = ['none', 'owner', 'editor', 'reader'] as const;
@@ -34,7 +39,7 @@ const ROLE_VALUE: Record<(typeof ROLE_KEYS)[number], ProjectRoleView | null> = {
   none: null, owner: 'owner', editor: 'editor', reader: 'reader',
 };
 
-describe('canPersona — матрица §2: 4 роли × 13 действий', () => {
+describe('canPersona — матрица §2: 4 роли × 14 действий', () => {
   for (const roleKey of ROLE_KEYS) {
     for (const action of ACTIONS) {
       it(`${roleKey} × ${action} → ${EXPECTED[action][roleKey]}`, () => {

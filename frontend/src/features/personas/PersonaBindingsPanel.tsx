@@ -66,13 +66,15 @@ interface AddPanelState {
 // Типы привязок «Сотрудничество с другими проектами» — показываются отдельной секцией
 const CROSS_PROJECT_TYPES: PersonaBindingType[] = ['projectPersonas', 'projectTasks'];
 
-// «Цель этого проекта» для редактора (И-4 разреза shared-projects-personas-cut-2026-11):
-// решается по идентификатору цели, не по тексту подписи: проектные типы — сами являются
+// «Цель этого проекта» (И-4 разреза shared-projects-personas-cut-2026-11): решается по
+// идентификатору цели, не по тексту подписи: проектные типы — сами являются
 // id проекта; заметки проекта — тот же id (ключ источника = id проекта, NotesService.cs:254);
 // tool — ключи без 'mcp:' (личный реестр владельца); skill — имена без 'plugin:'
 // (навыки плагинов — личное владельца); knowledge — датасет этого проекта (meta цели —
-// id проекта, ветка knowledge в PersonasController.cs:1157). Для owner/без роли проверка
-// не применяется — вызывающий может всё.
+// id проекта, ветка knowledge в PersonasController.cs:1157). Вызывается только когда
+// право чужих целей закрыто участнику (mayBind && !mayBindForeign — по матрице
+// personaRights это ровно редактор); owner/без роли проходят через mayBindForeign и
+// сюда не заходят.
 function bindingTargetInProject(
   b: PersonaBinding,
   projectId: string | undefined,
@@ -127,12 +129,12 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
   // Гейт по роли (W3-F1f, разрез §2/§3.4): роль — только через personaRights по проекту
   // персоны. Нет роли (своя персона / обычный проект / старый бэк) и owner — всё как раньше.
   // Читателю закрыто право bindingWrite (всё редактирование), редактору открыт bindingWrite,
-  // но закрыт bindingMcpPlugin (цели mcp:/plugin:* — Configure на бэке) и editZoneModel
-  // (персональный флаг «Доступ ко всем проектам» — поле зоны).
+  // но закрыты bindingMcpPlugin (цели mcp:/plugin:* — Configure на бэке), skills (навыки —
+  // Configure) и bindingForeignTarget (правка привязок к целям вне этого проекта — И-4).
   const role = personaRole(persona, projects);
   const mayBind = canPersona(role, 'bindingWrite');
   const mayMcpPlugin = canPersona(role, 'bindingMcpPlugin');
-  const mayAllProjects = canPersona(role, 'editZoneModel');
+  const mayBindForeign = canPersona(role, 'bindingForeignTarget');
   const maySkills = canPersona(role, 'skills');
 
   const [bindings, setBindings] = useState<PersonaBinding[] | null>(null);
@@ -260,12 +262,15 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
   const localBindings = list.filter(b => !CROSS_PROJECT_TYPES.includes(b.type));
   const crossBindings = list.filter(b => CROSS_PROJECT_TYPES.includes(b.type));
 
-  // Для редактора «датасет этого проекта» решается по meta цели — id проекта датасета
-  // (ветка knowledge в binding-targets, PersonasController.cs:1157). Запрос тот же, что
-  // у подписей целей: модульный кэш fetchBindingTargets дублирует его, новой попытки нет.
-  // Каталога нет (ошибка/пустой) — у датасета кнопки остаются скрыты: при неизвестном
-  // проекте фронт не обещает то, что бэк может отказать (fail-closed, И-4).
-  const needKnowledgeMeta = role === 'editor' && list.some(b => b.type === 'knowledge');
+  // «Датасет этого проекта» решается по meta цели — id проекта датасета
+  // (ветка knowledge в binding-targets, PersonasController.cs:1157). Мета нужна ровно там,
+  // где решается «своя/чужая цель» — при закрытом праве чужих целей (те же флаги, что в
+  // canEditBinding: mayBind && !mayBindForeign); owner/без роли проходят через
+  // mayBindForeign и мета им не нужна. Запрос тот же, что у подписей целей: модульный
+  // кэш fetchBindingTargets дублирует его, новой попытки нет. Каталога нет (ошибка/пустой)
+  // — у датасета кнопки остаются скрыты: при неизвестном проекте фронт не обещает то,
+  // что бэк может отказать (fail-closed, И-4).
+  const needKnowledgeMeta = mayBind && !mayBindForeign && list.some(b => b.type === 'knowledge');
   const [knowledgeProject, setKnowledgeProject] = useState<Map<string, string | null>>(() => new Map());
   useEffect(() => {
     if (!needKnowledgeMeta) return;
@@ -276,13 +281,13 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
     return () => { alive = false; };
   }, [needKnowledgeMeta]);
 
-  // Можно ли менять/удалять эту привязку этому человеку: owner/без роли — все;
-  // читатель — никаких (право bindingWrite закрыто); редактор — только цели этого
-  // проекта (И-4). Порядок списка при этом не меняется — гейт прячет только органы.
+  // Можно ли менять/удалять эту привязку этому человеку: owner/без роли — все
+  // (mayBindForeign); читатель — никаких (mayBind закрыт); редактор — только цели этого
+  // проекта (bindingForeignTarget закрыт в personaRights, И-4). Порядок списка при этом
+  // не меняется — гейт прячет только органы.
   const canEditBinding = (b: PersonaBinding): boolean => {
-    if (!role || role === 'owner') return true;
     if (!mayBind) return false;
-    return bindingTargetInProject(b, persona.projectId, knowledgeProject);
+    return mayBindForeign || bindingTargetInProject(b, persona.projectId, knowledgeProject);
   };
 
   // Сводка по серверам личного MCP-реестра — каталог тот же, что у пикера инструментов
@@ -405,15 +410,21 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
       // Один цельный набор для PUT-замены: существующие привязки как есть, кроме
       // последней по каждому ключу каталога — она выключается; недостающие ключи
       // добавляются новыми off-привязками. touchedIdx — позиции, которые реально меняются.
+      // Серверы личного MCP-реестра ('mcp:') участнику без права bindingMcpPlugin не
+      // трогались ни в какую сторону: существующие остаются как есть, новых off-привязок
+      // на них не заводится (П1 доработки W3-F1f — иначе «Минимум» редактора менял чужие
+      // цели, хотя редактор их не правит).
       const touchedIdx = new Set<number>();
       const next: PersonaBindingDto[] = current.map((b, i) => {
-        if (b.type !== 'tool' || lastByTarget.get(b.target.toLowerCase()) !== b.id || b.mode === 'off')
+        if (b.type !== 'tool' || lastByTarget.get(b.target.toLowerCase()) !== b.id || b.mode === 'off'
+          || (!mayMcpPlugin && isMcpUserKey(b.target)))
           return { type: b.type, target: b.target, path: b.path ?? undefined, condition: b.condition, mode: b.mode };
         touchedIdx.add(i);
         return { type: b.type, target: b.target, path: b.path ?? undefined, condition: b.condition, mode: 'off' };
       });
       for (const t of catalog) {
         if (lastByTarget.has(t.id.toLowerCase())) continue;
+        if (!mayMcpPlugin && isMcpUserKey(t.id)) continue;
         touchedIdx.add(next.length);
         next.push({ type: 'tool', target: t.id, mode: 'off', condition: '' });
       }
@@ -824,8 +835,11 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
         )}
 
         {/* Доступ ко всем проектам — персона-уровневый флаг, не привязка (только у глобальных).
-            Поле зоны (editZoneModel, разрез §2): участнику общего проекта не рисуется (W3-F1f) */}
-        {persona.scope === 'global' && mayAllProjects && (
+            Ролевой гейт здесь не нужен: флаг рисуется только глобальной персоне, у неё нет
+            projectId → personaRole даёт null → любое право = «как владелец» (П4 доработки
+            W3-F1f: мёртвый гейт editZoneModel убран). Поле зоны участника гейтится ролью
+            в PersonaForm. */}
+        {persona.scope === 'global' && (
           <div style={{
             marginTop: 14, display: 'flex', alignItems: 'center', gap: 12,
             background: allAccess ? C.accentLight : C.bgWhite,
@@ -845,7 +859,7 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
             <Toggle checked={allAccess} onChange={toggleAllAccess} disabled={allAccessBusy} />
           </div>
         )}
-        {persona.scope === 'global' && mayAllProjects && (
+        {persona.scope === 'global' && (
           <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 6 }}>
             Заметки персона видит из всех проектов всегда, независимо от этой настройки.
           </div>

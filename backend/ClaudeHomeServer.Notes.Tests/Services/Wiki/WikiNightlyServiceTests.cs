@@ -946,6 +946,50 @@ public class WikiNightlyServiceTests : IDisposable
         last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted);
     }
 
+    // ─── WC-4b: фактические входные токены в итоге ночи ─────────────────────
+    // Итог несёт сумму фактического входа разобранных чатов (ChatResult.InputTokens, WC-4a) рядом с
+    // оценкой: EstTokens решает бюджет заранее, InputTokens — что реально ушло модели.
+
+    [Fact]
+    public async Task ИтогНочи_InputTokensРавенСуммеФактических()
+    {
+        // Мутации: «не прибавлять r.InputTokens» → 0; «суммировать только applied» → 0 (исход здесь
+        // nothing_new). Сбой разбора (c3) до analyzed++ не доходит — в сумме его нет.
+        Configure();
+        AddChat("c1");
+        AddChat("c2");
+        AddChat("c3");
+        await Tick(Sut((owner, chat, ct) =>
+        {
+            lock (_analyzed) _analyzed.Add(chat);
+            if (chat == "c3") throw new InvalidOperationException("разбор не вернулся");
+            return Task.FromResult(new WikiChatIngestService.ChatResult(
+                WikiChatIngestService.OutcomeNothingNew, null, [],
+                InputTokens: chat == "c1" ? 1_000 : 2_500));
+        }));
+
+        var last = Last();
+        last.Analyzed.Should().Be(2, "сбой разбора в итог не входит");
+        last.InputTokens.Should().Be(3_500, "сумма фактического входа разобранных чатов");
+        last.EstTokens.Should().BeGreaterThan(0, "оценка остаётся: по ней бюджет решает заранее");
+        File.ReadAllText(LastFile()).Should().Contain("\"inputTokens\"");
+    }
+
+    [Fact]
+    public async Task СтарыйИтогБезПоля_ЧитаетсяНулём()
+    {
+        // Аддитивность поля: файл итога, записанный до WC-4b, читается как раньше, нового поля в нём
+        // нет → 0. Ломающего изменения формата нет, BackupSchema.Version не тронут.
+        File.WriteAllText(LastFile(), """
+            {"date":"2026-11-02","selected":1,"analyzed":1,"applied":0,"toInbox":0,
+             "estTokens":120,"outcome":"completed","overrodeHuman":0,"disputedPages":0}
+            """);
+
+        var last = Last();
+        last.InputTokens.Should().Be(0);
+        last.EstTokens.Should().Be(120);
+    }
+
     // ─── c4: изоляция владельцев и один проход ─────────────────────────────
 
     [Fact]

@@ -62,9 +62,10 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // к тому моменту уже записан, исключение отправителя не выходит из службы (LogSafe).
 
 // Честные пределы:
-// - Токены — ОЦЕНКА (символы дельты / 4, плюс потолок входа на каждый вызов ступени 2): фактический
-//   расход ChatResult не возвращает. Чатам отдано ≤ 70 % InputTokenBudget, остаток — запас на
-//   ступень 2 и ответы.
+// - Токены — ОЦЕНКА EstTokens (символы дельты / 4, плюс потолок входа на каждый вызов ступени 2):
+//   по ней ночь решает бюджет ЗАРАНЕЕ, до вызова. Фактический вход NightResult.InputTokens — сумма
+//   ChatResult.InputTokens разобранных чатов (WC-4a/WC-4b): её пишут постфактум, решения она не
+//   меняет. Чатам отдано ≤ 70 % InputTokenBudget, остаток — запас на ступень 2 и ответы.
 // - Пакеты: хроника чата — страница, а не пакет, в ChatResult.PackageIds её нет; считаются только
 //   пакеты. У исхода awaiting_human число пакетов неизвестно — он засчитывается как один (нижняя
 //   граница). applied в итоге — число применённых пакетов, toInbox — число чатов с пакетами во
@@ -100,10 +101,13 @@ public sealed class WikiNightlyService : BackgroundService
     /// исход; Applied — применённых пакетов; ToInbox — чатов с пакетами во «Входящих»; EstTokens —
     /// оценка расхода (см. шапку). OverrodeHuman — формулировок человека, которые ИИ заменил за ночь
     /// сам; DisputedPages — страниц, где он сам оспорил утверждение человека (conflict@human, ADR-038, предохранитель 6);
-    /// в файле итога поля аддитивны: старый итог читается нулями.</summary>
+    /// InputTokens (WC-4b) — фактический вход разборов: сумма ChatResult.InputTokens всех разобранных
+    /// чатов независимо от исхода разбора (отказанный план расход не отменяет); чат, упавший
+    /// исключением, в сумму не входит; расход ступени 2 в неё не входит — метрик шва она не даёт.
+    /// В файле итога поля аддитивны: старый итог (без поля) читается нулями.</summary>
     public sealed record NightResult(
         string Date, int Selected, int Analyzed, int Applied, int ToInbox, long EstTokens, string Outcome,
-        int OverrodeHuman = 0, int DisputedPages = 0);
+        int OverrodeHuman = 0, int DisputedPages = 0, long InputTokens = 0);
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -358,7 +362,7 @@ public sealed class WikiNightlyService : BackgroundService
     {
         int selected = 0, analyzed = 0, applied = 0, toInbox = 0, packagesNight = 0, overrodeHuman = 0;
         var disputedPages = new HashSet<string>(StringComparer.Ordinal);
-        long est = 0;
+        long est = 0, inputTokens = 0;
         var outcome = OutcomeCompleted;
         try
         {
@@ -439,6 +443,10 @@ public sealed class WikiNightlyService : BackgroundService
                     continue;
                 }
                 analyzed++;
+                // Фактический вход (WC-4b): сумма по всем разобранным чатам независимо от исхода —
+                // отказанный план понесённый расход не отменяет (тот же смысл, что у ChatResult).
+                // Чат, упавший исключением выше, до analyzed++ не доходит: его токенов нет.
+                inputTokens += r.InputTokens;
                 var made = r.Outcome switch
                 {
                     // Частичный исход (Partial, WC-3) — тоже applied: его применённые пакеты
@@ -474,7 +482,7 @@ public sealed class WikiNightlyService : BackgroundService
         return Result(outcome);
 
         NightResult Result(string o) => new(FormatDate(date), selected, analyzed, applied, toInbox, est, o,
-            overrodeHuman, disputedPages.Count);
+            overrodeHuman, disputedPages.Count, inputTokens);
     }
 
     // Что мешает продолжать ПЕРЕД чатом: тумблер/флаг сняли (disabled_midway), окно закрылось

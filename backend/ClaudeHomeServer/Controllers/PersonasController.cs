@@ -137,12 +137,13 @@ public class PersonasController(
                 .Where(p => p.Scope == PersonaScope.Global).ToList());
         // Без scope — свои (как раньше) + проектные персоны проектов, где вызывающий участник
         // (разрез §3.1 «GET /api/personas без scope»). Список проектов участника — существующая
-        // видимость ProjectManager.GetAccessible (с рубильником и флагом), не новая выборка;
-        // свои проекты отсекаются по роли из точки доступа ProjectAccess.Check (их персоны уже
-        // в own — без дублей), а не инлайн-сравнением с вызывающим; ключ чужой команды — её владелец.
+        // видимость ProjectManager.GetAccessible (с рубильником и флагом), не новая выборка по
+        // OwnerId; ключ чужой команды — её владелец. Отсев своих проектов — сравнением с
+        // вызывающим осознанно: их персоны уже в own (дублей быть не должно), доступа здесь
+        // никто не решает — он решён GetAccessible; вердикт в снимке OwnerIdInlineAllowList.
         var own = _personas.GetByOwner(UserId);
         var memberProjects = _projects.GetAccessible(UserId)
-            .Where(p => ProjectAccess.Check(p, UserId) is { } role && role != ProjectRole.Owner)
+            .Where(p => p.OwnerId != UserId)
             .Select(p => (p.Id, p.OwnerId!))
             .ToList();
         return Ok(own.Concat(_personas.GetProjectTeamsOfMemberProjects(memberProjects))

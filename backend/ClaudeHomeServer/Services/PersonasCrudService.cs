@@ -192,9 +192,15 @@ public sealed class PersonasCrudService(
     // broadcast: false — вызывающий доводит правку следующей мутацией (голос в MCP
     // personas_update) и шлёт одно событие «updated» сам, по её итогу
     public async Task<ActionResult<Persona>> UpdateAsync(string userId, string id,
-        UpdatePersonaRequest req, string? callerSessionId, bool broadcast = true)
+        UpdatePersonaRequest req, string? callerSessionId, bool broadcast = true, bool callerIsOwner = true)
     {
         if (personas.Get(id, userId) is not { } current) return NotFound();
+        // И-7 (W3-B3b, разрез §3.1 строка «PUT /{id}»): зону персоны не-владелец не меняет никогда.
+        // REST-гейт (owner_settings, PersonasController.Update) отказывает такую правку до сервиса;
+        // обнуление здесь — собственная граница сервиса: UpdateAsync — общая точка с MCP-тулсетом
+        // (personas_update), и если его откроют актору-участнику (открытый вопрос 1 разреза),
+        // зона не поедет вместе с ним.
+        if (!callerIsOwner) req = req with { Scope = null, ProjectId = null, SphereId = null };
         if (req.Scope == PersonaScope.Project && !ValidProject(userId, req.ProjectId))
             return BadRequest("Для проектной персоны нужен корректный projectId");
         // Любой непустой projectId (в т.ч. при partial-update без scope) — только свой проект

@@ -297,8 +297,51 @@ public class PersonasController(
 
     [HttpPut("{id}")]
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
-    public Task<ActionResult<Persona>> Update(string id, [FromBody] UpdatePersonaRequest req) =>
-        _crud.UpdateAsync(UserId, id, req, CallerSessionId());
+    public async Task<ActionResult<Persona>> Update(string id, [FromBody] UpdatePersonaRequest req)
+    {
+        // W3-B3b (разрез §3.1 строка «PUT /{id}», §2 строка «Поля зоны и денег»; И-2, И-7): ключ —
+        // арендатор. Поля зоны и денег персоны (Scope/ProjectId/SphereId, профиль доступа,
+        // модель/уровень/усилие/матрица уровней) — право Configure, как у настроек чата: участнику —
+        // 403 с кодом owner_settings до записи (тот же гейт, что OwnerSettingsGate, S2a-10b).
+        // Сравнение с текущими значениями персоны: поле, принесённое DTO без изменения, — не отказ
+        // (форма персоны шлёт карточку целиком).
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is not { } current) return NotFound();
+        if (scope.Role != ProjectRole.Owner && ChangesOwnerSettings(current, req))
+            return StatusCode(403, new { error = "Настройки персоны выбирает её владелец", code = OwnerSettingsGate.ErrorCode });
+        return await _crud.UpdateAsync(scope.TenantOwnerId, id, req, CallerSessionId(),
+            callerIsOwner: scope.Role == ProjectRole.Owner);
+    }
+
+    // Поля строки §2 «Поля зоны и денег» — право Configure, только владелец. «Меняется» — когда DTO
+    // задаёт значение отличное от текущего: null — не менять; ""/пробел — сброс в null (как
+    // PersonaManager.Update:739-754), изменением считается только реальная разница значений.
+    // Неразбираемое значение (уровень, профиль доступа) здесь не изменение: его 400 — дело сервиса,
+    // гейт не должен менять 400 на 403.
+    private static bool ChangesOwnerSettings(Persona current, UpdatePersonaRequest req)
+    {
+        if (req.Scope is { } scope && scope != current.Scope) return true;
+        if (ChangedOwnerField(req.ProjectId, current.ProjectId)) return true;
+        if (ChangedOwnerField(req.SphereId, current.SphereId)) return true;
+        if (ChangedOwnerField(req.Model, current.Model)) return true;
+        if (ChangedOwnerField(req.Effort, current.Effort)) return true;
+        if (ChangedOwnerField(req.TierStrong, current.TierStrong)) return true;
+        if (ChangedOwnerField(req.TierMedium, current.TierMedium)) return true;
+        if (ChangedOwnerField(req.TierWeak, current.TierWeak)) return true;
+        if (PersonasCrudService.TryParseAccess(req.Access, out var access) && access is not null
+            && access.Value != current.Access) return true;
+        if (req.ModelTier is not null && ModelTiers.IsValidWireValue(req.ModelTier)
+            && (ModelTiers.TryParse(req.ModelTier, out var tier) ? (ModelTier?)tier : null) != current.ModelTier)
+            return true;
+        return false;
+    }
+
+    private static bool ChangedOwnerField(string? requested, string? current)
+    {
+        if (requested is null) return false;
+        var effective = string.IsNullOrWhiteSpace(requested) ? null : requested.Trim();
+        return effective != (string.IsNullOrWhiteSpace(current) ? null : current.Trim());
+    }
 
     [HttpDelete("{id}")]
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
@@ -398,8 +441,13 @@ public class PersonasController(
     // prompt пуст → строим фото-промпт из имени/описания персоны.
     [HttpPost("{id}/avatar/generate")]
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
-    public Task<ActionResult> GenerateAvatar(string id, [FromBody] GenerateAvatarRequest req) =>
-        _crud.GenerateAvatarAsync(UserId, id, req);
+    public async Task<ActionResult> GenerateAvatar(string id, [FromBody] GenerateAvatarRequest req)
+    {
+        // W3-B3b (разрез §3.1 строка «POST {id}/avatar/generate»; И-2): ключ — арендатор: кандидаты
+        // аватара проектной персоны идут в папку ассетов владельца её проекта.
+        var scope = HttpContext.GetRequestScope();
+        return await _crud.GenerateAvatarAsync(scope.TenantOwnerId, id, req);
+    }
 
     // Отдать кандидата аватара (превью в галерее выбора). access_token в query для <img>.
     [HttpGet("{id}/avatar/candidate/{file}")]
@@ -418,8 +466,12 @@ public class PersonasController(
     // Выбрать кандидата как аватар персоны: делаем основным, чистим остальных кандидатов.
     [HttpPost("{id}/avatar/select")]
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
-    public Task<ActionResult<Persona>> SelectAvatar(string id, [FromBody] SelectAvatarRequest req) =>
-        _crud.SelectAvatarAsync(UserId, id, req);
+    public async Task<ActionResult<Persona>> SelectAvatar(string id, [FromBody] SelectAvatarRequest req)
+    {
+        // W3-B3b (разрез §3.1 строка «POST {id}/avatar/select»; И-2): ключ — арендатор.
+        var scope = HttpContext.GetRequestScope();
+        return await _crud.SelectAvatarAsync(scope.TenantOwnerId, id, req);
+    }
 
     // Отдать картинку аватара. JWT принимается и в query access_token (браузерный <img>).
     // size — размер показа (device px): сервер отдаёт миниатюру ближайшей ступени
@@ -494,7 +546,10 @@ public class PersonasController(
     public async Task<ActionResult<Persona>> UploadAvatar(string id,
         [FromForm] IFormFile? original, [FromForm] IFormFile? cropped, [FromForm] string? crop)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B3b (разрез §3.1 строка «POST {id}/avatar/upload»; И-2): ключ — арендатор: файлы аватара
+        // проектной персоны лежат в папке ассетов владельца её проекта.
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         if (original is null || cropped is null)
             return BadRequest(new { error = "Нужны файлы original и cropped" });
@@ -513,7 +568,7 @@ public class PersonasController(
         await ImageAssetHelper.SaveFormFileAsync(original, SafePath.Join(dir, originalName));
         await ImageAssetHelper.SaveFormFileAsync(cropped, SafePath.Join(dir, imageName));
 
-        var updated = _personas.SetAvatarUploaded(id, UserId, imageName, originalName, cropState);
+        var updated = _personas.SetAvatarUploaded(id, scope.TenantOwnerId, imageName, originalName, cropState);
         await Broadcast("updated", id);
         return Ok(updated);
     }
@@ -525,7 +580,9 @@ public class PersonasController(
     public async Task<ActionResult<Persona>> RecropAvatar(string id,
         [FromForm] IFormFile? cropped, [FromForm] string? crop)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B3b (разрез §3.1 строка «POST {id}/avatar/recrop»; И-2): ключ — арендатор.
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         if (string.IsNullOrEmpty(persona.Avatar.OriginalFile))
             return BadRequest(new { error = "У персоны нет оригинала для перекропа" });
@@ -539,7 +596,7 @@ public class PersonasController(
         var imageName = $"avatar-{Guid.NewGuid():N}{croppedCheck.Ext}";
         await ImageAssetHelper.SaveFormFileAsync(cropped, SafePath.Join(dir, imageName));
 
-        var updated = _personas.SetAvatarRecropped(id, UserId, imageName, ImageAssetHelper.ParseCrop(crop));
+        var updated = _personas.SetAvatarRecropped(id, scope.TenantOwnerId, imageName, ImageAssetHelper.ParseCrop(crop));
         await Broadcast("updated", id);
         return Ok(updated);
     }
@@ -784,8 +841,12 @@ public class PersonasController(
     // Валидация и запись — PersonasCrudService (та же копия правила у MCP personas_update)
     [HttpPut("{id}/voice")]
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
-    public Task<ActionResult<Persona>> SetVoice(string id, [FromBody] PersonaVoice? req) =>
-        _crud.SetVoiceAsync(UserId, id, req);
+    public async Task<ActionResult<Persona>> SetVoice(string id, [FromBody] PersonaVoice? req)
+    {
+        // W3-B3b (разрез §3.1 строка «PUT {id}/voice»; И-2): ключ — арендатор.
+        var scope = HttpContext.GetRequestScope();
+        return await _crud.SetVoiceAsync(scope.TenantOwnerId, id, req);
+    }
 
     // Изменить одну привязку
     [HttpPut("{id}/bindings/{bindingId}")]

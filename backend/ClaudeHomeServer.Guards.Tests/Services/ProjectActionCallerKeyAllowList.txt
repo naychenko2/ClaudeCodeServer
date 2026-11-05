@@ -166,7 +166,12 @@ backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 # запрошенное право и в развилку 403/404 (тот же класс мест, что вердикт S2c-9 выше), ключом
 # хранилищ не стал. Глобальная/сферная персона — личное пространство вызывающего: её ключ
 # остался UserId намеренно (это не проектное действие, §3.1 «без изменений»).
-backend/ClaudeHomeServer/Controllers/PersonasController.cs|58
+# W3-B3b (правка карточки, разрез §3.1 строки «PUT /{id}», «POST {id}/avatar/generate|select|
+# upload|recrop», «PUT {id}/voice», И-2): 58→50 — восемь мест переведены на scope.TenantOwnerId:
+# Update (резолв персоны в гейте owner_settings + ключ _crud.UpdateAsync), GenerateAvatar/
+# SelectAvatar/SetVoice (ключ _crud.*), UploadAvatar/RecropAvatar (резолв персоны и ключ
+# SetAvatarUploaded/SetAvatarRecropped). Вызывающий остался в callerIsOwner (флаг права, не ключ).
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|50
 backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6

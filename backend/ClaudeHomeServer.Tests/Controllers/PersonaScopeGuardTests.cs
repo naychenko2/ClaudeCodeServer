@@ -182,9 +182,12 @@ public class PersonaScopeGuardTests
         // SharedProjectPersonaRightsTests): инлайновых вызовов с ключом-вызывающим в Add/Set/Update/
         // Delete/Test/Suggest/Generate-автоматике, Remember/ClearFocus/UpdateMemory/Forget/
         // ConfirmMemory/MemoryToNote/NoteToMemory больше нет, строки сняты.
-        // W3-B3b — аватар: загрузка и перекроп (§3.1 «POST {id}/avatar/upload, /avatar/recrop»)
-        ("PersonasController.cs", "PersonasController.UploadAvatar", "W3-B3b"),
-        ("PersonasController.cs", "PersonasController.RecropAvatar", "W3-B3b"),
+        // W3-B3b закрыт (аватар: загрузка и перекроп — под ключом арендатора, SharedProjectPersonaRightsTests):
+        // инлайновых вызовов с ключом-вызывающим в UploadAvatar/RecropAvatar больше нет, строки сняты.
+        // PUT/голос/generate/select в список долга не вводились: их вызовы идут через _crud.*, которых
+        // паттерн §5 п.2 не видит (тот же слепой участок, что у W3-B3a); смысл шага держат строки
+        // матрицы «правка карточки» и «голос»/«выбор аватара»: вернуть ключ вызывающего в Update,
+        // SetVoice или SelectAvatar — они красные.
         // W3-B5a — привязки CRUD (§3.1 «POST/PUT/DELETE {id}/bindings»)
         ("PersonasController.cs", "PersonasController.AddBinding", "W3-B5a"),
         ("PersonasController.cs", "PersonasController.UpdateBinding", "W3-B5a"),
@@ -260,8 +263,9 @@ public class PersonaScopeGuardTests
         // инлайновые вызовы на ResolvePersona и он законно падает (W3-B4b снял два места в
         // SessionsController.Create, W3-B2 — места списков, W3-B1c — 10 тел read-путей,
         // W3-B1d — 14 тел write-путей в PersonasController). 10 — по текущему составу с запасом
-        // (15: 9 оставшихся мест в PersonasController — W3-B3b/W3-B5 — и 6 «личных»):
+        // (13: 7 оставшихся мест в PersonasController — W3-B5 — и 6 «личных»):
         // обнуление области всё ещё красное.
+        // (W3-B3b снял два места в PersonasController: UploadAvatar/RecropAvatar — ключ арендатора.)
         found.Should().BeGreaterThan(10, "сверка не должна быть вакуумной: базовый состав инлайновых вызовов — десятки");
         offenders.Should().BeEmpty(
             "вызовы PersonaManager, ключованные вызывающим, допустимы только из «личных» мест и списка долга "

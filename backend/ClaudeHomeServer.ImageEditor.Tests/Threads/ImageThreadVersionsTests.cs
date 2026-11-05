@@ -788,7 +788,9 @@ public class ImageThreadVersionsTests : IDisposable
     }
 
     // Состояние нити меняется до рассылки ImageThreadChangedMessage — проверяем его на каждую рассылку,
-    // а не по часам; потолок 30 с — страховка от зависания, не проверяемая скорость
+    // а не по часам; потолок 30 с — страховка от зависания, не проверяемая скорость. Нить рассылает через
+    // ToChatAudience: событие общего чата уходит группе проекта (ToProject), личного — владельцу (ToOwner),
+    // поэтому ждём MessageSent — общий сигнал обеих адресаций — и только самого события нити.
     private async Task<T> Until<T>(Func<T?> probe) where T : class
     {
         var found = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -796,7 +798,11 @@ public class ImageThreadVersionsTests : IDisposable
         {
             if (probe() is { } value) found.TrySetResult(value);
         }
-        _broadcaster.OwnerMessageSent += Check;
+        void OnMessage(ServerMessage message)
+        {
+            if (message is ImageThreadChangedMessage) Check();
+        }
+        _broadcaster.MessageSent += OnMessage;
         try
         {
             Check();
@@ -804,7 +810,7 @@ public class ImageThreadVersionsTests : IDisposable
         }
         finally
         {
-            _broadcaster.OwnerMessageSent -= Check;
+            _broadcaster.MessageSent -= OnMessage;
         }
     }
 

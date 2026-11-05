@@ -28,7 +28,6 @@ import { useCallback, useState } from 'react';
 import { Clapperboard, Cpu, MessageSquareText } from 'lucide-react';
 import { C, FONT, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../lib/subsystems/registryCore';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { InlineSegmented, PanelHeaderSlot, useHasPanelHeader } from '../../components/ui';
 import { openChatById } from '../../lib/openChat';
 import {
@@ -97,16 +96,15 @@ function TabSwitch({ value, onChange, isMobile, dotLevel }: {
 }
 
 export function LocalModelPanel({ ctx }: { ctx: WorkspacePanelDefCtx }) {
-  const flag = useFeature(FLAGS.localModelStats);
   // Роль и опрос configured — в useLocalModelWatcher (смонтирован на странице всегда)
   const isAdmin = useLocalModelAdmin();
 
-  // Тяжёлый 2-с опрос: только когда панель видна (открыта + флаг + admin +
+  // Тяжёлый 2-с опрос: только когда панель видна (открыта + admin +
   // configured); не видна — опрос стоит, таймера нет. «Настроен ли» — одно выражение
   // со значком рельса (isLocalModelConfiguredAny: основной/медиа ИЛИ последний
   // снимок второй дорожки): с другой формулой был бы значок без панели (пустая
   // карточка). Ререндер при смене — подписка сторожа на странице.
-  const visible = isLocalModelPanelVisible({ flag, isAdmin, configured: isLocalModelConfiguredAny() });
+  const visible = isLocalModelPanelVisible(isLocalModelConfiguredAny());
 
   // Не-админ: вкладка всегда «Медиа» — переключателя нет, /stats (LLM) не опрашивается.
   // Если в localStorage 'hardware' (оставлено админом) и пользователь не админ —

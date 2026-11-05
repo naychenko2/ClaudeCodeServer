@@ -319,7 +319,8 @@ export function buildLocalTask(id: string, projectId: string | null, dto: Create
     personaId: dto.personaId || undefined,
     recurrence: dto.recurrence && dto.recurrence.type !== 'none' ? dto.recurrence : undefined,
     seriesId: dto.recurrence && dto.recurrence.type !== 'none' ? id : undefined,
-    linkedSessionId: dto.linkedSessionId,
+    // S2d-4b: null в DTO — не значение (маска бэка), локальная задача не должна нести его как «чат задан»
+    linkedSessionId: dto.linkedSessionId ?? undefined,
     linkedFiles: dto.linkedFiles ?? [],
     subtasks: (dto.subtasks ?? []).map(s => ({ id: crypto.randomUUID(), title: s.title, isDone: false })),
     labels: dto.labels ?? [],
@@ -360,13 +361,24 @@ export function applyUpdateLocally(task: Task, dto: UpdateTaskDto): Task {
     next.personaId = dto.personaId === '' ? undefined : dto.personaId;
     if (next.personaId) next.assignee = 'claude';
   }
+  // Человек-исполнитель общего проекта (S2b-F7, зеркало TaskManager.Update): id — назначить и
+  // поставить assignee='me' (смысл поля — «этот человек исполняет»; явное назначение человека
+  // сильнее присланного Assignee); '' или null — снять (обратно к владельцу); не слать — не менять.
+  // id владельца бэк трактует как снятие — здесь он не различается: фронт на дорожку владельца
+  // просит снятие прямо (TaskBoard), отдельного значения «на себя» в записи нет.
+  if (dto.assigneeUserId !== undefined) {
+    const uid = dto.assigneeUserId === '' || dto.assigneeUserId === null ? undefined : dto.assigneeUserId;
+    next.assigneeUserId = uid;
+    if (uid) next.assignee = 'me';
+  }
   // Уровень модели исполнителя: '' — сбросить (семантика строковых полей на бэке)
   if (dto.modelTier !== undefined) next.modelTier = dto.modelTier === '' ? undefined : dto.modelTier;
   if (dto.recurrence !== undefined) {
     next.recurrence = dto.recurrence.type === 'none' ? undefined : dto.recurrence;
     if (next.recurrence && !next.seriesId) next.seriesId = next.id;
   }
-  if (dto.linkedSessionId !== undefined) next.linkedSessionId = dto.linkedSessionId === '' ? undefined : dto.linkedSessionId;
+  // S2d-4b: null — не менять (зеркало TaskManager.cs: req.LinkedSessionId is not null), '' — очистить
+  if (dto.linkedSessionId != null) next.linkedSessionId = dto.linkedSessionId === '' ? undefined : dto.linkedSessionId;
   if (dto.linkedFiles !== undefined) next.linkedFiles = dto.linkedFiles;
   if (dto.labels !== undefined) next.labels = dto.labels;
   if (dto.order !== undefined) next.order = dto.order;

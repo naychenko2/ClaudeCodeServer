@@ -20,30 +20,24 @@
 // Заявка заметки «Разобрать в базу» — логика здесь (requestNoteIngest), кнопка на NoteView:
 // функция никогда не бросает — любой отказ становится текстом, экран не падает.
 //
-// Раскладка (дефект ecec968a): на компактной ширине шапки ряд действий не переносится
-// (ChatHeaderBar: isCompact = isMobile || isTablet ⇔ ширина < TABLET_WIDE_MIN), и три
-// текстовые кнопки «Вики» переполняют его: на 360 правый край «Откатить всё…» — 565,
-// шапка срезает (overflow-x:hidden). Там действия — ОДНА кнопка-меню (ToolbarOverflowMenu:
-// боттом-шит/дропдаун по якорю — тот же путь, что у шапкиного «⋯»); логика, статусы,
-// тексты и подтверждение — прежние, меняется только оболочка. Статус разбора — значением
-// пункта «Разобрать», итог отката — подписью пункта «Откатить»; сигнал, что в меню есть
-// сообщение, — точкой на триггере (приём шапкиного «⋯» с точкой срока). При
-// ≥ TABLET_WIDE_MIN — прежний ряд.
-
+// Оболочка (WM-2): ряда кнопок больше нет — действия живут ОДНИМ меню «Вики»
+// (WikiChatMenu на базе ToolbarOverflowMenu), его же рисует вклад 'wiki-chat-menu'
+// (в ядре — шапка, «⋯», карточка). Внешнее открытие — по якорю (open), без своего
+// триггера — headless. Итог разбора — человеческим текстом значением пункта «Разобрать»,
+// на триггере точка статуса; точка гаснет, когда человек открыл меню (cc_wiki_seen_<chat>
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { BookOpen, Ban, Check, ScrollText, Star, Undo2 } from 'lucide-react';
 import {
-  C, FS, SP, FLAGS, useFeature, useWindowWidth, TABLET_WIDE_MIN,
+  C, SP, FLAGS, useFeature,
   analyzeWikiChat, ingestWikiNote, loadWikiChatAnalyzeStatus, loadWikiChats, requestOpenWikiPage, retractWikiSource, setWikiChatMark,
   WikiError, type WikiChatAnalyzeOk, type WikiChatMark, type WikiNoteIngestDto,
 } from 'aihome_shell/kit';
-import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { ToolbarOverflowMenu, type OverflowItem } from '../../components/ToolbarOverflowMenu';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { TASK_HINT, isTaskChat } from './wiki/WikiChatTriageList';
-import { personalSectionRefusalText, retractResultText, wikiErrorText } from './wiki/wikiLabels';
-import type { ChatHeaderSummaryCtx } from '../../lib/subsystems/registryCore';
+import { analyzeRefusalText, personalSectionRefusalText, retractResultText, wikiErrorText } from './wiki/wikiLabels';
+import type { ChatWikiMenuCtx } from '../../lib/subsystems/registryCore';
 
 // Пауза между опросами analyze-status: analyze ждёт исход сам ≤10 с (WikiChatsController),
 // 202 значит «долше» — частый опрос не нужен, редкий не успевает за пользователем
@@ -52,7 +46,7 @@ const POLL_MS = 4000;
 type AnalyzeState =
   | { kind: 'idle' }
   | { kind: 'running' }
-  | { kind: 'done'; result: WikiChatAnalyzeOk }
+  | { kind: 'done'; result: WikiChatAnalyzeOk; finishedAt: string | null }
   | { kind: 'error'; text: string };
 
 // «личный раздел — с Ф2» — строка бэка (WikiIngestService.cs:180), не код: заявка заметки
@@ -61,16 +55,30 @@ type AnalyzeState =
 const PERSONAL_SECTION_REASON = 'личный раздел — с Ф2';
 
 // Текст результата разбора — по исходу. Кодовые отказы (task_execution, marked_skip, …)
-// в этот результат не попадают: они WikiError, их текст — wikiErrorText. Неизвестный исход
-// (будущее значение контракта) — «отказ» с причиной, если она есть: смысла не выдумываем.
+// в этот результат не попадают: они WikiError, их текст — wikiErrorText. Отказ (rejected и
+// любой неизвестный исход) — человеческой причиной из wikiLabels, сырая строка бэка сюда не идёт.
 export function analyzeResultText(r: WikiChatAnalyzeOk): string {
   switch (r.outcome) {
-    case 'applied': return 'готово';
-    case 'awaiting_human': return 'есть спорное — во «Входящих»';
+    case 'applied': return 'Разобрано — записано в вики';
+    case 'awaiting_human': return 'Есть спорное — во «Входящих»';
     case 'nothing_new':
-    case 'up_to_date': return 'нечего добавить';
-    default: return r.reason ? `отказ: ${r.reason}` : 'отказ';
+    case 'up_to_date': return 'Нового нет';
+    default: return analyzeRefusalText(r.reason);
   }
+}
+
+// Исходы не-отказа: всё остальное (rejected и будущие значения контракта) — отказ
+const KNOWN_OUTCOMES: string[] = ['applied', 'awaiting_human', 'nothing_new', 'up_to_date'];
+
+// Отметка «увидел итог»: finishedAt последнего исхода, ключ — на чат. Любой сбой хранилища —
+// как «не видел» (точка горит), исключение наружу не выходит
+const seenKey = (sessionId: string) => `cc_wiki_seen_${sessionId}`;
+function readSeen(sessionId: string, finishedAt: string | null): boolean {
+  if (!finishedAt) return false;
+  try { return localStorage.getItem(seenKey(sessionId)) === finishedAt; } catch { return false; }
+}
+function writeSeen(sessionId: string, finishedAt: string) {
+  try { localStorage.setItem(seenKey(sessionId), finishedAt); } catch { /* точка просто останется после перезагрузки */ }
 }
 
 // Исход заявки заметки — текстом. packageId в текст не идёт: человек идёт в «Входящие».
@@ -107,15 +115,8 @@ function msgDot(color: string): CSSProperties {
   };
 }
 
-export function WikiChatActions({ session, hasMessages, online, compact }: ChatHeaderSummaryCtx) {
+export function WikiChatMenu({ session, hasMessages, online, isMobile, headless, open, onClose }: ChatWikiMenuCtx) {
   const enabled = useFeature(FLAGS.llmWiki);
-  // Тот же порог, что читает сама шапка (ChatHeaderBar:1357 isCompact = isMobile || isTablet
-  // ⇔ ширина < TABLET_WIDE_MIN): ниже — ряд действий не переносится, три кнопки «Вики»
-  // переполняют его (дефект ecec968a) — оболочка одна кнопка-меню
-  // Шапка сама знает, что она сжата (в т.ч. узкая колонка «Стены» при широком окне) — её признак
-  // главнее ширины окна; без него (прямой вызов) — по окну
-  const windowCompact = useWindowWidth() < TABLET_WIDE_MIN;
-  const isCompactHeader = compact ?? windowCompact;
   const [state, setState] = useState<AnalyzeState>({ kind: 'idle' });
   const [chroniclePath, setChroniclePath] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -127,6 +128,8 @@ export function WikiChatActions({ session, hasMessages, online, compact }: ChatH
   const [taskChat, setTaskChat] = useState(false);
   const [markBusy, setMarkBusy] = useState(false);
   const [markError, setMarkError] = useState<string | null>(null);
+  // Итог (разбор, откат, отказ пометки) человек уже видел — точка на триггере погашена
+  const [seen, setSeen] = useState(false);
   // Поколение запросов (образец WikiHealth): ответ и опрос пишут состояние, только если их
   // поколение последнее; смена чата, «Разобрать» и откат поднимают новое — запоздалый ответ
   // прежнего чата нового не затрёт
@@ -163,12 +166,13 @@ export function WikiChatActions({ session, hasMessages, online, compact }: ChatH
         .then(st => {
           if (seq.current !== mine) return;
           if (st.running) { poll(sessionId, mine); return; }
-          setState(st.last ? { kind: 'done', result: st.last } : { kind: 'idle' });
+          if (st.last) { setState({ kind: 'done', result: st.last, finishedAt: st.last.finishedAt }); setSeen(readSeen(sessionId, st.last.finishedAt)); }
+          else setState({ kind: 'idle' });
           // Хронику создаёт применённый разбор: после 202→опроса путь появляется в списке
           // только сейчас — перечитываем его, как при прямом 200 ниже (иначе «готово» без ссылки)
           if (st.last?.packageIds.length) fetchChronicle(sessionId, mine);
         })
-        .catch(() => { if (seq.current === mine) setState({ kind: 'error', text: 'Не удалось дождаться результата разбора' }); });
+        .catch(() => { if (seq.current === mine) { setState({ kind: 'error', text: 'Не удалось дождаться результата разбора' }); setSeen(false); } });
     }, POLL_MS);
     timers.current.push(t);
   }, [fetchChronicle]);
@@ -182,6 +186,7 @@ export function WikiChatActions({ session, hasMessages, online, compact }: ChatH
     setMark(null);
     setTaskChat(false);
     setMarkError(null);
+    setSeen(false);
     markGen.current += 1;
     setMarkBusy(false);
     setConfirmOpen(false);
@@ -192,7 +197,7 @@ export function WikiChatActions({ session, hasMessages, online, compact }: ChatH
       .then(st => {
         if (seq.current !== mine) return;
         if (st.running) { setState({ kind: 'running' }); poll(session.id, mine); return; }
-        if (st.last) setState({ kind: 'done', result: st.last });
+        if (st.last) { setState({ kind: 'done', result: st.last, finishedAt: st.last.finishedAt }); setSeen(readSeen(session.id, st.last.finishedAt)); }
       })
       .catch(() => { /* сбой чтения статуса — не ошибка экрана: пользователь может начать сам */ });
     fetchChronicle(session.id, mine);
@@ -210,13 +215,15 @@ export function WikiChatActions({ session, hasMessages, online, compact }: ChatH
       .then(r => {
         if (seq.current !== mine) return;
         if ('running' in r) { poll(session.id, mine); return; }
-        setState({ kind: 'done', result: r });
+        setState({ kind: 'done', result: r, finishedAt: null });
+        setSeen(false);
         // Хронику создаёт применённый разбор: путь появляется в списке только после него
         if (r.packageIds.length) fetchChronicle(session.id, mine);
       })
       .catch(e => {
         if (seq.current !== mine) return;
         setState({ kind: 'error', text: e instanceof WikiError ? wikiErrorText(e) : 'Не удалось начать разбор' });
+        setSeen(false);
       });
   };
 
@@ -239,6 +246,7 @@ export function WikiChatActions({ session, hasMessages, online, compact }: ChatH
     const mine = markGen.current;
     setMarkBusy(true);
     setMarkError(null);
+    setSeen(false);
     setWikiChatMark(session.id, mark === kind ? null : kind)
       .then(next => { if (markGen.current === mine) setMark(next); })
       .catch(e => {
@@ -248,184 +256,155 @@ export function WikiChatActions({ session, hasMessages, online, compact }: ChatH
       .finally(() => { if (markGen.current === mine) setMarkBusy(false); });
   };
 
+  // Диалог закрыт (подтвердили или отменили) — только теперь сообщаем наружу: карточка снимает вклад по onClose
+  const closeConfirm = () => { setConfirmOpen(false); onClose?.(); };
+
   const doRetract = () => {
     if (retractBusy) return;
     const mine = ++seq.current; // откат делает идущий/прежний разбор неактуальным — поколение поднимается
     setRetractBusy(true);
     retractWikiSource(`session:${session.id}`)
       .then(r => {
-        setConfirmOpen(false);
+        closeConfirm();
         if (seq.current !== mine) return;
         setRetractText(retractResultText(r, 'чат'));
+        setSeen(false);
         setState({ kind: 'idle' });
         setChroniclePath(null);
       })
       .catch(e => {
-        setConfirmOpen(false);
+        closeConfirm();
         if (seq.current !== mine) return;
         setRetractText(e instanceof WikiError ? wikiErrorText(e) : 'Не удалось откатить всё из этого чата');
+        setSeen(false);
       })
       .finally(() => setRetractBusy(false));
   };
 
+  // Человек открыл меню: итог увиден. Для исхода с finishedAt отметка переживает перезагрузку;
+  // чужой чат не пишем — состояние могло ещё принадлежать прежнему session.id
+  const markSeen = () => {
+    setSeen(true);
+    if (state.kind === 'done' && state.finishedAt) writeSeen(session.id, state.finishedAt);
+  };
+  // Внешний запрос на открытие (строка «⋯», подменю карточки) — тоже открытие меню
+  const prevOpen = useRef(open?.counter ?? 0);
+  useEffect(() => {
+    if (!open || open.counter === prevOpen.current) return;
+    prevOpen.current = open.counter;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- реакция на внешний счётчик открытия: другого места нет
+    markSeen();
+    // markSeen читает свежее состояние на каждый рендер; эффект — только по счётчику
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open?.counter]);
+
   if (!enabled) return null;
 
   const status = state.kind === 'running'
-    ? { text: 'разбираю…', color: C.textMuted }
+    ? { text: 'разбираю…', color: C.textMuted, raw: null as string | null }
     : state.kind === 'done'
       ? {
           text: analyzeResultText(state.result),
           color: state.result.outcome === 'applied' ? C.success
-            : state.result.outcome === 'awaiting_human' ? C.warning : C.textMuted,
+            : state.result.outcome === 'awaiting_human' ? C.warning
+              : state.result.outcome === 'nothing_new' || state.result.outcome === 'up_to_date' ? C.textMuted : C.dangerText,
+          raw: KNOWN_OUTCOMES.includes(state.result.outcome) ? null : state.result.reason,
         }
       : state.kind === 'error'
-        ? { text: state.text, color: C.dangerText }
+        ? { text: state.text, color: C.dangerText, raw: null as string | null }
         : null;
+  const refused = state.kind === 'done' && !KNOWN_OUTCOMES.includes(state.result.outcome);
+  // Точка: пока идёт разбор — всегда; итог — пока человек не открыл меню
+  const dotColor = state.kind === 'running' ? C.textMuted
+    : !seen && (status || retractText || markError) ? (status ? status.color : C.textMuted)
+      : null;
 
-  // Подтверждение отката — одно и то же в обеих раскладках (модалка — портал в body)
-  const confirm = confirmOpen && (
-    <ConfirmDialog
-      title="Откатить всё из этого чата?"
-      subtitle={(
-        <>
-          <div>Снимется всё, что Хранитель взял из этого чата: хроника и знания. Знание из других источников останется.</div>
-          <div style={{ marginTop: SP.xs }}>Чат получит пометку «не разбирать» — иначе следующая ночь разберёт его заново.</div>
-        </>
-      )}
-      confirmLabel="Откатить всё"
-      confirmVariant="danger"
-      onConfirm={doRetract}
-      onCancel={() => setConfirmOpen(false)}
-    />
-  );
-
-  if (isCompactHeader) {
-    // Одна кнопка-меню вместо трёх (макет llm-wiki-v2 §13: действия «Вики» в Menu,
-    // «Откатить…» цветом C.dangerText — тон даёт ItemRow по флагу danger). Пункты несут
-    // те же гарды и тексты, что ряд; статус разбора — значением пункта «Разобрать»,
-    // итог отката — подписью пункта «Откатить»; без сообщения точка на триггере не нужна
-    const items: OverflowItem[] = [
-      {
-        key: 'analyze',
-        icon: <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
-        label: 'Разобрать этот чат',
-        sublabel: 'сейчас, не дожидаясь ночи',
-        value: status ? <span style={{ color: status.color }}>{status.text}</span> : undefined,
-        disabled: !online || !hasMessages || state.kind === 'running',
-        onClick: analyze,
-      },
-      ...(chroniclePath ? [{
-        key: 'chronicle',
-        icon: <ScrollText size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
-        label: 'Открыть хронику',
-        onClick: openChronicle,
-      }] : []),
-      {
-        key: 'mark-important',
-        icon: <Star size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
-        label: 'Важный',
-        sublabel: taskChat ? TASK_HINT : 'ночью — в первую очередь, минуя отбор',
-        value: mark === 'important' ? <Check size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> : undefined,
-        active: mark === 'important',
-        separator: true,
-        disabled: !online || markBusy || taskChat,
-        onClick: () => toggleMark('important'),
-      },
-      {
-        key: 'mark-skip',
-        icon: <Ban size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
-        label: 'Не разбирать',
-        sublabel: markError ?? (taskChat ? TASK_HINT : 'ни ночью, ни кнопкой'),
-        value: mark === 'skip' ? <Check size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> : undefined,
-        active: mark === 'skip',
-        disabled: !online || markBusy || taskChat,
-        onClick: () => toggleMark('skip'),
-      },
-      {
-        key: 'retract',
-        icon: <Undo2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
-        label: 'Откатить всё из этого чата',
-        sublabel: retractText ?? undefined,
-        separator: true,
-        danger: true,
-        disabled: !online || retractBusy,
-        onClick: () => setConfirmOpen(true),
-      },
-    ];
-    return (
-      <>
-        <ToolbarOverflowMenu
-          isMobile
-          title="Вики"
-          triggerLabel="Вики"
-          triggerIcon={<BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-          triggerTitle="Действия «Вики» в этом чате"
-          indicator={status || retractText || markError ? <span style={msgDot(status ? status.color : C.textMuted)} /> : undefined}
-          items={items}
-        />
-        {confirm}
-      </>
-    );
-  }
-
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}>
-      <Button
-        variant="secondary" size="sm" dataTestId="wiki-chat-analyze"
-        ariaLabel="Разобрать этот чат сейчас, не дожидаясь ночи"
-        disabled={!online || !hasMessages || state.kind === 'running'}
-        leftIcon={<BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-        onClick={analyze}
-      >
-        Разобрать этот чат
-      </Button>
-      {chroniclePath && (
-        <Button
-          variant="ghost" size="sm" dataTestId="wiki-chat-chronicle"
-          ariaLabel="Открыть хронику этого чата в вики"
-          leftIcon={<ScrollText size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-          onClick={openChronicle}
-        >
-          Открыть хронику
-        </Button>
-      )}
-      <Button
-        variant="ghost" size="sm" dataTestId="wiki-chat-retract"
-        ariaLabel="Откатить всё из этого чата"
-        disabled={!online || retractBusy}
-        leftIcon={<Undo2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-        onClick={() => setConfirmOpen(true)}
-      >
-        Откатить всё из этого чата
-      </Button>
-      {(['important', 'skip'] as const).map(kind => (
-        <Button
-          key={kind} variant={mark === kind ? 'secondary' : 'ghost'} size="sm"
-          dataTestId={`wiki-chat-mark-${kind}`} ariaPressed={mark === kind}
-          title={taskChat ? TASK_HINT : kind === 'important' ? 'Ночью — в первую очередь, минуя отбор' : 'Ни ночью, ни кнопкой'}
-          disabled={!online || markBusy || taskChat}
-          leftIcon={kind === 'important' ? <Star size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> : <Ban size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-          onClick={() => toggleMark(kind)}
-        >
-          {kind === 'important' ? 'Важный' : 'Не разбирать'}
-        </Button>
-      ))}
-      {markError && (
-        <span data-testid="wiki-chat-mark-error" style={{ fontSize: FS.xs, color: C.dangerText, maxWidth: 360 }}>
-          {markError}
-        </span>
-      )}
-      {status && (
-        <span data-testid="wiki-chat-status" style={{ fontSize: FS.xs, color: status.color, maxWidth: 360 }}>
+  // Действие пункта закрывает меню (ItemRow зовёт onDone после onClick) — наружу сообщаем так же,
+  // инлайном в каждом onClick. Пункт с внутренним подтверждением (откат) зовёт onClose только после
+  // закрытия диалога: иначе карточка снимет вклад, а с ним и диалог
+  const items: OverflowItem[] = [
+    {
+      key: 'analyze',
+      icon: <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+      label: refused ? 'Разобрать ещё раз' : 'Разобрать этот чат',
+      sublabel: 'сейчас, не дожидаясь ночи',
+      // Длинный человеческий итог переносится по словам: nowrap моно-значения съел бы подпись
+      value: status ? (
+        <span title={status.raw ?? undefined} style={{ color: status.color, display: 'inline-block', maxWidth: 170, whiteSpace: 'normal', textAlign: 'right' }}>
           {status.text}
         </span>
+      ) : undefined,
+      disabled: !online || !hasMessages || state.kind === 'running',
+      onClick: () => { analyze(); onClose?.(); },
+    },
+    ...(chroniclePath ? [{
+      key: 'chronicle',
+      icon: <ScrollText size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+      label: 'Открыть хронику',
+      onClick: () => { openChronicle(); onClose?.(); },
+    }] : []),
+    {
+      key: 'mark-important',
+      icon: <Star size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+      label: 'Важный',
+      sublabel: taskChat ? TASK_HINT : 'ночью — в первую очередь, минуя отбор',
+      value: mark === 'important' ? <Check size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> : undefined,
+      active: mark === 'important',
+      separator: true,
+      disabled: !online || markBusy || taskChat,
+      onClick: () => { toggleMark('important'); onClose?.(); },
+    },
+    {
+      key: 'mark-skip',
+      icon: <Ban size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+      label: 'Не разбирать',
+      sublabel: markError ?? (taskChat ? TASK_HINT : 'ни ночью, ни кнопкой'),
+      value: mark === 'skip' ? <Check size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> : undefined,
+      active: mark === 'skip',
+      disabled: !online || markBusy || taskChat,
+      onClick: () => { toggleMark('skip'); onClose?.(); },
+    },
+    {
+      key: 'retract',
+      icon: <Undo2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+      label: 'Откатить всё из этого чата',
+      sublabel: retractText ?? undefined,
+      separator: true,
+      danger: true,
+      disabled: !online || retractBusy,
+      onClick: () => setConfirmOpen(true),
+    },
+  ];
+
+  return (
+    // display:contents — обёртка не меняет раскладку шапки; захват клика по триггеру гасит точку
+    <span style={{ display: 'contents' }} data-testid="wiki-chat-menu" onClickCapture={markSeen}>
+      <ToolbarOverflowMenu
+        isMobile={isMobile}
+        title="Вики"
+        triggerLabel="Вики"
+        triggerIcon={<BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+        triggerTitle="Действия «Вики» в этом чате"
+        indicator={dotColor ? <span style={msgDot(dotColor)} /> : undefined}
+        items={items}
+        openTrigger={open}
+        renderTrigger={headless ? () => null : undefined}
+      />
+      {confirmOpen && (
+        <ConfirmDialog
+          title="Откатить всё из этого чата?"
+          subtitle={(
+            <>
+              <div>Снимется всё, что Хранитель взял из этого чата: хроника и знания. Знание из других источников останется.</div>
+              <div style={{ marginTop: SP.xs }}>Чат получит пометку «не разбирать» — иначе следующая ночь разберёт его заново.</div>
+            </>
+          )}
+          confirmLabel="Откатить всё"
+          confirmVariant="danger"
+          onConfirm={doRetract}
+          onCancel={closeConfirm}
+        />
       )}
-      {retractText && (
-        <span data-testid="wiki-chat-retract-status" style={{ fontSize: FS.xs, color: C.textMuted, maxWidth: 360 }}>
-          {retractText}
-        </span>
-      )}
-      {confirm}
-    </div>
+    </span>
   );
 }

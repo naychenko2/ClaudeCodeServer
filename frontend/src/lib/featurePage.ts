@@ -24,7 +24,6 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import { api } from './api';
 import { onMessage } from './signalr';
-import { getFlag, FLAGS } from './featureFlags';
 import type { FeaturePage } from '../types/featureIndex';
 import type { FeatureRun } from '../types/featureRun';
 import type { ServerMessage } from '../types';
@@ -364,9 +363,8 @@ function isOwnEvent(msg: ServerMessage, fid: string): boolean {
   return t.featureId === fid || t.id === fid;
 }
 
-// Обработчик task_changed: флаг выключен или страница закрыта — событие проигнорировано.
+// Обработчик task_changed: страница закрыта — событие проигнорировано.
 function handleTaskChanged(msg: ServerMessage) {
-  if (!getFlag(FLAGS.featuresOverview)) return;
   if (!_fid) return;
   if (!isOwnEvent(msg, _fid)) return;
   scheduleRefresh(_fid);

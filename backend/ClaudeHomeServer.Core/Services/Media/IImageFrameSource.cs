@@ -7,8 +7,9 @@ public interface IImageFrameSource
 {
     // Картинка версии нити владельца: нить ищется среди чатов владельца по threadId (кадр хранит нить и
     // версию, а чат нити — не обязательно чат сцены). null — нити или версии нет, у черновика нет картинки
-    // или файл не читается
-    Task<ImageFrame?> GetAsync(string ownerId, string threadId, string versionId, CancellationToken ct);
+    // или файл не читается. ownerId — арендатор (ключ хранилищ), actorId — вызывающий: субъект приватности файла
+    // проекта у нити по файлу (null — актор неизвестен, чужим считается любое private)
+    Task<ImageFrame?> GetAsync(string ownerId, string? actorId, string threadId, string versionId, CancellationToken ct);
 
     // Черновик «Новая картинка» в чате: кадр сцены рисуется в «Картинках». null — чат не свой или область
     // не подходит. scopeKey — id проекта или «personal», folder — папка проекта ("" — корень)

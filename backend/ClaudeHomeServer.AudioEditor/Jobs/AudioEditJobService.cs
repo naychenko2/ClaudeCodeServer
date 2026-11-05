@@ -62,6 +62,7 @@ public sealed class AudioEditJobService : IDisposable
     private readonly AudioPrefsService? _prefs;
     private readonly ISpendCollector? _spend;
     private readonly ISessionBroadcaster? _broadcaster;
+    private readonly ISessionDirectory? _sessions;
     private readonly Voices.VoiceLibrary? _voices;
     private readonly ChatContext.AudioContextLaunch? _context;
     private readonly ILogger<AudioEditJobService> _log;
@@ -82,8 +83,10 @@ public sealed class AudioEditJobService : IDisposable
         ISessionBroadcaster? broadcaster = null,
         TimeProvider? time = null,
         Voices.VoiceLibrary? voices = null,
-        ChatContext.AudioContextLaunch? context = null)
+        ChatContext.AudioContextLaunch? context = null,
+        ISessionDirectory? sessions = null)
     {
+        _sessions = sessions;
         _context = context;
         _engines = engines;
         _workspace = workspace;
@@ -155,7 +158,7 @@ public sealed class AudioEditJobService : IDisposable
     // ── Котировка ────────────────────────────────────────────────────────────────
 
     public async Task<AudioEditCallResult<AudioQuoteDto>> QuoteAsync(
-        string ownerId, AudioEditScope scope, AudioQuoteRequest request, CancellationToken ct)
+        string ownerId, AudioEditScope scope, AudioQuoteRequest request, CancellationToken ct, string? actorId = null)
     {
         if (!AudioModes.IsValid(request.Mode))
             return Fail<AudioQuoteDto>(AudioEditErrorCodes.InvalidRequest, $"Неизвестный режим: {request.Mode}");
@@ -168,7 +171,7 @@ public sealed class AudioEditJobService : IDisposable
         {
             if (_context is null)
                 return Fail<AudioQuoteDto>(AudioEditErrorCodes.Unavailable, ChatContext.AudioContextLaunch.UnavailableText);
-            var read = _context.Read(ownerId, scope, request.SessionId, revision);
+            var read = _context.Read(ownerId, scope, request.SessionId, revision, actorId);
             if (!read.Ok) return read.Fail<AudioQuoteDto>();
             contextState = read.State;
             requestThreadId = ChatContext.AudioContextLaunch.Extract(scope, contextState!, null).ThreadId;
@@ -320,7 +323,7 @@ public sealed class AudioEditJobService : IDisposable
     // ── Запуск ───────────────────────────────────────────────────────────────────
 
     public async Task<AudioEditCallResult<AudioJobCreatedDto>> StartAsync(
-        string ownerId, AudioEditScope scope, AudioJobInput input, CancellationToken ct)
+        string ownerId, AudioEditScope scope, AudioJobInput input, CancellationToken ct, string? actorId = null)
     {
         if (!_quotes.TryGetValue(input.QuoteId, out var quote)
             || quote.OwnerId != ownerId || quote.ScopeKey != scope.Key || quote.ExpiresAt < Now())
@@ -331,10 +334,10 @@ public sealed class AudioEditJobService : IDisposable
         {
             if (_context is null)
                 return Fail<AudioJobCreatedDto>(AudioEditErrorCodes.Unavailable, ChatContext.AudioContextLaunch.UnavailableText);
-            var read = _context.Read(ownerId, scope, input.SessionId, revision);
+            var read = _context.Read(ownerId, scope, input.SessionId, revision, actorId);
             if (!read.Ok) return read.Fail<AudioJobCreatedDto>();
             if (quote.ContextRevision != revision)
-                return _context.Stale(ownerId, scope, input.SessionId!).Fail<AudioJobCreatedDto>();
+                return _context.Stale(ownerId, scope, input.SessionId!, actorId).Fail<AudioJobCreatedDto>();
             // Нить, версия-основа и голос — из стора; одноимённые поля тела игнорируются
             var fromContext = ChatContext.AudioContextLaunch.Extract(scope, read.State!, OpName(quote.Op));
             input = input with { ThreadId = fromContext.ThreadId, BaseVersionId = fromContext.VersionId, Voice = fromContext.VoiceRef };
@@ -627,7 +630,7 @@ public sealed class AudioEditJobService : IDisposable
         if (job is { ChatSessionId: { } sessionId, ThreadId: { } threadId })
             await _threads!.OnFinishedAsync(job.OwnerId, job.Scope.Key, sessionId, threadId, job.Id,
                 AudioEditJobStatus.Completed, variants, partialError);
-        await Broadcast(job.OwnerId, new AudioEditCompletedMessage(job.Id, job.Scope.Key, [.. variants.Select(v => v.Variant)],
+        await Broadcast(job.OwnerId, AudioEditScope.ProjectIdOf(job.Scope.Key), job.ChatSessionId, new AudioEditCompletedMessage(job.Id, job.Scope.Key, [.. variants.Select(v => v.Variant)],
             cost, partialError, job.ChatSessionId, job.ThreadId, job.Initiator));
     }
 
@@ -662,7 +665,7 @@ public sealed class AudioEditJobService : IDisposable
         if (job is { ChatSessionId: { } sessionId, ThreadId: { } threadId })
             await _threads!.OnFinishedAsync(job.OwnerId, job.Scope.Key, sessionId, threadId, job.Id,
                 cancelled ? AudioEditJobStatus.Cancelled : AudioEditJobStatus.Failed, variants, result.Error);
-        await Broadcast(job.OwnerId, new AudioEditFailedMessage(job.Id, job.Scope.Key, result.Outcome, charged, result.Error,
+        await Broadcast(job.OwnerId, AudioEditScope.ProjectIdOf(job.Scope.Key), job.ChatSessionId, new AudioEditFailedMessage(job.Id, job.Scope.Key, result.Outcome, charged, result.Error,
             retry, job.ChatSessionId, job.ThreadId, job.Initiator));
     }
 
@@ -842,18 +845,18 @@ public sealed class AudioEditJobService : IDisposable
                 job.EtaSeconds = value.EtaSeconds;
                 job.Gpu = value.Gpu;
             }
-            _ = owner.Broadcast(job.OwnerId, new AudioEditProgressMessage(job.Id, job.Scope.Key, value.Stage,
+            _ = owner.Broadcast(job.OwnerId, AudioEditScope.ProjectIdOf(job.Scope.Key), job.ChatSessionId, new AudioEditProgressMessage(job.Id, job.Scope.Key, value.Stage,
                 value.QueuePosition, value.EtaSeconds, variant, job.Quote.Count, job.ChatSessionId, job.ThreadId, job.Initiator,
                 Gpu: value.Gpu));
         }
     }
 
-    private async Task Broadcast(string ownerId, ServerMessage message)
+    private async Task Broadcast(string ownerId, string? projectId, string? chatSessionId, ServerMessage message)
     {
         if (_broadcaster is null) return;
         try
         {
-            await _broadcaster.ToOwner(ownerId, message);
+            await _broadcaster.ToChatAudience(_sessions, ownerId, projectId, chatSessionId, message);
         }
         catch (Exception ex)
         {

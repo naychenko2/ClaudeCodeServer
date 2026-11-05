@@ -84,6 +84,25 @@ public class McpHttpTransportTests(McpHttpTransportTests.MainHost main,
         return JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
     }
 
+    /// <summary>
+    /// Живая сессия личного проекта для X-Caller-Session-Id. Синтетический id делает актора хода
+    /// неизвестным, и по правилу F2-O2 («неизвестный актор не получает прав») вызов отвергается
+    /// гейтом актора до тулсета: отказа инструмента в логе нет вовсе — проверять санитизацию
+    /// имени было бы нечего. Личный проект даёт такому вызову рамку Wide (TurnFrame.Resolve),
+    /// и он доходит до тулсета.
+    /// </summary>
+    private async Task<string> PersonalSessionAsync()
+    {
+        var project = await _client.PostAsJsonAsync("/api/projects", new { name = $"mcp-probe-{Guid.NewGuid():N}" });
+        project.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(
+            await project.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+        var session = await _client.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "acceptEdits" });
+        session.EnsureSuccessStatusCode();
+        return JsonSerializer.Deserialize<JsonElement>(
+            await session.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+    }
+
     // id карточки вызова: CLI кладёт его в params._meta (тело живого tools/call по http:
     // {"name":…,"arguments":{},"_meta":{"claudecode/toolUseId":"toolu_…","progressToken":2}}).
     // Строка внешняя и уходит ключом в событие ленты — негодная форма даёт null, а не прогресс
@@ -531,13 +550,16 @@ public class McpHttpTransportTests(McpHttpTransportTests.MainHost main,
     /// Они проходят ту же форму (McpCallLog.Record) — короткие, без «X-Injected». Исключение —
     /// запись внутреннего сбоя «boom» с полным стек-трейсом исключения: она не про имя вызова и
     /// по длине зависит от глубины стека пайплайна, поэтому в утверждение о длине не входит.
+    /// Вызов идёт от живой сессии личного проекта: с синтетическим id актор хода неизвестен, и
+    /// гейт актора (F2-O2) отсекает его до тулсета — «упавшего инструмента» в логе не стало бы
+    /// вовсе, и проверять санитизацию было бы нечего.
     /// </summary>
     [Fact]
     public async Task ГигантскоеИмяСCRLF_НеПопадаетВЛогБэкенда()
     {
         var sink = _main.Sink;
         using var caller = _main.CreateAuthenticatedClient();
-        caller.DefaultRequestHeaders.Add("X-Caller-Session-Id", "evil-log-probe");
+        caller.DefaultRequestHeaders.Add("X-Caller-Session-Id", await PersonalSessionAsync());
         var call = await caller.PostAsJsonAsync("/mcp/widgets", new
         {
             jsonrpc = "2.0", id = 1, method = "tools/call",

@@ -80,6 +80,23 @@ public sealed class TrackedLocalLlmClient(ILocalLlmClient inner, LocalEngineBusy
         Guard<string?>(() => inner.GenerateTextAsync(prompt, model, timeout, numPredict, numCtx,
             ownerId, label, ct), null);
 
+    // Detailed-варианты делегируются внутреннему клиенту, а не строковым методам: иначе
+    // обёртка молча теряла бы usage, который тот уже разобрал (в DI ILocalLlmClient — этот
+    // класс, так что через строковый метод метрик не дошёл бы ни до одного потребителя).
+    // Отказ по занятости слота — та же пара «нет ответа»: (null, null).
+    public Task<(string? Text, Protocol.UsageInfo? Usage)> ChatJsonDetailedAsync(
+        string systemPrompt, string userPrompt, object jsonFormat, CancellationToken ct = default,
+        string? model = null, int? timeoutMs = null, int? numPredict = null, int? numCtx = null,
+        string? ownerId = null, string? label = null) =>
+        Guard<(string? Text, Protocol.UsageInfo? Usage)>(() => inner.ChatJsonDetailedAsync(systemPrompt,
+            userPrompt, jsonFormat, ct, model, timeoutMs, numPredict, numCtx, ownerId, label), (null, null));
+
+    public Task<(string? Text, Protocol.UsageInfo? Usage)> GenerateTextDetailedAsync(
+        string prompt, string? model, TimeSpan timeout, int numPredict, int numCtx,
+        string? ownerId = null, string? label = null, CancellationToken ct = default) =>
+        Guard<(string? Text, Protocol.UsageInfo? Usage)>(() => inner.GenerateTextDetailedAsync(prompt, model,
+            timeout, numPredict, numCtx, ownerId, label, ct), (null, null));
+
     public Task<ChatTurnResult> ChatTurnAsync(
         IReadOnlyList<ChatMsg> messages, string? model, TimeSpan timeout,
         int numPredict, int numCtx, string? ownerId,

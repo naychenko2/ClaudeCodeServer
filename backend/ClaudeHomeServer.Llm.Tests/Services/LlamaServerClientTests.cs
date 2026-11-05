@@ -116,6 +116,53 @@ public class LlamaServerClientTests : IDisposable
         seenBody.Should().NotContain("reasoning_format");
     }
 
+    // --- detailed-варианты (WC-4c): usage того же ответа отдаётся наружу, а не только в RecordSpend ---
+
+    [Fact]
+    public async Task ChatJsonDetailedAsync_ВозвращаетTextИUsageТогоЖеОтвета()
+    {
+        // Мутация «return (answer, null) вместо ReadUsage(json)» → этот тест красный.
+        var handler = new FakeHandler(
+            """{"choices":[{"message":{"content":"{\"ok\":1}"}}],"usage":{"prompt_tokens":1000,"completion_tokens":50}}""");
+        var client = NewClient(new FakeHttpFactory(handler), EnabledConfig());
+
+        var (text, usage) = await client.ChatJsonDetailedAsync("sys", "user", "json");
+
+        text.Should().Be("{\"ok\":1}");
+        usage.Should().NotBeNull("метрики этого ответа уже разбираются для RecordSpend — их отдаёт и detailed-метод");
+        usage!.InputTokens.Should().Be(1000);
+        usage.OutputTokens.Should().Be(50);
+    }
+
+    [Fact]
+    public async Task ChatJsonDetailedAsync_БезUsageВОтвете_ВызовУспешен_UsageNull()
+    {
+        // Контракт отказа: метрик нет (или формат нераспознан) — Usage = null без исключения,
+        // текст при этом обычный. Потребитель прибавляет 0.
+        var handler = new FakeHandler("""{"choices":[{"message":{"content":"{\"ok\":1}"}}]}""");
+        var client = NewClient(new FakeHttpFactory(handler), EnabledConfig());
+
+        var (text, usage) = await client.ChatJsonDetailedAsync("sys", "user", "json");
+
+        text.Should().Be("{\"ok\":1}");
+        usage.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GenerateTextDetailedAsync_ВозвращаетTextИUsageТогоЖеОтвета()
+    {
+        var handler = new FakeHandler(
+            """{"choices":[{"message":{"content":"hello"}}],"usage":{"prompt_tokens":1000,"completion_tokens":50}}""");
+        var client = NewClient(new FakeHttpFactory(handler), EnabledConfig());
+
+        var (text, usage) = await client.GenerateTextDetailedAsync("p", null, TimeSpan.FromSeconds(5), 100, 4096);
+
+        text.Should().Be("hello");
+        usage.Should().NotBeNull();
+        usage!.InputTokens.Should().Be(1000);
+        usage.OutputTokens.Should().Be(50);
+    }
+
     // --- GenerateTextAsync: max_tokens, температура 0 ---
 
     [Fact]

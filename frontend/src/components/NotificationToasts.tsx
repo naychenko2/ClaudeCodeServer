@@ -5,7 +5,12 @@
 // диплинк только через обязательный onNavigate: url пишет и модель, а проверку своего
 // origin делает обработчик (notificationTargetUrl), своей навигации здесь нет (S7).
 // Закреплённое уведомление (sticky) не гаснет по таймеру и всплывает при каждом входе,
-// пока не прочитано: клик или ✕ помечают его прочитанным.
+// пока не прочитано: «Открыть» или ✕ помечают его прочитанным.
+// Тост-слой НЕ перехватывает клики интерфейса: слой и карточка — pointer-events:none,
+// нажатие проходит сквозь тост к тому, что под ним. Кликабельны только контролы карточки
+// (✕, «Открыть», кнопка действия) — они pointer-events:auto. Закреплённое висит
+// неограниченно, и кликабельная карточка лежала бы поверх кнопок шапки раздела всё это
+// время: нажатие до них не доходило (упавшие браузерные сценарии).
 
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
@@ -19,7 +24,7 @@ import type { LocalToast, ToastAction } from '../lib/toast';
 import { KIND_LABELS, TOAST_META } from '../features/notifications/kindMeta';
 import { NotificationAvatar, hasPersona, notifPersonaLabel } from '../features/notifications/NotificationAvatar';
 
-interface ToastItem {
+export interface ToastItem {
   id: number;
   title: string;
   body: string;
@@ -125,37 +130,52 @@ export function NotificationToasts({ onNavigate }: { onNavigate: (url: string) =
   const sheetRaised = useGenSheetRaised();
 
   if (toasts.length === 0) return null;
-
   return (
-    <div style={{
+    <ToastStack
+      items={toasts}
+      sheetRaised={sheetRaised}
+      onOpen={openToast}
+      onDismiss={dismiss}
+      onAction={t => { t.action?.onClick(); setToasts(prev => prev.filter(x => x.id !== t.id)); }}
+    />
+  );
+}
+
+// Слой тостов — только вид, без состояния и подписок: правило «тост не перехватывает
+// клики интерфейса» должно проверяться рендером. Слой и карточка — pointer-events:none:
+// тост висит над интерфейсом, но нажатию не мешает (тот же приём, что у «призрака»
+// разделителя в PanelZone). Кликабельны контролы карточки: ✕, «Открыть», действие.
+export function ToastStack({ items, sheetRaised, onOpen, onDismiss, onAction }: {
+  items: ToastItem[];
+  sheetRaised: boolean;
+  onOpen: (t: ToastItem) => void;
+  onDismiss: (t: ToastItem) => void;
+  onAction: (t: ToastItem) => void;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <div data-testid="toast-layer" style={{
       position: 'fixed', top: 14, right: 14, zIndex: sheetRaised ? Z.modal - 1 : Z.modal + 10,
       display: 'flex', flexDirection: 'column', gap: 10,
       maxWidth: 'min(360px, calc(100vw - 28px))',
+      pointerEvents: 'none',
     }}>
-      {toasts.map(t => {
+      {items.map(t => {
         const eyebrow = eyebrowText(t);
-        // Кнопка-действие: «Отменить» в тосте архивации. Клик НЕ открывает тост
-        // (это не диплинк), а зовёт свой колбэк; сам тост после этого снимается.
-        // Стиль — тот же accent-цвет, что у главной кнопки композера: читается
-        // как «отменить сделанное», а не как «закрыть уведомление»
-        const runAction = () => {
-          if (!t.action) return;
-          t.action.onClick();
-          setToasts(prev => prev.filter(x => x.id !== t.id));
-        };
         // 'error' — клиентский отказ (текст сервера в body). Рамка danger, чтобы
         // оператор не перепутал с обычным info
         const isError = t.kind === 'error';
         return (
           <div
             key={t.id}
-            onClick={() => openToast(t)}
+            data-testid="toast"
             style={{
               display: 'flex', gap: SP.md, alignItems: 'flex-start',
-              padding: '13px 15px', cursor: t.url ? 'pointer' : 'default',
+              padding: '13px 15px',
               background: C.bgCard,
               border: `1px solid ${isError ? C.dangerBorder : C.border}`,
               borderRadius: R.xl, boxShadow: SHADOW.dropdown,
+              pointerEvents: 'none',
             }}
           >
             <div style={{ marginTop: 1, flexShrink: 0 }}>
@@ -192,19 +212,37 @@ export function NotificationToasts({ onNavigate }: { onNavigate: (url: string) =
               }}>
                 {t.body}
               </div>
-              {t.action && (
-                // Кнопка-действие — справа под body, на своей строке. Курсор
-                // pointer оставляем только на кнопке, родительский клик-переход
-                // по диплинку гасим stopPropagation. Стиль — accent-цветом, без
-                // заливки: тост остаётся лёгким, акцент — только у действия
+              {/* Адрес уведомления — переход остаётся явной кнопкой: сама карточка клики
+                  не принимает. Форма та же, что у кнопки-действия ниже: accent-цветом,
+                  без заливки */}
+              {t.url && (
                 <div style={{ marginTop: SP.sm, display: 'flex', justifyContent: 'flex-end' }}>
                   <button
                     type="button"
-                    onClick={e => { e.stopPropagation(); runAction(); }}
+                    data-testid="toast-open"
+                    onClick={() => onOpen(t)}
                     style={{
                       border: 'none', background: 'none', cursor: 'pointer', padding: 0,
                       color: C.accent, fontFamily: FONT.sans, fontWeight: 600,
-                      fontSize: FS.sm, lineHeight: 1.2,
+                      fontSize: FS.sm, lineHeight: 1.2, pointerEvents: 'auto',
+                    }}
+                  >
+                    Открыть
+                  </button>
+                </div>
+              )}
+              {t.action && (
+                // Кнопка-действие — справа под body, на своей строке («Отменить» в тосте
+                // архивации): зовёт свой колбэк и снимает тост. Курсор pointer — только
+                // на ней
+                <div style={{ marginTop: SP.sm, display: 'flex', justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    onClick={() => onAction(t)}
+                    style={{
+                      border: 'none', background: 'none', cursor: 'pointer', padding: 0,
+                      color: C.accent, fontFamily: FONT.sans, fontWeight: 600,
+                      fontSize: FS.sm, lineHeight: 1.2, pointerEvents: 'auto',
                     }}
                   >
                     {t.action.label}
@@ -213,12 +251,12 @@ export function NotificationToasts({ onNavigate }: { onNavigate: (url: string) =
               )}
             </div>
             <button
-              onClick={e => { e.stopPropagation(); dismiss(t); }}
+              onClick={() => onDismiss(t)}
               title="Закрыть"
               style={{
                 border: 'none', background: 'none', cursor: 'pointer', padding: 2,
                 color: C.textMuted, fontSize: 13, lineHeight: 1, fontFamily: FONT.sans, flexShrink: 0,
-                display: 'flex', alignItems: 'center',
+                display: 'flex', alignItems: 'center', pointerEvents: 'auto',
               }}
             >
               <X size={13} strokeWidth={ICON_STROKE} />

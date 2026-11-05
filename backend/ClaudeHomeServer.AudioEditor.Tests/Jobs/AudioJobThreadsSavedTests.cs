@@ -108,7 +108,11 @@ public sealed class AudioJobThreadsSavedTests : IDisposable
 
         public Task ToSession(string sessionId, ServerMessage message) => Task.CompletedTask;
         public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) => Task.CompletedTask;
-        public Task ToProject(string projectId, ServerMessage message) => Task.CompletedTask;
+        public Task ToProject(string projectId, ServerMessage message)
+        {
+            lock (_sent) _sent.Add(message);
+            return Task.CompletedTask;
+        }
         public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) => Task.CompletedTask;
     }
 }

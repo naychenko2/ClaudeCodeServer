@@ -1,13 +1,27 @@
 ﻿using System.Net;
 using System.Net.Http.Json;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.CodeGraph;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Files;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.Extensions.Configuration;
+using Moq;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -718,6 +732,211 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
         (await response.Content.ReadAsStringAsync()).Should().Be("from chat tree", "stream — тот же резолв дерева, что content");
     }
 
+    // ─── TAIL-ROOTS-GATE (доработка по ревью 44e1219c к 8b56ba3db): вторая линия гейта по фактическому корню операции ───
+
+    // Ссылка ВНУТРИ рабочего дерева: «L» → .cc-attachments лежит в worktree, а не в корне проекта.
+    // Первая линия (по корню проекта) о ней молчит: «L» там даже нет на диске, и канон
+    // <mainRoot>/L/private/… не содержит сегмент-пары .cc-attachments/private/{X}. Ловит вторая
+    // линия — по фактическому корню операции (корень дерева эпика / hit.Root): в своём дереве «L»
+    // разыменовывается в <wt>/.cc-attachments, и чужое private через неё — тот же 404, что
+    // прямым именем. Именно эта линия закрывает дефект f1c60d82: без неё регресс вернулся бы молча.
+    //
+    // Пара самопроверяющаяся: своё через ту же ссылку — 200 ровно как прямым именем. Это доказывает,
+    // что путь через ссылку РЕАЛЬНО находится и читается в этом дереве (для featureId — дерево
+    // эпика, для sessionId — анкер локатора), т.е. 404 на чужом даёт именно гейт, а не «файла нет».
+    // Прямые имена .cc-attachments/private/… — юрисдикция первой линии, проверены
+    // FilesControllerPrivateAttachmentsReadTests/SymlinkTests; здесь их нет, чтобы тест не был
+    // зелёным не по своей причине.
+    //
+    // Мутация (критерий c2 карточки 3df09cd9, по вердикту 44e1219c): снять строки FilesController.cs:198/:211/:1137 — чужое
+    // читается 200, оба теста краснеют. Ссылка на каталог требует привилегий на Windows, поэтому
+    // тесты идут только на Linux (образец FilesControllerPrivateAttachmentsSymlinkTests).
+
+    // Приватное вложение автора в рабочем дереве + ссылка «L» → .cc-attachments в этом же дереве.
+    // Путь запроса — та же раскладка, но с префиксом каталога, заменённым на «L» (ссылка УЖЕ есть
+    // .cc-attachments, двойной сегмент дал бы 404 отсутствующего пути). Возвращает путь запроса.
+    private static string WritePrivateThroughLink(string worktree, string authorId, string name, string content)
+    {
+        var rel = PrivateAttachments.Build(authorId, Guid.NewGuid(), name)!;
+        var abs = Path.Combine(worktree, rel);
+        Directory.CreateDirectory(Path.GetDirectoryName(abs)!);
+        File.WriteAllText(abs, content);
+        var link = Path.Combine(worktree, "L");
+        if (!Directory.Exists(link))
+            Directory.CreateSymbolicLink(link, TreeExcludes.AttachmentsDir);
+        return "L/" + rel[(TreeExcludes.AttachmentsDir.Length + 1)..];
+    }
+
+    // id автора JWT-клиента и второго тестового пользователя — тот же характер, что у id авторов
+    // в бою (Guid), и та же санация PrivateAttachments.Build
+    private (string Me, string Other) TestAuthorIds()
+    {
+        var users = _factory.Services.GetRequiredService<UserStore>();
+        return (users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id,
+                users.FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id);
+    }
+
+    // Настоящий путь записи «L/…»: та же цель на диске, которую откроет операция (для проверки,
+    // что запись лёгла в каталог автора, а не в каталог с именем «L»).
+    private static string ThroughLinkTarget(string root, string viaLink) =>
+        Path.Combine(root, TreeExcludes.AttachmentsDir, viaLink[2..]);
+
+    [Fact]
+    public async Task GetContent_FeatureId_СсылкаВнутриWorktree_ЧужоеPrivate_404_Своё_200()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var (epicId, worktree, projectId, _) = await CreateEpicWithVerifiedWorktreeAsync("tailgate");
+        var (me, other) = TestAuthorIds();
+
+        var foreign = WritePrivateThroughLink(worktree, other, "чужое.txt", "чужое в дереве эпика");
+        var own = WritePrivateThroughLink(worktree, me, "своё.txt", "своё в дереве эпика");
+
+        var denied = await _client.GetAsync(
+            $"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(foreign)}&featureId={epicId}");
+        denied.StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "ссылка внутри рабочего дерева не обходит гейт: чужое private через «L» — тот же путь, что прямым именем");
+
+        var ok = await _client.GetAsync(
+            $"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(own)}&featureId={epicId}");
+        ok.StatusCode.Should().Be(HttpStatusCode.OK, "свой автор через ссылку в своём дереве — своё");
+        var body = JsonSerializer.Deserialize<JsonElement>(await ok.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString().Should().Be("своё в дереве эпика",
+            "своё через ссылку читается так же, как прямым именем: чтение идёт из дерева эпика");
+    }
+
+    [Fact]
+    public async Task GetContentИStream_SessionId_СсылкаВнутриWorktree_ЧужоеPrivate_404_Своё_200()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var (sessionId, worktree, branch, projectId, _) = await CreateChatWithTaskWorktreeAsync("tailgate");
+        var (me, other) = TestAuthorIds();
+
+        var foreign = WritePrivateThroughLink(worktree, other, "чужое.txt", "чужое в дереве задачи");
+        var own = WritePrivateThroughLink(worktree, me, "своё.txt", "своё в дереве задачи");
+
+        // content (:211) и stream (:1137) — обе multi-root точки с hit.Root: PhysicalFile отдаёт
+        // разыменованный путь, и ссылка в worktree читалась бы мимо гейта по корню проекта
+        var deniedContent = await _client.GetAsync(
+            $"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(foreign)}&sessionId={sessionId}");
+        deniedContent.StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "ссылка внутри рабочего дерева не обходит гейт: чужое private через «L» — тот же путь, что прямым именем");
+        var deniedStream = await _client.GetAsync(
+            $"/api/projects/{projectId}/files/stream?path={Uri.EscapeDataString(foreign)}&sessionId={sessionId}");
+        deniedStream.StatusCode.Should().Be(HttpStatusCode.NotFound, "stream — тот же гейт по hit.Root");
+
+        var ok = await _client.GetAsync(
+            $"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(own)}&sessionId={sessionId}");
+        ok.StatusCode.Should().Be(HttpStatusCode.OK, "свой автор через ссылку в дереве чата — своё");
+        var body = JsonSerializer.Deserialize<JsonElement>(await ok.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString().Should().Be("своё в дереве задачи");
+        // Путь через ссылку найден именно в заявленном дереве: значит, 404 выше дал гейт, а не «файла нет»
+        body.GetProperty("isAnchor").GetBoolean().Should().BeTrue("прочитано из заявленного дерева задачи");
+        body.GetProperty("branch").GetString().Should().Be(branch);
+
+        var stream = await _client.GetAsync(
+            $"/api/projects/{projectId}/files/stream?path={Uri.EscapeDataString(own)}&sessionId={sessionId}");
+        stream.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await stream.Content.ReadAsStringAsync()).Should().Be("своё в дереве задачи",
+            "своё через ссылку отдаётся потоком так же, как прямым именем");
+    }
+
+    // Запись через ссылку. Фактический корень операции записи — корень проекта: SaveContent ни
+    // featureId, ни sessionId не принимает и пишет в GetRoot (FilesController.cs:483, :283), поэтому
+    // «ссылка внутри рабочего дерева» для записи — это ссылка в том самом корне, на который запись
+    // идёт: вторая линия здесь совпадает с первой, и она обязана стоять до любого эффекта — до
+    // SafeJoin, до замка пути, до файла на диске. Отказ — 404: контракт пишущих ручек REST
+    // (S2d-6b-5, дефект e5d55007); 403 на запись — контракт WebDAV, не этот маршрут.
+    //
+    // Пара самопроверяющаяся, как и чтение выше: своё через ту же ссылку — успех, и файл лёг в
+    // настоящий каталог автора. Значит 404 на чужом дал именно гейт по автору пути, а не «пути нет».
+    // Новый файл берётся в УЖЕ существующем каталоге автора: без гейта запись дошла бы до диска
+    // (FileService.WriteFile создаёт файл, но не каталог — FileService.cs:575-582), и тест краснеет
+    // на обоих утверждениях — и на коде, и на «файла нет».
+    //
+    // Прямой контракт через корневую ссылку на уровне контроллера держит
+    // FilesControllerPrivateAttachmentsSymlinkTests.ЧужоеPrivateЧерезСимлинкВКорне…; здесь — HTTP
+    // -маршрут с параметром дерева (то, о чём спрашивал п.3 ревью 6db670ff) и проверка, что
+    // параметр запись ни в чьё дерево не переносит. Stream (:1120) не пишет — отдельной линии у
+    // него нет. Ссылка на каталог требует привилегий, поэтому тест только на Linux (образец).
+    //
+    // sessionId-линия (доработка по дельта-ревью d055b433, п.4 хвоста d24d4238): одна 404 здесь
+    // контракт не различает — SaveContent параметра не принимает, а без дерева у чата корень
+    // операции тот же, что без параметра: та же цель, тот же отказ. Поэтому к чату привязано
+    // проверенное worktree (то же дерево эпика — оно числится в «git worktree list»,
+    // SessionManager.AttachWorktreeAsync), и в нём та же раскладка автора с «L»: при уважении
+    // sessionId записи есть куда дойти до диска. Различает линия МЕСТО: свой файл обязан остаться
+    // в .cc-attachments корня проекта и не появиться в дереве чата.
+    //
+    // Мутация (c2): снять строку FilesController.cs:489 — чужая запись проходит (200) и оставляет
+    // файл в чужом каталоге, тест краснеет; откат — зелено. Вторая мутация (на sessionId-линию):
+    // дать SaveContent параметр sessionId и вести запись по ChatTreeRootForAsync
+    // (FilesController.cs:272) — своя запись уходит в дерево чата, проверка места в нём краснеет;
+    // откат — зелено. На этом прогоне исходы 404/200 не изменились ни на одном шаге — краснела
+    // ровно проверка места: без неё линия опять не различает контракт.
+    [Fact]
+    public async Task SaveContent_СсылкаВКорнеОперации_ЧужоеPrivate_404_Своё_Успех_ПараметрыДереваНеПишут()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var (epicId, epicTree, projectId, mainRoot) = await CreateEpicWithVerifiedWorktreeAsync("writelink");
+        var (me, other) = TestAuthorIds();
+
+        // Ссылка и каталоги авторов — в корне проекта: именно на него идёт запись.
+        var foreign = WritePrivateThroughLink(mainRoot, other, "якорь.txt", "чужое в корне");
+        var own = WritePrivateThroughLink(mainRoot, me, "якорь.txt", "своё в корне");
+        // Тот же каталог автора, новый файл: место записи существует, отказа «нет пути» быть не может
+        var newForeignReq = foreign[..foreign.LastIndexOf('/')] + "/новый.txt";
+        var newOwnReq = own[..own.LastIndexOf('/')] + "/новый.txt";
+        var newForeignAbs = Path.Combine(Path.GetDirectoryName(ThroughLinkTarget(mainRoot, foreign))!, "новый.txt");
+        var newOwnAbs = Path.Combine(Path.GetDirectoryName(ThroughLinkTarget(mainRoot, own))!, "новый.txt");
+
+        var denied = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(newForeignReq)}&featureId={epicId}",
+            new { content = "чужая правка" });
+        denied.StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "ссылка в корне операции не обходит гейт: чужое private через «L» — тот же путь, что прямым именем");
+        File.Exists(newForeignAbs).Should().BeFalse("отказанная запись не дошла до диска");
+
+        var ok = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(newOwnReq)}&featureId={epicId}",
+            new { content = "своя правка" });
+        ok.StatusCode.Should().Be(HttpStatusCode.OK, "свой автор через ссылку в своём корне — своё");
+        File.ReadAllText(newOwnAbs).Should().Be("своя правка",
+            "запись через ссылку дошла до настоящего каталога автора: 404 выше дал именно гейт, а не «пути нет»");
+
+        // Тот же маршрут с заявленным чатом: корень операции записи не меняется ни от какого
+        // параметра дерева — и гейт остаётся тем же. Чат привязан к проверенному дереву: если
+        // параметр перенесёт запись, ей будет куда дойти до диска, и молчаливой 404 «негде» уже
+        // не будет — различает только место записи ниже.
+        var sessions = _factory.Services.GetRequiredService<SessionManager>();
+        var session = await sessions.CreateAsync(projectId, ClaudeMode.Auto, name: "chat for the write line");
+        (await sessions.AttachWorktreeAsync(session.Id, epicTree)).Should().BeTrue(
+            "дерево чата — проверенный worktree эпика: при уважении sessionId запись пошла бы в него");
+
+        var deniedBySession = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(newForeignReq)}&sessionId={session.Id}",
+            new { content = "чужая правка" });
+        deniedBySession.StatusCode.Should().Be(HttpStatusCode.NotFound, "sessionId — тот же корень и тот же гейт");
+
+        // Та же раскладка автора и «L» — в дереве чата: цель своей записи существует в обоих
+        // деревьях, и исход «200» о ней ничего не решает — решает, куда она легла.
+        var ownBySessionReq = own[..own.LastIndexOf('/')] + "/по-чату.txt";
+        var ownBySessionInMain = ThroughLinkTarget(mainRoot, ownBySessionReq);
+        var ownBySessionInTree = ThroughLinkTarget(epicTree, ownBySessionReq);
+        Directory.CreateDirectory(Path.GetDirectoryName(ownBySessionInTree)!);
+        var treeLink = Path.Combine(epicTree, "L");
+        if (!Directory.Exists(treeLink))
+            Directory.CreateSymbolicLink(treeLink, TreeExcludes.AttachmentsDir);
+
+        var okBySession = await _client.PutAsJsonAsync(
+            $"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(ownBySessionReq)}&sessionId={session.Id}",
+            new { content = "своя правка по чату" });
+        okBySession.StatusCode.Should().Be(HttpStatusCode.OK, "свой автор через ссылку — то же право, что без параметра");
+        File.Exists(ownBySessionInTree).Should().BeFalse(
+            "в дереве чата записи нет: sessionId не переносит корень операции — при переносе краснеет");
+        File.ReadAllText(ownBySessionInMain).Should().Be("своя правка по чату",
+            "запись с sessionId лезла в .cc-attachments корня проекта: параметр дерева запись не переносит");
+    }
+
     // ─── Шаг B2b: POST /api/projects/{id}/files/locate — пакетный резолв с alternatives ───
 
     // Лимит пакета — часть контракта (фронт батчит ≤50): 51 путь → 400, а не тихая обрезка.
@@ -845,6 +1064,448 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
         var response = await _client.GetAsync($"/api/projects/{id}/files/content?path=roundtrip.txt");
         var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
         body.GetProperty("content").GetString().Should().Be("new content");
+    }
+
+    // ---------- S2c-1 · ETag и 409 при сохранении (К8) ----------
+
+    private static string Sha256Hex(string content) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
+
+    // GET content → ETag-заголовок: (сырое значение с кавычками — как его вернёт клиент,
+    // хеш без кавычек). К8: `ETag: "<sha256>"`.
+    private async Task<(string ETagRaw, string Sha256)> GetContentETagAsync(string projectId, string path)
+    {
+        var response = await _client.GetAsync($"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(path)}");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var values = response.Headers.GetValues("ETag").ToList();
+        values.Should().HaveCount(1, "ETag по К8 — один сильный заголовок");
+        var raw = values[0];
+        raw.StartsWith('"').Should().BeTrue("сильный ETag отдаётся в кавычках");
+        return (raw, raw.Trim('"'));
+    }
+
+    private async Task<HttpResponseMessage> PutWithIfMatchAsync(
+        string projectId, string path, string content, string ifMatchRaw)
+    {
+        var request = new HttpRequestMessage(
+            HttpMethod.Put, $"/api/projects/{projectId}/files/content?path={Uri.EscapeDataString(path)}");
+        request.Headers.TryAddWithoutValidation("If-Match", ifMatchRaw);
+        request.Content = new StringContent(JsonSerializer.Serialize(new { content }), Encoding.UTF8, "application/json");
+        return await _client.SendAsync(request);
+    }
+
+    [Fact]
+    public async Task GetContent_ReturnsETagSha256OfContent()
+    {
+        var (id, _) = await SetupProjectWithFileAsync("etag.txt", "hello content");
+        var (_, sha) = await GetContentETagAsync(id, "etag.txt");
+        // Хеш байтов файла на диске, а не «вида» текста: LOWERCASE hex SHA-256
+        sha.Should().Be(Sha256Hex("hello content"));
+    }
+
+    [Fact]
+    public async Task ETag_ChangesAfterSave()
+    {
+        var (id, _) = await SetupProjectWithFileAsync("round.txt", "v1 content");
+        var (etag1, _) = await GetContentETagAsync(id, "round.txt");
+
+        var put = await PutWithIfMatchAsync(id, "round.txt", "v2 content", etag1);
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var (etag2, sha2) = await GetContentETagAsync(id, "round.txt");
+        etag2.Should().NotBe(etag1, "после записи хеш обязан смениться");
+        sha2.Should().Be(Sha256Hex("v2 content"));
+    }
+
+    [Fact]
+    public async Task SaveContent_IfMatchMatches_WritesFile()
+    {
+        var (id, dir) = await SetupProjectWithFileAsync("match.txt", "original");
+        var (etag, _) = await GetContentETagAsync(id, "match.txt");
+
+        var put = await PutWithIfMatchAsync(id, "match.txt", "new content", etag);
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        File.ReadAllText(Path.Combine(dir, "match.txt")).Should().Be("new content");
+    }
+
+    // Названный тест мутации (S2c-1): убрать сравнение хеша в SaveContent — этот тест красный.
+    [Fact]
+    public async Task SaveContent_IfMatchMismatch_Returns409FileChanged_FileUnchanged()
+    {
+        var (id, dir) = await SetupProjectWithFileAsync("stale.txt", "stale content");
+        var put = await PutWithIfMatchAsync(id, "stale.txt", "my edit", "\"0000000000000000000000000000000000000000000000000000000000000000\"");
+        put.StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        var body = JsonSerializer.Deserialize<JsonElement>(await put.Content.ReadAsStringAsync());
+        body.GetProperty("code").GetString().Should().Be("file_changed");
+        // Тело по К8 — актуальное состояние: хеш и содержимое на диске, а не присланное
+        body.GetProperty("sha256").GetString().Should().Be(Sha256Hex("stale content"));
+        body.GetProperty("content").GetString().Should().Be("stale content");
+        body.GetProperty("changedAt").ValueKind.Should().NotBe(JsonValueKind.Null, "mtime — серверное состояние");
+        // Автор — из серверного состояния (буфер коммиттера, S3-3); здесь его нет, и из тела
+        // запроса он не принимается
+        body.GetProperty("author").ValueKind.Should().Be(JsonValueKind.Null);
+
+        File.ReadAllText(Path.Combine(dir, "stale.txt")).Should().Be("stale content", "отказ не трогает файл");
+    }
+
+    [Fact]
+    public async Task SaveContent_Race_TwoParallelWithSameIfMatch_ExactlyOneWins()
+    {
+        var (id, dir) = await SetupProjectWithFileAsync("race.txt", "base");
+        var (etag, _) = await GetContentETagAsync(id, "race.txt");
+        var racePath = Path.Combine(dir, "race.txt");
+
+        // Гонка без таймеров: обе записи стоят на одном gate и стартуют одновременно
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var t1 = Task.Run(async () => { await gate.Task; return await PutWithIfMatchAsync(id, "race.txt", "win A", etag); });
+        var t2 = Task.Run(async() => { await gate.Task; return await PutWithIfMatchAsync(id, "race.txt", "win B", etag); });
+        gate.SetResult();
+        var responses = await Task.WhenAll(t1, t2);
+
+        var statuses = responses.Select(r => r.StatusCode).ToList();
+        statuses.Count(s => s == HttpStatusCode.OK).Should().Be(1, "под замком проходит ровно одна запись");
+        statuses.Count(s => s == HttpStatusCode.Conflict).Should().Be(1);
+
+        var winner = responses[0].StatusCode == HttpStatusCode.OK ? "win A" : "win B";
+        var loser = responses[0].StatusCode == HttpStatusCode.OK ? responses[1] : responses[0];
+        File.ReadAllText(racePath).Should().Be(winner, "файл содержит запись победителя");
+        // Проигравший получает актуальное состояние — уже запись победителя
+        var body = JsonSerializer.Deserialize<JsonElement>(await loser.Content.ReadAsStringAsync());
+        body.GetProperty("code").GetString().Should().Be("file_changed");
+        body.GetProperty("content").GetString().Should().Be(winner);
+        body.GetProperty("sha256").GetString().Should().Be(Sha256Hex(winner));
+    }
+
+    // П.1 доработки S2c-1: атомарная замена (WriteAtomic) несёт права не цели, а временного
+    // файла: без переноса 0600 с битом исполнения становился 0644. Явный Skip на Windows —
+    // unix-битов там нет, тест не должен молчать на другой ОС.
+    [SkippableFact]
+    public async Task SaveContent_IfMatch_PreservesUnixModeAndExecBit()
+    {
+        Skip.If(OperatingSystem.IsWindows(), "unix-права (0600 + бит исполнения) — вне Windows");
+        var (id, dir) = await SetupProjectWithFileAsync("keep_mode.sh", "#!/bin/sh\necho old");
+        var abs = Path.Combine(dir, "keep_mode.sh");
+        var mode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute; // 0700
+        File.SetUnixFileMode(abs, mode);
+
+        var (etag, _) = await GetContentETagAsync(id, "keep_mode.sh");
+        var put = await PutWithIfMatchAsync(id, "keep_mode.sh", "#!/bin/sh\necho new", etag);
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        File.ReadAllText(abs).Should().Be("#!/bin/sh\necho new");
+        File.GetUnixFileMode(abs).Should().Be(mode,
+            "подмена через временный файл не меняет прав исходного файла");
+    }
+
+    // П.3 доработки S2c-1: видео/аудио/документы раньше не читались вовсе — полный хеш на
+    // каждый GET стоил чтения всего файла. Тег для них не отдаётся, ответ не ломается.
+    [Fact]
+    public async Task GetContent_VideoFile_HasNoETag_AndResponseIsOk()
+    {
+        var id = await SetupProjectWithBinaryAsync("clip.mp4", new byte[] { 0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70 });
+        var response = await _client.GetAsync($"/api/projects/{id}/files/content?path=clip.mp4");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("isVideo").GetBoolean().Should().BeTrue("видео отдаётся как раньше");
+        response.Headers.Contains("ETag").Should().BeFalse(
+            "нередактируемый файл не перечитывается целиком ради тега");
+    }
+
+    // П.3: текст выше потолка (MaxEtagTextBytes) — без тега; PUT таких файлов остаётся
+    // без If-Match, как до S2c-1.
+    [Fact]
+    public async Task GetContent_TextAboveEtagCap_HasNoETag_AndContentIsFull()
+    {
+        var big = new string('a', (int)FilesController.MaxEtagTextBytes + 1);
+        var (id, _) = await SetupProjectWithFileAsync("big.txt", big);
+        var response = await _client.GetAsync($"/api/projects/{id}/files/content?path=big.txt");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString()!.Length.Should().Be((int)FilesController.MaxEtagTextBytes + 1);
+        response.Headers.Contains("ETag").Should().BeFalse(
+            "файл сверх потолка не хешируется целиком на каждый GET");
+    }
+
+    // П.4 доработки S2c-1: хеш — по каноническим байтам (тем же, что отдаёт GET), а не по
+    // сырым байтам диска. Файл с BOM: content из GET без BOM, ETag = его хеш, и PUT с этим
+    // тегом проходит (раньше unchanged-файл отвечал 409 на собственный же тег).
+    [Fact]
+    public async Task GetContent_FileWithBom_ETagMatchesReturnedContent_PutWithThatETagPasses()
+    {
+        const string text = "содержимое с BOM";
+        var (id, dir) = await SetupProjectWithFileAsync("bom.txt", text);
+        var abs = Path.Combine(dir, "bom.txt");
+        File.WriteAllText(abs, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+
+        var response = await _client.GetAsync($"/api/projects/{id}/files/content?path=bom.txt");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        var content = body.GetProperty("content").GetString()!;
+        content.Should().Be(text, "GET отдаёт декодированный текст без BOM");
+
+        var etagRaw = response.Headers.GetValues("ETag").Single();
+        etagRaw.Trim('"').Should().Be(Sha256Hex(text),
+            "тег — по тем же байтам, что отдаёт GET, а не по сырым байтам с BOM");
+
+        var put = await PutWithIfMatchAsync(id, "bom.txt", "правка по ETag из GET", etagRaw);
+        put.StatusCode.Should().Be(HttpStatusCode.OK, "unchanged-файл принимает собственный тег");
+
+        var after = File.ReadAllBytes(abs);
+        (after.Length >= 3 && after[0] == 0xEF && after[1] == 0xBB && after[2] == 0xBF)
+            .Should().BeFalse("запись API пишет UTF-8 без BOM");
+        var (_, sha2) = await GetContentETagAsync(id, "bom.txt");
+        sha2.Should().Be(Sha256Hex("правка по ETag из GET"), "после записи тег — хеш нового содержимого");
+    }
+
+    // ---------- S2c-1 доживка (дефект найден на S2c-F2a): 200-ответ PUT несёт новый ETag ----------
+
+    // Названный тест мутации (дозивка S2c-1): убрать SetContentETagAfterWrite в If-Match-ветке
+    // SaveContent — этот тест красный. ETag ответа PUT = канонический хеш записанного
+    // содержимого (файл с BOM) и равен ETag последующего GET.
+    [Fact]
+    public async Task SaveContent_IfMatch_ResponseETagEqualsSubsequentGet_FileWithBom()
+    {
+        const string text = "содержимое с BOM";
+        var (id, dir) = await SetupProjectWithFileAsync("etag_put_bom.txt", text);
+        File.WriteAllText(Path.Combine(dir, "etag_put_bom.txt"), text, new UTF8Encoding(true));
+
+        var (etag1, _) = await GetContentETagAsync(id, "etag_put_bom.txt");
+        var put = await PutWithIfMatchAsync(id, "etag_put_bom.txt", "правка по ETag", etag1);
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var values = put.Headers.GetValues("ETag").ToList();
+        values.Should().HaveCount(1, "ETag по К8 — один сильный заголовок");
+        var raw2 = values[0];
+        raw2.StartsWith('"').Should().BeTrue("сильный ETag отдаётся в кавычках");
+        raw2.Trim('"').Should().Be(Sha256Hex("правка по ETag"),
+            "тег ответа — хеш записанного содержимого, той же канонической функцией, что у GET");
+
+        var (etag2, _) = await GetContentETagAsync(id, "etag_put_bom.txt");
+        etag2.Should().Be(raw2, "тег ответа PUT равен ETag последующего GET");
+    }
+
+    // Конкурентность: цепочка клиента GET→PUT(If-Match=etag1)→etag2 из ответа→PUT(If-Match=etag2)
+    // проходит 200 без ложного 409 на собственную правку.
+    [Fact]
+    public async Task SaveContent_IfMatch_ChainByResponseETag_NoFalse409()
+    {
+        var (id, _) = await SetupProjectWithFileAsync("chain.txt", "v1");
+        var (etag1, _) = await GetContentETagAsync(id, "chain.txt");
+
+        var put1 = await PutWithIfMatchAsync(id, "chain.txt", "v2", etag1);
+        put1.StatusCode.Should().Be(HttpStatusCode.OK);
+        var etag2 = put1.Headers.GetValues("ETag").Single();
+        etag2.Trim('"').Should().Be(Sha256Hex("v2"));
+
+        var put2 = await PutWithIfMatchAsync(id, "chain.txt", "v3", etag2);
+        put2.StatusCode.Should().Be(HttpStatusCode.OK,
+            "следующая сохранка по возвращённому тегу — не 409 на собственную правку");
+        var (etag3, sha3) = await GetContentETagAsync(id, "chain.txt");
+        sha3.Should().Be(Sha256Hex("v3"));
+    }
+
+    // Чужая запись между сохранками: вторая сохранка с etag2 — настоящий конфликт, 409
+    // (тег протух не из-за сервера, а из-за чужой правки).
+    [Fact]
+    public async Task SaveContent_IfMatch_ForeignWriteBetweenSaves_SecondSaveWithOldTag409()
+    {
+        var (id, _) = await SetupProjectWithFileAsync("interloper.txt", "v1");
+        var (etag1, _) = await GetContentETagAsync(id, "interloper.txt");
+
+        var put1 = await PutWithIfMatchAsync(id, "interloper.txt", "v2", etag1);
+        put1.StatusCode.Should().Be(HttpStatusCode.OK);
+        var etag2 = put1.Headers.GetValues("ETag").Single();
+
+        // Чужая запись между сохранками клиента (правка мимо If-Match)
+        var foreign = await _client.PutAsJsonAsync(
+            $"/api/projects/{id}/files/content?path=interloper.txt", new { content = "чужая правка" });
+        foreign.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var put2 = await PutWithIfMatchAsync(id, "interloper.txt", "v3", etag2);
+        put2.StatusCode.Should().Be(HttpStatusCode.Conflict, "тег протух из-за чужой записи — настоящий 409");
+        var body = JsonSerializer.Deserialize<JsonElement>(await put2.Content.ReadAsStringAsync());
+        body.GetProperty("code").GetString().Should().Be("file_changed");
+        body.GetProperty("content").GetString().Should().Be("чужая правка");
+    }
+
+    // Путь без If-Match тоже отдаёт ETag: клиент, начавший с тега, получает тег.
+    [Fact]
+    public async Task SaveContent_NoIfMatch_ResponseCarriesETagOfWrittenContent()
+    {
+        var (id, _) = await SetupProjectWithFileAsync("plain_etag.txt", "old");
+        var response = await _client.PutAsJsonAsync(
+            $"/api/projects/{id}/files/content?path=plain_etag.txt", new { content = "новая запись" });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var raw = response.Headers.GetValues("ETag").Single();
+        raw.Trim('"').Should().Be(Sha256Hex("новая запись"));
+        var (etag2, _) = await GetContentETagAsync(id, "plain_etag.txt");
+        etag2.Should().Be(raw, "тег ответа PUT равен ETag последующего GET");
+    }
+
+    // Не-etaggable: 200-ответ сохранения без заголовка — как GET такого файла (бинарный по
+    // расширению остаётся бинарным и после записи).
+    [Fact]
+    public async Task SaveContent_BinaryFile_ResponseHasNoETag()
+    {
+        var id = await SetupProjectWithBinaryAsync("clip_put.mp4", new byte[] { 0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70 });
+        var response = await _client.PutAsJsonAsync(
+            $"/api/projects/{id}/files/content?path=clip_put.mp4", new { content = "текст в mp4" });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Headers.Contains("ETag").Should().BeFalse(
+            "бинарный файл не etaggable — заголовка нет, как у GET");
+    }
+
+    // ---------- доработка по ревью 00f9451e: тег ответа — хеш текста запроса, не файла ----------
+
+    // П.1 (major, contract): замок на путь сериализует только SaveContent — писатель мимо замка
+    // (revert/upload/офис/агент — реальные точки записи) может вклиниться между нашей записью
+    // и ответом. Окно симулировано публичным швом: FileService.WriteFile и WriteAtomic зовут
+    // NotifyMutated синхронно внутри записи (FileService.cs:427, FilesController.cs:504), подписчик пишет чужую версию
+    // на диск до SetContentETagAfterWrite. Тег ответа — хеш ОТПРАВЛЕННОГО текста (не чужой
+    // версии файла), и следующий PUT по нему — настоящий 409, а не тихая перезапись чужой правки.
+    [Fact]
+    public async Task SaveContent_ResponseETagIsOurText_ForeignWriteInWindow_NextPut409()
+    {
+        var (id, dir) = await SetupProjectWithFileAsync("window.txt", "v1");
+        var filesSvc = _factory.Services.GetRequiredService<FileService>();
+        Action<string, string, FileMutationKind, string?> interloper = (root, rel, _, _) =>
+        {
+            if (rel == "window.txt") File.WriteAllText(Path.Combine(root, rel), "чужая правка");
+        };
+        filesSvc.OnMutated += interloper;
+        string etagRaw;
+        try
+        {
+            var (etag1, _) = await GetContentETagAsync(id, "window.txt");
+            var put = await PutWithIfMatchAsync(id, "window.txt", "v2", etag1);
+            put.StatusCode.Should().Be(HttpStatusCode.OK);
+
+            var values = put.Headers.GetValues("ETag").ToList();
+            values.Should().HaveCount(1, "ETag по К8 — один сильный заголовок");
+            etagRaw = values[0];
+            etagRaw.Trim('"').Should().Be(Sha256Hex("v2"),
+                "тег ответа — хеш отправленного контента, даже если на диске уже чужая запись");
+        }
+        finally { filesSvc.OnMutated -= interloper; }
+
+        File.ReadAllText(Path.Combine(dir, "window.txt")).Should().Be("чужая правка",
+            "окно настоящее: на момент ответа файл уже чужой");
+        var put2 = await PutWithIfMatchAsync(id, "window.txt", "v3", etagRaw);
+        put2.StatusCode.Should().Be(HttpStatusCode.Conflict,
+            "цепочка по нашему тегу не затирает чужую правку молча — настоящий 409");
+        var body = JsonSerializer.Deserialize<JsonElement>(await put2.Content.ReadAsStringAsync());
+        body.GetProperty("code").GetString().Should().Be("file_changed");
+        body.GetProperty("content").GetString().Should().Be("чужая правка");
+    }
+
+    // П.1, граница BOM: контент, начинающийся с U+FEFF. Запись пишет его как есть (EF BB BF),
+    // GET срезает преамбулу при декоде — тег ответа обязан быть хешем БЕЗ преамбулы и равен
+    // ETag последующего GET, иначе цепочка дала бы ложный 409. Без снятия BOM у текста запроса
+    // этот тест красный. U+FEFF — явным кодом точки: литерал тонет в диффе.
+    [Fact]
+    public async Task SaveContent_ContentStartsBom_ResponseETagEqualsSubsequentGet_NoFalse409()
+    {
+        var (id, _) = await SetupProjectWithFileAsync("bom_put.txt", "old");
+        var content = (char)0xFEFF + "новая запись с BOM";
+        var put = await _client.PutAsJsonAsync(
+            $"/api/projects/{id}/files/content?path=bom_put.txt", new { content });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var raw = put.Headers.GetValues("ETag").Single();
+        raw.Trim('"').Should().Be(Sha256Hex("новая запись с BOM"),
+            "тег — хеш без BOM-преамбулы: та же канонизация, что у GET после декода");
+
+        var (etag2, _) = await GetContentETagAsync(id, "bom_put.txt");
+        etag2.Should().Be(raw, "тег ответа PUT равен ETag последующего GET");
+
+        var put2 = await PutWithIfMatchAsync(id, "bom_put.txt", "v2", raw);
+        put2.StatusCode.Should().Be(HttpStatusCode.OK,
+            "цепочка по возвращённому тегу не даёт ложного 409 на BOM-преамбулу");
+    }
+
+    // П.2 доработки S2c-1: служебный файл атомарной записи («.имя.<guid>.tmp») не правка
+    // пользователя — до filesChanged он не доходит (тот же накопленный список уходит в
+    // QueueSync синка знаний, FilesWatcherService.cs:535). Проверка на наблюдателе в
+    // polling-режиме: IsExcluded общий у событий (inotify) и у снапшот-диффа, а дифф
+    // детерминирован на любой ОС — тест про признак, а не про inotify.
+    [Fact]
+    public async Task FileWatcher_AtomicTempFileIsNotSent_TargetFileIsSent()
+    {
+        var root = Path.Combine(_tempDir, "watch_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(root);
+        var sent = new List<JsonElement>();
+        var (svc, projectId) = BuildWatcherService(root, sent);
+        try
+        {
+            svc.Watch(projectId, "conn-atomic").Should().BeTrue("наблюдатель поднят впервые");
+            var tmpName = TreeExcludes.AtomicTempName("target.txt");
+            File.WriteAllText(Path.Combine(root, tmpName), "недозаписанный");
+            File.WriteAllText(Path.Combine(root, "target.txt"), "правка пользователя");
+
+            var paths = await WaitSentPaths(sent, "target.txt", TimeSpan.FromSeconds(20));
+            paths.Should().Contain("target.txt", "правка целевого файла доходит до клиента");
+            paths.Should().NotContain(tmpName, "служебный файл атомарной записи — не правка пользователя");
+        }
+        finally { svc.Dispose(); }
+    }
+
+    // Наблюдатель с проектом на заданном корне (по образцу FileWatcherSubscriptionTests),
+    // в polling-режиме и с коротким интервалом: снапшот-дифф даёт событие без inotify.
+    private (FileWatcherService Svc, string ProjectId) BuildWatcherService(string root, List<JsonElement> sent)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "watcher_projects.json"),
+            ["FileWatcher:UsePolling"] = "true",
+            ["FileWatcher:PollIntervalMs"] = "200",
+        }).Build();
+        var userStore = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var owner = userStore.Add("fw-" + Guid.NewGuid().ToString("N")[..8], "pw-123456", "user");
+        var projects = new ProjectManager(config, userStore, new AppSettingsService(config));
+        var project = projects.Create("fw-" + Guid.NewGuid().ToString("N")[..8], root, owner.Id, owner.Username);
+
+        // Dify не настроен → QueueSync — тихий no-op: тест про фильтр путей, не про синк.
+        var wkStore = new WorkspaceKnowledgeStore(config);
+        var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
+            Options.Create(new DifyOptions()), wkStore);
+        var knowledgeSync = new ProjectKnowledgeSyncService(knowledge, wkStore, projects,
+            new ProjectFileGateway(new FileService()), new RecordingHubNotifier(), new NullDifyMetrics(),
+            NullLogger<ProjectKnowledgeSyncService>.Instance);
+        var graphs = new CodeGraphService(NullLogger<CodeGraphService>.Instance, new ProjectRootLookup(projects),
+            new GraphPersistence(_tempDir, NullLogger<GraphPersistence>.Instance), config);
+
+        var proxy = new Mock<IClientProxy>();
+        proxy.Setup(p => p.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
+            .Callback<string, object[], CancellationToken>((_, args, _) =>
+            {
+                lock (sent) sent.Add(JsonSerializer.SerializeToElement(args[0]));
+            })
+            .Returns(Task.CompletedTask);
+        var clients = new Mock<IHubClients>();
+        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(proxy.Object);
+        var hub = new Mock<IHubContext<SessionHub>>();
+        hub.Setup(h => h.Clients).Returns(clients.Object);
+
+        return (new FileWatcherService(projects, hub.Object, knowledgeSync, graphs, config), project.Id);
+    }
+
+    // Собирает пути из всех событий filesChanged, пока не появится ожидаемый.
+    private static async Task<List<string>> WaitSentPaths(List<JsonElement> sent, string expected, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            var paths = new List<string>();
+            lock (sent)
+                foreach (var payload in sent)
+                    paths.AddRange(payload.GetProperty("paths").EnumerateArray().Select(p => p.GetString()!));
+            if (paths.Contains(expected)) return paths;
+            if (DateTime.UtcNow > deadline)
+                throw new TimeoutException($"событие по {expected} не доехало до клиента: [{string.Join(", ", paths)}]");
+            await Task.Delay(100);
+        }
     }
 
     [Fact]

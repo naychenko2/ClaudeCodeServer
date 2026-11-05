@@ -32,6 +32,7 @@ public sealed record McpServerDto(
     string Transport, string? Command, IReadOnlyList<string> Args, IReadOnlyList<McpValueDto> Env,
     string? Url, IReadOnlyList<McpValueDto> Headers, McpAuthDto Auth,
     bool Enabled, bool AlwaysLoad, bool AllowReadOnlyPersonas, bool AllowOutsideProjects,
+    bool SharedWithMembers,
     string Source, int AuthVersion, DateTime CreatedAt, DateTime UpdatedAt,
     string? Group = null, McpCatalogRefDto? CatalogRef = null, McpServerStatusDto? Status = null);
 
@@ -61,6 +62,7 @@ public static class McpServerMapper
         AlwaysLoad: r.AlwaysLoad,
         AllowReadOnlyPersonas: r.AllowReadOnlyPersonas,
         AllowOutsideProjects: r.AllowOutsideProjects,
+        SharedWithMembers: r.SharedWithMembers,
         Source: r.Source.ToString().ToLowerInvariant(),
         AuthVersion: r.AuthVersion,
         CreatedAt: r.CreatedAt,

@@ -5,8 +5,7 @@ using Microsoft.Extensions.Options;
 namespace ClaudeHomeServer.Services.TurnAutoResume;
 
 /// <summary>
-/// Фоновый оркестратор авто-возобновления ходов после рестарта сервера (флаг turn-auto-resume,
-/// ADR-033). Ждёт ApplicationStarted, запись маркеров обрыва и паузу прогрева, затем
+/// Фоновый оркестратор авто-возобновления ходов после рестарта сервера (ADR-033). Ждёт ApplicationStarted, запись маркеров обрыва и паузу прогрева, затем
 /// последовательно (пауза GapSeconds) возобновляет подходящих кандидатов, но не больше
 /// MaxPerBoot за старт. Сбой одной сессии цикл не роняет.
 /// </summary>
@@ -89,9 +88,9 @@ public class TurnAutoResumeService : BackgroundService
                 // Владелец резолвится через шов (ResolveOwnerId): у проектной сессии OwnerId
                 // пустой — владелец берётся из проекта (ADR-033, дефект: проверка по OwnerId
                 // отсеивала все проектные чаты).
-                if (!_host.IsEnabledFor(session))
+                if (!_host.HasResolvableOwner(session))
                 {
-                    _log.LogInformation("Авто-возобновление {SessionId}: флаг turn-auto-resume выключен у владельца", id);
+                    _log.LogInformation("Авто-возобновление {SessionId}: владелец чата не резолвится", id);
                     continue;
                 }
 

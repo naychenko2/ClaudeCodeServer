@@ -51,7 +51,7 @@ public class WorkspaceHttpOwnerIsolationTests : IDisposable
     private static async Task<JsonElement> CallToolAsync(HttpClient client, string sessionId,
         string tool, object args)
     {
-        var resp = await client.PostAsJsonAsync($"/mcp/wsp/{sessionId}", new
+        var resp = await client.AsCaller(sessionId).PostAsJsonAsync($"/mcp/wsp/{sessionId}", new
         {
             jsonrpc = "2.0", id = 1, method = "tools/call",
             @params = new { name = tool, arguments = args },

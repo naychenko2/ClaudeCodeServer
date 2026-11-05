@@ -54,7 +54,7 @@ public class WikiNightlyServiceTests : IDisposable
             .Build();
         var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _projects = new ProjectManager(_config, users, new AppSettingsService(_config));
-        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, _flag);
+        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, flags: _flag);
         _keeper = new WikiKeeper(_notes, _config);
         _apply = new WikiApplyService(_notes, _keeper, new NoSpheres(), _config);
         foreach (var owner in new[] { User, Other })
@@ -122,7 +122,7 @@ public class WikiNightlyServiceTests : IDisposable
         ClaudeHomeServer.Services.Composition.IFeatureFlagGate? flags = null,
         ClaudeHomeServer.Services.Composition.INotificationSender? notifier = null) =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
-            analyze ?? Done(), _llm, _config, NullLogger<WikiNightlyService>.Instance, flags ?? _flag, () => _now, notifier);
+            analyze ?? Done(), _llm, _config, NullLogger<WikiNightlyService>.Instance, flags ?? _flag, () => _now, notifier, _keeper);
 
     private Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> Done(
         string outcome = WikiChatIngestService.OutcomeNothingNew, int packages = 0) =>
@@ -145,7 +145,7 @@ public class WikiNightlyServiceTests : IDisposable
     private WikiNightlyService RealSut() =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
             (o, c, ct) => RealIngest().AnalyzeAsync(o, c, ct, LocalActionCatalog.WikiNightly),
-            _llm, _config, NullLogger<WikiNightlyService>.Instance, _flag, () => _now);
+            _llm, _config, NullLogger<WikiNightlyService>.Instance, _flag, () => _now, keeper: _keeper);
 
     private List<string> KeeperFiles() =>
         Directory.Exists(Path.Combine(Root(), "keeper"))
@@ -288,6 +288,109 @@ public class WikiNightlyServiceTests : IDisposable
         _analyzed.Should().BeEmpty("умолчания — ночь выключена");
         File.Exists(LastFile()).Should().BeFalse();
         File.ReadAllText(health).Split("нечитаемы").Length.Should().Be(2, "ровно одна строка за сутки, а не по строке на тик");
+    }
+
+    // ─── LI-1: ночь сама заводит вики при включённом тумблере ──────────────
+
+    private const string Fresh = "u3"; // владелец без pages/_schema.md
+
+    private string FreshSchema() => Path.Combine(Root(Fresh), "pages", WikiPaths.SchemaFileName);
+    private string FreshPages() => Path.Combine(Root(Fresh), "pages");
+
+    [Fact]
+    public async Task ТумблерВключён_ВикиНеЗаведена_НочьЗаводитПроходитИУведомляет()
+    {
+        Configure(owner: Fresh);
+        AddChat("c1", owner: Fresh);
+        File.Exists(FreshSchema()).Should().BeFalse();
+        var notifier = new Notifier();
+
+        await Tick(Sut(Done(WikiChatIngestService.OutcomeApplied, packages: 1), notifier: notifier));
+
+        File.Exists(FreshSchema()).Should().BeTrue("ночь завела вики через EnsureInitializedAsync");
+        _analyzed.Should().Equal(new[] { "c1" }, "проход выполнен");
+        WikiNightlyService.ReadLast(Root(Fresh)).Should().NotBeNull();
+        notifier.Sent.Should().ContainSingle("итог ночи доставлен владельцу");
+    }
+
+    [Fact]
+    public async Task НеЗаводит_ВнеОкна()
+    {
+        Configure(owner: Fresh);
+        AddChat("c1", owner: Fresh);
+        _now = At(12);
+
+        await Tick();
+
+        Directory.Exists(FreshPages()).Should().BeFalse();
+        _analyzed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task НеЗаводит_ТумблерВыключен()
+    {
+        Configure(enabled: false, owner: Fresh);
+        AddChat("c1", owner: Fresh);
+
+        await Tick();
+
+        Directory.Exists(FreshPages()).Should().BeFalse();
+        _analyzed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task НеЗаводит_ФлагLlmWikiВыключен()
+    {
+        Configure(owner: Fresh);
+        AddChat("c1", owner: Fresh);
+        _flag.On = false;
+
+        await Tick();
+
+        Directory.Exists(FreshPages()).Should().BeFalse();
+        _analyzed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task НеЗаводит_НевалидныеНастройки_БезСигналаИЗаписи()
+    {
+        Directory.CreateDirectory(Path.Combine(Root(Fresh), "keeper"));
+        File.WriteAllText(Path.Combine(Root(Fresh), "keeper", "settings.json"), "{ не json");
+        AddChat("c1", owner: Fresh);
+
+        await Tick();
+
+        Directory.Exists(FreshPages()).Should().BeFalse("_health.md создал бы pages/ мимо единственного метода заведения");
+        _analyzed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Гонка_НочнойТикИЗаведениеИзВне_ОдинШаблон_ПравкаЧеловекаНеЗатёрта()
+    {
+        Configure(owner: Fresh);
+        AddChat("c1", owner: Fresh);
+        var sut = Sut();
+        var go = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Оба заведения стартуют по одному сигналу — ночь и «PUT settings/analyze».
+        var tick = Task.Run(async () => { await go.Task; await sut.RunNightTickAsync(_now); });
+        var direct = Task.Run(async () => { await go.Task; await _keeper.EnsureInitializedAsync(Fresh); });
+        go.SetResult();
+        await Task.WhenAll(tick, direct);
+
+        File.Exists(FreshSchema()).Should().BeTrue();
+        const string edited = "# Правка человека\n";
+        File.WriteAllText(FreshSchema(), edited);
+
+        _now = At(4, day: 3); // следующая ночь: заведение идёт повторно и параллельно с прямым вызовом
+        AddChat("c2", owner: Fresh);
+        var go2 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tick2 = Task.Run(async () => { await go2.Task; await sut.RunNightTickAsync(_now); });
+        var direct2 = Task.Run(async () => { await go2.Task; await _keeper.EnsureInitializedAsync(Fresh); });
+        go2.SetResult();
+        await Task.WhenAll(tick2, direct2);
+
+        File.ReadAllText(FreshSchema()).Should().Be(edited, "заведение идемпотентно: шаблон поверх правки человека не пишется");
     }
 
     // ─── c1: бюджет, лимиты пакетов и открытых ────────────────────────────
@@ -818,6 +921,115 @@ public class WikiNightlyServiceTests : IDisposable
         File.ReadAllText(LastFile()).Should().Contain("\"estTokens\"").And.Contain("\"toInbox\"");
     }
 
+    // ─── WC-3: частичный исход считается в applied ─────────────────────────
+    // Частичный исход разбора (Partial, отказ позднего окна) — Outcome applied:
+    // применённые пакеты чата считаются в итог ночи так же, как при полном разборе.
+
+    [Fact]
+    public async Task ЧастичныйИсход_СчитаетсяВApplied()
+    {
+        Configure();
+        AddChat("c1");
+        AddChat("c2");
+        await Tick(Sut((owner, chat, ct) =>
+        {
+            lock (_analyzed) _analyzed.Add(chat);
+            return Task.FromResult(new WikiChatIngestService.ChatResult(
+                WikiChatIngestService.OutcomeApplied, "разбор окна m8-m10 не удался", ["pkg-" + chat],
+                Partial: true));
+        }));
+
+        var last = Last();
+        last.Analyzed.Should().Be(2);
+        last.Applied.Should().Be(2, "пакеты частичного исхода — в applied, отказ позднего окна их не перечёркивает");
+        last.ToInbox.Should().Be(0);
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted);
+    }
+
+    // ─── WC-4b: фактические входные токены в итоге ночи ─────────────────────
+    // Итог несёт сумму фактического входа разобранных чатов (ChatResult.InputTokens, WC-4a) рядом с
+    // оценкой: EstTokens решает бюджет заранее, InputTokens — что реально ушло модели.
+
+    [Fact]
+    public async Task ИтогНочи_InputTokensРавенСуммеФактических()
+    {
+        // Мутации: «не прибавлять r.InputTokens» → 0; «суммировать только applied» → 0 (исход здесь
+        // nothing_new). Сбой разбора (c3) до analyzed++ не доходит — в сумме его нет.
+        Configure();
+        AddChat("c1");
+        AddChat("c2");
+        AddChat("c3");
+        await Tick(Sut((owner, chat, ct) =>
+        {
+            lock (_analyzed) _analyzed.Add(chat);
+            if (chat == "c3") throw new InvalidOperationException("разбор не вернулся");
+            return Task.FromResult(new WikiChatIngestService.ChatResult(
+                WikiChatIngestService.OutcomeNothingNew, null, [],
+                InputTokens: chat == "c1" ? 1_000 : 2_500));
+        }));
+
+        var last = Last();
+        last.Analyzed.Should().Be(2, "сбой разбора в итог не входит");
+        last.InputTokens.Should().Be(3_500, "сумма фактического входа разобранных чатов");
+        last.EstTokens.Should().BeGreaterThan(0, "оценка остаётся: по ней бюджет решает заранее");
+        File.ReadAllText(LastFile()).Should().Contain("\"inputTokens\"");
+    }
+
+    [Fact]
+    public async Task ИтогНочи_InputTokensВключаетВходСтупени2()
+    {
+        // Мутация «не прибавлять judged.InputTokens к inputTokens в RunPassAsync» → 1 000
+        // (красный): фактический вход ступени 2 выпадает из суммы.
+        Configure();
+        AddChat("g1", mark: null, history: Gray());
+        WikiChatScorer.Score(ScorerInput(_sessions.GetById("g1")!)).Zone.Should().Be(WikiChatScorer.ZoneGray,
+            "фикстура серого чата: ступень 2 спрашивается");
+        _llm.LocalInputTokens = 300;
+        _llm.Reply = a => a == LocalActionCatalog.WikiTriage
+            ? """{"hasKnowledge":true,"about":"a","reason":"r"}"""
+            : NothingJson;
+
+        await Tick(Sut((owner, chat, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
+            WikiChatIngestService.OutcomeNothingNew, null, [], InputTokens: 1_000))));
+
+        var last = Last();
+        last.Analyzed.Should().Be(1);
+        last.InputTokens.Should().Be(1_300, "разбор чата (1 000) плюс фактический вход ступени 2 (300)");
+    }
+
+    [Fact]
+    public async Task ОтказСтупени2_ЕёВходВИтогеОстаётся_ЧатНеРазобран()
+    {
+        // Расход считается по факту вызова, а не по исходу вердикта: отказ ступени 2 понесённого
+        // расхода не отменяет (тот же смысл, что у ChatResult в WC-4b). Мутация «суммировать
+        // только Judged» → 0 (красный).
+        Configure();
+        AddChat("g1", mark: null, history: Gray());
+        _llm.LocalInputTokens = 300;
+        _llm.Reply = _ => "это не json";
+
+        await Tick(Sut((owner, chat, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
+            WikiChatIngestService.OutcomeNothingNew, null, [], InputTokens: 1_000))));
+
+        _analyzed.Should().BeEmpty("отказ ступени 2 — серая зона, чат не берётся");
+        Last().InputTokens.Should().Be(300, "вызов модели состоялся — его вход в итоге");
+    }
+
+    [Fact]
+    public async Task СтарыйИтогБезПоля_ЧитаетсяНулём()
+    {
+        // Аддитивность поля: файл итога, записанный до WC-4b, читается как раньше, нового поля в нём
+        // нет → 0. Ломающего изменения формата нет, BackupSchema.Version не тронут.
+        File.WriteAllText(LastFile(), """
+            {"date":"2026-11-02","selected":1,"analyzed":1,"applied":0,"toInbox":0,
+             "estTokens":120,"outcome":"completed","overrodeHuman":0,"disputedPages":0}
+            """);
+
+        var last = Last();
+        last.InputTokens.Should().Be(0);
+        last.EstTokens.Should().Be(120);
+    }
+
     // ─── c4: изоляция владельцев и один проход ─────────────────────────────
 
     [Fact]
@@ -945,6 +1157,9 @@ public class WikiNightlyServiceTests : IDisposable
         public bool Route = true;
         public Func<string, string>? Reply;
         public TaskCompletionSource? Gate;
+        // Сколько «отдал» движок на detailed-вызове (полный вход). 0 — метрик не было:
+        // вызов успешен, usage=null, итог прибавляет 0 (WC-4c).
+        public long LocalInputTokens;
         // Модель вызвана и встала на гейте — событие вместо таймерного ожидания в тестах.
         public readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -972,6 +1187,19 @@ public class WikiNightlyServiceTests : IDisposable
                 await Gate.Task.ConfigureAwait(false);
             }
             return new OneShotResult(text, new OneShotUsage(10, 0, 0, 5, 0.0, "fake"), 1);
+        }
+
+        // Ночная ветка (wiki-nightly) и ступень 2 (wiki-triage) зовут detailed-вариант шва
+        // (WC-4c): тот же ответ плюс usage «движка».
+        public Task<OneShotResult?> RunLocalOrChosenDetailedAsync(string actionKey, string prompt,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            var text = Answer(actionKey, prompt);
+            return Task.FromResult<OneShotResult?>(new OneShotResult(
+                text,
+                LocalInputTokens == 0
+                    ? null
+                    : new OneShotUsage(LocalInputTokens, 0, 0, 5, 0.0, "qwen-local"), 1));
         }
 
         private string Answer(string actionKey, string prompt)

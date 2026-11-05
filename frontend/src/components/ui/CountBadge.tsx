@@ -2,10 +2,12 @@ import { C, FONT } from '../../lib/design';
 
 // Тон кружка — РОЛЬ, а не цвет: accent (оранжевый) зовёт посмотреть немедленно,
 // muted (серый) просто сообщает число, warning (жёлтый) предупреждает о состоянии,
-// которое человек, скорее всего, забыл закрыть (доступ наружу к дев-серверу).
+// которое человек, скорее всего, забыл закрыть (доступ наружу к дев-серверу),
+// info (синий) сообщает о случившемся факте, действия не требует (точка на
+// «Журнале»: ИИ заменил вашу формулировку).
 // Общий тип: те же значения носят точки-расшифровки в тултипе рельсы (RailFlyout),
 // и разъехавшиеся списки молча теряли бы цвет на одной из сторон.
-export type BadgeTone = 'accent' | 'muted' | 'warning';
+export type BadgeTone = 'accent' | 'muted' | 'warning' | 'info';
 
 // Кружок-счётчик на иконке: сколько всего чего-то есть за этой кнопкой.
 // Жил внутри PanelRail (рельса панелей), теперь общий — тот же кружок нужен кнопке
@@ -16,6 +18,7 @@ export function CountBadge({ value, inline, tone = 'accent', bottom }: {
 }) {
   const muted = tone === 'muted';
   const warning = tone === 'warning';
+  const info = tone === 'info';
   return (
     <span style={{
       // Второй индикатор стоит в нижнем углу — стопка под основным (top:-6/right:-7).
@@ -25,7 +28,9 @@ export function CountBadge({ value, inline, tone = 'accent', bottom }: {
         : { position: 'absolute', top: -6, right: -7 }),
       minWidth: 14, height: 14, padding: '0 3px', flexShrink: 0,
       borderRadius: 7,
-      background: muted ? C.bgSelected : warning ? C.warning : C.accent,
+      // info — такой же плотный, как accent: цифра поверх него та же (onAccent),
+      // своего onInfo в дизайн-системе нет
+      background: muted ? C.bgSelected : warning ? C.warning : info ? C.info : C.accent,
       // Жёлтый светлый в обеих темах — цифра поверх него всегда тёмная (onWarning)
       color: muted ? C.textSecondary : warning ? C.onWarning : C.onAccent,
       // Тихий кружок сидит на подложке почти того же тона — без обводки он

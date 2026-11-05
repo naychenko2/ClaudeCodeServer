@@ -19,6 +19,7 @@ import {
 } from '../../../lib/boardControls';
 import { useIsMobile } from '../../../lib/breakpoints';
 import { ToolbarOverflowMenu } from '../../../components/ToolbarOverflowMenu';
+import { assigneeFilterOptions, MemberChips, type AssigneePersonOption } from '../TasksListFilter';
 
 const LABEL_STYLE = {
   fontFamily: FONT.sans, fontSize: 10.5, fontWeight: 700, color: C.textMuted,
@@ -67,12 +68,16 @@ export function useDefectsOnly(): boolean {
   );
 }
 
-export function BoardToolbar({ layout, groupOptions, onEditColumns }: {
+// people — участники общего проекта (загружает вызывающий: TaskBoard/TasksPanel):
+// с ними сегмент «Исполнитель» получает «Участники» и выбор чипом (S2b-F5).
+// Личный проект и хаб — people нет, состав и снимок прежние.
+export function BoardToolbar({ layout, groupOptions, onEditColumns, people }: {
   layout: 'inline' | 'sidebar';
   groupOptions: BoardGroupBy[];
   onEditColumns?: () => void;   // только проектная доска — открыть редактор колонок
+  people?: AssigneePersonOption[];
 }) {
-  const { groupBy, search, priorities, assignee } = useBoardControls();
+  const { groupBy, search, priorities, assignee, assigneeUserId } = useBoardControls();
   const defectsOnly = useDefectsOnly();
   const sidebar = layout === 'sidebar';
   const isMobile = useIsMobile();
@@ -134,25 +139,36 @@ export function BoardToolbar({ layout, groupOptions, onEditColumns }: {
     </div>
   );
 
+  const assigneeOptions = assigneeFilterOptions(people);
   const assigneeToggle = (
     <div style={{ display: sidebar ? 'flex' : 'inline-flex', border: `1px solid ${C.border}`, borderRadius: R.lg, overflow: 'hidden' }}>
-      {(['all', 'me', 'claude'] as const).map(a => (
+      {assigneeOptions.map(o => (
         <button
-          key={a}
-          onClick={() => setAssigneeFilter(a)}
+          key={o.value}
+          onClick={() => setAssigneeFilter(o.value)}
           style={{
             flex: sidebar ? 1 : undefined,
             padding: '6px 11px', cursor: 'pointer', border: 'none',
-            background: assignee === a ? C.accentLight : C.bgWhite,
-            color: assignee === a ? C.accent : C.textSecondary,
-            fontFamily: FONT.sans, fontSize: 12, fontWeight: assignee === a ? 700 : 500,
+            background: assignee === o.value ? C.accentLight : C.bgWhite,
+            color: assignee === o.value ? C.accent : C.textSecondary,
+            fontFamily: FONT.sans, fontSize: 12, fontWeight: assignee === o.value ? 700 : 500,
           }}
         >
-          {a === 'all' ? 'Все' : a === 'me' ? 'Я' : 'AI'}
+          {o.label}
         </button>
       ))}
     </div>
   );
+  // Выбор конкретного участника под сегментом (общий проект); без people — ничего нет
+  const memberChips = (mobileChips: boolean) =>
+    assignee === 'member' && people && people.length > 0 ? (
+      <MemberChips
+        people={people} selectedUserId={assigneeUserId} mobile={mobileChips}
+        onPick={userId => setAssigneeFilter('member', userId)}
+      />
+    ) : null;
+  const chips = memberChips(false);
+  const chipsMobile = memberChips(true);
 
   // Чип «Только дефекты»: тот же стиль, что у фильтров приоритета, но без точки-маркера —
   // иконка Bug вместо неё. Семантика «дефект» сразу видна рядом с пометкой активного
@@ -207,6 +223,7 @@ export function BoardToolbar({ layout, groupOptions, onEditColumns }: {
         <div>
           <span style={{ ...LABEL_STYLE, display: 'block', marginBottom: 6 }}>Исполнитель</span>
           {assigneeToggle}
+          {chips && <div style={{ marginTop: 6 }}>{chips}</div>}
         </div>
         <div>
           <span style={{ ...LABEL_STYLE, display: 'block', marginBottom: 6 }}>Тип</span>
@@ -252,21 +269,22 @@ export function BoardToolbar({ layout, groupOptions, onEditColumns }: {
             <div>
               <span style={{ ...LABEL_STYLE, display: 'block', marginBottom: 6 }}>Исполнитель</span>
               <div style={{ display: 'flex', border: `1px solid ${C.border}`, borderRadius: R.lg, overflow: 'hidden' }}>
-                {(['all', 'me', 'claude'] as const).map(a => (
+                {assigneeOptions.map(o => (
                   <button
-                    key={a}
-                    onClick={() => setAssigneeFilter(a)}
+                    key={o.value}
+                    onClick={() => setAssigneeFilter(o.value)}
                     style={{
                       flex: 1, padding: '9px 11px', cursor: 'pointer', border: 'none',
-                      background: assignee === a ? C.accentLight : C.bgWhite,
-                      color: assignee === a ? C.accent : C.textSecondary,
-                      fontFamily: FONT.sans, fontSize: 13, fontWeight: assignee === a ? 700 : 500,
+                      background: assignee === o.value ? C.accentLight : C.bgWhite,
+                      color: assignee === o.value ? C.accent : C.textSecondary,
+                      fontFamily: FONT.sans, fontSize: 13, fontWeight: assignee === o.value ? 700 : 500,
                     }}
                   >
-                    {a === 'all' ? 'Все' : a === 'me' ? 'Я' : 'AI'}
+                    {o.label}
                   </button>
                 ))}
               </div>
+              {chipsMobile && <div style={{ marginTop: 6 }}>{chipsMobile}</div>}
             </div>
             <div>
               <span style={{ ...LABEL_STYLE, display: 'block', marginBottom: 6 }}>Тип</span>
@@ -299,6 +317,8 @@ export function BoardToolbar({ layout, groupOptions, onEditColumns }: {
       {searchInput}
       {priorityChips}
       {assigneeToggle}
+      {/* chips — внутри той же строки: при активном «Участники» встают сразу за сегментом */}
+      {chips}
       {defectsChip}
       {columnsBtn}
     </div>

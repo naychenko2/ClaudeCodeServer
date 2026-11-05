@@ -33,7 +33,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // человека / WikiMark=skip) → отказ с причиной, 0 вызовов модели. Плюс уроки ревью
 // S6b-3: гонка двух заявок одного чата — один разбор (настоящий параллельный, через
 // TaskCompletionSource); отмена ct заявителя не гасит чужую заявку; сбой посреди окон
-// не двигает курсор и не оставляет половины хроники. Плюс доработка S4c (ревью d857da6c):
+// при неприменённом не двигает курсор и не оставляет половины хроники; при применённом —
+// частичный исход (WC-3): отказ позднего окна не перечёркивает применённое, Partial с
+// причиной отказа, курсор на конце последнего успешного окна. Плюс доработка S4c (ревью d857da6c):
 // этот путь не решает «само / Входящие» сам — он получает настройки владельца через
 // тот же WikiIngestService: выключенный класс оставляет пакет в «Входящих».
 //
@@ -115,7 +117,7 @@ public class WikiChatIngestTests : IDisposable
             .Build();
         var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _projects = new ProjectManager(_config, users, new AppSettingsService(_config));
-        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, new WikiFlagOn());
+        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, flags: new WikiFlagOn());
         _keeper = new WikiKeeper(_notes, _config);
         _apply = new WikiApplyService(_notes, _keeper, new NoSpheres(), _config);
         _keeper.EnsureInitializedAsync(User).GetAwaiter().GetResult();
@@ -1076,19 +1078,17 @@ public class WikiChatIngestTests : IDisposable
         llm.Calls.Should().HaveCount(2);
     }
 
-    // ── сбой посреди окон: курсор на месте, половины хроники нет (урок S6e-2) ──
+    // ── сбой посреди окон и частичный исход (урок S6e-2; WC-3) ──────────────────────
 
-    [Fact]
-    public async Task СбойПосредиОкон_КурсорНаМесте_БезПоловиныХроники()
+    // Дельта длиннее окна (35k токенов; мера — байты/3, WikiChatSlicer.cs:57):
+    // 18 ответов по 6k латинских символов = 36k токенов → ровно два окна S6j.
+    // Латинский и 6k, а не кириллица и 12k: кириллица в два байта делает реплику
+    // 24 КБ — первая реплика второго окна не полезла бы в выдержку карточки (8 КБ,
+    // целыми репликами) и второе окно отбилось бы захватом, а не моделью. Последняя
+    // реплика — человеческая: в диапазоне второго окна обязана быть реплика человека
+    // (§12а: агентскую цитирует только человеческая того же диапазона).
+    private List<StoredMessage> TwoWindowHistory()
     {
-        AddSession();
-        // Дельта длиннее окна (35k токенов; мера — байты/3, WikiChatSlicer.cs:57):
-        // 18 ответов по 6k латинских символов = 36k токенов → ровно два окна S6j.
-        // Латинский и 6k, а не кириллица и 12k: кириллица в два байта делает реплику
-        // 24 КБ — первая реплика второго окна не полезла бы в выдержку карточки (8 КБ,
-        // целыми репликами) и второе окно отбилось бы захватом, а не моделью. Последняя
-        // реплика — человеческая: в диапазоне второго окна обязана быть реплика человека
-        // (§12а: агентскую цитирует только человеческая того же диапазона).
         var history = new List<StoredMessage>
         {
             new StoredSessionStartedMessage("claude", "default"),
@@ -1096,7 +1096,89 @@ public class WikiChatIngestTests : IDisposable
         };
         for (var i = 0; i < 18; i++) history.Add(new StoredTextMessage(new string('x', 6_000)));
         history.Add(new StoredUserMessage("Хватит. Итога нет."));
+        return history;
+    }
+
+    // Тот же слайсинг, что делает сервис (от 1 до конца истории): конец первого окна —
+    // позиция курсора частичного исхода; два окна — сам сценарий теста.
+    private int EndOfFirstWindow(List<StoredMessage> history)
+    {
+        var windows = WikiChatSlicer.Windows(history, 1, history.Count);
+        windows.Should().HaveCount(2, "дельта — ровно два окна");
+        return windows[0].Lines[^1].Index;
+    }
+
+    // Вне шага WC-3: только «нечего добавить» до отказа — по-старому отказ всего разбора:
+    // курсор на месте, половины хроники нет.
+    [Fact]
+    public async Task СбойПосредиОкон_НичегоНеПрименено_КурсорНаМесте_БезПоловиныХроники()
+    {
+        AddSession();
+        SetHistory(ChatId, TwoWindowHistory());
+
+        var llm = new FakeLlm(
+            ("A", Claims(Claim1)), ("B", NothingJson),
+            ("A", "модель ответила прозой вместо JSON"));
+        var res = await Sut(llm).AnalyzeAsync(User, ChatId);
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected, res.Reason);
+        res.Reason.Should().Contain("окна m", "названо окно, на котором разбор оборвался");
+        llm.CountOf("A").Should().Be(2, "первое окно разобрано («нечего добавить»), второе — отказано");
+        WikiChatTriageStore.Get(Root).Entries.Should().BeEmpty("отказ при неприменённом курсор не двигает");
+        ChronicleFiles().Should().BeEmpty("хроника не начинается половиной разбора");
+    }
+
+    // c1 (WC-3): окно 1 применил пакет, окно 2 отказано — частичный исход: applied с
+    // Partial и причиной отказа, хроника по применённому, курсор на конце окна 1 —
+    // не назад (0) и не за отказанное окно (history.Count).
+    [Fact]
+    public async Task ДваОкна_ВтороеОтказано_ЧастичныйИсход()
+    {
+        AddSession();
+        var history = TwoWindowHistory();
         SetHistory(ChatId, history);
+        var endOfFirst = EndOfFirstWindow(history);
+
+        var llm = new FakeLlm(
+            ("A", Claims(Claim1)), ("B", Plan1),
+            ("A", "модель ответила прозой вместо JSON"));
+        var res = await Sut(llm).AnalyzeAsync(User, ChatId);
+
+        // Мутация «вернуть return Refused в default»: исход rejected, Partial нет,
+        // курсора и хроники нет — красное здесь.
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, res.Reason);
+        res.Partial.Should().BeTrue("разбор оборвался на позднем окне — применённое осталось");
+        res.Reason.Should().Contain("окна m", "причина отказанного окна остаётся в результате");
+        res.PackageIds.Should().HaveCount(1, "пакет применённого окна не отменён отказом позднего");
+
+        var entry = WikiChatTriageStore.Get(Root).Entries.Single();
+        entry.Cursor.Should().Be(endOfFirst, "курсор на конце последнего успешного окна");
+        entry.Cursor.Should().NotBe(history.Count, "курсор не прыгает за отказанное окно");
+        entry.CursorHash.Should().NotBeNullOrEmpty("хэш записи, на которой стоит курсор");
+
+        // Хроника — по применённым; страница знаний пополнена применённым окном.
+        var chronicles = ChronicleFiles();
+        chronicles.Should().HaveCount(1);
+        StatementLines(File.ReadAllText(chronicles[0], System.Text.Encoding.UTF8), Claim1)
+            .Should().Be(1, "хроника по применённому написана");
+        File.ReadAllText(PathOf(PagePath)).Should().Contain(Claim1, "применённое окно осталось на странице");
+        llm.CountOf("A").Should().Be(2, "первое окно разобрано, второе отказано, дальше цикл не идёт");
+    }
+
+    // c3 (WC-3): хроника частичного исхода не записана — исход refused, курсор на месте
+    // (его Upsert идёт только после хроники).
+    [Fact]
+    public async Task ХроникаНеЗаписана_ЧастичныйИсход_КурсорНаМесте()
+    {
+        AddSession();
+        SetHistory(ChatId, TwoWindowHistory());
+        // На пути хроники — страница, которая хроникой не читается: дописать её нечем,
+        // тот же сбой хроники, что у полного разбора. Пишется Хранителем (не прямым файлом):
+        // страница обязана быть в манифесте раздела — иначе её видит не хроника, а захват
+        // окна («чужие файлы вне манифеста»).
+        var chronicleKey = WikiChatIngestService.ChroniclePath(Section, ChatId)!;
+        (await _keeper.WritePageAsync(User, Section, chronicleKey, PageBase.Replace(PageTitle, ChatId)))
+            .Status.Should().Be(WikiOpStatus.Applied);
 
         var llm = new FakeLlm(
             ("A", Claims(Claim1)), ("B", Plan1),
@@ -1104,10 +1186,92 @@ public class WikiChatIngestTests : IDisposable
         var res = await Sut(llm).AnalyzeAsync(User, ChatId);
 
         res.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected, res.Reason);
-        res.Reason.Should().Contain("окна m", "названо окно, на котором разбор оборвался");
-        llm.CountOf("A").Should().Be(2, "первое окно разобрано, второе — отказано");
-        WikiChatTriageStore.Get(Root).Entries.Should().BeEmpty("сбой посреди окон курсор не двигает");
-        ChronicleFiles().Should().BeEmpty("хроника не начинается половиной разбора");
+        res.Reason.Should().Contain("не читается как хроника", "сбой хроники назван причиной отказа");
+        llm.CountOf("A").Should().Be(2, "первое окно применилось, второе отказано");
+        WikiChatTriageStore.Get(Root).Entries.Should().BeEmpty("сбой хроники курсор не двигает");
+    }
+
+    // c2 (WC-3), гонка: две заявки одного чата при частичном исходе — один разбор:
+    // один пакет, одна хроника, один курсор. Мутация «снять проверку _inFlight» в
+    // AnalyzeAsync: вторая заявка начинает свой разбор — свои ReadAsync и захваты
+    // (HistoryReads больше 3) и свой вызов модели (CountOf("A") больше 2) — красное.
+    [Fact]
+    public async Task ДваРазбораОдногоЧата_ЧастичныйИсход_ОдинПакетОднаХроника()
+    {
+        AddSession();
+        var history = TwoWindowHistory();
+        SetHistory(ChatId, history);
+        var endOfFirst = EndOfFirstWindow(history);
+
+        var gate = new TaskCompletionSource();
+        var llm = new FakeLlm(
+            ("A", Claims(Claim1)), ("B", Plan1),
+            ("A", "модель ответила прозой вместо JSON")) { GateA = gate };
+        var sut = Sut(llm);
+
+        var t1 = sut.AnalyzeAsync(User, ChatId);
+        SpinWait.SpinUntil(() => llm.Calls.Count > 0, 5000).Should().BeTrue("первая заявка реально в прогоне");
+        var t2 = sut.AnalyzeAsync(User, ChatId);
+        gate.SetResult();
+        var results = await Task.WhenAll(t1, t2);
+
+        results.Should().OnlyContain(r => r.Outcome == WikiChatIngestService.OutcomeApplied && r.Partial,
+            "обе заявки получают один и тот же разбор");
+        results[0].PackageIds.Should().Equal(results[1].PackageIds);
+        results[0].PackageIds.Should().HaveCount(1);
+        _sessions.HistoryReads.Should().Be(3, "один разбор: его ReadAsync и захваты двух окон; вторая заявка своего разбора не начинает");
+        llm.CountOf("A").Should().Be(2, "два окна одного разбора: первое применено, второе отказано");
+
+        WikiPackageStore.List(Root).Packages.Should().HaveCount(1, "пакет один, не на каждую заявку");
+        var chronicles = ChronicleFiles();
+        chronicles.Should().HaveCount(1);
+        StatementLines(File.ReadAllText(chronicles[0], System.Text.Encoding.UTF8), Claim1)
+            .Should().Be(1, "хронику пишет один разбор, не каждая присоединившаяся заявка");
+
+        var entry = WikiChatTriageStore.Get(Root).Entries.Single();
+        entry.Cursor.Should().Be(endOfFirst, "курсор — конец последнего успешного окна одного разбора");
+    }
+
+    // ── WC-4a: фактические входные токены разбора доходят до его результата ────────────
+
+    // c1: два окна — сумма входных токенов ВСЕХ вызовов модели обоих окон, на том же
+    // сценарии частичного исхода WC-3: окно 2 отказано ПОСЛЕ ответившего вызова, и его
+    // расход понесён — он остаётся в исходе. Мутации: «не прибавлять расход окна»
+    // (снять inputTokens += ing.InputTokens) → 0; «прибавлять только успешные окна»
+    // (перенести прибавление в ветки applied/awaiting/nothing_new) → 300 вместо 600.
+    [Fact]
+    public async Task ДваОкна_InputTokensСуммируются()
+    {
+        AddSession();
+        SetHistory(ChatId, TwoWindowHistory());
+
+        var llm = new FakeLlm(
+            ("A", Claims(Claim1)), ("B", Plan1),
+            ("A", "модель ответила прозой вместо JSON"))
+        { InputTokensByCall = [100, 200, 300] };
+        var res = await Sut(llm).AnalyzeAsync(User, ChatId);
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, res.Reason);
+        res.Partial.Should().BeTrue("тот же сценарий, что у частичного исхода WC-3");
+        llm.CountOf("A").Should().Be(2, "оба окна дошли до модели");
+        res.InputTokens.Should().Be(600,
+            "100+200 первого окна и 300 ответившего, но отказанного второго: расход не зависит от исхода окна");
+    }
+
+    // c2: штатный «нечего добавить» после двух ответивших вызовов — расход не ноль: он был,
+    // даже с тем, что писать нечего. Мутация «nothing_new обнуляет расход» → 0.
+    [Fact]
+    public async Task ОкноНичегоНового_InputTokensНеНоль()
+    {
+        AddSession();
+        SetShortHistory();
+
+        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", NothingJson))
+        { InputTokensByCall = [100, 200] };
+        var res = await Sut(llm).AnalyzeAsync(User, ChatId);
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeNothingNew, res.Reason);
+        res.InputTokens.Should().Be(300, "«нечего добавить» не отменяет понесённого расхода");
     }
 
     // ── доработка S4c (ревью d857da6c): чат-разбор — та же проводка настроек владельца ──
@@ -1261,7 +1425,7 @@ public class WikiChatIngestTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, User)], "test"));
-        return new WikiChatsController(_sessions, Sut(new FakeLlm()), new WikiChatRecalc(_sessions, _config), _config, new WikiFlagOn())
+        return new WikiChatsController(_sessions, Sut(new FakeLlm()), new WikiChatRecalc(_sessions, _config), _keeper, _config, new WikiFlagOn())
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -1287,6 +1451,10 @@ public class WikiChatIngestTests : IDisposable
         // Локальный раннер «недоступен»: RunLocalOrChosenAsync бросает; облачные входы при этом
         // ответили бы (Answer) — так видно, что облако не позвано.
         public Exception? LocalThrow;
+        // Входные токены вызовов по их порядку (WC-4a): тест на сумму результата ставит свои
+        // значения — тогда «не прибавить окно» видно числом, а не только фактом «не ноль».
+        // Не задан — прежние 10 на каждый вызов (существующие тесты метрик не проверяют).
+        public List<long>? InputTokensByCall;
 
         private readonly Dictionary<string, Queue<string>> _answers = new();
         private readonly List<Action> _beforeNextCall = [];
@@ -1334,7 +1502,9 @@ public class WikiChatIngestTests : IDisposable
             // отдаёт управление, и к этому моменту заявка уже стоит в очереди.
             if (GateAAsync is not null && Calls[^1].Pass == "A" && CountOf("A") == 1)
                 await GateAAsync.Task.ConfigureAwait(false);
-            return new OneShotResult(text, new OneShotUsage(10, 0, 0, 5, 0.0, "fake"), 1);
+            // Answer уже записал этот вызов в Calls: его позиция — индекс метрик теста (WC-4a).
+            var input = InputTokensByCall is { } t && Calls.Count <= t.Count ? t[Calls.Count - 1] : 10L;
+            return new OneShotResult(text, new OneShotUsage(input, 0, 0, 5, 0.0, "fake"), 1);
         }
 
         private string Answer(string actionKey, string prompt, CancellationToken ct)

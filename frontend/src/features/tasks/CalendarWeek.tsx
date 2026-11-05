@@ -6,7 +6,7 @@ import type { Project, Task } from '../../types';
 import { C, FONT } from '../../lib/design';
 import { NO_PROJECT_LABEL, addDaysIso, projectColor, todayIso } from '../../lib/tasks';
 import { NavArrow } from './CalendarMonth';
-import { RepeatIcon } from './bits';
+import { RepeatIcon, SharedTaskChip, isSharedTask } from './bits';
 import { useTaskHover } from './useTaskHover';
 
 interface Props {
@@ -174,6 +174,7 @@ export function CalendarWeek({ tasks, projectsById, navDate, onNavigate, onOpenT
                 <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textSecondary }}>
                   весь день · {nameOf(t)}
                 </span>
+                {isSharedTask(t, projectsById) && <SharedTaskChip />}
               </div>
             );
           })}
@@ -226,6 +227,7 @@ export function CalendarWeek({ tasks, projectsById, navDate, onNavigate, onOpenT
                 <div style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textSecondary }}>
                   {t.dueTime} · {nameOf(t)}
                 </div>
+                {isSharedTask(t, projectsById) && <SharedTaskChip />}
               </div>
             </div>
           );

@@ -97,10 +97,13 @@ public class RunDelegationGateTests : IDisposable
             await project.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
     }
 
+    // Вызов «от лица чата» (S2a-3a): рамка хода читается по заголовку X-Caller-Session-Id,
+    // вызов без него — узкая рамка (fail-closed, SessionManager.GetTurnFrame) и отказ NarrowText
+    // ещё до проверяемого гейта делегированности. Конфиг хода в бою кладёт этот заголовок всегда.
     private static async Task<string> ToolTextAsync(HttpClient client, string server, string sessionId,
         string tool, object args)
     {
-        var resp = await client.PostAsJsonAsync($"/mcp/{server}/{sessionId}", new
+        var resp = await client.AsCaller(sessionId).PostAsJsonAsync($"/mcp/{server}/{sessionId}", new
         {
             jsonrpc = "2.0", id = 1, method = "tools/call",
             @params = new { name = tool, arguments = args },

@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Media;
@@ -178,6 +179,20 @@ public sealed class WikiSourceCapture
         if (ProjectLinkGuard.HasLink(project.RootPath, full))
             return Refused("файл в проекте идёт через символическую ссылку — это не файл проекта");
 
+        // Чужое closed-поддерево private (тот же общий предикат, что у FilesController,
+        // WorkspaceToolset и KnowledgeController): вложения приватных чатов участников общего
+        // проекта лежат в .cc-attachments/private/{X}/ того же дерева, и чужое (X ≠ владелец)
+        // в вики проекта не берётся. Формула — каноническая (DEC-ROOTS): сегмент
+        // .cc-attachments/private/{X} на любой глубине абсолютного пути цели — поэтому корень
+        // чужого проекта внутри дерева (свой .cc-attachments) даёт тот же отказ; неразрешимый
+        // канон — fail-closed. Свой private и общая раскладка .cc-attachments/{guid}/ — не
+        // чужое: принимаются, как раньше. Отказ неотличим от «файла не найден»: существования
+        // чужого private не раскрываем (тот же инвариант, что у files_read и «чат не
+        // существует» в CaptureSession). IsContainerResolved здесь не нужен: контейнеры —
+        // каталоги, их уже отклоняет проверка файла ниже, а путь через ссылку — гейт выше.
+        if (PrivateAttachments.IsForeignResolved(project.RootPath, rel, ownerId))
+            return Refused("файл не найден");
+
         // Всё {data} — служебное пространство сервера, а не файлы проекта: {data}/wiki — страницы
         // самой вики, {data}/notes/{другойOwner}/ — чужой владелец (источник не выходит за своего).
         // {data}/wiki — канонически (IsWikiPath разыменывает ссылки со стороны data/: «data/wiki»
@@ -235,7 +250,10 @@ public sealed class WikiSourceCapture
     /// `session:{id}#m{a}-{b}` — её режет WikiChatSlicer (реплики человека и ответы агента,
     /// всё через SecretRedactor, без вызовов инструментов), ≤8 КБ. Сессия обязана принадлежать
     /// тому же владельцу и тому же проекту, что раздел назначения: раздел определяет дом чата
-    /// (ADR-036, решение 3), и разбор раздела не цитирует чужие чаты. Чаты исполнения задач —
+    /// (ADR-036, решение 3), и разбор раздела не цитирует чужие чаты. Приватный чат
+    /// (PrivateToUserId, FIN3-3) — отказ как несуществующий: это общий chokepoint обоих
+    /// выдержковых входов (wiki_ingest session:{id}#m{a}-{b} и «Запиши это»), машинные
+    /// потребители приватный чат не читают вовсе. Чаты исполнения задач —
     /// отказ: «чаты исполнения задач не разбираются» (§12, решение Андрея), их итоги уже
     /// триггер. exactSecrets — точные значения секретов инстанса от вызывающего: их собирает
     /// InstanceSecretsProvider вертикали Dossiers (Notes его не видит), без них работает
@@ -259,11 +277,18 @@ public sealed class WikiSourceCapture
         if (!WikiPage.TryParseSessionRef(ref_, out _, out _, out _))
             return Refused($"ref карточки не представим формой session:{{id}}#m{{a}}-{{b}}: '{ref_}'");
 
+        // Чужой и несуществующий — одно слово на двоих (тот же инвариант, что у AnalyzeAsync):
+        // «принадлежит другому владельцу» выдавало бы существование чужого чата — per-owner
+        // утечка, которой здесь нет; различить их может только владелец, и он их не различает.
         var session = _sessions.GetById(sessionId);
-        if (session is null)
-            return Refused("сессия не существует");
-        if (_sessions.ResolveOwnerId(session) != ownerId)
-            return Refused("чат принадлежит другому владельцу: источник — тому же владельцу, что вики");
+        if (session is null || _sessions.ResolveOwnerId(session) != ownerId)
+            return Refused("чат не существует");
+        // Приватный чат (FIN3-3, тот же инвариант, что у AnalyzeAsync и BuildQueue): виден
+        // только автору; его выдержку читают лишь машинные потребители — им он не виден вовсе.
+        // Отказ неотличим от несуществующего (тот же текст «чат не существует»): приватность
+        // не выдавала бы существования чата вызывающему.
+        if (session.PrivateToUserId is not null)
+            return Refused("чат не существует");
         if (session.TaskExecution)
             return Refused("чаты исполнения задач не разбираются: их итоги уже источники");
 

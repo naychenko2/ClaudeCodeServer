@@ -45,13 +45,21 @@ public class DifyHttpOwnerIsolationTests : IDisposable
         return (projectId, sessionId);
     }
 
+    // Вызов «от лица чата» (S2a-3): рамка хода читается по заголовку X-Caller-Session-Id,
+    // вызов без него считается узким (fail-closed). Тесты этого класса зовут инструменты от
+    // лица своего личного чата — рамка широкая, поведение прежнее
     private async Task<JsonElement> CallToolAsync(HttpClient client, string sessionId, string tool, object args)
     {
-        var resp = await client.PostAsJsonAsync($"/mcp/dify/{sessionId}", new
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"/mcp/dify/{sessionId}")
         {
-            jsonrpc = "2.0", id = 1, method = "tools/call",
-            @params = new { name = tool, arguments = args },
-        });
+            Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0", id = 1, method = "tools/call",
+                @params = new { name = tool, arguments = args },
+            }), System.Text.Encoding.UTF8, "application/json"),
+        };
+        req.Headers.Add("X-Caller-Session-Id", sessionId);
+        var resp = await client.SendAsync(req);
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         return JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
     }

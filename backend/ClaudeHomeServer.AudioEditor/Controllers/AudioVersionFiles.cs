@@ -5,17 +5,17 @@ using ClaudeHomeServer.Services.Media;
 namespace ClaudeHomeServer.Services.AudioEditor.Controllers;
 
 // Где на диске лежит файл версии нити (ADR-021 §2). Исходник — файл проекта: только через
-// ProjectLinkGuard.ResolveInside и только у области проекта. Версия запуска — файл рабочей папки
+// ProjectLinkGuard.ResolveInsideAs (чужое private не читается) и только у области проекта. Версия запуска — файл рабочей папки
 // задачи владельца: путь из нити сверяется с папкой задачи, чтобы испорченный или подменённый файл
-// нитей не вывел за неё; правка без ИИ тоже лежит в папке своей задачи (DspAudioEngine). Версия без
+// нитей не вывел за неё; ownerId — арендатор (ключ рабочей папки), actorId — вызывающий (по нему судится чужое private); правка без ИИ тоже лежит в папке своей задачи (DspAudioEngine). Версия без
 // задачи файла на диске не имеет — null. null всегда значит «нет такого файла», причину наружу не выдаём.
 public static class AudioVersionFiles
 {
-    public static string? Resolve(AudioEditWorkspace workspace, string ownerId, AudioEditScope scope,
+    public static string? Resolve(AudioEditWorkspace workspace, string ownerId, string? actorId, AudioEditScope scope,
         AudioThreadVersion version, AudioVersionFile file)
     {
         if (version.IsOrigin)
-            return scope.Project is { } project ? ProjectLinkGuard.ResolveInside(project.RootPath, file.Path) : null;
+            return scope.Project is { } project ? ProjectLinkGuard.ResolveInsideAs(project.RootPath, file.Path, actorId) : null;
         if (version.JobId is not { } jobId) return null;
 
         string jobDir;

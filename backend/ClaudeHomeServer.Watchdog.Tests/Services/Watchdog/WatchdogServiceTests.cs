@@ -79,12 +79,14 @@ public class WatchdogServiceTests : IDisposable
     {
         private readonly Queue<bool> _results = new();
         public List<(string Owner, string Session, string Text)> Delivered { get; } = [];
+        public List<string?> Actors { get; } = [];
 
         public FakeAlarm(params bool[] results) { foreach (var r in results) _results.Enqueue(r); }
 
-        public Task<bool> DeliverAsync(string ownerId, string sessionId, string text)
+        public Task<bool> DeliverAsync(string ownerId, string sessionId, string text, string? actorUserId = null)
         {
             Delivered.Add((ownerId, sessionId, text));
+            Actors.Add(actorUserId);
             return Task.FromResult(_results.Count > 0 ? _results.Dequeue() : true);
         }
     }
@@ -116,6 +118,19 @@ public class WatchdogServiceTests : IDisposable
         env.Chats[chat.Id] = chat;
         return _store.Create("owner-1", chat.Id, null, "Билд", "py check.py",
             intervalSec, ttlMin, out var error)!;
+    }
+
+    [Fact]
+    public async Task Tick_ExitZero_БудильникНесётАктораПоставившегоХода()
+    {
+        var (sut, runner, alarm, env) = Setup();
+        runner.Enqueue(PollOutcome.Exited(0, "ok"));
+        env.Chats["chat-1"] = new Session { Id = "chat-1", OwnerId = "owner-1", ProjectId = null };
+        _store.Create("owner-1", "chat-1", null, "Билд", "py check.py", 60, 240, out _, actorUserId: "u-participant");
+
+        await sut.TickAsync(DateTime.UtcNow);
+
+        alarm.Actors.Should().ContainSingle().Which.Should().Be("u-participant");
     }
 
     [Fact]

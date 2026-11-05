@@ -12,7 +12,7 @@ namespace ClaudeHomeServer.Services.AudioEditor.Mcp;
 // (проверяет реализация)
 public interface IAudioAgentEdits
 {
-    Task<AudioEditCallResult<AudioAgentEditDto>> ApplyAsync(string ownerId, AudioEditScope scope, string sessionId,
+    Task<AudioEditCallResult<AudioAgentEditDto>> ApplyAsync(string ownerId, string? actorId, AudioEditScope scope, string sessionId,
         string threadId, string? versionId, AudioOp op, double? startSec, double? endSec, JsonObject? parameters,
         CancellationToken ct);
 }

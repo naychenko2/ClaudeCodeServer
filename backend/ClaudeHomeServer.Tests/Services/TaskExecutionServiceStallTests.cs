@@ -550,6 +550,49 @@ public class TaskExecutionServiceStallTests : IDisposable
         (await CountNotificationsAsync(user.Id)).Should().Be(0, "человека во время паузы не зовём");
     }
 
+    // --- Ленивый резолв блокера (дефект 7f403c13) -----------------------------------
+    // Крючок OpenBlockerLookup читает history.json чата-постановщика целиком. До правки
+    // его звали для КАЖДОЙ незакрытой задачи на каждом тике (прод 2026-11-05: ~1100 загрузок
+    // раз в 30 с). Признак нужен только исходам Nudge/Alert — для остальных крючок не зовём.
+    // Мутация: вернуть безусловный вызов крючка — первый тест краснеет.
+
+    [Fact]
+    public async Task CheckStalledExecutorAsync_ЗадачаНеЗапускалась_КрючокБлокераНеЗовётся()
+    {
+        var calls = 0;
+        _sut.OpenBlockerLookup = _ => { calls++; return Task.FromResult(true); };
+        var todo = _tasks.Create(null, "user-1", new CreateTaskRequest("Ещё не начата"));
+        todo.Status.Should().Be(TaskItemStatus.Todo);
+        todo.ClaudeStartedAt.Should().BeNull();
+
+        await _sut.CheckStalledExecutorAsync(todo, Now);
+        // Исполнитель между ходами (тишина короче порога) — признак тоже не нужен
+        var (fresh, _) = await ArrangeExecutorChatAsync(silence: TimeSpan.FromMinutes(1));
+        await _sut.CheckStalledExecutorAsync(fresh, Now);
+
+        calls.Should().Be(0, "признак блокера не влияет на решение — историю постановщика не читаем");
+        Sent<UserMessageMessage>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CheckStalledExecutorAsync_ЗастрялСОткрытымБлокером_ЖдётОтветаКакРаньше()
+    {
+        var calls = 0;
+        _sut.OpenBlockerLookup = _ => { calls++; return Task.FromResult(true); };
+        // Чат молчит дольше порога — без блокера был бы Nudge, с блокером сразу зов человека
+        var (task, _) = await ArrangeExecutorChatAsync(silence: TimeSpan.FromMinutes(20));
+
+        await _sut.CheckStalledExecutorAsync(task, Now);
+
+        calls.Should().Be(1);
+        var after = _tasks.GetById(task.Id)!;
+        after.ExecutorNudgedAt.Should().BeNull("при открытом блокере исполнителя не окликаем");
+        after.ExecutorStaleAlertedAt.Should().Be(Now);
+        var items = await _notifStore.GetListAsync(task.OwnerId!);
+        items.Should().ContainSingle().Which.Title.Should().Be("Исполнитель ждёт ответа по блокеру");
+        Sent<UserMessageMessage>().Should().BeEmpty("оклика в чат исполнителя нет");
+    }
+
     // --- Закрытая задача без итога хода: доклад по одному сигналу D --------------
     // Случай 2026-10-01: итог успешного хода отбросили, задача в Done, доклад не ушёл
     // никогда, а страховка молчала — для Done она не срабатывала вовсе.

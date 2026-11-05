@@ -18,7 +18,7 @@ public sealed class FilmServiceTests : IDisposable
     public void Dispose() => _w.Dispose();
 
     private Task<FilmCallResult<FilmStateDto>> Patch(string path, string revision, params FilmPatchOp[] ops) =>
-        _w.Service.PatchAsync(Owner, _w.Scope, path, new FilmPatch(revision, ops), VideoInitiators.Human, default);
+        _w.Service.PatchAsync(Owner, Owner, _w.Scope, path, new FilmPatch(revision, ops), VideoInitiators.Human, default);
 
     private string FilmWith(params string[] files)
     {
@@ -59,9 +59,9 @@ public sealed class FilmServiceTests : IDisposable
     [Fact]
     public async Task Личная_область_отказывает_до_диска_для_всех_операций()
     {
-        var state = _w.Service.State(Owner, Personal, "video/a/a.film");
+        var state = _w.Service.State(Owner, Owner, Personal, "video/a/a.film");
         var list = _w.Service.List(Personal);
-        var patch = await _w.Service.PatchAsync(Owner, Personal, "video/a/a.film",
+        var patch = await _w.Service.PatchAsync(Owner, Owner, Personal, "video/a/a.film",
             new FilmPatch("x", [new FilmPatchOp(FilmPatchOps.Remove, Index: 0)]), VideoInitiators.Human, default);
 
         state.ErrorCode.Should().Be(VideoEditorErrors.PersonalScopeNoFilms);
@@ -77,7 +77,7 @@ public sealed class FilmServiceTests : IDisposable
     [InlineData("/etc/video/a.film")]
     public void Путь_фильма_вне_video_отказывает(string path)
     {
-        var result = _w.Service.State(Owner, _w.Scope, path);
+        var result = _w.Service.State(Owner, Owner, _w.Scope, path);
 
         result.IsOk.Should().BeFalse();
         result.ErrorCode.Should().BeOneOf(VideoEditorErrors.OutsideAllowedFolders, VideoEditorErrors.InvalidRequest);
@@ -111,7 +111,7 @@ public sealed class FilmServiceTests : IDisposable
 
         var viaDir = await Patch("video/a/a.film", revision, new FilmPatchOp(FilmPatchOps.Add, "video/link/evil.mp4", Trim: [0, 3]));
         var viaFile = await Patch("video/a/a.film", revision, new FilmPatchOp(FilmPatchOps.Add, "video/a/file-link.mp4", Trim: [0, 3]));
-        var filmViaLink = _w.Service.State(Owner, _w.Scope, "video/link/x.film");
+        var filmViaLink = _w.Service.State(Owner, Owner, _w.Scope, "video/link/x.film");
 
         viaDir.ErrorCode.Should().Be(VideoEditorErrors.OutsideAllowedFolders);
         viaFile.ErrorCode.Should().Be(VideoEditorErrors.OutsideAllowedFolders);
@@ -130,14 +130,14 @@ public sealed class FilmServiceTests : IDisposable
         w.WriteFile("video/a/1.mp4");
         var revision = w.WriteFilm("video/a/a.film", Doc());
 
-        var result = await w.Service.PatchAsync(Owner, w.Scope, "video/a/a.film",
+        var result = await w.Service.PatchAsync(Owner, Owner, w.Scope, "video/a/a.film",
             new FilmPatch(revision, [new FilmPatchOp(FilmPatchOps.Add, "video/a/1.mp4")]), VideoInitiators.Human, default);
 
         result.Value!.Document.Items.Single().Trim.Should().Equal(0, 7.5);
 
         // Без пробы — по снимку сцены; нет и его — отказ с объяснением
         w.WriteFile("video/a/2.mp4");
-        var noDsp = await _w.Service.PatchAsync(Owner, _w.Scope, "video/a/a.film",
+        var noDsp = await _w.Service.PatchAsync(Owner, Owner, _w.Scope, "video/a/a.film",
             new FilmPatch("x", [new FilmPatchOp(FilmPatchOps.Add, "video/a/2.mp4")]), VideoInitiators.Human, default);
         noDsp.IsOk.Should().BeFalse();
     }
@@ -147,7 +147,7 @@ public sealed class FilmServiceTests : IDisposable
     {
         var revision = FilmWith("video/a/1.mp4");
         _w.WriteFile("video/a/2.mp4");
-        var added = await _w.Service.PatchAsync(Owner, _w.Scope, "video/a/a.film",
+        var added = await _w.Service.PatchAsync(Owner, Owner, _w.Scope, "video/a/a.film",
             new FilmPatch(revision, [new FilmPatchOp(FilmPatchOps.Add, "video/a/2.mp4", Trim: [0, 3])]), VideoInitiators.Agent, default);
 
         added.Value!.Marks.Select(m => m.Claude).Should().Equal(false, true);
@@ -160,7 +160,7 @@ public sealed class FilmServiceTests : IDisposable
     public async Task Обновлена_пока_нет_сборки_и_устарел_после_правки_а_сборка_гасит_оба_признака()
     {
         var revision = FilmWith("video/a/1.mp4");
-        var state = _w.Service.State(Owner, _w.Scope, "video/a/a.film").Value!;
+        var state = _w.Service.State(Owner, Owner, _w.Scope, "video/a/a.film").Value!;
         state.Marks.Should().OnlyContain(m => m.Updated, "сборки ещё не было — всё новее неё");
         _w.Service.List(_w.Scope).Value!.Single().Stale.Should().BeTrue();
 
@@ -168,7 +168,7 @@ public sealed class FilmServiceTests : IDisposable
         var hash = FilmStaleness.SourceHash(_w.ProjectRoot, state.Document);
         File.SetLastWriteTimeUtc(_w.Full("video/a/1.mp4"), DateTime.UtcNow.AddHours(-1));
         _w.Films.Update(_w.Full("video/a/a.film"), d => d with { Builds = [new FilmBuild("video/a/film.mp4", hash, DateTime.UtcNow)] });
-        var built = _w.Service.State(Owner, _w.Scope, "video/a/a.film").Value!;
+        var built = _w.Service.State(Owner, Owner, _w.Scope, "video/a/a.film").Value!;
         built.Marks.Should().OnlyContain(m => !m.Updated);
         _w.Service.List(_w.Scope).Value!.Single().Stale.Should().BeFalse();
 
@@ -184,11 +184,11 @@ public sealed class FilmServiceTests : IDisposable
         FilmWith("video/a/1.mp4");
         var (scene, version) = _w.SceneWithClip();
         _w.Threads.AddSavedFile(Owner, Session, scene.SceneId, new VideoSavedFileDto(version.VersionId, "video/a/1.mp4"));
-        _w.Service.State(Owner, _w.Scope, "video/a/a.film").Value!.Marks[0].Stale.Should().BeFalse();
+        _w.Service.State(Owner, Owner, _w.Scope, "video/a/a.film").Value!.Marks[0].Stale.Should().BeFalse();
 
         _w.Threads.SetSettings(Owner, Session, scene.SceneId, scene.Settings with { Text = "другой текст" }, null);
 
-        _w.Service.State(Owner, _w.Scope, "video/a/a.film").Value!.Marks[0].Stale.Should().BeTrue();
+        _w.Service.State(Owner, Owner, _w.Scope, "video/a/a.film").Value!.Marks[0].Stale.Should().BeTrue();
     }
 
     [Fact]
@@ -201,7 +201,7 @@ public sealed class FilmServiceTests : IDisposable
         // Сцена из другой папки в счёт не идёт
         _w.SceneWithClip(folder: "video/other", cost: new VideoCostDto("usd", 99), name: "Чужая");
 
-        var spent = _w.Service.State(Owner, _w.Scope, "video/a/a.film").Value!.Spent;
+        var spent = _w.Service.State(Owner, Owner, _w.Scope, "video/a/a.film").Value!.Spent;
 
         spent.Usd.Should().BeApproximately(1.5, 1e-9);
         spent.Credits.Should().BeApproximately(12, 1e-9);
@@ -209,7 +209,7 @@ public sealed class FilmServiceTests : IDisposable
 
         // Нити чата ушли, а счёт остался в состоянии вне файла
         _w.Threads.Delete(Owner, Session);
-        _w.Service.State(Owner, _w.Scope, "video/a/a.film").Value!.Spent.Usd.Should().BeApproximately(1.5, 1e-9);
+        _w.Service.State(Owner, Owner, _w.Scope, "video/a/a.film").Value!.Spent.Usd.Should().BeApproximately(1.5, 1e-9);
     }
 
     [Fact]
@@ -239,8 +239,8 @@ public sealed class FilmServiceTests : IDisposable
         Directory.CreateDirectory(_w.Full("video/a"));
         File.WriteAllText(_w.Full("video/a/a.film"), """{ "schema": 9, "aspect": "16:9", "items": [], "cuts": [], "builds": [] }""");
 
-        var state = _w.Service.State(Owner, _w.Scope, "video/a/a.film");
-        var patch = await _w.Service.PatchAsync(Owner, _w.Scope, "video/a/a.film",
+        var state = _w.Service.State(Owner, Owner, _w.Scope, "video/a/a.film");
+        var patch = await _w.Service.PatchAsync(Owner, Owner, _w.Scope, "video/a/a.film",
             new FilmPatch(state.Value!.Revision, [new FilmPatchOp(FilmPatchOps.Music, Music: null)]), VideoInitiators.Human, default);
 
         state.IsOk.Should().BeTrue("для чтения файл отдаётся");

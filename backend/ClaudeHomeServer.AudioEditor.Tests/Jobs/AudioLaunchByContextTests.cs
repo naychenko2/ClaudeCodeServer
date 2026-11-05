@@ -260,7 +260,7 @@ public sealed class AudioLaunchByContextTests : IDisposable
             _workspace, NullLogger<AudioConcatService>.Instance, dsp, _launch);
 
         // Куски тела игнорируются — в теле другой порядок и чужой кусок
-        var result = await svc.ConcatAsync(Owner, _scope, new AudioConcatInput(Chat, [new AudioConcatPiece(ProjectFile: "sfx/jingle.wav")],
+        var result = await svc.ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Chat, [new AudioConcatPiece(ProjectFile: "sfx/jingle.wav")],
             ContextRevision: state.Revision), CancellationToken.None);
 
         result.Error.Should().BeNull();
@@ -274,7 +274,7 @@ public sealed class AudioLaunchByContextTests : IDisposable
         var svc = new AudioConcatService(new AudioJobThreads(_threads, NullLogger<AudioJobThreads>.Instance), _workspace,
             NullLogger<AudioConcatService>.Instance, new FakeDsp(), _launch);
 
-        var result = await svc.ConcatAsync(Owner, _scope, new AudioConcatInput(Chat, [], ContextRevision: state.Revision),
+        var result = await svc.ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Chat, [], ContextRevision: state.Revision),
             CancellationToken.None);
 
         result.ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
@@ -288,7 +288,7 @@ public sealed class AudioLaunchByContextTests : IDisposable
         var svc = new AudioConcatService(new AudioJobThreads(_threads, NullLogger<AudioJobThreads>.Instance), _workspace,
             NullLogger<AudioConcatService>.Instance, new FakeDsp(), _launch);
 
-        var result = await svc.ConcatAsync(Owner, _scope, new AudioConcatInput(Chat, [], ContextRevision: state.Revision - 1),
+        var result = await svc.ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Chat, [], ContextRevision: state.Revision - 1),
             CancellationToken.None);
 
         result.ErrorCode.Should().Be(AudioEditErrorCodes.ContextChanged);
@@ -303,7 +303,7 @@ public sealed class AudioLaunchByContextTests : IDisposable
         var engine = new DspAudioEngine(new AudioJobThreads(_threads, NullLogger<AudioJobThreads>.Instance), _workspace,
             NullLogger<DspAudioEngine>.Instance, new FakeDsp(), _launch);
 
-        var result = await engine.MixAsync(Owner, _scope,
+        var result = await engine.MixAsync(Owner, Owner, _scope,
             new AudioMixInput(Chat, other, [new AudioMixStemInput("stem:vocals")], ContextRevision: state.Revision),
             CancellationToken.None);
 

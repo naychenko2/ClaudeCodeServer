@@ -2,7 +2,6 @@ import { memo, useContext, useEffect, useMemo, useState } from 'react';
 import { SquareCheck, ArrowRight, Route } from 'lucide-react';
 import type { ChatItem, Task } from '../../types';
 import { C, FONT, FS, SHADOW, TB } from '../../lib/design';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { dueLabel, ensureFullTask, isDueUrgent, openTaskInSection, PRIORITY_LABEL, useTasks } from '../../lib/tasks';
 import { PriorityFlag, MeBadge, ClaudeBadge, LabelChip, SubtaskCheck, CalendarIcon } from '../../features/tasks/bits';
 import { usePersonas, ensurePersonasLoaded, personaLabel } from '../../lib/personas';
@@ -97,7 +96,6 @@ export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onO
   const [hovered, setHovered] = useState(false);
   // Чип «Шаг N фичи» — за гейтом фич-флага: разметка (featureId/stepRef) уже в проде,
   // но чип показываем только когда режим «Исполнение фичи» включён.
-  const featureMode = useFeature(FLAGS.turnPlanFeatureMode);
   // F9: клик по чипу — focusFeatureStep + openPillMenu (всегда): короткая карточка
   // плана (решение Андрея 20.10) не потребляет сигнал фокуса сама.
   // Hover/фокус чипа: hover — подложка C.bgSelected + текст C.textPrimary, фокус — кольцо SHADOW.focus.
@@ -257,7 +255,7 @@ export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onO
             неразмеченные задачи). Клик — stopPropagation: вся карточка — ссылка на задачу,
             а чип открывает план (сигнал фокуса в сторе Ф1; без живой карточки плана —
             меню пилюли). */}
-        {featureMode && task?.featureId && task?.stepRef && (
+        {task?.featureId && task?.stepRef && (
           <div style={{ marginTop: CHIP_MARGIN_TOP }}>
             <span
               onMouseEnter={() => setChipHot(true)}

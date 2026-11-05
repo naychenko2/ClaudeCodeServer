@@ -9,7 +9,6 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { act, createElement, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { setAllFlags } from '../../../lib/featureFlags';
 import { videoApi, type VideoCatalog, type VideoQuote } from '../api';
 import { CATALOG, PREFS } from '../mocks';
 import { __resetVideoStore, __setScopeData } from '../store/videoStore';
@@ -62,7 +61,6 @@ let startJobSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   vi.clearAllMocks();
   __resetVideoStore();
-  setAllFlags({ 'local-model-stats': true });
   __setScopeData('p1', CATALOG, PREFS);
   quoteSpy = vi.spyOn(videoApi, 'quote').mockResolvedValue(CLOUD_QUOTE);
   startJobSpy = vi.spyOn(videoApi, 'startJob').mockResolvedValue({ jobId: 'j-cloud' });
@@ -97,18 +95,15 @@ describe('cloudCandidate', () => {
 });
 
 describe('showCloudButton (видимость)', () => {
-  it('true: флаг + down + облачный исполнитель', () => {
-    expect(showCloudButton(true, DOWN, CATALOG)).toBe(true);
-  });
-  it('false: флаг выключен (мутация «показ с выключенным флагом»)', () => {
-    expect(showCloudButton(false, DOWN, CATALOG)).toBe(false);
+  it('true: down + облачный исполнитель', () => {
+    expect(showCloudButton(DOWN, CATALOG)).toBe(true);
   });
   it('false: стенд не лежит (мутация «показ без down»)', () => {
-    expect(showCloudButton(true, QUEUED, CATALOG)).toBe(false);
+    expect(showCloudButton(QUEUED, CATALOG)).toBe(false);
   });
-  it('false: нет gpu', () => expect(showCloudButton(true, null, CATALOG)).toBe(false));
+  it('false: нет gpu', () => expect(showCloudButton(null, CATALOG)).toBe(false));
   it('false: нет облачного исполнителя (только локальные)', () => {
-    expect(showCloudButton(true, DOWN, LOCAL_ONLY)).toBe(false);
+    expect(showCloudButton(DOWN, LOCAL_ONLY)).toBe(false);
   });
 });
 
@@ -124,9 +119,8 @@ describe('isCloudButtonEnabled (кликабельность)', () => {
 });
 
 describe('showQueueLine', () => {
-  it('false: флаг выключен', () => expect(showQueueLine(false, QUEUED)).toBe(false));
-  it('false: нет gpu', () => expect(showQueueLine(true, null)).toBe(false));
-  it('true: флаг + gpu', () => expect(showQueueLine(true, QUEUED)).toBe(true));
+  it('false: нет gpu', () => expect(showQueueLine(null)).toBe(false));
+  it('true: есть gpu', () => expect(showQueueLine(QUEUED)).toBe(true));
 });
 
 // ── Шаг 2: gpu есть → без собственной полосы (ровно одна полоса, не дубль) ──
@@ -193,7 +187,7 @@ describe('GpuQueueBlock: запуск только по клику', () => {
   it('на монтировании startJob не вызывается (даже при down + флага), кнопка видна', () => {
     const html = renderToStaticMarkup(
       createElement(GpuQueueBlock, {
-        scope: 'p1', sessionId: 's1', sceneId: 's1', feature: true, gpu: DOWN, params: PARAMS,
+        scope: 'p1', sessionId: 's1', sceneId: 's1', gpu: DOWN, params: PARAMS,
       }),
     );
     expect(html).toContain('Сделать в облаке');
@@ -203,17 +197,7 @@ describe('GpuQueueBlock: запуск только по клику', () => {
   it('без gpu блок не рендерится и startJob не вызывается', () => {
     const html = renderToStaticMarkup(
       createElement(GpuQueueBlock, {
-        scope: 'p1', sessionId: 's1', sceneId: 's1', feature: true, gpu: null, params: PARAMS,
-      }),
-    );
-    expect(html).toBe('');
-    expect(startJobSpy).not.toHaveBeenCalled();
-  });
-
-  it('флаг выключен: блок не рендерится даже с gpu', () => {
-    const html = renderToStaticMarkup(
-      createElement(GpuQueueBlock, {
-        scope: 'p1', sessionId: 's1', sceneId: 's1', feature: false, gpu: DOWN, params: PARAMS,
+        scope: 'p1', sessionId: 's1', sceneId: 's1', gpu: null, params: PARAMS,
       }),
     );
     expect(html).toBe('');
@@ -399,7 +383,7 @@ function findButton(container: FNode, label: string): { onClick: () => void } | 
 async function renderBlockDown() {
   vi.useFakeTimers();
   const { root, container } = mount(createElement(GpuQueueBlock, {
-    scope: 'p1', sessionId: 's1', sceneId: 's1', feature: true, gpu: DOWN, params: PARAMS,
+    scope: 'p1', sessionId: 's1', sceneId: 's1', gpu: DOWN, params: PARAMS,
   }));
   // Прогоняем 300 мс: таймаут хука срабатывает, videoApi.quote (мок) разрешает котировку,
   // setState перерисовывает кнопку с ценой. Await — чтобы микротаск .then() отработал.
@@ -481,7 +465,7 @@ describe('GpuQueueBlock: строка ожидания', () => {
   it('идущая задача с этапами: «этап 2 · шаг 12 из 25» (длинная форма)', () => {
     const html = renderToStaticMarkup(
       createElement(GpuQueueBlock, {
-        scope: 'p1', sessionId: 's1', sceneId: 's1', feature: true, gpu: STAGED, params: PARAMS,
+        scope: 'p1', sessionId: 's1', sceneId: 's1', gpu: STAGED, params: PARAMS,
       }),
     );
     expect(html).toContain('этап 2 · шаг 12 из 25');
@@ -490,7 +474,7 @@ describe('GpuQueueBlock: строка ожидания', () => {
   it('в очереди: «В очереди · старт ≈ через 40 с»', () => {
     const html = renderToStaticMarkup(
       createElement(GpuQueueBlock, {
-        scope: 'p1', sessionId: 's1', sceneId: 's1', feature: true, gpu: QUEUED, params: PARAMS,
+        scope: 'p1', sessionId: 's1', sceneId: 's1', gpu: QUEUED, params: PARAMS,
       }),
     );
     expect(html).toContain('старт ≈ через 40 с');

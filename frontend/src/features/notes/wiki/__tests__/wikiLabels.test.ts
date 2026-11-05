@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { WikiError, type WikiErrorCode } from '../../../../lib/wiki';
 import {
-  INBOX_REASON_TEXT, INBOX_TEXT, countWord, isHumanTargetClass,
+  INBOX_REASON_TEXT, INBOX_TEXT, analyzeRefusalText, countWord, isHumanTargetClass,
   wikiErrorText, wikiInboxReasonCode, wikiInboxReasonText,
 } from '../wikiLabels';
 
@@ -75,6 +75,20 @@ describe('текст wiki_triage_invalid (R-W4-1)', () => {
   });
 });
 
+// LI-6: с LI-2 analyze/ingest/transfer сами заводят вики владельца, 409 wiki_not_initialized
+// из действия человека не приходит (остаётся ответ сервисного слоя). Текст словаря —
+// нейтральное сообщение о факте, без прежней готовой фразы «Твоя вики ещё не заведена» и
+// без какой бы то ни было просьбы «завести» — кнопки «Завести вики» нет с LI-3.
+describe('текст wiki_not_initialized — нейтральный, без просьбы «завести» (LI-6)', () => {
+  it('никакой обращённой к человеку формы и ни одного побуждения к отсутствующей кнопке', () => {
+    const t = wikiErrorText(new WikiError(409, 'wiki_not_initialized', 'x'));
+    expect(t).toBe('Вики этого владельца не заведена');
+    expect(t).not.toContain('Твоя');
+    expect(t).not.toContain('завести');
+    expect(t).not.toContain('заведите');
+  });
+});
+
 // ─── Причины «Входящих» (F6a) ───
 // Таблица «Входящие: причины правила замены» читается из файла ADR-038, а не копируется
 // в тест: тест сверяет классификатор и тексты с самим ADR (постановка F6a). Строки-префиксы
@@ -112,8 +126,8 @@ describe('причины «Входящих»: таблица сверяется
   const rows = adrReasonTable();
   const adr = readFileSync(ADR_PATH, 'utf8');
 
-  it('таблица ADR прочитана: шесть пунктов правила замены', () => {
-    expect(rows.length).toBe(6);
+  it('таблица ADR прочитана: семь пунктов правила замены', () => {
+    expect(rows.length).toBe(7);
   });
 
   it('каждый пункт: причина с началом строки ADR показывается текстом пункта; текст — из ADR', () => {
@@ -122,6 +136,13 @@ describe('причины «Входящих»: таблица сверяется
       expect(wikiInboxReasonText(prefix)).toBe(label);
       expect(adr).toContain(`«${label}»`);
     }
+  });
+
+  it('нет секции «История»: строка бэка (TL-3, WikiApplyPolicy.cs:158) даёт новый код и текст для человека, а не unknown', () => {
+    const raw = 'На этой странице нет секции «История», прежняя формулировка не сохранится — решите сами';
+    expect(wikiInboxReasonCode(raw)).toBe('no_history_section');
+    expect(wikiInboxReasonText(raw)).toBe('На этой странице нет раздела «История», прежняя формулировка не сохранится — решите сами');
+    expect(wikiInboxReasonText(raw)).not.toBe(INBOX_TEXT.unknown);
   });
 
   it('тексты пунктов различны: подмена одного текста другим — провал', () => {
@@ -144,5 +165,22 @@ describe('причины «Входящих»: таблица сверяется
     expect(isHumanTargetClass('session×supersede@human')).toBe(true);
     expect(isHumanTargetClass('session×supersede')).toBe(false);
     expect(isHumanTargetClass('')).toBe(false);
+  });
+});
+
+describe('отказ разбора чата по-человечески (WM-2)', () => {
+  it('«пустой ответ» — «модель не ответила»; окна и проходы бэка в текст не попадают', () => {
+    const raw = 'пустой ответ модели в окне m11-m381, проход A';
+    const text = analyzeRefusalText(raw);
+    expect(text).toBe('Не удалось разобрать: модель не ответила');
+    expect(text).not.toContain('m11');
+    expect(text).not.toContain('проход');
+    expect(analyzeRefusalText('Пустой ответ')).toBe('Не удалось разобрать: модель не ответила');
+  });
+
+  it('неизвестная причина и её отсутствие — «Не удалось разобрать» без хвоста', () => {
+    expect(analyzeRefusalText('нет утверждений с цитатами в окнах m1-m9')).toBe('Не удалось разобрать');
+    expect(analyzeRefusalText(null)).toBe('Не удалось разобрать');
+    expect(analyzeRefusalText('')).toBe('Не удалось разобрать');
   });
 });

@@ -20,13 +20,18 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // из claim sub; сервисный токен хода (typ=svc) отказан 403 ДО разбора тела и до любых
 // состояний — иначе агент `curl`-ом подделал бы правку человека, написал утверждения без
 // цитат и обошёл цитатный контракт. Инструмента MCP для правки от имени человека нет.
-// Серверный гейт `wiki_unified_off` — 409, когда выключен любой из двух флагов: llm-wiki
-// (без вики нечего править) или notes-wiki-unified (вложенный флаг, ADR-038 §9).
+// Серверный гейт `wiki_unified_off` — 409, когда выключен флаг llm-wiki
+// (без вики нечего править; флаг notes-wiki-unified снят и сведён к llm-wiki, ADR-038 §9).
 //
 // Конкурентность оптимистическая, по baseHash (sha256 байтов страницы, как в манифесте):
 // страница изменилась после открытия редактора (чужое сохранение, применённый пакет ИИ) —
 // 409 wiki_page_changed со свежей версией, UI рисует сравнение «Моё / ИИ / Было». Сверка и
 // запись — одна критическая секция блокировки раздела (WikiApplyService), исключений наружу нет.
+//
+// С LI-2 edit («Править» / новая страница) заводит вику заявителя (тот же
+// WikiKeeper.EnsureInitializedAsync, что и на остальных человеческих точках) вместо отказа
+// «вики не заведена»: человек не обязан заводить вику руками. restore — вне этого: без вики
+// там нет того, что возвращать.
 [ApiController]
 [Authorize]
 [Route("api/wiki/pages")]
@@ -34,14 +39,16 @@ public class WikiPagesController : ControllerBase
 {
     private readonly WikiApplyService _apply;
     private readonly IProjectManager _projects;
+    private readonly WikiKeeper _keeper;
     private readonly IFeatureFlagGate? _flags;
     private readonly ISphereDirectory? _spheres;
 
-    public WikiPagesController(WikiApplyService apply, IProjectManager projects, IFeatureFlagGate? flags,
-        ISphereDirectory? spheres = null)
+    public WikiPagesController(WikiApplyService apply, IProjectManager projects, WikiKeeper keeper,
+        IFeatureFlagGate? flags, ISphereDirectory? spheres = null)
     {
         _apply = apply;
         _projects = projects;
+        _keeper = keeper;
         _flags = flags;
         _spheres = spheres;
     }
@@ -71,7 +78,8 @@ public class WikiPagesController : ControllerBase
     /// редактор (нет — создание новой страницы). 200 {status: applied|unchanged, hash,
     /// packageId?}; 409 wiki_page_changed со свежей страницей; 409 wiki_drift — файл разошёлся с
     /// манифестом (решает adopt); 400 wiki_edit_invalid — правка не прошла разбор или гейт
-    /// (message и violations по-русски, для редактора).</summary>
+    /// (message и violations по-русски, для редактора). С LI-2 вика заявителя заводится до
+    /// сохранения: отказа «вики не заведена» этой ручке нет.</summary>
     [HttpPost("edit")]
     public async Task<IActionResult> Edit([FromBody] WikiPageEditRequest? req)
     {
@@ -83,6 +91,12 @@ public class WikiPagesController : ControllerBase
 
         var (key, refusal) = ResolveWritableSection(userId, req.Section, req.Page);
         if (refusal is not null) return refusal;
+        // LI-2: «править»/новая страница — действие человека, которому нужна вики: она заводится
+        // сама, прежний отказ «вики не заведена» этой ручки больше нет. svc и оба флага
+        // проверены выше, раздел и страница — ResolveWritableSection. Гейт IsInitialized в _apply
+        // остаётся второй линией защиты; restore — вне этой правки (решение разреза): без
+        // вики там нет того, что возвращать, — отказ остаётся честным.
+        await _keeper.EnsureInitializedAsync(userId);
         return ToResult(userId, await _apply.EditPageAsync(userId, key!, req.Page!, req.BaseHash, req.Content), req.Page!);
     }
 
@@ -108,10 +122,9 @@ public class WikiPagesController : ControllerBase
     private IActionResult ServiceTokenRefusal() =>
         StatusCode(403, new { error = "Сервисный токен: вики решает только пользовательский токен" });
 
-    // Флаг действует только при включённом llm-wiki: без вики нечего править (ADR-038, §9).
+    // Совместная правка идёт только при включённом llm-wiki: без вики нечего править (ADR-038, §9).
     private bool UnifiedOn(string userId) =>
-        _flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) == true
-        && _flags.IsEnabled(userId, FeatureFlagKeys.NotesWikiUnified);
+        _flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) == true;
 
     private IActionResult UnifiedOffRefusal() =>
         StatusCode(409, new { code = CodeUnifiedOff, message = "правка страниц выключена: функция недоступна" });

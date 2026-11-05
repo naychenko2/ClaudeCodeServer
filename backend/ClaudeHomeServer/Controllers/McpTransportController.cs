@@ -28,6 +28,8 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 public sealed class McpTransportController(McpToolsetRegistry registry,
     McpToolWhitelist whitelist,
+    ClaudeHomeServer.Services.Access.IActorRightGate actorGate,
+    ClaudeHomeServer.Services.ISessionDirectory sessionDirectory,
     ILogger<McpTransportController> logger,
     // Тайминги потоковой ветки; в тестах — укороченные, в бою — умолчание
     McpStreamTiming? timing = null) : ControllerBase
@@ -249,6 +251,16 @@ public sealed class McpTransportController(McpToolsetRegistry registry,
                             : "Запрошенный инструмент недоступен в этом чате";
                         return Ok(id, ToolContent(denied, isError: true));
                     }
+                    // Право актора хода (S2c-6) — ЕДИНАЯ точка для всех тулсетов реестра: токен хода
+                    // арендаторский, поэтому пишущий вызов агента участника проверяется по АКТОРУ
+                    // реестра хода в проекте чата-вызывателя. Таблица — default-deny; фон и актор=арендатор
+                    // идут с правами арендатора. Состав tools/list гейт не трогает (отказ только на вызове).
+                    // Тулсеты wsp/tasks/notes проверяют ту же таблицу ещё раз у себя (по данным сессии).
+                    var callerChat = context.CallerSessionId;
+                    var callerProject = string.IsNullOrEmpty(callerChat) ? null : sessionDirectory.GetById(callerChat)?.ProjectId;
+                    if (actorGate.Denied(toolset.Name, toolName, callerChat, context.OwnerId, callerProject)
+                        is { } actorDenied)
+                        return Ok(id, ToolContent(actorDenied, isError: true));
                     var args = parms?["arguments"]?.DeepClone() as JsonObject ?? [];
                     try
                     {

@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
-import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles, SlidersHorizontal, MessageSquareShare } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo, Fragment, type ReactNode } from 'react';
+import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles, SlidersHorizontal, MessageSquareShare, BookOpen } from 'lucide-react';
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag, ChatItem } from '../../types';
-import { api } from '../../lib/api';
+import { api, chatFieldsErrorText } from '../../lib/api';
 import { openChatById } from '../../lib/openChat';
 import { isArchivedChat } from '../../lib/chatFilters';
 import { TagAssignMenu } from '../TagChip';
@@ -11,6 +11,7 @@ import { effortLabel } from '../../lib/effort';
 import { ExpiryButton } from './ExpiryButton';
 import { ExpiryPicker } from './ExpiryPicker';
 import { DossierOptOutButton } from './DossierOptOutButton';
+import { PrivateChatToggle } from './PrivateChatToggle';
 import { NotifyButton } from './NotifyButton';
 import { updateChatFields } from '../../lib/chatUpdate';
 import { isNotifySupported, useChatNotifyOn } from '../../lib/notify';
@@ -22,6 +23,7 @@ import { personaTitleLines } from '../../lib/personas';
 import { isProjectPersona, isSpherePersona, zoneLabel } from '../../lib/personaZone';
 import { useSpheres } from '../../lib/useSpheres';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
+import { useWikiChatAvailable } from '../../hooks/useWikiChatAvailable';
 import { useLocalModelLive, type LocalModelLiveState } from '../../features/localModel/useLocalModelLive';
 import { useLocalModelAdmin } from '../../features/localModel/useLocalModelStats';
 import { localModelTail, localModelQueueText, formatTps } from '../../features/localModel/localModelTail';
@@ -42,9 +44,11 @@ import { Badge, Button, IconButton, ChatTopicIcon, Modal, ModalActions, ConfirmD
 import { FeatureBackChip } from './FeatureBackChip';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
+import { chatActionDeniedReason, isNotChatAuthorError } from '../../features/projects/members/participantGate';
+import { readStoredUserId } from '../../lib/offline';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import { useSlotItem } from '../../lib/subsystems/registry';
-import type { ChatHeaderSummaryCtx, ChatHeaderMenuItemCtx, ChatHeaderBadgeCtx } from '../../lib/subsystems/registryCore';
+import type { ChatHeaderSummaryCtx, ChatHeaderMenuItemCtx, ChatHeaderBadgeCtx, ChatWikiMenuCtx } from '../../lib/subsystems/registryCore';
 import type { ExtractedTaskCandidate } from '../../types';
 import { ChatOriginBadge } from '../ChatOriginBadge';
 import { CHAT_SWITCHER_MIN_W, ChatSwitcherTrigger } from '../../features/home/ChatSwitcherSheet';
@@ -581,10 +585,6 @@ function ContextActions({ estimate, isWaiting, isCompacting, canCompact, compact
 function PromptCacheSection({ state, isWaiting, sessionId }: { state: PromptCacheState; isWaiting: boolean; sessionId: string }) {
   const warn = useCacheWarnThresholds();
   const [showWarn, setShowWarn] = useState(false);
-  // Вся секция монтируется только за фич-флагом prompt-cache (гейт в RingPillBadge,
-  // дефект QA) — и кнопка переноса (F-4), и кнопка порогов за ним по построению.
-  // Флаг здесь читается ещё раз как страховка самой кнопки, а не как единственный гейт.
-  const promptCacheOn = useFeature(FLAGS.promptCache);
   // «Перенести в новый чат» (F-4): тёплый путь — записку пишет сам чат (видимый ход до
   // 5 мин), холодный — быстрый раннер по транскрипту. Успех: переход в новый чат,
   // черновик — в поле ввода (префилл тот же, что у «Попросить агента исправить»,
@@ -647,16 +647,12 @@ function PromptCacheSection({ state, isWaiting, sessionId }: { state: PromptCach
       <BadgeRow k="В кэше" v={`${fmtTokens(live.readTokens)} токенов`} />
       <BadgeRow k="Срок кэша" v={ttlText} />
       <BadgeRow k="Последний промах" v={miss} />
-      {/* Личный порог предупреждения (F-3) — правится только за фич-флагом, секция
-          и так монтируется за ним */}
       <div style={{ marginTop: SP.sm, display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
-        {promptCacheOn && (
-          <Button variant="ghost" size="xs" disabled={!sessionId || isWaiting} loading={handoffBusy}
-            onClick={() => void runHandoff()}
-            title={isWaiting ? 'Дождитесь завершения текущего хода' : 'Новый чат начнётся с короткой запиской об этом разговоре'}>
-            {handoffBusy ? 'Переношу…' : 'Перенести в новый чат'}
-          </Button>
-        )}
+        <Button variant="ghost" size="xs" disabled={!sessionId || isWaiting} loading={handoffBusy}
+          onClick={() => void runHandoff()}
+          title={isWaiting ? 'Дождитесь завершения текущего хода' : 'Новый чат начнётся с короткой запиской об этом разговоре'}>
+          {handoffBusy ? 'Переношу…' : 'Перенести в новый чат'}
+        </Button>
         <Button variant="ghost" size="xs" onClick={() => setShowWarn(true)} style={{ marginLeft: 'auto' }}
           leftIcon={<SlidersHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>
           Когда предупреждать об остывании
@@ -664,7 +660,7 @@ function PromptCacheSection({ state, isWaiting, sessionId }: { state: PromptCach
       </div>
       {/* Ошибка переноса — текст бэка как есть (409 «чат занят…», 502 «модель не дала
           записку»), не «сбой»: его можно прочитать и повторить клик */}
-      {promptCacheOn && handoffError && (
+      {handoffError && (
         <div style={{ ...meterSubStyle, marginTop: SP.sm, padding: `${SP.xs + 2}px ${SP.sm}px`, background: C.dangerBg, color: C.dangerText, borderRadius: R.md }}>
           {handoffError}
         </div>
@@ -928,9 +924,6 @@ export function RingPillBadge(props: {
   // индикатора. Стор подписочный — поздний засев сам обновит циферблат.
   const warn = useCacheWarnThresholds();
   const cache = usePromptCache(usePromptCacheItems(props.items, props.isWaiting), warn);
-  // Перенос в новый чат (F-4): обе точки входа — подсказка у кольца и кнопка в поповере —
-  // только за фич-флагом prompt-cache. Это предложение, не авто-действие
-  const promptCacheOn = useFeature(FLAGS.promptCache);
 
   // Живые данные локальной модели: хвост + поповер «Локальная модель». Хуки — до раннего
   // return (правило хуков). live=null — чат не на локальной модели (событий нет). Хвост —
@@ -939,15 +932,14 @@ export function RingPillBadge(props: {
   // Витрина: форсированное состояние обходит хук (в витрине нет живых событий)
   const live = props.forceLocalModel ?? hookLive;
   const isAdmin = useLocalModelAdmin();
-  const lmFlag = useFeature(FLAGS.localModelStats);
   // Десктоп: хвост добавляется к лицу через « · »; мобила (вариант А): лицо
   // ЗАМЕНЯЕТСЯ компактным словом состояния (≤ 7 знаков), тревога контекста побеждает.
-  const lmTail = !isMobile && lmFlag ? localModelTail(live) : null;
-  const lmTailCompact = isMobile && lmFlag ? localModelTail(live, true) : null;
+  const lmTail = !isMobile ? localModelTail(live) : null;
+  const lmTailCompact = isMobile ? localModelTail(live, true) : null;
   // Мобила: лицо заменяется словом состояния, только пока контекст в норме (не тревога)
   const lmMobileFace = lmTailCompact != null && estimate.level === 'normal' ? lmTailCompact : null;
   // Раздел «Локальная модель» в поповере: живые данные есть и флаг включён
-  const lmActive = live != null && lmFlag;
+  const lmActive = live != null;
   // Что «озвучивается» в aria-label: на десктопе — хвост, на мобиле — слово-лицо
   // (только когда оно реально заменит лицо, т.е. контекст в норме). Нет активного
   // состояния — null (строку в aria-label не добавляем).
@@ -1040,7 +1032,7 @@ export function RingPillBadge(props: {
   // Только предложение: само действие — кнопка в поповере, за этим же флагом. То же
   // условие, что и у секции кнопки — `cache` (F-4r): в чате без данных кэша обещание
   // без действия — тупик.
-  if (promptCacheOn && showCtx && estimate.level === 'danger' && cache) {
+  if (showCtx && estimate.level === 'danger' && cache) {
     parts.push({ text: 'Контекст почти полон — можно начать новый чат с запиской' });
   }
   // Локальная модель: живой хвост (десктоп) или слово-лицо (мобила) — озвучиваем,
@@ -1059,9 +1051,7 @@ export function RingPillBadge(props: {
     })));
   }
   // Тон пилюли кэш не перекрашивает — у циферблата свой цвет, строка только в подсказке.
-  // Вся обвязка кэша — за фич-флагом prompt-cache (дефект QA): бэкенд присылает
-  // promptCache независимо от флага, при выключенном ничего из этого не показывается.
-  if (promptCacheOn && cache) parts.push({ text: cacheStaticLabel(props.isWaiting), dial: true });
+  if (cache) parts.push({ text: cacheStaticLabel(props.isWaiting), dial: true });
   const title = (parts.length > 0 ? parts.map(p => p.text).join(' · ') : 'Контекст и расход сессии') + ' — нажмите для деталей';
   const tip = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs + 1 }}>
@@ -1110,8 +1100,8 @@ export function RingPillBadge(props: {
           )}
         </span>
         {/* Циферблат кэша — справа от лица, через разделитель; сам по себе не кнопка,
-            цель клика — вся пилюля (F-1b). Только за фич-флагом prompt-cache (дефект QA) */}
-        {promptCacheOn && cache && <CacheDial state={cache} isWaiting={props.isWaiting} isMobile={isMobile} warnThresholds={warn} />}
+            цель клика — вся пилюля (F-1b). Только  (дефект QA) */}
+        {cache && <CacheDial state={cache} isWaiting={props.isWaiting} isMobile={isMobile} warnThresholds={warn} />}
       </>}
       isMobile={isMobile}
       isCompact={isCompact}
@@ -1153,9 +1143,8 @@ export function RingPillBadge(props: {
         </div>
       )}
       {showCtx && <ContextActions {...props} />}
-      {/* Секция «Кэш промпта» целиком — за фич-флагом prompt-cache (дефект QA): при
-          выключенном нет ни секции, ни кнопки порогов, хотя данные кэша приходят с бэка */}
-      {promptCacheOn && cache && (
+      {/* Секция «Кэш промпта» показывается всегда, когда с бэка пришли данные кэша (с кнопкой порогов) */}
+      {cache && (
         <div style={(lmActive || wfActive || showCtx || showCost) ? sectionDivider : undefined}>
           <PromptCacheSection state={cache} isWaiting={props.isWaiting} sessionId={props.sessionId ?? ''} />
         </div>
@@ -1209,6 +1198,9 @@ interface ChatHeaderBarProps {
   participants?: Persona[] | null;
   // Состав группы изменён через поповер участников — родитель обновляет session
   onSessionUpdated?: (s: Session) => void;
+  // Карта переноса вложений (S2d-6b-4F3): тумблер приватности сообщает, какие пути бэк
+  // перенёс в private/… — родитель переписывает ими черновик композера
+  onAttachmentMoves?: (moves: Record<string, string>) => void;
   // «На стену» — набор стены живёт в воркспейсе; не задан — действия нет
   onAddToWall?: () => void;
   // Чат удалён из шапки: уйти из него и обновить список должен владелец экрана.
@@ -1239,7 +1231,7 @@ interface ChatHeaderBarProps {
 
 // «Обновить название чата» — запускается через AI-палитру (действие chat.retitle).
 // Невидимый слушатель cc-ai-run: перечитывает переписку и переименовывает чат по её смыслу.
-function RetitleButton({ session, hasMessages, online }: { session: Session; hasMessages: boolean; online: boolean }) {
+function RetitleButton({ session, hasMessages, online, locked }: { session: Session; hasMessages: boolean; online: boolean; locked?: boolean }) {
   const [busy, setBusy] = useState(false);
   // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс busy при смене чата
   useEffect(() => { setBusy(false); }, [session.id]);
@@ -1253,7 +1245,7 @@ function RetitleButton({ session, hasMessages, online }: { session: Session; has
       .finally(() => { setBusy(false); endAiBusy(); });
   };
   useEffect(() => {
-    if (!online || !hasMessages) return;
+    if (!online || !hasMessages || locked) return;
     const onRun = (e: Event) => { if ((e as CustomEvent<{ action?: string }>).detail?.action === 'chat.retitle') run(); };
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);
@@ -1343,15 +1335,15 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, items, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, contextBar, featureBar, scrolled }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, items, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAttachmentMoves, onAddToWall, onChatDeleted, island, compact, contextBar, featureBar, scrolled }: ChatHeaderBarProps) {
   // Вклады слота chat-header-action: невидимый слушатель «Итог сессии в заметку»
   // и его пункт в правом клик-меню. Нет подсистемы — нет и вкладов, остальные
   // AI-действия чата к заметкам не относятся и остаются.
   const summaryAction = useSlotItem<ChatHeaderSummaryCtx>('chat-header-action', 'session-summary');
   const summaryMenuItem = useSlotItem<ChatHeaderMenuItemCtx>('chat-header-action', 'summary-menu-item');
-  // Действия «Вики» в ряду (S7b): «Разобрать этот чат», «Открыть хронику», «Откатить всё…».
-  // Гейт флага llm-wiki — внутри вклада: при выключенном он рендерит null, ряда не касается.
-  const wikiActions = useSlotItem<ChatHeaderSummaryCtx>('chat-header-action', 'wiki-chat-actions');
+  // Меню «Вики» — вклад «Заметок» (WM-2). Доступность («Вики» есть в шапке вообще) считает
+  // useWikiChatAvailable; сам вклад — ОДИН экземпляр на шапку (в ряду либо headless у «⋯»)
+  const wikiMenu = useSlotItem<ChatWikiMenuCtx>('chat-header-action', 'wiki-chat-menu');
   const spendBadgeSlot = useSlotItem<ChatHeaderBadgeCtx>('chat-header-badge', 'spend-badge');
   // УЗКИЙ планшет (601 – TABLET_WIDE_MIN): мобильная механика — объединённый чип,
   // wide-поповер, плотная группа кнопок, заголовок с многоточием. Объединяем с mobile
@@ -1751,14 +1743,20 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const expiryValue = expiryLeft ? expiryLeft.replace(/^через /, 'осталось ') : null;
   const expAt = expiresAt(session);
   const expiryUrgent = !!expAt && expAt.getTime() - Date.now() < ONE_HOUR_MS;
+  // project — ради owner-гейта (QA-P1F): срок и досье — настройки владельца, кнопка
+  // гасится сама вне своей границы (тот же паттерн, что у PrivateChatToggle ниже)
   const expiryBadge = online ? (
-    <ExpiryButton session={session} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
+    <ExpiryButton session={session} project={project} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
   ) : null;
   // Opt-out «не сохранять решения из этого чата» — только у проектных чатов, рядом со
   // «Временем жизни» (тем же паттерном кнопки в шапке)
   const dossierBtn = project && online ? (
-    <DossierOptOutButton session={session} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
+    <DossierOptOutButton session={session} project={project} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
   ) : null;
+  // Тумблер «Приватный чат» (S2d-F2): компонент сам гасится вне своей границы —
+  // только автор чата в общем проекте, не читатель; в личном проекте — нет вовсе
+  const privateBtn = <PrivateChatToggle session={session} project={project} hasMessages={hasMessages}
+    online={online} isMobile={isCompact} onSessionUpdated={onSessionUpdated} onAttachmentMoves={onAttachmentMoves} />;
   // На узких раскладках (мобил/планшет) прогресс workflow втянут в объединённый чип
   // (costBadges) — отдельный бейдж рисуем только на десктопе, где ряду хватает места.
   const workflowBadge = activeWorkflow && !isCompact ? (
@@ -1812,19 +1810,25 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       {badgeVisible('spend') && spendBadge}
     </>
   );
+  // Причина недоступности действия ЭТОМУ участнику (QA-P1, доработка QA-P1F): решение
+  // живёт в едином гейте (chatActionDeniedReason): rename/archive/tags — право записи
+  // чата (отказано только читателю), delete — автор чата и владелец, срок/мьют/досье —
+  // настройки владельца (отказаны и редактору, и читателю). myUserId — текущий человек
+  // из stored-пары
+  const myUserId = readStoredUserId();
+  const actionDenied = (key: string): string | null => chatActionDeniedReason(key, project, session, myUserId);
   // Тумблер уведомлений ЭТОГО чата — сигнал о завершённом ходе, когда вкладка не в фокусе.
   // compact (колонка стены): не показываем — в тесной колонке хватает срока жизни,
   // а заглушить чат можно из меню его карточки в списке. Общий рубильник уведомлений
   // живёт в разделе «Уведомления»
   const notifyBtn = online
-    ? <NotifyButton session={session} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
+    ? <NotifyButton session={session} project={project} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
     : null;
   // На узких раскладках артефакты и настройки — плотная пара справа (gap 0 вместо
   // TB.gap), читаются как единая группа действий чата; на десктопе — как раньше, врозь.
   const summaryBtn = summaryAction?.render?.({ session, hasMessages, online });
-  const wikiActionsBtn = wikiActions?.render?.({ session, hasMessages, online, compact: isCompact || compact });
   const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} />;
-  const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} />;
+  const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} locked={!!actionDenied('rename')} />;
 
   // === Видимость ряда действий ===
   // «⋯» стоит в ряду ВСЕГДА, а тумблеры внутри решают, что показывать рядом с ним.
@@ -1838,6 +1842,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // просто отключались, потому что ряд не вмещал их все. Теперь состав ряда
   // выбирает пользователь глазиком (по умолчанию наружу выведен только срок),
   // а «⋯» на месте всегда — значит прятать сами действия незачем
+  const wikiAvailable = useWikiChatAvailable(project?.id, !!actionDenied('wiki')) && online;
   const headerActionAvailable: Record<ChatActionKey, boolean> = {
     rename: online,
     pin: online && !session.projectId,
@@ -1847,6 +1852,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     wall: !!onAddToWall,
     notify: online && isNotifySupported(),
     dossier: !!project && online,
+    wiki: wikiAvailable,
     expiry: online,
     // Архив доступен и в узкой колонке «Стены»: сетевой клиент
     // PUT /api/chats/{id}/archived есть в любом онлайн-чате, а ряд от него не распухнет —
@@ -1864,17 +1870,39 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Исполнение действий шапки. Часть уже живёт готовыми кнопками (у них свои
   // поповеры и состояния) — их узлы в rowNode; остальные исполняются здесь
   const [renameDialog, setRenameDialog] = useState<string | null>(null);
+  // Запрос «открой меню «Вики» по якорю» из строки «⋯» и правого клика; counter растёт на каждый запрос
+  // Запрос живёт один рендер: меню забирает его в своём эффекте, шапка тут же гасит — иначе
+  // переезд экземпляра между рядом и «⋯» (глазик) открыл бы свежесмонтированное меню заново.
+  // Номер запроса сквозной (ref): меню сравнивает его с последним обработанным
+  const wikiReqSeq = useRef(0);
+  const [wikiOpen, setWikiOpen] = useState<{ counter: number; anchor: DOMRect | null } | null>(null);
+  useEffect(() => { if (wikiOpen) setWikiOpen(null); }, [wikiOpen]);
+  const requestWikiOpen = (anchor: DOMRect | null) => setWikiOpen({ counter: ++wikiReqSeq.current, anchor });
+  // Смена чата закрывает меню: чат меняет session во вкладе, его попап сбрасывается по session.id
+  // ОДИН экземпляр вклада на шапку: рисуется либо в ряду (со своим триггером), либо headless
+  // рядом с «⋯» — иначе два опроса analyze-status на один чат
+  const wikiMenuNode = (headless: boolean): ReactNode => (
+    // key по чату: смена чата размонтирует меню — открытое меню и его опрос прежнего чата закрываются
+    <Fragment key={session.id}>
+      {wikiMenu?.render?.({ session, hasMessages, online, isMobile: isCompact || !!compact, headless, open: wikiOpen ?? undefined })}
+    </Fragment>
+  );
+  const wikiHeadless = wikiAvailable && !rowActions.includes('wiki') ? wikiMenuNode(true) : null;
   const [deleteAsk, setDeleteAsk] = useState(false);
   // Сохранение имени — одна точка на кнопку «Сохранить» и на Enter в поле
+  // Отказ бэка «только автор» (устаревшая роль на клиенте) показываем текстом ответа
+  const failToast = (title: string, fallback: string) => (e: unknown) =>
+    showToast(title, isNotChatAuthorError(e) ? (e as Error).message : fallback, 'info');
   const saveRename = () => {
     const next = (renameDialog ?? '').trim();
     setRenameDialog(null);
     if (!next || next === (session.name ?? '')) return;
     void updateChatFields(session, { name: next })
       .then(s => onSessionUpdated?.(s))
-      .catch(() => showToast('Чат', 'Не удалось переименовать чат', 'info'));
+      .catch(failToast('Чат', 'Не удалось переименовать чат'));
   };
   const runAction = (key: ChatActionKey, anchor?: DOMRect) => {
+    if (actionDenied(key)) return;
     switch (key) {
       case 'rename': setRenameDialog(session.name ?? ''); break;
       case 'pin':
@@ -1883,6 +1911,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           .catch(() => showToast('Чат', 'Не удалось изменить закрепление', 'info'));
         break;
       case 'tags': if (anchor) setTagMenu(anchor); break;
+      case 'wiki': requestWikiOpen(anchor ?? null); break;
       case 'wall': onAddToWall?.(); break;
       case 'notify':
         void updateChatFields(session, { notificationsMuted: notifyOn })
@@ -1892,7 +1921,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       case 'dossier':
         void updateChatFields(session, { excludeFromDossiers: !session.excludeFromDossiers })
           .then(s => onSessionUpdated?.(s))
-          .catch(() => showToast('История решений', 'Не удалось изменить настройку чата', 'info'));
+          .catch(e => showToast('История решений', chatFieldsErrorText(e), 'info'));
         break;
       case 'expiry': if (anchor) setExpiryMenu(anchor); break;
       case 'archive':
@@ -1911,7 +1940,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
             // где этого чата уже нет, значит прятать его от человека второй раз
             if (isArchivedChat(session) && !isArchivedChat(s)) leaveChatArchiveView(chatFilterScope(s));
           })
-          .catch(() => showToast('Архив', 'Не удалось изменить архив чата', 'info'));
+          .catch(failToast('Архив', 'Не удалось изменить архив чата'));
         break;
       case 'delete': setDeleteAsk(true); break;
     }
@@ -1944,6 +1973,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         icon: <History size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
         label: session.excludeFromDossiers ? 'Досье: не сохраняются' : 'Досье: сохраняются',
       };
+      case 'wiki': return { icon: <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Вики' };
       case 'expiry': return {
         icon: <Hourglass size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
         label: session.expiresAfterMinutes != null ? `Хранить: ${formatTimeLeft(session) ?? 'по сроку'}` : 'Срок хранения',
@@ -1967,12 +1997,15 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const rowNode = (key: ChatActionKey): ReactNode => {
     if (key === 'dossier') return dossierBtn;
     if (key === 'expiry') return expiryBadge;
+    if (key === 'wiki') return wikiMenuNode(false);
     if (key === 'notify') return notifyBtn;
     const m = actionMeta(key);
+    const denied = actionDenied(key);
     return (
       <ToolbarIconButton
         onClick={e => runAction(key, (e.currentTarget as HTMLElement).getBoundingClientRect())}
-        title={m.label}
+        title={denied ?? m.label}
+        disabled={!!denied}
         isMobile={isCompact}
         active={m.active}
         color={m.danger ? C.danger : undefined}
@@ -2059,12 +2092,15 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // «осталось 2 ч» (меньше часа — C.warningText); порядок остальных — канонический
   const overflowActionItems: OverflowItem[] = headerActions.map(k => {
     const m = actionMeta(k);
+    const denied = actionDenied(k);
     const visible = headerVis.isVisible(k);
     const it: OverflowItem = {
       key: k,
       icon: m.icon,
       label: m.label,
       danger: m.danger,
+      disabled: !!denied,
+      sublabel: denied ?? undefined,
       // Теги и срок открывают свои поповеры по якорю «⋯» — сама кнопка исчезнет
       // вместе с меню, и её rect брать было бы неоткуда
       onClick: () => runAction(k, overflowAnchorRef.current ?? undefined),
@@ -2096,6 +2132,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       // композер растянут во весь экран и места ему не осталось (placeFab, hidden)
       ...(isMobile ? [{
         key: 'ai-hub', icon: <Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'AI-действия',
+        disabled: !!actionDenied('rename'),
+        sublabel: actionDenied('rename') ?? undefined,
         onClick: () => window.dispatchEvent(new Event(OPEN_AI_EVENT)),
       }] : []),
       ...(canContinue ? [{
@@ -2125,7 +2163,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Ghost-заглушение ряда действий — только на десктопе (класс сам гасится вне
   // hover-media): компактные раскладки получают полную непрозрачность
   const actionBtns = isCompact
-    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{wikiActionsBtn}{rowActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}{headerOverflow}</div>
+    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{privateBtn}{rowActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}{wikiHeadless}{headerOverflow}</div>
     // На десктопе кнопки — неразрывная группа: при переносе кластера уходят вниз целиком,
     // оставаясь последними у правого края (мышечная память на позицию). Ghost-класс
     // приглушает ряд в покое; «⋯» стоит ВНЕ него — это единственный путь к скрытым
@@ -2133,9 +2171,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     : (
       <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>
         <div className="cc-ghost-actions" style={{ display: 'flex', alignItems: 'center', gap: TB.gap }}>
-          {retitleBtn}{extractBtn}{summaryBtn}{wikiActionsBtn}
+          {retitleBtn}{extractBtn}{summaryBtn}{privateBtn}
           {rowActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}
         </div>
+        {wikiHeadless}
         {headerOverflow}
       </div>
     );
@@ -2184,6 +2223,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         <MenuItem
           icon={<Tags size={15} strokeWidth={2} />}
           label="Теги чата"
+          hint={actionDenied('tags') ?? undefined}
+          disabled={!!actionDenied('tags')}
           action={visAction('tags')}
           // Меню тегов открывается по тому же якорю: это меню уже закрылось бы,
           // и rect взять неоткуда — фиксируем якорь до закрытия (приём ChatCard)
@@ -2194,6 +2235,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         <MenuItem
           icon={notifyOn ? <Bell size={15} strokeWidth={2} /> : <BellOff size={15} strokeWidth={2} />}
           label={notifyOn ? 'Уведомления: включены' : 'Уведомления: выключены'}
+          hint={actionDenied('notify') ?? undefined}
+          disabled={!!actionDenied('notify')}
           action={visAction('notify')}
           onClick={() => {
             setCtxMenu(null);
@@ -2207,21 +2250,33 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         <MenuItem
           icon={<History size={15} strokeWidth={2} />}
           label={dossierExcluded ? 'Досье: не сохраняются' : 'Досье: сохраняются'}
+          hint={actionDenied('dossier') ?? undefined}
+          disabled={!!actionDenied('dossier')}
           action={visAction('dossier')}
           onClick={() => {
             setCtxMenu(null);
             void updateChatFields(session, { excludeFromDossiers: !dossierExcluded })
               .then(s => onSessionUpdated?.(s))
-              .catch(() => showToast('История решений', 'Не удалось изменить настройку чата', 'info'));
+              .catch(e => showToast('История решений', chatFieldsErrorText(e), 'info'));
           }}
         />
       )}
       <MenuItem
         icon={<Hourglass size={15} strokeWidth={2} />}
         label={chatTemporary ? `Хранить: ${formatTimeLeft(session) ?? 'по сроку'}` : 'Срок хранения…'}
+        hint={actionDenied('expiry') ?? undefined}
+        disabled={!!actionDenied('expiry')}
         action={visAction('expiry')}
         onClick={() => { const a = ctxMenu; setCtxMenu(null); setExpiryMenu(a); }}
       />
+      {wikiAvailable && (
+        <MenuItem
+          icon={<BookOpen size={15} strokeWidth={2} />}
+          label="Вики"
+          action={visAction('wiki')}
+          onClick={() => { const a = ctxMenu; setCtxMenu(null); requestWikiOpen(a); }}
+        />
+      )}
       {canContinue && (
         <MenuItem
           icon={<MessageSquareShare size={15} strokeWidth={2} />}
@@ -2238,6 +2293,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           <MenuItem
             icon={<Pencil size={15} strokeWidth={2} />}
             label="Переименовать по переписке"
+            hint={actionDenied('rename') ?? undefined}
+            disabled={!!actionDenied('rename')}
             onClick={() => { setCtxMenu(null); runAi('chat.retitle'); }}
           />
           <MenuItem
@@ -2299,7 +2356,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
             // Уйти из удалённого чата и обновить список — дело владельца экрана
             return del
               .then(() => { setDeleteAsk(false); onChatDeleted?.(session.id); })
-              .catch(() => { setDeleteAsk(false); showToast('Чат', 'Не удалось удалить чат', 'info'); });
+              .catch(e => { setDeleteAsk(false); failToast('Чат', 'Не удалось удалить чат')(e); });
           }}
           onCancel={() => setDeleteAsk(false)}
         />

@@ -305,7 +305,8 @@ public class NotesWikiSourceTests : IDisposable
         var session = new Session { Id = "s-wiki-source-test", OwnerId = User }; // без проекта: источник по умолчанию — личный
         return (
             new NotesToolset(new AllowAllPersonas(), new AllowAllBindings(), new OwnSession(session),
-                new TestSessionBroadcaster(), _sut, _kb, _ai, _noteTasks),
+                new ClaudeHomeServer.Tests.Helpers.NotesNoopHubNotifier(), new ClaudeHomeServer.Tests.Helpers.NotesWideTurnFrame(),
+                new ClaudeHomeServer.Tests.Helpers.NotesNoActorDenials(), _sut, _kb, _ai, _noteTasks),
             new McpToolCallContext(User, session.Id, session.Id));
     }
 
@@ -346,8 +347,8 @@ public class NotesWikiSourceTests : IDisposable
 
     private sealed class RecordingNotesNotifier : INotesHubNotifier
     {
-        public Task BroadcastNotesChangedAsync(string userId, string action, string noteId) => Task.CompletedTask;
-        public Task BroadcastTaskChangedAsync(string userId, string action, string taskId) => Task.CompletedTask;
+        public Task BroadcastNotesChangedAsync(string userId, string action, string noteId, string? projectId = null) => Task.CompletedTask;
+        public Task BroadcastTaskChangedAsync(string userId, string action, string taskId, string? projectId = null) => Task.CompletedTask;
     }
 
     // Гейт llm-wiki с управляемым состоянием: семантика — ровно SourcesFor-проверка

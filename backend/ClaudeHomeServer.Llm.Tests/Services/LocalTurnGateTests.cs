@@ -358,8 +358,8 @@ public class LocalTurnGateTests
         await b.Sut.SendMessageAsync("b");
         await WaitForAsync(() => gate.QueuedFor(Local) == 1, "B в очереди");
 
-        // Событие идёт обычным потоком хода, а не LocalModelLiveMessage (тот под флагом
-        // local-model-stats): у адаптера нет зависимости от флага вовсе.
+        // Событие идёт обычным потоком хода, а не LocalModelLiveMessage (тот гасится рубильником
+        // LocalModelStats:Enabled): у адаптера нет зависимости от рубильника вовсе.
         await WaitForAsync(() => b.Downstream().OfType<LocalTurnQueueMessage>().Any(), "событие ожидания");
         b.Downstream().OfType<LocalTurnQueueMessage>().Single()
             .Should().Be(new LocalTurnQueueMessage(Position: 1, Active: 1, Limit: 1));

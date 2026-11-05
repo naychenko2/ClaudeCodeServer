@@ -18,6 +18,10 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // умолчаниями. Образец — WikiController: владелец только из claim sub, чужая
 // вики — 403, выключенный флаг llm-wiki — 409 (тот же код, что у линта).
 //
+// С LI-2 PUT с включённой ночью заводит вику тем же вызовом WikiKeeper.EnsureInitializedAsync,
+// что и остальные человеческие точки: человек поставил тумблер — ночной разбор без заведённой
+// вики невозможен, а сама служба её не заводит. GET остаётся читающим и вику не заводит.
+//
 // GET оценивает здоровье классов (WikiClassHealth) и возвращает настройки с замером: блок
 // «Применение» обязан показывать текущую долю, а не память прошлого просмотра. Оценка
 // идемпотентна и однопоточна на владельца; выключение класса и уведомление — её часть, а не
@@ -39,12 +43,14 @@ public class WikiSettingsController : ControllerBase
 {
     private readonly WikiClassHealth _health;
     private readonly IFeatureFlagGate? _flags;
+    private readonly WikiKeeper _keeper;
     private readonly string _dataDir;
 
-    public WikiSettingsController(WikiClassHealth health, IFeatureFlagGate? flags, IConfiguration config)
+    public WikiSettingsController(WikiClassHealth health, IFeatureFlagGate? flags, WikiKeeper keeper, IConfiguration config)
     {
         _health = health;
         _flags = flags;
+        _keeper = keeper;
         // Каталог данных — как у всех сервисов (DataPath указывает на projects.json в dataDir).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
@@ -101,9 +107,13 @@ public class WikiSettingsController : ControllerBase
     /// одновременные PUT и оценка не рвут файл и не затирают друг друга; мердж ночного блока
     /// делается от состояния на момент записи, а не от чтения вне замка. Кривой merged-блок —
     /// 400 с кодом, файл не тронут. Отказ записи (диск отказал) — {code}, а не исключение наружу.
-    /// Замер не возвращается: он читается GET после действия.</summary>
+    /// Замер не возвращается: он читается GET после действия.
+    /// LI-2: PUT, включивший ночной разбор, заводит вику — она нужна ночной службе. Заведение
+    /// после успешного Mutate и только когда в итоговых настройках nightly.enabled == true:
+    /// PUT класса или автоприменения вику не заводит, svc и выключенный флаг до заведения
+    /// не доходят (порядок проверок не менялся).</summary>
     [HttpPut]
-    public ActionResult<WikiSettingsDto> Put([FromBody] WikiSettingsRequest? req)
+    public async Task<ActionResult<WikiSettingsDto>> Put([FromBody] WikiSettingsRequest? req)
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
@@ -192,6 +202,14 @@ public class WikiSettingsController : ControllerBase
             // код, а не 500 без тела: вызывающий различает «файл не записан» и прочие свои ошибки.
             return StatusCode(500, new { code = CodeWriteFailed, message = "файл настроек не записан" });
         }
+
+        // LI-2: включённая ночь — действие человека, после которого вики нужна сразу (ночная
+        // служба её не заводит, она только разбирает). Идемпотентный EnsureInitializedAsync под
+        // замком владельца: повторный PUT ничего не меняет, две одновременные точки (PUT +
+        // analyze) дают ровно один шаблон. Класс и автоприменение сюда не доходят: в итоговых
+        // настройках ночь остаётся выключенной.
+        if (next.NightlyOrDefaults().Enabled)
+            await _keeper.EnsureInitializedAsync(userId);
 
         // PUT итога ночи не несёт: он меняет настройки, а не читает прошлые проходы (шапка).
         return Ok(BuildDto(next, [], null));

@@ -13,7 +13,7 @@
 // Этап 4: кнопка-зеркало «Загрузить из репозитория» (Download слева от Upload),
 // модалка импорта, бейдж происхождения в метастроке импортированной записи,
 // заголовок группы «Две записи об одном коммите» между своей и импортированной
-// парой. Оба действия видны при включённом флаге change-dossiers-recall И когда
+// парой. Оба действия видны, когда
 // проект — git-репозиторий. Тумблер opt-out DossierOptOutButton живёт в шапке
 // чата и сюда не ходит.
 
@@ -27,7 +27,6 @@ import { displayNameOf, type AuthState } from '../../types';
 import { api } from '../../lib/api';
 import { basename } from '../../lib/paths';
 import { C, FONT, FS, R, SP } from '../../lib/design';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { Button, Dot, EmptyState, IconButton, TextField } from '../../components/ui';
 import { PanelHeaderSlot, useHasPanelHeader } from '../../components/ui';
@@ -58,7 +57,7 @@ const RECENT_DAYS = 30;
 const AVATAR_INDENT = 34;
 
 // Тексты панели — в одном месте файла. Подсказка автовыгрузки появляется по тому же
-// гейту, что у кнопок выгрузки (флаг change-dossiers-recall включён и проект —
+// гейту, что у кнопок выгрузки ( включён и проект —
 // git-репозиторий), но текст выбирается по причине гейта фона (autoExport из
 // /dossiers/export/status): после сужения автовыгрузки «ветка заведомо наша» фон
 // молчит при чужом tip, одной origin-ветке и общей папке — общая фраза «выгружается
@@ -433,13 +432,12 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
   const [query, setQuery] = useState('');
 
   // Этап 3 — экспорт в ветку ccs/dossiers/v1. Гейт видимости кнопки:
-  //   флаг change-dossiers-recall включён
+  //    включён
   //   И проект — git-репозиторий (isGitRepo из /dossiers/export/status)
   // sharedFolder приезжает тем же запросом и подсовывается модалке для выноски.
   // hasDossierBranch — наличие локальной refs/heads/ccs/dossiers/v1: пока ветки нет,
   // импорт из неё бессмыслен, и «Загрузить» гейтим отдельно от «Выгрузить» —
   // выгрузить можно и когда ветки ещё нет, именно так она и создаётся.
-  const recallEnabled = useFeature(FLAGS.changeDossiersRecall);
   const [exportStatus, setExportStatus] = useState<{
     isGitRepo: boolean;
     sharedFolder: boolean;
@@ -450,20 +448,14 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
   const [importOpen, setImportOpen] = useState(false);
 
   useEffect(() => {
-    if (!recallEnabled) {
-      // Сбрасываем на null и закрываем модалку, если флаг мигнул во время открытого диалога
-      setExportStatus(null);
-      setExportOpen(false);
-      return;
-    }
     let cancelled = false;
     api.dossiers.exportStatus(project.id)
       .then(s => { if (!cancelled) setExportStatus(s); })
       .catch(() => { if (!cancelled) setExportStatus({ isGitRepo: false, sharedFolder: false, hasDossierBranch: false, autoExport: null }); });
     return () => { cancelled = true; };
-  }, [project.id, recallEnabled]);
+  }, [project.id]);
 
-  const showExportButton = recallEnabled && exportStatus?.isGitRepo === true;
+  const showExportButton = exportStatus?.isGitRepo === true;
   // Импорт дополнительно требует существующую ветку ccs/dossiers/v1: без неё
   // «Загрузить» упрётся в «Загружать пока нечего». «Выгрузить» этой зависимости
   // не имеет — выгрузка как раз и создаёт ветку.

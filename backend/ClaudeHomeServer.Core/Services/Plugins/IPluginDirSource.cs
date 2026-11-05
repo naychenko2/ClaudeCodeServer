@@ -20,5 +20,7 @@ public interface IPluginDirSource
     // или подсистема выключена. personaId null — без привязки персоны (все включённые).
     // project null (M8) — ход без привязки к проекту (например, персональный чат):
     // локальности не проверяем, все включённые пакеты владельца.
+    // Общий проект (S2a-8) — пустой список: рамка хода в нём узкая для всех (TurnFrame),
+    // личные пакеты арендатора в старт общего чата не идут.
     IReadOnlyList<string> GetPluginDirs(string ownerId, string? personaId, Project? project);
 }

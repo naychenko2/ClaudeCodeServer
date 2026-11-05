@@ -15,8 +15,8 @@ public sealed record EligibilityResult(bool Eligible, string? Reason = null)
 }
 
 /// <summary>
-/// Чистая функция отбора кандидатов на авто-возобновление хода после рестарта сервера
-/// (флаг turn-auto-resume). Без side-effects, без await: принимает всё необходимое
+/// Чистая функция отбора кандидатов на авто-возобновление хода после рестарта сервера.
+/// Без side-effects, без await: принимает всё необходимое
 /// как параметры. Вызывается фоновым сторожом после ApplicationStarted.
 /// </summary>
 public static class TurnAutoResumeEligibility

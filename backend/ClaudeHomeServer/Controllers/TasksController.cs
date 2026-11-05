@@ -8,6 +8,7 @@ using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Docs;
 using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Llm;
@@ -30,38 +31,71 @@ namespace ClaudeHomeServer.Controllers;
 public class ProjectTasksController(
     TaskManager tasks, ProjectManager projects, PersonaManager personas,
     ISessionBroadcaster broadcaster, PersonaBindingsService bindings,
-    ISphereDirectory spheres, SessionManager sessions) : ControllerBase
+    ISphereDirectory spheres, SessionManager sessions,
+    // Явный резолв доступа к проекту — та же точка, что у FeatureOwnerGate на двери правки
+    // (F2-M2); null — fail-closed (проект недоступен)
+    IProjectAccess? access = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
-    private Project? OwnProject(string projectId)
-    {
-        var project = projects.GetById(projectId);
-        return project?.OwnerId == UserId ? project : null;
-    }
+    // Проект запроса; доступ проверил [ProjectScope] (чужой — 404)
+    private Project? OwnProject(string projectId) => projects.GetById(projectId);
 
     [HttpGet]
+    [ProjectScope]
     public IActionResult GetAll(string projectId)
     {
         if (OwnProject(projectId) is null) return NotFound();
-        // Список — облегчённый (без Description/ResultMarkdown); полная карточка — GET /api/tasks/{id}
-        return Ok(tasks.GetByProject(projectId).Select(TaskListItem.From).ToList());
+        // Список — облегчённый (без Description/ResultMarkdown); полная карточка — GET /api/tasks/{id}.
+        // S2c-9: задачи проекта, вызываемые не владельцем, — через единую проекцию участника TaskView
+        // (те же поля, что в его карточке, минус тяжёлый текст). «Владелец или участник» берётся из
+        // RequestScope, который [ProjectScope] разрешил до действия: новой сверки id вызывающего
+        // в контроллере нет.
+        var asMember = HttpContext.GetRequestScope().Role != ProjectRole.Owner;
+        // Маска чужих приватных чатов (S2d-4b) — обе роли: задачи проекта вызываются и владельцем,
+        // и участником, а чужой приватный чат не видит никто из них, кроме его автора.
+        var audience = ChatAudience.Viewer(UserId);
+        return Ok(tasks.GetByProject(projectId)
+            .Select(t => TaskView.MaskForeignChats(
+                asMember ? TaskView.ForMemberListItem(t) : TaskListItem.From(t), sessions, projects, audience))
+            .ToList());
     }
 
+    // Задача в общий проект (F2-T1, разрез §2.1 «править задачи» — владелец и редактор): право
+    // WriteContent, то же, что у остального записывания задач проекта; читатель — 403
+    // project_scope («нет права на запись», форма ProjectScopeAttribute), посторонний — 404.
+    // Право Write участнику остаётся закрытым (замок ProjectAccessService не открыт).
     [HttpPost]
+    [ProjectScope(Right = ProjectRight.WriteContent)]
     public async Task<IActionResult> Create(string projectId, [FromBody] CreateTaskRequest req)
     {
         var project = OwnProject(projectId);
         if (project is null) return NotFound();
+        // Арендатор проекта — ключ записи его задач (F2-T1): тот же источник, что у
+        // RequestScope.TenantOwnerId, который разрешил [ProjectScope] до действия.
+        var tenantId = project.OwnerId!;
         if (string.IsNullOrWhiteSpace(req.Title))
             return BadRequest(new { error = "Название задачи не может быть пустым" });
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
 
+        // Приватный чат не привязывается к фиче (S2d-7b-2)
+        if (FeatureChatDoor.DenyPrivateForHeader(sessions,
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), FeatureChatDoor.CreateTarget(req.FeatureId, req.Role)) is { } privateChat)
+            return Conflict(new { error = privateChat, code = FeatureChatDoor.PrivateChatCode });
         // Чат, ведущий фичу, не заводит задачи чужой фичи (правило FeatureChatBinding)
         if (FeatureChatDoor.DenyForHeader(sessions, tasks, UserId,
                 Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), FeatureChatDoor.CreateTarget(req.FeatureId, req.Role)) is { } bound)
             return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
+
+        // Фичевые поля при создании — тот же предикат, что на двери правки (F2-M2, возврат
+        // финала db216f32): дверь WriteContent открыта редактору, но она не отдаёт ему ведение
+        // фичи арендатора — роль/фичу/план/связь с ревью создаёт только владелец. Актор —
+        // вызывающий, запись ляжет под арендатором (tenantId — ключ, не автор). Отказ до любой
+        // записи. Обычная задача (без фичевых полей) — создаётся как раньше.
+        if (FeatureOwnerGate.DeniedForCreate(access, UserId, tenantId, projectId, req) is { } featureDenied)
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new { error = featureDenied, code = FeatureOwnerGate.ErrorCode });
 
         // Колонка доски → статус выводим из её категории
         var cat = BoardColumnHelper.Category(project, req.ColumnId);
@@ -92,14 +126,32 @@ public class ProjectTasksController(
         TaskItem task;
         try
         {
-            task = tasks.Create(projectId, UserId, req, targetColumn);
+            // Явный признак происхождения (S2b-1, доработка): этот эндпоинт — человеческий
+            // путь (UI/API), признак ставит сервер, а не тело запроса: агентские и серверные
+            // пути (тулсет задач, волна, merge, сборка архитектора) зовут TaskManager напрямую.
+            // Ключ записи — арендатор проекта (Project.OwnerId, тот же источник, что у
+            // RequestScope.TenantOwnerId в [ProjectScope]), автор — вызывающий (F2-T1): задача
+            // участника общего проекта лежит под тем же ключом, что задачи владельца («ключ
+            // записи проектной задачи» в TaskManager.Update), иначе она уедет из календаря и
+            // выдачи арендатора; CreatedByUserId — тот, кто её поставил, по нему решается
+            // удаление. Для владельца проекта оба id совпадают — прежний путь.
+            task = tasks.Create(projectId, tenantId,
+                req with { CreatedByHuman = true, CreatedByActorUserId = UserId, SourceSessionId = null }, targetColumn);
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { error = ex.Message });
         }
-        await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", task));
-        return Ok(task);
+        // Событие доски: адресат полной карточки — владелец записи (не тот, кто нажал кнопку):
+        // группе проекта идёт проекция участника, арендатору — полная (ISessionBroadcaster.ToTaskBoard).
+        await broadcaster.ToTaskBoard(task.OwnerId!, task.ProjectId, new TaskChangedMessage("created", task), sessions, projects);
+        // Ответ записи — копия с маской чужих приватных чатов (S2d-4i), та же форма, что в GET-пути.
+        // Проектная задача лежит под арендатором (TaskManager), а её чат-источник может быть
+        // приватным чатом участника: ни id, ни название этого чата в ответ не идут. Запись стора не правится.
+        // Состав полей — по владению записью, как в пути чтения (S2c-9): открытая редактору
+        // дверь записи не должна отдавать ему то, чего ему не отдаёт GET.
+        return Ok(TaskView.MaskForeignChats(TaskView.ForWrite(task, UserId),
+            sessions, projects, ChatAudience.Viewer(UserId)));
     }
 }
 
@@ -147,6 +199,12 @@ public class TasksController(
     // Очередь фич (волна 6): пересчёт очереди проекта после постановки/снятия удержания.
     // null — подсистема Tasks выключена (тот же гейт, что у features) → пересчёта нет.
     FeatureQueueService? queue = null,
+    // Явный резолв доступа к проекту из тела/запроса ([ProjectScope] такого id не видит);
+    // null — fail-closed (проект недоступен)
+    IProjectAccess? access = null,
+    // Выдача «моих задач» (S2b-3a): личные и свои + назначенные мне в общих проектах.
+    // null — подсистема Tasks выключена: фолбэк на собственные задачи (GetByOwner).
+    MyTasksQuery? myTasks = null,
     // Лимит слотов очереди для brief.queueStartEstimate (FeatureQueuePolicy.Limit): тот же ключ, что у снятия очереди.
     IConfiguration? config = null) : ControllerBase
 {
@@ -161,7 +219,45 @@ public class TasksController(
 
     // Проект генерации: только свой; чужой/несуществующий → личный контекст
     private string? OwnProjectId(string? projectId) =>
-        projectId is not null && projects.GetById(projectId)?.OwnerId == UserId ? projectId : null;
+        projectId is not null && CanUseProject(projectId) ? projectId : null;
+
+    // Доступ вызывающего к проекту, названному в теле/запросе (в S0 — только владелец)
+    private bool CanUseProject(string projectId) =>
+        access?.Resolve(UserId, projectId, ProjectRight.Read) is not null && projects.GetById(projectId) is not null;
+
+    // Двери записи задач (F2-T1, разрез §2.1: «править … задачи» — владелец ✓, редактор ✓,
+    // читатель —). Право решает IProjectAccess по проекту задачи: WriteContent (правка, статус,
+    // колонка, подзадачи, порядок) и RunTurn (запуск исполнителя — он у редактора открыт с
+    // S2a-10). Своя запись — личная или своего проекта — как раньше, по владению: право не
+    // спрашивается, рубильник и флаг «Общих проектов» её не касаются. Чужая личная — 404.
+    // Видимому без права — 403 той же формы и тем же кодом, что у [ProjectScope]
+    // (ProjectScopeAttribute.cs:87-97), невидимому — 404: решение о праве идёт ПОСЛЕ проверки
+    // видимости (тот же порядок, что TurnRightExtensions.Deny).
+    private IActionResult? TaskActionDenied(TaskItem? task, ProjectRight right)
+    {
+        if (task is null || task.OwnerId == UserId) return null;
+        if (task.ProjectId is not { } pid) return new NotFoundResult();
+        if (access?.Resolve(UserId, pid, right) is not null) return null;
+        if (access?.Resolve(UserId, pid, ProjectRight.Read) is null) return new NotFoundResult();
+        return StatusCode(StatusCodes.Status403Forbidden, new
+        {
+            error = right == ProjectRight.RunTurn ? "Нет права вести ход" : "Нет права на запись",
+            code = ProjectScopeAttribute.ErrorCode,
+        });
+    }
+
+    // Удаление задачи (F2-T1, по образцу чатов — вопрос 2 макета, рекомендация Александра):
+    // её автор (CreatedByUserId) или её владелец. Порядок: сначала право — читателю остаёт
+    // 403 project_scope (права нет до авторства), невидимому — 404; затем авторство —
+    // редактору на чужой задаче 403 not_task_author с причиной (по коду фронт выключает
+    // кнопку). Автор неизвестен (старые и серверные записи, CreatedByUserId == null) — автором
+    // не считается: тот же fail-closed, что у DenyTurnAuthor и ChatAuthorGate.
+    private IActionResult? TaskDeleteDenied(TaskItem? task)
+    {
+        if (TaskActionDenied(task, ProjectRight.WriteContent) is { } denied) return denied;
+        if (task is null || task.OwnerId == UserId) return null;
+        return task.CreatedByUserId == UserId ? null : TaskAuthorGate.Denied();
+    }
 
     // Сгенерировать описание задачи (Claude): по названию + контекст проекта (личная — только название)
     [HttpPost("ai/description")]
@@ -266,14 +362,21 @@ public class TasksController(
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
 
+        // Приватный чат не привязывается к фиче (S2d-7b-2)
+        if (FeatureChatDoor.DenyPrivateForHeader(sessions,
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), FeatureChatDoor.CreateTarget(req.FeatureId, req.Role)) is { } privateChat)
+            return Conflict(new { error = privateChat, code = FeatureChatDoor.PrivateChatCode });
         // Чат, ведущий фичу, не заводит задачи чужой фичи (правило FeatureChatBinding)
         if (FeatureChatDoor.DenyForHeader(sessions, tasks, UserId,
                 Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), FeatureChatDoor.CreateTarget(req.FeatureId, req.Role)) is { } bound)
             return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
 
         // Проект из тела (если он свой) — для резолва кастомной колонки. Чужой проект
-        // игнорируем: личный эндпоинт не должен подменять статус по чужой доске.
-        var project = bodyProjectId is not null && projects.GetById(bodyProjectId)?.OwnerId == UserId
+        // игнорируем: личный эндпоинт не должен подменять статус по чужой доске. Право на
+        // чужую доску — WriteContent (F2-T1), не чтение: читателю общего проекта её колонки
+        // не управляют его личной задачей.
+        var project = bodyProjectId is not null
+            && access?.Resolve(UserId, bodyProjectId, ProjectRight.WriteContent) is not null
             ? projects.GetById(bodyProjectId)
             : null;
 
@@ -307,14 +410,18 @@ public class TasksController(
             // TeamWaveService) могут слать personal-карточки в review-колонку своих
             // проектов через bodyProjectId — это не «личная» задача в смысле обхода,
             // обычный кейс гейта.
-            task = tasks.Create(null, UserId, req, targetColumn);
+            // Явный признак происхождения (S2b-1, доработка): человеческий путь (UI/API),
+            // как в проектной ветке Create выше.
+            task = tasks.Create(null, UserId, req with { CreatedByHuman = true, CreatedByActorUserId = null, SourceSessionId = null }, targetColumn);
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { error = ex.Message });
         }
-        await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", task));
-        return Ok(task);
+        await broadcaster.ToTaskBoard(UserId, task.ProjectId, new TaskChangedMessage("created", task), sessions, projects);
+        // Та же маска ответа записи, что в проектной ветке Create и в GET-путе (S2d-4i):
+        // чат-источник из тела — id чата, и он может быть приватным чатом другого человека.
+        return Ok(TaskView.MaskForeignChats(TaskView.CopyOf(task), sessions, projects, ChatAudience.Viewer(UserId)));
     }
 
     // Все задачи пользователя (календарь, MCP): диапазон по сроку, поиск и фильтры.
@@ -328,7 +435,7 @@ public class TasksController(
         [FromQuery] string? projectId = null, [FromQuery] bool personal = false,
         [FromQuery] string? personaId = null, [FromQuery] int? doneDays = null)
     {
-        var result = tasks.GetByOwner(UserId).AsEnumerable();
+        var result = (myTasks?.ForUser(UserId) ?? tasks.GetByOwner(UserId)).AsEnumerable();
         // doneDays задан — закрытые только за N дней по CompletedAt (границу включаем); не задан — все
         if (doneDays is { } dd)
         {
@@ -360,25 +467,63 @@ public class TasksController(
         // Фильтры (в т.ч. q по полному описанию) отработали на полных задачах; наружу уходит
         // облегчённый элемент: без Description/ResultMarkdown (на проде это ~80% веса ответа).
         // Полная карточка — GET /api/tasks/{taskId}.
-        return Ok(result.Select(TaskListItem.From).ToList());
+        // S2c-9: задачи общих проектов, не принадлежащие вызывающему, — через единую проекцию
+        // участника TaskView (те же поля, что в его карточке, минус тяжёлый текст; id личной заметки
+        // владельца закрыт). MyTasksQuery уже отобрал их по праву Read — сверка «своя ли задача»
+        // выбирает форму ответа, ключом хранилищ не служит.
+        // Маска чужих приватных чатов (S2d-4b) — и своих задач тоже: владелец не видит чат,
+        // приватный другому участнику его проекта.
+        var audience = ChatAudience.Viewer(UserId);
+        return Ok(result.Select(t => TaskView.MaskForeignChats(
+            t.OwnerId == UserId ? TaskListItem.From(t) : TaskView.ForMemberListItem(t), sessions, projects, audience)).ToList());
     }
 
     [HttpGet("{taskId}")]
     public IActionResult GetById(string taskId)
     {
         var task = tasks.GetById(taskId);
-        return task is null || task.OwnerId != UserId ? NotFound() : Ok(task);
+        if (task is null) return NotFound();
+        // Владелец (арендатор) — полная карточка, как раньше (тот же состав полей), но копия с
+        // маской чужих приватных чатов (S2d-4b): их не видит и владелец проекта.
+        if (task.OwnerId == UserId)
+            return Ok(TaskView.MaskForeignChats(TaskView.CopyOf(task), sessions, projects, ChatAudience.Viewer(UserId)));
+        // S2c-9 (решение Андрея 01.11): участник общего проекта с правом Read (редактор и читатель)
+        // читает полную карточку через единую проекцию TaskView (тот же состав полей, что в списке,
+        // плюс Description/ResultMarkdown). Членство и флаг «Общие проекты» решает только
+        // IProjectAccess.Resolve; ключ хранилища не меняется — задача лежит у арендатора.
+        if (task.ProjectId is { } pid && access?.Resolve(UserId, pid, ProjectRight.Read) is not null)
+            return Ok(TaskView.MaskForeignChats(TaskView.ForMember(task), sessions, projects, ChatAudience.Viewer(UserId)));
+        // Посторонний, отозванный, выключенный флаг, личная задача владельца — всегда 404:
+        // «нет» и «чужое» не различаем.
+        return NotFound();
     }
 
     [HttpPut("{taskId}")]
     public async Task<IActionResult> Update(string taskId, [FromBody] UpdateTaskRequest req)
     {
         var task = tasks.GetById(taskId);
-        if (task is null || task.OwnerId != UserId) return NotFound();
+        if (task is null) return NotFound();
+        // Правка, статус, колонка (перетаскивание), подзадачи и порядок — право WriteContent
+        // по проекту задачи (F2-T1): редактор может, читателю 403, невидимому 404.
+        if (TaskActionDenied(task, ProjectRight.WriteContent) is { } denied) return denied;
+        // Фичевые поля и жизнь фичи — только владельцу проекта (возврат ревью R-F2-T1): дверь
+        // WriteContent открыта редактору, но она не отдаёт ему ведение фичи арендатора. Отказ
+        // 403 до любой записи и до валидации тела — при отказе хранимый объект не тронут.
+        if (FeatureOwnerGate.Denied(access, UserId, task, req) is { } featureDenied)
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new { error = featureDenied, code = FeatureOwnerGate.ErrorCode });
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
 
+        // Человеческий REST не принимает id чата из тела: ось «чат-исполнитель» ставит сервер
+        // (ExecutorLauncher), иначе приватный чат привязывался бы к фиче мимо двери (S2d-7b-2)
+        req = req with { ExecutorLaunchedBySessionId = null };
+
         // Смена фичи задачи (featureId или превращение в эпик ролью) — та же дверь, что у создания
+        if (FeatureChatDoor.DenyPrivateForHeader(sessions,
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(),
+                FeatureChatDoor.UpdateTarget(task, req.FeatureId, req.Role)) is { } privateChat)
+            return Conflict(new { error = privateChat, code = FeatureChatDoor.PrivateChatCode });
         if (FeatureChatDoor.DenyForHeader(sessions, tasks, UserId,
                 Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(),
                 FeatureChatDoor.UpdateTarget(task, req.FeatureId, req.Role)) is { } bound)
@@ -390,8 +535,19 @@ public class TasksController(
         if (req.ProjectId is not null)
         {
             targetProjectId = req.ProjectId == "" ? null : req.ProjectId;
-            if (targetProjectId is not null && projects.GetById(targetProjectId)?.OwnerId != UserId)
+            if (targetProjectId is not null && !CanUseProject(targetProjectId))
                 return BadRequest(new { error = "Проект не найден или недоступен" });
+            // Перенос в другой проект — это запись в него (задача появится на доске и уйдёт в группу
+            // проекта): право Write, оно остаётся только у владельца (F2-T1: «остаётся только у
+            // владельца … перенос задачи из проекта в личные или в другой проект»). Тот же отказ —
+            // на выводе задачи из общего проекта в личные: данные уходят из проекта, а не правятся
+            // в нём, поэтому это не WriteContent редактора.
+            if (targetProjectId is not null && targetProjectId != task.ProjectId
+                && access?.Resolve(UserId, targetProjectId, ProjectRight.Write) is null)
+                return StatusCode(403, new { error = "Нет права на запись", code = ProjectScopeAttribute.ErrorCode });
+            if (targetProjectId is null && task.ProjectId is { } fromPid
+                && access?.Resolve(UserId, fromPid, ProjectRight.Write) is null)
+                return StatusCode(403, new { error = "Нет права на запись", code = ProjectScopeAttribute.ErrorCode });
         }
 
         // Колонка доски → статус выводим из её категории (единый источник для MCP/Claude и доски).
@@ -409,6 +565,46 @@ public class TasksController(
             effectiveColumn = targetProject?.BoardColumns?.FirstOrDefault(c => c.Id == req.ColumnId);
         else if (task.ColumnId is not null && targetProject?.BoardColumns is { } currentColumns)
             effectiveColumn = currentColumns.FirstOrDefault(c => c.Id == task.ColumnId);
+
+        // Человек-исполнитель (S2b-2a): id участника проекта задачи. Членство и роль знает
+        // только проект — их проверяет дверь (TaskManager проекта не видит; ту же пару
+        // проверок для MCP-двери поставит S2b-2b). Отказ — 400 с машинным кодом контракта
+        // (assignee_not_member / reader_not_assignable): по коду фронт решает подсказку.
+        // access резолвит УЧАСТНИКА, а не вызывающего: право на это действие у вызывающего
+        // уже проверено выше (чужой — 403), здесь вопрос «можно ли этого человека исполнителем».
+        // id владельца проекта — не отказ: TaskManager сбрасывает поле (владелец — исполнитель
+        // по умолчанию). Личная задача: чужой id — тот же отказ (ей нечего быть участником),
+        // свой id допустим и равен «снять» (для правки задачи вызывающий и есть её владелец).
+        var tenantOwnerId = targetProject?.OwnerId;
+        var assigneeUserId = string.IsNullOrWhiteSpace(req.AssigneeUserId) ? null : req.AssigneeUserId.Trim();
+        if (assigneeUserId is not null)
+        {
+            if (targetProjectId is null)
+            {
+                if (assigneeUserId != UserId)
+                    return BadRequest(new
+                    {
+                        error = "Личной задаче нельзя назначить исполнителя: у неё нет проекта",
+                        code = TaskManager.AssigneeNotMemberCode,
+                    });
+            }
+            else
+            {
+                var assigneeRole = access?.Resolve(assigneeUserId, targetProjectId, ProjectRight.Read)?.Role;
+                if (assigneeRole is null)
+                    return BadRequest(new
+                    {
+                        error = $"«{assigneeUserId}» не участник проекта задачи",
+                        code = TaskManager.AssigneeNotMemberCode,
+                    });
+                if (assigneeRole == ProjectRole.Reader)
+                    return BadRequest(new
+                    {
+                        error = "Читателя нельзя назначить исполнителем: он только смотрит",
+                        code = TaskManager.ReaderNotAssignableCode,
+                    });
+            }
+        }
 
         // Персона-исполнитель: "" = убрать (валидировать нечего), непустая — проверяем.
         // Валидация по целевому проекту: проектная персона прежнего проекта в новом недействительна,
@@ -480,9 +676,15 @@ public class TasksController(
                 () => !DelegatedTurnGate.Decide(
                     sessions, UserId, callerSessionHeader, "Закрытие/возобновление фичи",
                     alsoWhenExecutorSuppressed: false, allowInTeamImplement: false).Allowed);
+            // Арендатор целевого проекта — ключ записи и «владелец» для назначения на владельца
             updated = tasks.Update(taskId, req, effectiveColumn, isAgentCall, callerIsExecutor,
-                denyFeatureClose: denyFeature, denyFeatureReopen: denyFeature)
+                denyFeatureClose: denyFeature, denyFeatureReopen: denyFeature, tenantOwnerId: tenantOwnerId)
                 ?? throw new InvalidOperationException("Задача не найдена");
+        }
+        catch (TaskManager.TaskAssigneeDeniedException ex)
+        {
+            // Отказ назначения — 400 с машинным кодом (тот же словарь, что у проверок двери выше)
+            return BadRequest(new { error = ex.Message, code = ex.Code });
         }
         catch (TaskManager.FeatureCloseDeniedException ex)
         {
@@ -496,7 +698,9 @@ public class TasksController(
         {
             return BadRequest(new { error = ex.Message });
         }
-        await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", updated));
+        // Адресат полной карточки — владелец записи (арендатор общего проекта), а не вызывающий:
+        // группа проекта получает проекцию участника, арендатор — полную (ToTaskBoard).
+        await broadcaster.ToTaskBoard(updated.OwnerId!, updated.ProjectId, new TaskChangedMessage("updated", updated), sessions, projects);
 
         // Завершение экземпляра регулярной задачи → следующий экземпляр серии.
         // Покрывает и UI, и MCP (tasks_complete/tasks_update идут через этот PUT)
@@ -504,7 +708,7 @@ public class TasksController(
         {
             var next = tasks.SpawnNextOccurrence(updated);
             if (next is not null)
-                await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", next));
+                await broadcaster.ToTaskBoard(next.OwnerId!, next.ProjectId, new TaskChangedMessage("created", next), sessions, projects);
         }
 
         // Обратная запись в заметку-источник: смена done-состояния ставит/снимает галочку
@@ -515,7 +719,12 @@ public class TasksController(
         // Мироринг MCP (TasksToolset.CompleteResponse): если ревью/проверку/финал фичи
         // закрыли без вердикта, ответ несёт мягкое предупреждение (отдельное поле warning,
         // не notes) — карточка фичи вердикт не покажет, а блокировать закрытие ради UI нельзя.
-        return WithWarning(updated);
+        // Копия с маской чужих приватных чатов (S2d-4i): PUT — тот же вектор утечки, что закрытый
+        // в GET (задача участника лежит у арендатора, её чат-источник — приватный чат участника).
+        // Warning считается по хранимым полям (Status/Role/Verification), маска их не трогает.
+        // Состав полей — по роли вызывающего, как в GET (S2c-9): открытая редактору дверь
+        // записи не должна отдавать ему то, чего ему не отдаёт чтение.
+        return WithWarning(TaskView.MaskForeignChats(TaskView.ForWrite(updated, UserId), sessions, projects, ChatAudience.Viewer(UserId)));
     }
 
     // Карточка + мягкое warning (FeatureVerdict.Warning), если условие сработало. Единый путь
@@ -560,7 +769,7 @@ public class TasksController(
         var runs = sessionId is null
             ? features.ProjectAll(UserId, snapshot, resolver)
             : features.ProjectForSession(sessionId, UserId, snapshot, resolver);
-        return Ok(runs);
+        return Ok(runs.Select(r => FeatureChatDoor.MaskRunChats(r, sessions, projects, UserId)).ToList());
     }
 
     // Индекс «чат → фичи» (контракт С0, GET /api/tasks/features/index?projectId=…): [Authorize],
@@ -583,7 +792,9 @@ public class TasksController(
     // источник для индекса (GetFeaturesIndex) и ленты одной фичи (GetFeature): fail-closed, чужие/
     // удалённые id чатов в снимок не попадают (GetAllOwnedBy — только живые сессии владельца). Model —
     // Session.Model (null/пусто — «Авто», слот; Б4). PersonaId — Session.PersonaId (W4-1B, оркестратор).
-    private List<FeatureIndexSession> SessionSnapshot() => FeatureChatDoor.Snapshot(sessions, UserId);
+    // S2d-4j: проекции для человека берут снимок ВИДИМЫХ чатов; гард привязки (DenyReason ниже)
+    // зовёт машинный FeatureChatDoor.Snapshot напрямую.
+    private List<FeatureIndexSession> SessionSnapshot() => FeatureChatDoor.SnapshotVisible(sessions, UserId);
 
     // Б4/Б5b: готовая функция модели чата (label/full) для проекции фичи. Явная модель
     // (Session.Model) — её имя/метка. «Авто» — боевой резолвер ModelAssignmentResolver.ExecutorModel
@@ -888,7 +1099,7 @@ public class TasksController(
         // Б-mk-b: макеты фичи (вкладка «Планы и макеты»): mockups[] + mockupsUnavailable.
         // Порядок и fail-closed — в BuildMockups (ADR-031 «Макеты фичи»).
         var (mockups, mockupsUnavailable) = await BuildMockups(run, catalog);
-        return Ok(new { run = FeatureProjector.SlimRun(run), events, eventsTotal, chats, plans, stats,
+        return Ok(new { run = FeatureChatDoor.MaskRunChats(FeatureProjector.SlimRun(run), sessions, projects, UserId), events, eventsTotal, chats, plans, stats,
             brief, mockups, mockupsUnavailable });
     }
 
@@ -1004,12 +1215,12 @@ public class TasksController(
         // в группу владельца для эпика (с Hold — проектор по нему считает state=paused)
         // и каждого шага, помеченного этой паузой. Без вещания стор обновляется только по
         // снятию — асимметрия, которую Вера и зафиксировала.
-        await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", epic));
+        await broadcaster.ToTaskBoard(UserId, epic.ProjectId, new TaskChangedMessage("updated", epic), sessions, projects);
         foreach (var t in tasks.GetByOwner(UserId))
         {
             if (t.FeatureId != featureId) continue;
             if (t.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) continue;
-            await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", t));
+            await broadcaster.ToTaskBoard(UserId, t.ProjectId, new TaskChangedMessage("updated", t), sessions, projects);
         }
         // W4-HOLD-D2 (контракт :364): ответ — прерванные этой паузой задачи. Тот же набор,
         // что поле run.interrupted на странице («на паузе» читает его, а не пустой now), —
@@ -1062,7 +1273,7 @@ public class TasksController(
         var epic = tasks.SetFeatureNote(featureId, req?.Text, null, true,
             FeatureBrief.ActiveStageOf(run), FeatureBrief.KindAtWriteOf(run), estimate);
         if (epic is null) return NotFound(new { error = "Фича не найдена" });
-        await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", epic));
+        await broadcaster.ToTaskBoard(UserId, epic.ProjectId, new TaskChangedMessage("updated", epic), sessions, projects);
         return Ok(new { note = epic.Note is null ? null : new { text = epic.Note.Text, at = epic.Note.At } });
     }
 
@@ -1354,14 +1565,16 @@ public class TasksController(
                 {
                     try
                     {
-                        existing = await executor.ExecuteAsync(existing, auto: false, null);
+                        existing = await executor.ExecuteAsync(existing, auto: false, null, UserId);
                     }
                     catch (InvalidOperationException ex)
                     {
                         return BadRequest(new { error = ex.Message });
                     }
                 }
-                return Ok(existing);
+                // Ответ — хранимая задача идемпотентной ветки: та же маска чужих приватных чатов
+                // в копии, что во всех write-ответах (S2d-4i).
+                return Ok(TaskView.MaskForeignChats(TaskView.CopyOf(existing), sessions, projects, ChatAudience.Viewer(UserId)));
             }
 
             // Создаём задачу merge: FeatureId, ProjectId, WorktreePath/WorktreeBranch — из эпика.
@@ -1376,7 +1589,9 @@ public class TasksController(
                 PersonaId: persona.Id,
                 Assignee: TaskItemAssignee.Claude,
                 WorktreePath: run.Epic.WorktreePath,
-                WorktreeBranch: run.Epic.WorktreeBranch);
+                WorktreeBranch: run.Epic.WorktreeBranch,
+                // Мерж ставит человек по кнопке: он и создатель (автозапуск возобновления наследует его)
+                CreatedByActorUserId: UserId);
 
             TaskItem task;
             try
@@ -1388,20 +1603,21 @@ public class TasksController(
                 return BadRequest(new { error = ex.Message });
             }
 
-            await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", task));
+            await broadcaster.ToTaskBoard(UserId, task.ProjectId, new TaskChangedMessage("created", task), sessions, projects);
 
             // Возвращаем задачу ПОСЛЕ запуска: ClaudeStartedAt/статус подтверждают, что исполнитель стартовал.
             TaskItem started;
             try
             {
-                started = await executor.ExecuteAsync(task, auto: false, null);
+                started = await executor.ExecuteAsync(task, auto: false, null, UserId);
             }
             catch (InvalidOperationException ex)
             {
                 return BadRequest(new { error = ex.Message });
             }
 
-            return Ok(started);
+            // Та же маска в копии ответа, что в идемпотентной ветке выше (S2d-4i).
+            return Ok(TaskView.MaskForeignChats(TaskView.CopyOf(started), sessions, projects, ChatAudience.Viewer(UserId)));
         }
         finally
         {
@@ -1531,7 +1747,12 @@ public class TasksController(
     public async Task<IActionResult> Execute(string taskId)
     {
         var task = tasks.GetById(taskId);
-        if (task is null || task.OwnerId != UserId) return NotFound();
+        if (task is null) return NotFound();
+        // Запуск исполнителя — право RunTurn по проекту задачи (F2-T1): оно открыто редактору
+        // с S2a-10, читателю — нет (403 project_scope «нет права вести ход»). Сам вызов
+        // исполнителя остаётся под owner'ом задачи: порождённый ход принадлежит владельцу
+        // записи, а не тому, кто нажал кнопку (TaskExecutionService).
+        if (TaskActionDenied(task, ProjectRight.RunTurn) is { } denied) return denied;
 
         try
         {
@@ -1540,12 +1761,25 @@ public class TasksController(
             var callerSessionId = Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault();
             var callerSession = callerSessionId is not null && sessions.GetById(callerSessionId) is { } cs
                 && sessions.ResolveOwnerId(cs) == UserId ? cs : null;
+            if (FeatureChatDoor.DenyPrivateForHeader(sessions, callerSessionId, FeatureChatDoor.TargetFeature(task)) is { } privateChat)
+                return Conflict(new { error = privateChat, code = FeatureChatDoor.PrivateChatCode });
             if (callerSession is not null
-                && FeatureChatDoor.DenyReason(tasks, SessionSnapshot(), UserId, callerSession.Id,
+                && FeatureChatDoor.DenyReason(tasks, FeatureChatDoor.Snapshot(sessions, UserId), UserId, callerSession.Id,
                     FeatureChatDoor.TargetFeature(task)) is { } bound)
                 return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
-            return Ok(await executor.ExecuteAsync(task, auto: false,
-                new ExecutorLauncher(callerSession?.Id, callerSession?.PersonaId)));
+            // Актор: из реестра идущего хода чата-вызывателя (F-1). Молчание реестра (в этом чате
+            // сейчас нет хода) не делает вызов безымянным: человек с JWT этого запроса — сам
+            // инициатор и владелец задачи (проверено выше). После О2 финального ревью
+            // «Общих проектов» безымянный актор общего проекта не имеет ни одного права —
+            // без имени исполнитель не мог бы ни закрыть свою задачу, ни поставить сторожа.
+            var actor = callerSession is null ? null : sessions.GetTurnActor(callerSession.Id, UserId);
+            var started = await executor.ExecuteAsync(task, auto: false,
+                new ExecutorLauncher(callerSession?.Id, callerSession?.PersonaId),
+                string.IsNullOrEmpty(actor) ? UserId : actor);
+            // Кнопка «Выполнить с Claude» на задаче участника: в ответ уходит хранимая задача,
+            // её чат-источник — приватный чат участника. Копия с маской (S2d-4i), как в PUT/GET;
+            // состав полей — по роли вызывающего (S2c-9), как в PUT.
+            return Ok(TaskView.MaskForeignChats(TaskView.ForWrite(started, UserId), sessions, projects, ChatAudience.Viewer(UserId)));
         }
         catch (InvalidOperationException ex)
         {
@@ -1576,14 +1810,18 @@ public class TasksController(
     public async Task<IActionResult> Delete(string taskId)
     {
         var task = tasks.GetById(taskId);
-        if (task is null || task.OwnerId != UserId) return NotFound();
+        if (task is null) return NotFound();
+        // Удаление необратимо: автор задачи или её владелец (F2-T1, по образцу чатов).
+        if (TaskDeleteDenied(task) is { } denied) return denied;
 
         // W4-HOLD-N (хвост R-N п.3): страховка на любой двери удаления: эпик возвращает
         // замороженные сроки своим шагам, шаг на паузе — срок собственному чату. До удаления:
         // после него задачи в реестре нет, и путь возврата срока для её чата больше не выполнится.
         executor.RestoreFrozenChatsBeforeDelete(task);
         tasks.Delete(taskId);
-        await broadcaster.ToOwner(UserId, new TaskChangedMessage("deleted", task));
+        // Адресат — владелец записи: удалил чужую задачу её автор (редактор) — полную карточку
+        // получает арендатор, группа проекта — проекцию участника.
+        await broadcaster.ToTaskBoard(task.OwnerId!, task.ProjectId, new TaskChangedMessage("deleted", task), sessions, projects);
         return NoContent();
     }
 }

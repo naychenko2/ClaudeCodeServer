@@ -183,7 +183,7 @@ public class WatchdogPresenceTests : IDisposable
 
     private sealed class FakeAlarm : IWatchdogAlarm
     {
-        public Task<bool> DeliverAsync(string ownerId, string sessionId, string text) =>
+        public Task<bool> DeliverAsync(string ownerId, string sessionId, string text, string? actorUserId = null) =>
             Task.FromResult(true);
     }
 

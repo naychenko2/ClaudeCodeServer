@@ -1,6 +1,6 @@
 // Строка ожидания GPU (шаг 28) и кнопка «Сделать в облаке» (шаг 35) в карточке
-// идущей картинки. Показывается только за флагом local-model-stats и только когда
-// задача несёт живой снимок очереди GPU (gpu). Без флага или без gpu карточка —
+// идущей картинки. Показывается только когда
+// задача несёт живой снимок очереди GPU (gpu). Без gpu карточка —
 // как раньше. Кнопка — только когда стенд лежит (downSince) и есть котировка
 // облачного исполнителя («Автоматически», без локальных); запуск — только по клику
 // человека, новым запуском с явным поставщиком, параллельно с локальной задачей.
@@ -47,13 +47,13 @@ export function cloudCandidate(catalog: ImageEditCatalog | null, op?: ImageEditO
   return p;
 }
 
-// Кнопка «Сделать в облаке» видна: флаг включён, стенд лежит, есть облачный исполнитель
+// Кнопка «Сделать в облаке» видна: стенд лежит, есть облачный исполнитель
 // («Автоматически», не локальные, доступен, умеет операцию). Котировка на этот момент
 // может ещё грузиться
 export function showCloudButton(
-  feature: boolean, gpu: LocalGpuQueueInfo | null, catalog: ImageEditCatalog | null, op?: ImageEditOp | null,
+  gpu: LocalGpuQueueInfo | null, catalog: ImageEditCatalog | null, op?: ImageEditOp | null,
 ): boolean {
-  return feature && isStandDown(gpu) && cloudCandidate(catalog, op) != null;
+  return isStandDown(gpu) && cloudCandidate(catalog, op) != null;
 }
 
 // Кнопка кликабельна: котировка облачного исполнителя пришла с ценой. Пока грузится —
@@ -61,8 +61,8 @@ export function showCloudButton(
 export const isCloudButtonEnabled = (quote: ImageEditQuote | null): boolean =>
   quote != null && quote.estimate.amount != null;
 
-// Строка ожидания GPU: флаг включён и задача несёт живой снимок очереди
-export const showQueueLine = (feature: boolean, gpu: LocalGpuQueueInfo | null): boolean => feature && gpu != null;
+// Строка ожидания GPU: задача несёт живой снимок очереди
+export const showQueueLine = (gpu: LocalGpuQueueInfo | null): boolean => gpu != null;
 
 // Котировка облачного исполнителя: «Авто»-модель, режим auto, операция, маска, число
 // вариантов, референсы, персонаж и стирание — ВСЁ из исходной задачи (не текущего
@@ -187,13 +187,12 @@ export interface GpuQueueBlockProps {
   sessionId: string;
   thread: ImageThread;
   status: JobStatus | null;
-  feature: boolean;
   // Число вариантов текущей задачи — для котировки облачного исполнителя
   count: number;
 }
 
 export function GpuQueueBlock(props: GpuQueueBlockProps) {
-  const { projectId, sessionId, thread, status, feature, count } = props;
+  const { projectId, sessionId, thread, status, count } = props;
   // Финальное ревью: котировка и запуск берут операцию и входы из ИСХОДНОЙ задачи
   // (cloudOriginalParams), не из текущего состояния нити.
   const ref = useRef<HTMLDivElement>(null);
@@ -219,11 +218,11 @@ export function GpuQueueBlock(props: GpuQueueBlockProps) {
   // Защита от двойного клика: guard выставляется синхронно, до первого await
   const guard = useRef(makeLaunchGuard());
 
-  // showQueueLine = feature && gpu != null; повторная проверка gpu сужает тип для TS
-  if (!showQueueLine(feature, gpu) || gpu == null) return null;
+  // showQueueLine = gpu != null; повторная проверка gpu сужает тип для TS
+  if (!showQueueLine(gpu) || gpu == null) return null;
 
   // Кнопка видна: стенд лежит, есть облачный исполнитель, и исходные параметры восстановимы
-  const showBtn = showCloudButton(feature, gpu, catalog, cloudParams?.op ?? 'edit') && cloudParams != null;
+  const showBtn = showCloudButton(gpu, catalog, cloudParams?.op ?? 'edit') && cloudParams != null;
   const enabled = isCloudButtonEnabled(quote);
 
   const launch = async () => {

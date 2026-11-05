@@ -10,7 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Characters;
 
-// Метки фото в API персонажа (ADR-027 §1, §10): DTO и PUT photoLabels гейтятся флагом character-smart-photos
+// Метки фото в API персонажа (ADR-027 §1, §10): DTO и PUT photoLabels (флаг character-smart-photos снят)
 [Trait("Category", "Host")]
 public class CharacterLabelsEndpointsTests : IClassFixture<CharacterLabelsEndpointsTests.Hosts>
 {
@@ -36,9 +36,6 @@ public class CharacterLabelsEndpointsTests : IClassFixture<CharacterLabelsEndpoi
     private string UserId =>
         _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
 
-    private void Flag(bool on) =>
-        _factory.Services.GetRequiredService<UserStore>().SetFeatureFlag(UserId, FeatureFlagKeys.CharacterSmartPhotos, on);
-
     // Персонаж на диске с одной ручной меткой у первого фото; возвращает (api, имена файлов)
     private async Task<(string Api, string Root, string[] Files)> SeedAsync()
     {
@@ -60,25 +57,9 @@ public class CharacterLabelsEndpointsTests : IClassFixture<CharacterLabelsEndpoi
     private static string[] Keys(JsonElement photo) => [.. photo.EnumerateObject().Select(p => p.Name).Order()];
 
     [Fact]
-    public async Task Флаг_выключен_фото_в_DTO_как_до_фичи()
+    public async Task DTO_отдаёт_метки_и_источник_а_у_неразмеченного_фото_их_нет()
     {
         var (api, _, files) = await SeedAsync();
-        Flag(false);
-        var client = _factory.CreateAuthenticatedClient();
-
-        var one = await Json(await client.GetAsync($"{api}/characters/anya"));
-        var list = await Json(await client.GetAsync($"{api}/characters"));
-
-        foreach (var photos in new[] { one.GetProperty("photos"), list[0].GetProperty("photos") })
-            photos.EnumerateArray().Should().OnlyContain(p => Keys(p).SequenceEqual(new[] { "angle", "file", "primary" }));
-        one.GetProperty("photos")[1].GetProperty("file").GetString().Should().Be(files[1]);
-    }
-
-    [Fact]
-    public async Task Флаг_включён_DTO_отдаёт_метки_и_источник_а_у_неразмеченного_фото_их_нет()
-    {
-        var (api, _, files) = await SeedAsync();
-        Flag(true);
 
         var photos = (await Json(await _factory.CreateAuthenticatedClient().GetAsync($"{api}/characters/anya")))
             .GetProperty("photos");
@@ -93,10 +74,9 @@ public class CharacterLabelsEndpointsTests : IClassFixture<CharacterLabelsEndpoi
     }
 
     [Fact]
-    public async Task PUT_photoLabels_при_включённом_флаге_пишет_метки_человека()
+    public async Task PUT_photoLabels_пишет_метки_человека()
     {
         var (api, root, files) = await SeedAsync();
-        Flag(true);
         var form = new MultipartFormDataContent
         {
             { new StringContent($$$"""{"{{{files[2]}}}":{"angle":"three-quarter","emotion":"laugh"}}"""), "photoLabels" },
@@ -111,22 +91,6 @@ public class CharacterLabelsEndpointsTests : IClassFixture<CharacterLabelsEndpoi
             .Single(p => p.GetProperty("file").GetString() == files[2]).GetProperty("labelSource").GetString().Should().Be("human");
     }
 
-    [Fact]
-    public async Task PUT_photoLabels_при_выключенном_флаге_400_и_метки_не_меняются()
-    {
-        var (api, root, files) = await SeedAsync();
-        Flag(false);
-        var form = new MultipartFormDataContent
-        {
-            { new StringContent($$$"""{"{{{files[2]}}}":{"angle":"profile"}}"""), "photoLabels" },
-        };
-
-        var resp = await _factory.CreateAuthenticatedClient().PutAsync($"{api}/characters/anya", form);
-
-        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        CharacterStore.Get(root, "anya")!.Photos.Single(p => p.File == files[2]).LabelSource.Should().BeNull();
-    }
-
     [Theory]
     [InlineData("не json")]
     [InlineData("""{"чужое.jpg":{"angle":"profile"}}""")]
@@ -135,7 +99,6 @@ public class CharacterLabelsEndpointsTests : IClassFixture<CharacterLabelsEndpoi
     public async Task PUT_photoLabels_с_мусором_отвечает_400(string body)
     {
         var (api, root, files) = await SeedAsync();
-        Flag(true);
         var form = new MultipartFormDataContent { { new StringContent(body.Replace("FILE", files[2])), "photoLabels" } };
 
         var resp = await _factory.CreateAuthenticatedClient().PutAsync($"{api}/characters/anya", form);

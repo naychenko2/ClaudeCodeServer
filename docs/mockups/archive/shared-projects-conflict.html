@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · Общие проекты · Конфликт правок (409)</title>
+<!--
+  Макет фичи «Общие проекты», экран 5 из 9 (разрез docs/research/shared-projects-cut-2026-10.md, раздел И.6).
+  Привязка: эпик featureId c926e0e5-8a22-4299-88cf-65d3ba1b3355, задача макетов 9bdab3c4 (role=design).
+  Шаги-потребители: фронтовые шаги этапа S2c (stepRef появятся в плане фичи).
+  Спецификация для Киры (токены поимённо, состояния, мобила, тёмная тема) — shared-projects-proposal.md.
+  Данные выдуманы: владелец Андрей (andrey), редактор Мария (maria), читатель Игорь (igor),
+  бывшая участница Ольга (olga). Проект «Лендинг пекарни». Код продукта не правится.
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--c-*) и var(--shadow-*). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4; --c-track:#D8CFBE;
+  --c-overlay:rgba(23,19,15,.42);
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8; --c-plan-text:#4E4196;
+  --c-rose:#B0527C;
+  --c-diff-add-bg:#E8F5E9; --c-diff-add-text:#1B5E20; --c-diff-rem-bg:#FFEBEE; --c-diff-rem-text:#B71C1C;
+  --c-msg-bg:rgba(251,248,242,.42);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-focus-danger:0 0 0 3px rgba(180,69,47,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-modal:0 24px 60px rgba(23,19,15,.40);
+  --shadow-sheet:0 -8px 40px rgba(23,19,15,.22);
+  --shadow-button:0 4px 14px rgba(217,119,87,.30);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B; --c-track:#453F37;
+  --c-overlay:rgba(0,0,0,.62);
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-plan:#9385D8; --c-plan-light:#2A2540; --c-plan-text:#B0A4E6;
+  --c-rose:#D683A6;
+  --c-diff-add-bg:#1E2E1E; --c-diff-add-text:#8FCB79; --c-diff-rem-bg:#33201E; --c-diff-rem-text:#EE8A72;
+  --c-msg-bg:rgba(46,42,37,.38);
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-focus-danger:0 0 0 3px rgba(232,120,94,.26);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-modal:0 28px 70px rgba(0,0,0,.65);
+  --shadow-sheet:0 -10px 46px rgba(0,0,0,.55);
+  --shadow-button:0 4px 16px rgba(227,138,106,.34);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+}
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+button { font:inherit; color:inherit; border:0; background:none; margin:0; padding:0; cursor:pointer; text-align:left; }
+button:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+.serif { font-family:"PT Serif",Georgia,serif; }
+svg { flex-shrink:0; }
+
+/* ===== Обвязка макета (не часть продукта) ===== */
+.mk { position:sticky; top:0; z-index:100; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center;
+  padding:10px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.mk h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); }
+.mk .grp { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.mk .lbl { font-size:10px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.mk nav { display:flex; flex-wrap:wrap; gap:4px; font-size:12px; }
+.mk nav a { color:var(--c-text-secondary); text-decoration:none; padding:3px 7px; border-radius:6px; }
+.mk nav a.on { background:var(--c-bg-white); color:var(--c-text-heading); font-weight:600; box-shadow:var(--shadow-thumb); }
+.pills { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.pills button { color:var(--c-text-secondary); padding:4px 10px; border-radius:7px; font-size:12px; }
+.pills button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.wrap { max-width:1360px; margin:0 auto; padding:16px; }
+section { margin:0 0 36px; }
+section > h2 { font-family:"PT Serif",Georgia,serif; font-size:20px; color:var(--c-text-heading); margin:4px 0 6px; }
+.brief { font-size:13px; color:var(--c-text-secondary); max-width:940px; margin:0 0 12px; }
+.brief b { color:var(--c-text-heading); }
+.row { display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap; }
+.cap { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:0 0 4px 2px; }
+.note { font-size:12px; color:var(--c-text-secondary); margin:6px 2px 0; max-width:620px; }
+.note b { color:var(--c-text-heading); }
+
+/* Рамки: десктоп (ширина задаётся style) и телефон 360 CSS-px */
+.dk { position:relative; }
+.mb { width:360px; position:relative; }
+.isl { background:var(--c-bg-panel); border-radius:14px; box-shadow:var(--shadow-island); overflow:hidden; position:relative; }
+.mb .isl, .phone { border-radius:22px; border:1px solid var(--c-border); box-shadow:none; overflow:hidden; position:relative; background:var(--c-bg-main); min-height:640px; }
+.canvas { background:var(--c-bg-main); border-radius:14px; border:1px solid var(--c-border); position:relative; overflow:hidden; }
+
+/* ===== Примитивы продукта (по components/ui) ===== */
+.hstack { display:flex; align-items:center; gap:8px; }
+.vstack { display:flex; flex-direction:column; gap:8px; }
+.grow { flex:1; min-width:0; }
+.ell { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.t-h { font-family:"PT Serif",Georgia,serif; font-weight:700; color:var(--c-text-heading); }
+.t-lg { font-size:16px; } .t-md { font-size:14px; } .t-sm { font-size:12px; } .t-xs { font-size:11px; } .t-xxs { font-size:10px; }
+.c-sec { color:var(--c-text-secondary); } .c-mut { color:var(--c-text-muted); } .c-head { color:var(--c-text-heading); }
+.c-danger { color:var(--c-danger-text); } .c-acc { color:var(--c-accent); }
+.b6 { font-weight:600; }
+.lab { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-muted); }
+
+/* Button: primary / secondary / ghost / ghostAccent / danger; sm 32 / md 40 */
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:32px; padding:7px 13px; border-radius:10px;
+  font-size:13px; font-weight:600; white-space:nowrap; }
+.btn.md { min-height:40px; padding:11px 16px; font-size:14px; border-radius:12px; }
+.btn.pri { background:var(--c-accent); color:var(--c-on-accent); box-shadow:var(--shadow-button); }
+.btn.sec { background:var(--c-bg-white); color:var(--c-text-primary); border:1px solid var(--c-border); }
+.btn.gh { color:var(--c-text-secondary); }
+.btn.gh:hover { background:var(--c-bg-selected); color:var(--c-text-heading); }
+.btn.gha { color:var(--c-accent); }
+.btn.gha:hover { background:var(--c-accent-light); }
+.btn.dng { background:var(--c-danger); color:var(--c-on-accent); }
+.btn.ghd { color:var(--c-danger-text); }
+.btn.ghd:hover { background:var(--c-danger-bg); }
+.btn[disabled], .btn.off { opacity:.45; cursor:default; box-shadow:none; }
+.btn.full { width:100%; }
+.mb .btn { min-height:40px; }
+/* IconButton 32 (мобила 40) */
+.ib { width:32px; height:32px; border-radius:8px; color:var(--c-text-secondary); display:inline-flex; align-items:center; justify-content:center; }
+.ib:hover { background:var(--c-bg-selected); color:var(--c-text-heading); }
+.mb .ib { width:40px; height:40px; }
+
+/* Badge: tone × xs/sm */
+.bdg { display:inline-flex; align-items:center; gap:4px; height:20px; padding:0 7px; border-radius:6px; font-size:11px; font-weight:600; white-space:nowrap; }
+.bdg.xs { height:16px; padding:0 5px; font-size:10px; border-radius:5px; }
+.bdg.neu { background:var(--c-bg-inset); color:var(--c-text-muted); }
+.bdg.acc { background:var(--c-accent-light); color:var(--c-accent); }
+.bdg.inf { background:var(--c-info-bg); color:var(--c-info); }
+.bdg.suc { background:var(--c-success-bg); color:var(--c-success-text); }
+.bdg.wrn { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.bdg.dan { background:var(--c-danger-bg); color:var(--c-danger-text); }
+
+/* Notice: warning / danger / info */
+.ntc { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border-radius:12px; font-size:12px; line-height:1.5; }
+.ntc .ti { font-weight:700; font-size:13px; margin:0 0 2px; }
+.ntc.wrn { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.ntc.dan { background:var(--c-danger-bg); color:var(--c-danger-text); border:1px solid var(--c-danger-border); }
+.ntc.inf { background:var(--c-info-bg); color:var(--c-text-primary); }
+.ntc.inf > svg { color:var(--c-info); }
+.ntc .act { margin-top:6px; display:flex; gap:6px; flex-wrap:wrap; }
+.ntc ul { margin:4px 0 0; padding-left:16px; }
+
+/* Field / input / select */
+.fld { display:flex; flex-direction:column; gap:4px; }
+.fld .fl { font-size:12px; font-weight:600; color:var(--c-text-secondary); }
+.inp { display:flex; align-items:center; gap:8px; height:40px; padding:0 12px; border-radius:12px; border:1px solid var(--c-border);
+  background:var(--c-bg-white); font-size:14px; color:var(--c-text-primary); }
+.inp.ph { color:var(--c-text-muted); }
+.inp.foc { border-color:var(--c-accent); box-shadow:var(--shadow-focus); }
+.inp.err { border-color:var(--c-danger); box-shadow:var(--shadow-focus-danger); }
+.inp.dis { background:var(--c-bg-inset); color:var(--c-text-muted); }
+.fld .hint { font-size:11px; color:var(--c-text-muted); }
+.fld .errt { font-size:12px; color:var(--c-danger-text); display:flex; gap:6px; align-items:flex-start; }
+.sel { display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 8px 0 10px; border-radius:10px; border:1px solid var(--c-border);
+  background:var(--c-bg-white); font-size:13px; color:var(--c-text-primary); white-space:nowrap; }
+.sel.dis { background:transparent; border-color:transparent; color:var(--c-text-secondary); }
+.mb .sel { height:40px; }
+
+/* Toggle 36×20 */
+.tg { width:36px; height:20px; border-radius:999px; background:var(--c-track); position:relative; flex-shrink:0; display:inline-block; }
+.tg::after { content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:var(--c-bg-white); box-shadow:var(--shadow-thumb); }
+.tg.on { background:var(--c-accent); }
+.tg.on::after { left:18px; }
+.tg.dis { opacity:.45; }
+
+/* Segmented / Tabs */
+.seg { display:inline-flex; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.seg span { padding:4px 10px; border-radius:7px; font-size:12px; color:var(--c-text-secondary); white-space:nowrap; }
+.seg span.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.mb .seg span { padding:8px 12px; }
+.tabs { display:flex; gap:2px; border-bottom:1px solid var(--c-divider); padding:0 12px; overflow:hidden; }
+.tabs span { padding:9px 10px; font-size:13px; color:var(--c-text-secondary); border-bottom:2px solid transparent; margin-bottom:-1px; white-space:nowrap; }
+.tabs span.on { color:var(--c-text-heading); font-weight:600; border-color:var(--c-accent); }
+.mb .tabs span { padding:12px 10px; }
+
+/* Chip (toggle) */
+.chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; border:1px solid var(--c-border-light);
+  font-size:12px; color:var(--c-text-secondary); white-space:nowrap; }
+.chip.on { background:var(--c-accent); border-color:var(--c-accent); color:var(--c-on-accent); }
+.mb .chip { padding:7px 13px; min-height:40px; }
+
+/* Аватар: кружок с инициалом, пары «фон + текст» из тонов Badge */
+.av { width:28px; height:28px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; flex-shrink:0; }
+.av.s { width:20px; height:20px; font-size:10px; }
+.av.l { width:36px; height:36px; font-size:14px; }
+.av.a { background:var(--c-accent-light); color:var(--c-accent); }
+.av.m { background:var(--c-info-bg); color:var(--c-info); }
+.av.i { background:var(--c-success-bg); color:var(--c-success-text); }
+.av.o { background:var(--c-bg-inset); color:var(--c-text-muted); }
+.av.p { background:var(--c-plan-light); color:var(--c-plan-text); }
+.avs { display:inline-flex; }
+.avs .av { box-shadow:0 0 0 2px var(--c-bg-panel); }
+.avs .av + .av { margin-left:-6px; }
+
+/* Списки и строки */
+.lst { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:12px; overflow:hidden; }
+.li { display:flex; align-items:center; gap:10px; padding:10px 12px; border-top:1px solid var(--c-border-light); min-height:52px; }
+.li:first-child { border-top:0; }
+.mb .li { min-height:56px; }
+.li .nm { font-size:13px; font-weight:600; color:var(--c-text-heading); }
+.li .sb { font-size:11px; color:var(--c-text-muted); }
+.li.sel { background:var(--c-bg-selected); }
+.li.mut .nm { color:var(--c-text-secondary); font-weight:500; }
+
+/* EmptyState */
+.empty { padding:24px 18px; text-align:center; border:1px dashed var(--c-dashed); border-radius:12px; }
+.empty .ic { width:44px; height:44px; border-radius:50%; background:var(--c-bg-inset); color:var(--c-text-secondary); display:inline-flex; align-items:center; justify-content:center; margin-bottom:8px; }
+.empty .tt { font-size:15px; font-weight:600; color:var(--c-text-heading); margin:0 0 4px; }
+.empty .ss { font-size:12px; color:var(--c-text-secondary); margin:0 auto 12px; max-width:340px; }
+.empty ul { text-align:left; display:inline-block; margin:0 0 12px; padding-left:18px; font-size:12px; color:var(--c-text-secondary); max-width:360px; }
+
+/* Скелетон */
+.sk { background:var(--c-bg-selected); border-radius:6px; opacity:.7; }
+.sk.ln { height:10px; }
+.sk.cir { border-radius:50%; }
+
+/* Модалка и шторка */
+.scrim { position:absolute; inset:0; background:var(--c-overlay); display:flex; align-items:center; justify-content:center; padding:16px; }
+.mb .scrim { align-items:flex-end; padding:0; }
+.modal { background:var(--c-bg-white); border-radius:20px; box-shadow:var(--shadow-modal); padding:20px; width:440px; max-width:100%; }
+.modal.cf { width:380px; } .modal.wd { width:720px; }
+.modal .mt { font-family:"PT Serif",Georgia,serif; font-size:18px; font-weight:700; color:var(--c-text-heading); margin:0 0 6px; }
+.modal .ms { font-size:13px; color:var(--c-text-secondary); margin:0 0 12px; }
+.modal .ma { display:flex; justify-content:flex-end; gap:8px; margin-top:16px; flex-wrap:wrap; }
+.sheet { background:var(--c-bg-white); border-radius:22px 22px 0 0; box-shadow:var(--shadow-sheet); padding:8px 16px 20px; width:100%; }
+.sheet .hdl { width:36px; height:4px; border-radius:2px; background:var(--c-border); margin:0 auto 12px; }
+.sheet .mt { font-family:"PT Serif",Georgia,serif; font-size:17px; font-weight:700; color:var(--c-text-heading); margin:0 0 6px; }
+.sheet .ms { font-size:13px; color:var(--c-text-secondary); margin:0 0 12px; }
+.sheet .ma { display:flex; flex-direction:column; gap:8px; margin-top:16px; }
+.cons { margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:8px; font-size:13px; color:var(--c-text-primary); }
+.cons li { display:flex; gap:8px; align-items:flex-start; }
+.cons li svg { margin-top:2px; color:var(--c-text-secondary); }
+
+/* Меню */
+.menu { background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px; box-shadow:var(--shadow-dropdown); padding:4px; min-width:220px; }
+.mi { display:flex; align-items:center; gap:8px; padding:7px 10px; border-radius:8px; font-size:13px; color:var(--c-text-primary); }
+.mi:hover { background:var(--c-bg-selected); }
+.mi.off { color:var(--c-text-muted); cursor:default; }
+.mi.off:hover { background:transparent; }
+.mi .why { display:block; font-size:11px; color:var(--c-text-muted); }
+.mi.dng { color:var(--c-danger-text); }
+.msep { height:1px; background:var(--c-divider); margin:4px 6px; }
+.mhd { padding:6px 10px 2px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-muted); }
+.mb .mi { min-height:44px; }
+
+/* Шапки островов */
+.ph-h { display:flex; align-items:center; gap:8px; padding:12px 14px; border-bottom:1px solid var(--c-divider); min-height:52px; }
+.mb .ph-h { min-height:56px; padding:8px 8px 8px 12px; }
+.ph-h .ttl { font-family:"PT Serif",Georgia,serif; font-weight:700; font-size:16px; color:var(--c-text-heading); }
+.pad { padding:14px; }
+
+/* Сообщения чата (упрощённо) */
+.feed { padding:14px 16px; display:flex; flex-direction:column; gap:14px; }
+.msg-u { align-self:flex-end; max-width:78%; }
+.msg-u .who { display:flex; justify-content:flex-end; align-items:center; gap:6px; font-size:11px; color:var(--c-text-muted); margin:0 4px 3px 0; }
+.msg-u .bub { background:var(--c-accent-light); border:1px solid var(--c-accent-muted); color:var(--c-text-primary); padding:9px 12px; border-radius:14px 14px 4px 14px; font-size:13px; }
+.msg-u.oth { align-self:flex-start; }
+.msg-u.oth .who { justify-content:flex-start; margin:0 0 3px 4px; }
+.msg-u.oth .bub { background:var(--c-bg-card); border-color:var(--c-border-light); border-radius:14px 14px 14px 4px; }
+.msg-u.gone .who b { color:var(--c-text-muted); font-weight:500; }
+.msg-a { font-size:13px; color:var(--c-text-primary); background:var(--c-msg-bg); padding:8px 10px; border-radius:10px; max-width:92%; }
+.composer { margin:0 12px 12px; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:16px; padding:10px 12px; }
+.composer .ph { color:var(--c-text-muted); font-size:14px; min-height:22px; }
+.composer.dis { background:var(--c-bg-inset); }
+.queue { display:flex; align-items:center; gap:8px; margin:0 12px 6px; padding:6px 10px; border-radius:10px; background:var(--c-bg-card); border:1px solid var(--c-border-light); font-size:12px; color:var(--c-text-secondary); }
+
+/* Таблица */
+table.tb { width:100%; border-collapse:collapse; font-size:13px; }
+.tb th { text-align:left; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-muted); padding:6px 10px; border-bottom:1px solid var(--c-divider); }
+.tb td { padding:9px 10px; border-bottom:1px solid var(--c-border-light); vertical-align:middle; }
+.tb td.num { text-align:right; font-family:"JetBrains Mono","Courier New",monospace; font-size:12px; white-space:nowrap; }
+.tb tr.sub td { color:var(--c-text-secondary); font-size:12px; }
+.bar { height:6px; border-radius:3px; background:var(--c-bg-inset); overflow:hidden; min-width:60px; }
+.bar i { display:block; height:100%; border-radius:3px; background:var(--c-accent); }
+
+/* Дифф */
+.diff { font-family:"JetBrains Mono","Courier New",monospace; font-size:12px; line-height:1.6; background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; overflow:hidden; }
+.diff div { padding:0 10px; white-space:pre-wrap; }
+.diff .ad { background:var(--c-diff-add-bg); color:var(--c-diff-add-text); }
+.diff .rm { background:var(--c-diff-rem-bg); color:var(--c-diff-rem-text); }
+.diff .ln { color:var(--c-text-muted); display:inline-block; width:22px; user-select:none; }
+</style>
+</head>
+<body>
+<div class="mk">
+  <h1>Общие проекты · 5/9 · Конфликт правок (409)</h1>
+  <div class="grp"><span class="lbl">Тема</span>
+    <div class="pills" data-ctl="theme"><button class="on" data-v="light">Светлая</button><button data-v="dark">Тёмная</button></div></div>
+  <nav><a href="shared-projects-members.html">1. Участники проекта</a><a href="shared-projects-header.html">2. Бейдж «общий» и шапка</a><a href="shared-projects-chat.html">3. Чат общего проекта</a><a href="shared-projects-private-chat.html">4. Приватный чат</a><a href="shared-projects-conflict.html" class="on">5. Конфликт правок (409)</a><a href="shared-projects-history.html">6. История и blame файла</a><a href="shared-projects-my-tasks.html">7. «Мои задачи»</a><a href="shared-projects-spend.html">8. Расход по участникам</a><a href="shared-projects-leave-transfer.html">9. Уход и передача владения</a></nav>
+</div>
+<div class="wrap">
+<style>
+.cols { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.colh { display:flex; align-items:center; gap:6px; font-size:12px; font-weight:600; color:var(--c-text-heading); margin:0 0 4px; }
+.ver { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:12px; padding:12px; display:flex; flex-direction:column; gap:6px; }
+.ver.on { border-color:var(--c-accent); box-shadow:var(--shadow-focus); }
+.radio { width:16px; height:16px; border-radius:50%; border:1.5px solid var(--c-border); display:inline-block; flex-shrink:0; }
+.radio.on { border:5px solid var(--c-accent); }
+</style>
+
+<section>
+  <h2>Что тут происходит</h2>
+  <p class="brief">Мария правит <span class="mono">menu.md</span> в редакторе файлов, а за это время Андрей (или агент в его чате) изменил тот же файл.
+  При сохранении сервер отвечает 409 со свежим содержимым. Мы не теряем ничью работу: показываем разницу и даём три выхода.
+  Обе версии в любом случае останутся в истории git — это успокаивает и делает «Оставить мою» нестрашной.</p>
+</section>
+
+<section>
+  <h2>1. Текстовый файл или заметка: дифф</h2>
+  <p class="brief">Модалка MODAL_W.wide. Слева «Ваша версия», справа «Сейчас в проекте», изменённые строки подсвечены токенами диффа.
+  Над колонками — кто и когда изменил. Главное действие — «Сохранить мою копией»: оно ничего не перезаписывает.</p>
+  <div class="row">
+    <div class="dk" style="width:780px">
+      <div class="cap">Десктоп · MODAL_W.wide</div>
+      <div class="canvas" style="height:560px"><div class="scrim"><div class="modal wd">
+        <div class="mt">Файл изменился, пока вы его правили</div>
+        <div class="ms hstack"><span class="av s a">А</span><span><b class="c-head">Андрей</b> изменил <span class="mono">menu.md</span> 4 минуты назад — через агента в чате «Меню на зиму».</span></div>
+        <div class="cols">
+          <div><div class="colh"><svg width="14" height="14"><use href="#i-pencil"/></svg> Ваша версия</div>
+            <div class="diff"><div><span class="ln">12</span>## Напитки</div><div class="rm"><span class="ln">13</span>- Глинтвейн — 250 ₽</div><div class="ad"><span class="ln">13</span>- Глинтвейн — 280 ₽</div><div><span class="ln">14</span>- Какао — 180 ₽</div><div class="ad"><span class="ln">15</span>- Сбитень — 200 ₽</div></div></div>
+          <div><div class="colh"><svg width="14" height="14"><use href="#i-file"/></svg> Сейчас в проекте</div>
+            <div class="diff"><div><span class="ln">12</span>## Напитки</div><div><span class="ln">13</span>- Глинтвейн — 250 ₽</div><div class="ad"><span class="ln">14</span>- Глинтвейн б/а — 220 ₽</div><div><span class="ln">15</span>- Какао — 180 ₽</div></div></div>
+        </div>
+        <div class="t-xs c-mut" style="margin-top:8px"><svg width="12" height="12"><use href="#i-history"/></svg> Обе версии останутся в истории файла, любую можно вернуть.</div>
+        <div class="ma">
+          <button class="btn gh">Взять текущую</button>
+          <button class="btn sec">Оставить мою</button>
+          <button class="btn pri"><svg width="14" height="14"><use href="#i-copy"/></svg> Сохранить мою копией</button>
+        </div>
+      </div></div></div>
+      <p class="note"><b>Подсказки кнопок:</b> «Взять текущую» — «Ваши правки пропадут из редактора, файл останется как у Андрея»;
+      «Оставить мою» — «Перезапишет правку Андрея, она останется в истории»; «Сохранить мою копией» — «Создаст <span class="mono">menu (Мария).md</span> рядом, исходный не тронет».</p>
+    </div>
+    <div class="mb">
+      <div class="cap">Мобила · вкладки вместо колонок</div>
+      <div class="phone"><div class="scrim"><div class="sheet"><div class="hdl"></div>
+        <div class="mt" style="font-size:17px">Файл изменился, пока вы его правили</div>
+        <div class="t-sm c-sec" style="margin-bottom:10px">Андрей · 4 мин назад · через агента</div>
+        <div class="seg" style="display:flex;margin-bottom:10px"><span class="on" style="flex:1;text-align:center">Ваша</span><span style="flex:1;text-align:center">В проекте</span><span style="flex:1;text-align:center">Разница</span></div>
+        <div class="diff"><div>## Напитки</div><div class="rm">- Глинтвейн — 250 ₽</div><div class="ad">- Глинтвейн — 280 ₽</div><div>- Какао — 180 ₽</div><div class="ad">- Сбитень — 200 ₽</div></div>
+        <div class="vstack" style="margin-top:14px">
+          <button class="btn md pri full">Сохранить мою копией</button>
+          <button class="btn md sec full">Оставить мою</button>
+          <button class="btn md gh full">Взять текущую</button>
+        </div>
+      </div></div></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>2. Office и двоичные файлы: без диффа</h2>
+  <p class="brief">Построчной разницы нет — показываем две карточки версий с автором, временем и размером. Выбор — радио-карточками,
+  действие одно и повторяет выбор. «Сохранить мою копией» доступно всегда.</p>
+  <div class="row">
+    <div class="dk" style="width:620px">
+      <div class="cap">Десктоп · MODAL_W.form+ (520)</div>
+      <div class="canvas" style="height:440px"><div class="scrim"><div class="modal" style="width:520px">
+        <div class="mt">«Прайс.xlsx» изменился, пока вы его правили</div>
+        <div class="ms">Для таблиц и документов разницу показать нельзя. Выберите, какую версию оставить.</div>
+        <div class="vstack">
+          <div class="ver on"><div class="hstack"><span class="radio on"></span><b class="c-head grow">Ваша версия</b><span class="t-xs c-mut">48 КБ</span></div><div class="t-xs c-sec" style="padding-left:24px">вы · правили 10 минут</div></div>
+          <div class="ver"><div class="hstack"><span class="radio"></span><b class="c-head grow">Сейчас в проекте</b><span class="t-xs c-mut">46 КБ</span></div><div class="t-xs c-sec" style="padding-left:24px">Андрей · 4 минуты назад</div></div>
+        </div>
+        <div class="ma"><button class="btn gh"><svg width="14" height="14"><use href="#i-copy"/></svg> Сохранить мою копией</button><button class="btn pri">Оставить мою</button></div>
+      </div></div></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>3. Повторный конфликт, загрузка, ошибка</h2>
+  <div class="row">
+    <div style="width:520px">
+      <div class="cap">Пока разбирались, файл изменился ещё раз</div>
+      <div class="ntc wrn"><svg width="16" height="16"><use href="#i-refresh"/></svg><div><div class="ti">Файл снова изменился — Мария, только что</div>Сравнение обновлено, ваш выбор сброшен. Посмотрите разницу ещё раз.</div></div>
+      <p class="note">Notice warning встаёт над колонками в той же модалке; колонка «Сейчас в проекте» перерисована. Если файл меняется в третий раз за минуту — добавляем в плашку: «В файл сейчас пишет агент. Сохраните копией и сведите позже».</p>
+    </div>
+    <div style="width:380px">
+      <div class="cap">Загрузка свежей версии</div>
+      <div class="cols"><div class="vstack"><span class="sk ln" style="width:50%"></span><span class="sk" style="height:90px"></span></div><div class="vstack"><span class="sk ln" style="width:50%"></span><span class="sk" style="height:90px"></span></div></div>
+      <p class="note">Кнопки выключены, пока обе колонки не загрузились.</p>
+    </div>
+    <div style="width:380px">
+      <div class="cap">Сохранение не удалось</div>
+      <div class="ntc dan"><svg width="16" height="16"><use href="#i-alert"/></svg><div><div class="ti">Не сохранилось</div>Нет связи с сервером. Ваш текст остался в редакторе — ничего не потеряно.<div class="act"><button class="btn sec"><svg width="14" height="14"><use href="#i-refresh"/></svg> Повторить</button></div></div></div>
+      <div class="cap" style="margin-top:14px">Файл удалили, пока вы правили</div>
+      <div class="ntc wrn"><svg width="16" height="16"><use href="#i-alert"/></svg><div><div class="ti">Андрей удалил menu.md</div>Сохранить ваш текст как новый файл?<div class="act"><button class="btn pri">Сохранить как новый</button><button class="btn gh">Не сохранять</button></div></div></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>4. Читатель</h2>
+  <p class="brief">Читатель конфликтов не видит: редактор файлов и заметок у него открывается только на просмотр, с плашкой
+  «Вы читатель — файл открыт только для просмотра». Если файл изменился, пока читатель смотрит, — тихо подменяем содержимое и показываем
+  тост «Андрей обновил файл».</p>
+</section>
+</div>
+<!-- Иконки lucide (в продукте — из lucide-react с ICON_SIZE/ICON_STROKE) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4M12 17h.01"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></symbol>
+    <symbol id="i-user-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5M21 12H9"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><path d="M14 2v6h6"/></symbol>
+    <symbol id="i-crown" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-pencil" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-right" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 21v-5h5M21 3v5h-5"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></symbol>
+    <symbol id="i-cal" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5M9 8V2M15 8V2M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></symbol>
+    <symbol id="i-msg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+    <symbol id="i-git" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M3 12h6M15 12h6"/></symbol>
+    <symbol id="i-task" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="6" height="6" rx="1"/><path d="m3 17 2 2 4-4M13 6h8M13 12h8M13 18h8"/></symbol>
+    <symbol id="i-bot" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="2"/><path d="M12 7v4M8 16h.01M16 16h.01"/></symbol>
+    <symbol id="i-home" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></symbol>
+    <symbol id="i-unlock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></symbol>
+    <symbol id="i-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.56"/></symbol>
+  </defs>
+</svg>
+<script>
+// Обвязка макета: переключатель темы и групповые пилюли data-ctl (не часть продукта)
+document.querySelectorAll('.pills[data-ctl]').forEach(function (g) {
+  g.addEventListener('click', function (e) {
+    var b = e.target.closest('button'); if (!b) return;
+    g.querySelectorAll('button').forEach(function (x) { x.classList.toggle('on', x === b); });
+    var ctl = g.dataset.ctl, v = b.dataset.v;
+    if (ctl === 'theme') { document.documentElement.dataset.theme = v; return; }
+    document.querySelectorAll('[data-when^="' + ctl + ':"]').forEach(function (el) {
+      el.style.display = el.dataset.when === ctl + ':' + v ? '' : 'none';
+    });
+  });
+});
+</script>
+</body>
+</html>

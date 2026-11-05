@@ -82,6 +82,9 @@ public class WikiControllerTests : IDisposable
 
         var tree = TreeOf(Controller());
         tree.Initialized.Should().BeFalse("вики не заведена — признак на диске, а не папки разделов");
+        // LI-2: GET дерева вики не заводит — чтение не имеет побочных эффектов, пустое
+        // состояние показывается как есть. Мутация «заводить на GET» — красный.
+        File.Exists(Path.Combine(_pages, WikiPaths.SchemaFileName)).Should().BeFalse();
         // Личный и «Общее» — в дереве всегда (ADR-036, решение 1)
         tree.Sections.Should().Contain(s => s.Key == "personal" && !s.Orphan);
         tree.Sections.Should().Contain(s => s.Key == "common" && !s.Orphan);

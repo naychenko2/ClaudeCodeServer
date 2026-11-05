@@ -98,6 +98,11 @@ public static class WikiApplyPolicy
         /// <summary>Автор цели supersede/conflict по сноскам утверждения: WikiPackage.AuthorHuman |
         /// AuthorAi; null — операция не замена. Определяет код (валидатор), не модель.</summary>
         public string? TargetAuthor { get; init; }
+
+        /// <summary>У целевой страницы нет секции «История» (хроника): прежняя формулировка при
+        /// замене не сохранится. Определяет код (валидатор) по разобранной странице. Для цели
+        /// human такая замена не применяется сама (ADR-038): формулировка человека не пропадает молча.</summary>
+        public bool TargetHasNoHistory { get; init; }
     }
 
     /// Счётчики ночи для проверки лимитов (мера 3). Каждый считает текущий элемент вместе
@@ -148,6 +153,9 @@ public static class WikiApplyPolicy
         // Замена и оспаривание (ADR-038, решение 4): само — только если новый источник новее и
         // заменяемого утверждения, и последней правки человека на странице. Правило одно для
         // целей ai и human: ветки по автору цели нет (автор влияет на класс, не на условия).
+        if (op.Op == WikiPackage.OpSupersede
+            && context.TargetAuthor == WikiPackage.AuthorHuman && context.TargetHasNoHistory)
+            return Inbox("На этой странице нет секции «История», прежняя формулировка не сохранится — решите сами");
         if (op.Op is WikiPackage.OpSupersede or WikiPackage.OpConflict
             && ReplacementBlocker(op, context) is { } blocker)
             return Inbox(blocker);

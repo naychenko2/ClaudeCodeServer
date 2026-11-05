@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import type { ChatItem, Session, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, TeamPlanDecision, TeamWavePulse } from '../types';
-import { joinSession, joinProject, leaveSession, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision, respondTeamPlan as sendTeamPlanDecision, respondTeamEscalation as sendTeamEscalationDecision, setMode as sendSetMode } from '../lib/signalr';
+import { joinSession, leaveSession, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision, respondTeamPlan as sendTeamPlanDecision, respondTeamEscalation as sendTeamEscalationDecision, setMode as sendSetMode } from '../lib/signalr';
 import { setRecallManifest } from '../lib/recallManifest';
 import { requestWakeLock, releaseWakeLock } from '../lib/wakeLock';
 import { api } from '../lib/api';
 import { applyHistoryReply, cursorQuery, type HistoryCursor } from '../lib/historyTail';
+import { denialCodeOf, denialTextOf } from '../features/projects/members/participantGate';
 import { applyServerMessage, normalizeHistory, serverHistoryNewer, resolveCardsFromHistory, adoptServerHistory, historyTurnFinished, initialChatState, consumeComposerRestore, teamImplementSnapshot, turnAlreadyEnded, type ChatState, type PendingChatMessage, type ComposerRestore } from '../lib/chatReducer';
 
 // --- Модульный персистентный стор ---
@@ -276,6 +277,30 @@ function updateItems(sid: string, fn: (items: ChatItem[]) => ChatItem[]) {
   setState(sid, prev => ({ ...prev, items: fn(prev.items) }));
 }
 
+// Карта переноса вложений (S2d-6b-4): бэк при смене видимости чата переносит его файлы и
+// возвращает {старый путь: новый путь}. Здесь — замена пути из карты, остальные как есть,
+// порядок тот же. Идемпотентна: повторный вызов с той же картой ничего не меняет (новые
+// пути в карте не встречаются). Позже пришедший loadHistory заменит items — это нормально:
+// бэк уже переписал history.json, повторный перенос на фронте не нужен.
+export function remapPaths(paths: string[], moves: Record<string, string>): string[] {
+  return paths.map(p => moves[p] ?? p);
+}
+
+// Применить карту переноса к ленте ОДНОЙ сессии: attachedPaths у user_message (единственный
+// элемент ленты, несущий пути). Нет сессии в сторе — ничего не делать: запись не заводим
+// (getState её бы завёл), LRU не трогаем. Чужие сессии не затрагиваем.
+export function remapSessionAttachedPaths(sid: string, moves: Record<string, string>) {
+  if (!_store.has(sid)) return;
+  setState(sid, prev => ({
+    ...prev,
+    items: prev.items.map(it =>
+      it.kind === 'user_message' && it.attachedPaths
+        ? { ...it, attachedPaths: remapPaths(it.attachedPaths, moves) }
+        : it
+    ),
+  }));
+}
+
 // --- Реконсиляция isWaiting с серверным статусом ---
 // Клиентский флаг чисто событийный: любое пропущенное событие (разрыв сети, вкладка вне
 // группы, гонка) оставляет его врущим до следующего события. Лечение — повторный
@@ -395,18 +420,9 @@ function ensureHandler() {
         setState(sid, prev => ({ ...prev, isWaiting: false }));
       }
     }
-    // Переподключаем project-группы (для real-time статусов) — но только проектов,
-    // где есть ОТКРЫТЫЙ (смотримый) чат. Ушедший проект (все его сессии холодные,
-    // зритель ушёл) группу не держит: иначе реконнект перевступал бы во все проекты,
-    // в которых когда-либо был чат, и куча групп росла без ограничения
-    const projectIds = new Set<string>();
-    for (const [sid, s] of _store) {
-      if (s.projectId && isWatched(sid)) projectIds.add(s.projectId);
-    }
-    for (const pid of projectIds) {
-      // Осознанно: неудача переподключения project-группы не критична — догонится следующим join
-      try { await joinProject(pid); } catch { /* ignore */ }
-    }
+    // Project-группы здесь не переподключаем: их ведёт счётчиком signalr.ts и сам
+    // перезаходит в держимые после реконнекта. Здесь остаются только session-группы
+    // (joinTracked ниже) — их держит этот стор.
 
     for (const [sid, s] of _store) {
       // Перезаходим и в сессии, которые считают себя вне группы, но их кто-то смотрит:
@@ -734,7 +750,12 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
   const cancelPending = useCallback(async (messageId: string) => {
     if (!sessionId) return;
     try { await api.sessions.cancelPending(sessionId, messageId); }
-    catch { /* уже доставлено или сеть — снимок от сервера всё поправит */ }
+    catch (e) {
+      // Отказ по коду (not_sender — чужое сообщение): поднимается выше — строка очереди
+      // обязана вернуться в живое состояние и назвать причину (её отметка «отменяем» была
+      // оптимистичной). Сеть и «уже доставлено» — как раньше, молча: снимок от сервера поправит.
+      if (denialCodeOf(e)) throw e;
+    }
   }, [sessionId]);
 
   // Прервать идущий ход и доставить ждущее сейчас (кнопка на карточке очереди). Элемент
@@ -918,22 +939,47 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     }
   }, [sessionId]);
 
-  const interrupt = useCallback(() => {
+  const interrupt = useCallback(async () => {
     if (!sessionId) return;
-    interruptSession(sessionId);
     // Оптимистично помечаем ход как остановленный пользователем; подсказка прерванного хода неактуальна.
     // Время пометки — момент обрыва для «прервано · M:SS» (toolLiveness.abortedAt): без него
     // длительность держалась бы только в состоянии карточки и терялась при перемонтировании
     // Закончившийся ход не помечаем: сервер пишет ту же отметку в историю только на идущем
     // ходу, и лишний персистентный элемент в ленте навсегда перевесил бы историю при сверке
-    setState(sessionId, prev => ({
-      ...prev,
-      isWaiting: false,
-      promptSuggestion: null,
-      items: turnAlreadyEnded(prev.items)
-        ? prev.items
-        : [...prev.items, { kind: 'interrupted', ts: Date.now() }],
-    }));
+    // Снимок состояния ДО запроса и время своей отметки — на случай отказа по коду:
+    // сервер ход не остановил, и наше оптимистичное изменение должно вернуться целиком
+    let addedTs: number | undefined;
+    let endedAtRequest = false;
+    let was: { isWaiting: boolean; promptSuggestion: string | null } | undefined;
+    setState(sessionId, prev => {
+      was = { isWaiting: prev.isWaiting, promptSuggestion: prev.promptSuggestion };
+      endedAtRequest = turnAlreadyEnded(prev.items);
+      const base = { ...prev, isWaiting: false, promptSuggestion: null };
+      if (endedAtRequest) return base;
+      addedTs = Date.now();
+      return { ...base, items: [...prev.items, { kind: 'interrupted', ts: addedTs }] };
+    });
+    try { await interruptSession(sessionId); }
+    catch (e) {
+      // Отказ по коду (S2a-10c «not_chat_author: …»): сервер ход не остановил — наша отметка
+      // нечестна, откатываем её ПО ИДЕНТИФИКАТОРУ (своему ts — отметка могла уехать из хвоста
+      // ленты долетевшими хвостами хода) и ставим причину в ленту. Инвариант: отказ по коду
+      // не меняет состояние хода — isWaiting/promptSuggestion возвращаются к снимку ДО запроса.
+      // Исключение: ход за время запроса завершился сам (появился терминальный маркер) — его
+      // состояние от сервера свежее снимка, возвращаем только свою ложную отметку.
+      // Прочие ошибки (сеть) неотличимы от живого прерывания — как в preemptForPending:
+      // отметка и молчание остаются, живой остановленный ход пришлёт свою отметку историей.
+      const denial = denialTextOf(e);
+      if (!denial || !was) return;
+      const ts = addedTs;
+      const snapshot = was;
+      setState(sessionId, prev => {
+        const items = prev.items.filter(i => !(ts !== undefined && i.kind === 'interrupted' && i.ts === ts));
+        const reason = [...items, { kind: 'error' as const, text: denial, canRetry: false }];
+        if (!endedAtRequest && turnAlreadyEnded(items)) return { ...prev, items: reason };
+        return { ...prev, isWaiting: snapshot.isWaiting, promptSuggestion: snapshot.promptSuggestion, items: reason };
+      });
+    }
   }, [sessionId]);
 
   // Ответ на уточняющий вопрос Claude (AskUserQuestion)
@@ -950,8 +996,21 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
           ? { ...item, resolved: true, answers } : item
       ),
     }));
-    await joinTracked(sessionId); // гарантируем группу перед ответом
-    await sendAnswer(sessionId, toolUseId, answerText);
+    try {
+      await joinTracked(sessionId); // гарантируем группу перед ответом
+      await sendAnswer(sessionId, toolUseId, answerText);
+    } catch (e) {
+      // Отказ по коду (хаб гейтит AnswerQuestion тем же гейтом, что и Interrupt, S2a-10c):
+      // сервер ответ не принял — откатываем оптимистичную отметку, карточка остаётся открытой
+      // для того, кто вправе отвечать. Сетевой сбой — как прежде: отметка держится, снимок
+      // сервера поправит. Ошибка уходит вызывающему, как уходила.
+      if (denialCodeOf(e)) {
+        setState(sessionId, prev => ({ ...prev, items: prev.items.map(item =>
+          item.kind === 'ask_question' && item.toolUseId === toolUseId
+            ? { kind: 'ask_question' as const, toolUseId: item.toolUseId, input: item.input, resolved: false } : item) }));
+      }
+      throw e;
+    }
   }, [sessionId]);
 
   const respondPlan = useCallback(async (requestId: string, approve: boolean, feedback?: string) => {
@@ -964,8 +1023,19 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
           ? { ...item, resolved: true, approved: approve, feedback } : item
       ),
     }));
-    await joinTracked(sessionId); // гарантируем группу перед ответом
-    await sendPlanDecision(sessionId, requestId, approve, feedback);
+    try {
+      await joinTracked(sessionId); // гарантируем группу перед ответом
+      await sendPlanDecision(sessionId, requestId, approve, feedback);
+    } catch (e) {
+      // Отказ по коду (тот же гейт хаба, что у AnswerQuestion): решение не принято —
+      // карточка плана остаётся открытой. Сетевой сбой — как прежде. Ошибка — вызывающему.
+      if (denialCodeOf(e)) {
+        setState(sessionId, prev => ({ ...prev, items: prev.items.map(item =>
+          item.kind === 'plan_review' && item.requestId === requestId
+            ? { kind: 'plan_review' as const, requestId: item.requestId, plan: item.plan, resolved: false } : item) }));
+      }
+      throw e;
+    }
   }, [sessionId]);
 
   // Решение по карточке плана командной реализации. Оптимистично применяем видимую

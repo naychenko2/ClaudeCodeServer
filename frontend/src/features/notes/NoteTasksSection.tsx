@@ -1,12 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
 import { X, Check } from 'lucide-react';
-import type { NoteTask } from '../../types';
+import type { NoteTask, Project } from '../../types';
 import { api, bumpNotes, C, FONT, R, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
+import { canWriteContent } from '../projects/members/contentRights';
 
 // Секция «Задачи из заметки» (флаг notes-task-sync): чекбоксы заметки с промоутом в
 // настоящую задачу (появится в календаре), синхронной отметкой и сроком через дейт-пикер.
 // Живёт в правом сайдбаре заметки. Пусто (нет чекбоксов) — не рендерится.
-export function NoteTasksSection({ noteId, version }: { noteId: string; version: number }) {
+// Право на 'note.tasks' (S2c-F4f): у редактора и читателя все три действия (отметить,
+// «В задачи», срок) закрыты на бэке на Write — здесь они ПРЯЧУТСЯ (0 узлов), список
+// остаётся только для чтения: текст задачи и статус «в задачах» видны. Проект-источник
+// даёт вызывающий (NoteView); undefined — 'personal' или кэш проектов не прогрет → всё
+// разрешено (решение по умолчанию — в contentRights.ts).
+export function NoteTasksSection({ noteId, version, project }: {
+  noteId: string;
+  version: number;
+  // Проект-источник заметки ('personal' — undefined): право на дверь 'note.tasks'
+  project?: Pick<Project, 'myRole'> | null;
+}) {
+  const canTasks = canWriteContent(project, 'note.tasks');
   const [tasks, setTasks] = useState<NoteTask[] | null>(null);
   const [busy, setBusy] = useState<number | null>(null); // строка, по которой идёт запрос
 
@@ -53,23 +65,26 @@ export function NoteTasksSection({ noteId, version }: { noteId: string; version:
           const disabled = busy === t.line;
           return (
             <div key={t.line} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              {/* Строка 1: галочка + текст (переносится в узком сайдбаре) */}
+              {/* Строка 1: галочка + текст (переносится в узком сайдбаре); без права на
+                  'note.tasks' чекбокса нет (0 узлов), текст — на всю ширину */}
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                <button
-                  onClick={() => void toggle(t)} disabled={disabled}
-                  aria-label={t.done ? 'Снять отметку' : 'Отметить выполненной'}
-                  style={{
-                    flex: 'none', width: 17, height: 17, borderRadius: 5, padding: 0, marginTop: 1,
-                    cursor: disabled ? 'default' : 'pointer',
-                    border: `1.5px solid ${t.done ? C.accent : C.border}`,
-                    background: t.done ? C.accent : C.bgWhite,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }}
-                >
-                  {t.done && (
-                    <Check size={11} strokeWidth={ICON_STROKE} color={C.onAccent} />
-                  )}
-                </button>
+                {canTasks && (
+                  <button
+                    onClick={() => void toggle(t)} disabled={disabled}
+                    aria-label={t.done ? 'Снять отметку' : 'Отметить выполненной'}
+                    style={{
+                      flex: 'none', width: 17, height: 17, borderRadius: 5, padding: 0, marginTop: 1,
+                      cursor: disabled ? 'default' : 'pointer',
+                      border: `1.5px solid ${t.done ? C.accent : C.border}`,
+                      background: t.done ? C.accent : C.bgWhite,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}
+                  >
+                    {t.done && (
+                      <Check size={11} strokeWidth={ICON_STROKE} color={C.onAccent} />
+                    )}
+                  </button>
+                )}
                 <span style={{
                   flex: 1, minWidth: 0, fontSize: 13, fontFamily: FONT.sans, lineHeight: 1.35,
                   color: t.done ? C.textMuted : C.textPrimary,
@@ -79,40 +94,44 @@ export function NoteTasksSection({ noteId, version }: { noteId: string; version:
                   {t.text}
                 </span>
               </div>
-              {/* Строка 2: срок + промоут/статус (под текстом) */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: 25 }}>
-                <DueChip due={t.due} disabled={disabled} onSet={v => void setDue(t, v)} />
-                {t.due && (
-                  <button
-                    onClick={() => void setDue(t, '')} disabled={disabled}
-                    title="Убрать срок" aria-label="Убрать срок"
-                    style={{
-                      flex: 'none', border: 'none', background: 'none', color: C.textMuted,
-                      cursor: disabled ? 'default' : 'pointer', lineHeight: 1, padding: '0 2px', display: 'flex', alignItems: 'center',
-                    }}
-                  >
-                    <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                  </button>
-                )}
-                <span style={{ flex: 1 }} />
-                {t.taskId ? (
-                  <span style={{ flex: 'none', fontSize: 11, fontFamily: FONT.sans, color: C.accent }}>
-                    в задачах
-                  </span>
-                ) : (
-                  <button
-                    onClick={() => void promote(t)} disabled={disabled}
-                    title="Создать настоящую задачу (появится в календаре)"
-                    style={{
-                      flex: 'none', fontSize: 11, fontWeight: 500, color: C.accent, background: C.bgWhite,
-                      border: `1px solid ${C.accentMuted}`, borderRadius: R.sm, padding: '2px 8px',
-                      cursor: disabled ? 'default' : 'pointer', fontFamily: FONT.sans,
-                    }}
-                  >
-                    В задачи
-                  </button>
-                )}
-              </div>
+              {/* Строка 2: срок + промоут/статус (под текстом). Без права на 'note.tasks'
+                  контролов записи нет вовсе; строка остаётся только ради read-only
+                  статуса «в задачах» (он — не запись, он — виден) */}
+              {(canTasks || t.taskId) && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: canTasks ? 25 : 0 }}>
+                  {canTasks && <DueChip due={t.due} disabled={disabled} onSet={v => void setDue(t, v)} />}
+                  {canTasks && t.due && (
+                    <button
+                      onClick={() => void setDue(t, '')} disabled={disabled}
+                      title="Убрать срок" aria-label="Убрать срок"
+                      style={{
+                        flex: 'none', border: 'none', background: 'none', color: C.textMuted,
+                        cursor: disabled ? 'default' : 'pointer', lineHeight: 1, padding: '0 2px', display: 'flex', alignItems: 'center',
+                      }}
+                    >
+                      <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                    </button>
+                  )}
+                  <span style={{ flex: 1 }} />
+                  {t.taskId ? (
+                    <span style={{ flex: 'none', fontSize: 11, fontFamily: FONT.sans, color: C.accent }}>
+                      в задачах
+                    </span>
+                  ) : canTasks ? (
+                    <button
+                      onClick={() => void promote(t)} disabled={disabled}
+                      title="Создать настоящую задачу (появится в календаре)"
+                      style={{
+                        flex: 'none', fontSize: 11, fontWeight: 500, color: C.accent, background: C.bgWhite,
+                        border: `1px solid ${C.accentMuted}`, borderRadius: R.sm, padding: '2px 8px',
+                        cursor: disabled ? 'default' : 'pointer', fontFamily: FONT.sans,
+                      }}
+                    >
+                      В задачи
+                    </button>
+                  ) : null}
+                </div>
+              )}
             </div>
           );
         })}

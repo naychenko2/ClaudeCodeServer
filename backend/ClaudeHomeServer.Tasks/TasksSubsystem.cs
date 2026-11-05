@@ -61,11 +61,14 @@ public sealed class TasksSubsystem : IAppSubsystem
         // Читатель коммита дерева для гейта предгейта (NC-P1b); без него TaskManager закрывает шаги как раньше
         services.AddSingleton<ClaudeHomeServer.Services.Composition.IWorktreeHeadReader, GitWorktreeHeadReader>();
         services.AddSingleton<TaskManager>();
+        // Шов «чат привязан к фиче?» для SessionManager (S2d-7b-2): живёт рядом с TaskManager
+        services.AddSingleton<ClaudeHomeServer.Services.IFeatureChatLinks, FeatureChatLinks>();
         // Форвардер, а не вторая регистрация: иначе второй экземпляр `TaskManager`
         // перезаписывает статические резолверы на `Session` и иерархия чатов для новых задач
         // отмирает (см. DuplicateSingletonRegistrationTests).
         services.AddSingleton<ITaskStatusReader>(sp => sp.GetRequiredService<TaskManager>());
         services.AddSingleton<TaskAiService>();
+        services.AddSingleton<MyTasksQuery>();
         services.AddSingleton<BoardService>();
         // Агрегат фичи (режим «Исполнение фичи»): чистая проекция TaskItem'ов в FeatureRun.
         // Зависимость только на TaskManager (тот же singleton, что выше) — нового шва нет.

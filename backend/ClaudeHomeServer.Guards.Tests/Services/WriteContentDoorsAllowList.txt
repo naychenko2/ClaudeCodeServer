@@ -1,0 +1,20 @@
+# Снимок дверей WriteContent (S2c-8, разрез f899602f §6/§7): каждое HTTP-действие контроллера
+# с [ProjectScope(Right = WriteContent)] названо строкой «Контроллер.Действие». Право записи
+# контента открывается участнику ПОИМЁННО: новая дверь — только новой строкой здесь с вердиктом
+# в дифе (сторож WriteContentDoorsGuardTests красный на двери вне снимка); мёртвая строка —
+# убрать с вердиктом (дверь снята с WriteContent или переименована).
+# На Write остаются (в снимок НЕ входят): Revert, SaveFromUrl, OfficeConfig, OfficeDiscard,
+# OfficeForceSave, удаление папки (явная проверка Write в ветке папки Delete), office-callback
+# (не ProjectScope-дверь: защищён office-токеном + явным Resolve(Write) в GetProjectByOfficeToken).
+FilesController.SaveContent
+FilesController.CreateFile
+FilesController.CreateDir
+FilesController.Rename
+FilesController.Upload
+FilesController.Delete
+FilesController.ToMarkdown
+# F2-T1 (57aa6c829, разрез §2.1): дверь создания задачи общего проекта открыта редактору правом
+# WriteContent (матрица RoleHasRight): POST /api/projects/{p}/tasks названа здесь. Остальные
+# правки задачи — не ProjectScope-двери с WriteContent: PUT/DELETE/execute закрыты явными
+# гейтами TaskActionDenied/TaskAuthorGate/FeatureOwnerGate, колонки доски и перенос задачи — Write.
+ProjectTasksController.Create

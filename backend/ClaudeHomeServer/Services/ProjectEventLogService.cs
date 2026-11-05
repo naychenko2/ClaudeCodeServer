@@ -21,10 +21,23 @@ public class ProjectEventLogService : IDisposable, IProjectEventLogService
     // Ретенция append-only лога: события старше порога прунятся, иначе БД растёт бесконечно
     private readonly int _retentionDays;
     private DateTime _lastPruneUtc = DateTime.MinValue;
+    private readonly Action? _migrationProbe;
+    // Инициализация не удалась: события молча теряются — предупреждаем об этом один раз
+    private bool _initFailed;
+    private bool _initFailedWarned;
+
+    // Открытие базы (журнал, WAL, миграция) сериализуется в процессе: два сервиса на одном файле
+    // (рестарт хоста, тесты) не мигрируют одновременно. Между процессами то же держит BEGIN IMMEDIATE.
+    private static readonly Lock OpenLock = new();
 
     public ProjectEventLogService(IConfiguration config, ILogger<ProjectEventLogService>? log = null)
+        : this(config, log, migrationProbe: null) { }
+
+    // migrationProbe — шов тестов: зовётся внутри миграции, под блокировкой открытия базы
+    internal ProjectEventLogService(IConfiguration config, ILogger<ProjectEventLogService>? log, Action? migrationProbe)
     {
         _log = log;
+        _migrationProbe = migrationProbe;
         // Каталог данных — как у всех сервисов (DataPath указывает на projects.json в dataDir).
         var dataDir = Path.GetDirectoryName(
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
@@ -43,18 +56,21 @@ public class ProjectEventLogService : IDisposable, IProjectEventLogService
         {
             // Не роняем старт сервера из-за лога — фича деградирует до «нет событий»
             _log?.LogError(ex, "Не удалось инициализировать лог событий проекта ({DbPath})", dbPath);
+            _initFailed = true;
         }
     }
 
     // Текущая версия схемы БД. Поднимать вместе с новой ступенькой в Migrate.
-    private const int SchemaVersion = 1;
+    private const int SchemaVersion = 2;
 
     private void Init()
     {
-        using var c = OpenConnection();
-        Exec(c, "PRAGMA journal_mode=WAL;");
-        Exec(c, "PRAGMA busy_timeout=5000;");
-        Migrate(c);
+        lock (OpenLock)
+        {
+            using var c = OpenConnection();
+            Exec(c, "PRAGMA journal_mode=WAL;");
+            Migrate(c);
+        }
     }
 
     // Лесенка миграций по PRAGMA user_version.
@@ -64,10 +80,28 @@ public class ProjectEventLogService : IDisposable, IProjectEventLogService
     // промолчит, и запрос с новой колонкой упадёт в рантайме — причём не при обновлении,
     // а когда кто-нибудь откроет ленту активности. Версия в самой БД снимает вопрос:
     // каждая ступенька выполняется ровно один раз и доводит файл до актуальной схемы.
-    private static void Migrate(SqliteConnection c)
+    private void Migrate(SqliteConnection c)
+    {
+        // Версию читаем и ступеньки идём в одной транзакции с блокировкой записи: второй открыватель
+        // (другой процесс) ждёт busy_timeout, потом видит уже актуальную версию и ничего не делает
+        Exec(c, "BEGIN IMMEDIATE;");
+        try
+        {
+            MigrateLocked(c);
+            Exec(c, "COMMIT;");
+        }
+        catch
+        {
+            try { Exec(c, "ROLLBACK;"); } catch { /* транзакция уже закрыта */ }
+            throw;
+        }
+    }
+
+    private void MigrateLocked(SqliteConnection c)
     {
         var version = QueryUserVersion(c);
         if (version >= SchemaVersion) return;
+        _migrationProbe?.Invoke();
 
         if (version < 1)
         {
@@ -88,7 +122,12 @@ public class ProjectEventLogService : IDisposable, IProjectEventLogService
             Exec(c, "CREATE INDEX IF NOT EXISTS ix_events_owner_project_type ON project_events(owner_id, project_id, type, ts DESC);");
         }
 
-        // Следующие ступеньки — сюда: if (version < 2) { ALTER TABLE …; }
+        // v2 (общие проекты, S2a-6c): кто из людей инициировал событие. NULL у старых строк и там,
+        // где актор не известен; ALTER ADD COLUMN строк не трогает
+        if (version < 2)
+            Exec(c, "ALTER TABLE project_events ADD COLUMN actor_user_id TEXT;");
+
+        // Следующие ступеньки — сюда: if (version < 3) { ALTER TABLE …; }
 
         // user_version не принимает параметр — только литерал в тексте запроса
         Exec(c, $"PRAGMA user_version={SchemaVersion};");
@@ -105,7 +144,7 @@ public class ProjectEventLogService : IDisposable, IProjectEventLogService
     {
         var c = new SqliteConnection(_connStr);
         c.Open();
-        // busy_timeout — параметр соединения, а не БД: ставим на каждом (Init покрывал только своё)
+        // busy_timeout — параметр соединения, а не БД: ставим на каждом открытом соединении
         Exec(c, "PRAGMA busy_timeout=5000;");
         return c;
     }
@@ -123,7 +162,7 @@ public class ProjectEventLogService : IDisposable, IProjectEventLogService
 
     // Записать событие. null-результат — событие не относится к проекту (нет projectId/ownerId):
     // личные задачи/чаты/память глобальных персон в проектный лог не попадают.
-    public ProjectEvent? Append(string projectId, string ownerId, string type, string actor, string summary, string? entityRef = null)
+    public ProjectEvent? Append(string projectId, string ownerId, string type, string actor, string summary, string? entityRef = null, string? actorUserId = null)
     {
         if (string.IsNullOrEmpty(projectId) || string.IsNullOrEmpty(ownerId)) return null;
         var ev = new ProjectEvent
@@ -135,6 +174,7 @@ public class ProjectEventLogService : IDisposable, IProjectEventLogService
             Actor = string.IsNullOrEmpty(actor) ? "system" : actor,
             Summary = summary,
             EntityRef = entityRef,
+            ActorUserId = string.IsNullOrEmpty(actorUserId) ? null : actorUserId,
         };
         lock (_writeLock)
         {
@@ -143,8 +183,8 @@ public class ProjectEventLogService : IDisposable, IProjectEventLogService
                 using var c = OpenConnection();
                 using var cmd = c.CreateCommand();
                 cmd.CommandText = """
-                    INSERT INTO project_events(project_id, owner_id, ts, type, actor, summary, entity_ref)
-                    VALUES(@pid, @oid, @ts, @type, @actor, @summary, @ref);
+                    INSERT INTO project_events(project_id, owner_id, ts, type, actor, summary, entity_ref, actor_user_id)
+                    VALUES(@pid, @oid, @ts, @type, @actor, @summary, @ref, @auid);
                     SELECT last_insert_rowid();
                     """;
                 cmd.Parameters.AddWithValue("@pid", ev.ProjectId);
@@ -154,13 +194,23 @@ public class ProjectEventLogService : IDisposable, IProjectEventLogService
                 cmd.Parameters.AddWithValue("@actor", ev.Actor);
                 cmd.Parameters.AddWithValue("@summary", ev.Summary);
                 cmd.Parameters.AddWithValue("@ref", (object?)ev.EntityRef ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("@auid", (object?)ev.ActorUserId ?? DBNull.Value);
                 ev.Id = (long)cmd.ExecuteScalar()!;
 
                 PruneIfDue(c);
             }
             catch (Exception ex)
             {
-                _log?.LogError(ex, "Не удалось записать событие проекта ({Type})", ev.Type);
+                if (_initFailed)
+                {
+                    if (!_initFailedWarned)
+                    {
+                        _initFailedWarned = true;
+                        _log?.LogWarning(ex, "Лог событий проекта не инициализирован (миграция не удалась): события не пишутся");
+                    }
+                }
+                else
+                    _log?.LogError(ex, "Не удалось записать событие проекта ({Type})", ev.Type);
                 return null;
             }
         }
@@ -192,7 +242,7 @@ public class ProjectEventLogService : IDisposable, IProjectEventLogService
         string? type = null, string? actor = null, int limit = 100)
     {
         var sb = new StringBuilder(
-            "SELECT id, project_id, owner_id, ts, type, actor, summary, entity_ref " +
+            "SELECT id, project_id, owner_id, ts, type, actor, summary, entity_ref, actor_user_id " +
             "FROM project_events WHERE owner_id=@oid AND project_id=@pid");
         if (since.HasValue) sb.Append(" AND ts > @since");
         if (!string.IsNullOrEmpty(type)) sb.Append(" AND type=@type");
@@ -225,6 +275,7 @@ public class ProjectEventLogService : IDisposable, IProjectEventLogService
                     Actor = r.GetString(5),
                     Summary = r.GetString(6),
                     EntityRef = r.IsDBNull(7) ? null : r.GetString(7),
+                    ActorUserId = r.IsDBNull(8) ? null : r.GetString(8),
                 });
             }
             return list;
@@ -242,7 +293,7 @@ public class ProjectEventLogService : IDisposable, IProjectEventLogService
         string? type = null, string? actor = null, int limit = 200)
     {
         var sb = new StringBuilder(
-            "SELECT id, project_id, owner_id, ts, type, actor, summary, entity_ref " +
+            "SELECT id, project_id, owner_id, ts, type, actor, summary, entity_ref, actor_user_id " +
             "FROM project_events WHERE owner_id=@oid");
         if (since.HasValue) sb.Append(" AND ts > @since");
         if (!string.IsNullOrEmpty(type)) sb.Append(" AND type=@type");
@@ -274,6 +325,7 @@ public class ProjectEventLogService : IDisposable, IProjectEventLogService
                     Actor = r.GetString(5),
                     Summary = r.GetString(6),
                     EntityRef = r.IsDBNull(7) ? null : r.GetString(7),
+                    ActorUserId = r.IsDBNull(8) ? null : r.GetString(8),
                 });
             }
             return list;

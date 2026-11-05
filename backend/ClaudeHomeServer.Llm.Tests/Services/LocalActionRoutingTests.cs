@@ -2,6 +2,7 @@
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition.Llm;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Llm.Claude;
 using ClaudeHomeServer.Tests.Helpers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -451,6 +452,180 @@ public class LocalActionRoutingTests
 
         Assert.Null(result);
         Assert.Empty(claude.Calls);
+    }
+
+    // --- WC-4c: detailed-цепочка RunLocalOrChosenDetailedAsync. Тот же путь без облачного
+    //     фолбэка, но usage локального ответа доходит до вызывающего: им ночной разбор вики и
+    //     ступень 2 отбора чатов меряют фактическую нагрузку GPU локали. ---
+
+    // Фейк движка с метриками того же ответа — как реальные LlamaServerClient/OllamaClient.
+    // throws — «движок бросает» (реальные клиенты своё исключение глушат; здесь проверяется,
+    // что цепочка по нему в облако не уходит). usage = null — «метрик не было»: вызов успешен.
+    private sealed class DetailedLocalEngine : ILocalLlmClient
+    {
+        private readonly string? _answer;
+        private readonly Protocol.UsageInfo? _usage;
+        private readonly bool _throws;
+
+        public DetailedLocalEngine(string? answer, Protocol.UsageInfo? usage, bool throws = false)
+        {
+            _answer = answer;
+            _usage = usage;
+            _throws = throws;
+        }
+
+        public bool Enabled => true;
+        public string BaseUrl => "http://localhost:11434";
+        public string Model => "qwen-test";
+        public string TextModel => "qwen-test";
+        public string ProviderKey => "llama-server";
+
+        public Task<string?> ChatJsonAsync(string systemPrompt, string userPrompt, object jsonFormat,
+            CancellationToken ct = default, string? model = null, int? timeoutMs = null, int? numPredict = null,
+            int? numCtx = null, string? ownerId = null, string? label = null) => Task.FromResult(_answer);
+        public Task<string?> GenerateTextAsync(string prompt, string? model, TimeSpan timeout, int numPredict,
+            int numCtx, string? ownerId = null, string? label = null, CancellationToken ct = default)
+            => Task.FromResult(_answer);
+        public Task<ChatTurnResult> ChatTurnAsync(IReadOnlyList<ChatMsg> messages, string? model, TimeSpan timeout,
+            int numPredict, int numCtx, string? ownerId, Func<string, Task>? onDelta = null,
+            CancellationToken ct = default) => Task.FromResult(new ChatTurnResult(_answer, _usage));
+        public Task WarmUpAsync(string? model, CancellationToken ct = default) => Task.CompletedTask;
+
+        private Task<(string? Text, Protocol.UsageInfo? Usage)> Result() =>
+            _throws
+                ? Task.FromException<(string?, Protocol.UsageInfo?)>(
+                    new InvalidOperationException("движок недоступен"))
+                : Task.FromResult((_answer, _usage));
+
+        public Task<(string? Text, Protocol.UsageInfo? Usage)> ChatJsonDetailedAsync(
+            string systemPrompt, string userPrompt, object jsonFormat, CancellationToken ct = default,
+            string? model = null, int? timeoutMs = null, int? numPredict = null, int? numCtx = null,
+            string? ownerId = null, string? label = null) => Result();
+
+        public Task<(string? Text, Protocol.UsageInfo? Usage)> GenerateTextDetailedAsync(
+            string prompt, string? model, TimeSpan timeout, int numPredict, int numCtx,
+            string? ownerId = null, string? label = null, CancellationToken ct = default) => Result();
+    }
+
+    private static (CheapTextRunner Runner, FakeOneShot Claude) DetailedNoCloudRunner(
+        string? answer, Protocol.UsageInfo? usage, bool throws = false)
+    {
+        var engine = new DetailedLocalEngine(answer, usage, throws);
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "qwen-test" });
+        var router = new LocalActionRouter(engine, Store(config), config, NullLogger<LocalActionRouter>.Instance);
+        var claude = new FakeOneShot();
+        return (new CheapTextRunner(router, engine, Cloud(config), claude, NullLogger<CheapTextRunner>.Instance),
+            claude);
+    }
+
+    private static async Task<(OneShotResult? Result, FakeOneShot Claude)> RunLocalOrChosenDetailedNoCloud(
+        string actionKey, string? answer, Protocol.UsageInfo? usage)
+    {
+        var (runner, claude) = DetailedNoCloudRunner(answer, usage);
+        return (await runner.RunLocalOrChosenDetailedAsync(actionKey, "prompt-text", jsonFormat: "json"), claude);
+    }
+
+    [Fact]
+    public async Task Detailed_ЛокальныйМаршрут_ОтдаётТекстИUsageЛокали()
+    {
+        // Тот же путь, что RunLocalOrChosenAsync (маршрут local, облачного шага нет), но с
+        // расходом: usage того же ответа движка переводится в OneShotUsage с CostUsd 0.
+        // Клиент обёрнут в TrackedLocalLlmClient, как в DI: без его делегирования в
+        // detailed-методы метрики терялись бы на обёртке и в бою не дошли бы ни до кого.
+        var inner = new DetailedLocalEngine("ответ-локали", new Protocol.UsageInfo(1_000, 50, 0, 0));
+        var local = new TrackedLocalLlmClient(inner, new LocalEngineBusyTracker(), "test", () => 3,
+            NullLogger<TrackedLocalLlmClient>.Instance);
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "qwen-test" });
+        var router = new LocalActionRouter(local, Store(config), config, NullLogger<LocalActionRouter>.Instance);
+        var claude = new FakeOneShot();
+        var runner = new CheapTextRunner(router, local, Cloud(config), claude, NullLogger<CheapTextRunner>.Instance);
+
+        var result = await runner.RunLocalOrChosenDetailedAsync(
+            LocalActionCatalog.ActionRank, "prompt-text", jsonFormat: "json");
+
+        result.Should().NotBeNull();
+        result!.Text.Should().Be("ответ-локали");
+        result.Usage.Should().NotBeNull("usage того же ответа — смысл этого шага");
+        result.Usage!.InputTokens.Should().Be(1_000);
+        result.Usage.TotalInputTokens.Should().Be(1_000, "кеша у локального вызова нет");
+        result.Usage.OutputTokens.Should().Be(50);
+        result.Usage.CostUsd.Should().Be(0, "локальный вызов бесплатный");
+        result.Usage.Model.Should().Be("qwen-test");
+        Assert.Empty(claude.Calls);
+    }
+
+    [Theory]
+    [InlineData(LocalActionCatalog.ActionRank)]
+    [InlineData(LocalActionCatalog.CharacterSceneParse)]
+    public async Task ЛокальПусто_БезОблака_Detailed(string actionKey)
+    {
+        // Мутация «убрать ранний return (null, null) при !allowCloudFallback && Local в
+        // RunChainCoreAsync»: цепочка доходит до claude-шага → result не null, claude.Calls
+        // не пуст → этот тест красный.
+        var (result, claude) = await RunLocalOrChosenDetailedNoCloud(actionKey, answer: null, usage: null);
+
+        result.Should().BeNull("сбой/пусто локали не уводит содержимое в облако молча");
+        Assert.Empty(claude.Calls);
+    }
+
+    [Theory]
+    [InlineData(LocalActionCatalog.ActionRank)]
+    [InlineData(LocalActionCatalog.CharacterSceneParse)]
+    public async Task ЛокальБросает_БезОблака_ОблачногоШагаНет(string actionKey)
+    {
+        // Тот же контракт, что у строкового RunLocalOrChosenAsync: исключение движка
+        // пробрасывается наружу (его ловит вызывающий своим отказом), облачного шага нет.
+        var (runner, claude) = DetailedNoCloudRunner(
+            answer: "не важно", usage: new Protocol.UsageInfo(1, 1, 0, 0), throws: true);
+
+        var act = async () => await runner.RunLocalOrChosenDetailedAsync(
+            actionKey, "prompt-text", jsonFormat: "json");
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        claude.Calls.Should().BeEmpty("сбой локали не переводит вызов в облако");
+    }
+
+    // Подменённый шов БЕЗ переопределения detailed-метода: работает реализация по умолчанию
+    // интерфейса — текст тот же, что у строкового метода, usage = null, исключений нет. Так
+    // существующие потребители и тестовые фейки шва от нового метода не меняются.
+    private sealed class LegacyRunner : ICheapTextRunner
+    {
+        private readonly string? _answer;
+        public LegacyRunner(string? answer) => _answer = answer;
+
+        public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => true;
+        public bool HasRoute(string actionKey) => true;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "legacy";
+
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+            => Task.FromResult(_answer ?? "");
+
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) => Task.FromResult(_answer);
+
+        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
+            string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
+            => Task.FromResult(new OneShotResult(_answer ?? "", null, 0));
+    }
+
+    [Fact]
+    public async Task ФейкШваБезDetailed_РаботаетРеализацияПоУмолчанию_UsageNull()
+    {
+        ICheapTextRunner legacy = new LegacyRunner("ответ");
+
+        var result = await legacy.RunLocalOrChosenDetailedAsync(LocalActionCatalog.WikiNightly, "p");
+
+        result.Should().NotBeNull();
+        result!.Text.Should().Be("ответ");
+        result.Usage.Should().BeNull("шов метрик не давал — обёртка их не выдумывает");
+        result.DurationMs.Should().Be(0);
+
+        // Пустой ответ строкового метода — тот же null, обёртка не подставляет пустой ответ.
+        ICheapTextRunner empty = new LegacyRunner(null);
+        (await empty.RunLocalOrChosenDetailedAsync(LocalActionCatalog.WikiNightly, "p")).Should().BeNull();
     }
 
     [Fact]
@@ -2181,6 +2356,85 @@ public class LocalActionRoutingTests
             previewModel.Should().Be(combatChain.FirstOrDefault(),
                 $"модель превью чата = первый шаг боевой цепочки (sessionModel={sessionModel})");
         }
+    }
+
+    // --- Ключ владельца цепочки: владелец хода, а не пустой владелец сессии (DEC-FALLBACK 3f2f33fb) ---
+    // У проектной сессии Session.OwnerId пуст по контракту, владелец хода приходит через
+    // LlmSessionContext.OwnerId. ClaudeSession обязан резолвить модель и хвост цепочки по
+    // владельцу хода (_turnOwnerId): иначе старт заморожен из личного слота арендатора
+    // (SessionManager), а хвост и пустая Info.Model уходят на общий слот инстанса — правило
+    // «старт и фолбэк одним ключом» (инцидент 26.08) нарушен.
+
+    // Инстансовый сильный слот — «instance-opus»; личный сильный слот владельца — пресет
+    // «owner» → ["owner-kimi","owner-glm"]. Два разных слота: по цепочке видно, каким ключом
+    // прошёл резолв.
+    private static (ModelAssignmentResolver Resolver, string OwnerId) BuildOwnerSlotFixture()
+    {
+        var (resolver, app, users, _, specialty, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "instance-opus" });
+        specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            Presets = { Preset("owner", "owner-kimi", "owner-glm") },
+        });
+        var owner = users.Add("owner", "p", "user");
+        users.SetModelTiers(owner.Id, strong: "preset:owner", null, null);
+        return (resolver, owner.Id);
+    }
+
+    private static ClaudeSession BuildSessionWithResolver(ModelAssignmentResolver resolver,
+        string? sessionOwnerId, string? contextOwnerId, string? model)
+    {
+        var context = new LlmSessionContext(
+            RootPath: Path.GetTempPath(),
+            OnMessage: _ => Task.CompletedTask,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ProjectManager.BuiltInSystemPrompt,
+            PermissionRules: null,
+            TasksMcp: null)
+        { OwnerId = contextOwnerId };
+        return new ClaudeSession(new Session { Model = model, OwnerId = sessionOwnerId },
+            context, assignments: resolver);
+    }
+
+    [Fact]
+    public void ПроектнаяСессия_ЦепочкаФолбэка_ПоВладельцуХода_АНеПоПустомуВладельцуСессии()
+    {
+        // c2: Info.OwnerId пуст (проектная сессия), владелец хода — в контексте. Хвост цепочки
+        // продолжается личным пресетом владельца, пустая Info.Model резолвится тем же ключом.
+        // До правки обе точки шли по Info.OwnerId=null → общий слот инстанса («instance-opus»).
+        var (resolver, ownerId) = BuildOwnerSlotFixture();
+
+        // Старт заморожен из личного пресета владельца (как делает SessionManager для чата
+        // проекта): хвост обязан идти тем же пресетом, а не слотом инстанса.
+        var frozen = BuildSessionWithResolver(resolver, sessionOwnerId: null, contextOwnerId: ownerId,
+            model: "owner-kimi");
+        frozen.EffectiveTurnChain.Should().Equal("owner-kimi", "owner-glm");
+
+        // Пустая Info.Model: старт резолвится по личному слоту владельца (первый шаг его
+        // пресета), а не по слоту инстанса.
+        var empty = BuildSessionWithResolver(resolver, sessionOwnerId: null, contextOwnerId: ownerId,
+            model: null);
+        empty.EffectiveTurnModel.Should().Be("owner-kimi");
+    }
+
+    [Fact]
+    public void ЧатВнеПроекта_ЦепочкаФолбэка_НеМеняется_ВладелецНаСессии()
+    {
+        // c3 (регрессия): у чата вне проекта владелец — на сессии: context.OwnerId == Info.OwnerId
+        // (обычный путь SessionManager) или контекст его не несёт вовсе (старый контракт/тесты).
+        // _turnOwnerId = context.OwnerId ?? info.OwnerId даёт тот же ключ — цепочка не меняется.
+        var (resolver, ownerId) = BuildOwnerSlotFixture();
+
+        var sameKey = BuildSessionWithResolver(resolver, sessionOwnerId: ownerId, contextOwnerId: ownerId,
+            model: "owner-kimi");
+        sameKey.EffectiveTurnChain.Should().Equal("owner-kimi", "owner-glm");
+
+        var onSession = BuildSessionWithResolver(resolver, sessionOwnerId: ownerId, contextOwnerId: null,
+            model: "owner-kimi");
+        onSession.EffectiveTurnChain.Should().Equal("owner-kimi", "owner-glm");
+
+        var emptyModel = BuildSessionWithResolver(resolver, sessionOwnerId: ownerId, contextOwnerId: null,
+            model: null);
+        emptyModel.EffectiveTurnModel.Should().Be("owner-kimi");
     }
 
     private sealed class SingleFactory(System.Net.Http.HttpMessageHandler handler) : IHttpClientFactory

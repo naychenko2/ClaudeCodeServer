@@ -13,6 +13,10 @@ import type { NoteDetail, NoteSummary } from '../../types';
 import { NotesPage } from './NotesPage';
 import { findNodeByAttr, installFakeDom, mount, reactProps, uninstallFakeDom } from '../../components/chat/__tests__/fakeDom';
 import { setAllFlags } from '../../lib/featureFlags';
+import { notesPanels, zoneOf } from '../../pages/workspace/panelStackState';
+import { SECTION_CHIP_TITLE } from '../../components/ui/SectionChip';
+// порог тач-цели мобилы — тот же токен, что в коде страницы (сверяем не магическое число)
+import { TB } from '../../lib/design';
 // очередь запроса «открыть страницу» — настоящая (не моканная): тестам прямой импорт разрешён
 import { __test as wikiStore, consumeOpenWikiPage, requestOpenWikiPage } from '../../lib/wiki';
 
@@ -69,7 +73,12 @@ vi.mock('../../lib/signalr', async (importOriginal) => {
 // в WikiTab.test; здесь проверяется связь вкладки со страницей заметок, а не стор.
 // OPEN-1 не мокан: очередь запроса (requestOpenWikiPage/consumeOpenWikiPage/useWikiOpenRequest)
 // настоящая — через spread orig; её контракт — в lib/__tests__/wiki.test.ts
-const { wikiMock } = vi.hoisted(() => ({ wikiMock: { tree: null as unknown, catalog: null as unknown, page: null as unknown } }));
+const { wikiMock } = vi.hoisted(() => ({
+  wikiMock: {
+    tree: null as unknown, catalog: null as unknown, page: null as unknown,
+    packages: [] as unknown[], healthCalls: [] as string[],
+  },
+}));
 vi.mock('../../lib/wiki', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../lib/wiki')>();
   return {
@@ -79,7 +88,9 @@ vi.mock('../../lib/wiki', async (importOriginal) => {
     loadWikiPage: async () => wikiMock.page,
     // S7a: «Входящие» — свои, экран списка зовёт listWikiPackages; здесь он пустой:
     // тест проверяет смену подвкладки, а не список пакетов
-    listWikiPackages: async () => ({ packages: [], invalidCount: 0 }),
+    listWikiPackages: async () => ({ packages: wikiMock.packages, invalidCount: 0 }),
+    // W3: ключи, по которым «Здоровье» запросило отчёт, — проверка передачи ключа раздела
+    getWikiHealth: async (key: string) => { wikiMock.healthCalls.push(key); return { section: key, content: '' }; },
     useWikiTree: () => wikiMock.tree,
     useWikiCatalog: () => wikiMock.catalog,
     useWikiPage: () => wikiMock.page,
@@ -317,8 +328,8 @@ describe('NotesPage: вкладка «Вики» за флагом llmWiki (S5d)
     root.unmount();
   });
 
-  it('F1: notes-wiki-unified + llm-wiki на 360 — две кнопки шторок, дерево во шторке, «Раздел ▸» нет', async () => {
-    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+  it('F1: llm-wiki на 360 — две кнопки шторок, дерево во шторке, «Раздел ▸» нет', async () => {
+    setAllFlags({ 'llm-wiki': true });
     wikiMock.tree = WIKI_TREE;
     wikiMock.catalog = WIKI_CATALOG;
     const { root, container } = mountNotes();
@@ -350,7 +361,7 @@ describe('NotesPage: вкладка «Вики» за флагом llmWiki (S5d)
 
   it('F1-qa: шторка на 360 — строки заметок и страниц вики; цели касания ≥40; в центре нет tab/navigation', async () => {
     notesMock.push(note('n1', 'Заметка из шторки', []));
-    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+    setAllFlags({ 'llm-wiki': true });
     wikiMock.tree = WIKI_TREE;
     wikiMock.catalog = WIKI_CATALOG;
     const { root, container } = mountNotes();
@@ -372,7 +383,7 @@ describe('NotesPage: вкладка «Вики» за флагом llmWiki (S5d)
 
   it('F1-qa: выбор страницы закрывает шторку и открывает страницу; выбор заметки открывает заметку', async () => {
     notesMock.push(note('n1', 'Заметка из шторки', []));
-    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+    setAllFlags({ 'llm-wiki': true });
     wikiMock.tree = WIKI_TREE;
     wikiMock.catalog = WIKI_CATALOG;
     noteMock.detail = { ...NOTE_DETAIL, id: 'n1', title: 'Заметка из шторки' };
@@ -393,22 +404,10 @@ describe('NotesPage: вкладка «Вики» за флагом llmWiki (S5d)
     root.unmount();
   });
 
-  it('F1: без notes-wiki-unified раскладка прежняя — кнопки шторок нет', async () => {
-    setAllFlags({ 'llm-wiki': true });
-    wikiMock.tree = WIKI_TREE;
-    wikiMock.catalog = WIKI_CATALOG;
-    const { root, container } = mountNotes();
-    clickNode(findButtonByText(container, 'Вики')!);
-    await settle();
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-open-tree')).toBeNull();
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-section-switch')).not.toBeNull();
-    root.unmount();
-  });
-
   // Доступность шторок на 360 (вердикт Глеба, M2). Мутации (вывод — в отчёте задачи):
   // убрать слушатель Esc / aria-modal / возврат фокуса / переключатель setDrawer(d => ...) / ariaExpanded
   async function openUnifiedMobile() {
-    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+    setAllFlags({ 'llm-wiki': true });
     wikiMock.tree = WIKI_TREE;
     wikiMock.catalog = WIKI_CATALOG;
     const { root, container } = mountNotes();
@@ -468,76 +467,6 @@ describe('NotesPage: вкладка «Вики» за флагом llmWiki (S5d)
     root.unmount();
   });
 
-  it('флаг включён: «Вики» → каталог; «Раздел ▸» → экран «Разделы»; раздел → обратно каталог', async () => {
-    setAllFlags({ 'llm-wiki': true });
-    wikiMock.tree = WIKI_TREE;
-    wikiMock.catalog = WIKI_CATALOG;
-    const { root, container } = mountNotes();
-    const tab = findButtonByText(container, 'Вики');
-    expect(tab, 'сегмент «Вики» в мобильном переключателе').not.toBeNull();
-    clickNode(tab!);
-    await settle();
-    // Центр — вкладка «Вики»: каталог выбранного раздела. Мобильного дерева над каталогом
-    // нет (оно и схлопывало каталог в нулевую высоту — хвост ревью S5c) — вместо него кнопка
-    expect(hasText(container, 'Тестовая страница вики'), 'каталог раздела открыт').toBe(true);
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-tree'), 'дерева над каталогом нет').toBeNull();
-    const switchBtn = findNodeByAttr(container, 'data-testid', 'wiki-section-switch');
-    expect(switchBtn, 'кнопка «Раздел ▸»').not.toBeNull();
-    expect(hasText(container, 'Проекты / AI Home'), 'кнопка показывает префикс выбранного раздела').toBe(true);
-    clickNode(switchBtn!);
-    // Экран «Разделы»: полное дерево, без ограничения высоты
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-tree'), 'список разделов открыт').not.toBeNull();
-    const row = findNodeByAttr(container, 'data-testid', 'wiki-section-row');
-    expect(row, 'строка раздела в списке').not.toBeNull();
-    clickNode(row!);
-    await settle();
-    // Выбор раздела возвращает к каталогу этого раздела
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-tree'), 'экран «Разделы» закрыт').toBeNull();
-    expect(hasText(container, 'Тестовая страница вики'), 'каталог снова открыт').toBe(true);
-    root.unmount();
-  });
-
-  // Минор 3 ревью S5d: экран «Разделы» был тупиком (возврат только выбором раздела).
-  // Кнопка «Назад» (ui/Button, aria-label) возвращает к каталогу выбранного раздела
-  it('мобильный «Разделы»: кнопка «Назад» возвращает к каталогу выбранного раздела', async () => {
-    setAllFlags({ 'llm-wiki': true });
-    wikiMock.tree = WIKI_TREE;
-    wikiMock.catalog = WIKI_CATALOG;
-    const { root, container } = mountNotes();
-    clickNode(findNodeByAttr(container, 'aria-label', 'Вики')!);
-    await settle();
-    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-section-switch')!);
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-tree'), 'экран «Разделы» открыт').not.toBeNull();
-    const back = findNodeByAttr(container, 'data-testid', 'wiki-sections-back');
-    expect(back, 'кнопка «Назад» на экране «Разделы»').not.toBeNull();
-    clickNode(back!);
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-tree'), 'экран «Разделы» закрыт').toBeNull();
-    expect(hasText(container, 'Тестовая страница вики'), 'каталог выбранного раздела снова открыт').toBe(true);
-    root.unmount();
-  });
-
-  // Минор 4 ревью S5d: showSections не сбрасывался при смене подвкладки — возврат на
-  // «Страницы» открывал «Разделы» снова. Смена подвкладки теперь закрывает этот экран
-  it('смена подвкладки закрывает «Разделы»: возврат на «Страницы» — каталог, не список разделов', async () => {
-    setAllFlags({ 'llm-wiki': true });
-    wikiMock.tree = WIKI_TREE;
-    wikiMock.catalog = WIKI_CATALOG;
-    const { root, container } = mountNotes();
-    clickNode(findNodeByAttr(container, 'aria-label', 'Вики')!);
-    await settle();
-    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-section-switch')!);
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-tree'), 'экран «Разделы» открыт').not.toBeNull();
-    // Подвкладки на мобиле icons-only, имена — в aria-label (PillSwitch.tsx:273).
-    // С S7a «Входящие» — не заглушка: признак смены — пустое состояние своего экрана
-    clickNode(findNodeByAttr(container, 'aria-label', 'Входящие')!);
-    await settle();
-    expect(hasText(container, 'Спорного нет'), 'экран «Входящие» открыт').toBe(true);
-    clickNode(findNodeByAttr(container, 'aria-label', 'Страницы')!);
-    await settle();
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-tree'), '«Разделы» не открылся снова').toBeNull();
-    expect(hasText(container, 'Тестовая страница вики'), 'открыт каталог').toBe(true);
-    root.unmount();
-  });
 });
 
 // ─── S5d-доработка: десктопный путь вкладки (major ревью Глеба) ───
@@ -565,9 +494,14 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     noteMock.detail = NOTE_DETAIL;
     wikiMock.tree = WIKI_TREE;
     wikiMock.catalog = WIKI_CATALOG;
+    wikiMock.packages = [];
   });
   afterEach(() => {
     setAllFlags({});
+    // раскладка зон — модульное состояние: закрываем открытое тестом, чтобы оно не текло дальше
+    for (const k of ['wikiInbox', 'wikiJournal', 'wikiHealth', 'wikiSettings', 'notesGraph'] as const)
+      notesPanels.ops.close(k);
+    wikiMock.packages = [];
     wikiMock.tree = null;
     wikiMock.catalog = null;
     noteMock.detail = null;
@@ -585,29 +519,8 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     root.unmount();
   });
 
-  it('«Вики» → клик по заметке в рельсе открывает заметку, а не каталог «Вики»', async () => {
-    setAllFlags({ 'llm-wiki': true });
-    const { root, container } = mountNotes();
-    await settle();
-    const tab = findNodeByAttr(container, 'aria-label', 'Вики');
-    expect(tab, 'десктопный переключатель «Заметки | Вики»').not.toBeNull();
-    clickNode(tab!);
-    await settle();
-    expect(hasText(container, 'Тестовая страница вики'), 'центр — каталог «Вики»').toBe(true);
-    // Строка заметки в панели списка — div с title=имени (NotesList.tsx:327)
-    const row = findNodeByAttr(container, 'title', NOTE_TITLE);
-    expect(row, 'строка заметки в рельсе').not.toBeNull();
-    clickNode(row!);
-    await settle();
-    // Центр — NoteView: кнопка «Править» в тулбаре есть только у загруженной заметки
-    expect(findButtonByText(container, 'Править'), 'заметка открыта').not.toBeNull();
-    expect(hasText(container, 'Тестовая страница вики'), 'каталога «Вики» в центре больше нет').toBe(false);
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-tree'), 'WikiTab размонтирован').toBeNull();
-    root.unmount();
-  });
-
   it('F2: unified на десктопе — одно дерево: заметки и страницы вики, переключателя режимов нет', async () => {
-    setAllFlags({ 'llm-wiki': true, 'notes-wiki-unified': true });
+    setAllFlags({ 'llm-wiki': true });
     const { root, container } = mountNotes();
     await settle();
     const tree = findNodeByAttr(container, 'data-testid', 'wiki-unified-tree');
@@ -631,21 +544,121 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     root.unmount();
   });
 
-  it('переключение «Заметки ↔ Вики» работает в обе стороны', async () => {
+  // W3: панели вики — панели зон раздела; самодельной рельсы TL-8 в центре нет
+  const rails = (c: AnyNode) => {
+    const out: AnyNode[] = [];
+    const walk = (x: AnyNode) => {
+      if (x.nodeType === 1 && (x as unknown as { getAttribute(n: string): string | null }).getAttribute('data-testid') === 'wiki-rail') out.push(x);
+      for (const ch of x.childNodes) walk(ch);
+    };
+    walk(c);
+    return out;
+  };
+  // Кнопки рельсы зоны по подписи: aria-label «Журнал» или «Журнал: <подсказка бейджа>»
+  const railButtons = (c: AnyNode, label: string) => {
+    const out: AnyNode[] = [];
+    const walk = (x: AnyNode) => {
+      const al = x.nodeType === 1 ? (x as unknown as { getAttribute(n: string): string | null }).getAttribute('aria-label') : null;
+      if (al === label || (al != null && al.startsWith(`${label}: `))) out.push(x);
+      for (const ch of x.childNodes) walk(ch);
+    };
+    walk(c);
+    return out;
+  };
+  const chipOf = (c: AnyNode) => findNodeByAttr(c as never, 'title', SECTION_CHIP_TITLE) as AnyNode | null;
+  const openWikiPanel = (key: 'wikiInbox' | 'wikiJournal' | 'wikiHealth' | 'wikiSettings') =>
+    act(() => { notesPanels.ops.openIn('right', key); });
+
+  it('W3: при флаге на 1280 рельсы TL-8 нет, кнопка «Журнал» ровно одна — в рельсе зоны', async () => {
     setAllFlags({ 'llm-wiki': true });
     const { root, container } = mountNotes();
     await settle();
-    clickNode(findNodeByAttr(container, 'aria-label', 'Вики')!);
-    await settle();
-    expect(hasText(container, 'Тестовая страница вики'), 'каталог «Вики» открыт').toBe(true);
-    clickNode(findNodeByAttr(container, 'aria-label', 'Заметки')!);
-    expect(hasText(container, 'Тестовая страница вики'), '«Вики» закрыта').toBe(false);
-    expect(findNodeByAttr(container, 'data-testid', 'wiki-tree'), 'WikiTab размонтирован').toBeNull();
-    clickNode(findNodeByAttr(container, 'aria-label', 'Вики')!);
-    await settle();
-    expect(hasText(container, 'Тестовая страница вики'), '«Вики» открылась снова').toBe(true);
+    expect(rails(container as unknown as AnyNode).length, 'самодельной рельсы нет').toBe(0);
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-rail-pages'), 'кнопки «Страницы» нет').toBeNull();
+    for (const label of ['Входящие', 'Журнал', 'Здоровье', 'Настройки'])
+      expect(railButtons(container as unknown as AnyNode, label).length, `кнопка «${label}» ровно одна`).toBe(1);
     root.unmount();
   });
+
+  it('W3: чип раздела — у «Журнала» и «Входящих» (подпись по умолчанию — AI Home), у «Настроек» чипа нет', async () => {
+    setAllFlags({ 'llm-wiki': true });
+    const { root, container } = mountNotes();
+    await settle();
+    openWikiPanel('wikiJournal');
+    await settle();
+    expect(hasText(chipOf(container as unknown as AnyNode)!, 'AI Home'), 'follow по умолчанию — раздел AI Home').toBe(true);
+    act(() => { notesPanels.ops.close('wikiJournal'); });
+    openWikiPanel('wikiSettings');
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-panel-body'), 'панель «Настройки» открыта').not.toBeNull();
+    expect(chipOf(container as unknown as AnyNode), 'у «Настроек» чипа нет').toBeNull();
+    root.unmount();
+  });
+
+  it('W3: выбор заметки двигает чип за её разделом, «Другие заметки» раздел не меняют; «Здоровье» получает ключ', async () => {
+    setAllFlags({ 'llm-wiki': true });
+    notesMock.push({ ...note('n2', 'Заметка без раздела', []), source: 'zzz-unknown', sourceLabel: 'Чужой' });
+    wikiMock.healthCalls.length = 0;
+    const { root, container } = mountNotes();
+    await settle();
+    openWikiPanel('wikiHealth');
+    await settle();
+    expect(wikiMock.healthCalls.at(-1), 'по умолчанию — раздел проекта').toBe('projects/aaa11111');
+    // заметка личного источника → раздел «Личное»
+    clickNode(findNodeByAttr(findNodeByAttr(container, 'data-testid', 'wiki-unified-tree')!, 'title', NOTE_TITLE)!);
+    await settle();
+    expect(hasText(chipOf(container as unknown as AnyNode)!, 'Личное'), 'чип за разделом заметки').toBe(true);
+    expect(wikiMock.healthCalls.at(-1), '«Здоровье» запросило отчёт нового раздела').toBe('personal');
+    // заметка из «Других заметок» раздел не меняет
+    clickNode(findNodeByAttr(findNodeByAttr(container, 'data-testid', 'wiki-unified-tree')!, 'title', 'Заметка без раздела')!);
+    await settle();
+    expect(hasText(chipOf(container as unknown as AnyNode)!, 'Личное'), 'раздел чипа прежний').toBe(true);
+    expect(wikiMock.healthCalls.at(-1)).toBe('personal');
+    root.unmount();
+  });
+
+  it('W3: пустая вики — в центре «Вики пока пустая», чипа и чисел на рельсе нет', async () => {
+    setAllFlags({ 'llm-wiki': true });
+    wikiMock.tree = { initialized: false, sections: [] };
+    wikiMock.packages = [{ id: 'p1' }];
+    const { root, container } = mountNotes();
+    await settle();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-empty'), 'пустое состояние в центре').not.toBeNull();
+    expect(railButtons(container as unknown as AnyNode, 'Входящие').length, 'кнопка есть, числа и подсказки нет').toBe(1);
+    wikiMock.packages = [];
+    expect(findButtonByText(container, 'Завести вики'), 'кнопки «Завести вики» нет').toBeNull();
+    openWikiPanel('wikiInbox');
+    await settle();
+    expect(chipOf(container as unknown as AnyNode), 'чипа нет').toBeNull();
+    root.unmount();
+  });
+
+  it('W3: число «Входящих» на рельсе — с подсказкой «N ждут вашего решения»', async () => {
+    setAllFlags({ 'llm-wiki': true });
+    wikiMock.packages = [{ id: 'p1' }, { id: 'p2' }];
+    const { root, container } = mountNotes();
+    await settle();
+    const al = (railButtons(container as unknown as AnyNode, 'Входящие')[0] as unknown as { getAttribute(n: string): string }).getAttribute('aria-label');
+    expect(al).toBe('Входящие: 2 ждут вашего решения');
+    root.unmount();
+  });
+
+  it('W3: открытая панель вики не закрывает граф заметок слева', async () => {
+    setAllFlags({ 'llm-wiki': true });
+    // граф в центре тянет useThemeColors: в node нет MutationObserver
+    (globalThis as { MutationObserver?: unknown }).MutationObserver = class { observe() {} disconnect() {} };
+    const { root, container } = mountNotes();
+    await settle();
+    act(() => { notesPanels.ops.openIn('left', 'notesGraph'); });
+    openWikiPanel('wikiJournal');
+    await settle();
+    expect(zoneOf(notesPanels.getZones(), 'notesGraph'), 'граф на месте').toBe('left');
+    expect(zoneOf(notesPanels.getZones(), 'wikiJournal'), 'журнал открыт').toBe('right');
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-panel-body')).not.toBeNull();
+    root.unmount();
+    delete (globalThis as { MutationObserver?: unknown }).MutationObserver;
+  });
+
 });
 
 // ─── OPEN-1: запрос «Открыть хронику» из шапки чата ───
@@ -701,5 +714,94 @@ describe('NotesPage: запрос «Открыть хронику» (OPEN-1)', (
     expect(hasText(container, 'Содержание хроники chat-x')).toBe(false);
     expect(findButtonByText(container, 'Вики'), 'переключателя «Вики» нет, как и без запроса').toBeNull();
     root.unmount();
+  });
+});
+
+// ─── Тач-цели кнопок создания: порог 40 px на мобиле ───
+// «Новая» и «Дневниковая заметка» рисует sidebarControls NotesPage — она стоит и в
+// списке заметок (мобильный сайдбар), и в мобильной шторке дерева (drawerTree WikiTab).
+// Порог — TB.iconHitMobile (docs/design/guidelines.md, п.4 чек-листа «тач-цели не
+// меньше 40px»). Мутации (вывод прогона — в отчёте задачи): (1) убрать minHeight у
+// «Новой» → краснеет «мобильный список»; (2) убрать minHeight/minWidth у иконочной →
+// краснеет та же; (3) ставить их всегда, без isMobile → краснеет десктопный тест.
+
+const DAILY_TITLE = 'Дневниковая заметка на сегодня';
+const HIT_PX = `${TB.iconHitMobile}px`;
+
+// Кнопки блока создания: «Новая» — по подписи; «Дневниковая заметка» — по title
+// (текста у неё нет, только иконка)
+function createButtons(scope: AnyNode) {
+  return {
+    newNote: findButtonByText(scope, 'Новая'),
+    daily: findNodeByAttr(scope as never, 'title', DAILY_TITLE),
+  };
+}
+
+describe('NotesPage: тач-цели «Новая» / «Дневниковая заметка» ≥ 40 px на мобиле', () => {
+  beforeEach(() => {
+    prepareEnv();
+    notesMock.length = 0;
+    wikiMock.tree = WIKI_TREE;
+    wikiMock.catalog = WIKI_CATALOG;
+  });
+  afterEach(() => {
+    setAllFlags({});
+    wikiMock.tree = null;
+    wikiMock.catalog = null;
+    notesMock.length = 0;
+    vi.unstubAllGlobals();
+    uninstallFakeDom();
+  });
+
+  it('мобильный список: «Новая» ≥ 40 px по высоте, «Дневниковая заметка» ≥ 40×40', () => {
+    const { root, container } = mountNotes();
+    const { newNote, daily } = createButtons(container);
+    expect(newNote, 'кнопка «Новая» есть').not.toBeNull();
+    expect(daily, 'кнопка «Дневниковая заметка» есть').not.toBeNull();
+    expect(newNote!.style.minHeight, '«Новая» — высота по тач-порогу').toBe(HIT_PX);
+    expect(daily!.style.minHeight, 'иконочная — высота по тач-порогу').toBe(HIT_PX);
+    expect(daily!.style.minWidth, 'иконочная — и ширина по тач-порогу (без подписи её держат только паддинги)').toBe(HIT_PX);
+    root.unmount();
+  });
+
+  it('мобильная шторка дерева (unified, режим «Вики»): те же цели внутри шторки', async () => {
+    setAllFlags({ 'llm-wiki': true });
+    const { root, container } = mountNotes();
+    clickNode(findButtonByText(container, 'Вики')!);
+    await settle();
+    clickNode(findNodeByAttr(container, 'data-testid', 'wiki-open-tree')!);
+    await settle();
+    const drawer = findNodeByAttr(container, 'data-testid', 'wiki-drawer-left');
+    expect(drawer, 'шторка дерева открыта').not.toBeNull();
+    const { newNote, daily } = createButtons(drawer as unknown as AnyNode);
+    expect(newNote, '«Новая» в шторке есть').not.toBeNull();
+    expect(daily, '«Дневниковая заметка» в шторке есть').not.toBeNull();
+    expect(newNote!.style.minHeight).toBe(HIT_PX);
+    expect(daily!.style.minHeight).toBe(HIT_PX);
+    expect(daily!.style.minWidth).toBe(HIT_PX);
+    root.unmount();
+  });
+
+  it('десктоп 1280: размеров-исключений нет — кнопки как прежде', () => {
+    envMock.isMobile = false;
+    envMock.width = 1280;
+    // Путь десктопа — через PanelZone/PanelShell (documentElement, ResizeObserver,
+    // requestAnimationFrame): те же стабы, что в десктопном описании S5d-доработки
+    const d = (globalThis as { document: Record<string, unknown> }).document;
+    d.documentElement = { style: { setProperty: () => {}, removeProperty: () => {} } };
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+    (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame = (cb: () => void) => { cb(); return 1; };
+    (globalThis as { cancelAnimationFrame?: unknown }).cancelAnimationFrame = () => {};
+    const { root, container } = mountNotes();
+    const { newNote, daily } = createButtons(container);
+    expect(newNote, 'кнопка «Новая» есть').not.toBeNull();
+    expect(daily, 'кнопка «Дневниковая заметка» есть').not.toBeNull();
+    expect(newNote!.style.minHeight, 'на десктопе высоты-исключения нет').toBeUndefined();
+    expect(daily!.style.minHeight, 'на десктопе высоты-исключения нет').toBeUndefined();
+    expect(daily!.style.minWidth, 'на десктопе ширины-исключения нет').toBeUndefined();
+    root.unmount();
+    delete (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame;
+    delete (globalThis as { cancelAnimationFrame?: unknown }).cancelAnimationFrame;
+    delete (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
   });
 });

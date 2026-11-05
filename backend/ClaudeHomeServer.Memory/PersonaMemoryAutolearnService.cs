@@ -66,6 +66,22 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
         // Реагируем только на завершение хода в персонной сессии
         if (msg is not ResultMessage || session.PersonaId is null) return Task.CompletedTask;
 
+        // Приватный чат (S2d-5b, разрез 4bc3d04f §1, путь 17): его ход виден только автору,
+        // а память проектной персоны читают все чаты проекта — факт разговора пересёк бы
+        // границу приватности. Не запускается вовсе: ни чтения истории, ни LLM. Тот же
+        // признак и то же место, что в TeamMemoryAutolearnService (S2d-5a): проверка здесь,
+        // а не в AutolearnGate. Мусорный PrivateToUserId (пустая строка) — тот же fail-closed,
+        // что в SessionAccess.CanSee. Закрытый случай ровно «приватный чат с проектной
+        // персоной»: приватность ставится только в общем проекте (S2d-7a, NotSharedProject),
+        // а глобальная персона собеседником такого чата быть не может (global_persona_in_shared).
+        if (session.PrivateToUserId is not null)
+        {
+            var total = Interlocked.Increment(ref _skipped);
+            _log.LogDebug("autolearn: персона {Persona}, сессия {Session} — пропуск (приватный чат), всего пропусков {Total}",
+                session.PersonaId, session.Id, total);
+            return Task.CompletedTask;
+        }
+
         var persona = _personas.GetByIdInternal(session.PersonaId);
         if (persona is null || !persona.MemoryEnabled) return Task.CompletedTask;
 
@@ -163,8 +179,13 @@ public sealed class PersonaMemoryAutolearnService : IHostedService
     // сессионного autolearn, но транскрипт — переданный вопрос + ответ персоны, а рабочий
     // фокус НЕ трогается (консультация — побочный разговор, затирать «что я сейчас делаю»
     // нельзя). Фон, best-effort: ошибки не влияют на уже отданный ответ.
-    public void LearnFromConsultation(Persona persona, string question, string answer)
+    // callerIsPrivate (S2d-5b): вызов из приватного чата (или вызыватель не определён —
+    // fail-closed) — факты вопроса и ответа в память персоны НЕ извлекаются: память проектной
+    // персоны подмешивается ко всем чатам проекта, а приватный чат виден только автору.
+    public void LearnFromConsultation(Persona persona, string question, string answer,
+        bool callerIsPrivate)
     {
+        if (callerIsPrivate) return;
         if (!persona.MemoryEnabled) return;
         _ = Task.Run(() => LearnConsultationSafeAsync(persona, question, answer));
     }

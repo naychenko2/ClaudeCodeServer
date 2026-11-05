@@ -33,7 +33,10 @@ public sealed record LocalMediaRequest(
     IReadOnlyList<string>? RefAudios = null,
     string? Identity = null,
     // Аудио-операции: аргументы инструмента как есть, разбор и белые списки — в LocalMediaService.Audio
-    JsonObject? Args = null);
+    JsonObject? Args = null,
+    // Вызывающий — по нему судится чужое private при чтении входов; OwnerId — арендатор (ключ задач и папки).
+    // null (актор неизвестен) — чужим считается любое private (fail-closed)
+    string? ActorId = null);
 
 // Задача и её живое положение: Position — сколько задач ComfyUI впереди (0 — идёт),
 // Warning — временный сбой опроса (ComfyUI недоступен), задача при этом жива. EtaSeconds без
@@ -589,7 +592,7 @@ public sealed partial class LocalMediaService(
             while (relative.StartsWith("./", StringComparison.Ordinal)) relative = relative[2..];
         }
 
-        var full = ProjectLinkGuard.ResolveInside(root, relative)
+        var full = ProjectLinkGuard.ResolveInsideAs(root, relative, request.ActorId)
             ?? throw new LocalMediaInputException($"Путь «{value}» вне папки проекта.");
         var info = new FileInfo(full);
         if (!info.Exists) throw new LocalMediaInputException($"Файл «{value}» не найден в проекте.");

@@ -245,6 +245,9 @@ public class TasksHttpDelegationGateTests : IClassFixture<TasksHttpDelegationGat
     /// <summary>
     /// Живой сценарий приёмки «создание задачи работает»: tools/call tasks_create на обычном
     /// ходу создаёт задачу в проекте чата, и она видна через REST того же владельца.
+    /// Происхождение (sourceSessionId) проверяется в пути владельца: ответ MCP-вызова без актора
+    /// хода маскирует ссылки на чат (S2d-4b2: актор неизвестен — «не видит», ForActorMasked →
+    /// TaskView.MaskForeignChats), а запись задачи источник помнит и владелец видит его по REST.
     /// </summary>
     [Fact]
     public async Task СозданиеЗадачи_ЖивымВызовом_Работает()
@@ -260,8 +263,17 @@ public class TasksHttpDelegationGateTests : IClassFixture<TasksHttpDelegationGat
         task.GetProperty("title").GetString().Should().Be("Задача из http-тулсета");
         task.GetProperty("projectId").GetString().Should().Be(projectId,
             "проект по умолчанию — проект чата-вызывателя");
-        // Происхождение: задача из чата помнит его id (sourceSessionId)
-        task.GetProperty("sourceSessionId").GetString().Should().Be(sessionId);
+        // Ответ вызова без актора хода: id чата обнулён, рядом форма-заглушка (текущий контракт
+        // маски — TaskChatRefMcpAndReportTests «актор неизвестен — не видит»)
+        task.GetProperty("sourceSessionId").ValueKind.Should().Be(JsonValueKind.Null,
+            "вызов без актора хода: id своего чата в ответе маскируется");
+        task.GetProperty("sourceChat").GetProperty("private").GetBoolean().Should().BeTrue();
+        // Происхождение записи — в пути владельца: его REST свой чат видит и отдаёт полный id
+        var id = task.GetProperty("id").GetString()!;
+        var viaOwner = JsonSerializer.Deserialize<JsonElement>(
+            await (await Client.GetAsync($"/api/tasks/{id}")).Content.ReadAsStringAsync());
+        viaOwner.GetProperty("sourceSessionId").GetString().Should().Be(sessionId,
+            "задача из чата помнит его id (sourceSessionId)");
     }
 
     // ── Закрытие эпика фичи — только человеком ──────────────────────────────
@@ -270,8 +282,8 @@ public class TasksHttpDelegationGateTests : IClassFixture<TasksHttpDelegationGat
 
     private async Task<string> CreateEpicAsync(string projectId)
     {
-        var resp = await Client.PostAsJsonAsync("/api/tasks",
-            new { title = "эпик", role = "feature", projectId });
+        var resp = await Client.PostAsJsonAsync($"/api/projects/{projectId}/tasks",
+            new { title = "эпик", role = "feature" });
         resp.EnsureSuccessStatusCode();
         return JsonSerializer.Deserialize<JsonElement>(
             await resp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
@@ -361,7 +373,7 @@ public class TasksHttpDelegationGateTests : IClassFixture<TasksHttpDelegationGat
     public async Task ЗакрытиеОбычнойЗадачи_ЧатИсполнитель_Проходит()
     {
         var (projectId, sessionId) = await CreateProjectWithSessionAsync();
-        var created = await Client.PostAsJsonAsync("/api/tasks", new { title = "шаг", projectId });
+        var created = await Client.PostAsJsonAsync($"/api/projects/{projectId}/tasks", new { title = "шаг" });
         var id = JsonSerializer.Deserialize<JsonElement>(
             await created.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
         _adapters.AgentDepth = 0;
@@ -543,7 +555,7 @@ public class TasksHttpDelegationGateTests : IClassFixture<TasksHttpDelegationGat
     public async Task ВозобновлениеОбычнойЗадачи_ЧатИсполнитель_Проходит()
     {
         var (projectId, sessionId) = await CreateProjectWithSessionAsync();
-        var created = await Client.PostAsJsonAsync("/api/tasks", new { title = "шаг", projectId });
+        var created = await Client.PostAsJsonAsync($"/api/projects/{projectId}/tasks", new { title = "шаг" });
         var id = JsonSerializer.Deserialize<JsonElement>(
             await created.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
         (await Client.PutAsJsonAsync($"/api/tasks/{id}", new { status = "done" })).EnsureSuccessStatusCode();

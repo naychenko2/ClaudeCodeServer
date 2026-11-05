@@ -73,7 +73,7 @@ public class PersonalVideoEditorController(
 
     [HttpGet(VideoEditorRoutes.Scenes)]
     public IActionResult Scenes(string sessionId) =>
-        Gate(sessionId, out _, out var denied) ? ScenesIn(sessionId) : denied;
+        Gate(sessionId, out var scope, out var denied) ? ScenesIn(scope, sessionId) : denied;
 
     // Только сцена без папки: папок проекта у личного чата нет
     [HttpPost(VideoEditorRoutes.Scenes)]
@@ -102,7 +102,7 @@ public class PersonalVideoEditorController(
 
     [HttpGet(VideoEditorRoutes.SceneVersionFile)]
     public IActionResult VersionFile(string sessionId, string sceneId, string versionId, [FromQuery] bool download) =>
-        Gate(sessionId, out _, out var denied) ? VersionFileIn(sessionId, sceneId, versionId, download) : denied;
+        Gate(sessionId, out var scope, out var denied) ? VersionFileIn(scope, sessionId, sceneId, versionId, download) : denied;
 
     // «С компьютера»: в личном чате проекта нет, кадр ложится в рабочую папку владельца; FrameRef — готов для
     // настроек сцены. В проектном чате ручки нет: фронт кладёт файл через files/upload в video/<фильм>/кадры/

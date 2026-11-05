@@ -50,6 +50,8 @@ export { LiveDot } from './LiveDot';
 export { IntroDot } from './IntroDot';
 export { Badge, TONE_DOT } from './Badge';
 export type { BadgeTone, BadgeSize } from './Badge';
+export { UserAvatar, userAvatarColor } from './UserAvatar';
+export type { UserAvatarSize } from './UserAvatar';
 export { Notice } from './Notice';
 export type { NoticeTone } from './Notice';
 export { SidebarSection } from './SidebarSection';

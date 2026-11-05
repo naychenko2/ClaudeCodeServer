@@ -15,7 +15,9 @@
 //  (3) снять блокировку «Принять» на время запроса (disabled={busy}→{false}) →
 //      «пока решение в пути, кнопки заблокированы» краснеет;
 //  (4) убрать !o.humanDecision из pendingContested → «0 на решение» краснеет;
-//  (5) убрать проверку loadSeq в загрузке списка → «гонка поколений» краснеет.
+//  (5) убрать проверку loadSeq в загрузке списка → «гонка поколений» краснеет;
+//  (6) игнорировать sectionScope (scope = null при любом пропe) → «область раздела» и
+//      «смена пропa без перезапроса» краснеют (W9a).
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -42,6 +44,9 @@ vi.mock('../../../../lib/offline', async (orig) => ({
 }));
 
 import { request } from '../../../../lib/offline';
+// Стор дерева — он же, что читает компонент через кит: тесту нужен снимок tree.sections
+// для имени раздела (тот же шов, что в WikiNightlyBlock.test)
+import { __test as wikiStore, loadWikiTree } from '../../../../lib/wiki';
 
 type MockFn = ReturnType<typeof vi.fn>;
 const req = request as unknown as MockFn;
@@ -83,6 +88,7 @@ const decidedPkg = (status: string, human: Record<string, unknown>) => ({
 });
 
 const roots: Root[] = [];
+let lastRoot: Root | null = null;
 
 function seedList(data: { packages: unknown[]; invalidCount: number }) {
   req.mockImplementation((url: string) => {
@@ -91,11 +97,18 @@ function seedList(data: { packages: unknown[]; invalidCount: number }) {
   });
 }
 
-function render(): Cont {
+// scope === undefined — без пропa (путь старой раскладки WikiTab); иначе — проп панели
+function render(scope?: string | null | 'all'): Cont {
   installFakeDom();
-  const { root, container } = mount(createElement(WikiInbox));
+  const { root, container } = mount(createElement(WikiInbox, { sectionScope: scope }));
   roots.push(root);
+  lastRoot = root;
   return container;
+}
+
+// Смена пропa на живом экране (путь панели W3): тот же компонент, тот же список в состоянии
+function rerender(scope?: string | null | 'all') {
+  act(() => lastRoot!.render(createElement(WikiInbox, { sectionScope: scope })));
 }
 
 async function settle(times = 10) {
@@ -151,6 +164,11 @@ function mockDecide(result: () => Promise<unknown>) {
 
 const postCalls = () => req.mock.calls.filter(([, init]) => (init as { method?: string } | undefined)?.method === 'POST');
 
+// GET списка пакетов (без decide/accept-all): «смена пропa не перезапрашивает» мерится им
+const listCalls = () => req.mock.calls.filter(
+  ([url, init]) => String(url).startsWith('/wiki/packages') && !(init as { method?: string } | undefined)?.method,
+);
+
 beforeEach(() => {
   req.mockReset();
   req.mockImplementation(() => Promise.resolve(null));
@@ -159,7 +177,10 @@ beforeEach(() => {
 afterEach(() => {
   for (const r of roots) act(() => r.unmount());
   roots.length = 0;
+  lastRoot = null;
   uninstallFakeDom();
+  // снимок дерева, засеянный тестом области, не должен течь в следующие тесты файла
+  wikiStore.reset();
 });
 
 describe('«Входящие» (S7a)', () => {
@@ -428,5 +449,80 @@ describe('«Входящие» (S7a)', () => {
     await settle();
     expect(has(c, 'СВЕЖИЙ-C')).toBe(true);
     expect(has(c, 'ЗАПАЗДАЛЫЙ-B')).toBe(false);
+  });
+});
+
+// ─── Область раздела (W9a) ───
+// Проп панели с чипом раздела: строка раздела — только её пакеты; без пропa / 'all' / null —
+// все (прежнее поведение старой раскладки). Фильтр поверх загруженного списка: смена пропa
+// не делает второго GET. Пустая область — «Разобрано» с именем раздела по дереву.
+describe('область раздела (W9a)', () => {
+  const PKG_A = { ...PKG, id: '11111111-2222-3333-4444-555555555A01', section: 'projects/alpha', sources: [{ origin: 'session', ref: 'ПАКЕТ-А' }] };
+  const PKG_B = { ...PKG, id: '11111111-2222-3333-4444-555555555B01', section: 'projects/beta', sources: [{ origin: 'session', ref: 'ПАКЕТ-Б' }] };
+
+  it('строка раздела — только её пакеты; без пропa, "all" и null — все', async () => {
+    seedList({ packages: [PKG_A, PKG_B], invalidCount: 0 });
+    const c = render('projects/alpha');
+    await settle();
+    expect(has(c, 'ПАКЕТ-А')).toBe(true);
+    expect(has(c, 'ПАКЕТ-Б')).toBe(false);
+    // без пропa — путь старой раскладки: прежний вид, все пакеты
+    rerender();
+    await settle();
+    expect(has(c, 'ПАКЕТ-Б')).toBe(true);
+    rerender('all');
+    await settle();
+    expect(has(c, 'ПАКЕТ-Б')).toBe(true);
+    rerender(null);
+    await settle();
+    expect(has(c, 'ПАКЕТ-А')).toBe(true);
+    expect(has(c, 'ПАКЕТ-Б')).toBe(true);
+  });
+
+  it('смена sectionScope не перезапрашивает сервер: фильтр поверх списка', async () => {
+    seedList({ packages: [PKG_A, PKG_B], invalidCount: 0 });
+    const c = render();
+    await settle();
+    expect(listCalls()).toHaveLength(1);
+    expect(has(c, 'ПАКЕТ-А')).toBe(true);
+    expect(has(c, 'ПАКЕТ-Б')).toBe(true);
+    rerender('projects/alpha');
+    await settle();
+    expect(has(c, 'ПАКЕТ-Б')).toBe(false);
+    rerender('projects/beta');
+    await settle();
+    expect(has(c, 'ПАКЕТ-А')).toBe(false);
+    expect(has(c, 'ПАКЕТ-Б')).toBe(true);
+    // ни одного лишнего GET за всю смену области
+    expect(listCalls()).toHaveLength(1);
+  });
+
+  it('пустая область — «Разобрано» с именем раздела по дереву', async () => {
+    req.mockImplementation((url: string) => {
+      if (url.startsWith('/wiki/packages')) return Promise.resolve({ packages: [PKG_A], invalidCount: 0 });
+      if (url.startsWith('/wiki/tree')) {
+        return Promise.resolve({
+          initialized: true,
+          sections: [{ key: 'projects/beta', name: 'Раздел Б', orphan: false, local: false, sphereReserved: false, pageCount: 0 }],
+        });
+      }
+      return Promise.resolve(null);
+    });
+    await act(async () => { await loadWikiTree(); });
+    const c = render('projects/beta');
+    await settle();
+    expect(has(c, 'Разобрано')).toBe(true);
+    expect(has(c, 'Всё, что ИИ предлагал по разделу «Проекты / Раздел Б», применено или отклонено.')).toBe(true);
+    // это не общее пустое состояние: пакет другого раздела скрыт, «Спорного нет» нет
+    expect(has(c, 'Спорного нет')).toBe(false);
+    expect(has(c, 'ПАКЕТ-А')).toBe(false);
+  });
+
+  it('раздела нет в дереве — ключ как есть (тот же фолбэк, что у строки списка)', async () => {
+    seedList({ packages: [PKG_A], invalidCount: 0 });
+    const c = render('projects/unknown');
+    await settle();
+    expect(has(c, 'Разобрано')).toBe(true);
+    expect(has(c, 'Всё, что ИИ предлагал по разделу «projects/unknown», применено или отклонено.')).toBe(true);
   });
 });

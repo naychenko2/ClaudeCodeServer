@@ -1,3 +1,5 @@
+using ClaudeHomeServer.Services.Access;
+
 namespace ClaudeHomeServer.Services.Media;
 
 // Граница проекта для путей редактора картинок (ADR-017, раздел 8). SafePath.Join
@@ -19,6 +21,15 @@ public static class ProjectLinkGuard
         try { full = SafePath.Join(root, relativePath); }
         catch (UnauthorizedAccessException) { return null; }
         return HasLink(root, full) ? null : full;
+    }
+
+    // То же плюс общий предикат приватности (PrivateAttachments.IsForeignResolved): чужое private участника
+    // не читается и владельцем проекта. Читающие точки зовут именно его; ResolveInside без актора остаётся
+    // для путей, которые на чтение чужих байт не идут (запись, листинг папок).
+    public static string? ResolveInsideAs(string root, string relativePath, string? userId)
+    {
+        var full = ResolveInside(root, relativePath);
+        return full is not null && !PrivateAttachments.IsForeignResolved(root, relativePath, userId) ? full : null;
     }
 
     // Бросает то же исключение, что SafePath.Join, — вызывающие уже переводят его в «вне проекта»

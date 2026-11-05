@@ -548,6 +548,32 @@ public class ChatHandoffServiceTests : IDisposable
         gates[TestUserId].Should().BeSameAs(first, "второй перенос входит в тот же семафор");
     }
 
+    // ─── S2d-7b-1: чужой приватный чат ────────────────────────────────────────
+
+    [Fact]
+    public async Task Handoff_ЧужойПриватныйЧат_ВладелецПроекта_404_ПреемникаНет_РаннерНеЗван()
+    {
+        // Гейт GetOwnedVisible в HandoffAsync: владелец проекта не переносит приватный чат участника.
+        // Мутация «GetOwnedVisible → GetOwned» пускает дальше — холодный путь зовёт платный раннер
+        var runner = new CountingRunner("### Цель\nне должно быть вызвано");
+        var (mgr, projects, _) = BuildManager();
+        var chat = NewProjectChat(mgr, projects);
+        const string участник = "u-participant";
+        projects.GetById(chat.ProjectId!)!.Members =
+            [new ProjectMember { UserId = участник, Role = ClaudeHomeServer.Services.Access.ProjectRole.Editor, AddedBy = TestUserId }];
+        chat.CreatedByUserId = участник;
+        chat.PrivateToUserId = участник;
+        var sut = new ChatHandoffService(mgr, runner, NullLogger<ChatHandoffService>.Instance);
+        var before = mgr.GetAll().Count();
+
+        var act = () => sut.HandoffAsync(TestUserId, chat.Id, CancellationToken.None);
+
+        await act.Should().ThrowAsync<KeyNotFoundException>();
+        runner.Calls.Should().Be(0, "платный раннер записки не вызывается");
+        mgr.GetAll().Count().Should().Be(before, "преемника нет");
+        chat.ContinuedInSessionId.Should().BeNull();
+    }
+
     // ─── Сборка SUT ───────────────────────────────────────────────────────────
 
     private (ChatHandoffService Sut, SessionManager Manager, Session Chat) BuildSut(

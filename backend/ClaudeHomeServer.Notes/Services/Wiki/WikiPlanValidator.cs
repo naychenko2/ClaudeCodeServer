@@ -232,6 +232,16 @@ public static class WikiPlanValidator
             // в том состоянии, которое будет записано (после предыдущих принятых операций).
             // Проверка по исходному снимку расходилась с рендером: план из двух правок одного
             // факта ронял валидатор исключением (ревью S6b-2, M1).
+            // Карточка источника — не страница знаний: «Сводки» и места утверждению в ней
+            // нет, но отказ «нет секции» модель обходит молча. Причина прямая: в карточку
+            // операцию не принять, новое знание — через create (WC-2).
+            if (!isCreate && page.Model!.Frontmatter.Type == WikiFrontmatter.TypeSource)
+            {
+                rejected.Add(new(i,
+                    $"страница «{page.Path}» — карточка источника, а не страница знаний: для нового знания — create"));
+                rejectedAt.Add(i);
+                continue;
+            }
             string? targetSection = op.Op switch
             {
                 WikiPackage.OpConflict => "Противоречия",
@@ -302,6 +312,8 @@ public static class WikiPlanValidator
                     TargetAuthor = !isReplacement
                         ? null
                         : humanTarget ? WikiPackage.AuthorHuman : WikiPackage.AuthorAi,
+                    TargetHasNoHistory = op.Op == WikiPackage.OpSupersede
+                        && page.Model is { } model && model.Sections.All(s => s.Name != "История"),
                 });
 
             candidates.Add((i, new()

@@ -96,18 +96,16 @@ public class CharacterPickModelLimitTests : IDisposable
             object? jsonFormat = null, CancellationToken ct = default) => throw new NotSupportedException();
     }
 
-    private async Task<ImageEditRequest> Run(bool flagOn, string prompt)
+    private async Task<ImageEditRequest> Run(string prompt)
     {
-        var flags = new Mock<IFeatureFlagGate>();
-        flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.CharacterSmartPhotos)).Returns(flagOn);
         var assembler = new ImageEditLaunchAssembler([_editor], _service, new SkiaImageRaster(),
-            flags: flags.Object, sceneParser: new CharacterSceneParser(new NoRunner()));
+            sceneParser: new CharacterSceneParser(new NoRunner()));
 
         var quote = await _service.QuoteAsync(Owner, Project,
             new ImageEditQuoteRequest("fake", "fake-model", EditMode.Auto, ImageEditOp.Generate, 1, false,
                 References: 3, HasCharacter: true), default);
         quote.Value.Should().NotBeNull(quote.Error);
-        var assembled = await assembler.AssembleAsync(Owner, _scope,
+        var assembled = await assembler.AssembleAsync(Owner, Owner, _scope,
             new ImageEditLaunchRequest(quote.Value!.QuoteId, prompt, null, null, null, null, null, [], [], "anya",
                 CharacterPhotos: null), default);
         assembled.Value.Should().NotBeNull(assembled.Error);
@@ -122,7 +120,7 @@ public class CharacterPickModelLimitTests : IDisposable
     [Trait("Category", "Slow")]
     public async Task Запись_обрезается_до_числа_фото_которые_модель_взяла()
     {
-        var request = await Run(true, "портрет в профиль у окна");
+        var request = await Run("портрет в профиль у окна");
 
         // Драйвер получил одно фото персонажа (лимит модели)
         request.References.Count(r => r.Role == ReferenceRole.Character).Should().Be(1);

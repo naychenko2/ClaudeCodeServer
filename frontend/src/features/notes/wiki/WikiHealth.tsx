@@ -26,10 +26,11 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { AlertTriangle, ArrowUpCircle, CheckCircle2, HeartPulse, RefreshCw } from 'lucide-react';
+import { AlertTriangle, ArrowUpCircle, CheckCircle2, HeartPulse, RotateCw } from 'lucide-react';
 import {
   C, FONT, FS, R, SP, useIsMobile,
   FLAGS, useFeature, WikiError, adoptWikiPageMine, getWikiHealth, runWikiLint, useWikiTree,
+  PanelHeaderSlot, useHasPanelHeader,
 } from 'aihome_shell/kit';
 import { Badge, type BadgeTone } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
@@ -38,6 +39,7 @@ import { EmptyState } from '../../../components/ui/EmptyState';
 import { Notice } from '../../../components/ui/Notice';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { sectionPrefix, wikiErrorText } from './wikiLabels';
+import { refreshWikiRailCounts } from './useWikiRailCounts';
 
 // ─── Разбор _health.md (зеркало бэкового RenderHealth/FindingLine) ───
 
@@ -322,6 +324,7 @@ function LoadingSkeleton() {
 export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
   const isMobile = useIsMobile();
   const tree = useWikiTree();
+  const hasHeader = useHasPanelHeader(); // место кнопки: шапка панели или тело (W11)
   const [report, setReport] = useState<HealthReport | null>(null);
   const [loadError, setLoadError] = useState<unknown>(null);
   const [noReport, setNoReport] = useState(false);
@@ -366,6 +369,8 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
       try {
         await runWikiLint();
         ranOk = true;
+        // Счётчик «Здоровья» на рельсе (W12): прогон переписал отчёты разделов — числа перечитываются
+        refreshWikiRailCounts();
         if (seq.current !== mine) return;
         const d = await getWikiHealth(selectedKey);
         if (seq.current === mine) { setNoReport(false); setReport(parseHealth(d.content)); }
@@ -387,8 +392,7 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
   // второй вызов пропускается при выключенном первом, и переключение флага при открытом
   // «Здоровье» меняло бы число хуков между рендерами (rules-of-hooks).
   const wikiFlag = useFeature(FLAGS.llmWiki);
-  const unifiedFlag = useFeature(FLAGS.notesWikiUnified);
-  const canAdoptMine = wikiFlag && unifiedFlag;
+  const canAdoptMine = wikiFlag;
   const [mineAsk, setMineAsk] = useState<string | null>(null); // путь страницы под подтверждением
   const [mineUi, setMineUi] = useState<{ id: string; busy: boolean; notice: MineNotice | null } | null>(null);
   // Текущий ключ действия «раздел\nпуть»: ref пишется в эффектах и обработчиках, не во время
@@ -446,22 +450,39 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
   // Имя раздела — из дерева (его дал бэк как данные); ключ из props — только когда дерева нет
   const prefix = section ? sectionPrefix(section) : selectedKey ?? '';
 
-  const runButton = (
+  // «Проверить сейчас» — единственная кнопка шапки во всей вики (записка Майи
+  // notes-wiki-panels-v1, п. 5 и «Что нужно от кода» п. 3): под шапкой панели она стоит
+  // в закреплённом слоте (PanelHeaderSlot pinned — виден всегда, в покое его приглушает
+  // сам PanelShell), без шапки (шторка 360, старая раскладка без флага) — первой строкой
+  // тела во всю ширину, 40 px на мобиле, с подписью под ней. Логика запуска (run, замок
+  // busy, поколение запросов) от места не меняется. Иконка и её размер — по макету:
+  // 13 в шапке (тот же размер, что у кнопок шапок других панелей — ChatListToolbar.tsx:315),
+  // ICON_SIZE.xs в теле (кадр mob-health).
+  const runBtn = (inBody: boolean) => (
     <Button
-      variant="secondary" size="sm" dataTestId="wiki-health-run"
+      variant="secondary" size={inBody ? (isMobile ? 'md' : 'sm') : 'sm'}
+      fullWidth={inBody} dataTestId="wiki-health-run"
       ariaLabel="Выполнить проверку вики сейчас"
       disabled={busy || !selectedKey}
-      leftIcon={<RefreshCw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+      leftIcon={<RotateCw size={inBody ? ICON_SIZE.xs : 13} strokeWidth={ICON_STROKE} />}
       onClick={run}
     >
       Проверить сейчас
     </Button>
   );
+  const runPlacement = hasHeader
+    ? <PanelHeaderSlot pinned>{runBtn(false)}</PanelHeaderSlot>
+    : (
+      <div data-testid="wiki-health-run-line" style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, padding: `0 ${SP.md}px` }}>
+        {runBtn(true)}
+        <span style={{ fontSize: FS.xs, color: C.textMuted }}>Проверяет всю вики, займёт около минуты</span>
+      </div>
+    );
 
   if (!selectedKey) {
     return (
       <div>
-        <div style={{ padding: `${SP.sm}px ${SP.md}px` }}>{runButton}</div>
+        {runPlacement}
         <EmptyState
           icon={<HeartPulse size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
           title="Раздел не выбран"
@@ -504,14 +525,14 @@ export function WikiHealth({ selectedKey }: { selectedKey: string | null }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, paddingBottom: SP.md }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', padding: `${SP.sm}px ${SP.md}px 0` }}>
-        <span style={{ flex: '1 1 200px', minWidth: 0, display: 'flex', alignItems: 'center', gap: SP.xs, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>
+      {runPlacement}
+      <div style={{ padding: `${SP.sm}px ${SP.md}px 0` }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>
           <HeartPulse size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           <span style={{ wordBreak: 'break-all' }}>
             {checked ? `проверка: ${checked}` : 'проверки ещё не было'} · {prefix}
           </span>
         </span>
-        {runButton}
       </div>
 
       {actionError ? (

@@ -384,6 +384,275 @@ public class TaskManagerTests : IDisposable
         updated.Assignee.Should().Be(TaskItemAssignee.Claude); // явно не сбрасываем — задача уже была на Claude
     }
 
+    // ─── Чтение «Me» и автор задачи (S2b-1, общие проекты) ────────────────────
+
+    // Старая задача (без AssigneeUserId) остаётся на владельце: «Me» = владелец задачи.
+    // Мутация (c2): убрать фолбэк «?? task.OwnerId» в ResolveMeUserId — тест красный
+    // (null вместо «owner-1»); вернуть — зелёный.
+    [Fact]
+    public void Me_СтараяЗадачаБезAssigneeUserId_ИсполнительВладелец()
+    {
+        var task = _sut.Create("proj-1", "owner-1", new CreateTaskRequest("старая задача"));
+
+        TaskManager.ResolveMeUserId(task).Should().Be("owner-1");
+    }
+
+    [Fact]
+    public void Me_СAssigneeUserIdУчастника_ИсполнительУчастник()
+    {
+        var task = _sut.Create("proj-1", "owner-1", new CreateTaskRequest("задача на участника"));
+        // Путь записи поля (MCP assignee=username) — S2b-2; здесь поле выставлено напрямую.
+        task.AssigneeUserId = "member-1";
+
+        TaskManager.ResolveMeUserId(task).Should().Be("member-1");
+    }
+
+    // Assignee=null (старая запись без значения) читается как Me — прежний дефолт Create;
+    // Claude-задача и задача с персоной (инвариант ⇒ Claude) — человека-исполнителя нет.
+    [Fact]
+    public void Me_ЗначениеНеЗадано_РезолвитсяКакMe_АClaudeБезЧеловека()
+    {
+        var legacy = _sut.Create(null, "u", new CreateTaskRequest("без значения"));
+        legacy.Assignee = null;
+        var claude = _sut.Create(null, "u", new CreateTaskRequest("t", Assignee: TaskItemAssignee.Claude));
+        var persona = _sut.Create(null, "u", new CreateTaskRequest("t", PersonaId: "prs-1"));
+
+        TaskManager.ResolveMeUserId(legacy).Should().Be("u");
+        TaskManager.ResolveMeUserId(claude).Should().BeNull();
+        TaskManager.ResolveMeUserId(persona).Should().BeNull();
+    }
+
+    // Автор задачи (S2b-1, доработка): явный признак CreatedByHuman — его ставят только
+    // человеческие пути (UI/API в TasksController); дефолт — null. Маркерный агентский путь
+    // (персона или чат — маркеры TasksToolset) автора не получает и без признака.
+    [Fact]
+    public void CreatedByUserId_ЯвныйПризнакЧеловека_ИначеNull()
+    {
+        var human = _sut.Create("proj-1", "user-1", new CreateTaskRequest("из UI", CreatedByHuman: true));
+        var byPersona = _sut.Create("proj-1", "user-1", new CreateTaskRequest("от персоны",
+            CreatedByPersonaId: "prs-delegator"));
+        var bySession = _sut.Create("proj-1", "user-1", new CreateTaskRequest("из чата",
+            SourceSessionId: "sess-1"));
+
+        human.CreatedByUserId.Should().Be("user-1");
+        byPersona.CreatedByUserId.Should().BeNull();
+        bySession.CreatedByUserId.Should().BeNull();
+    }
+
+    // MAJOR ревью S2b-1: серверный путь БЕЗ маркеров до доработки получал автора-человека
+    // по выводу «нет маркеров — значит человек». Форма — exact вызов
+    // ArchitectureAgentLauncherAdapter.LaunchAsync (personaId+Claude+strong, маркеров нет);
+    // merge-задача TasksController — та же форма без признака. Теперь — null.
+    [Fact]
+    public void CreatedByUserId_СерверныйПутьБезМаркеров_Null()
+    {
+        var archBuild = _sut.Create("proj-1", "user-1", new CreateTaskRequest("Сборка архитектуры",
+            Assignee: TaskItemAssignee.Claude, PersonaId: "prs-architect", ModelTier: "strong"));
+        var serverPlain = _sut.Create("proj-1", "user-1", new CreateTaskRequest("Серверная карточка"));
+
+        archBuild.CreatedByUserId.Should().BeNull();
+        serverPlain.CreatedByUserId.Should().BeNull();
+    }
+
+    // Fail-closed: новый («забытый») вызывающий, не проставивший признак, — null по
+    // умолчанию, а не автор-владелец: дефолт не должен молча становиться человеком.
+    [Fact]
+    public void CreatedByUserId_ЗабытыйПутьБезПризнака_Null()
+    {
+        var forgotten = _sut.Create(null, "user-1", new CreateTaskRequest("новая обходная ветка"));
+
+        forgotten.CreatedByUserId.Should().BeNull();
+    }
+
+    // Регулярная серия: человек-автор и человек-исполнитель — устойчивые атрибуты
+    // (как CreatedByPersonaId/PersonaId): без переноса следующий экземпляр молча
+    // терял бы автора, а «Me» падал бы с участника на владельца.
+    [Fact]
+    public void SpawnNext_ПереноситАвтораИЧеловекаИсполнителя_КакАтрибутыСерии()
+    {
+        var task = _sut.Create("proj-1", "owner-1", new CreateTaskRequest("регулярная",
+            CreatedByHuman: true, // человек-автор серии (S2b-1, доработка): признак явный
+            DueDate: "2026-11-01",
+            Recurrence: new TaskRecurrence { Type = TaskRecurrenceType.Daily }));
+        task.AssigneeUserId = "member-1";
+
+        var next = _sut.SpawnNextOccurrence(task);
+
+        next.Should().NotBeNull();
+        next!.CreatedByUserId.Should().Be("owner-1");
+        next.AssigneeUserId.Should().Be("member-1");
+        TaskManager.ResolveMeUserId(next).Should().Be("member-1");
+    }
+
+    // ─── Назначение человека-исполнителя (S2b-2a) ────────────────────────────
+    // Членство и роль участника проверяет дверь (TaskManager проекта не видит) — здесь
+    // применение поля, отказ по персоне и ключ записи.
+
+    [Fact]
+    public void Update_НазначениеУчастника_СтавитAssigneeUserIdИMe()
+    {
+        var task = _sut.Create("proj-1", "owner-1", new CreateTaskRequest("задача"));
+
+        var updated = _sut.Update(task.Id, new UpdateTaskRequest(AssigneeUserId: "member-1"),
+            tenantOwnerId: "owner-1")!;
+
+        updated.AssigneeUserId.Should().Be("member-1");
+        updated.Assignee.Should().Be(TaskItemAssignee.Me);
+        TaskManager.ResolveMeUserId(updated).Should().Be("member-1");
+    }
+
+    // Назначение на владельца = сброс поля: «Me» без AssigneeUserId читается как владелец
+    // (ResolveMeUserId), отдельного значения «на себя» в записи нет — старый формат задачи
+    // остаётся старым. Сравнивается АРЕНДАТОР (tenantOwnerId), а не id записи.
+    [Fact]
+    public void Update_НазначениеНаВладельца_СбрасываетПолеИСтавитMe()
+    {
+        var task = _sut.Create("proj-1", "owner-1", new CreateTaskRequest("задача"));
+        _sut.Update(task.Id, new UpdateTaskRequest(AssigneeUserId: "member-1"), tenantOwnerId: "owner-1");
+
+        var updated = _sut.Update(task.Id, new UpdateTaskRequest(AssigneeUserId: "owner-1"),
+            tenantOwnerId: "owner-1")!;
+
+        updated.AssigneeUserId.Should().BeNull();
+        updated.Assignee.Should().Be(TaskItemAssignee.Me);
+        TaskManager.ResolveMeUserId(updated).Should().Be("owner-1");
+    }
+
+    // Пустая строка — снять человека-исполнителя (обратно к владельцу), как у прочих
+    // строковых полей UpdateTaskRequest.
+    [Fact]
+    public void Update_ПустаяСтрока_СнимаетЧеловекаИсполнителя()
+    {
+        var task = _sut.Create("proj-1", "owner-1", new CreateTaskRequest("задача"));
+        _sut.Update(task.Id, new UpdateTaskRequest(AssigneeUserId: "member-1"), tenantOwnerId: "owner-1");
+
+        var updated = _sut.Update(task.Id, new UpdateTaskRequest(AssigneeUserId: ""),
+            tenantOwnerId: "owner-1")!;
+
+        updated.AssigneeUserId.Should().BeNull();
+        TaskManager.ResolveMeUserId(updated).Should().Be("owner-1");
+    }
+
+    // Смысл AssigneeUserId — «этот человек исполняет»; при Claude поле не читается.
+    // Прислать в одном запросе «claude» и id участника — противоречие: исполнитель человек.
+    [Fact]
+    public void Update_НазначениеЧеловека_СЯвнымAssigneeClaude_СтавитMe()
+    {
+        var task = _sut.Create("proj-1", "owner-1", new CreateTaskRequest("задача"));
+
+        var updated = _sut.Update(task.Id, new UpdateTaskRequest(
+            Assignee: TaskItemAssignee.Claude, AssigneeUserId: "member-1"), tenantOwnerId: "owner-1")!;
+
+        updated.Assignee.Should().Be(TaskItemAssignee.Me);
+        updated.AssigneeUserId.Should().Be("member-1");
+    }
+
+    // Задача с персоной-исполнителем человеку не отдаётся: назначение человека обязано
+    // ставить Assignee=Me, а инвариант «персона ⇒ Claude» при этом ломался бы молча.
+    // Мутация (c3): убрать проверку в TaskManager.Update — этот тест красный, откат — зелёный.
+    [Fact]
+    public void Update_ЗадачаСПерсоной_НазначитьЧеловека_ОтказСКодом_ИЗапискаНеТронута()
+    {
+        var task = _sut.Create("proj-1", "owner-1", new CreateTaskRequest("персонная", PersonaId: "prs-1"));
+
+        var ex = Assert.Throws<TaskManager.TaskAssigneeDeniedException>(
+            () => _sut.Update(task.Id, new UpdateTaskRequest(AssigneeUserId: "member-1"), tenantOwnerId: "owner-1"));
+
+        ex.Code.Should().Be(TaskManager.PersonTaskNotAssignableCode);
+        var stored = _sut.GetById(task.Id)!;
+        stored.PersonaId.Should().Be("prs-1");
+        stored.Assignee.Should().Be(TaskItemAssignee.Claude);
+        stored.AssigneeUserId.Should().BeNull("отказ не меняет запись");
+    }
+
+    // Тот же отказ, когда персона ставится ЭТИМ же запросом: «персона + человек» в одном
+    // ходе — противоречие, а не тихая победа одного поля над другим (проверка по
+    // эффективной персоне, как и прочие гейты Update).
+    [Fact]
+    public void Update_ПерсонаИЧеловекВДномЗапросе_ОтказСКодом()
+    {
+        var task = _sut.Create("proj-1", "owner-1", new CreateTaskRequest("обычная"));
+
+        var ex = Assert.Throws<TaskManager.TaskAssigneeDeniedException>(
+            () => _sut.Update(task.Id,
+                new UpdateTaskRequest(PersonaId: "prs-1", AssigneeUserId: "member-1"), tenantOwnerId: "owner-1"));
+
+        ex.Code.Should().Be(TaskManager.PersonTaskNotAssignableCode);
+        var stored = _sut.GetById(task.Id)!;
+        stored.PersonaId.Should().BeNull();
+        stored.AssigneeUserId.Should().BeNull();
+    }
+
+    // Снятие исполнителя («») — не назначение: персонную задачу не трогает и не отказывает.
+    [Fact]
+    public void Update_ЗадачаСПерсоной_СнятьИсполнителя_НеОтказ()
+    {
+        var task = _sut.Create("proj-1", "owner-1", new CreateTaskRequest("персонная", PersonaId: "prs-1"));
+
+        var updated = _sut.Update(task.Id, new UpdateTaskRequest(AssigneeUserId: ""), tenantOwnerId: "owner-1")!;
+
+        updated.PersonaId.Should().Be("prs-1");
+        updated.Assignee.Should().Be(TaskItemAssignee.Claude);
+    }
+
+    // Ключ записи проектной задачи — арендатор проекта (хвост ревью S2b-1, п.2): фолбэк
+    // «Me» (ResolveMeUserId) не должен уезжать на id, под которым задачу записали. Симуляция
+    // S2c: задача общего проекта под id участника (дверь её не откроет, пока Write закрыт).
+    // Мутация: убрать нормализацию в TaskManager.Update — тест красный («member-1»).
+    [Fact]
+    public void Update_КлючПроектнойЗадачи_НормализуетсяАрендатором_ФолбэкMeНеУезжает()
+    {
+        var task = _sut.Create("proj-1", "member-1", new CreateTaskRequest("задача под id участника"));
+
+        var updated = _sut.Update(task.Id, new UpdateTaskRequest(Title: "правка"), tenantOwnerId: "owner-1")!;
+
+        updated.OwnerId.Should().Be("owner-1");
+        TaskManager.ResolveMeUserId(updated).Should().Be("owner-1", "фолбэк — арендатор проекта, а не id записи");
+    }
+
+    // Вызывающий, который проекта не знает (внутренний путь — TaskBridge, планировщик),
+    // арендатора не передаёт: ключ записи он не меняет (ничего не знает — не и выдумывает).
+    [Fact]
+    public void Update_БезАрендатора_КлючЗаписиНеМеняется()
+    {
+        var task = _sut.Create("proj-1", "member-1", new CreateTaskRequest("задача"));
+
+        _sut.Update(task.Id, new UpdateTaskRequest(Title: "правка"))!.OwnerId.Should().Be("member-1");
+    }
+
+    // Конкурентность (c2): человек-исполнитель пишется только через TaskManager, второго
+    // писателя нет. Два одновременных назначения одной задачи дают ровно одно из двух
+    // значений целиком — запись не рвётся пополам и не теряет остальное (Title).
+    [Fact]
+    public async Task Update_ОдновременныеНазначения_ОдноИзДвухЗначенийБезПорчиЗаписи()
+    {
+        var task = _sut.Create("proj-1", "owner-1", new CreateTaskRequest("гонка"));
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var first = Task.Run(() =>
+        {
+            gate.Task.GetAwaiter().GetResult();
+            return _sut.Update(task.Id, new UpdateTaskRequest(AssigneeUserId: "member-a"), tenantOwnerId: "owner-1");
+        });
+        var second = Task.Run(() =>
+        {
+            gate.Task.GetAwaiter().GetResult();
+            return _sut.Update(task.Id, new UpdateTaskRequest(AssigneeUserId: "member-b"), tenantOwnerId: "owner-1");
+        });
+        gate.SetResult();
+
+        var a = await first;
+        var b = await second;
+
+        a.Should().NotBeNull();
+        b.Should().NotBeNull();
+        var stored = _sut.GetById(task.Id)!;
+        stored.AssigneeUserId.Should().BeOneOf("member-a", "member-b");
+        stored.Assignee.Should().Be(TaskItemAssignee.Me);
+        stored.Title.Should().Be("гонка", "назначение исполнителя не забирает остальные поля");
+        ReferenceEquals(a, stored).Should().BeTrue("оба вызова правят одну запись стора, не копию");
+    }
+
     // ─── Отметки планировщика и исполнителя ──────────────────────────────────
 
     [Fact]

@@ -243,42 +243,49 @@ public class SpendAnalyticsTests : IDisposable
         Assert.NotNull(res.Error);
     }
 
+    // S2a-6b: разрез «user» не-админу открыт — в его срезе (Me принудителен) он даёт
+    // владельцу разбивку по участникам его общих проектов; чужого человека срез не содержит.
     [Fact]
-    public void Access_НеАдмин_РазрезUser_Запрещён()
+    public void Access_НеАдмин_РазрезUser_Открыт_МеПринудителен()
     {
         var res = SpendAccess.Resolve(isAdmin: false, "u1", scope: null,
-            null, null, null, null, null, null, null, null, groupBy: "user");
-        Assert.NotNull(res.Error);
+            null, null, null, null, null, null, null, null);
+        Assert.Null(res.Error);
+        Assert.Equal("u1", res.Filter.Me);
     }
 
     [Fact]
-    public void Access_НеАдмин_ВладелецПринудительный()
+    public void Access_НеАдмин_СвоиЗаписиПринудительны()
     {
         var res = SpendAccess.Resolve(isAdmin: false, "u1", scope: null,
             null, project: "p1", null, null, null, null, null, null);
         Assert.Null(res.Error);
         Assert.False(res.AllUsers);
-        Assert.Equal("u1", res.Filter.Owner);
+        Assert.Equal("u1", res.Filter.Me);
+        Assert.Null(res.Filter.Owner);
         Assert.Equal("p1", res.Filter.Project);
     }
 
     [Fact]
-    public void Access_Админ_ScopeAll_БезВладельца_ИСужениеФильтром()
+    public void Access_Админ_ScopeAll_БезОграничения_ИСужениеПоОсиUser()
     {
         var all = SpendAccess.Resolve(isAdmin: true, "admin", scope: "all",
             null, null, null, null, null, null, null, null);
         Assert.Null(all.Error);
         Assert.True(all.AllUsers);
         Assert.Null(all.Filter.Owner);
+        Assert.Null(all.Filter.Me);
 
+        // Сужение по оси «user» — по ключу уровня (актор, а без актора — владелец), не по арендатору
         var narrowed = SpendAccess.Resolve(isAdmin: true, "admin", scope: "all",
             user: "u2", null, null, null, null, null, null, null);
-        Assert.Equal("u2", narrowed.Filter.Owner);
+        Assert.Equal("u2", narrowed.Filter.User);
+        Assert.Null(narrowed.Filter.Owner);
 
         // Админ без scope=all — тот же режим «моё», что у всех
         var mine = SpendAccess.Resolve(isAdmin: true, "admin", scope: null,
             null, null, null, null, null, null, null, null);
-        Assert.Equal("admin", mine.Filter.Owner);
+        Assert.Equal("admin", mine.Filter.Me);
         Assert.False(mine.AllUsers);
     }
 
@@ -290,14 +297,14 @@ public class SpendAnalyticsTests : IDisposable
         var d = new DateOnly(2026, 7, 20);
         List<SpendSlice> slices =
         [
-            new(d, "u1", "p1", "s1", null, null, "claude", "opus", SpendSources.ChatTurn,
+            new(d, "u1", "p1", "s1", null, null, null, "claude", "opus", SpendSources.ChatTurn,
                 100, 50, 0, 0, 0, 0, 0, 1, Detailed: true),
-            new(d, "u1", "p1", "s2", null, null, "claude", "opus", SpendSources.ChatTurn,
+            new(d, "u1", "p1", "s2", null, null, null, "claude", "opus", SpendSources.ChatTurn,
                 10, 5, 0, 0, 0, 0, 0, 1, Detailed: true),
             // Свёрнутый день той же модели и день другой модели
-            new(d.AddDays(-40), "u1", "p1", "s1", null, null, "claude", "opus", SpendSources.ChatTurn,
+            new(d.AddDays(-40), "u1", "p1", "s1", null, null, null, "claude", "opus", SpendSources.ChatTurn,
                 1000, 0, 0, 0, 0, 0, 0, 7, Detailed: false),
-            new(d, "u1", "p1", "s1", null, null, "deepseek", "deepseek-chat", SpendSources.ChatTurn,
+            new(d, "u1", "p1", "s1", null, null, null, "deepseek", "deepseek-chat", SpendSources.ChatTurn,
                 1, 1, 0, 0, 0, 0, 0, 1, Detailed: true),
         ];
 
@@ -324,11 +331,11 @@ public class SpendAnalyticsTests : IDisposable
         var d = new DateOnly(2026, 7, 20);
         List<SpendSlice> slices =
         [
-            new(d, "u1", "p1", "s1", null, null, "claude", "default", SpendSources.ChatTurn,
+            new(d, "u1", "p1", "s1", null, null, null, "claude", "default", SpendSources.ChatTurn,
                 100, 50, 0, 0, 0, 0, 0, 1, Detailed: true),
-            new(d, "u1", "p1", "s2", null, null, "claude", "default", SpendSources.ChatTurn,
+            new(d, "u1", "p1", "s2", null, null, null, "claude", "default", SpendSources.ChatTurn,
                 10, 5, 0, 0, 0, 0, 0, 1, Detailed: true),
-            new(d, "u1", "p1", "s3", null, null, "claude", "opus", SpendSources.ChatTurn,
+            new(d, "u1", "p1", "s3", null, null, null, "claude", "opus", SpendSources.ChatTurn,
                 5, 5, 0, 0, 0, 0, 0, 1, Detailed: true),
         ];
 
@@ -439,9 +446,9 @@ public class SpendAnalyticsTests : IDisposable
     public void Tier_УзлаPivot_СмешаннаяГруппа_БерётсяБольшинствоТокенов()
     {
         var day = new DateOnly(2026, 7, 20);
-        var cheapMajor = new SpendSlice(day, "u1", null, null, null, null, "minimax", "MiniMax-M3",
+        var cheapMajor = new SpendSlice(day, "u1", null, null, null, null, null, "minimax", "MiniMax-M3",
             SpendSources.ChatTurn, 950, 0, 0, 0, 0, 0, 0, 1, Detailed: true);
-        var expensiveMinor = new SpendSlice(day, "u1", null, null, null, null, "claude", "MiniMax-M3",
+        var expensiveMinor = new SpendSlice(day, "u1", null, null, null, null, null, "claude", "MiniMax-M3",
             SpendSources.ChatTurn, 50, 0, 0, 0, 0, 0, 0, 1, Detailed: true);
 
         var byModel = SpendAnalyticsService.GroupRaw([cheapMajor, expensiveMinor], "model");
@@ -454,9 +461,9 @@ public class SpendAnalyticsTests : IDisposable
     public void Tier_УзлаPivot_РавныеТокены_БерётсяБолееДорогой()
     {
         var day = new DateOnly(2026, 7, 20);
-        var cheap = new SpendSlice(day, "u1", null, null, null, null, "minimax", "m",
+        var cheap = new SpendSlice(day, "u1", null, null, null, null, null, "minimax", "m",
             SpendSources.ChatTurn, 100, 0, 0, 0, 0, 0, 0, 1, Detailed: true);
-        var expensive = new SpendSlice(day, "u1", null, null, null, null, "claude", "m",
+        var expensive = new SpendSlice(day, "u1", null, null, null, null, null, "claude", "m",
             SpendSources.ChatTurn, 100, 0, 0, 0, 0, 0, 0, 1, Detailed: true);
 
         Assert.Equal(SpendCostTiers.Expensive,
@@ -471,9 +478,9 @@ public class SpendAnalyticsTests : IDisposable
     public void Tier_УзлаPivot_ВесКлассаСУчётомКэша()
     {
         var day = new DateOnly(2026, 7, 20);
-        var cheap = new SpendSlice(day, "u1", null, null, null, null, "minimax", "m",
+        var cheap = new SpendSlice(day, "u1", null, null, null, null, null, "minimax", "m",
             SpendSources.ChatTurn, 1000, 0, 0, 0, 0, 0, 0, 1, Detailed: true);
-        var expensive = new SpendSlice(day, "u1", null, null, null, null, "claude", "m",
+        var expensive = new SpendSlice(day, "u1", null, null, null, null, null, "claude", "m",
             SpendSources.ChatTurn, 10, 0, 5000, 0, 0, 0, 0, 1, Detailed: true);
 
         Assert.Equal(SpendCostTiers.Expensive,
@@ -496,7 +503,7 @@ public class SpendAnalyticsTests : IDisposable
     public void ByTierOf_ПустойTier_ФолбэкНаSliceTier_БезЛишнегоКлюча()
     {
         var day = new DateOnly(2026, 7, 20);
-        var slice = new SpendSlice(day, "u1", null, null, null, null, "claude", "opus",
+        var slice = new SpendSlice(day, "u1", null, null, null, null, null, "claude", "opus",
             SpendSources.ChatTurn, 10, 5, 100, 20, 0, 0, 0, 1, Detailed: true);
 
         var byTier = SpendAnalyticsService.ByTierOf([slice]);

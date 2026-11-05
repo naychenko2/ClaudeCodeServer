@@ -20,7 +20,7 @@ public sealed class FilmSceneSaver(
 {
     private const int MaxAutoAttempts = 99;
 
-    public async Task<FilmCallResult<SaveSceneResult>> SaveAsync(string ownerId, VideoEditScope scope,
+    public async Task<FilmCallResult<SaveSceneResult>> SaveAsync(string ownerId, string? actorId, VideoEditScope scope,
         SaveSceneRequest? req, string initiator, CancellationToken ct)
     {
         var project = FilmService.ProjectOf(scope);
@@ -44,7 +44,7 @@ public sealed class FilmSceneSaver(
         string? explicitFilm = null;
         if (!string.IsNullOrWhiteSpace(req.FilmPath))
         {
-            var openFilm = FilmService.ResolveFilm(scope, req.FilmPath);
+            var openFilm = FilmService.ResolveFilm(scope, req.FilmPath, actorId);
             if (!openFilm.IsOk) return FilmCallResult<SaveSceneResult>.Fail(openFilm.ErrorCode!, openFilm.Error!);
             explicitFilm = openFilm.Value!.Relative;
         }
@@ -56,7 +56,7 @@ public sealed class FilmSceneSaver(
         if (!folder.StartsWith(FilmPaths.VideoRoot + "/", StringComparison.Ordinal) || !FilmPaths.IsAllowed(folder))
             return FilmCallResult<SaveSceneResult>.Fail(VideoEditorErrors.OutsideAllowedFolders,
                 "Сцены сохраняются только в video/<фильм>/");
-        var folderResolved = FilmService.ResolveInside(project.Value!, folder);
+        var folderResolved = FilmService.ResolveInside(project.Value!, folder, actorId);
         if (!folderResolved.IsOk) return FilmCallResult<SaveSceneResult>.Fail(folderResolved.ErrorCode!, folderResolved.Error!);
 
         string? source;
@@ -80,7 +80,7 @@ public sealed class FilmSceneSaver(
             if (frame is null || snapshotFrames.ContainsKey(frame)) continue;
             snapshotFrames[frame] = frame.Kind == FrameRef.KindFile
                 ? frame.Path
-                : await SaveFrameAsync(ownerId, project.Value!, folder, frame, framePaths, ct);
+                : await SaveFrameAsync(ownerId, actorId, project.Value!, folder, frame, framePaths, ct);
         }
 
 
@@ -90,7 +90,7 @@ public sealed class FilmSceneSaver(
             new VideoSavedFileDto(version.VersionId, clipPath, threads.Store.Now()),
             new VideoThreadEvent(threads.Store.Now(), VideoThreadEventKinds.Saved, text, scene.SceneId));
 
-        var added = await AddToFilmAsync(ownerId, scope, folder, explicitFilm, clipPath, scene, version, snapshotFrames, initiator, ct);
+        var added = await AddToFilmAsync(ownerId, actorId, scope, folder, explicitFilm, clipPath, scene, version, snapshotFrames, initiator, ct);
 
         if (written.Status == VideoThreadWriteStatus.Ok)
             await threads.BroadcastAsync(ownerId, scope.Key, req.SessionId, written.State);
@@ -165,11 +165,11 @@ public sealed class FilmSceneSaver(
 
     // Кадр-нить из «Картинок» → video/<фильм>/кадры/кадр-N.<ext> CreateNew. null — кадр не прочитался: сцена всё
     // равно сохраняется, в снимке фильма кадра не будет
-    private async Task<string?> SaveFrameAsync(string ownerId, Project project, string folder, FrameRef frame,
+    private async Task<string?> SaveFrameAsync(string ownerId, string? actorId, Project project, string folder, FrameRef frame,
         List<string> framePaths, CancellationToken ct)
     {
         if (images is null || frame.ThreadId is null || frame.VersionId is null) return null;
-        var image = await images.GetAsync(ownerId, frame.ThreadId, frame.VersionId, ct);
+        var image = await images.GetAsync(ownerId, actorId, frame.ThreadId, frame.VersionId, ct);
         if (image is null) return null;
         var extension = image.ContentType switch { "image/jpeg" => ".jpg", "image/webp" => ".webp", _ => ".png" };
         for (var n = 1; n <= MaxAutoAttempts; n++)
@@ -192,14 +192,14 @@ public sealed class FilmSceneSaver(
 
     // Новый файл сцены встаёт в фильм своей папки (файл <папка>/<имя папки>.film или открытый фильм из запроса; нет — заводится). Фильм
     // невалидный, чужой схемы или с этой сценой — не добавляем: сохранение клипа от этого не страдает
-    private async Task<bool> AddToFilmAsync(string ownerId, VideoEditScope scope, string folder, string? explicitFilm,
+    private async Task<bool> AddToFilmAsync(string ownerId, string? actorId, VideoEditScope scope, string folder, string? explicitFilm,
         string clipPath, VideoSceneDto scene, VideoClipVersionDto version, Dictionary<FrameRef, string?> frames, string initiator,
         CancellationToken ct)
     {
         try
         {
             var filmPath = explicitFilm ?? DefaultFilmPath(folder);
-            var resolved = FilmService.ResolveFilm(scope, filmPath);
+            var resolved = FilmService.ResolveFilm(scope, filmPath, actorId);
             if (!resolved.IsOk) return false;
             var film = resolved.Value!;
             var settings = scene.Settings;

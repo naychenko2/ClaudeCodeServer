@@ -8,7 +8,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.ImageEditor.Characters;
 
-// Фоновая разметка фото персонажа (ADR-027 §9): флаг, повторы, human, отказы, последовательность, сжатие
+// Фоновая разметка фото персонажа (ADR-027 §9): повторы, human, отказы, последовательность, сжатие
 public class CharacterPhotoLabelingTests : IDisposable
 {
     private const string Owner = "u1";
@@ -16,7 +16,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     private readonly FakeLabeler _labeler = new();
     private readonly FakeMedia _media = new();
     private readonly FakeRaster _raster = new();
-    private readonly FakeFlags _flags = new();
     private readonly CharacterLoraRuns _locks = new(NullLogger<CharacterLoraRuns>.Instance);
 
     public void Dispose()
@@ -26,7 +25,7 @@ public class CharacterPhotoLabelingTests : IDisposable
     }
 
     private CharacterPhotoLabeling Service(TimeProvider? time = null) =>
-        new(_locks, NullLogger<CharacterPhotoLabeling>.Instance, _labeler, _flags, _media, _raster, time);
+        new(_locks, NullLogger<CharacterPhotoLabeling>.Instance, _labeler, _media, _raster, time);
 
     private string Root(string name = "p")
     {
@@ -66,32 +65,8 @@ public class CharacterPhotoLabelingTests : IDisposable
     }
 
     [Fact]
-    public async Task Флаг_выключен_ни_одного_вызова()
-    {
-        var root = Root();
-        var m = MakeCharacter(root);
-        await Service().ProcessAsync(JobOf(root, m.Slug), default);
-        _labeler.Calls.Should().Be(0);
-        _media.Calls.Should().Be(0);
-        _raster.Applied.Should().BeEmpty();
-        Photo(root, m.Slug, 0).Angle.Should().BeNull();
-    }
-
-    [Fact]
-    public void Флаг_выключен_повод_ничего_не_ставит()
-    {
-        var svc = Service();
-        svc.Enqueue(Owner, Root(), "x");
-        // Включаем флаг и запускаем: очередь должна быть пуста, значит вызовов нет
-        _flags.On = true;
-        svc.Invoking(s => s.ProcessAsync(JobOf(Root(), "нет"), default).GetAwaiter().GetResult()).Should().NotThrow();
-        _labeler.Calls.Should().Be(0);
-    }
-
-    [Fact]
     public async Task Ракурс_face_pose_пишется_а_эмоция_идёт_через_vision()
     {
-        _flags.On = true;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
         _media.Poses = [new(3, 2, 0), new(60, 0, 0), null];
         _labeler.Answer = _ => ImageLabelResult.Ok(
@@ -113,7 +88,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Размеченное_и_unknown_повторно_не_уходят()
     {
-        _flags.On = true;
         _media.Poses = [null, null, null];
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
         _labeler.Answer = _ => ImageLabelResult.Fail(ImageLabelFailure.Refused);
@@ -132,7 +106,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Human_не_трогается_и_не_уходит_в_модель()
     {
-        _flags.On = true;
         var root = Root();
         var m = MakeCharacter(root);
         CharacterStore.Update(root, Owner, m.Slug, new CharacterPatch(null, null, [], [], null, null,
@@ -154,7 +127,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Отказ_модели_даёт_unknown_без_исключения()
     {
-        _flags.On = true;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.Vision, false, "m");
         _labeler.Answer = _ => ImageLabelResult.Fail(ImageLabelFailure.NoVision);
         var root = Root();
@@ -173,7 +145,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Failed_трижды_на_пачку_из_десяти_даёт_unknown_всем()
     {
-        _flags.On = true;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.Vision, false, "m");
         _labeler.Answer = _ => ImageLabelResult.Fail(ImageLabelFailure.Failed);
         var root = Root();
@@ -192,7 +163,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Счётчики_Failed_удалённого_фото_выбрасываются()
     {
-        _flags.On = true;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.Vision, false, "m");
         _labeler.Answer = _ => ImageLabelResult.Fail(ImageLabelFailure.Failed);
         var root = Root();
@@ -217,7 +187,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [InlineData(ImageLabelFailure.Timeout)]
     public async Task Временная_недоступность_ничего_не_пишет(ImageLabelFailure failure)
     {
-        _flags.On = true;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.Vision, false, "m");
         _labeler.Answer = _ => ImageLabelResult.Fail(failure);
         var root = Root();
@@ -232,7 +201,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Failed_третий_раз_подряд_даёт_unknown_и_больше_не_уходит()
     {
-        _flags.On = true;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.Vision, false, "m");
         _labeler.Answer = _ => ImageLabelResult.Fail(ImageLabelFailure.Failed);
         var root = Root();
@@ -266,7 +234,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [InlineData(ImageLabelFailure.Timeout)]
     public async Task Временная_недоступность_не_увеличивает_счётчик_Failed(ImageLabelFailure temporary)
     {
-        _flags.On = true;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.Vision, false, "m");
         var root = Root();
         var m = MakeCharacter(root);
@@ -289,7 +256,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Успешный_ответ_сбрасывает_счётчик_Failed()
     {
-        _flags.On = true;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.Vision, false, "m");
         var root = Root();
         var m = MakeCharacter(root);
@@ -317,7 +283,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Busy_face_pose_ничего_не_пишет()
     {
-        _flags.On = true;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
         _media.Busy = true;
         _labeler.Answer = _ => ImageLabelResult.Fail(ImageLabelFailure.Timeout);
@@ -335,7 +300,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Нет_маршрута_сразу_unknown_без_повторов()
     {
-        _flags.On = true;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.None, false, null);
         _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.None, false, null);
         var root = Root();
@@ -364,7 +328,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Нет_маршрута_итог_доходит_до_DTO_непустым()
     {
-        _flags.On = true;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.None, false, null);
         _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.None, false, null);
         var root = Root();
@@ -385,7 +348,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Маршрут_появился_после_noroute_фото_размечаются()
     {
-        _flags.On = true;
         // Фаза 1: маршрута нет — и для ракурса, и для эмоции
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.None, false, null);
         _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.None, false, null);
@@ -429,7 +391,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task ComfyUI_поднялся_после_noroute_фото_размечаются()
     {
-        _flags.On = true;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
         _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.None, false, null);
         _media.Available = false; // настроен, но ComfyUI сейчас лежит
@@ -467,7 +428,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Модель_не_определила_auto_unknown_повторно_не_уходит()
     {
-        _flags.On = true;
         // Оба места через vision: и ракурс, и эмоция «ответили» NoVision → оба auto/unknown
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.Vision, false, "m");
         _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.Vision, false, "m");
@@ -496,7 +456,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Смешанный_а_ракурс_noroute_эмоция_auto_после_маршрута_ракурс_размечается()
     {
-        _flags.On = true;
         // Фаза 1: ракурс — face-pose, но local-media не заведён → noroute; эмоция — vision, ответила → auto
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
         _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.Vision, false, "m");
@@ -537,7 +496,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Смешанный_б_эмоция_auto_ракурс_noroute_эмоция_повторно_не_уходит()
     {
-        _flags.On = true;
         // Фаза 1: эмоция — vision, ответила → auto; ракурс — face-pose, ComfyUI лежит → Failed × 3 → noroute
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
         _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.Vision, false, "m");
@@ -575,7 +533,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Human_не_трогается_через_noroute_и_появление_маршрута()
     {
-        _flags.On = true;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.None, false, null);
         _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.None, false, null);
         var root = Root();
@@ -616,7 +573,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task FacePose_ComfyUI_лежит_после_трёх_попыток_unknown()
     {
-        _flags.On = true;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
         _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.None, false, null);
         _media.Available = false; // настроен, но ComfyUI сейчас лежит
@@ -638,7 +594,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task FacePose_не_настроен_сразу_unknown()
     {
-        _flags.On = true;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
         _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.None, false, null);
         _media.Configured = false; // тумблер local-media выключен
@@ -659,7 +614,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Noroute_пауза_не_больше_одной_записи_за_пять_минут()
     {
-        _flags.On = true;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.None, false, null);
         _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.None, false, null);
         var root = Root();
@@ -684,7 +638,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Noroute_пауза_ComfyUI_лежит_обращений_к_модели_нет()
     {
-        _flags.On = true;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
         _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.None, false, null);
         _media.Available = false; // ComfyUI лежит
@@ -709,7 +662,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Noroute_пауза_прошла_маршрут_появился_фото_размечаются()
     {
-        _flags.On = true;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.None, false, null);
         _labeler.Routes[LocalActionCatalog.CharacterPhotoEmotion] = new(ImageLabelRouteKind.None, false, null);
         var root = Root();
@@ -744,7 +696,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Сжатие_до_512_перед_отправкой_в_облако()
     {
-        _flags.On = true;
         _raster.Width = 3000;
         _raster.Height = 2000;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.Vision, false, "m");
@@ -763,7 +714,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Мелкое_фото_не_увеличивается()
     {
-        _flags.On = true;
         _raster.Width = 300;
         _raster.Height = 400;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.Vision, false, "m");
@@ -778,7 +728,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Два_персонажа_строго_последовательно()
     {
-        _flags.On = true;
         _labeler.Routes[LocalActionCatalog.CharacterPhotoAngle] = new(ImageLabelRouteKind.FacePose, false, null);
         _media.Poses = [new(0, 0, 0), new(0, 0, 0), new(0, 0, 0)];
         _media.Delay = TimeSpan.FromMilliseconds(100);
@@ -809,7 +758,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Старый_манифест_noroute_размечается_когда_маршрут_появится()
     {
-        _flags.On = true;
         var root = Root();
         var m = MakeCharacter(root);
         // Старый формат: noroute на всё фото, без по-местных источников
@@ -840,7 +788,6 @@ public class CharacterPhotoLabelingTests : IDisposable
     [Fact]
     public async Task Старый_auto_повторно_не_размечается()
     {
-        _flags.On = true;
         var root = Root();
         var m = MakeCharacter(root);
         WriteOldFormat(root, m.Slug, "auto", "front", "level", "smile");
@@ -890,12 +837,6 @@ public class CharacterPhotoLabelingTests : IDisposable
         public static int Max { get; private set; }
         public static void Enter() { var n = Interlocked.Increment(ref _now); lock (typeof(Concurrency)) Max = Math.Max(Max, n); }
         public static void Exit() => Interlocked.Decrement(ref _now);
-    }
-
-    private sealed class FakeFlags : IFeatureFlagGate
-    {
-        public bool On { get; set; }
-        public bool IsEnabled(string userId, string key) => On && key == FeatureFlagKeys.CharacterSmartPhotos;
     }
 
     private sealed class FakeLabeler : IImageLabeler

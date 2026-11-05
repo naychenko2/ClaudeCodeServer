@@ -200,11 +200,28 @@ public sealed class PrivateChatSubjectResumeTests : IDisposable
         new(_sessions, _projects, null!, null!, null!, null!, null!, _users, null!, null!,
             NullLogger<ChatsController>.Instance) { ControllerContext = AsUser(userId) };
 
-    // CreateChat не трогает оркестрацию персон (memory/ask/automation/...) — те же null!
-    private PersonasController PersonasAs(string userId) =>
-        new(_personas, _projects, _sessions, null!, null!, null!, null!, null!, null!, null!, null!,
-            null!, null!, null!, null!, null!, _config, NullLogger<PersonasController>.Instance, null!)
-        { ControllerContext = AsUser(userId) };
+    // CreateChat не трогает оркестрацию персон (memory/ask/automation/...) — те же null!.
+    // W3-B4a: действие берёт HttpContext.GetRequestScope(), поэтому прямому вызову нужна та же
+    // область, что положил бы фильтр [ProjectScope(From = Persona)] (ProjectAccessService.
+    // ResolvePersona): ключ — арендатор (владелец пространства персоны: проектной — её проекта,
+    // глобальной — самой персоны), вызывающий — зритель (И-2, И-5). Без области действие
+    // падает громко (RequestScope не определён) — это и есть контракт, он не обходится.
+    private PersonasController PersonasAs(string userId, string personaId)
+    {
+        var persona = _personas.GetByIdInternal(personaId)!;
+        var ownProject = PersonaZone.OwnProjectId(persona);
+        var tenant = ownProject is not null ? _projects.GetById(ownProject)!.OwnerId! : persona.OwnerId;
+        var http = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", userId)])),
+        };
+        http.SetRequestScope(new RequestScope(userId, tenant,
+            userId == tenant ? ProjectRole.Owner : ProjectRole.Editor));
+        return new PersonasController(_personas, _projects, _sessions, null!, null!, null!, null!, null!,
+            null!, null!, null!, null!, null!, null!, null!, null!, _config,
+            NullLogger<PersonasController>.Instance, null!)
+        { ControllerContext = new ControllerContext { HttpContext = http } };
+    }
 
     // ── 1. subject: чужой приватный — 404, тема не пишется ────────────────────────────
 
@@ -345,18 +362,18 @@ public sealed class PrivateChatSubjectResumeTests : IDisposable
 
         // Глобальная персона редактора, чат вне проекта: csid приватного чата владельца — отказ,
         // неотличимый от неизвестного id
-        var r = await PersonasAs(_editorId).CreateChat(_editorPersonaId,
+        var r = await PersonasAs(_editorId, _editorPersonaId).CreateChat(_editorPersonaId,
             new CreatePersonaChatRequest(ResumeSessionId: OwnerPrivateCsid));
         r.Result.Should().BeOfType<NotFoundObjectResult>("csid чужого приватного — тот же отказ, что неизвестный id");
         _sessions.GetProjectlessChats(_editorId).Count.Should().Be(beforeChats, "отказ не создаёт чат");
 
         // Проектная ветка (persona.ProjectId → SessionManager.cs:4378): тот же 404
-        (await PersonasAs(_ownerId).CreateChat(_ownerProjectPersonaId,
+        (await PersonasAs(_ownerId, _ownerProjectPersonaId).CreateChat(_ownerProjectPersonaId,
             new CreatePersonaChatRequest(ResumeSessionId: EditorPrivateCsid)))
             .Result.Should().BeOfType<NotFoundObjectResult>();
 
         // Та же ветка через contextProjectId (req.ProjectId): тот же 404, чат проекта не создан
-        (await PersonasAs(_ownerId).CreateChat(_ownerGlobalPersonaId,
+        (await PersonasAs(_ownerId, _ownerGlobalPersonaId).CreateChat(_ownerGlobalPersonaId,
             new CreatePersonaChatRequest(ResumeSessionId: EditorPrivateCsid, ProjectId: _projectId)))
             .Result.Should().BeOfType<NotFoundObjectResult>();
         _sessions.GetVisibleByProject(_projectId, _ownerId).Count.Should().Be(beforeProject,
@@ -367,18 +384,18 @@ public sealed class PrivateChatSubjectResumeTests : IDisposable
     public async Task ResumePersonaChats_СвойПриватныйОбщийИНеизвестный_200_ОбеВеткиПроходят()
     {
         // Глобальная персона редактора, чат вне проекта: свой, общий и неизвестный csid — прежний путь
-        var own = (OkObjectResult)(await PersonasAs(_editorId).CreateChat(_editorPersonaId,
+        var own = (OkObjectResult)(await PersonasAs(_editorId, _editorPersonaId).CreateChat(_editorPersonaId,
             new CreatePersonaChatRequest(ResumeSessionId: EditorPrivateCsid))).Result!;
         ((Session)own.Value!).ClaudeSessionId.Should().Be(EditorPrivateCsid);
-        var open = (OkObjectResult)(await PersonasAs(_editorId).CreateChat(_editorPersonaId,
+        var open = (OkObjectResult)(await PersonasAs(_editorId, _editorPersonaId).CreateChat(_editorPersonaId,
             new CreatePersonaChatRequest(ResumeSessionId: OwnerOpenCsid))).Result!;
         ((Session)open.Value!).ClaudeSessionId.Should().Be(OwnerOpenCsid);
-        var unknown = (OkObjectResult)(await PersonasAs(_editorId).CreateChat(_editorPersonaId,
+        var unknown = (OkObjectResult)(await PersonasAs(_editorId, _editorPersonaId).CreateChat(_editorPersonaId,
             new CreatePersonaChatRequest(ResumeSessionId: "resume-unknown-789"))).Result!;
         ((Session)unknown.Value!).ClaudeSessionId.Should().Be("resume-unknown-789");
 
         // Проектная ветка на своём csid — гейт её не блокирует (приватный виден автору)
-        var proj = (OkObjectResult)(await PersonasAs(_ownerId).CreateChat(_ownerProjectPersonaId,
+        var proj = (OkObjectResult)(await PersonasAs(_ownerId, _ownerProjectPersonaId).CreateChat(_ownerProjectPersonaId,
             new CreatePersonaChatRequest(ResumeSessionId: OwnerPrivateCsid))).Result!;
         ((Session)proj.Value!).ClaudeSessionId.Should().Be(OwnerPrivateCsid);
         ((Session)proj.Value!).ProjectId.Should().Be(_projectId);

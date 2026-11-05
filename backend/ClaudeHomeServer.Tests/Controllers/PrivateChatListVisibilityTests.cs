@@ -173,10 +173,27 @@ public sealed class PrivateChatListVisibilityTests : IDisposable
         new(_sessions, _projects, null!, null!, null!, null!, null!, _users, null!, null!,
             NullLogger<ChatsController>.Instance) { ControllerContext = AsUser(userId) };
 
-    private PersonasController PersonasAs(string userId) =>
-        new(_personas, _projects, _sessions, null!, null!, null!, null!, null!, null!, null!, null!,
-            null!, null!, null!, null!, null!, _config, NullLogger<PersonasController>.Instance, null!)
-        { ControllerContext = AsUser(userId) };
+    // W3-B4a: Chats берёт HttpContext.GetRequestScope(), поэтому прямому вызову нужна та же
+    // область, что положил бы фильтр [ProjectScope(From = Persona)] (ProjectAccessService.
+    // ResolvePersona): ключ — арендатор (владелец пространства персоны: проектной — её проекта,
+    // глобальной — самой персоны), вызывающий — зритель (И-2, И-5). Без области действие
+    // падает громко (RequestScope не определён) — это и есть контракт, он не обходится.
+    private PersonasController PersonasAs(string userId, string personaId)
+    {
+        var persona = _personas.GetByIdInternal(personaId)!;
+        var ownProject = PersonaZone.OwnProjectId(persona);
+        var tenant = ownProject is not null ? _projects.GetById(ownProject)!.OwnerId! : persona.OwnerId;
+        var http = new DefaultHttpContext
+        {
+            User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", userId)])),
+        };
+        http.SetRequestScope(new RequestScope(userId, tenant,
+            userId == tenant ? ProjectRole.Owner : ProjectRole.Editor));
+        return new PersonasController(_personas, _projects, _sessions, null!, null!, null!, null!, null!,
+            null!, null!, null!, null!, null!, null!, null!, null!, _config,
+            NullLogger<PersonasController>.Instance, null!)
+        { ControllerContext = new ControllerContext { HttpContext = http } };
+    }
 
     private HomeController HomeAs(string userId) =>
         new(_sessions, _projects, new Mock<ITaskLookup>().Object) { ControllerContext = AsUser(userId) };
@@ -277,22 +294,27 @@ public sealed class PrivateChatListVisibilityTests : IDisposable
     [Fact]
     public void СписокЧатовПерсоны_ЧужойПриватныйНеЖивёт_СвойЧатПерсоныКакПрежде()
     {
-        var ids = IdsOf(PersonasAs(_ownerId).Chats(_personaId));
+        var ids = IdsOf(PersonasAs(_ownerId, _personaId).Chats(_personaId));
 
         ids.Should().Contain(PersonaOwnId, "свой чат персоны — прежнее поведение");
         ids.Should().NotContain(PersonaForeignId,
             "в списке чатов персоны чужой приватный — тот же мёртвый id, что в остальных списках");
     }
 
-    // Участнику список закрыт раньше, на владении персоны (S2d-4e, c2): проектная персона
-    // принадлежит владельцу (PersonaManager.Get по OwnerId) — «чаты с персоной» участнику
-    // не отдаются вовсе, чужой приватный отсекается на этой границе. VisibleTo внутри
-    // GetPersonaChats — следующий слой: и для доступной персоны список фильтруется по зрителю.
+    // W3-B4a снял границу S2d-4e: персона проекта резолвится по доступу к проекту (ResolvePersona),
+    // а не по владению персоны — участнику она открыта. Список ключуется арендатором (владельцем
+    // проекта), но фильтруется видимостью вызывающего (viewer — И-5): участник видит общий чат
+    // персоны и свой приватный с ней. Подмена viewer на арендатора (проба) уберёт его приватный
+    // из его же списка — тест на это и стоит.
     [Fact]
-    public void СписокЧатовПерсоны_УчастникуНеДоступнаСамаПерсона_ЕёЧатовУНегоНет()
+    public void СписокЧатовПерсоны_УчастникуВиденЕгоПриватныйИОбщий_СписокПоЗрителю()
     {
-        var result = PersonasAs(_editorId).Chats(_personaId);
-        result.Should().BeOfType<NotFoundResult>().Which.StatusCode.Should().Be(404);
+        var ids = IdsOf(PersonasAs(_editorId, _personaId).Chats(_personaId));
+
+        ids.Should().Contain(PersonaForeignId,
+            "свой приватный чат участника с персоной — автору виден: viewer — вызывающий, не арендатор (И-5)");
+        ids.Should().Contain(PersonaOwnId,
+            "общий чат персоны — участнику виден: персона проекта открыта участнику (W3-B4a)");
     }
 
     // ── снимок фоновой работы (id чатов) ───────────────────────────────────────────

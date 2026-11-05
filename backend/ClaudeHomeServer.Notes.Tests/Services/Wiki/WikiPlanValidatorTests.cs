@@ -258,6 +258,48 @@ public class WikiPlanValidatorTests
         r.Violations.Should().BeEmpty();
     }
 
+    // ─── WC-2: операция в карточку источника — прямая причина, а не «нет секции» ──
+
+    [Fact]
+    public void AppendВКарточкуИсточника_ОтказСПодсказкойCreate()
+    {
+        // Карточка источника стоит в снимке раздела: append в неё раньше отклонялся как
+        // «нет секции „Сводка“» — в ремонте модель на это не отвечала. Теперь отказ
+        // называется прямо: в карточку операцию не принять, новое знание — через create.
+        var r = Run(Plan(Op(WikiPackage.OpAppend, CardTitle, 0)));
+
+        r.Accepted.Should().BeEmpty();
+        r.Rejected.Should().HaveCount(1);
+        r.Rejected[0].Reason.Should().Contain("карточка источника").And.Contain("create");
+        r.Rejected[0].Index.Should().Be(0);
+    }
+
+    [Fact]
+    public void LinkВКарточкуИсточника_ТаЖеПричина()
+    {
+        // Та же карточка и для link: проверка стоит до проверки секции, поэтому причина
+        // одна для append и link.
+        var r = Run(Plan(Op(WikiPackage.OpLink, CardTitle, 0, "Сущность")));
+
+        r.Accepted.Should().BeEmpty();
+        r.Rejected.Should().HaveCount(1);
+        r.Rejected[0].Reason.Should().Contain("карточка источника").And.Contain("create");
+    }
+
+    [Fact]
+    public void CreateВРазделСОднимиКарточками_ПринятКакОбычно()
+    {
+        // Отказ по карточке — только для операций не-create: create новой страницы в
+        // раздел, где лежат одни карточки, принимается как раньше.
+        var r = WikiPlanValidator.Validate(
+            Plan(Op(WikiPackage.OpCreate, "Знание-новое", 0)),
+            Claims(GoodClaim), Src, Section, [WikiSections.Common],
+            [new(CardPath, CardFile)], new());
+
+        r.Accepted.Should().ContainSingle(op => op.Op == WikiPackage.OpCreate);
+        r.Rejected.Should().BeEmpty();
+    }
+
     // ─── Fail-closed входа (ни исключения наружу, ни «само») ───────────────────
 
     [Fact]

@@ -189,7 +189,14 @@ backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
 # проверку права (фичу ведёт владелец проекта), ключ записи — tenantId (арендатор), не вызывающий;
 # тот же класс мест, что «FeatureOwnerGate.Denied(access, UserId, …)» выше. Дверь MCP зовёт тот же
 # гейт через TurnActorId(...) — не имя из словаря регекспов, счётчик TasksToolset не изменился.
-backend/ClaudeHomeServer/Controllers/TasksController.cs|98
+# W3-B7 (8e8d3d88a; разрез §3.2 «TasksController»): TasksController 98→93 — три ручки задач
+# переведены на TaskPersonaGate: допуск персоны через ResolvePersona(Read), валидация с ключом
+# арендатора задачи; removed — одиннадцать мест в Create/Update: «personas.Get(…, UserId)» ×3,
+# «BuildExternalTaskScopes(UserId, …)» ×3, «TaskPersonaValidator.Error(personas, UserId, …)» ×5;
+# added — пять вызовов
+# «TaskPersonaGate.Denied(…, UserId, …)» (id вызывающего входит только в допуск персоны, ключ
+# валидации — tenantId) и «ResolvePersona(callerUserId, …)» в теле гейта. Сторож посчитал это снижением.
+backend/ClaudeHomeServer/Controllers/TasksController.cs|93
 # QA-P1: TurnRightExtensions 6→7 — DenyContentWrite (право записи контента чата: переименование и
 # архив, редактор и выше) идёт тем же уровнем Deny, что RunTurn и Configure: id вызывающего входит
 # только в IProjectAccess.ResolveSession (запрошенное право WriteContent) и GetAccessible (развилка

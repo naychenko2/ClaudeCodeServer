@@ -104,6 +104,8 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
   header?: ReactNode;
   children: ReactNode;
 }) {
+  // Проверка на truthy, как в Modal: header={cond && <X/>} при ложном cond даёт false
+  const hasHeader = Boolean(header);
   const opener = useRef<Element | null>(typeof document !== 'undefined' ? document.activeElement : null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -177,9 +179,9 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
         // maxHeight участвует только в расчёте openUp выше — без явного ограничения
         // здесь высокое содержимое (длинный список этапов плана) вылезало за экран,
         // а не обрезалось/скроллилось.
-        ...(anchorSide ? { maxHeight, overflow: 'hidden' } : anchor ? { maxHeight, overflow: innerScroll || header ? 'hidden' : 'auto' } : null),
+        ...(anchorSide ? { maxHeight, overflow: 'hidden' } : anchor ? { maxHeight, overflow: innerScroll || hasHeader ? 'hidden' : 'auto' } : null),
       }}>
-        {header == null ? children : (
+        {!hasHeader ? children : (
           <>
             <div style={{ flexShrink: 0 }}>{header}</div>
             <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>{children}</div>

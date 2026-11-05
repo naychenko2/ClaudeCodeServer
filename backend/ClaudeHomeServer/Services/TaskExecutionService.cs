@@ -1976,25 +1976,28 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
     public async Task CheckStalledExecutorAsync(TaskItem task, DateTime nowUtc)
     {
         var session = task.LinkedSessionId is not null ? _sessions.GetById(task.LinkedSessionId) : null;
-        // Резолв «есть ли открытая карточка блокера по этой задаче» — на стороне штаба.
-        // Сейчас штабный реестр эскалаций живёт в TeamWaveService через ITeamHistoryStore,
-        // и его резолв делает подключаемый крючок (OpenBlockerLookup ниже). null — крючок не
-        // подключён (например, режим «Командная реализация» выключен): страховка работает
-        // как раньше, без новой ветки.
-        var hasOpenBlocker = false;
-        if (_openBlockerLookup is not null)
+        // Фича задачи на паузе (W4-HOLD-I, контракт §1 :179): та же сфера, что у гейта запуска
+        // (TaskManager.FeatureIsPaused) — задач удержанной фичи сторож не окликает и человека
+        // не зовёт: их тишина — сама пауза, а не брошенная работа.
+        var featurePaused = _tasks.FeatureIsPaused(task);
+        var action = ClassifyStall(task, session, nowUtc, _staleAfter, hasOpenBlocker: false, featurePaused);
+        // Резолв «есть ли открытая карточка блокера по этой задаче» — на стороне штаба
+        // (крючок OpenBlockerLookup ниже; null — режим «Командная реализация» выключен).
+        // Признак меняет только исходы Nudge/Alert, а резолв читает историю чата-постановщика
+        // целиком — поэтому зовём его лишь для них, а не для каждой задачи на каждом тике
+        // (прод 2026-11-05: ~1100 загрузок history.json раз в 30 с ради одной задачи).
+        if (_openBlockerLookup is not null && action is ExecutorStallAction.Nudge or ExecutorStallAction.Alert)
         {
+            var hasOpenBlocker = false;
             try { hasOpenBlocker = await _openBlockerLookup(task); }
             catch (Exception ex)
             {
                 _log.LogError(ex, "Резолв открытого блокера по задаче {TaskId} не удался", task.Id);
             }
+            if (hasOpenBlocker)
+                action = ClassifyStall(task, session, nowUtc, _staleAfter, hasOpenBlocker: true, featurePaused);
         }
-        // Фича задачи на паузе (W4-HOLD-I, контракт §1 :179): та же сфера, что у гейта запуска
-        // (TaskManager.FeatureIsPaused) — задач удержанной фичи сторож не окликает и человека
-        // не зовёт: их тишина — сама пауза, а не брошенная работа.
-        var featurePaused = _tasks.FeatureIsPaused(task);
-        switch (ClassifyStall(task, session, nowUtc, _staleAfter, hasOpenBlocker, featurePaused))
+        switch (action)
         {
             case ExecutorStallAction.Nudge:
                 await NudgeExecutorAsync(task, session!, nowUtc);

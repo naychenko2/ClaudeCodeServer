@@ -25,7 +25,11 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// Установка навыка и каталог реестра — заглушка CLI (`Skills:Command` с нулевым кодом, тот же
 /// приём, что `Markitdown:Command` в FilesControllerEditorDenialsTests): тест меряет ДОПУСК, а
 /// не настоящий «npx skills add» из реестра. Поэтому `bound` после заглушки не проверяем —
-/// она зависит от глобального каталога машины, а не от этого контракта.
+/// она зависит от глобального каталога машины (`SkillsService.cs:35-36` — `~/.claude/skills`
+/// хоста), а не от этого контракта. «Без записи» в тесте отказа меряется по телу ответа:
+/// у отказа нет поля `installed` (до установки дело не дошло); привязку по персоне не меряем
+/// — при навыке, которого нет в каталоге, `ValidateAsync` не пишет её даже при снятом гейте
+/// (`PersonaBindingsService.cs:1186-1188`), и такая проверка была бы зелёной впустую.
 /// </summary>
 [Trait("Category", "Host")]
 public class SharedProjectPersonaSkillsTests : IClassFixture<TestWebApplicationFactory>
@@ -63,10 +67,6 @@ public class SharedProjectPersonaSkillsTests : IClassFixture<TestWebApplicationF
 
     private static string IdOf(string json) =>
         JsonSerializer.Deserialize<JsonElement>(json).GetProperty("id").GetString()!;
-
-    private static async Task<JsonElement> BodyAsync(HttpClient client, string path) =>
-        JsonSerializer.Deserialize<JsonElement>(
-            await (await client.GetAsync(path)).Content.ReadAsStringAsync());
 
     /// <summary>Проект владельца с проектной персоной этого проекта. memberRole = null —
     /// участников нет: второй пользователь для такого проекта посторонний.</summary>
@@ -110,19 +110,6 @@ public class SharedProjectPersonaSkillsTests : IClassFixture<TestWebApplicationF
     private static Task<HttpResponseMessage> SuggestForPersonaAsync(HttpClient client, string personaId) =>
         client.PostAsJsonAsync("/api/skills/suggest", new { personaId });
 
-    // Привязки-навыки персоны (type=skill) — чтобы проверить, что отказ не оставил записи
-    private static async Task<List<string>> SkillTargetsOfAsync(HttpClient owner, string personaId)
-    {
-        var body = await BodyAsync(owner, $"/api/personas/{personaId}");
-        return body.TryGetProperty("bindings", out var bindings) && bindings.ValueKind == JsonValueKind.Array
-            ? bindings.EnumerateArray()
-                .Where(b => string.Equals(b.GetProperty("type").GetString(), "skill",
-                    StringComparison.OrdinalIgnoreCase))
-                .Select(b => b.GetProperty("target").GetString()!)
-                .ToList()
-            : [];
-    }
-
     // ── POST /api/personas/{id}/skills ───────────────────────────────────────────────
 
     [Theory]
@@ -133,13 +120,23 @@ public class SharedProjectPersonaSkillsTests : IClassFixture<TestWebApplicationF
         var personaId = await ProjectWithPersonaAsync(role);
 
         var r = await InstallSkillAsync(Member(), personaId);
+        var body = await r.Content.ReadFromJsonAsync<JsonElement>();
+
+        // «Без записи» — по телу ответа, детерминированно и независимо от глобального каталога
+        // навыков машины: до установки дело не дошло — в отказе нет поля installed (у 200
+        // владельца оно есть). Привязку по персоне здесь не меряем: при навыке, которого нет
+        // в каталоге, ValidateAsync не пишет её даже при снятом гейте
+        // (PersonaBindingsService.cs:1186-1188), и проверка была бы зелёной впустую. Зубы у
+        // этой — с целевой поломки: ослабленное право (Configure→Read) даёт 200
+        // {installed, bound:false, warning} (SkillsController.cs:211-213) — и краснеет именно
+        // она, а не только код ответа.
+        body.TryGetProperty("installed", out _).Should().BeFalse(
+            "отказ не должен нести installed: до установки дело не дошло");
 
         r.StatusCode.Should().Be(HttpStatusCode.Forbidden,
             $"{role} видит персону своего проекта, но право Configure — только у владельца");
-        (await r.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("code").GetString()
+        body.GetProperty("code").GetString()
             .Should().Be(ProjectScopeAttribute.ErrorCode, "тот же машинный код, что у [ProjectScope]");
-        // Отказ дошёл только до двери: ни установки, ни привязки.
-        (await SkillTargetsOfAsync(Owner(), personaId)).Should().BeEmpty();
     }
 
     [Fact]

@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services;
 
@@ -22,6 +23,32 @@ public static class PregateRules
         if (green) return new PregateRecord(sha, true, summary, now);
         var streak = previous is { Green: false, NothingApplicable: false } && previous.RedKey == redKey ? previous.RedStreak + 1 : 1;
         return new PregateRecord(sha, false, summary, now, streak, redKey);
+    }
+
+    // Заголовок блока флаков в выводе scripts/test-shards.py: «Флаки (прошли со второго раза): N»
+    public const string FlakyHeader = "Флаки (прошли со второго раза)";
+
+    // Сводка записи по вердикту: красные проверки — «✗ имя: деталь»; зелёная с деталью (флаки быстрых тестов
+    // прошли со второго раза) — «⚠ имя: флаки N» и FQN следом. Зелёный без флаков — пустая строка, как раньше
+    public static string Summary(PregateVerdict verdict)
+    {
+        var lines = new List<string>();
+        foreach (var c in verdict.Checks)
+        {
+            if (c.Status == PregateStatus.Red) lines.Add($"✗ {c.Name}: {c.Detail}");
+            else if (c.Status == PregateStatus.Green && c.Detail.Length > 0) lines.Add($"⚠ {c.Name}: {Warning(c.Detail)}");
+        }
+        return string.Join("\n", lines);
+    }
+
+    // Деталь зелёной проверки: блок флаков сворачивается в «флаки N» + FQN, иное — как есть
+    private static string Warning(string detail)
+    {
+        var parts = detail.Split('\n');
+        if (!parts[0].StartsWith(FlakyHeader, StringComparison.Ordinal)) return detail;
+        var count = parts[0][FlakyHeader.Length..].TrimStart(':', ' ');
+        var n = int.TryParse(count, out var parsed) ? parsed : parts.Length - 1;
+        return string.Join("\n", [$"флаки {n}", .. parts[1..]]);
     }
 
     public const string UiRoutesMarker = "UI-маршруты:";

@@ -62,6 +62,10 @@ function countOf(html: string, name: string): number {
 
 const CHAT = 'Поговорить';
 const LEAD_MENU = 'title="Ещё"';
+// Вкладка «Память» (хвост ревью 7efb03bd): карточка ручного добавления в MemoryPanel
+// рисуется только с onAdd — его PersonaMemoryPanel даёт по роли (memoryWrite).
+const ADD_CARD = 'Добавить вручную';
+const ADD_BTN = 'Запомнить';
 
 describe('PersonasPage (студия персоны): гейт по роли (W3-F1d)', () => {
   it('читатель: нет «Поговорить», нет ⋯-меню (makeLead/delete)', () => {
@@ -95,5 +99,37 @@ describe('PersonasPage (студия персоны): гейт по роли (W3
     const html = renderStudio(PROJECT_PERSONA, [projectWith(undefined)]);
     expect(countOf(html, CHAT), 'чат с персоной без роли').toBe(1);
     expect(countOf(html, LEAD_MENU), '⋯-меню без роли').toBe(1);
+  });
+});
+
+// Хвост ревью 7efb03bd (W3-F1h): студия обязана пробрасывать вычисленную роль в
+// PersonaMemoryPanel — иначе тот считает роль null («как раньше, всё открыто») и читатель
+// видит в памяти все кнопки записи. Проверяется вкладка «Память» (initialView='memory'):
+// effects в SSR не идут, память не грузится, но карточка ручного добавления рисуется
+// независимо от загрузки — её отсутствие в HTML и есть закрытый memoryWrite.
+describe('PersonasPage (студия персоны): вкладка «Память» по роли (W3-F1h)', () => {
+  function renderMemory(persona: Persona, projects: Project[]): string {
+    return renderToStaticMarkup(createElement(PersonaStudio, {
+      persona, projects, talking: false, initialView: 'memory',
+      onDelete: () => {}, onTalk: () => {}, onOpenSession: () => {}, onOpenSpecialties: () => {},
+      onBack: () => {}, isMobile: false,
+    }));
+  }
+
+  it('читатель: нет карточки добавления и «Запомнить» (memoryWrite закрыт)', () => {
+    const html = renderMemory(PROJECT_PERSONA, [projectWith('reader')]);
+    expect(countOf(html, ADD_CARD), 'карточка ручного добавления читателю').toBe(0);
+    expect(countOf(html, ADD_BTN), '«Запомнить» читателю').toBe(0);
+  });
+
+  it('редактор: карточка добавления на месте (memoryWrite открыт)', () => {
+    const html = renderMemory(PROJECT_PERSONA, [projectWith('editor')]);
+    expect(countOf(html, ADD_CARD), 'карточка ручного добавления редактору').toBe(1);
+    expect(countOf(html, ADD_BTN), '«Запомнить» редактору').toBe(1);
+  });
+
+  it('владелец и без myRole: карточка добавления на месте, как раньше', () => {
+    expect(countOf(renderMemory(PROJECT_PERSONA, [projectWith('owner')]), ADD_CARD), 'карточка добавления владельцу').toBe(1);
+    expect(countOf(renderMemory(PROJECT_PERSONA, [projectWith(undefined)]), ADD_CARD), 'карточка добавления без роли').toBe(1);
   });
 });

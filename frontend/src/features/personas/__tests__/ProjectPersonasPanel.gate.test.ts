@@ -71,6 +71,10 @@ const CHAT = 'Поговорить';
 const EDIT = 'title="Редактировать"';
 const LEAD_MENU = 'title="Ещё"';
 const NEW_PERSONA = 'title="Новая персона"';
+// Вкладка «Память» (хвост ревью 7efb03bd): карточка ручного добавления в MemoryPanel
+// рисуется только с onAdd — его PersonaMemoryPanel даёт по роли (memoryWrite).
+const ADD_CARD = 'Добавить вручную';
+const ADD_BTN = 'Запомнить';
 
 describe('ProjectPersonasPanel: гейт по роли (W3-F1c)', () => {
   it('читатель: нет «Поговорить», нет «Редактировать», нет ⋯-меню, нет «Новой персоны»', () => {
@@ -109,5 +113,39 @@ describe('ProjectPersonasPanel: гейт по роли (W3-F1c)', () => {
     expect(countOf(html, EDIT), 'правка карточки без роли').toBe(1);
     expect(countOf(html, LEAD_MENU), '⋯-меню без роли').toBe(1);
     expect(countOf(renderSidebar(projectWith(undefined)), NEW_PERSONA), 'создание персоны без роли').toBe(1);
+  });
+});
+
+// Хвост ревью 7efb03bd (W3-F1h): зона обязана пробрасывать вычисленную роль в
+// PersonaMemoryPanel — иначе тот считает роль null («как раньше, всё открыто») и читатель
+// видит в памяти все кнопки записи. Проверяется вкладка «Память» (initialView='memory'):
+// effects в SSR не идут, память не грузится, но карточка ручного добавления рисуется
+// независимо от загрузки — её отсутствие в HTML и есть закрытый memoryWrite.
+describe('ProjectPersonasPanel: вкладка «Память» по роли (W3-F1h)', () => {
+  function renderPaneMemory(project: Project): string {
+    return renderToStaticMarkup(createElement(ProjectPersonaPane, {
+      project, personaId: 'per-1', creating: false, initialView: 'memory',
+      onOpenChat: () => {}, onSelectPersona: () => {}, onCleared: () => {},
+    }));
+  }
+
+  it('читатель: нет карточки добавления и «Запомнить» (memoryWrite закрыт)', () => {
+    personasRef.current = [PERSONA];
+    const html = renderPaneMemory(projectWith('reader'));
+    expect(countOf(html, ADD_CARD), 'карточка ручного добавления читателю').toBe(0);
+    expect(countOf(html, ADD_BTN), '«Запомнить» читателю').toBe(0);
+  });
+
+  it('редактор: карточка добавления на месте (memoryWrite открыт)', () => {
+    personasRef.current = [PERSONA];
+    const html = renderPaneMemory(projectWith('editor'));
+    expect(countOf(html, ADD_CARD), 'карточка ручного добавления редактору').toBe(1);
+    expect(countOf(html, ADD_BTN), '«Запомнить» редактору').toBe(1);
+  });
+
+  it('владелец и без myRole: карточка добавления на месте, как раньше', () => {
+    personasRef.current = [PERSONA];
+    expect(countOf(renderPaneMemory(projectWith('owner')), ADD_CARD), 'карточка добавления владельцу').toBe(1);
+    expect(countOf(renderPaneMemory(projectWith(undefined)), ADD_CARD), 'карточка добавления без роли').toBe(1);
   });
 });

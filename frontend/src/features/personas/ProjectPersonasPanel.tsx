@@ -224,7 +224,9 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
       <div style={{ flex: 1, minHeight: 0 }}>
         {persona ? (
           view === 'memory' ? (
-            <PersonaMemoryPanel persona={persona} isMobile={isMobile} embedded />
+            // Роль — из personaRole выше (хвост ревью 7efb03bd): без неё панель считает
+            // роль null и показывает читателю все кнопки записи.
+            <PersonaMemoryPanel persona={persona} isMobile={isMobile} embedded role={role} />
           ) : view === 'tasks' ? (
             <PersonaTasksPanel persona={persona} isMobile={isMobile} />
           ) : view === 'knowledge' ? (

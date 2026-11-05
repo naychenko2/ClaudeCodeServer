@@ -495,8 +495,10 @@ export function PersonaStudio({ persona, projects, talking, initialView, onDelet
   };
 
   const content = view === 'memory'
-    // Память — под тулбаром, свой заголовок не нужен (идентичность уже в тулбаре)
-    ? <div style={{ flex: 1, minHeight: 0 }}><PersonaMemoryPanel persona={persona} isMobile={isMobile} embedded /></div>
+    // Память — под тулбаром, свой заголовок не нужен (идентичность уже в тулбаре).
+    // Роль — из personaRole выше (хвост ревью 7efb03bd): без неё панель считает роль null
+    // («как раньше, всё открыто») и показывает читателю все кнопки записи.
+    ? <div style={{ flex: 1, minHeight: 0 }}><PersonaMemoryPanel persona={persona} isMobile={isMobile} embedded role={role} /></div>
     : view === 'tasks'
     // Задачи — отфильтрованный вид реальных задач, где персона исполнитель
     ? <div style={{ flex: 1, minHeight: 0 }}><PersonaTasksPanel persona={persona} isMobile={isMobile} /></div>

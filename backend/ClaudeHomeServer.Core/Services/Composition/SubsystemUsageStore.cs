@@ -16,8 +16,10 @@ namespace ClaudeHomeServer.Services.Composition;
 // Время — параметром `now`, `DateTime.UtcNow` внутри стора нет: модельное время (тест
 // на 7 суток, TTL при Load) детерминировано.
 //
-// Окно — по часовым корзинам. Слот времени t = ⌊t/1ч⌋ (абсолютный номер часа по UTC-ticks:
-// offset не участвует, один миг в любом представлении — один слот). Last24h(now) = сумма слотов
+// Окно — по часовым корзинам. Слот времени t = ⌊UTC(t)/1ч⌋: DateTimeOffset нормализуется к UTC
+// до слотования (UtcTicks), поэтому один миг в любом представлении — один слот; локальные Ticks
+// дали бы разные слоты одному мигу в +00:00 и +03:00 и съезжающее на целые часы окно (R-S1a).
+// Last24h(now) = сумма слотов
 // [⌊now/1ч⌋−23 … ⌊now/1ч⌋] — ровно 24 слота, заканчивающихся текущим. Обращение ровно
 // за 24 часа до now попадает в 25-й слот и из окна выпадает; ровно за 23 ч 59 мин —
 // остаётся (границы окна закрыты тестом RingWindow_HitsAtExactBounds).
@@ -234,9 +236,10 @@ public sealed class SubsystemUsageStore
         }
     }
 
-    // Абсолютный номер часового слота. Ticks DateTimeOffset — «часовая» часть мига без offset:
-    // один миг в любом представлении даёт один слот (границы окна не зависят от зоны).
-    private static long HourOf(DateTimeOffset t) => t.Ticks / TimeSpan.TicksPerHour;
+    // Абсолютный номер часового слота по UTC. Ticks DateTimeOffset считает «часовое» время с
+    // offset (локальные часы), UtcTicks — по UTC: без нормализации один миг в +00:00 и +03:00
+    // дал бы разные слоты (R-S1a).
+    private static long HourOf(DateTimeOffset t) => t.UtcTicks / TimeSpan.TicksPerHour;
 
     private static int SlotOf(long hour) => (int)Mod(hour, HourBuckets);
 

@@ -191,6 +191,10 @@ public class SharedProjectNotesWriteContentTests : IDisposable
         var asOwner = Service().GetDocAnnotations(_ownerId, _projectId, "notes/" + ProjectNote + ".md");
         asOwner.Should().ContainSingle(a => a.NoteId == comment.Id)
             .Which.Status.Should().Be("resolved");
+        // DEF-9fb9: счётчик ответов в списке — в треде ровно один ответ. Ключ счётчика —
+        // канонический путь комментария (с notes/), а не модельный RelPath без префикса:
+        // раньше ключи различались и список всегда возвращал Replies=0
+        asOwner.Single(a => a.NoteId == comment.Id).Replies.Should().Be(1);
         // Тред читается резолвером ответов (тот же id, тот же файл)
         Service().GetReplies(_ownerId, comment.Id).Should().ContainSingle(r => r.Title.Contains("Ответ редактора"));
     }

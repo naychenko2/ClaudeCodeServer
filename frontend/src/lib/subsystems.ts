@@ -18,10 +18,38 @@ import { useSyncExternalStore } from 'react';
 // Тонкий реестр ключей для type-safe вызовов useSubsystem. Дублирует ключи из
 // бэкового реестра подсистем (одна строка на подсистему). Описания/дефолты
 // приходят с сервера — здесь только ключи.
+// Полный набор сверен с регистрацией бэка: AddSubsystems(Program.cs) — статические
+// подсистемы — плюс секция DynamicModules в appsettings.json (динамические модули;
+// заглушка __stub не подсистема пользователя). Сторож полноты —
+// __tests__/subsystemsRegistry.test.ts: бэк добавляет подсистему — реестр обязан
+// пополниться, иначе следующий шаг (меню/рельса/маршрут) не сможет гейтить её ключ.
 export const SUBSYSTEMS = {
-  notes: 'notes',
-  spend: 'spend',
   architecture: 'architecture',
+  audioeditor: 'audioeditor',
+  backgrounds: 'backgrounds',
+  changelog: 'changelog',
+  codeGraph: 'code-graph',
+  deploy: 'deploy',
+  dossiers: 'dossiers',
+  git: 'git',
+  imageeditor: 'imageeditor',
+  images: 'images',
+  knowledge: 'knowledge',
+  llm: 'llm',
+  memory: 'memory',
+  notes: 'notes',
+  plugins: 'plugins',
+  projectIcons: 'project-icons',
+  projectServices: 'project-services',
+  reader: 'reader',
+  skills: 'skills',
+  spend: 'spend',
+  tasks: 'tasks',
+  testRuns: 'test-runs',
+  tts: 'tts',
+  video: 'video',
+  videoeditor: 'videoeditor',
+  yandex: 'yandex',
 } as const;
 
 export type SubsystemKey = (typeof SUBSYSTEMS)[keyof typeof SUBSYSTEMS];

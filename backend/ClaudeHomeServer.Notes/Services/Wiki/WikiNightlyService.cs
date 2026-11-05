@@ -62,8 +62,10 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // к тому моменту уже записан, исключение отправителя не выходит из службы (LogSafe).
 
 // Честные пределы:
-// - Токены — ОЦЕНКА (символы дельты / 4, плюс потолок входа на каждый вызов ступени 2): фактический
-//   расход ChatResult не возвращает. Чатам отдано ≤ 70 % InputTokenBudget, остаток — запас на
+// - Токены — ОЦЕНКА EstTokens (символы дельты / 4, плюс потолок входа на каждый вызов ступени 2):
+//   по ней ночь решает бюджет ЗАРАНЕЕ, до вызова. Фактический вход NightResult.InputTokens — сумма
+//   ChatResult.InputTokens разобранных чатов и входа ступени 2 (WC-4a/WC-4b/WC-4c): её пишут
+//   постфактум, решения она не меняет. Чатам отдано ≤ 70 % InputTokenBudget, остаток — запас на
 //   ступень 2 и ответы.
 // - Пакеты: хроника чата — страница, а не пакет, в ChatResult.PackageIds её нет; считаются только
 //   пакеты. У исхода awaiting_human число пакетов неизвестно — он засчитывается как один (нижняя
@@ -75,9 +77,11 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //   (не откатывать); превышение остатка раздела закрывает только его раздел — его последующие чаты
 //   пропускаются, ночь идёт по другим разделам (решение 02.11); при остатке 0 чат не начинается.
 // - Облако: ночной разбор и ступень 2 в облако не уходят (решение Андрея 02.11): WikiIngestService
-//   (ключ wiki-nightly) и WikiChatStage2 зовут модель через RunLocalOrChosenAsync, без финального
-//   claude-шага. Падение или недоступность локали — отказ вызова: окно разбора уходит в Rejected
-//   и курсор не двигается, ступень 2 оставляет чат серым. Расход по этим вызовам не учитывается.
+//   (ключ wiki-nightly) и WikiChatStage2 зовут модель через RunLocalOrChosenDetailedAsync (та же
+//   цепочка, что RunLocalOrChosenAsync), без финального claude-шага. Падение или недоступность
+//   локали — отказ вызова: окно разбора уходит в Rejected и курсор не двигается, ступень 2
+//   оставляет чат серым. Фактический вход этих вызовов (usage того же ответа движка) суммируется
+//   в NightResult.InputTokens — меры нагрузки, не денег.
 //   Кнопка «Разобрать» и агент wiki_ingest не затронуты — облако там допустимо.
 public sealed class WikiNightlyService : BackgroundService
 {
@@ -100,10 +104,16 @@ public sealed class WikiNightlyService : BackgroundService
     /// исход; Applied — применённых пакетов; ToInbox — чатов с пакетами во «Входящих»; EstTokens —
     /// оценка расхода (см. шапку). OverrodeHuman — формулировок человека, которые ИИ заменил за ночь
     /// сам; DisputedPages — страниц, где он сам оспорил утверждение человека (conflict@human, ADR-038, предохранитель 6);
-    /// в файле итога поля аддитивны: старый итог читается нулями.</summary>
+    /// InputTokens (WC-4b/WC-4c) — полный вход (вместе с кэшем): сумма ChatResult.InputTokens всех
+    /// разобранных чатов плюс фактический вход ступени 2. Мера нагрузки на GPU локали, а не деньги:
+    /// деньги из этого поля не считать, стоимость облачного пути — OneShotUsage.CostUsd. Сумма —
+    /// независимо от исхода (отказанный план и отказ ступени 2 понесённого расхода не отменяют);
+    /// чат, упавший исключением, в сумму не входит. 0 до WC-4c означало «не измерено», а не
+    /// «ничего не потрачено». В файле итога поля аддитивны: старый итог (без поля) читается
+    /// нулями.</summary>
     public sealed record NightResult(
         string Date, int Selected, int Analyzed, int Applied, int ToInbox, long EstTokens, string Outcome,
-        int OverrodeHuman = 0, int DisputedPages = 0);
+        int OverrodeHuman = 0, int DisputedPages = 0, long InputTokens = 0);
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -358,7 +368,7 @@ public sealed class WikiNightlyService : BackgroundService
     {
         int selected = 0, analyzed = 0, applied = 0, toInbox = 0, packagesNight = 0, overrodeHuman = 0;
         var disputedPages = new HashSet<string>(StringComparer.Ordinal);
-        long est = 0;
+        long est = 0, inputTokens = 0;
         var outcome = OutcomeCompleted;
         try
         {
@@ -410,7 +420,14 @@ public sealed class WikiNightlyService : BackgroundService
                     {
                         var judged = await _stage2.JudgeAsync(ownerId, c.Session.Id, ct);
                         if (judged.Outcome != WikiChatStage2.Outcome.NotApplicable)
+                        {
                             est += (WikiChatStage2.MaxInputChars + WikiChatStage2.PromptHeader.Length) / 4;
+                            // Фактический вход ступени 2 (WC-4c): метрики того же ответа модели,
+                            // по которому вынесен вердикт. Считается по факту вызова: отказ
+                            // ступени 2 понесённого расхода не отменяет (тот же смысл, что у
+                            // ChatResult). NotApplicable — модель не звалась, расхода нет.
+                            inputTokens += judged.InputTokens;
+                        }
                         // Отказ ступени 2 → серая зона: чат отложен до следующей ночи.
                         if (judged.Outcome != WikiChatStage2.Outcome.Judged
                             || judged.Zone != WikiChatScorer.ZoneTriage) continue;
@@ -439,8 +456,14 @@ public sealed class WikiNightlyService : BackgroundService
                     continue;
                 }
                 analyzed++;
+                // Фактический вход (WC-4b): сумма по всем разобранным чатам независимо от исхода —
+                // отказанный план понесённый расход не отменяет (тот же смысл, что у ChatResult).
+                // Чат, упавший исключением выше, до analyzed++ не доходит: его токенов нет.
+                inputTokens += r.InputTokens;
                 var made = r.Outcome switch
                 {
+                    // Частичный исход (Partial, WC-3) — тоже applied: его применённые пакеты
+                    // считаются здесь же, отказ позднего окна их не перечёркивает.
                     WikiChatIngestService.OutcomeApplied => r.PackageIds.Count,
                     WikiChatIngestService.OutcomeAwaitingHuman => 1, // число неизвестно: нижняя граница
                     _ => 0,
@@ -472,7 +495,7 @@ public sealed class WikiNightlyService : BackgroundService
         return Result(outcome);
 
         NightResult Result(string o) => new(FormatDate(date), selected, analyzed, applied, toInbox, est, o,
-            overrodeHuman, disputedPages.Count);
+            overrodeHuman, disputedPages.Count, inputTokens);
     }
 
     // Что мешает продолжать ПЕРЕД чатом: тумблер/флаг сняли (disabled_midway), окно закрылось

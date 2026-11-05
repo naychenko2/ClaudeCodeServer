@@ -454,6 +454,180 @@ public class LocalActionRoutingTests
         Assert.Empty(claude.Calls);
     }
 
+    // --- WC-4c: detailed-цепочка RunLocalOrChosenDetailedAsync. Тот же путь без облачного
+    //     фолбэка, но usage локального ответа доходит до вызывающего: им ночной разбор вики и
+    //     ступень 2 отбора чатов меряют фактическую нагрузку GPU локали. ---
+
+    // Фейк движка с метриками того же ответа — как реальные LlamaServerClient/OllamaClient.
+    // throws — «движок бросает» (реальные клиенты своё исключение глушат; здесь проверяется,
+    // что цепочка по нему в облако не уходит). usage = null — «метрик не было»: вызов успешен.
+    private sealed class DetailedLocalEngine : ILocalLlmClient
+    {
+        private readonly string? _answer;
+        private readonly Protocol.UsageInfo? _usage;
+        private readonly bool _throws;
+
+        public DetailedLocalEngine(string? answer, Protocol.UsageInfo? usage, bool throws = false)
+        {
+            _answer = answer;
+            _usage = usage;
+            _throws = throws;
+        }
+
+        public bool Enabled => true;
+        public string BaseUrl => "http://localhost:11434";
+        public string Model => "qwen-test";
+        public string TextModel => "qwen-test";
+        public string ProviderKey => "llama-server";
+
+        public Task<string?> ChatJsonAsync(string systemPrompt, string userPrompt, object jsonFormat,
+            CancellationToken ct = default, string? model = null, int? timeoutMs = null, int? numPredict = null,
+            int? numCtx = null, string? ownerId = null, string? label = null) => Task.FromResult(_answer);
+        public Task<string?> GenerateTextAsync(string prompt, string? model, TimeSpan timeout, int numPredict,
+            int numCtx, string? ownerId = null, string? label = null, CancellationToken ct = default)
+            => Task.FromResult(_answer);
+        public Task<ChatTurnResult> ChatTurnAsync(IReadOnlyList<ChatMsg> messages, string? model, TimeSpan timeout,
+            int numPredict, int numCtx, string? ownerId, Func<string, Task>? onDelta = null,
+            CancellationToken ct = default) => Task.FromResult(new ChatTurnResult(_answer, _usage));
+        public Task WarmUpAsync(string? model, CancellationToken ct = default) => Task.CompletedTask;
+
+        private Task<(string? Text, Protocol.UsageInfo? Usage)> Result() =>
+            _throws
+                ? Task.FromException<(string?, Protocol.UsageInfo?)>(
+                    new InvalidOperationException("движок недоступен"))
+                : Task.FromResult((_answer, _usage));
+
+        public Task<(string? Text, Protocol.UsageInfo? Usage)> ChatJsonDetailedAsync(
+            string systemPrompt, string userPrompt, object jsonFormat, CancellationToken ct = default,
+            string? model = null, int? timeoutMs = null, int? numPredict = null, int? numCtx = null,
+            string? ownerId = null, string? label = null) => Result();
+
+        public Task<(string? Text, Protocol.UsageInfo? Usage)> GenerateTextDetailedAsync(
+            string prompt, string? model, TimeSpan timeout, int numPredict, int numCtx,
+            string? ownerId = null, string? label = null, CancellationToken ct = default) => Result();
+    }
+
+    private static (CheapTextRunner Runner, FakeOneShot Claude) DetailedNoCloudRunner(
+        string? answer, Protocol.UsageInfo? usage, bool throws = false)
+    {
+        var engine = new DetailedLocalEngine(answer, usage, throws);
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "qwen-test" });
+        var router = new LocalActionRouter(engine, Store(config), config, NullLogger<LocalActionRouter>.Instance);
+        var claude = new FakeOneShot();
+        return (new CheapTextRunner(router, engine, Cloud(config), claude, NullLogger<CheapTextRunner>.Instance),
+            claude);
+    }
+
+    private static async Task<(OneShotResult? Result, FakeOneShot Claude)> RunLocalOrChosenDetailedNoCloud(
+        string actionKey, string? answer, Protocol.UsageInfo? usage)
+    {
+        var (runner, claude) = DetailedNoCloudRunner(answer, usage);
+        return (await runner.RunLocalOrChosenDetailedAsync(actionKey, "prompt-text", jsonFormat: "json"), claude);
+    }
+
+    [Fact]
+    public async Task Detailed_ЛокальныйМаршрут_ОтдаётТекстИUsageЛокали()
+    {
+        // Тот же путь, что RunLocalOrChosenAsync (маршрут local, облачного шага нет), но с
+        // расходом: usage того же ответа движка переводится в OneShotUsage с CostUsd 0.
+        // Клиент обёрнут в TrackedLocalLlmClient, как в DI: без его делегирования в
+        // detailed-методы метрики терялись бы на обёртке и в бою не дошли бы ни до кого.
+        var inner = new DetailedLocalEngine("ответ-локали", new Protocol.UsageInfo(1_000, 50, 0, 0));
+        var local = new TrackedLocalLlmClient(inner, new LocalEngineBusyTracker(), "test", () => 3,
+            NullLogger<TrackedLocalLlmClient>.Instance);
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "qwen-test" });
+        var router = new LocalActionRouter(local, Store(config), config, NullLogger<LocalActionRouter>.Instance);
+        var claude = new FakeOneShot();
+        var runner = new CheapTextRunner(router, local, Cloud(config), claude, NullLogger<CheapTextRunner>.Instance);
+
+        var result = await runner.RunLocalOrChosenDetailedAsync(
+            LocalActionCatalog.ActionRank, "prompt-text", jsonFormat: "json");
+
+        result.Should().NotBeNull();
+        result!.Text.Should().Be("ответ-локали");
+        result.Usage.Should().NotBeNull("usage того же ответа — смысл этого шага");
+        result.Usage!.InputTokens.Should().Be(1_000);
+        result.Usage.TotalInputTokens.Should().Be(1_000, "кеша у локального вызова нет");
+        result.Usage.OutputTokens.Should().Be(50);
+        result.Usage.CostUsd.Should().Be(0, "локальный вызов бесплатный");
+        result.Usage.Model.Should().Be("qwen-test");
+        Assert.Empty(claude.Calls);
+    }
+
+    [Theory]
+    [InlineData(LocalActionCatalog.ActionRank)]
+    [InlineData(LocalActionCatalog.CharacterSceneParse)]
+    public async Task ЛокальПусто_БезОблака_Detailed(string actionKey)
+    {
+        // Мутация «убрать ранний return (null, null) при !allowCloudFallback && Local в
+        // RunChainCoreAsync»: цепочка доходит до claude-шага → result не null, claude.Calls
+        // не пуст → этот тест красный.
+        var (result, claude) = await RunLocalOrChosenDetailedNoCloud(actionKey, answer: null, usage: null);
+
+        result.Should().BeNull("сбой/пусто локали не уводит содержимое в облако молча");
+        Assert.Empty(claude.Calls);
+    }
+
+    [Theory]
+    [InlineData(LocalActionCatalog.ActionRank)]
+    [InlineData(LocalActionCatalog.CharacterSceneParse)]
+    public async Task ЛокальБросает_БезОблака_ОблачногоШагаНет(string actionKey)
+    {
+        // Тот же контракт, что у строкового RunLocalOrChosenAsync: исключение движка
+        // пробрасывается наружу (его ловит вызывающий своим отказом), облачного шага нет.
+        var (runner, claude) = DetailedNoCloudRunner(
+            answer: "не важно", usage: new Protocol.UsageInfo(1, 1, 0, 0), throws: true);
+
+        var act = async () => await runner.RunLocalOrChosenDetailedAsync(
+            actionKey, "prompt-text", jsonFormat: "json");
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        claude.Calls.Should().BeEmpty("сбой локали не переводит вызов в облако");
+    }
+
+    // Подменённый шов БЕЗ переопределения detailed-метода: работает реализация по умолчанию
+    // интерфейса — текст тот же, что у строкового метода, usage = null, исключений нет. Так
+    // существующие потребители и тестовые фейки шва от нового метода не меняются.
+    private sealed class LegacyRunner : ICheapTextRunner
+    {
+        private readonly string? _answer;
+        public LegacyRunner(string? answer) => _answer = answer;
+
+        public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => true;
+        public bool HasRoute(string actionKey) => true;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "legacy";
+
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+            => Task.FromResult(_answer ?? "");
+
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) => Task.FromResult(_answer);
+
+        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
+            string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
+            => Task.FromResult(new OneShotResult(_answer ?? "", null, 0));
+    }
+
+    [Fact]
+    public async Task ФейкШваБезDetailed_РаботаетРеализацияПоУмолчанию_UsageNull()
+    {
+        ICheapTextRunner legacy = new LegacyRunner("ответ");
+
+        var result = await legacy.RunLocalOrChosenDetailedAsync(LocalActionCatalog.WikiNightly, "p");
+
+        result.Should().NotBeNull();
+        result!.Text.Should().Be("ответ");
+        result.Usage.Should().BeNull("шов метрик не давал — обёртка их не выдумывает");
+        result.DurationMs.Should().Be(0);
+
+        // Пустой ответ строкового метода — тот же null, обёртка не подставляет пустой ответ.
+        ICheapTextRunner empty = new LegacyRunner(null);
+        (await empty.RunLocalOrChosenDetailedAsync(LocalActionCatalog.WikiNightly, "p")).Should().BeNull();
+    }
+
     [Fact]
     public async Task ВыбраннаяМодельВернулаПустое_УходитНаClaude()
     {

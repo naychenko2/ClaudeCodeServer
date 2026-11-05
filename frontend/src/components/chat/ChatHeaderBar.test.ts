@@ -13,6 +13,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import { ChatHeaderBar } from './ChatHeaderBar';
 import { C } from '../../lib/design';
+import { CHAT_ACTION_ORDER, CHAT_ACTION_LABELS, CARD_ACTIONS_HIDDEN_BY_DEFAULT, HEADER_ACTIONS_HIDDEN_BY_DEFAULT } from '../../lib/chatActions';
 import type { Session } from '../../types';
 
 // Линия «при прокрутке» тулбара — маркер того, что шапка без строки фичи живёт как на
@@ -98,5 +99,21 @@ describe('ChatHeaderBar: слот строки фичи', () => {
   it('остров (island) без слота: узла слота нет — hero-шапка не обрастает пустым div', () => {
     const html = render({ island: true });
     expect(html).not.toContain('chat-feature-bar');
+  });
+});
+
+describe('ChatHeaderBar: действие «Вики» каталога', () => {
+  it('ключ wiki стоит сразу после dossier, подпись «Вики»', () => {
+    expect(CHAT_ACTION_ORDER[CHAT_ACTION_ORDER.indexOf('dossier') + 1]).toBe('wiki');
+    expect(CHAT_ACTION_LABELS.wiki).toBe('Вики');
+  });
+  it('умолчания: в плитке «Вики» под глазиком, в шапке/мобиле/на стене — на виду', () => {
+    expect(CARD_ACTIONS_HIDDEN_BY_DEFAULT).toContain('wiki');
+    expect(HEADER_ACTIONS_HIDDEN_BY_DEFAULT).not.toContain('wiki');
+  });
+  it('без подсистемы «Заметки» и флага в шапке нет ни кнопки, ни экземпляра меню «Вики»', () => {
+    const html = renderToStaticMarkup(createElement(ChatHeaderBar, base as never));
+    expect(html).not.toContain('wiki-chat-menu');
+    expect(html).not.toContain('Действия «Вики»');
   });
 });

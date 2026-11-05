@@ -60,10 +60,19 @@ public sealed class OllamaClient : ILocalLlmClient
     public async Task<string?> ChatJsonAsync(
         string systemPrompt, string userPrompt, object jsonFormat, CancellationToken ct = default,
         string? model = null, int? timeoutMs = null, int? numPredict = null, int? numCtx = null,
+        string? ownerId = null, string? label = null) =>
+        (await ChatJsonDetailedAsync(systemPrompt, userPrompt, jsonFormat, ct, model, timeoutMs,
+            numPredict, numCtx, ownerId, label)).Text;
+
+    // Тот же вызов со схемой, но счётчики ответа (prompt_eval_count/eval_count) отдаются
+    // наружу, а не только в RecordSpend: ими меряют нагрузку локали (WC-4c).
+    public async Task<(string? Text, Protocol.UsageInfo? Usage)> ChatJsonDetailedAsync(
+        string systemPrompt, string userPrompt, object jsonFormat, CancellationToken ct = default,
+        string? model = null, int? timeoutMs = null, int? numPredict = null, int? numCtx = null,
         string? ownerId = null, string? label = null)
     {
         var used = string.IsNullOrWhiteSpace(model) ? Model : model!;
-        if (string.IsNullOrWhiteSpace(BaseUrl) || string.IsNullOrWhiteSpace(used)) return null;
+        if (string.IsNullOrWhiteSpace(BaseUrl) || string.IsNullOrWhiteSpace(used)) return (null, null);
         try
         {
             var client = _http.CreateClient(HttpClientName);
@@ -91,7 +100,7 @@ public sealed class OllamaClient : ILocalLlmClient
             if (!resp.IsSuccessStatusCode)
             {
                 _logger.LogDebug("Ollama /api/chat вернул {Status}", resp.StatusCode);
-                return null;
+                return (null, null);
             }
 
             var json = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
@@ -99,13 +108,13 @@ public sealed class OllamaClient : ILocalLlmClient
                 ? content.GetString()
                 : null;
             if (!string.IsNullOrEmpty(answer)) RecordSpend(used, json, ownerId, label);
-            return answer;
+            return (answer, ReadUsage(json));
         }
         catch (Exception ex)
         {
             // Недоступность/таймаут — штатный сценарий (фолбэк на правила), не шумим ошибкой
             _logger.LogDebug(ex, "Ollama недоступен ({BaseUrl}), фолбэк на правила", BaseUrl);
-            return null;
+            return (null, null);
         }
     }
 
@@ -147,10 +156,17 @@ public sealed class OllamaClient : ILocalLlmClient
     // Возвращает null при любой ошибке/таймауте/пустом ответе — вызывающий откатывается на claude.
     public async Task<string?> GenerateTextAsync(
         string prompt, string? model, TimeSpan timeout, int numPredict, int numCtx,
+        string? ownerId = null, string? label = null, CancellationToken ct = default) =>
+        (await GenerateTextDetailedAsync(prompt, model, timeout, numPredict, numCtx, ownerId, label, ct)).Text;
+
+    // Тот же свободнотекстовый вызов, но счётчики ответа отдаются наружу, а не только в
+    // RecordSpend: ими меряют нагрузку локали (WC-4c).
+    public async Task<(string? Text, Protocol.UsageInfo? Usage)> GenerateTextDetailedAsync(
+        string prompt, string? model, TimeSpan timeout, int numPredict, int numCtx,
         string? ownerId = null, string? label = null, CancellationToken ct = default)
     {
         var used = string.IsNullOrWhiteSpace(model) ? TextModel : model!;
-        if (string.IsNullOrWhiteSpace(BaseUrl) || string.IsNullOrWhiteSpace(used)) return null;
+        if (string.IsNullOrWhiteSpace(BaseUrl) || string.IsNullOrWhiteSpace(used)) return (null, null);
         try
         {
             var client = _http.CreateClient(HttpClientName);
@@ -169,21 +185,21 @@ public sealed class OllamaClient : ILocalLlmClient
             if (!resp.IsSuccessStatusCode)
             {
                 _logger.LogDebug("Ollama /api/chat (text) вернул {Status}", resp.StatusCode);
-                return null;
+                return (null, null);
             }
 
             var json = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
             var content = json.TryGetProperty("message", out var msg) && msg.TryGetProperty("content", out var c)
                 ? c.GetString()
                 : null;
-            if (string.IsNullOrWhiteSpace(content)) return null;
+            if (string.IsNullOrWhiteSpace(content)) return (null, null);
             RecordSpend(used, json, ownerId, label);
-            return content;
+            return (content, ReadUsage(json));
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "Ollama (text) недоступен ({BaseUrl}), фолбэк на claude", BaseUrl);
-            return null;
+            return (null, null);
         }
     }
 

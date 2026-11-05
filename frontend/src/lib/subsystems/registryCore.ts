@@ -169,6 +169,16 @@ export interface ChatHeaderSummaryCtx {
   // Шапка узкая (мобила/планшет или колонка «Стены»): вклад сворачивает ряд кнопок в меню
   compact?: boolean;
 }
+// Меню «Вики» чата (вклад «Заметок» в слот chat-header-action, имя wiki-chat-menu).
+export interface ChatWikiMenuCtx {
+  session: Session;
+  hasMessages: boolean;
+  online: boolean;
+  isMobile: boolean;            // боттом-шит вместо дропдауна
+  headless?: boolean;           // без своего триггера: меню открывается только по open
+  open?: { counter: number; anchor: DOMRect | null }; // внешний запрос «открой по якорю»
+  onClose?: () => void;         // зовётся после действия пункта (закрытие кликом вне/Esc наружу не сообщается)
+}
 export interface ChatHeaderMenuItemCtx { run: () => void }
 
 export interface PlanChipCtx { plan: string; projectId?: string }

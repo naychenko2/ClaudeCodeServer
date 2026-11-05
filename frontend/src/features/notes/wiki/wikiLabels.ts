@@ -86,6 +86,16 @@ export const ORIGIN_META: Record<string, { label: string; genitive: string; icon
 // бэка на Ф2 без пути решения человеку не говорит ничего.
 export const personalSectionRefusalText = 'Личный раздел пока не разбирается — разбор доступен для заметок проекта.';
 
+// Отказ разбора чата (исход rejected и любой неизвестный исход) — по-человечески. reason —
+// сырая строка бэка («пустой ответ модели в окне m11-m381, проход A»): окна, проходы и прочее
+// внутреннее человеку не показываем никогда. Известна одна причина; чужая — без хвоста:
+// смысла не выдумываем, сырая строка уходит только в title пункта.
+export function analyzeRefusalText(reason: string | null): string {
+  const base = 'Не удалось разобрать';
+  if (reason && reason.toLowerCase().includes('пустой ответ')) return `${base}: модель не ответила`;
+  return base;
+}
+
 // Контекст вызова кода not_found: один код значит два разных отказа, и текст выбирается
 // по контексту, а не по коду (хвост ревью R-S7b-0 H4). Разбор чата (analyze /
 // analyze-status): чужой или несуществующий чат (WikiChatIngestService.cs:95-100). Заявка

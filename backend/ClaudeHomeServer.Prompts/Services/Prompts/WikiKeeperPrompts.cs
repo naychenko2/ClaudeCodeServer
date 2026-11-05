@@ -125,7 +125,9 @@ public static class WikiKeeperPrompts
             OUTPUT — JSON ONLY, THIS SCHEMA:
             {"claims":[{"text":"<the claim, in the language of the source>","quote":"<verbatim quote from the source>"}]}
 
-            SECTION CATALOG (data — the pages you may align to):
+            SECTION CATALOG (data — the pages you may align to). Entries marked "— source"
+            are source cards: they only receive footnotes; never append/supersede/conflict/link
+            into them.
             {{sectionIndex}}
             {{OptionalSectionPages(existingPages)}}
             SOURCE FRAGMENT:
@@ -165,13 +167,17 @@ public static class WikiKeeperPrompts
                - "conflict" — mark a real contradiction with a statement on an existing page.
                  A clarification is not a contradiction: if in doubt, do not use "conflict";
                - "link" — connect two pages (within the section or upward only).
+             If no knowledge page in the catalog fits a claim, use "create" with a new title;
+             an empty section is a normal case.
              Every operation carries the index of the claim it is based on. Three of them also
              carry "target" — what the operation acts upon:
                - "supersede" and "conflict" — the statement of the page that is replaced or
                  contradicted, copied exactly as it is worded on the page shown below;
                - "link" — the name of the other page, exactly as the catalog names it;
                - "create" and "append" carry no target.
-             Name an existing page exactly as the catalog names it; never invent a path.
+             Name an existing page exactly as the catalog names it; never invent a path for a
+             page the catalog already names. A new page has no path yet: "create" carries a
+             title only.
              An operation without its target is not a change: the code rejects it.
 
             WHAT YOU MUST SKIP
@@ -201,14 +207,17 @@ public static class WikiKeeperPrompts
 
             OUTPUT — JSON ONLY, THIS SCHEMA:
             {"chronicle":{"about":0,"decided":[0],"learned":[],"open_questions":[]},
-            "operations":[{"op":"append","page":"<title exactly as the catalog names it>","claim":0},
+            "operations":[{"op":"create","page":"<new title>","claim":0},
+            {"op":"append","page":"<title exactly as the catalog names it>","claim":0},
             {"op":"supersede","page":"<title>","claim":0,"target":"<the statement of the page, copied exactly>"},
             {"op":"link","page":"<title>","claim":0,"target":"<the other page, as the catalog names it>"}]}
 
             CLAIMS OF THE FIRST PASS (data — reference a claim by its index, an integer):
             {{claimsJson}}
 
-            SECTION CATALOG (data — the pages you may align to):
+            SECTION CATALOG (data — the pages you may align to). Entries marked "— source"
+            are source cards: they only receive footnotes; never append/supersede/conflict/link
+            into them.
             {{sectionIndex}}
             {{OptionalSectionPages(existingPages)}}
             SOURCE FRAGMENT:

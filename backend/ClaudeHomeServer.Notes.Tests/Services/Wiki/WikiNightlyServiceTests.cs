@@ -921,6 +921,115 @@ public class WikiNightlyServiceTests : IDisposable
         File.ReadAllText(LastFile()).Should().Contain("\"estTokens\"").And.Contain("\"toInbox\"");
     }
 
+    // ─── WC-3: частичный исход считается в applied ─────────────────────────
+    // Частичный исход разбора (Partial, отказ позднего окна) — Outcome applied:
+    // применённые пакеты чата считаются в итог ночи так же, как при полном разборе.
+
+    [Fact]
+    public async Task ЧастичныйИсход_СчитаетсяВApplied()
+    {
+        Configure();
+        AddChat("c1");
+        AddChat("c2");
+        await Tick(Sut((owner, chat, ct) =>
+        {
+            lock (_analyzed) _analyzed.Add(chat);
+            return Task.FromResult(new WikiChatIngestService.ChatResult(
+                WikiChatIngestService.OutcomeApplied, "разбор окна m8-m10 не удался", ["pkg-" + chat],
+                Partial: true));
+        }));
+
+        var last = Last();
+        last.Analyzed.Should().Be(2);
+        last.Applied.Should().Be(2, "пакеты частичного исхода — в applied, отказ позднего окна их не перечёркивает");
+        last.ToInbox.Should().Be(0);
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted);
+    }
+
+    // ─── WC-4b: фактические входные токены в итоге ночи ─────────────────────
+    // Итог несёт сумму фактического входа разобранных чатов (ChatResult.InputTokens, WC-4a) рядом с
+    // оценкой: EstTokens решает бюджет заранее, InputTokens — что реально ушло модели.
+
+    [Fact]
+    public async Task ИтогНочи_InputTokensРавенСуммеФактических()
+    {
+        // Мутации: «не прибавлять r.InputTokens» → 0; «суммировать только applied» → 0 (исход здесь
+        // nothing_new). Сбой разбора (c3) до analyzed++ не доходит — в сумме его нет.
+        Configure();
+        AddChat("c1");
+        AddChat("c2");
+        AddChat("c3");
+        await Tick(Sut((owner, chat, ct) =>
+        {
+            lock (_analyzed) _analyzed.Add(chat);
+            if (chat == "c3") throw new InvalidOperationException("разбор не вернулся");
+            return Task.FromResult(new WikiChatIngestService.ChatResult(
+                WikiChatIngestService.OutcomeNothingNew, null, [],
+                InputTokens: chat == "c1" ? 1_000 : 2_500));
+        }));
+
+        var last = Last();
+        last.Analyzed.Should().Be(2, "сбой разбора в итог не входит");
+        last.InputTokens.Should().Be(3_500, "сумма фактического входа разобранных чатов");
+        last.EstTokens.Should().BeGreaterThan(0, "оценка остаётся: по ней бюджет решает заранее");
+        File.ReadAllText(LastFile()).Should().Contain("\"inputTokens\"");
+    }
+
+    [Fact]
+    public async Task ИтогНочи_InputTokensВключаетВходСтупени2()
+    {
+        // Мутация «не прибавлять judged.InputTokens к inputTokens в RunPassAsync» → 1 000
+        // (красный): фактический вход ступени 2 выпадает из суммы.
+        Configure();
+        AddChat("g1", mark: null, history: Gray());
+        WikiChatScorer.Score(ScorerInput(_sessions.GetById("g1")!)).Zone.Should().Be(WikiChatScorer.ZoneGray,
+            "фикстура серого чата: ступень 2 спрашивается");
+        _llm.LocalInputTokens = 300;
+        _llm.Reply = a => a == LocalActionCatalog.WikiTriage
+            ? """{"hasKnowledge":true,"about":"a","reason":"r"}"""
+            : NothingJson;
+
+        await Tick(Sut((owner, chat, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
+            WikiChatIngestService.OutcomeNothingNew, null, [], InputTokens: 1_000))));
+
+        var last = Last();
+        last.Analyzed.Should().Be(1);
+        last.InputTokens.Should().Be(1_300, "разбор чата (1 000) плюс фактический вход ступени 2 (300)");
+    }
+
+    [Fact]
+    public async Task ОтказСтупени2_ЕёВходВИтогеОстаётся_ЧатНеРазобран()
+    {
+        // Расход считается по факту вызова, а не по исходу вердикта: отказ ступени 2 понесённого
+        // расхода не отменяет (тот же смысл, что у ChatResult в WC-4b). Мутация «суммировать
+        // только Judged» → 0 (красный).
+        Configure();
+        AddChat("g1", mark: null, history: Gray());
+        _llm.LocalInputTokens = 300;
+        _llm.Reply = _ => "это не json";
+
+        await Tick(Sut((owner, chat, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
+            WikiChatIngestService.OutcomeNothingNew, null, [], InputTokens: 1_000))));
+
+        _analyzed.Should().BeEmpty("отказ ступени 2 — серая зона, чат не берётся");
+        Last().InputTokens.Should().Be(300, "вызов модели состоялся — его вход в итоге");
+    }
+
+    [Fact]
+    public async Task СтарыйИтогБезПоля_ЧитаетсяНулём()
+    {
+        // Аддитивность поля: файл итога, записанный до WC-4b, читается как раньше, нового поля в нём
+        // нет → 0. Ломающего изменения формата нет, BackupSchema.Version не тронут.
+        File.WriteAllText(LastFile(), """
+            {"date":"2026-11-02","selected":1,"analyzed":1,"applied":0,"toInbox":0,
+             "estTokens":120,"outcome":"completed","overrodeHuman":0,"disputedPages":0}
+            """);
+
+        var last = Last();
+        last.InputTokens.Should().Be(0);
+        last.EstTokens.Should().Be(120);
+    }
+
     // ─── c4: изоляция владельцев и один проход ─────────────────────────────
 
     [Fact]
@@ -1048,6 +1157,9 @@ public class WikiNightlyServiceTests : IDisposable
         public bool Route = true;
         public Func<string, string>? Reply;
         public TaskCompletionSource? Gate;
+        // Сколько «отдал» движок на detailed-вызове (полный вход). 0 — метрик не было:
+        // вызов успешен, usage=null, итог прибавляет 0 (WC-4c).
+        public long LocalInputTokens;
         // Модель вызвана и встала на гейте — событие вместо таймерного ожидания в тестах.
         public readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -1075,6 +1187,19 @@ public class WikiNightlyServiceTests : IDisposable
                 await Gate.Task.ConfigureAwait(false);
             }
             return new OneShotResult(text, new OneShotUsage(10, 0, 0, 5, 0.0, "fake"), 1);
+        }
+
+        // Ночная ветка (wiki-nightly) и ступень 2 (wiki-triage) зовут detailed-вариант шва
+        // (WC-4c): тот же ответ плюс usage «движка».
+        public Task<OneShotResult?> RunLocalOrChosenDetailedAsync(string actionKey, string prompt,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            var text = Answer(actionKey, prompt);
+            return Task.FromResult<OneShotResult?>(new OneShotResult(
+                text,
+                LocalInputTokens == 0
+                    ? null
+                    : new OneShotUsage(LocalInputTokens, 0, 0, 5, 0.0, "qwen-local"), 1));
         }
 
         private string Answer(string actionKey, string prompt)

@@ -86,7 +86,7 @@ export function chatActionDeniedReason(
 ): string | null {
   if (key === 'rename' || key === 'archive' || key === 'tags') return chatWriteDeniedReason(project);
   if (key === 'delete') return chatDeleteDeniedReason(project, chat, myUserId);
-  if (key === 'expiry' || key === 'notify' || key === 'dossier') return ownerSettingsDeniedReason(project);
+  if (key === 'expiry' || key === 'notify' || key === 'dossier' || key === 'wiki') return ownerSettingsDeniedReason(project);
   return null;
 }
 

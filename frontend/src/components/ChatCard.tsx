@@ -1,5 +1,5 @@
 import { memo, useCallback, useState, useRef, useEffect, useLayoutEffect, type CSSProperties, type ReactNode } from 'react';
-import { AlertCircle, AlarmClock, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, FileText, GitCommitVertical, History, Hourglass, Eye, EyeOff, Layers, MessageSquareShare, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
+import { AlertCircle, AlarmClock, Archive, ArchiveRestore, Bell, BellOff, Bot, BookOpen, CheckCircle2, Clock, Columns3, FileText, GitCommitVertical, History, Hourglass, Eye, EyeOff, Layers, MessageSquareShare, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT, FS } from '../lib/design';
 import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem, Tooltip, handlePressableKey } from './ui';
@@ -8,7 +8,8 @@ import { STATUS_CONFIG, STATUS_GLOW, type VisualStatus } from './StatusIndicator
 import { useAgentsRunning, useBgCommandRunning } from '../lib/agentsPresence';
 import { useChatWatchdogs } from '../lib/watchdogPresence';
 import { useActionVisibility } from '../hooks/useActionVisibility';
-import { CHAT_ACTION_ORDER, CARD_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey } from '../lib/chatActions';
+import { useWikiChatAvailable } from '../hooks/useWikiChatAvailable';
+import { CHAT_ACTION_ORDER, CARD_ACTIONS_HIDDEN_BY_DEFAULT, CHAT_ACTION_LABELS, type ChatActionKey } from '../lib/chatActions';
 import { isArchivedChat } from '../lib/chatFilters';
 import { ExpiryBadge } from './ExpiryBadge';
 import { ExpiryPicker } from './chat/ExpiryPicker';
@@ -31,8 +32,8 @@ import { getLastMechanic, useLastMechanicVersion } from '../lib/lastMechanic';
 import { teamImplementTone, teamImplementStageShort, teamImplementBadgeText } from '../lib/teamImplement';
 import { useCanHover } from '../lib/pointer';
 import { NO_AUTOFILL } from '../lib/noAutofill';
-import { useSlot } from '../lib/subsystems/registry';
-import type { ChatCardBadgeApi, ChatCardBadgeCtx } from '../lib/subsystems/registryCore';
+import { useSlot, useSlotItem } from '../lib/subsystems/registry';
+import type { ChatCardBadgeApi, ChatCardBadgeCtx, ChatWikiMenuCtx } from '../lib/subsystems/registryCore';
 import { featureOf, useFeaturesIndex } from '../lib/featuresIndex';
 import { featureDisplayState, KEY_SESSION_TOOLTIP } from '../lib/chatGroups';
 import { FeatureGlyph } from './chat/feature/FeatureGlyphs';
@@ -501,6 +502,22 @@ function ChatCardView({
       tags: tagsDeniedReason, notify: notifyDeniedReason, dossier: dossierDeniedReason,
       expiry: expiryDeniedReason } as Partial<Record<ChatActionKey, string | null>>)[k] ?? null;
 
+  // «Вики» (WM-4). Доступность действия считает хук: флаг llm-wiki, чат в проекте, роль не
+  // отказана (тот же гейт «только владелец», что у настроек вики — ветка ownerSettingsDeniedReason
+  // participantGate'а, приходит в карточку как dossierDeniedReason), вики владельца заведена.
+  // Пока дерево не загружено — false: пункт скрыт целиком, не серым и не disabled.
+  const wikiAvailable = useWikiChatAvailable(s.projectId, !!dossierDeniedReason);
+  // Меню — вклад «Заметок» слота chat-header-action (тот же, что у шапки). Он монтируется
+  // только пока карточка держит его открытым: его опрос analyze-status живёт ровно пока меню
+  // живо, и при закрытии карточки (чат ушёл из списка, сменился фильтр) снимается сам.
+  // Состояние локальное: две карточки разных чатов меню не делят. Повторное открытие — новый
+  // counter: вклад открывается по его изменению (prevTrigger-гард вклада не даёт двойного
+  // открытия на одном запросе).
+  const wikiMenu = useSlotItem<ChatWikiMenuCtx>('chat-header-action', 'wiki-chat-menu');
+  const wikiReqSeq = useRef(0);
+  const [wikiOpen, setWikiOpen] = useState<{ counter: number; anchor: DOMRect } | null>(null);
+  const requestWikiOpen = (anchor: DOMRect) => setWikiOpen({ counter: ++wikiReqSeq.current, anchor });
+
   // Быстрые действия карточки (hover-кластер на desktop, кнопки свайпа на мобиле).
   // Набор — общий каталог действий чата (тот же, что в шапке открытого чата); какие
   // из них стоят кнопками рядом с «⋮», решает пользователь глазиком в меню.
@@ -516,6 +533,9 @@ function ChatCardView({
     wall: !!onAddToWall,
     notify: canMute,
     dossier: canEditChat && !!s.projectId,
+    // «Вики» — как решил его хук: нет флага/проекта/заведённой вики/права — нет ни строки
+    // меню, ни быстрой кнопки, ни кнопки свайпа (инвариант «недоступно → скрыто целиком»)
+    wiki: wikiAvailable,
     expiry: canEditChat,
     // Архивный пункт рисуется на меню (см. ниже) и/или в быстром кластере — но
     // только когда родительский список дал колбэк onArchive (= отвечает за сеть
@@ -615,6 +635,12 @@ function ChatCardView({
         icon: <History size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
         title: s.excludeFromDossiers ? 'Решения не сохраняются' : 'Решения сохраняются',
         onClick: e => { e.stopPropagation(); void toggleDossier(); },
+      };
+      case 'wiki': return {
+        icon: <BookOpen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, title: CHAT_ACTION_LABELS.wiki,
+        // Быстрая кнопка (кластер или свайп) открывает меню по своему rect: она не проходит
+        // через меню карточки, его якоря у неё нет
+        onClick: e => { e.stopPropagation(); requestWikiOpen((e.currentTarget as HTMLElement).getBoundingClientRect()); },
       };
       case 'expiry': return {
         icon: <Hourglass size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
@@ -1415,6 +1441,21 @@ function ChatCardView({
               onClick={e => { e.stopPropagation(); setMenu(null); void toggleDossier(); }}
             />
           )}
+          {/* «Вики» (WM-4): строка по образцу тегов — по каноническому порядку каталога,
+              между «Досье» и «сроком». Её гейт — cardActionAvailable.wiki: один источник с
+              быстрой кнопкой и свайпом, строка не может разойтись с ними. Для недоступного
+              здесь нет ни серой строки, ни disabled-строки */}
+          {cardActionAvailable.wiki && (
+            <MenuItem
+              icon={<BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+              label={CHAT_ACTION_LABELS.wiki}
+              isMobile={isMobile}
+              action={visAction('wiki')}
+              // Меню вики открывается по тому же якорю, что и это меню закрывается: кнопка «⋮»
+              // исчезнет вместе с ним, и её rect брать будет неоткуда (приём пункта «Теги»)
+              onClick={e => { e.stopPropagation(); const anchor = menu; setMenu(null); requestWikiOpen(anchor); }}
+            />
+          )}
           {canEditChat && (
             <MenuItem
               icon={<Hourglass size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
@@ -1466,6 +1507,27 @@ function ChatCardView({
             onClick={e => { e.stopPropagation(); setMenu(null); onDelete(); }}
           />
         </Menu>
+      )}
+
+      {/* Подменю «Вики» (WM-4): вклад «Заметок» живёт, только пока открыт, — карточка
+          держит его состоянием wikiOpen. Действие пункта зовет onClose: карточка снимает
+          состояние, вклад размонтируется и свой опрос снимает сам (это в самом вкладе).
+          Закрытие кликом вне/Esc наружу не сообщается (контракт WM-2): вклад остаётся
+          открытым состоянием карточки и открывается заново по новому counter.
+          Клик гасится на обёртке: выпадающий список вклада — портал в body, но React-события
+          идут по дереву компонентов, и клик по пункту иначе открыл бы чат (onClick карточки). */}
+      {wikiOpen && (
+        <span style={{ display: 'contents' }} onClick={e => e.stopPropagation()}>
+          {wikiMenu?.render?.({
+            session: s,
+            hasMessages: s.messageCount > 0,
+            online,
+            isMobile,
+            headless: true,
+            open: wikiOpen,
+            onClose: () => setWikiOpen(null),
+          })}
+        </span>
       )}
 
       {expiryMenu && !editing && (

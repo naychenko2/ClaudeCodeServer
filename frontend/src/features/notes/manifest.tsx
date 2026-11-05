@@ -9,7 +9,7 @@ import type {
   FileViewerNoteViewCtx, FileViewerNoteEditorCtx, FileViewerNoteConnectionsCtx, FileViewerDocCommentsCtx,
   FileExplorerFolderIconCtx, FileExplorerNoteDialogCtx,
   WorkspacePanelNotesCtx, HomeWidgetNotesCtx, QuickActionNoteCtx,
-  ChatItemSaveNoteCtx, ChatHeaderSummaryCtx, ChatHeaderMenuItemCtx,
+  ChatItemSaveNoteCtx, ChatHeaderSummaryCtx, ChatHeaderMenuItemCtx, ChatWikiMenuCtx,
   PlanChipCtx, PlanButtonCtx, MarkdownEditorCtx,
 } from '../../lib/subsystems/registryCore';
 
@@ -22,7 +22,7 @@ import { NotesWidget } from './NotesWidget';
 import { QuickNoteAction } from './QuickNoteAction';
 import { ChatSaveNoteAction } from './ChatSaveNoteAction';
 import { SessionSummaryAction, ChatSummaryMenuItem } from './SessionSummaryAction';
-import { WikiChatActions } from './WikiChatActions';
+import { WikiChatActions, WikiChatMenu } from './WikiChatActions';
 import { PlanSaveChip, PlanSaveButton } from './PlanNoteActions';
 import { IconNotes } from './shared';
 import { openNoteById } from './saveToNote';
@@ -147,6 +147,12 @@ export const manifest: SubsystemManifest = {
       },
       // Действия «Вики» в шапке чата (S7b, за флагом llm-wiki): «Разобрать этот чат»,
       // «Открыть хронику», «Откатить всё из этого чата». Гейт флага — внутри компонента
+      // Меню «Вики» (WM-2): единственная оболочка действий; ядро (шапка, «⋯», карточка) подключит
+      // его в WM-3 и тогда же снимет 'wiki-chat-actions' ниже
+      {
+        name: 'wiki-chat-menu', order: 31,
+        render: (ctx: ChatWikiMenuCtx) => <WikiChatMenu {...ctx} />,
+      },
       {
         name: 'wiki-chat-actions', order: 30,
         render: (ctx: ChatHeaderSummaryCtx) => (

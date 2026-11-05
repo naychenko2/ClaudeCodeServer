@@ -1,59 +1,30 @@
-// Тест логики действий чата (S7b): флаг выключен — ни контролов, ни запросов вики;
-// «Разобрать» — POST analyze, 200 → исход текстом; 409 task_execution/marked_skip — текст
-// отказа по коду (wikiErrorText), не сырой код; 202 → опрос analyze-status до running:false и
-// показ last.outcome, и после завершенного опроса — перечитка chroniclePath (кнопка
-// «Открыть хронику» без перезагрузки); «идёт» восстанавливается при монтировании без клика;
-// двойное нажатие — один запрос; гард поколения — ответ прежнего чата (и POST, и опроса)
-// не попадает на экран нового; «Откатить всё» — REST только после подтверждения модалкой,
-// sourceRef без диапазона окна, итог — согласованный по числу («1 пакет откатан»,
-// «2 пакета откатано», «5 пакетов откатано»); requestNoteIngest — POST ingest/note с noteId,
-// 409 packages_limit, 404 и 400 wiki_note_id — текстом, не бросает.
-// «Открыть хронику» (OPEN-1): клик — запрос в стор вики (section — 'projects/{projectId}'
-// из session.projectId, path — chroniclePath из списка) + переход в «Заметки» каналом
-// 'cc-open-note'; без projectId чата — ни запроса, ни перехода. Открытие самой страницы —
-// в WikiTab.test (там же и «запрос ждёт загрузки дерева»).
-// Плюс достижимость из UI: РЕАЛЬНАЯ шапка чата (ChatHeaderBar) с РЕАЛЬНЫМ манифестом «Заметок»
-// рисует вклад wiki-chat-actions в ряду действий (десктоп); при выключенном флаге — нет
-// (п.1 вердикта ревью 98278913).
+// Тест меню «Вики» чата (S7b → WM-2): флаг выключен — ни контролов, ни запросов вики;
+// ряда из пяти кнопок больше нет — действия живут ОДНИМ меню (WikiChatMenu на базе
+// ToolbarOverflowMenu): «Разобрать этот чат» · «Открыть хронику» (только при chroniclePath) ·
+// «Важный» · «Не разбирать» · «Откатить всё из этого чата» (danger, ConfirmDialog).
+// «Разобрать» — POST analyze, 200 → исход человеческим текстом (applied «Разобрано — записано в
+// вики», awaiting_human «Есть спорное — во „Входящих“», nothing_new/up_to_date «Нового нет»,
+// отказ «Не удалось разобрать[: модель не ответила]» + подпись пункта «Разобрать ещё раз»;
+// сырая причина бэка — только в title, окна и проходы в видимый текст не попадают); 409 —
+// текст по коду (wikiErrorText); 202 → опрос analyze-status до running:false; «идёт»
+// восстанавливается при монтировании; двойное нажатие — один запрос; гард поколения.
+// Точка статуса на триггере гаснет по открытию меню: отметка cc_wiki_seen_<chat> = finishedAt
+// последнего исхода (сбой localStorage — точка горит); пока идёт разбор — горит всегда.
+// Внешнее открытие (open: counter+anchor) и headless — без своего триггера.
+// «Откатить всё» — REST только после подтверждения, sourceRef без диапазона окна.
+// «Открыть хронику» (OPEN-1): запрос в стор вики + 'cc-open-note'.
+// Достижимость: РЕАЛЬНАЯ шапка (ChatHeaderBar) с РЕАЛЬНЫМ манифестом рисует старый вклад
+// wiki-chat-actions — теперь это то же меню, без ряда (его снимет WM-3).
 //
-// Компактная раскладка (дефект ecec968a): на ширине < TABLET_WIDE_MIN — тот же порог,
-// который читает сама шапка (isCompact = isMobile || isTablet, ChatHeaderBar:1357), —
-// ряд не переносится и три текстовые кнопки переполняют его (замер QA-П1b: на 360 правый
-// край «Откатить» 565). Там компонент рисует ОДНУ кнопку-меню (ToolbarOverflowMenu):
-// те же действия, гарды и тексты; статус разбора — значением пункта «Разобрать», итог
-// отката — подписью пункта «Откатить»; «Откатить» — цветом C.dangerText (тон ItemRow по
-// флагу danger); подтверждение — та же ConfirmDialog. Ряд на 360 в разметке нет — он и
-// был дефект.
-// Сигнал на триггере (доработка M-1, пункт ревью 6570f3d0): при результате разбора или
-// отката на триггере ЗАКРЫТОГО меню — точка цвета статуса (контракт ToolbarOverflowMenu:
-// indicator ReactNode «как есть», правка nodeIndicator); без сообщения — точки нет.
+// Стор вики и флаги — настоящие; мокан только транспорт (offline.request) и signalr.
+// Шапка — через renderToStaticMarkup (эффекты в SSR не работают — запросов нет).
 //
-// Стор вики и флаги — настоящие; мокан только транспорт (offline.request) и signalr —
-// тот же приём, что в WikiJournal.test. Модалка ConfirmDialog — портал в document.body.
-// Шапка монтируется через renderToStaticMarkup (паттерн stripShortcuts.test): эффекты в SSR
-// не работают — ни одного запроса; проверяется ровно состав ряда.
-//
-// Мутации этого прогона (вывод — в отчёте задачи):
-// (1) убрать гард seq в analyze .then → «ответ прежнего чата» краснеет;
-// (2) звать doRetract прямо из кнопки, минуя подтверждение → «0 вызовов до подтверждения» краснеет;
-// (3) послать sourceRef с диапазоном («session:{id}#m1-9») → «карточка без диапазона» краснеет;
-// (4) показать сырой код вместо wikiErrorText → «409 текстом» краснеет;
-// (5) в опросе не останавливаться на running:false (сcheduling всегда) → «опрос останавливается» краснеет;
-// (6) убрать useSlotItem('chat-header-action','wiki-chat-actions') в ChatHeaderBar → «ряд шапки» краснеет;
-// (7) убрать гард seq в poll .then → «гард опроса» краснеет;
-// (8) не перечитывать chroniclePath после завершенного опроса → «со ссылкой» краснеет;
-// (9) вернуть несклонённые формы в retractResultText → «склонение» краснеет.
-// OPEN-1 (этот прогон): (10) не класть запрос в стор (убрать requestOpenWikiPage) и
-// (11) не диспатчить 'cc-open-note' → оба краснят «200 applied — … клик — запрос в сторе
-// и переход»; (12) снять гейт session.projectId → «без projectId» краснеет.
-// M-1 (этот прогон): (13) вернуть единый nowrap-ряд без меню на компакте
-// (isCompactHeader → false) → «шапка на 360: … трёх кнопок в разметке нет» и
-// «на 360 ряда из трёх кнопок нет…» краснеют; (14) снять флаг danger у пункта «Откатить»
-// → «цветом C.dangerText» краснеет.
-// M-1 доработка (вердикт 6570f3d0, этот прогон): (15) не рендерить ReactNode-индикатор
-// в ToolbarOverflowMenu (nodeIndicator → всегда null) → «сигнал на триггере…» краснеет;
-// (16) не брать в indicator исход отката (убрать retractText из условия) → «после отката»
-// краснеет.
+// Мутации WM-2 (вывод — в отчёте задачи): (1) не гасить точку по открытию (убрать onClickCapture) →
+// «точка гаснет» краснеет; (2) не писать отметку в localStorage → «после перезагрузки» краснеет;
+// (3) отказ без analyzeRefusalText (сырая причина в тексте) → «отказ по-человечески» краснеет;
+// (4) снять гард seq в analyze/poll → «гард поколения»/«гард опроса»; (5) звать doRetract мимо
+// подтверждения → «0 вызовов до подтверждения»; (6) писать отметку в чужой чат (ключ не по session.id)
+// → «смена чата не пишет отметку»; (7) running гасить как итог → «пока идёт разбор точка горит».
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -65,7 +36,7 @@ import {
 import { C } from '../../../lib/design';
 import { setAllFlags } from '../../../lib/featureFlags';
 import { setAllSubsystems } from '../../../lib/subsystems';
-import { WikiChatActions, requestNoteIngest } from '../WikiChatActions';
+import { WikiChatMenu, requestNoteIngest } from '../WikiChatActions';
 import { retractResultText } from '../wiki/wikiLabels';
 import { manifest as notesManifest } from '../manifest';
 import { ChatHeaderBar } from '../../../components/chat/ChatHeaderBar';
@@ -159,11 +130,25 @@ function serve(opts: {
   return counts;
 }
 
-const roots: Root[] = [];
 
-function render(session: ChatHeaderSummaryCtx['session']): Cont {
+const roots: Root[] = [];
+const TRIGGER_TITLE = 'Действия «Вики» в этом чате';
+const OK = 'Разобрано — записано в вики';
+
+// Меню в тестах — боттом-шит (isMobile): дропдауну нужен якорь с размерами, а fakeDom их не считает
+function menuEl(session: ChatHeaderSummaryCtx['session'], extra: Record<string, unknown> = {}) {
+  return createElement(WikiChatMenu, { session, hasMessages: true, online: true, isMobile: true, ...extra });
+}
+
+function mountMenu(session: ChatHeaderSummaryCtx['session'], extra: Record<string, unknown> = {}): Cont {
+  // один живой экземпляр на тест: повторный installFakeDom даёт новый document, и портал
+  // прежнего корня остался бы в старом
+  for (const r of roots.splice(0)) act(() => r.unmount());
   installFakeDom();
-  const { root, container } = mount(createElement(WikiChatActions, { session, hasMessages: true, online: true }));
+  // открытый ToolbarOverflowMenu ищет прокручиваемых предков через getComputedStyle — в node он заглушен
+  const g = globalThis as Record<string, unknown>;
+  if (!g.getComputedStyle) g.getComputedStyle = () => ({ overflowY: 'visible' });
+  const { root, container } = mount(menuEl(session, extra));
   roots.push(root);
   return container;
 }
@@ -220,58 +205,122 @@ const CHATRECORD = {
   chroniclePath: `Проекты/p1/Хроники/${CHAT_A}.md`,
 };
 
+// Пункт меню по вхождению подписи (у строки два текстовых блока — label и sublabel)
+function item(label: string): AnyNode | null {
+  return allNodes(docBody()).find(n => n.nodeName === 'BUTTON' && textNodes(n).join('').includes(label)) ?? null;
+}
+
+// Открыть меню как человек: захват клика по обёртке гасит точку (в fakeDom события не всплывают —
+// зовём обработчик обёртки сами), затем клик по триггеру
+function openMenu(c: Cont) {
+  const wrap = findNodeByAttr(c, 'data-testid', 'wiki-chat-menu');
+  if (!wrap) throw new Error('нет обёртки меню');
+  act(() => { (reactProps(wrap) as { onClickCapture?: () => void }).onClickCapture?.(); });
+  click(findNodeByAttr(c, 'title', TRIGGER_TITLE), 'триггер');
+}
+
+// Меню закрывается после действия пункта: для проверки текста — открыть, если закрыто
+async function ensureOpen(c: Cont) {
+  if (!has(docBody(), 'Разобрать этот чат')) { openMenu(c); await settle(); }
+}
+async function menuHas(c: Cont, needle: string): Promise<boolean> {
+  await ensureOpen(c);
+  return has(docBody(), needle);
+}
+
+// Точка статуса на триггере: span с absolute-позиционированием (msgDot)
+function triggerDot(c: Cont): AnyNode | null {
+  const trigger = findNodeByAttr(c, 'title', TRIGGER_TITLE);
+  if (!trigger) throw new Error('нет кнопки-триггера «Вики»');
+  return allNodes(trigger).find(n => n.nodeName === 'SPAN'
+    && (n as { style?: Record<string, string> }).style?.position === 'absolute') ?? null;
+}
+
+// localStorage в node нет: Map-заглушка (сбой хранилища — отдельным тестом)
+function stubStorage(broken = false): Map<string, string> {
+  const store = new Map<string, string>();
+  (globalThis as Record<string, unknown>).localStorage = broken
+    ? { getItem() { throw new Error('storage'); }, setItem() { throw new Error('storage'); }, removeItem() {} }
+    : {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => { store.set(k, v); },
+        removeItem: (k: string) => { store.delete(k); },
+      };
+  return store;
+}
+
+const LAST_APPLIED = { outcome: 'applied', reason: null, packageIds: [], finishedAt: '2026-11-05T01:00:00Z' };
+
 beforeEach(() => {
   req.mockReset();
   req.mockImplementation(() => Promise.resolve(null));
   // запрос «Открыть хронику» — модульное состояние стора: каждый тест начинает с чистого
   wikiStore.reset();
   setAllFlags({ 'llm-wiki': true });
+  stubStorage();
 });
 
 afterEach(() => {
   for (const r of roots) act(() => r.unmount());
   roots.length = 0;
-  // ширина окна — только внутри mountAt360: вне неё следующий тест монтируется
-  // в десктопной раскладке (innerWidth undefined → сравнение ложно)
+  delete (globalThis as Record<string, unknown>).localStorage;
   delete ((globalThis as { window?: Record<string, unknown> }).window ?? {} as Record<string, unknown>).innerWidth;
   vi.useRealTimers();
   uninstallFakeDom();
 });
 
-describe('Действия «Вики» в чате (S7b)', () => {
-  it('флаг llm-wiki выключен — ни действий, ни запросов вики', async () => {
+describe('Меню «Вики» в чате (S7b → WM-2)', () => {
+  it('флаг llm-wiki выключен — ни триггера, ни запросов вики', async () => {
     setAllFlags({});
     serve();
-    const c = render(sessionA);
+    const c = mountMenu(sessionA);
     await settle();
-    expect(buttonByTestId(c, 'wiki-chat-analyze')).toBeNull();
-    expect(buttonByTestId(c, 'wiki-chat-retract')).toBeNull();
+    expect(findNodeByAttr(c, 'title', TRIGGER_TITLE)).toBeNull();
     expect(req.mock.calls.filter(([u]) => String(u).startsWith('/wiki'))).toHaveLength(0);
   });
 
-  it('флаг включён — «Разобрать этот чат» и «Откатить всё из этого чата»; без chroniclePath «Открыть хронику» нет', async () => {
+  it('флаг включён — один триггер «Вики», пункты меню по составу; ряда кнопок нет; без chroniclePath «Открыть хронику» нет', async () => {
     serve();
-    const c = render(sessionA);
+    const c = mountMenu(sessionA);
     await settle();
-    expect(buttonByExactText(c, 'Разобрать этот чат')).not.toBeNull();
-    expect(buttonByExactText(c, 'Откатить всё из этого чата')).not.toBeNull();
-    expect(buttonByTestId(c, 'wiki-chat-chronicle')).toBeNull();
+    for (const id of ['analyze', 'chronicle', 'retract', 'mark-important', 'mark-skip', 'status', 'retract-status', 'mark-error']) {
+      expect(buttonByTestId(c, `wiki-chat-${id}`)).toBeNull();
+    }
+    expect(findNodeByAttr(c, 'title', TRIGGER_TITLE)).not.toBeNull();
+    openMenu(c);
+    await settle();
+    const labels = allNodes(docBody()).filter(n => n.nodeName === 'BUTTON').map(n => textNodes(n).join(' '));
+    expect(labels.some(t => t.includes('Разобрать этот чат'))).toBe(true);
+    expect(labels.some(t => t.includes('Важный'))).toBe(true);
+    expect(labels.some(t => t.includes('Не разбирать'))).toBe(true);
+    expect(buttonByExactText(docBody(), 'Откатить всё из этого чата')).not.toBeNull();
+    expect(item('Открыть хронику')).toBeNull();
   });
 
-  it('200 applied — «готово»; хроника из списка даёт кнопку «Открыть хронику»: клик — запрос в сторе и переход', async () => {
+  it('открытое меню: «Откатить» — цветом C.dangerText; хроника из списка даёт пункт «Открыть хронику»', async () => {
+    serve({ chats: { items: [CHATRECORD], counts: {} } });
+    const c = mountMenu(sessionA);
+    await settle();
+    openMenu(c);
+    await settle();
+    expect(item('Открыть хронику')).not.toBeNull();
+    expect((buttonByExactText(docBody(), 'Откатить всё из этого чата') as { style?: { color?: string } }).style?.color).toBe(C.dangerText);
+  });
+
+  it('200 applied — «Разобрано — записано в вики»; «Открыть хронику»: клик — запрос в сторе и переход', async () => {
     serve({
       analyze: { outcome: 'applied', reason: null, packageIds: ['pkg-1'] },
       chats: { items: [CHATRECORD], counts: {} },
     });
-    const c = render(sessionA);
+    const c = mountMenu(sessionA);
     await settle();
-    click(buttonByExactText(c, 'Разобрать этот чат'), 'анализ');
+    openMenu(c);
     await settle();
-    expect(has(c, 'готово')).toBe(true);
-    const chron = buttonByTestId(c, 'wiki-chat-chronicle');
+    click(item('Разобрать этот чат'), 'анализ');
+    await settle();
+    expect(await menuHas(c, OK)).toBe(true);
+    const chron = item('Открыть хронику');
     expect(chron).not.toBeNull();
-    // (а) OPEN-1: клик — запрос в сторе (раздел из projectId чата, путь из списка) и
-    // переход в «Заметки» существующим каналом 'cc-open-note' (слушатель App, App.tsx:357)
     let opens = 0;
     const onOpen = () => { opens++; };
     const w = globalThis as { window: { addEventListener: Function; removeEventListener: Function } };
@@ -284,36 +333,67 @@ describe('Действия «Вики» в чате (S7b)', () => {
 
   it('409 task_execution и marked_skip — текст отказа по коду, не сырой код', async () => {
     serve({ analyze: () => Promise.reject({ status: 409, body: { code: 'task_execution', message: 'chat is an executor session' } }) });
-    const c1 = render(sessionA);
+    const c1 = mountMenu(sessionA);
     await settle();
-    click(buttonByExactText(c1, 'Разобрать этот чат'), 'анализ');
+    openMenu(c1);
     await settle();
-    expect(has(c1, 'Чаты исполнения задач не разбираются')).toBe(true);
-    expect(has(c1, 'task_execution')).toBe(false);
+    click(item('Разобрать этот чат'), 'анализ');
+    await settle();
+    expect(await menuHas(c1, 'Чаты исполнения задач не разбираются')).toBe(true);
+    expect(has(docBody(), 'task_execution')).toBe(false);
 
     serve({ analyze: () => Promise.reject({ status: 409, body: { code: 'marked_skip', message: 'skip mark set' } }) });
-    const c2 = render(sessionB);
+    const c2 = mountMenu(sessionB);
     await settle();
-    click(buttonByExactText(c2, 'Разобрать этот чат'), 'анализ');
+    openMenu(c2);
     await settle();
-    expect(has(c2, 'Чат помечен «не разбирать» — сними пометку')).toBe(true);
-    expect(has(c2, 'marked_skip')).toBe(false);
+    click(item('Разобрать этот чат'), 'анализ');
+    await settle();
+    expect(await menuHas(c2, 'Чат помечен «не разбирать» — сними пометку')).toBe(true);
+    expect(has(docBody(), 'marked_skip')).toBe(false);
   });
 
-  it('nothing_new и rejected — «нечего добавить» и «отказ» с причиной', async () => {
-    serve({ analyze: { outcome: 'nothing_new', reason: null, packageIds: [] } });
-    const c1 = render(sessionA);
+  async function analyzeOnce(session: ChatHeaderSummaryCtx['session']): Promise<Cont> {
+    const c = mountMenu(session);
     await settle();
-    click(buttonByExactText(c1, 'Разобрать этот чат'), 'анализ');
+    openMenu(c);
     await settle();
-    expect(has(c1, 'нечего добавить')).toBe(true);
+    click(item('Разобрать этот чат'), 'анализ');
+    await settle();
+    return c;
+  }
 
-    serve({ analyze: { outcome: 'rejected', reason: 'нет утверждений с цитатами', packageIds: [] } });
-    const c2 = render(sessionB);
-    await settle();
-    click(buttonByExactText(c2, 'Разобрать этот чат'), 'анализ');
-    await settle();
-    expect(has(c2, 'отказ: нет утверждений с цитатами')).toBe(true);
+  it('awaiting_human и nothing_new/up_to_date — человеческие тексты', async () => {
+    serve({ analyze: { outcome: 'awaiting_human', reason: null, packageIds: ['p'] } });
+    expect(await menuHas(await analyzeOnce(sessionA), 'Есть спорное — во «Входящих»')).toBe(true);
+    serve({ analyze: { outcome: 'nothing_new', reason: null, packageIds: [] } });
+    expect(await menuHas(await analyzeOnce(sessionB), 'Нового нет')).toBe(true);
+    serve({ analyze: { outcome: 'up_to_date', reason: null, packageIds: [] } });
+    const c = await analyzeOnce(sessionA);
+    expect(await menuHas(c, 'Нового нет')).toBe(true);
+    expect(has(docBody(), 'нечего добавить')).toBe(false);
+  });
+
+  it('отказ по-человечески: «пустой ответ» — «модель не ответила»; чужая причина — без хвоста; сырая строка и окна — только в title', async () => {
+    const RAW1 = 'пустой ответ модели в окне m11-m381, проход A';
+    serve({ analyze: { outcome: 'rejected', reason: RAW1, packageIds: [] } });
+    const c1 = await analyzeOnce(sessionA);
+    expect(await menuHas(c1, 'Не удалось разобрать: модель не ответила')).toBe(true);
+    expect(has(docBody(), 'Разобрать ещё раз')).toBe(true); // подпись пункта
+    expect(has(docBody(), 'm11')).toBe(false);
+    expect(has(docBody(), 'проход')).toBe(false);
+    expect(findNodeByAttr(docBody(), 'title', RAW1)).not.toBeNull(); // сырая причина — только в title
+
+    const RAW2 = 'нет утверждений с цитатами в окнах m1-m9, проход B';
+    serve({ analyze: { outcome: 'rejected', reason: RAW2, packageIds: [] } });
+    const c2 = await analyzeOnce(sessionB);
+    expect(await menuHas(c2, 'Не удалось разобрать')).toBe(true);
+    expect(has(docBody(), 'нет утверждений')).toBe(false);
+    expect(has(docBody(), 'm1-m9')).toBe(false);
+    // неизвестный будущий исход — тоже отказ, без выдуманного смысла
+    serve({ analyze: { outcome: 'weird_new_outcome', reason: null, packageIds: [] } });
+    const c3 = await analyzeOnce(sessionA);
+    expect(await menuHas(c3, 'Разобрать ещё раз')).toBe(true);
   });
 
   it('202 — опрос analyze-status до running:false, показывает last.outcome и останавливается', async () => {
@@ -325,20 +405,22 @@ describe('Действия «Вики» в чате (S7b)', () => {
         n++;
         if (n === 1) return { running: false, last: null }; // начальная проверка при монтировании
         if (n === 2) return { running: true, last: null }; // первый опрос — ещё идёт
-        return { running: false, last: { outcome: 'applied', reason: null, packageIds: ['pkg-1'], finishedAt: '2026-11-01T00:00:00Z' } };
+        return { running: false, last: LAST_APPLIED };
       },
     });
-    const c = render(sessionA);
+    const c = mountMenu(sessionA);
     await settle();
-    click(buttonByExactText(c, 'Разобрать этот чат'), 'анализ');
+    openMenu(c);
     await settle();
-    expect(has(c, 'разбираю…')).toBe(true);
+    click(item('Разобрать этот чат'), 'анализ');
+    await settle();
+    expect(await menuHas(c, 'разбираю…')).toBe(true);
     expect(counts.status).toBe(1);
     await tick(4000);
-    expect(has(c, 'разбираю…')).toBe(true);
+    expect(has(docBody(), 'разбираю…')).toBe(true);
     expect(counts.status).toBe(2);
     await tick(4000);
-    expect(has(c, 'готово')).toBe(true);
+    expect(has(docBody(), OK)).toBe(true);
     // running:false — следующего опроса нет: счётчик не растёт на дальнейших таймерах
     await tick(4000);
     await tick(4000);
@@ -352,20 +434,20 @@ describe('Действия «Вики» в чате (S7b)', () => {
       status: () => {
         n++;
         if (n === 1) return { running: true, last: null };
-        return { running: false, last: { outcome: 'applied', reason: null, packageIds: [], finishedAt: '2026-11-01T00:00:00Z' } };
+        return { running: false, last: LAST_APPLIED };
       },
     });
-    const c = render(sessionA);
+    const c = mountMenu(sessionA);
     await settle();
-    expect(has(c, 'разбираю…')).toBe(true);
+    expect(await menuHas(c, 'разбираю…')).toBe(true);
     expect(counts.analyze).toBe(0); // восстановление — без нового POST analyze
     await tick(4000);
-    expect(has(c, 'готово')).toBe(true);
+    expect(has(docBody(), OK)).toBe(true);
     // новое «идёт» после размонтирования опросить некому
     const counts2 = serve({ status: () => ({ running: true, last: null }) });
-    const c2 = render(sessionA);
+    const c2 = mountMenu(sessionA);
     await settle();
-    expect(has(c2, 'разбираю…')).toBe(true);
+    expect(await menuHas(c2, 'разбираю…')).toBe(true);
     const before = counts2.status; // 1 — начальный при монтировании
     act(() => { roots[roots.length - 1].unmount(); });
     await tick(4000);
@@ -373,45 +455,52 @@ describe('Действия «Вики» в чате (S7b)', () => {
     expect(counts2.status).toBe(before);
   });
 
-  it('двойное нажатие «Разобрать» — один POST, кнопка выключена пока идёт', async () => {
+  it('двойное нажатие «Разобрать» — один POST: пока идёт, пункт выключен', async () => {
     let release: (v: unknown) => void = () => {};
     const counts = serve({ analyze: () => new Promise<unknown>(res => { release = res; }) });
-    const c = render(sessionA);
+    const c = mountMenu(sessionA);
     await settle();
-    const btn = buttonByExactText(c, 'Разобрать этот чат');
-    click(btn, 'анализ');
-    click(btn, 'анализ повторно');
+    openMenu(c);
+    await settle();
+    click(item('Разобрать этот чат'), 'анализ');
+    await settle();
+    openMenu(c); // меню закрылось после действия — открываем снова: пункт обязан быть выключен
+    await settle();
+    expect((reactProps(item('Разобрать этот чат')!) as { disabled?: boolean }).disabled).toBe(true);
+    click(item('Разобрать этот чат'), 'анализ повторно');
     expect(counts.analyze).toBe(1);
-    expect(has(c, 'разбираю…')).toBe(true);
+    expect(has(docBody(), 'разбираю…')).toBe(true);
     release({ outcome: 'nothing_new', reason: null, packageIds: [] });
     await settle();
-    expect(has(c, 'нечего добавить')).toBe(true);
+    expect(has(docBody(), 'Нового нет')).toBe(true);
   });
 
   it('гард поколения: ответ прежнего чата не попадает на экран нового', async () => {
     let release: (v: unknown) => void = () => {};
     serve({ analyze: () => new Promise<unknown>(res => { release = res; }) });
-    installFakeDom();
-    const { root, container } = mount(createElement(WikiChatActions, { session: sessionA, hasMessages: true, online: true }));
-    roots.push(root);
+    const container = mountMenu(sessionA);
+    const root = roots[roots.length - 1];
     await settle();
-    click(buttonByExactText(container, 'Разобрать этот чат'), 'анализ');
+    openMenu(container);
+    await settle();
+    click(item('Разобрать этот чат'), 'анализ');
     // смена чата до ответа прежнего: новое поколение — запоздалый ответ CHAT_A отбрасывается
-    act(() => { root.render(createElement(WikiChatActions, { session: sessionB, hasMessages: true, online: true })); });
+    act(() => { root.render(menuEl(sessionB)); });
     await settle();
     release({ outcome: 'applied', reason: null, packageIds: ['pkg-1'] });
     await settle();
-    expect(has(container, 'готово')).toBe(false);
+    expect(await menuHas(container, OK)).toBe(false);
   });
 
   it('«Откатить всё из этого чата»: 0 вызовов до подтверждения; после — sourceRef без диапазона', async () => {
     const counts = serve();
-    const c = render(sessionA);
+    const c = mountMenu(sessionA);
     await settle();
-    click(buttonByExactText(c, 'Откатить всё из этого чата'), 'откат');
+    openMenu(c);
+    await settle();
+    click(buttonByExactText(docBody(), 'Откатить всё из этого чата'), 'откат');
     await settle();
     expect(counts.retract).toBe(0);
-    // подтверждение спрашивает явно — с обещанием пометки
     expect(has(docBody(), 'Чат получит пометку «не разбирать»')).toBe(true);
     click(buttonByExactText(docBody(), 'Откатить всё'), 'подтвердить откат');
     await settle();
@@ -420,10 +509,144 @@ describe('Действия «Вики» в чате (S7b)', () => {
     const body = JSON.parse(String((call[1] as { body: string }).body));
     expect(body.sourceRef).toBe(`session:${CHAT_A}`);
     expect(String(body.sourceRef)).not.toContain('#m');
-    expect(has(c, '1 пакет откатан')).toBe(true);
-    expect(has(c, 'чат помечен «не разбирать»')).toBe(true);
+    expect(await menuHas(c, '1 пакет откатан')).toBe(true);
+    expect(has(docBody(), 'чат помечен «не разбирать»')).toBe(true);
   });
 });
+
+describe('Точка статуса и «увидел» (WM-2)', () => {
+  const statusDone = (finishedAt: string | null) => ({ running: false, last: { ...LAST_APPLIED, finishedAt } });
+
+  it('итог показан — точка на триггере; открытие меню гасит её; после перезагрузки (тот же finishedAt) не горит, у нового исхода — горит', async () => {
+    const store = stubStorage();
+    serve({ status: statusDone('F1') });
+    const c = mountMenu(sessionA);
+    await settle();
+    expect(triggerDot(c)).not.toBeNull();
+    expect((triggerDot(c) as { style?: Record<string, string> }).style?.background).toBe(C.success);
+    openMenu(c);
+    await settle();
+    expect(triggerDot(c)).toBeNull();
+    expect(store.get(`cc_wiki_seen_${CHAT_A}`)).toBe('F1');
+    // «перезагрузка»: тот же исход — точки нет
+    act(() => { roots.pop()!.unmount(); });
+    const c2 = mountMenu(sessionA);
+    await settle();
+    expect(triggerDot(c2)).toBeNull();
+    // новый исход (другой finishedAt) — точка горит снова
+    act(() => { roots.pop()!.unmount(); });
+    serve({ status: statusDone('F2') });
+    const c3 = mountMenu(sessionA);
+    await settle();
+    expect(triggerDot(c3)).not.toBeNull();
+  });
+
+  it('пока идёт разбор точка горит всегда — и после открытия меню, и после перезагрузки', async () => {
+    serve({ status: { running: true, last: null } });
+    const c = mountMenu(sessionA);
+    await settle();
+    expect(triggerDot(c)).not.toBeNull();
+    openMenu(c);
+    await settle();
+    expect(triggerDot(c)).not.toBeNull();
+  });
+
+  it('прямой 200 без finishedAt: итог — точка; открытие меню гасит её до перезагрузки, в хранилище ничего не пишется', async () => {
+    const store = stubStorage();
+    serve({ analyze: { outcome: 'applied', reason: null, packageIds: [] } });
+    const c = mountMenu(sessionA);
+    await settle();
+    openMenu(c);
+    await settle();
+    click(item('Разобрать этот чат'), 'анализ');
+    await settle();
+    expect(triggerDot(c)).not.toBeNull();
+    openMenu(c);
+    await settle();
+    expect(triggerDot(c)).toBeNull();
+    expect(store.size).toBe(0);
+  });
+
+  it('сбой localStorage — точка горит, исключения наружу нет', async () => {
+    stubStorage(true);
+    serve({ status: statusDone('F1') });
+    const c = mountMenu(sessionA);
+    await settle();
+    expect(triggerDot(c)).not.toBeNull();
+    expect(() => openMenu(c)).not.toThrow();
+    await settle();
+  });
+
+  it('смена чата при открытом меню не записывает отметку прежнего чата в новый', async () => {
+    const store = stubStorage();
+    let n = 0;
+    serve({ status: () => (++n === 1 ? statusDone('F1') : { running: false, last: null }) });
+    const c = mountMenu(sessionA);
+    const root = roots[roots.length - 1];
+    await settle();
+    act(() => { root.render(menuEl(sessionB)); });
+    await settle();
+    openMenu(c); // открыли меню уже у B: итога у B нет, чужой F1 писать некуда
+    await settle();
+    expect(store.size).toBe(0);
+    expect(triggerDot(c)).toBeNull();
+  });
+
+  it('откат: приглушённая точка; открытие меню гасит её', async () => {
+    serve();
+    const c = mountMenu(sessionA);
+    await settle();
+    openMenu(c);
+    await settle();
+    click(buttonByExactText(docBody(), 'Откатить всё из этого чата'), 'откат');
+    await settle();
+    click(buttonByExactText(docBody(), 'Откатить всё'), 'подтвердить откат');
+    await settle();
+    expect((triggerDot(c) as { style?: Record<string, string> }).style?.background).toBe(C.textMuted);
+    openMenu(c);
+    await settle();
+    expect(triggerDot(c)).toBeNull();
+  });
+});
+
+describe('Внешнее открытие и headless (WM-2)', () => {
+  it('headless: триггера нет; открытие — по open.counter; пункт зовёт onClose', async () => {
+    const counts = serve({ analyze: { outcome: 'nothing_new', reason: null, packageIds: [] } });
+    const onClose = vi.fn();
+    const c = mountMenu(sessionA, { headless: true, onClose });
+    const root = roots[roots.length - 1];
+    await settle();
+    expect(findNodeByAttr(c, 'title', TRIGGER_TITLE)).toBeNull();
+    expect(has(docBody(), 'Разобрать этот чат')).toBe(false);
+    act(() => { root.render(menuEl(sessionA, { headless: true, onClose, open: { counter: 1, anchor: null } })); });
+    await settle();
+    expect(has(docBody(), 'Разобрать этот чат')).toBe(true);
+    click(item('Разобрать этот чат'), 'анализ');
+    await settle();
+    expect(counts.analyze).toBe(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    // тот же counter — повторного открытия нет; новый — открывает снова
+    act(() => { root.render(menuEl(sessionA, { headless: true, onClose, open: { counter: 1, anchor: null } })); });
+    await settle();
+    expect(has(docBody(), 'Разобрать этот чат')).toBe(false);
+    act(() => { root.render(menuEl(sessionA, { headless: true, onClose, open: { counter: 2, anchor: null } })); });
+    await settle();
+    expect(has(docBody(), 'Разобрать этот чат')).toBe(true);
+  });
+
+  it('внешнее открытие при показанном итоге гасит точку так же, как клик по триггеру', async () => {
+    serve({ status: { running: false, last: LAST_APPLIED } });
+    const c = mountMenu(sessionA);
+    const root = roots[roots.length - 1];
+    await settle();
+    expect(triggerDot(c)).not.toBeNull();
+    act(() => { root.render(menuEl(sessionA, { open: { counter: 1, anchor: null } })); });
+    await settle();
+    expect(triggerDot(c)).toBeNull();
+  });
+});
+
+
 
 describe('«Разобрать в базу» у заметки (S7b, логика NoteView)', () => {
   it('POST ingest/note на нужный noteId; исход — текстом', async () => {
@@ -466,7 +689,7 @@ describe('«Разобрать в базу» у заметки (S7b, логик�
 });
 
 describe('Опрос после 202: ссылка на хронику и гард поколения (доработка S7b, п.2 и п.4)', () => {
-  it('202 → опрос → «готово» со ссылкой: «Открыть хронику» появляется без перезагрузки', async () => {
+  it('202 → опрос → итог со ссылкой: пункт «Открыть хронику» появляется без перезагрузки', async () => {
     vi.useFakeTimers();
     let nStatus = 0;
     let nChats = 0;
@@ -475,19 +698,21 @@ describe('Опрос после 202: ссылка на хронику и гар�
       status: () => {
         nStatus++;
         if (nStatus === 1) return { running: false, last: null }; // проверка при монтировании
-        return { running: false, last: { outcome: 'applied', reason: null, packageIds: ['pkg-1'], finishedAt: '2026-11-01T00:00:00Z' } };
+        return { running: false, last: { ...LAST_APPLIED, packageIds: ['pkg-1'] } };
       },
       // хроника появляется в списке только после применённого разбора (первый вызов — пустой)
       chats: () => ({ items: nChats++ === 0 ? [] : [CHATRECORD], counts: {} }),
     });
-    const c = render(sessionA);
+    const c = mountMenu(sessionA);
     await settle();
-    expect(buttonByTestId(c, 'wiki-chat-chronicle')).toBeNull(); // до разбора ссылки нет
-    click(buttonByExactText(c, 'Разобрать этот чат'), 'анализ');
+    openMenu(c);
+    await settle();
+    expect(item('Открыть хронику')).toBeNull(); // до разбора ссылки нет
+    click(item('Разобрать этот чат'), 'анализ');
     await settle(); // 202 обработан: опрос поставил таймер — только теперь его двигать
     await tick(4000); // опрос: running:false + applied → перечитка списка чатов
-    expect(has(c, 'готово')).toBe(true);
-    const chron = buttonByTestId(c, 'wiki-chat-chronicle');
+    expect(await menuHas(c, OK)).toBe(true);
+    const chron = item('Открыть хронику');
     expect(chron).not.toBeNull(); // та же монтированная панель, без remount
     let opens = 0;
     const onOpen = () => { opens++; };
@@ -499,18 +724,16 @@ describe('Опрос после 202: ссылка на хронику и гар�
     expect(opens).toBe(1);
   });
 
-  // OPEN-1: внепроективный чат (хроника бывает только у проектного дома) — даже с путём
-  // из списка кнопка не шлёт запроса без раздела и не будит переход
+  // OPEN-1: внепроективный чат — даже с путём из списка пункт не шлёт запроса без раздела и не будит переход
   it('без projectId чата — ни запроса в сторе, ни перехода (раздел взять не из чего)', async () => {
-    serve({
-      analyze: { outcome: 'applied', reason: null, packageIds: ['pkg-1'] },
-      chats: { items: [CHATRECORD], counts: {} },
-    });
+    serve({ chats: { items: [CHATRECORD], counts: {} } });
     const sessionNoProject = { id: CHAT_A } as unknown as ChatHeaderSummaryCtx['session'];
-    const c = render(sessionNoProject);
+    const c = mountMenu(sessionNoProject);
     await settle();
-    const chron = buttonByTestId(c, 'wiki-chat-chronicle');
-    expect(chron).not.toBeNull(); // ссылка есть — кнопка есть
+    openMenu(c);
+    await settle();
+    const chron = item('Открыть хронику');
+    expect(chron).not.toBeNull(); // ссылка есть — пункт есть
     let opens = 0;
     const onOpen = () => { opens++; };
     const w = globalThis as { window: { addEventListener: Function; removeEventListener: Function } };
@@ -537,20 +760,21 @@ describe('Опрос после 202: ссылка на хронику и гар�
       if (m === 'GET' && u === '/wiki/chats') return Promise.resolve({ items: [], counts: {} });
       return Promise.resolve(null);
     });
-    installFakeDom();
-    const { root, container } = mount(createElement(WikiChatActions, { session: sessionA, hasMessages: true, online: true }));
-    roots.push(root);
+    const container = mountMenu(sessionA);
+    const root = roots[roots.length - 1];
     await settle();
-    expect(has(container, 'разбираю…')).toBe(true);
+    expect(await menuHas(container, 'разбираю…')).toBe(true);
     await tick(4000); // опрос A отправлен и висит (промис держим)
     // смена чата ДО ответа опроса: новое поколение — запоздалый ответ A отбрасывается в .then
-    act(() => { root.render(createElement(WikiChatActions, { session: sessionB, hasMessages: true, online: true })); });
+    act(() => { root.render(menuEl(sessionB)); });
     await settle();
-    release({ running: false, last: { outcome: 'applied', reason: null, packageIds: ['pkg-1'], finishedAt: '2026-11-01T00:00:00Z' } });
+    release({ running: false, last: LAST_APPLIED });
     await settle();
-    expect(has(container, 'готово')).toBe(false); // исход A не на экране B
+    expect(await menuHas(container, OK)).toBe(false); // исход A не на экране B
   });
 });
+
+
 
 describe('Склонение итога отката (доработка S7b, п.3)', () => {
   const mk = (n: number) => ({
@@ -575,11 +799,10 @@ describe('Склонение итога отката (доработка S7b, п
   });
 });
 
-describe('Достижимость из шапки чата (доработка S7b, п.1 вердикта; M-1 — раскладка по ширине)', () => {
+describe('Достижимость из шапки чата (старый вклад wiki-chat-actions до WM-3)', () => {
   // Окружение для SSR-рендера реальной шапки: window с шириной (useWindowWidth — тот же
-  // источник, по которому сама шапка решает isCompact), localStorage (useActionVisibility/
-  // notify), Notification (isNotifySupported). Эффекты в SSR не работают — запросов нет
-  // вовсе; проверяется ровно состав ряда действий.
+  // источник, по которому сама шапка решает isCompact), localStorage, Notification.
+  // Эффекты в SSR не работают — запросов нет; проверяется состав ряда действий.
   function withBrowserStub<T>(width: number, fn: () => T): T {
     const g = globalThis as Record<string, unknown>;
     const saved = { window: g.window, localStorage: g.localStorage, Notification: g.Notification };
@@ -599,249 +822,71 @@ describe('Достижимость из шапки чата (доработка 
     }
   }
 
-  // Минимальный, но честный набор props: без проекта, без острова, без контекст-строки —
-  // ряд действий от этого не меняется
   function headerHtml(isMobile: boolean, compact = false): string {
     return renderToStaticMarkup(createElement(ChatHeaderBar, {
       session: { id: CHAT_A, name: 'Рефью звука' },
       project: null, hasMessages: true, online: true,
       cost: { cost: 0, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, turns: 0, results: 0 },
-      // пустые, но НЕ null статистики: badgeAvailable читает их безусловно (line 1995–1996)
       falCost: { total: 0, count: 0, byModel: new Map() },
       glifCost: { count: 0, credits: 0, hasCredits: false, byType: new Map() },
       billing: null, rateWindows: [],
       isMobile, isCompacting: false, canCompact: false, onCompact: () => {},
-      // оценка без токенов: hasContextInfo читает её безусловно (line 1993) — форма живого
-      // чата до первого хода, а не null
       ctxEstimate: { window: 200000, fresh: false, level: 'normal' }, isWaiting: false, items: [],
       persona: null, agent: null, participants: [],
       island: false, compact, contextBar: null, scrolled: false,
     } as never));
   }
 
-  it('ряд шапки (десктоп 1440) рисует вклад wiki-chat-actions тремя кнопками — прежние data-testid', () => {
-    // read-time гейт getSlotContributions: неактивная подсистема не отдаёт ни один вклад.
-    // «Заметки» активны — как их делает хост сетом ключей от /auth/me
+  const ROW_TESTIDS = ['wiki-chat-analyze', 'wiki-chat-retract', 'wiki-chat-chronicle', 'wiki-chat-mark-important', 'wiki-chat-mark-skip'];
+
+  it('шапка на десктопе 1440: кнопка-меню «Вики» вместо ряда — ни одного data-testid ряда', () => {
     setAllSubsystems(['notes']);
     setAllFlags({ 'llm-wiki': true });
     const html = withBrowserStub(1440, () => headerHtml(false));
-    expect(html).toContain('data-testid="wiki-chat-analyze"');
-    expect(html).toContain('data-testid="wiki-chat-retract"');
-    expect(html).toContain('Разобрать этот чат');
-    expect(html).toContain('Откатить всё из этого чата');
+    expect(html).toContain(`title="${TRIGGER_TITLE}"`);
+    for (const id of ROW_TESTIDS) expect(html).not.toContain(id);
+    expect(html).not.toContain('Откатить всё из этого чата'); // пункты — только в открытом меню
   });
 
-  // M-1 (дефект ecec968a): на 360 ряд из трёх кнопок и был дефект — его срезала шапка.
-  // Вклад остаётся достижимым: одна кнопка-меню вместо ряда, содержимое — только в меню
-  it('шапка на 360: вместо ряда «Вики» — одна кнопка-меню, трёх кнопок в разметке нет', () => {
+  it('шапка на 360: та же одна кнопка-меню', () => {
     setAllSubsystems(['notes']);
     setAllFlags({ 'llm-wiki': true });
     const html = withBrowserStub(360, () => headerHtml(true));
-    expect(html).toContain('Действия «Вики» в этом чате'); // title кнопки-триггера
-    expect(html).not.toContain('wiki-chat-analyze');
-    expect(html).not.toContain('wiki-chat-retract');
-    expect(html).not.toContain('Разобрать этот чат');
-    expect(html).not.toContain('Откатить всё из этого чата');
+    expect(html).toContain(TRIGGER_TITLE);
+    for (const id of ROW_TESTIDS) expect(html).not.toContain(id);
   });
 
-  // Проводка признака: колонка «Стены» (compact) → render вклада → меню. Окно широкое (1280),
-  // поэтому isCompact шапки false — меню может появиться только из-за compact
-  it('шапка с compact при широком окне: вместо ряда «Вики» — кнопка-меню', () => {
+  it('шапка с compact при широком окне: тоже меню', () => {
     setAllSubsystems(['notes']);
     setAllFlags({ 'llm-wiki': true });
     const html = withBrowserStub(1280, () => headerHtml(false, true));
-    expect(html).toContain('title="Действия «Вики» в этом чате"');
-    expect(html).not.toContain('data-testid="wiki-chat-analyze"');
-    expect(html).not.toContain('data-testid="wiki-chat-retract"');
+    expect(html).toContain(`title="${TRIGGER_TITLE}"`);
+    for (const id of ROW_TESTIDS) expect(html).not.toContain(id);
   });
 
-  it('флаг llm-wiki выключен — в шапке нет действий «Вики»', () => {
+  it('флаг llm-wiki выключен — в шапке нет меню «Вики»', () => {
     setAllSubsystems(['notes']); // подсистема активна — нет именно из-за выключенного флага
     setAllFlags({});
-    const html = withBrowserStub(1440, () => headerHtml(false));
-    expect(html).not.toContain('wiki-chat-analyze');
-    expect(html).not.toContain('Разобрать этот чат');
-    expect(html).not.toContain('Откатить всё из этого чата');
-    const html360 = withBrowserStub(360, () => headerHtml(true));
-    expect(html360).not.toContain('Действия «Вики» в этом чате');
+    expect(withBrowserStub(1440, () => headerHtml(false))).not.toContain(TRIGGER_TITLE);
+    expect(withBrowserStub(360, () => headerHtml(true))).not.toContain(TRIGGER_TITLE);
+  });
+
+  it('манифест: вклад wiki-chat-menu в слоте chat-header-action и старый wiki-chat-actions (до WM-3)', () => {
+    const names = (notesManifest.slots?.['chat-header-action'] ?? []).map((i: { name: string }) => i.name);
+    expect(names).toContain('wiki-chat-menu');
+    expect(names).toContain('wiki-chat-actions');
   });
 });
 
-describe('Компактная раскладка (M-1, дефект ecec968a)', () => {
-  // Раскладка выбирается по ширине окна — тот же источник, что у isCompact самой шапки
-  // (ChatHeaderBar:1357). Ширина ставится до монтирования и снимается после (afterEach)
-  const TRIGGER_TITLE = 'Действия «Вики» в этом чате';
-
-  // Пункт меню с подписью: у строки два текстовых блока (label + sublabel), поэтому
-  // поиск по вхождению, а не по точному тексту (exact — только для кнопок без подписи)
-  function buttonContaining(root: AnyNode, needle: string): AnyNode | null {
-    return allNodes(root).find(n => n.nodeName === 'BUTTON' && textNodes(n).join('').includes(needle)) ?? null;
-  }
-
-  // Точка-сигнал на триггере: span с absolute-позиционированием (msgDot из компонента).
-  // До правки ToolbarOverflowMenu рендерил индикатор только как number/true — ReactNode
-  // молча отбрасывался, и на закрытом меню сигнала о результате не было (пункт ревью 6570f3d0)
-  function triggerDot(root: AnyNode): AnyNode | null {
-    const trigger = findNodeByAttr(root, 'title', TRIGGER_TITLE);
-    if (!trigger) throw new Error('нет кнопки-триггера «Вики»');
-    return allNodes(trigger).find(n => n.nodeName === 'SPAN'
-      && (n as { style?: Record<string, string> }).style?.position === 'absolute') ?? null;
-  }
-
-  // Сколько точек-индикаторов на триггере: слияние с master (bc5a023a2) научило иконочный
-  // триггер рисовать ReactNode само — вторая строка в той же ветке нарисовала бы точку дважды
-  function triggerDotCount(root: AnyNode): number {
-    const trigger = findNodeByAttr(root, 'title', TRIGGER_TITLE);
-    if (!trigger) throw new Error('нет кнопки-триггера «Вики»');
-    return allNodes(trigger).filter(n => n.nodeName === 'SPAN'
-      && (n as { style?: Record<string, string> }).style?.position === 'absolute').length;
-  }
-
-  async function mountAt360(session: ChatHeaderSummaryCtx['session']): Promise<Cont> {
-    // installFakeDom ПОСЛЕ предыдущего uninstall создаёт новый объект window —
-    // innerWidth ставим на нём, иначе компонент читает пустую ширину (дефолт — десктоп)
-    installFakeDom();
-    const w = (globalThis as { window: Record<string, unknown> }).window;
-    w.innerWidth = 360;
-    // открытый ToolbarOverflowMenu ищет прокручиваемых предков через getComputedStyle —
-    // в node он заглушен (тот же приём, что workspaceOpenFileSession.test.ts:434)
-    const g = globalThis as Record<string, unknown>;
-    if (!g.getComputedStyle) g.getComputedStyle = () => ({ overflowY: 'visible' });
-    const { root, container } = mount(createElement(WikiChatActions, { session, hasMessages: true, online: true }));
-    roots.push(root);
-    await settle();
-    return container;
-  }
-
-  it('на 360 ряда из трёх кнопок нет; есть одна кнопка-меню', async () => {
-    serve({ chats: { items: [CHATRECORD], counts: {} } });
-    const c = await mountAt360(sessionA);
-    expect(buttonByTestId(c, 'wiki-chat-analyze')).toBeNull();
-    expect(buttonByTestId(c, 'wiki-chat-retract')).toBeNull();
-    expect(findNodeByAttr(c, 'title', TRIGGER_TITLE)).not.toBeNull();
-  });
-
-  it('compact из шапки главнее ширины окна: колонка «Стены» при широком окне — меню, а не ряд', async () => {
-    serve({ chats: { items: [CHATRECORD], counts: {} } });
-    installFakeDom();
-    const w = (globalThis as { window: Record<string, unknown> }).window;
-    w.innerWidth = 1280;
-    const { root, container } = mount(createElement(WikiChatActions, { session: sessionA, hasMessages: true, online: true, compact: true }));
-    roots.push(root);
-    await settle();
-    expect(buttonByTestId(container, 'wiki-chat-analyze')).toBeNull();
-    expect(findNodeByAttr(container, 'title', TRIGGER_TITLE)).not.toBeNull();
-  });
-
-  it('compact=false при узком окне: ряд кнопок (признак шапки главнее окна)', async () => {
-    serve({ chats: { items: [CHATRECORD], counts: {} } });
-    installFakeDom();
-    const w = (globalThis as { window: Record<string, unknown> }).window;
-    w.innerWidth = 360;
-    const { root, container } = mount(createElement(WikiChatActions, { session: sessionA, hasMessages: true, online: true, compact: false }));
-    roots.push(root);
-    await settle();
-    expect(buttonByTestId(container, 'wiki-chat-analyze')).not.toBeNull();
-    expect(findNodeByAttr(container, 'title', TRIGGER_TITLE)).toBeNull();
-  });
-
-  it('открытое меню: все три действия, «Откатить» — цветом C.dangerText', async () => {
-    serve({ chats: { items: [CHATRECORD], counts: {} } });
-    const c = await mountAt360(sessionA);
-    click(findNodeByAttr(c, 'title', TRIGGER_TITLE), 'триггер');
-    await settle();
-    const body = docBody();
-    expect(has(body, 'Разобрать этот чат')).toBe(true);
-    expect(has(body, 'Открыть хронику')).toBe(true); // ссылка есть (chats serve) — пункт есть
-    const retract = buttonByExactText(body, 'Откатить всё из этого чата');
-    expect(retract).not.toBeNull();
-    // тон опасного действия даёт ItemRow по флагу danger — ровно цвет макета (§13)
-    expect((retract as { style?: { color?: string } }).style?.color).toBe(C.dangerText);
-  });
-
-  it('«Разобрать» из меню — тот же POST; исход — значением пункта при повторном открытии', async () => {
-    const counts = serve({ analyze: { outcome: 'nothing_new', reason: null, packageIds: [] } });
-    const c = await mountAt360(sessionA);
-    click(findNodeByAttr(c, 'title', TRIGGER_TITLE), 'триггер');
-    await settle();
-    click(buttonContaining(docBody(), 'Разобрать этот чат'), 'анализ из меню');
-    await settle();
-    expect(counts.analyze).toBe(1);
-    // исход живёт в состоянии компонента, а не в ряду: повторное открытие показывает его
-    click(findNodeByAttr(c, 'title', TRIGGER_TITLE), 'триггер повторно');
-    await settle();
-    expect(has(docBody(), 'нечего добавить')).toBe(true);
-  });
-
-  it('откат из меню: сначала та же ConfirmDialog (0 запросов), после подтверждения — REST без диапазона', async () => {
-    const counts = serve();
-    const c = await mountAt360(sessionA);
-    click(findNodeByAttr(c, 'title', TRIGGER_TITLE), 'триггер');
-    await settle();
-    click(buttonByExactText(docBody(), 'Откатить всё из этого чата'), 'откат из меню');
-    await settle();
-    expect(counts.retract).toBe(0);
-    expect(has(docBody(), 'Чат получит пометку «не разбирать»')).toBe(true);
-    click(buttonByExactText(docBody(), 'Откатить всё'), 'подтвердить откат');
-    await settle();
-    expect(counts.retract).toBe(1);
-    const body = JSON.parse(String((postCalls('/retract')[0][1] as { body: string }).body));
-    expect(body.sourceRef).toBe(`session:${CHAT_A}`);
-    expect(String(body.sourceRef)).not.toContain('#m');
-  });
-
-  it('без chroniclePath пункта «Открыть хронику» нет (тот же гейт, что у кнопки ряда)', async () => {
-    serve(); // chats пустой
-    const c = await mountAt360(sessionA);
-    click(findNodeByAttr(c, 'title', TRIGGER_TITLE), 'триггер');
-    await settle();
-    expect(has(docBody(), 'Открыть хронику')).toBe(false);
-    expect(has(docBody(), 'Разобрать этот чат')).toBe(true);
-  });
-
-  it('сигнал на триггере: после разбора — точка цвета статуса; без результата — точки нет', async () => {
-    serve({ analyze: { outcome: 'applied', reason: null, packageIds: [] } });
-    const c = await mountAt360(sessionA);
-    expect(triggerDot(c)).toBeNull(); // idle — сигнала на триггере нет
-    click(findNodeByAttr(c, 'title', TRIGGER_TITLE), 'триггер');
-    await settle();
-    click(buttonContaining(docBody(), 'Разобрать этот чат'), 'анализ из меню');
-    await settle(); // обычный пункт закрыл меню — сигнал обязан быть на ЗАКРЫТОМ триггере
-    const dot = triggerDot(c);
-    expect(dot).not.toBeNull();
-    expect(triggerDotCount(c)).toBe(1); // индикатор рисуется ровно один раз
-    // цвет точки — цвет статуса (msgDot): applied → C.success
-    expect((dot as { style?: Record<string, string> }).style?.background).toBe(C.success);
-  });
-
-  it('сигнал на триггере после отката: приглушённая точка (без статуса разбора)', async () => {
-    serve(); // retract — RETRACT_OK
-    const c = await mountAt360(sessionA);
-    click(findNodeByAttr(c, 'title', TRIGGER_TITLE), 'триггер');
-    await settle();
-    click(buttonByExactText(docBody(), 'Откатить всё из этого чата'), 'откат из меню');
-    await settle();
-    click(buttonByExactText(docBody(), 'Откатить всё'), 'подтвердить откат');
-    await settle();
-    const dot = triggerDot(c);
-    expect(dot).not.toBeNull();
-    // статуса разбора после отката нет (state → idle) — приглушённый C.textMuted
-    expect((dot as { style?: Record<string, string> }).style?.background).toBe(C.textMuted);
-  });
-});
-
-// Пометки чата «Важный» / «Не разбирать» (F3, макет llm-wiki-v2 #chat&cut): отмечаемые,
-// взаимоисключающие (один cmark), состояние — из списка отбора (поле mark), клик ставит/снимает
-// через setWikiChatMark (PUT /wiki/chats/{id}/mark), у чата исполнения задач пункты неактивны,
+// Пометки чата «Важный» / «Не разбирать» (F3): отмечаемые пункты меню, взаимоисключающие
+// (один cmark), состояние — из списка отбора (поле mark), клик ставит/снимает через
+// setWikiChatMark (PUT /wiki/chats/{id}/mark), у чата исполнения задач пункты неактивны,
 // отказ — текстом без смены состояния.
-// Мутации этого прогона: (17) убрать вызов setWikiChatMark из toggleMark → «ставит и снимает»
-// краснеет; (18) снять гард taskChat → «чат исполнения задач» краснеет; (19) менять mark до
-// ответа бэка → «отказ не меняет состояние» краснеет.
 describe('Пометки чата «Важный» / «Не разбирать» (F3)', () => {
   const TASK_REASON = 'ступень 0: чат исполнения задачи';
   type MarkItem = typeof CHATRECORD & { mark: string | null };
 
-  function serveMarks(item: Partial<MarkItem>, put?: (body: { mark: string | null }) => unknown) {
+  function serveMarks(rec: Partial<MarkItem>, put?: (body: { mark: string | null }) => unknown) {
     const puts: Array<string | null> = [];
     req.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
       const u = String(url);
@@ -852,7 +897,7 @@ describe('Пометки чата «Важный» / «Не разбирать»
         return put ? Promise.resolve().then(() => put(body)) : Promise.resolve({ mark: body.mark });
       }
       if (method === 'GET' && u === '/wiki/chats') {
-        return Promise.resolve({ items: [{ ...CHATRECORD, mark: null, ...item }], counts: {} });
+        return Promise.resolve({ items: [{ ...CHATRECORD, mark: null, ...rec }], counts: {} });
       }
       if (method === 'GET' && u.includes('/analyze-status')) return Promise.resolve({ running: false, last: null });
       return Promise.resolve(null);
@@ -860,81 +905,82 @@ describe('Пометки чата «Важный» / «Не разбирать»
     return puts;
   }
 
-  const pressed = (c: AnyNode, kind: string) =>
-    (reactProps(buttonByTestId(c, `wiki-chat-mark-${kind}`)!) as { 'aria-pressed'?: boolean })['aria-pressed'];
-  const disabled = (c: AnyNode, kind: string) =>
-    (reactProps(buttonByTestId(c, `wiki-chat-mark-${kind}`)!) as { disabled?: boolean }).disabled === true;
+  // Отмеченный пункт — accent-цветом (флаг active у ItemRow) и с галочкой справа
+  const pressed = (label: string) => (item(label) as { style?: { color?: string } }).style?.color === C.accent;
+  const disabled = (label: string) => (reactProps(item(label)!) as { disabled?: boolean }).disabled === true;
 
-  it('состояние берётся из списка отбора: у чата с mark=skip нажат «Не разбирать»', async () => {
+  it('состояние берётся из списка отбора: у чата с mark=skip отмечен «Не разбирать»', async () => {
     serveMarks({ mark: 'skip' });
-    const c = render(sessionA);
+    const c = mountMenu(sessionA);
     await settle();
-    expect(pressed(c, 'skip')).toBe(true);
-    expect(pressed(c, 'important')).toBe(false);
+    openMenu(c);
+    await settle();
+    expect(pressed('Не разбирать')).toBe(true);
+    expect(pressed('Важный')).toBe(false);
   });
 
   it('«Не разбирать» ставит пометку ровно одним вызовом, повторный клик снимает (null)', async () => {
     const puts = serveMarks({ mark: null });
-    const c = render(sessionA);
+    const c = mountMenu(sessionA);
     await settle();
-    click(buttonByTestId(c, 'wiki-chat-mark-skip'), 'не разбирать');
+    openMenu(c);
+    await settle();
+    click(item('Не разбирать'), 'не разбирать');
     await settle();
     expect(puts).toEqual(['skip']);
-    expect(pressed(c, 'skip')).toBe(true);
-    click(buttonByTestId(c, 'wiki-chat-mark-skip'), 'не разбирать повторно');
+    openMenu(c);
+    await settle();
+    expect(pressed('Не разбирать')).toBe(true);
+    click(item('Не разбирать'), 'не разбирать повторно');
     await settle();
     expect(puts).toEqual(['skip', null]);
-    expect(pressed(c, 'skip')).toBe(false);
+    openMenu(c);
+    await settle();
+    expect(pressed('Не разбирать')).toBe(false);
   });
 
   it('«Важный» и «Не разбирать» взаимоисключающие: ответ бэка переключает отметку', async () => {
     const puts = serveMarks({ mark: 'important' });
-    const c = render(sessionA);
+    const c = mountMenu(sessionA);
     await settle();
-    expect(pressed(c, 'important')).toBe(true);
-    click(buttonByTestId(c, 'wiki-chat-mark-skip'), 'не разбирать');
+    openMenu(c);
+    await settle();
+    expect(pressed('Важный')).toBe(true);
+    click(item('Не разбирать'), 'не разбирать');
     await settle();
     expect(puts).toEqual(['skip']);
-    expect(pressed(c, 'skip')).toBe(true);
-    expect(pressed(c, 'important')).toBe(false);
+    openMenu(c);
+    await settle();
+    expect(pressed('Не разбирать')).toBe(true);
+    expect(pressed('Важный')).toBe(false);
   });
 
   it('у чата исполнения задач пункты неактивны и запроса нет', async () => {
     const puts = serveMarks({ reason: TASK_REASON });
-    const c = render(sessionA);
+    const c = mountMenu(sessionA);
     await settle();
-    expect(disabled(c, 'important')).toBe(true);
-    expect(disabled(c, 'skip')).toBe(true);
-    click(buttonByTestId(c, 'wiki-chat-mark-skip'), 'не разбирать');
+    openMenu(c);
+    await settle();
+    expect(disabled('Важный')).toBe(true);
+    expect(disabled('Не разбирать')).toBe(true);
+    click(item('Не разбирать'), 'не разбирать');
     await settle();
     expect(puts).toEqual([]);
   });
 
   it('отказ (409 wiki_llm_wiki_off) — текстом, отметка не меняется', async () => {
     const puts = serveMarks({ mark: 'important' }, () => Promise.reject({ status: 409, body: { code: 'wiki_llm_wiki_off', message: 'off' } }));
-    const c = render(sessionA);
+    const c = mountMenu(sessionA);
     await settle();
-    click(buttonByTestId(c, 'wiki-chat-mark-skip'), 'не разбирать');
+    openMenu(c);
     await settle();
-    expect(puts).toEqual(['skip']);
-    expect(pressed(c, 'important')).toBe(true);
-    expect(pressed(c, 'skip')).toBe(false);
-    expect(has(c, 'Вики выключена в настройках')).toBe(true);
-  });
-
-  it('в компактном меню пункты «Важный» / «Не разбирать» отмечаемые и зовут стор', async () => {
-    const puts = serveMarks({ mark: null });
-    installFakeDom();
-    const g = globalThis as Record<string, unknown>;
-    if (!g.getComputedStyle) g.getComputedStyle = () => ({ overflowY: 'visible' });
-    const { root, container: c } = mount(createElement(WikiChatActions, { session: sessionA, hasMessages: true, online: true, compact: true }));
-    roots.push(root);
-    await settle();
-    click(findNodeByAttr(c, 'title', 'Действия «Вики» в этом чате'), 'триггер');
-    await settle();
-    const item = allNodes(docBody()).find(n => n.nodeName === 'BUTTON' && textNodes(n).join(' ').includes('Не разбирать'));
-    click(item ?? null, 'пункт «Не разбирать»');
+    click(item('Не разбирать'), 'не разбирать');
     await settle();
     expect(puts).toEqual(['skip']);
+    openMenu(c);
+    await settle();
+    expect(pressed('Важный')).toBe(true);
+    expect(pressed('Не разбирать')).toBe(false);
+    expect(has(docBody(), 'Вики выключена в настройках')).toBe(true);
   });
 });

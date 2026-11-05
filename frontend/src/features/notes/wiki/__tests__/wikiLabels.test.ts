@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { WikiError, type WikiErrorCode } from '../../../../lib/wiki';
 import {
-  INBOX_REASON_TEXT, INBOX_TEXT, countWord, isHumanTargetClass,
+  INBOX_REASON_TEXT, INBOX_TEXT, analyzeRefusalText, countWord, isHumanTargetClass,
   wikiErrorText, wikiInboxReasonCode, wikiInboxReasonText,
 } from '../wikiLabels';
 
@@ -165,5 +165,22 @@ describe('причины «Входящих»: таблица сверяется
     expect(isHumanTargetClass('session×supersede@human')).toBe(true);
     expect(isHumanTargetClass('session×supersede')).toBe(false);
     expect(isHumanTargetClass('')).toBe(false);
+  });
+});
+
+describe('отказ разбора чата по-человечески (WM-2)', () => {
+  it('«пустой ответ» — «модель не ответила»; окна и проходы бэка в текст не попадают', () => {
+    const raw = 'пустой ответ модели в окне m11-m381, проход A';
+    const text = analyzeRefusalText(raw);
+    expect(text).toBe('Не удалось разобрать: модель не ответила');
+    expect(text).not.toContain('m11');
+    expect(text).not.toContain('проход');
+    expect(analyzeRefusalText('Пустой ответ')).toBe('Не удалось разобрать: модель не ответила');
+  });
+
+  it('неизвестная причина и её отсутствие — «Не удалось разобрать» без хвоста', () => {
+    expect(analyzeRefusalText('нет утверждений с цитатами в окнах m1-m9')).toBe('Не удалось разобрать');
+    expect(analyzeRefusalText(null)).toBe('Не удалось разобрать');
+    expect(analyzeRefusalText('')).toBe('Не удалось разобрать');
   });
 });

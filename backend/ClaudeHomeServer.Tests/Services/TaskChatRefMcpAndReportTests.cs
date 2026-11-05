@@ -72,7 +72,7 @@ public class TaskChatRefMcpAndReportTests
     [Theory]
     [InlineData(Owner)]   // арендатор: маска и для него
     [InlineData(Editor)]  // участник, для которого чат принадлежит другому (ниже чат переписывается на владельца)
-    [InlineData(null)]    // актор неизвестен — «не видит»
+    [InlineData(null)]    // актор неизвестен — приватное закрыто и для него (общий чат — отдельный тест ниже)
     public void Mcp_ЧужойПриватныйЧат_БезIdИНазванияВСтроке(string? actor)
     {
         var (s, p) = Catalogs();
@@ -103,6 +103,25 @@ public class TaskChatRefMcpAndReportTests
         TasksToolset.ForActorMasked(task, Owner, Owner, s, p);
         task.LinkedSessionId.Should().Be(ForeignId);
         task.LinkedChat.Should().BeNull();
+    }
+
+    /// <summary>DEF-83e3 (дефект 83e3701b): неизвестный актор — маска судит только приватность.
+    /// Общий чат проекта — как есть: id на месте, формы нет (раньше пустой зритель закрывал и его,
+    /// и обычный чат исполнителя уходил в ответе как «Приватный чат участника»). Чужой приватный —
+    /// закрыт, как раньше: fail-closed ровно для приватных.
+    /// Мутации: убрать пустую ветку в ChatRefs.For (вернуть прежнее «пустой зритель не видит
+    /// ничего») — первая проверка красная; заменить в ней Hidden на Visible — вторая красная.</summary>
+    [Fact]
+    public void Mcp_АкторНеизвестен_ОбщийЧатКакЕсть_ПриватныйЗамаскирован()
+    {
+        var (s, p) = Catalogs();
+
+        var open = JsonSerializer.Serialize(TasksToolset.ForActorMasked(MakeTask(OpenId), Owner, null, s, p), Wire);
+        open.Should().Contain(OpenId, "общий чат не приватный: неизвестный актор видит его, как любой").And.NotContain("linkedChat");
+
+        var priv = JsonSerializer.Serialize(TasksToolset.ForActorMasked(MakeTask(ForeignId), Owner, null, s, p), Wire);
+        priv.Should().NotContain(ForeignId).And.NotContain(ForeignTitle);
+        priv.Should().Contain("linkedChat").And.Contain("\"private\":true");
     }
 
     // ── (2) событие доски без явного резолвера ──────────────────────────────────────────

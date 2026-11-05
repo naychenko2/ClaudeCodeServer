@@ -1211,8 +1211,8 @@ public sealed class TasksToolset(
     // только ответ: запись задачи и гейты инструментов здесь не меняются (гейт актора — S2c-6).
     //
     // S2d-4b2: плюс маска чужих приватных чатов задачи (ChatRefs.For, та же функция, что в REST) —
-    // для ВСЕХ ролей, включая арендатора. Зритель — актор хода; актор неизвестен — «не видит»
-    // (пустой id никому не даёт доступа, fail-closed), в отличие от прав на поля задачи выше.
+    // для ВСЕХ ролей, включая арендатора. Зритель — актор хода; актор неизвестен — пустой id,
+    // и маска судит только приватность: приватные закрыты, общие отдаются как есть (DEF-83e3).
     private TaskItem ForCaller(TaskItem task, Session session, string ownerId) =>
         ForActorMasked(task, ownerId, sessions.GetTurnActor(session.Id, ownerId), sessions, projects);
 

@@ -441,6 +441,8 @@ public sealed class WikiNightlyService : BackgroundService
                 analyzed++;
                 var made = r.Outcome switch
                 {
+                    // Частичный исход (Partial, WC-3) — тоже applied: его применённые пакеты
+                    // считаются здесь же, отказ позднего окна их не перечёркивает.
                     WikiChatIngestService.OutcomeApplied => r.PackageIds.Count,
                     WikiChatIngestService.OutcomeAwaitingHuman => 1, // число неизвестно: нижняя граница
                     _ => 0,

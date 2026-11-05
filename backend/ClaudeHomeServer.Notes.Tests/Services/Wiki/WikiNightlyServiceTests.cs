@@ -921,6 +921,31 @@ public class WikiNightlyServiceTests : IDisposable
         File.ReadAllText(LastFile()).Should().Contain("\"estTokens\"").And.Contain("\"toInbox\"");
     }
 
+    // ─── WC-3: частичный исход считается в applied ─────────────────────────
+    // Частичный исход разбора (Partial, отказ позднего окна) — Outcome applied:
+    // применённые пакеты чата считаются в итог ночи так же, как при полном разборе.
+
+    [Fact]
+    public async Task ЧастичныйИсход_СчитаетсяВApplied()
+    {
+        Configure();
+        AddChat("c1");
+        AddChat("c2");
+        await Tick(Sut((owner, chat, ct) =>
+        {
+            lock (_analyzed) _analyzed.Add(chat);
+            return Task.FromResult(new WikiChatIngestService.ChatResult(
+                WikiChatIngestService.OutcomeApplied, "разбор окна m8-m10 не удался", ["pkg-" + chat],
+                Partial: true));
+        }));
+
+        var last = Last();
+        last.Analyzed.Should().Be(2);
+        last.Applied.Should().Be(2, "пакеты частичного исхода — в applied, отказ позднего окна их не перечёркивает");
+        last.ToInbox.Should().Be(0);
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted);
+    }
+
     // ─── c4: изоляция владельцев и один проход ─────────────────────────────
 
     [Fact]

@@ -24,6 +24,7 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { NewTaskDialog } from '../tasks/NewTaskDialog';
 import { useAiJob, runAiJob, patchAiJobResult, resetAiJob } from '../../lib/aiJobStore';
 import { isProjectTeam } from '../../lib/personaZone';
+import { canPersona } from './personaRights';
 import { TASKS_LOAD_INITIAL, settleTasks, heroCount, type TasksLoad } from './tasksLoad';
 
 // Командный центр проекта (①-L1, табовый): 3 вкладки — Обзор / Память команды / Активность-таймлайн.
@@ -80,6 +81,14 @@ export function TeamCommandCenter({
   const [menuOpen, setMenuOpen] = useState(false);
   const isMobile = useIsMobile();
   const stripe = projectColor(project.id).main;
+  // Права роли в командном центре (W3-F1b, матрица §2 разреза shared-projects-personas):
+  // фронт прячет то, что бэк откажет участнику — смену руководителя (makeLead), ИИ-сборку
+  // команды (aiTeam), чаты с проектными персонами (chat). Ключ — только project.myRole
+  // через personaRights (W3-F1a), своей логики не заводим. Закрытое прячем целиком,
+  // а не выключаем контролы (образец contentRights.ts).
+  const mayLead = canPersona(project.myRole ?? null, 'makeLead');
+  const mayAiTeam = canPersona(project.myRole ?? null, 'aiTeam');
+  const mayChat = canPersona(project.myRole ?? null, 'chat');
 
   useEffect(() => { sessionStorage.setItem('cc_team_tab', tab); }, [tab]);
 
@@ -193,7 +202,8 @@ export function TeamCommandCenter({
         {/* Вкладки */}
         <PillSwitch<Tab> value={tab} onChange={t => switchTab(t)} options={TAB_OPTIONS} compact={isMobile} isMobile={isMobile} />
         {/* Действия */}
-        {!isMobile && (
+        {/* «Созвать» — групповой чат с проектными персонами: закрыт читателю (chat, §2) */}
+        {!isMobile && mayChat && (
           <button onClick={() => setPickerOpen(true)} disabled={team.length < 2}
             style={{ ...tbBtnPrimary, background: stripe, color: C.onAccent, display: 'inline-flex', alignItems: 'center', gap: 7, opacity: team.length < 2 ? 0.5 : 1, cursor: team.length < 2 ? 'default' : 'pointer' }}>
             <MessageSquare size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
@@ -207,7 +217,8 @@ export function TeamCommandCenter({
           {menuOpen && (
             <Menu onClose={() => setMenuOpen(false)} align="right" top={38} minWidth={200}>
               <MenuItem icon={<UserPlus size={15} strokeWidth={ICON_STROKE} />} label="Новая персона" onClick={() => { setMenuOpen(false); onNewPersona(); }} />
-              <MenuItem icon={<Wand2 size={15} strokeWidth={ICON_STROKE} />} label="Сформировать команду" onClick={() => { setMenuOpen(false); setFormTeamOpen(true); }} />
+              {/* ИИ-сборка команды (aiTeam, §2): закрыта читателю; редактору — открыта (B3) */}
+              {mayAiTeam && <MenuItem icon={<Wand2 size={15} strokeWidth={ICON_STROKE} />} label="Сформировать команду" onClick={() => { setMenuOpen(false); setFormTeamOpen(true); }} />}
               <MenuItem icon={<Plus size={15} strokeWidth={ICON_STROKE} />} label="Новая задача" onClick={() => { setMenuOpen(false); setNewTaskOpen(true); }} />
             </Menu>
           )}
@@ -232,7 +243,7 @@ export function TeamCommandCenter({
               personaById={personaById} onOpenPersona={onOpenPersona} onSwitchTab={switchTab} onOpenEvent={openEvent}
               onPickerOpen={() => setPickerOpen(true)} onNewTaskOpen={() => setNewTaskOpen(true)} onNewPersona={onNewPersona}
               onFormTeamOpen={() => setFormTeamOpen(true)} onMenuOpen={() => createTeamChat(team, onOpenSession)} stripe={stripe} isMobile={isMobile}
-              leadId={leadId} onMakeLead={requestMakeLead} />
+              leadId={leadId} onMakeLead={requestMakeLead} mayMakeLead={mayLead} mayAiTeam={mayAiTeam} mayChat={mayChat} />
           )}
           {tab === 'memory' && (
             <TeamMemoryPanel mem={mem} onAdd={addMem} onUpdate={updateMem} onRemove={removeMem} stripe={stripe} />
@@ -293,8 +304,12 @@ function OverviewPanel(props: {
   // Руководитель проекта (фича default-personas-onboarding): текущий дефолт и смена;
   // onMakeLead не задан — блок руководителя не рисуется (флаг выключен)
   leadId: string | null; onMakeLead?: (p: Persona) => Promise<void>;
+  // Гейты роли (W3-F1b, §2): mayMakeLead — контрол смены руководителя; mayAiTeam —
+  // ИИ-сборка; mayChat — чаты с проектными персонами («Созвать»). Строка-информация
+  // «Руководитель проекта: …» остаётся: читателю она только для чтения, отказа нет.
+  mayMakeLead: boolean; mayAiTeam: boolean; mayChat: boolean;
 }) {
-  const { project, team, events, mem, tasks, tasksFailed, onRetryTasks, inFlight, onlineSet, tasksActive, chatsToday, personaById, onOpenPersona, onSwitchTab, onOpenEvent, onPickerOpen, onNewTaskOpen, onNewPersona, onFormTeamOpen, onMenuOpen, stripe, isMobile, leadId, onMakeLead } = props;
+  const { project, team, events, mem, tasks, tasksFailed, onRetryTasks, inFlight, onlineSet, tasksActive, chatsToday, personaById, onOpenPersona, onSwitchTab, onOpenEvent, onPickerOpen, onNewTaskOpen, onNewPersona, onFormTeamOpen, onMenuOpen, stripe, isMobile, leadId, onMakeLead, mayMakeLead, mayAiTeam, mayChat } = props;
   const specialtyCatalog = useSpecialtyCatalog();
   const recent = (events ?? []).slice(0, 6);
   const topMem = (mem ?? []).slice(0, 3);
@@ -308,11 +323,11 @@ function OverviewPanel(props: {
         <Users size={36} color={C.textMuted} style={{ opacity: 0.5 }} />
         <div style={{ fontFamily: FONT.serif, fontSize: 16, color: C.textHeading }}>В этом проекте ещё нет команды</div>
         <div style={{ fontSize: 13, color: C.textMuted, fontFamily: FONT.sans, maxWidth: 340, lineHeight: 1.5 }}>
-          Создайте персон — или попросите LLM сформировать команду по описанию.
+          {mayAiTeam ? 'Создайте персон — или попросите LLM сформировать команду по описанию.' : 'Создайте персон.'}
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
           <Button variant="primary" size="sm" leftIcon={<UserPlus size={15} />} onClick={onNewPersona}>Новая персона</Button>
-          <Button variant="ghost" size="sm" leftIcon={<Wand2 size={15} />} onClick={onFormTeamOpen}>Сформировать команду</Button>
+          {mayAiTeam && <Button variant="ghost" size="sm" leftIcon={<Wand2 size={15} />} onClick={onFormTeamOpen}>Сформировать команду</Button>}
         </div>
         {/* Команда пуста → строки «Руководитель проекта» с меню выше нет вовсе (нет
             кандидатов) — «Познакомиться с проектом» остаётся единственным выходом */}
@@ -357,7 +372,9 @@ function OverviewPanel(props: {
             ) : (
               <span style={{ fontSize: 13, color: C.textMuted, fontFamily: FONT.sans }}>не назначен</span>
             )}
-            {team.length > 0 && (
+            {/* Контрол смены руководителя (makeLead, §2): закрыт редактору и читателю;
+                строка-информация выше остаётся — она только для чтения */}
+            {team.length > 0 && mayMakeLead && (
               <div style={{ position: 'relative' }}>
                 <Button variant="ghost" size="sm" onClick={() => setLeadMenuOpen(o => !o)}>
                   {lead ? 'Сменить' : 'Назначить'}
@@ -375,15 +392,21 @@ function OverviewPanel(props: {
           </div>
         )}
         {onMakeLead && !lead && <LeadInviteRow project={project} isMobile={isMobile} style={{ marginTop: 8 }} />}
+        {/* Ряд действий героя: «Созвать команду» и быстрый командный чат — чаты с
+            проектными персонами (chat, §2), закрыты читателю; flexWrap — без пустых рядов */}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-          <Button variant="primary" size="sm" disabled={team.length < 2} leftIcon={<MessageSquare size={15} />}
-            title={team.length < 2 ? 'Нужно минимум 2 персоны в команде' : undefined}
-            onClick={onPickerOpen}>Созвать команду</Button>
+          {mayChat && (
+            <Button variant="primary" size="sm" disabled={team.length < 2} leftIcon={<MessageSquare size={15} />}
+              title={team.length < 2 ? 'Нужно минимум 2 персоны в команде' : undefined}
+              onClick={onPickerOpen}>Созвать команду</Button>
+          )}
           <Button variant="ghost" size="sm" leftIcon={<Plus size={15} />} onClick={onNewTaskOpen}>Новая задача</Button>
           <Button variant="ghost" size="sm" leftIcon={<UserPlus size={15} />} onClick={onNewPersona}>Новая персона</Button>
-          <IconButton variant="soft" size="sm" disabled={team.length < 2}
-            title={team.length < 2 ? 'Нужно минимум 2 персоны в команде' : 'Создать командный чат'}
-            onClick={onMenuOpen}><MoreHorizontal size={16} /></IconButton>
+          {mayChat && (
+            <IconButton variant="soft" size="sm" disabled={team.length < 2}
+              title={team.length < 2 ? 'Нужно минимум 2 персоны в команде' : 'Создать командный чат'}
+              onClick={onMenuOpen}><MoreHorizontal size={16} /></IconButton>
+          )}
         </div>
       </div>
 

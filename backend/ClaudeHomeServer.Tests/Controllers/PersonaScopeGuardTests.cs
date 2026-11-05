@@ -188,10 +188,11 @@ public class PersonaScopeGuardTests
         // паттерн §5 п.2 не видит (тот же слепой участок, что у W3-B3a); смысл шага держат строки
         // матрицы «правка карточки» и «голос»/«выбор аватара»: вернуть ключ вызывающего в Update,
         // SetVoice или SelectAvatar — они красные.
-        // W3-B5a — привязки CRUD (§3.1 «POST/PUT/DELETE {id}/bindings»)
-        ("PersonasController.cs", "PersonasController.AddBinding", "W3-B5a"),
-        ("PersonasController.cs", "PersonasController.UpdateBinding", "W3-B5a"),
-        ("PersonasController.cs", "PersonasController.DeleteBinding", "W3-B5a"),
+        // W3-B5a закрыт (привязки CRUD — под ключом арендатора и сужением целей NonOwnerBindingEditDenied,
+        // SharedProjectPersonaBindingsTests): инлайновых вызовов с ключом-вызывающим в AddBinding/
+        // UpdateBinding/DeleteBinding больше нет, строки сняты. Их ValidateAsync/UpdateBindings
+        // паттерн §5 п.2 не видит (_bindings./_personas.UpdateBindings вне CallRe) — смысл шага
+        // держат строки матрицы: вернуть ключ вызывающего в любой из трёх — они красные.
         // W3-B5b — подбор привязок и каталог целей (§3.1 «suggest/generate/apply-defaults», «binding-targets»)
         ("PersonasController.cs", "PersonasController.BindingTargets", "W3-B5b"),
         ("PersonasController.cs", "PersonasController.SuggestBindings", "W3-B5b"),
@@ -262,11 +263,11 @@ public class PersonaScopeGuardTests
         // Пол «невакуумности» следует за долгом: базовый состав был 40+; шаги волны переводят
         // инлайновые вызовы на ResolvePersona и он законно падает (W3-B4b снял два места в
         // SessionsController.Create, W3-B2 — места списков, W3-B1c — 10 тел read-путей,
-        // W3-B1d — 14 тел write-путей в PersonasController). 10 — по текущему составу с запасом
-        // (13: 7 оставшихся мест в PersonasController — W3-B5 — и 6 «личных»):
-        // обнуление области всё ещё красное.
-        // (W3-B3b снял два места в PersonasController: UploadAvatar/RecropAvatar — ключ арендатора.)
-        found.Should().BeGreaterThan(10, "сверка не должна быть вакуумной: базовый состав инлайновых вызовов — десятки");
+        // W3-B1d — 14 тел write-путей в PersonasController, W3-B3b — UploadAvatar/RecropAvatar,
+        // W3-B5a — AddBinding/UpdateBinding/DeleteBinding). 6 — по текущему составу с запасом
+        // (10: 4 оставшихся места в PersonasController — W3-B5b — и 6 вне него: 5 «личных»
+        // allow-list и TaskPersonaValidator — W3-B7): обнуление области всё ещё красное.
+        found.Should().BeGreaterThan(6, "сверка не должна быть вакуумной: базовый состав инлайновых вызовов — десятки");
         offenders.Should().BeEmpty(
             "вызовы PersonaManager, ключованные вызывающим, допустимы только из «личных» мест и списка долга "
             + "(W3-B1b, разрез §5 п.2); новый вызов вне списков — через ResolvePersona");

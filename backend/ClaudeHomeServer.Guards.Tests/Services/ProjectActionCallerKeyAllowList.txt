@@ -171,7 +171,12 @@ backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 # Update (резолв персоны в гейте owner_settings + ключ _crud.UpdateAsync), GenerateAvatar/
 # SelectAvatar/SetVoice (ключ _crud.*), UploadAvatar/RecropAvatar (резолв персоны и ключ
 # SetAvatarUploaded/SetAvatarRecropped). Вызывающий остался в callerIsOwner (флаг права, не ключ).
-backend/ClaudeHomeServer/Controllers/PersonasController.cs|50
+# W3-B5a (привязки CRUD, разрез §3.1 строка «POST/PUT/DELETE {id}/bindings», И-2, И-4): 50→42 —
+# восемь мест переведены на scope.TenantOwnerId: AddBinding/UpdateBinding/DeleteBinding (резолв
+# персоны, ValidateAsync, UpdateBindings; additive-запись — AppendBinding с тем же ключом).
+# Оставшееся в файле — строки долга W3-B5b (binding-targets/suggest/generate/apply-defaults) и
+# «личные» места (списки/пантеон/создание/ai-пути/Ask).
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|42
 backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6

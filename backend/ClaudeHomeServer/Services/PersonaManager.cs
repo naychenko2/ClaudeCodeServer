@@ -849,6 +849,25 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         return persona;
     }
 
+    // Добавление одной привязки к набору (W3-B5a, POST {id}/bindings): список строится
+    // под _saveLock из ТЕКУЩЕГО значения — снимок вызывающего не основа записи.
+    // Иначе две одновременные записи (владелец и редактор) перечёркивают друг друга:
+    // UpdateBindings пишет список целиком, и additive-вызов поверх его снимка —
+    // классическая потерянная правка. Полная замена — остаётся за UpdateBindings.
+    public Persona AppendBinding(string id, string userId, PersonaBinding binding)
+    {
+        var persona = Get(id, userId)
+            ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
+        lock (_saveLock)
+        {
+            persona.Bindings = [.. persona.Bindings ?? [], binding];
+            persona.UpdatedAt = DateTime.UtcNow;
+        }
+        Save();
+        OnPersonaChanged?.Invoke(persona);
+        return persona;
+    }
+
     // Полная замена правил автоматизации персоны (событийно-управляемая проактивность);
     // сохранение мгновенное. Пустой список → null (поведение как без правил).
     // Конфигурация только: runtime-состояние (LastFiredAt/счётчики/снапшоты) живёт отдельно

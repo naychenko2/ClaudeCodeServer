@@ -831,16 +831,25 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<ActionResult<PersonaBinding>> AddBinding(string id, [FromBody] PersonaBindingRequest req)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B5a (разрез §3.1 строка «POST/PUT/DELETE {id}/bindings»; И-2, И-4): ключ — арендатор;
+        // для не-владельца — сужение целей одним методом PersonaBindingsService (отказ по праву
+        // решается до валидности цели — тот же порядок, что у [ProjectScope]).
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
 
         var (binding, parseError) = PersonasCrudService.ParseBinding(req);
         if (binding is null) return BadRequest(new { error = parseError });
-        var err = await _bindings.ValidateAsync(UserId, binding, persona.Bindings, persona);
+        if (_bindings.NonOwnerBindingEditDenied(scope.Role, persona.ProjectId, binding)
+                is (int deniedStatus, string deniedError))
+            return StatusCode(deniedStatus, new { error = deniedError });
+        var err = await _bindings.ValidateAsync(scope.TenantOwnerId, binding, persona.Bindings, persona);
         if (err is not null) return BadRequest(new { error = err });
 
-        var list = new List<PersonaBinding>(persona.Bindings ?? []) { binding };
-        _personas.UpdateBindings(id, UserId, list);
+        // AppendBinding, не UpdateBindings поверх снимка: additive-запись строит список под
+        // _saveLock из текущего значения — одновременные записи владельца и редактора
+        // не перечёркивают друг друга (тест гонки).
+        _personas.AppendBinding(id, scope.TenantOwnerId, binding);
         await Broadcast("updated", id);
         return Ok(binding);
     }
@@ -877,7 +886,10 @@ public class PersonasController(
     public async Task<ActionResult<PersonaBinding>> UpdateBinding(string id, string bindingId,
         [FromBody] PersonaBindingRequest req)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B5a (та же строка §3.1; И-2, И-4): ключ — арендатор; сужение — тем же методом,
+        // с существующей привязкой (личную цель владельца участник не меняет — 403).
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         var current = persona.Bindings?.FirstOrDefault(b => b.Id == bindingId);
         if (current is null) return NotFound(new { error = "Привязка не найдена" });
@@ -896,7 +908,10 @@ public class PersonasController(
             Mode = parsed.Mode,
             CreatedAt = current.CreatedAt,
         };
-        var err = await _bindings.ValidateAsync(UserId, candidate, persona.Bindings, persona);
+        if (_bindings.NonOwnerBindingEditDenied(scope.Role, persona.ProjectId, candidate, current)
+                is (int deniedStatus, string deniedError))
+            return StatusCode(deniedStatus, new { error = deniedError });
+        var err = await _bindings.ValidateAsync(scope.TenantOwnerId, candidate, persona.Bindings, persona);
         if (err is not null) return BadRequest(new { error = err });
 
         current.Type = candidate.Type;
@@ -905,7 +920,7 @@ public class PersonasController(
         current.Condition = candidate.Condition;
         current.Mode = candidate.Mode;
         current.UpdatedAt = DateTime.UtcNow;
-        _personas.UpdateBindings(id, UserId, persona.Bindings!.ToList());
+        _personas.UpdateBindings(id, scope.TenantOwnerId, persona.Bindings!.ToList());
         await Broadcast("updated", id);
         return Ok(current);
     }
@@ -914,12 +929,18 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<IActionResult> DeleteBinding(string id, string bindingId)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B5a (та же строка §3.1; И-2, И-4): ключ — арендатор; существующую привязку
+        // владельца к личной цели не-владелец не удаляет (403, тот же метод).
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
-        var list = persona.Bindings?.Where(b => b.Id != bindingId).ToList();
-        if (list is null || list.Count == (persona.Bindings?.Count ?? 0))
-            return NotFound(new { error = "Привязка не найдена" });
-        _personas.UpdateBindings(id, UserId, list);
+        var current = persona.Bindings?.FirstOrDefault(b => b.Id == bindingId);
+        if (current is null) return NotFound(new { error = "Привязка не найдена" });
+        if (_bindings.NonOwnerBindingEditDenied(scope.Role, persona.ProjectId, current, current)
+                is (int deniedStatus, string deniedError))
+            return StatusCode(deniedStatus, new { error = deniedError });
+        var list = persona.Bindings!.Where(b => b.Id != bindingId).ToList();
+        _personas.UpdateBindings(id, scope.TenantOwnerId, list);
         await Broadcast("updated", id);
         return NoContent();
     }

@@ -80,6 +80,11 @@
 | `reader` | 2958–2974 | 17 | `features/reader/api.ts` | 1 |
 | `higgsfield` | 2975–2981 | 7 | `features/higgsfield/api.ts` | 2 |
 
+| _вне объекта: импорты, типы Architecture/Deploy/Power/RemoteCommands/Plugin*/Module/Dify, хелперы_ | 1–561 | 561 | по доменам при выносе (типы едут вместе с методами) | — |
+| _хвост: Higgsfield, Reader и закрытие объекта_ | 2983–3046 | 64 | `features/higgsfield`, `features/reader` | — |
+
+Сумма: 561 + 2 421 (ключи 562–2982) + 64 = 3 046 = длина файла. Для `types/index.ts` диапазоны таблицы раздела 2 идут встык с 1 по 4 337.
+
 Крупнейшие: `projects`, `personas`, `chats`, `git`, `files`, `tasks`, `notes`, `docs`, `sessions` — резать по поддоменам, ≤ 4 файла на шаг.
 
 ## 2. Домены `types/index.ts` (4 337 строк)

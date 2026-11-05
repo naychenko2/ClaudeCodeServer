@@ -10,6 +10,12 @@
 // Черновик (FormState) живёт локально, пока карточка/степпер открыты; PUT/POST уходит
 // только по кнопке. Общие рендер-блоки формы (тип+параметры триггера/действие/TTL/
 // троттлинг) — в ./automationForm, степпер — в ./stepperUi (общий с привязками).
+//
+// Гейт по роли (W3-F1g, матрица §2 разреза shared-projects-personas-cut-2026-11):
+// автоматика — Configure, правила меняет только владелец. Читатель и редактор видят
+// список и могут раскрыть правило для просмотра, но полей записи нет: ни «Добавить
+// правило», ни правки/удаления/теста в карточке, ни ИИ-подбора/генерации; поля
+// раскрытого правила выключены. Нет роли (обычный проект / старый бэк) — как сейчас.
 
 import { useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
@@ -24,6 +30,7 @@ import { bumpPersonas } from '../../lib/personas';
 import { showToast } from '../../lib/toast';
 import { Button, Field, Menu, MenuItem, SegmentedControl, TextArea, TextField, Toggle } from '../../components/ui';
 import { SectionLabel } from '../tasks/bits';
+import { personaRole, canPersona } from './personaRights';
 import { TRIGGER_META, ACTION_META, triggerDetails, rulesCounter } from './automationMeta';
 import { Stepper, Crumb } from './stepperUi';
 import type { FormState } from './automationForm';
@@ -74,6 +81,10 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
   const rules = persona.automationRules ?? [];
   // Глобальный агент: для file/gitCommit доступен режим «папка без проекта»
   const isGlobal = persona.scope === 'global';
+  // W3-F1g: роль — только через personaRights по persona.projectId (матрица §2):
+  // автоматика — Configure, её меняет только владелец; нет роли (обычный проект /
+  // старый бэк) — как владелец, всё открыто.
+  const mayAutomate = canPersona(personaRole(persona, projects), 'automation');
 
   // Редактирование раскрытой карточки — черновик локален, PUT только по «Сохранить»
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -250,6 +261,13 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
           Персона сама реагирует на события — таймер, файлы, заметки, коммиты, смену статуса задач и @упоминания.
         </div>
 
+        {/* Строка-пояснение над списком для тех, кому бэк откажет (матрица §2: только владелец) */}
+        {!mayAutomate && (
+          <div style={{ fontSize: 12.5, color: C.textMuted, lineHeight: 1.5, marginTop: 4 }}>
+            Правила автоматики меняет только владелец проекта
+          </div>
+        )}
+
         {/* Список правил */}
         {rules.length > 0 && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 14 }}>
@@ -262,6 +280,7 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
                 isMobile={isMobile}
                 isGlobal={isGlobal}
                 open={expandedId === rule.id}
+                readOnly={!mayAutomate}
                 draft={expandedId === rule.id ? draft : null}
                 setDraftField={setDraftField}
                 saving={saving && expandedId === rule.id}
@@ -284,13 +303,20 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
           </div>
         )}
 
-        {/* Пустое состояние — внутри 680-контейнера, в духе привязок */}
+        {/* Пустое состояние — внутри 680-контейнера, в духе привязок.
+            Для не-владельца — без кнопок записи (те же входы, что под списком) */}
         {rules.length === 0 && !adding && !suggest && genPrompt === null && (
-          <EmptyState onCreate={openAdd} onSuggest={() => void runSuggest()} onGenerate={openGenerate} />
+          <EmptyState
+            readOnly={!mayAutomate}
+            onCreate={openAdd}
+            onSuggest={() => void runSuggest()}
+            onGenerate={openGenerate}
+          />
         )}
 
-        {/* Кнопки под списком (скрыты, пока открыт степпер/подбор/ввод промпта) */}
-        {rules.length > 0 && !adding && !suggest && genPrompt === null && (
+        {/* Кнопки под списком (скрыты, пока открыт степпер/подбор/ввод промпта;
+            и совсем — для не-владельца: бэк откажет запись — матрица §2) */}
+        {rules.length > 0 && mayAutomate && !adding && !suggest && genPrompt === null && (
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
             <AddRuleButton onClick={openAdd} accent={accent} />
             <Button variant="ghostAccent" size="sm" onClick={() => void runSuggest()}>
@@ -428,7 +454,7 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
 // ─── Карточка правила: свёрнутая строка / раскрытое редактирование на месте ────
 
 function RuleCard({
-  rule, accent, projects, isMobile, isGlobal, open, draft, setDraftField, saving, testBusy,
+  rule, accent, projects, isMobile, isGlobal, open, readOnly, draft, setDraftField, saving, testBusy,
   menuOpen, hovered, confirming, onHover, onToggleCard, onToggleEnabled, onTest,
   onEdit, onAskDelete, onToggleMenu, onCloseMenu, onCancelEdit, onSaveEdit,
 }: {
@@ -438,6 +464,10 @@ function RuleCard({
   isMobile?: boolean;
   isGlobal?: boolean;
   open: boolean;
+  // Читатель/редактор: карточка только для чтения — меню действий нет, поля
+  // раскрытого тела выключены, блока кнопок записи/теста/удаления нет;
+  // клик по шапке сворачивает раскрытую карточку обратно
+  readOnly: boolean;
   draft: FormState | null;
   setDraftField: <K extends keyof FormState>(key: K, value: FormState[K]) => void;
   saving: boolean;
@@ -463,6 +493,25 @@ function RuleCard({
   const liveSubtitle = open && draft ? draftSummary(draft, projects) : savedSubtitle;
   const dim = !rule.enabled && !open;
 
+  // Блок полей раскрытого тела — общий для редактирования владельца и для выключенного
+  // просмотра не-владельца (разница — только обёртка <fieldset disabled> и блок кнопок)
+  const renderFields = (d: FormState) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <Field label="Событие" hint="Что запускает реакцию персоны.">
+        <SegmentedControl
+          value={d.triggerType}
+          options={TRIGGER_OPTIONS}
+          onChange={v => setDraftField('triggerType', v)}
+          columns={isMobile ? 2 : 3}
+        />
+      </Field>
+      <TriggerParamsFields f={d} set={setDraftField} projects={projects} isMobile={isMobile} isGlobal={isGlobal} />
+      <ActionFields f={d} set={setDraftField} />
+      <TtlFields f={d} set={setDraftField} isMobile={isMobile} />
+      <ThrottleDisclosure f={d} set={setDraftField} />
+    </div>
+  );
+
   return (
     <div
       onMouseEnter={() => onHover(true)}
@@ -474,16 +523,17 @@ function RuleCard({
         transition: 'border-color 0.15s, background 0.6s',
       }}
     >
-      {/* Шапка: свёрнуто — текст, раскрыто — поля имя+тумблер (без дублирующего блока) */}
+      {/* Шапка: свёрнуто — текст, раскрыто — поля имя+тумблер (без дублирующего блока).
+          У не-владельца и раскрытая карточка остаётся кликабельной — сворачивается обратно */}
       <div
-        onClick={!open ? onToggleCard : undefined}
-        style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: open ? 'default' : 'pointer' }}
+        onClick={!open || readOnly ? onToggleCard : undefined}
+        style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: open && !readOnly ? 'default' : 'pointer' }}
       >
         <TriggerTypeIcon type={rule.trigger.type} dim={dim} />
 
         <div style={{ flex: 1, minWidth: 0, opacity: dim ? 0.55 : 1 }}>
           {open && draft ? (
-            <TextField value={draft.name} onChange={v => setDraftField('name', v)} placeholder="Без названия" autoFocus />
+            <TextField value={draft.name} onChange={v => setDraftField('name', v)} placeholder="Без названия" autoFocus disabled={readOnly} />
           ) : (
             <div style={{
               fontSize: 13.5, fontWeight: 600, color: C.textHeading,
@@ -505,11 +555,13 @@ function RuleCard({
           onClick={e => e.stopPropagation()}
         >
           {open && draft ? (
-            <ToggleLabel checked={draft.enabled} onChange={v => setDraftField('enabled', v)} />
+            <ToggleLabel checked={draft.enabled} onChange={v => setDraftField('enabled', v)} disabled={readOnly} />
           ) : (
             <RuleStatusBadge enabled={rule.enabled} />
           )}
-          {!open && (
+          {/* Меню действий — только у того, кому разрешена запись (в нём правки,
+              тест, вкл/выкл и удаление); не-владелец раскрывает карточку для просмотра */}
+          {!open && !readOnly && (
             <div style={{ position: 'relative' }}>
               <button
                 onClick={onToggleMenu}
@@ -556,36 +608,32 @@ function RuleCard({
         </div>
       </div>
 
-      {/* Раскрытое тело — редактирование по месту, сохранение явной кнопкой */}
+      {/* Раскрытое тело — редактирование по месту, сохранение явной кнопкой.
+          У не-владельца поля тех же блоков выключены: <fieldset disabled> по стандарту
+          выключает все нативные контролы внутри (input/select/textarea/button),
+          pointer-events гасит ещё и div-тумблеры общих блоков; блока кнопок записи нет */}
       {open && draft && (
         <div style={{ borderTop: `1px solid ${C.borderLight}`, marginTop: 10, paddingTop: 14 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <Field label="Событие" hint="Что запускает реакцию персоны.">
-              <SegmentedControl
-                value={draft.triggerType}
-                options={TRIGGER_OPTIONS}
-                onChange={v => setDraftField('triggerType', v)}
-                columns={isMobile ? 2 : 3}
-              />
-            </Field>
-            <TriggerParamsFields f={draft} set={setDraftField} projects={projects} isMobile={isMobile} isGlobal={isGlobal} />
-            <ActionFields f={draft} set={setDraftField} />
-            <TtlFields f={draft} set={setDraftField} isMobile={isMobile} />
-            <ThrottleDisclosure f={draft} set={setDraftField} />
-          </div>
+          {readOnly ? (
+            <fieldset disabled style={{ border: 'none', margin: 0, padding: 0, minWidth: 0, pointerEvents: 'none' }}>
+              {renderFields(draft)}
+            </fieldset>
+          ) : renderFields(draft)}
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16, flexWrap: 'wrap', gap: 8 }}>
-            <button onClick={onAskDelete} style={delLink}>
-              {confirming ? 'Точно удалить?' : 'Удалить правило'}
-            </button>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <Button variant="ghost" size="sm" disabled={testBusy} onClick={onTest}>
-                {testBusy ? 'Запускаю…' : 'Проверить'}
-              </Button>
-              <Button variant="ghost" size="sm" onClick={onCancelEdit}>Отмена</Button>
-              <Button variant="primary" size="sm" loading={saving} onClick={onSaveEdit}>Сохранить</Button>
+          {!readOnly && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 16, flexWrap: 'wrap', gap: 8 }}>
+              <button onClick={onAskDelete} style={delLink}>
+                {confirming ? 'Точно удалить?' : 'Удалить правило'}
+              </button>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <Button variant="ghost" size="sm" disabled={testBusy} onClick={onTest}>
+                  {testBusy ? 'Запускаю…' : 'Проверить'}
+                </Button>
+                <Button variant="ghost" size="sm" onClick={onCancelEdit}>Отмена</Button>
+                <Button variant="primary" size="sm" loading={saving} onClick={onSaveEdit}>Сохранить</Button>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
     </div>
@@ -702,10 +750,12 @@ function RuleStatusBadge({ enabled }: { enabled: boolean }) {
 }
 
 // Toggle + подпись «вкл/выкл» — используется в шапке раскрытой карточки
-function ToggleLabel({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+function ToggleLabel({ checked, onChange, disabled }: {
+  checked: boolean; onChange: (v: boolean) => void; disabled?: boolean;
+}) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, flexShrink: 0 }}>
-      <Toggle checked={checked} onChange={onChange} />
+      <Toggle checked={checked} onChange={onChange} disabled={disabled} />
       <span style={{ fontSize: 11, color: C.textMuted, fontFamily: FONT.sans }}>{checked ? 'вкл' : 'выкл'}</span>
     </div>
   );
@@ -713,7 +763,9 @@ function ToggleLabel({ checked, onChange }: { checked: boolean; onChange: (v: bo
 
 // ─── Empty-state ────────────────────────────────────────────────────────────────
 
-function EmptyState({ onCreate, onSuggest, onGenerate }: { onCreate: () => void; onSuggest: () => void; onGenerate: () => void }) {
+function EmptyState({ readOnly, onCreate, onSuggest, onGenerate }: {
+  readOnly: boolean; onCreate: () => void; onSuggest: () => void; onGenerate: () => void;
+}) {
   return (
     <div style={{
       marginTop: 14, border: `1.5px dashed ${C.dashed}`, borderRadius: R.xl,
@@ -723,26 +775,29 @@ function EmptyState({ onCreate, onSuggest, onGenerate }: { onCreate: () => void;
       <div style={{ color: C.textMuted }}>
         <Zap size={26} strokeWidth={1.5} />
       </div>
+      {/* Не-владелец не может подключить правило — заголовок не зовёт к действию */}
       <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>
-        Подключи первое правило
+        {readOnly ? 'Правил автоматики нет' : 'Подключи первое правило'}
       </div>
       <div style={{ maxWidth: 360, fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5 }}>
         Персона будет сама реагировать на события: таймер, изменения файлов и заметок,
         новые коммиты, смену статуса задач и @упоминания. По умолчанию она сначала решает,
         стоит ли вмешиваться.
       </div>
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
-        <button onClick={onCreate} style={emptyAddBtn}>
-          <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-          Создать правило
-        </button>
-        <Button variant="ghostAccent" size="sm" onClick={onSuggest}>
-          ✨ Подобрать автоматически
-        </Button>
-        <Button variant="ghostAccent" size="sm" onClick={onGenerate}>
-          ✨ Создать по промпту
-        </Button>
-      </div>
+      {!readOnly && (
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
+          <button onClick={onCreate} style={emptyAddBtn}>
+            <Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+            Создать правило
+          </button>
+          <Button variant="ghostAccent" size="sm" onClick={onSuggest}>
+            ✨ Подобрать автоматически
+          </Button>
+          <Button variant="ghostAccent" size="sm" onClick={onGenerate}>
+            ✨ Создать по промпту
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

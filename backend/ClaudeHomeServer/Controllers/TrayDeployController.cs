@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Deploy;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -24,6 +25,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Route("api/admin/deploy")]
 [Authorize(Roles = "admin")]
+[SubsystemUsage("deploy")]
 public class TrayDeployController(DeployLauncher deploy, ILogger<TrayDeployController> log) : ControllerBase
 {
     /// <summary>

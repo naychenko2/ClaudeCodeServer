@@ -19,6 +19,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
+[SubsystemUsage("dossiers")]
 public class DossiersController(ProjectManager projects, DossierStore store,
     CodeGraphService graphs, DossierRecallService recall, FeatureFlagService flags,
     GitService git, IGitRefSnapshotStore snapshotStore, SessionManager sessions, UserStore users,

@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Composition;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
@@ -15,6 +16,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/reader")]
+[SubsystemUsage("reader")]
 public class ReaderController(ReaderService reader, ReaderQuotaService quota) : ControllerBase
 {
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);

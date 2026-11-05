@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{id}/background")]
+[SubsystemUsage("backgrounds")]
 public class ProjectBackgroundsController(
     ProjectManager projects, ProjectBackgroundService backgrounds)
     : ControllerBase

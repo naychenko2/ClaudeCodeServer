@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Composition;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -43,6 +44,7 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// собираются из статуса/тела ответа Dify (ключ в них не возвращается — он только в заголовке
 /// Authorization). Сторож парности со stdio-веткой отката — DifyToolsetParityTests.
 /// </summary>
+[SubsystemUsage("knowledge")]
 public sealed class DifyToolset(
     KnowledgeService knowledge,
     KnowledgeBaseCatalogService catalog,

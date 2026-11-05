@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Images;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -15,6 +16,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/image-generation")]
+[SubsystemUsage("images")]
 public class ImageGenerationController(ImageGenerationService images) : ControllerBase
 {
     // Патч-семантика PUT /api/settings: null — поле не прислали (оставить как есть),

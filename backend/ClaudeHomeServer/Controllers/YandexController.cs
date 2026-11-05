@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Composition;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Services.Spend;
@@ -21,6 +22,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/yandex")]
+[SubsystemUsage("yandex")]
 public class YandexController(YandexAccountService yandex, ISpendAnalytics? analytics = null)
     : ControllerBase
 {

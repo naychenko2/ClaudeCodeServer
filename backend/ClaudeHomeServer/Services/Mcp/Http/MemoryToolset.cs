@@ -34,6 +34,7 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// жизнь адаптера и от свойств хода не зависит. Сторож парности со stdio-веткой отката —
 /// MemoryToolsetParityTests.
 /// </summary>
+[SubsystemUsage("memory")]
 public sealed class MemoryToolset(
     PersonaManager personas,
     ProjectManager projects,

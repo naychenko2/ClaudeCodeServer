@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Composition;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
@@ -21,6 +22,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/tts")]
+[SubsystemUsage("tts")]
 public class TtsController(YandexTtsService tts, VoiceResolver voices,
     SessionManager sessions, ILogger<TtsController> logger,
     ISpendCollector? spend = null) : ControllerBase

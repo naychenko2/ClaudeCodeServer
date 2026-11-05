@@ -35,6 +35,7 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 ///
 /// Сторож парности со stdio-веткой отката — TasksToolsetParityTests (index.js заморожен).
 /// </summary>
+[SubsystemUsage("tasks")]
 public sealed class TasksToolset(
     TaskManager tasks,
     ProjectManager projects,

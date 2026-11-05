@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Composition;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
@@ -23,6 +24,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Route("api/deploy")]
 [Authorize(Policy = AdminByStoreRequirement.PolicyName)]
+[SubsystemUsage("deploy")]
 public class DeployController(DeployService deploy, SessionManager sessions) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;

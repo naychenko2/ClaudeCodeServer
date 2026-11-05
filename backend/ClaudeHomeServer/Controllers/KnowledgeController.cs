@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/knowledge")]
+[SubsystemUsage("knowledge")]
 public class KnowledgeController(
     ProjectManager projects,
     KnowledgeService knowledge,

@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Composition;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Hubs;
@@ -22,6 +23,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/knowledge")]
+[SubsystemUsage("knowledge")]
 public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<SessionHub> hub,
     Services.Llm.ICheapTextRunner cheap, KnowledgeBaseCatalogService catalog) : ControllerBase
 {

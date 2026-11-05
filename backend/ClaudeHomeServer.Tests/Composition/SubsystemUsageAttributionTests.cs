@@ -131,6 +131,46 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
         (await AdminRowAsync(clientB, "notes"))["usedLast24h"]!.GetValue<int>().Should().Be(4);
     }
 
+    private static int TotalOf(SubsystemUsageStore store) =>
+        store.Snapshot(DateTimeOffset.UtcNow).Sum(e => e.Last24h);
+
+    [Fact]
+    public async Task КонтроллерЯдраСборкиMain_СПривязкой_СчитаетсяПодсистеме()
+    {
+        using var client = _factory.CreateAuthenticatedClient();
+        var before = HitsOf(StoreOf(_factory), "tasks");
+
+        var resp = await client.GetAsync("/api/tasks");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        HitsOf(StoreOf(_factory), "tasks").Should().Be(before + 1);
+    }
+
+    [Fact]
+    public async Task McpТулсетMain_СПривязкой_СчитаетсяПодсистеме()
+    {
+        using var client = _factory.CreateAuthenticatedClient();
+        var before = HitsOf(StoreOf(_factory), "tasks");
+
+        var resp = await client.PostAsJsonAsync("/mcp/tasks/" + Guid.NewGuid().ToString("N"),
+            new { jsonrpc = "2.0", id = 1, method = "tools/list" });
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        HitsOf(StoreOf(_factory), "tasks").Should().Be(before + 1);
+    }
+
+    [Fact]
+    public async Task РучкаЯдра_НеСчитаетсяНикому()
+    {
+        using var client = _factory.CreateAuthenticatedClient();
+        var before = TotalOf(StoreOf(_factory));
+
+        var resp = await client.GetAsync("/api/projects");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        TotalOf(StoreOf(_factory)).Should().Be(before);
+    }
+
     [Fact]
     public void КартаСборок_ТулсетВертикалиАтрибутируетсяПоИмени_ЯдроНет()
     {

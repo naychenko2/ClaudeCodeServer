@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Composition;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Services;
@@ -15,6 +16,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/video")]
+[SubsystemUsage("video")]
 public class VideoController(
     VideoProviderRegistry registry,
     YouTubeOAuthService youtubeOauth,

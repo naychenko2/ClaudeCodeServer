@@ -21,6 +21,7 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// исполнители гоняют тесты чаще всех.
 /// ИНВАРИАНТ состава: tools/list зависит только от сессии-вызывателя, не от хода.
 /// </summary>
+[SubsystemUsage("test-runs")]
 public sealed class TestsToolset(
     SessionManager sessions,
     ProjectManager projects,

@@ -1,7 +1,10 @@
 import { useState } from 'react';
+import { Lock } from 'lucide-react';
 import type { Session, Persona, Project } from '../../types';
 import { C, R, SP, FS, FONT } from '../../lib/design';
+import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Button } from '../ui';
+import { COMPANION_LOCKED_HINT } from '../CompanionSelector';
 import { NewChatSetup } from './NewChatSetup';
 import { useAssistantName } from './contexts';
 import { personaLabel, personaTitleLines } from '../../lib/personas';
@@ -12,7 +15,7 @@ import { isGlobalPersona, isZonedPersona } from '../../lib/personaZone';
 
 // Empty state пустого чата: приветствие/чипы-подсказки; для проекта без CLAUDE.md — CTA /init.
 // Внизу — настройка будущего чата (модель, усилие, время жизни, теги), пока не отправлено первое сообщение.
-export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, project, onSessionUpdated, isMobile, personas, selectedPersonaId, onPickPersona, compact, greetingAbove }: {
+export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, project, onSessionUpdated, isMobile, personas, selectedPersonaId, onPickPersona, companionLocked, compact, greetingAbove }: {
   hasProject: boolean;
   hasCLAUDEmd: boolean | null;
   onHint: (hint: string) => void;
@@ -25,6 +28,9 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
   personas?: Persona[];
   selectedPersonaId?: string;
   onPickPersona?: (p: Persona) => void;
+  // Смена собеседника закрыта по праву (W3-F1i, дефект 9227267b): ряд выключен
+  // с видимой подсказкой — тем же companionLocked, что и селектор в композере
+  companionLocked?: boolean;
   // Узкая колонка (стена): без пилюль настройки чата
   compact?: boolean;
   // Выше в ленте уже стоит приветствие персоны (аватар + имя + реплика):
@@ -130,6 +136,7 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
                 hasProject={hasProject}
                 selectedPersonaId={selectedPersonaId}
                 onPick={onPickPersona}
+                locked={companionLocked}
               />
             )}
 
@@ -143,15 +150,19 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
   );
 }
 
-// Одна пилюля-аватар персоны (роль над именем)
-function PersonaPill({ p, active, onPick }: { p: Persona; active: boolean; onPick: (p: Persona) => void }) {
+// Одна пилюля-аватар персоны (роль над именем). locked (W3-F1i): смена собеседника
+// закрыта по праву — пиля видна, но не активна; причина — в title и в подсказке над рядом
+function PersonaPill({ p, active, onPick, locked }: { p: Persona; active: boolean; onPick: (p: Persona) => void; locked?: boolean }) {
   return (
     <button
       onClick={() => onPick(p)}
-      title={`Поговорить с «${personaLabel(p)}»`}
+      disabled={locked}
+      title={locked ? COMPANION_LOCKED_HINT : `Поговорить с «${personaLabel(p)}»`}
       style={{
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
-        border: 'none', background: 'none', cursor: 'pointer', padding: 2, width: 64,
+        border: 'none', background: 'none', padding: 2, width: 64,
+        cursor: locked ? 'not-allowed' : 'pointer',
+        ...(locked ? { opacity: 0.6 } : {}),
       }}
     >
       <span style={{ borderRadius: R.full, padding: 2, border: `2px solid ${active ? C.accent : 'transparent'}` }}>
@@ -182,11 +193,14 @@ const PERSONAS_VISIBLE = 6;
 // Ряд «Поговорить с…»: в проекте команда видна сразу, глобальные — за кнопкой-раскрывашкой.
 // Без проектных персон (или вне проекта) глобальные показываются сразу. Свёрнутый ряд —
 // не длиннее одной строки; выбранная персона в него попадает всегда.
-function PersonaPills({ personas, hasProject, selectedPersonaId, onPick }: {
+function PersonaPills({ personas, hasProject, selectedPersonaId, onPick, locked }: {
   personas: Persona[];
   hasProject: boolean;
   selectedPersonaId?: string;
   onPick: (p: Persona) => void;
+  // Ряд выключен по праву (W3-F1i): вместо заголовка «Поговорить с…» — причина,
+  // пилюи disabled; раскрывашка «+N» остаётся: она меняет видимость, а не право
+  locked?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const projectPersonas = personas.filter(isZonedPersona);
@@ -209,12 +223,25 @@ function PersonaPills({ personas, hasProject, selectedPersonaId, onPick }: {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginTop: 6 }}>
-      <div style={{ fontSize: FS.xs, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4 }}>
-        Поговорить с…
-      </div>
+      {locked ? (
+        // Причина выключенного ряда — видимым текстом (на мобиле title не читается),
+        // переносится, как подпись пилюль; замок сигналит закрытое состояние —
+        // тот же приём, что у выключенного селектора в композере (CompanionSelector)
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 5, maxWidth: 320,
+          fontSize: FS.xs, color: C.textMuted, lineHeight: 1.3, textAlign: 'center',
+        }}>
+          <Lock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+          <span>{COMPANION_LOCKED_HINT}</span>
+        </div>
+      ) : (
+        <div style={{ fontSize: FS.xs, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+          Поговорить с…
+        </div>
+      )}
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center', maxWidth: 480 }}>
         {visible.map(p => (
-          <PersonaPill key={p.id} p={p} active={p.id === selectedPersonaId} onPick={onPick} />
+          <PersonaPill key={p.id} p={p} active={p.id === selectedPersonaId} onPick={onPick} locked={locked} />
         ))}
         {hiddenCount > 0 && (
           <button

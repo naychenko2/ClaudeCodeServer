@@ -2933,6 +2933,7 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
               <ChatEmptyState hasProject={!!project} hasCLAUDEmd={hasCLAUDEmd} onHint={handleHint}
                 session={session} project={project} onSessionUpdated={onSessionUpdated} isMobile={isMobile}
                 personas={ctxPersonas} selectedPersonaId={session.personaId} onPickPersona={handlePersonaChange}
+                companionLocked={companionLocked}
                 compact={embedded} greetingAbove={!!personaGreeting} />
             </>
           )

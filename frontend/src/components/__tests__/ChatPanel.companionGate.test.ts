@@ -17,6 +17,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { CompanionSelector, COMPANION_LOCKED_HINT } from '../CompanionSelector';
+import { ChatEmptyState } from '../chat/EmptyState';
 import { canChangeCompanion } from '../../features/personas/personaRights';
 import type { Persona, Project, ProjectRoleView, Session } from '../../types';
 
@@ -132,5 +133,90 @@ describe('ChatPanel: гейт дошит до запроса и до селек�
   // переименование/удаление пропа в Composer оставило бы тест зелёным при мёртвом гейте
   it('Composer доносит блок до CompanionSelector (locked={companionLocked})', () => {
     expect(COMPOSER_SRC, 'в Composer нет строки «locked={companionLocked}»').toContain('locked={companionLocked}');
+  });
+});
+
+// ——— ChatEmptyState: ряд «Поговорить с…» в чужом чате (W3-F1i, дефект 9227267b) ———
+// Пустое состояние чата гейтится тем же companionLocked, что и селектор в композере:
+// значение берётся тем же выражением из исходника ChatPanel (companionLockedFromChatPanel
+// выше) — правка гейта краснит и этот блок. EmptyState рендерится в SSR целиком:
+// его стор-хуки (personas/me/chatContext/registry) с getServerSnapshot, effects в SSR
+// не идут. compact: true — пилюли настройки чата вне проверки (тест про ряд персон).
+const EMPTY_STATE_SRC = readFileSync(fileURLToPath(new URL('../chat/EmptyState.tsx', import.meta.url)), 'utf8');
+
+function renderEmptyState(myRole: ProjectRoleView | undefined, authorId: string): string {
+  const project = projectWith(myRole);
+  const session = { id: 's1', createdByUserId: authorId } as Session;
+  const locked = companionLockedFromChatPanel(project, session, { userId: ME_ID });
+  return renderToStaticMarkup(createElement(ChatEmptyState, {
+    hasProject: true, hasCLAUDEmd: true, onHint: () => {},
+    session, project, compact: true,
+    personas: [PERSONA], selectedPersonaId: undefined, onPickPersona: () => {},
+    companionLocked: locked,
+  }));
+}
+
+// Контролы ряда «Поговорить с…» (пилюи и раскрывашка «+N») — с шириной 64 (образец
+// buttonTagWithHint выше): состояние читается по атрибутам открывающего тега.
+// В этих кейсах одна персона — раскрывашки нет, в выборку попадают только пилюли
+function pillButtonTags(html: string): string[] {
+  const tags: string[] = [];
+  let at = 0;
+  while ((at = html.indexOf('<button', at)) >= 0) {
+    const end = html.indexOf('>', at);
+    if (end < 0) break;
+    const tag = html.slice(at, end + 1);
+    if (tag.includes('width:64px')) tags.push(tag);
+    at = end + 1;
+  }
+  return tags;
+}
+
+describe('ChatEmptyState: ряд «Поговорить с…» по роли (дефект 9227267b)', () => {
+  it('редактор в чате владельца: пилюли выключены, подсказка видима', () => {
+    const html = renderEmptyState('editor', OWNER_ID);
+    expect(html, 'подсказки «Собеседника меняет…» в разметке нет').toContain(`>${COMPANION_LOCKED_HINT}<`);
+    const pills = pillButtonTags(html);
+    expect(pills.length, 'пилюль в разметке нет').toBeGreaterThan(0);
+    expect(pills.every(t => t.includes('disabled')), 'пилюли редактору в чужом чате не выключены').toBe(true);
+  });
+
+  it('читатель и в своём чате: пилюли выключены, подсказка видима', () => {
+    const html = renderEmptyState('reader', ME_ID);
+    expect(html, 'подсказки читателю нет').toContain(`>${COMPANION_LOCKED_HINT}<`);
+    const pills = pillButtonTags(html);
+    expect(pills.length, 'пилюль в разметке нет').toBeGreaterThan(0);
+    expect(pills.every(t => t.includes('disabled')), 'пилюли читателю не выключены').toBe(true);
+  });
+
+  it('редактор в своём чате: как раньше — пилюли активны, подсказки нет', () => {
+    const html = renderEmptyState('editor', ME_ID);
+    expect(html, 'подсказки быть не должно').not.toContain(COMPANION_LOCKED_HINT);
+    const pills = pillButtonTags(html);
+    expect(pills.length, 'пилюль в разметке нет').toBeGreaterThan(0);
+    expect(pills.some(t => t.includes('disabled')), 'пилюли в своём чате выключены').toBe(false);
+  });
+
+  it('владелец: как раньше — пилюли активны, подсказки нет', () => {
+    const html = renderEmptyState('owner', OWNER_ID);
+    expect(html, 'подсказки владельцу быть не должно').not.toContain(COMPANION_LOCKED_HINT);
+    const pills = pillButtonTags(html);
+    expect(pills.length, 'пилюль в разметке нет').toBeGreaterThan(0);
+    expect(pills.some(t => t.includes('disabled')), 'пилюли владельцу выключены').toBe(false);
+  });
+
+  // Звенья цепочки (тот же guard по исходнику, что Composer выше): без этих строк
+  // переименование/удаление пропа оставило бы тест зелёным при мёртвом гейте
+  it('ChatPanel доносит блок до пустого состояния (companionLocked={companionLocked})', () => {
+    const at = CHAT_PANEL_SRC.indexOf('<ChatEmptyState');
+    expect(at, 'вызов <ChatEmptyState не найден').toBeGreaterThanOrEqual(0);
+    expect(
+      CHAT_PANEL_SRC.slice(at, at + 800),
+      'в вызове <ChatEmptyState нет строки «companionLocked={companionLocked}»',
+    ).toContain('companionLocked={companionLocked}');
+  });
+
+  it('EmptyState доносит блок до ряда (locked={companionLocked})', () => {
+    expect(EMPTY_STATE_SRC, 'в EmptyState нет строки «locked={companionLocked}»').toContain('locked={companionLocked}');
   });
 });

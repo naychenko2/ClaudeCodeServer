@@ -111,7 +111,10 @@ backend/ClaudeHomeServer/Controllers/FilesController.cs|11
 # в чтение своей записи пользователя (UserStore.GetById) и в конструирование автора коммита
 # (GitCommitAuthor: имя/логин для git-автора). Ключом хранилищ ничто не стало: git-операции идут
 # по Owner(p) (арендатору), а автор — это сам человек, ради которого фича и затевалась.
-backend/ClaudeHomeServer/Controllers/GitController.cs|3
+# 3c531d5e8 (линия S2d-6b, ручка git/diff): GitController 3→4 — ForeignPrivateDenied: id вызывающего
+# входит только в общий предикат приватности PrivateAttachments.IsForeignResolved (чужое private →
+# 404, неотличимый от «нет такого файла»). Ключом хранилищ не стал: git-операции идут по Owner(p).
+backend/ClaudeHomeServer/Controllers/GitController.cs|4
 # S2d-6b-6 (хвост S2d-6b-5): KnowledgeController 0→3 — IndexFile/IndexFolder закрывают чужое private-
 # вложение (S2d-6b-1): id вызывающего входит только в признак «чужой автор пути»
 # (PrivateAttachments.IsForeign → 404 до индексации/обхода) и передаётся в FileService.Tree как
@@ -172,7 +175,21 @@ backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
 # (features!.ProjectAll(UserId, snapshot)): тот же класс мест, что соседние FeatureTypical.Build(owner, UserId)
 # и journal.Read(UserId) — страница фичи строится по своим задачам вызывающего (GetByOwner);
 # ключом хранилища общего проекта id вызывающего не стал.
-backend/ClaudeHomeServer/Controllers/TasksController.cs|95
+# F2-T1 (57aa6c829, aa4bfbf47; разрез §2.1, вердикт ревью 713712c4): TasksController 95→97 —
+# двери записи/выполнения задачи переведены на явные гейты: «access?.Resolve(UserId, …)» (право
+# по IProjectAccess — intended-перевод сторожа) и «FeatureOwnerGate.Denied(access, UserId, …)»
+# (фичевые поля меряют вызывающего); маски write-ответов «TaskView.ForWrite(…, UserId)» — тот же
+# класс мест, что S2d-4i; актор берётся из реестра СВОЕГО чата-вызывателя (сессия проверена
+# ResolveOwnerId по вызывающему выше по телу). Снято ключевание по вызывающему:
+# «tasks.Create(…, UserId)» и «ToTaskBoard(UserId, …)» — ключ записи стал арендатор, адресат —
+# владелец записи; сторож посчитал это снижением.
+# F2-M2 (4686525fa; шаг M2, возврат финала db216f32): TasksController 97→98 — фичевые поля при
+# создании (role/featureId/planSteps/reviewOf) закрыты тем же FeatureOwnerGate, что дверь правки:
+# «FeatureOwnerGate.DeniedForCreate(access, UserId, tenantId, …)» — id вызывающего входит только в
+# проверку права (фичу ведёт владелец проекта), ключ записи — tenantId (арендатор), не вызывающий;
+# тот же класс мест, что «FeatureOwnerGate.Denied(access, UserId, …)» выше. Дверь MCP зовёт тот же
+# гейт через TurnActorId(...) — не имя из словаря регекспов, счётчик TasksToolset не изменился.
+backend/ClaudeHomeServer/Controllers/TasksController.cs|98
 # QA-P1: TurnRightExtensions 6→7 — DenyContentWrite (право записи контента чата: переименование и
 # архив, редактор и выше) идёт тем же уровнем Deny, что RunTurn и Configure: id вызывающего входит
 # только в IProjectAccess.ResolveSession (запрошенное право WriteContent) и GetAccessible (развилка
@@ -187,3 +204,8 @@ backend/ClaudeHomeServer/Hubs/TerminalHub.cs|1
 # (context.OwnerId из токена), тот же класс мест, что S2d-4b в TasksController.
 backend/ClaudeHomeServer/Services/Mcp/Http/TasksToolset.cs|1
 backend/ClaudeHomeServer/Services/Mcp/Http/WorkspaceToolset.cs|1
+# R-F2-D1 (возврат ревью R-F2, мост «чекбокс → задача»): NotesToolset 0→1 — id актора хода (`actor`)
+# входит только в IProjectAccess.Resolve (запрошенное право Write на мост «чекбокс → задача»), тот же
+# класс мест, что вердикт S2c-6 выше. Ключом хранилищ он не служит: заметка и задача адресуются
+# context.OwnerId из токена арендатора (PromoteAsync вызывается им, как и раньше).
+backend/ClaudeHomeServer.Notes/Services/Mcp/NotesToolset.cs|1

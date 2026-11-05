@@ -122,7 +122,7 @@ public sealed class McpFilesPrivateAttachmentTests : IDisposable
             _projects, null!, _sessions, _personas, new FileService(), null!, null!, null!, knowledgeSync, null!,
             null!, null!, _users, null!, null!, null!, null!, null!, null!, null!,
             null!, access, new RealFrame(_projects, _sessions, _actors), _actors,
-            new ActorRightGate(_actors, access));
+            new ActorRightGate(_actors, access, new RealFrame(_projects, _sessions, _actors)));
     }
 
     public void Dispose() => Helpers.TestFs.DeleteDirectoryResilient(_tempDir);
@@ -728,10 +728,14 @@ public sealed class McpFilesPrivateAttachmentTests : IDisposable
         own.IsError.Should().BeTrue();
         own.Text.Should().Contain("Dify не настроен", "свой private-путь не закрыт гейтом — поток идёт в knowledge-сервис, как раньше");
 
-        // актор неизвестен — чужое private закрыто и для него
+        // актор неизвестен — чужое private закрыто и для него. После О2 финального ревью
+        // «Общих проектов» (892deb00) безымянный ход общего проекта отвергается раньше и другим
+        // основанием — гейтом актора (knowledge_index — право владельца), поэтому текстом
+        // отказа является он. Вывод строки не меняется: чужое private через неизвестного актора
+        // не проходит ни через одну из двух дверей.
         r = await CallAsync("knowledge_index",
             new JsonObject { ["projectId"] = _projectId, ["path"] = _foreignPath }, null);
         r.IsError.Should().BeTrue();
-        r.Text.Should().StartWith("Файл не найден: ");
+        r.Text.Should().Be(ActorRightGate.DeniedText);
     }
 }

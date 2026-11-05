@@ -6,7 +6,6 @@ using ClaudeHomeServer.Services.Composition;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
-using static ClaudeHomeServer.Tests.Services.ChatContext.ChatContextTestData;
 
 namespace ClaudeHomeServer.Tests.Services.ChatContext;
 
@@ -19,7 +18,6 @@ public class ChatContextAudienceTests
         var done = new TaskCompletionSource();
         var sessions = new Mock<ISessionDirectory>();
         sessions.Setup(s => s.GetById(session.Id)).Returns(session);
-        var projects = new Mock<IProjectManager>();
         var hub = new Mock<ISessionBroadcaster>();
         hub.Setup(h => h.ToOwner(It.IsAny<string>(), It.IsAny<ServerMessage>()))
             .Callback<string, ServerMessage>((u, _) => { calls.Add("owner:" + u); done.TrySetResult(); })
@@ -27,8 +25,7 @@ public class ChatContextAudienceTests
         hub.Setup(h => h.ToProject(It.IsAny<string>(), It.IsAny<ServerMessage>()))
             .Callback<string, ServerMessage>((p, _) => { calls.Add("project:" + p); done.TrySetResult(); })
             .Returns(Task.CompletedTask);
-        var b = new ChatContextBroadcaster(Registry("image"), sessions.Object, projects.Object, hub.Object,
-            NullLogger<ChatContextBroadcaster>.Instance);
+        var b = new ChatContextBroadcaster(sessions.Object, hub.Object, NullLogger<ChatContextBroadcaster>.Instance);
         b.Changed("owner", session.Id, new ChatContextState(1, null, []));
         await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
         return (calls, done);

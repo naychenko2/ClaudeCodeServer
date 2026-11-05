@@ -71,7 +71,7 @@ public sealed class DspAudioEngineTests : IDisposable
     {
         var threadId = OpenSong();
 
-        var result = await Engine().EditAsync(Owner, _scope,
+        var result = await Engine().EditAsync(Owner, Owner, _scope,
             new AudioDspEditInput(Session, threadId, AudioDspEditOp.Trim, StartSec: 1, EndSec: 3), CancellationToken.None);
 
         result.ErrorCode.Should().BeNull(result.Error);
@@ -106,7 +106,7 @@ public sealed class DspAudioEngineTests : IDisposable
         var threads = new AudioJobThreads(_store, NullLogger<AudioJobThreads>.Instance, null, feed.Object);
         var engine = new DspAudioEngine(threads, _workspace, NullLogger<DspAudioEngine>.Instance, _dsp);
 
-        var result = await engine.EditAsync(Owner, _scope,
+        var result = await engine.EditAsync(Owner, Owner, _scope,
             new AudioDspEditInput(Session, threadId, AudioDspEditOp.Trim, StartSec: 1, EndSec: 3), CancellationToken.None);
 
         result.ErrorCode.Should().BeNull(result.Error);
@@ -120,10 +120,10 @@ public sealed class DspAudioEngineTests : IDisposable
     public async Task Правка_от_правки_идёт_от_основы_и_наследует_лицензию()
     {
         var (threadId, stemsVersion) = ThreadWithStems(license: "CC BY-NC 4.0");
-        var mixed = await Engine().MixAsync(Owner, _scope,
+        var mixed = await Engine().MixAsync(Owner, Owner, _scope,
             new AudioMixInput(Session, threadId, [new("stem:vocals")]), CancellationToken.None);
 
-        var normalized = await Engine().EditAsync(Owner, _scope,
+        var normalized = await Engine().EditAsync(Owner, Owner, _scope,
             new AudioDspEditInput(Session, threadId, AudioDspEditOp.Normalize, Format: AudioFormat.Flac), CancellationToken.None);
 
         normalized.ErrorCode.Should().BeNull(normalized.Error);
@@ -143,7 +143,7 @@ public sealed class DspAudioEngineTests : IDisposable
     {
         var (threadId, stemsVersion) = ThreadWithStems();
 
-        var result = await Engine().MixAsync(Owner, _scope, new AudioMixInput(Session, threadId,
+        var result = await Engine().MixAsync(Owner, Owner, _scope, new AudioMixInput(Session, threadId,
         [
             new("stem:vocals", GainDb: -3),
             new("stem:drums", Muted: true),
@@ -167,9 +167,9 @@ public sealed class DspAudioEngineTests : IDisposable
     {
         var (threadId, _) = ThreadWithStems();
 
-        var allMuted = await Engine().MixAsync(Owner, _scope,
+        var allMuted = await Engine().MixAsync(Owner, Owner, _scope,
             new AudioMixInput(Session, threadId, [new("stem:vocals", Muted: true)]), CancellationToken.None);
-        var missing = await Engine().MixAsync(Owner, _scope,
+        var missing = await Engine().MixAsync(Owner, Owner, _scope,
             new AudioMixInput(Session, threadId, [new("stem:piano")]), CancellationToken.None);
 
         allMuted.ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
@@ -183,7 +183,7 @@ public sealed class DspAudioEngineTests : IDisposable
     {
         var threadId = OpenSong();
 
-        var result = await Engine().PeaksAsync(Owner, _scope, Session, threadId, AudioThreadVersion.OriginId, null, 4,
+        var result = await Engine().PeaksAsync(Owner, Owner, _scope, Session, threadId, AudioThreadVersion.OriginId, null, 4,
             CancellationToken.None);
 
         result.ErrorCode.Should().BeNull(result.Error);
@@ -199,11 +199,11 @@ public sealed class DspAudioEngineTests : IDisposable
         var threadId = OpenSong();
         foreach (var engine in new[] { Engine(noDsp: true), Engine(new FakeDsp { Available = false }) })
         {
-            (await engine.EditAsync(Owner, _scope, new AudioDspEditInput(Session, threadId, AudioDspEditOp.Trim, EndSec: 1),
+            (await engine.EditAsync(Owner, Owner, _scope, new AudioDspEditInput(Session, threadId, AudioDspEditOp.Trim, EndSec: 1),
                 CancellationToken.None)).ErrorCode.Should().Be(AudioEditErrorCodes.DspUnavailable);
-            (await engine.MixAsync(Owner, _scope, new AudioMixInput(Session, threadId, [new("stem:vocals")]),
+            (await engine.MixAsync(Owner, Owner, _scope, new AudioMixInput(Session, threadId, [new("stem:vocals")]),
                 CancellationToken.None)).ErrorCode.Should().Be(AudioEditErrorCodes.DspUnavailable);
-            (await engine.PeaksAsync(Owner, _scope, Session, threadId, AudioThreadVersion.OriginId, null, 10,
+            (await engine.PeaksAsync(Owner, Owner, _scope, Session, threadId, AudioThreadVersion.OriginId, null, 10,
                 CancellationToken.None)).ErrorCode.Should().Be(AudioEditErrorCodes.DspUnavailable);
         }
         _store.Get(Owner, Session).Threads.Single().Versions.Should().ContainSingle();
@@ -215,7 +215,7 @@ public sealed class DspAudioEngineTests : IDisposable
         var threadId = OpenSong();
         var stale = _store.Get(Owner, Session).Revision - 1;
 
-        var result = await Engine().EditAsync(Owner, _scope,
+        var result = await Engine().EditAsync(Owner, Owner, _scope,
             new AudioDspEditInput(Session, threadId, AudioDspEditOp.Trim, EndSec: 1, Revision: stale), CancellationToken.None);
 
         result.ErrorCode.Should().Be(AudioEditErrorCodes.RevisionConflict);
@@ -227,9 +227,9 @@ public sealed class DspAudioEngineTests : IDisposable
     {
         var threadId = OpenSong();
 
-        (await Engine().EditAsync("someone-else", _scope, new AudioDspEditInput(Session, threadId, AudioDspEditOp.Trim, EndSec: 1),
+        (await Engine().EditAsync("someone-else", "someone-else", _scope, new AudioDspEditInput(Session, threadId, AudioDspEditOp.Trim, EndSec: 1),
             CancellationToken.None)).ErrorCode.Should().Be(AudioEditErrorCodes.ThreadNotFound);
-        (await Engine().EditAsync(Owner, new AudioEditScope(AudioEditScope.Personal, null),
+        (await Engine().EditAsync(Owner, Owner, new AudioEditScope(AudioEditScope.Personal, null),
             new AudioDspEditInput(Session, threadId, AudioDspEditOp.Trim, EndSec: 1), CancellationToken.None))
             .ErrorCode.Should().Be(AudioEditErrorCodes.FileNotFound);
         _dsp.Edit.Should().BeNull();
@@ -239,12 +239,12 @@ public sealed class DspAudioEngineTests : IDisposable
     public async Task Склейка_принимает_версию_правки_без_ИИ()
     {
         var threadId = OpenSong();
-        var edited = await Engine().EditAsync(Owner, _scope,
+        var edited = await Engine().EditAsync(Owner, Owner, _scope,
             new AudioDspEditInput(Session, threadId, AudioDspEditOp.GainFade, FadeInSec: 0.5, GainDb: 2), CancellationToken.None);
         edited.ErrorCode.Should().BeNull(edited.Error);
 
         var concat = await new AudioConcatService(_threads, _workspace, NullLogger<AudioConcatService>.Instance, _dsp)
-            .ConcatAsync(Owner, _scope, new AudioConcatInput(Session,
+            .ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session,
             [
                 new AudioConcatPiece(ThreadId: threadId, VersionId: edited.Value!.VersionId),
                 new AudioConcatPiece(ThreadId: threadId, VersionId: AudioThreadVersion.OriginId),

@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Images.LocalMedia;
 
@@ -28,7 +29,9 @@ public sealed partial class LocalMediaToolset(
     // Из отключаемой вертикали Images: выключена — инструменты честно отказывают
     LocalMediaService? media = null,
     // Живой прогресс local_jobs_wait в ленту; нет — вызов работает без прогресса
-    ISessionBroadcaster? broadcaster = null) : IMcpParameterizedToolset
+    ISessionBroadcaster? broadcaster = null,
+    // Актор хода — субъект приватности вложений; нет реестра — актор неизвестен (fail-closed)
+    ITurnActorRegistry? turnActors = null) : IMcpParameterizedToolset
 {
     public const string ServerName = McpEndpoints.LocalMediaName;
 
@@ -46,6 +49,8 @@ public sealed partial class LocalMediaToolset(
             return Deny("Локальная генерация выключена на этом сервере — используй облачные генераторы.");
         if (!TryResolveProject(session, context.OwnerId, out var project, out error)) return Deny(error);
 
+        var actor = turnActors?.Actor(session.Id, context.OwnerId);
+
         switch (tool)
         {
             case "local_generate_image":
@@ -56,7 +61,7 @@ public sealed partial class LocalMediaToolset(
                     Aspect: StringArg(arguments, "aspect"),
                     Steps: IntArg(arguments, "steps"),
                     Count: IntArg(arguments, "count"),
-                    Seed: LongArg(arguments, "seed")), ct);
+                    Seed: LongArg(arguments, "seed"), ActorId: actor), ct);
 
             case "local_edit_image":
                 return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id,
@@ -64,13 +69,13 @@ public sealed partial class LocalMediaToolset(
                     Prompt: StringArg(arguments, "prompt"),
                     Aspect: StringArg(arguments, "aspect"),
                     Seed: LongArg(arguments, "seed"),
-                    Images: StringListArg(arguments, "images")), ct);
+                    Images: StringListArg(arguments, "images"), ActorId: actor), ct);
 
             case "local_face_detail":
                 return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id,
                     LocalMediaOps.FaceDetail,
                     Seed: LongArg(arguments, "seed"),
-                    Images: [StringArg(arguments, "image") ?? ""]), ct);
+                    Images: [StringArg(arguments, "image") ?? ""], ActorId: actor), ct);
 
             case "local_text_to_video":
                 return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id,
@@ -80,7 +85,7 @@ public sealed partial class LocalMediaToolset(
                     VideoSize: StringArg(arguments, "size"),
                     Orientation: StringArg(arguments, "orientation"),
                     DurationSeconds: IntArg(arguments, "duration_seconds"),
-                    Fast: BoolArg(arguments, "fast")), ct);
+                    Fast: BoolArg(arguments, "fast"), ActorId: actor), ct);
 
             case "local_image_to_video":
                 return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id,
@@ -91,7 +96,7 @@ public sealed partial class LocalMediaToolset(
                     LastFrame: StringArg(arguments, "last_frame"),
                     VideoSize: StringArg(arguments, "size"),
                     DurationSeconds: IntArg(arguments, "duration_seconds"),
-                    Fast: BoolArg(arguments, "fast")), ct);
+                    Fast: BoolArg(arguments, "fast"), ActorId: actor), ct);
 
             case "local_reference_to_video":
                 return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id,
@@ -104,14 +109,14 @@ public sealed partial class LocalMediaToolset(
                     VideoSize: StringArg(arguments, "size"),
                     Orientation: StringArg(arguments, "orientation"),
                     DurationSeconds: IntArg(arguments, "duration_seconds"),
-                    Identity: StringArg(arguments, "identity")), ct);
+                    Identity: StringArg(arguments, "identity"), ActorId: actor), ct);
 
             case "local_video_upscale":
                 return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id,
                     LocalMediaOps.VideoUpscale,
                     Seed: LongArg(arguments, "seed"),
                     SourceJobId: StringArg(arguments, "job_id"),
-                    UpscaleTarget: StringArg(arguments, "target")), ct);
+                    UpscaleTarget: StringArg(arguments, "target"), ActorId: actor), ct);
 
             case "local_video_inpaint":
                 return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id,
@@ -119,13 +124,13 @@ public sealed partial class LocalMediaToolset(
                     Prompt: StringArg(arguments, "prompt"),
                     Seed: LongArg(arguments, "seed"),
                     Video: StringArg(arguments, "video"),
-                    Mask: StringArg(arguments, "mask")), ct);
+                    Mask: StringArg(arguments, "mask"), ActorId: actor), ct);
 
             case var audio when AudioOps.TryGetValue(audio, out var op):
                 return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id, op,
                     Prompt: StringArg(arguments, "prompt"),
                     Seed: LongArg(arguments, "seed"),
-                    Args: (JsonObject)arguments.DeepClone()), ct);
+                    Args: (JsonObject)arguments.DeepClone(), ActorId: actor), ct);
 
             case "local_job_status":
             {

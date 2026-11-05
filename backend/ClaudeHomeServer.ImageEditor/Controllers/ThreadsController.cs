@@ -101,7 +101,7 @@ public abstract class ImageThreadEndpoints(ImageThreadService threads, IImageEdi
     {
         if (string.IsNullOrWhiteSpace(req.Aspect))
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Не указаны пропорции");
-        var done = await threads.CropToAspectAsync(scope.Tenant, scope, sessionId, threadId, req.VersionId, req.Aspect, req.Anchor,
+        var done = await threads.CropToAspectAsync(scope.Tenant, UserId, scope, sessionId, threadId, req.VersionId, req.Aspect, req.Anchor,
             ImageEditInitiator.Human, req.DryRun, ct);
         if (done.Ok)
             return Ok(new ImageThreadCropResponse(done.Width, done.Height, done.Aspect!, done.Version?.Id, threads.View(scope.Tenant, sessionId)));
@@ -319,7 +319,7 @@ public class ThreadsController(
             return found.Image.Bytes;
         if (thread.File is { Length: > 0 } file && projects?.GetById(scope.Key) is { } project)
         {
-            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, file, "Версия", ct);
+            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(UserId, project.RootPath, file, "Версия", ct);
             return read.Value?.Bytes;
         }
         return null;

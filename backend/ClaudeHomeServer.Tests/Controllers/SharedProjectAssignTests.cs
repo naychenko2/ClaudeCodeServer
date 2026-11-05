@@ -12,8 +12,9 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 /// <summary>
 /// S2b-2a: назначение человека-исполнителя задачи общего проекта (REST-дверь, PUT /api/tasks/{id}).
-/// Назначать может тот, у кого уже есть право править задачи проекта: владелец (право Write
-/// участнику закрыто — его строка это проверяет). Исполнителем становится участник с правом
+/// Назначать может тот, у кого есть право править задачи проекта: владелец и редактор
+/// (F2-T1: правка задач — WriteContent; право Write участнику по-прежнему закрыто).
+/// Читателю закрыта сама дверь правки. Исполнителем становится участник с правом
 /// записи: редактор — 200; посторонний — 400 assignee_not_member; читатель — 400
 /// reader_not_assignable (его право только читать); задача с персоной-исполнителем — 400
 /// person_task_not_assignable (инвариант «персона ⇒ Claude» не ломается молча). Личной задаче
@@ -262,17 +263,32 @@ public class SharedProjectAssignTests : IClassFixture<TestWebApplicationFactory>
 
     // ─── право назначать — у того, кто вправе править задачи проекта ───────────
 
-    // Write участнику не открыт (матрица ролей и запрет в ProjectAccessService на месте):
-    // участник не может назначить исполнителя, даже самого себя.
+    // Читателю закрыта сама дверь правки (F2-T1, разрез §2.1): право отказывает раньше
+    // проверки исполнителя, запись не меняется.
     [Fact]
-    public async Task УчастникНазначаетИсполнителя_403_project_scope_ИЗаписьНеМеняется()
+    public async Task ЧитательНазначаетИсполнителя_403_project_scope_ИЗаписьНеМеняется()
     {
-        var (_, taskId) = await SharedProjectAsync("editor");
+        var (_, taskId) = await SharedProjectAsync("reader");
 
         var (status, body) = await AssignAsync(Member(), taskId, MemberId);
 
         status.Should().Be(HttpStatusCode.Forbidden);
         CodeOf(body).Should().Be("project_scope");
         Tasks.GetById(taskId)!.AssigneeUserId.Should().BeNull();
+    }
+
+    // Редактор правит задачи проекта (WriteContent) — назначает и себя: тот же путь, что у
+    // владельца, только право другое. Матрица дверей — SharedProjectTaskWriteRightsTests.
+    [Fact]
+    public async Task РедакторНазначаетСебя_200_ИИсполнительОн()
+    {
+        var (_, taskId) = await SharedProjectAsync("editor");
+
+        var (status, _) = await AssignAsync(Member(), taskId, MemberId);
+
+        status.Should().Be(HttpStatusCode.OK);
+        var task = Tasks.GetById(taskId)!;
+        task.AssigneeUserId.Should().Be(MemberId);
+        task.Assignee.Should().Be(TaskItemAssignee.Me);
     }
 }

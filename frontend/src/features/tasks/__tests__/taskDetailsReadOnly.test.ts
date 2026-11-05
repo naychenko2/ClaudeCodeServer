@@ -1,11 +1,15 @@
-// S2c-F4j: карточка задачи для участника общего проекта только для чтения: «Изменить»,
-// корзина, «Выполнить с AI» — 0 узлов в DOM, сегмент статуса выключен с подсказкой про
-// владельца, startInEdit и AI-действия панели игнорируются; строки подзадач и «Назначить»
-// участнику не кликаются (ревью 47fd9dd9). Рендерим настоящую
+// F2-Q3 (разрез CONSULT-TASK-RIGHTS): карточка задачи только для чтения у ЧИТАТЕЛЯ общего
+// проекта (не у «участника вообще» — это было S2c-F4j под ещё не открытую серверную дверь):
+// «Изменить», корзина, «Выполнить с AI» — 0 узлов в DOM, сегмент статуса выключен с
+// подсказкой «Менять задачи может редактор», startInEdit и AI-действия панели игнорируются;
+// строки подзадач и «Назначить» читателю не кликаются (ревью 47fd9dd9). РЕДАКТОР и владелец —
+// все действия на месте: редактор задачами управляет. Рендерим настоящую
 // TaskDetailsPane поверх linkedom; ширину панели задаём явно (getter clientWidth):
 // 500px < порога 720 — узкая раскладка (случай модалки: сегмент статуса под шапкой),
 // 900px — широкая (рельс «Статус» справа). Форму правки подменяем маркером.
-import { describe, it, expect, vi } from 'vitest';
+// Доработка F2-Q3 (ревью 11716b9b): корзина — право автора или владельца задачи (зеркало
+// бэкового TaskDeleteDenied): у редактора корзина только на своей задаче (свой автор).
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { parseHTML } from 'linkedom';
@@ -37,8 +41,16 @@ vi.mock('../../../lib/tasks', async importOriginal => {
 vi.mock('../../chatContext/useContextButton', () => ({
   useContextButton: () => ({ available: false, inContext: false, title: '', toggle: () => {} }),
 }));
+// Маркер пропа onDelete: форма правки рендерит корзину только когда проп передан
+// (доработка F2-Q3, ревью 54d79690) — тесты ниже смотрят на маркер, а не на DOM формы
 vi.mock('../TaskEditForm', () => ({
-  TaskEditForm: () => createElement('div', { 'data-testid': 'edit-form' }, 'ФОРМА ПРАВКИ'),
+  TaskEditForm: (props: { onDelete?: () => void }) =>
+    createElement(
+      'div',
+      { 'data-testid': 'edit-form' },
+      'ФОРМА ПРАВКИ',
+      props.onDelete ? createElement('span', { 'data-testid': 'edit-form-delete' }, 'КОРЗИНА В ФОРМЕ') : null,
+    ),
 }));
 vi.mock('../../../lib/sessionsList', () => ({ listProjectSessions: async () => [] }));
 
@@ -48,7 +60,7 @@ Object.assign(win, {
   requestAnimationFrame: (cb: () => void) => setTimeout(cb, 0),
   cancelAnimationFrame: (id: ReturnType<typeof setTimeout>) => clearTimeout(id),
 });
-// Панель меряет ШИРИНУ СВОЕГО контейнера (useNarrowContainer, порог 720): ширина из m.width
+// Панель мерит ШИРИНУ СВОЕГО контейнера (useNarrowContainer, порог 720): ширина из m.width
 Object.defineProperty(win.HTMLElement.prototype, 'clientWidth', { get: () => m.width, configurable: true });
 vi.stubGlobal('window', win);
 vi.stubGlobal('document', doc);
@@ -57,11 +69,21 @@ vi.stubGlobal('HTMLElement', win.HTMLElement);
 vi.stubGlobal('Node', win.Node);
 vi.stubGlobal('Event', win.Event);
 vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {}, removeItem: () => {} });
+// «Я — автор задачи» читается через readStoredUserId: пара токен+id из одного хранилища
+// (sessionStorage первый) — тот же стаб, что в PrivateChatToggle.test
+const ME = 'u-me';
+const sstore = new Map<string, string>([['cc_token', 't'], ['cc_user_id', ME]]);
+vi.stubGlobal('sessionStorage', {
+  getItem: (k: string) => sstore.get(k) ?? null,
+  setItem: (k: string, v: string) => { sstore.set(k, String(v)); },
+  removeItem: (k: string) => { sstore.delete(k); },
+});
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const { TaskDetailsPane } = await import('../TaskDetailsPane');
+const { TASK_WRITE_DENIED } = await import('../../projects/members/participantGate');
 
-const OWNER_TITLE = 'Задачу меняет владелец проекта';
+const DENIED_TITLE = TASK_WRITE_DENIED;
 
 const task = (over: Partial<Task> = {}): Task => ({
   id: 't1', title: 'Собрать отчёт', status: 'todo', priority: 'medium', assignee: 'claude',
@@ -69,10 +91,19 @@ const task = (over: Partial<Task> = {}): Task => ({
   createdAt: '2026-10-12T10:00:00Z', updatedAt: '2026-10-12T10:00:00Z', ...over,
 } as Task);
 
+// Панели следующего теста монтируются к тем же корням: снимание после каждого теста
+// обязательно, иначе слушатель 'cc-ai-run' предыдущей панели отвечает вместе с новой
+// (исполнитель вызывается дважды)
+const mounted: ReturnType<typeof createRoot>[] = [];
+afterEach(async () => {
+  while (mounted.length) { const r = mounted.pop()!; await act(async () => { r.unmount(); }); }
+});
+
 async function mount(over: Partial<Task> = {}, startInEdit?: boolean) {
   const host = doc.createElement('div');
   doc.getElementById('root')!.appendChild(host);
   const root = createRoot(host as unknown as HTMLElement);
+  mounted.push(root);
   await act(async () => { root.render(createElement(TaskDetailsPane, { task: task(over), project: null, startInEdit })); });
   await act(async () => { await Promise.resolve(); });
   return host;
@@ -113,9 +144,9 @@ const VIEW = {
 };
 const FORMER = [{ userId: 'u-old', displayName: 'Олег' }];
 
-describe('панель деталей: участник только для чтения', () => {
-  it.each(['editor', 'reader'] as const)('участник (%s): нет «Изменить», корзины, «Выполнить с AI»; статус выключен с подсказкой владельца', async (role) => {
-    m.project = { myRole: role }; m.width = 500;
+describe('панель деталей: читатель только для чтения', () => {
+  it('читатель: нет «Изменить», корзины, «Выполнить с AI»; статус выключен с подсказкой редактора', async () => {
+    m.project = { myRole: 'reader' }; m.width = 500;
     const host = await mount();
     expect(buttonsByText(host, 'Изменить')).toHaveLength(0);
     expect(buttonsByText(host, 'Выполнить с AI')).toHaveLength(0);
@@ -124,12 +155,12 @@ describe('панель деталей: участник только для чт
     expect(seg).toHaveLength(3);
     for (const b of seg) {
       expect(b.getAttribute('disabled')).not.toBeNull();
-      expect(b.getAttribute('title')).toBe(OWNER_TITLE);
+      expect(b.getAttribute('title')).toBe(DENIED_TITLE);
     }
   });
 
-  it('широкая панель: рельс «Статус» тоже выключен, сегмента нет', async () => {
-    m.project = { myRole: 'editor' }; m.width = 900;
+  it('читатель, широкая панель: рельс «Статус» тоже выключен, сегмента нет', async () => {
+    m.project = { myRole: 'reader' }; m.width = 900;
     const host = await mount();
     expect(buttonsByText(host, 'Изменить')).toHaveLength(0);
     expect(host.querySelector('[title="Удалить задачу"]')).toBeNull();
@@ -137,19 +168,19 @@ describe('панель деталей: участник только для чт
     expect(rail).toHaveLength(3);
     for (const b of rail) {
       expect(b.getAttribute('disabled')).not.toBeNull();
-      expect(b.getAttribute('title')).toBe(OWNER_TITLE);
+      expect(b.getAttribute('title')).toBe(DENIED_TITLE);
     }
   });
 
-  it('startInEdit у участника игнорируется: формы правки нет', async () => {
+  it('читатель: startInEdit игнорируется, формы правки нет', async () => {
     m.project = { myRole: 'reader' }; m.width = 500;
     const host = await mount({}, true);
     expect(host.querySelector('[data-testid="edit-form"]')).toBeNull();
     expect(host.innerHTML).not.toContain('ФОРМА ПРАВКИ');
   });
 
-  it('участник: панель не отзывается на AI-действия палитры', async () => {
-    m.project = { myRole: 'editor' }; m.width = 500;
+  it('читатель: панель не отзывается на AI-действия палитры', async () => {
+    m.project = { myRole: 'reader' }; m.width = 500;
     const host = await mount();
     apiSpy.tasks.execute.mockClear(); apiSpy.tasks.aiClassify.mockClear(); apiSpy.tasks.aiFindDuplicate.mockClear();
     for (const action of ['task.execute', 'task.description', 'task.subtasks', 'task.classify', 'task.dedup']) {
@@ -161,9 +192,32 @@ describe('панель деталей: участник только для чт
     expect(host.querySelector('[data-testid="edit-form"]')).toBeNull();
   });
 
-  it('владелец: всё как прежде — действия на месте, статус кликается, AI-действия работают', async () => {
-    m.project = { myRole: 'owner' }; m.width = 500;
-    const host = await mount();
+  // Ревью 47fd9dd9 (п.1): строки подзадач видны, но у читателя клик не идёт в updateTask
+  it('читатель: клик по строке подзадачи не зовёт api.tasks.update', async () => {
+    m.project = { myRole: 'reader' }; m.width = 500;
+    const host = await mount({ subtasks: [{ id: 's1', title: SUBTASK_TITLE, isDone: false }] });
+    const row = subtaskRow(host);
+    expect(row).not.toBeNull(); // чекбокс и строка остаются видимыми
+    apiSpy.tasks.update.mockClear();
+    await clickEl(row!);
+    expect(apiSpy.tasks.update).not.toHaveBeenCalled();
+  });
+
+  // Ревью 47fd9dd9 (п.2): читателю onAssign не отдаём — «Назначить» нет в DOM, форма правки не откроется
+  it('читатель: «была на…» без кнопки «Назначить», формы правки нет', async () => {
+    m.project = { myRole: 'reader', formerMembers: FORMER }; m.view = VIEW; m.width = 500;
+    const host = await mount({ assigneeUserId: 'u-old' });
+    expect(host.querySelector('[data-testid="former-assignee"]')).not.toBeNull(); // строка видна
+    expect(buttonsByText(host, 'Назначить')).toHaveLength(0);
+    expect(host.querySelector('[data-testid="edit-form"]')).toBeNull();
+  });
+});
+
+describe('панель деталей: редактор общего проекта правит задачи (как владелец)', () => {
+  it.each(['editor', 'owner'] as const)('%s: действия на месте, статус кликается без подсказки, AI-действия работают', async (role) => {
+    m.project = { myRole: role }; m.width = 500;
+    // Задача своя (createdByUserId=я): корзина редактора на своей задаче есть (доработка F2-Q3)
+    const host = await mount({ createdByUserId: ME });
     expect(buttonsByText(host, 'Изменить')).toHaveLength(1);
     expect(buttonsByText(host, 'Выполнить с AI')).toHaveLength(1);
     expect(host.querySelector('[title="Удалить задачу"]')).not.toBeNull();
@@ -178,27 +232,77 @@ describe('панель деталей: участник только для чт
     expect(apiSpy.tasks.execute).toHaveBeenCalledTimes(1);
   });
 
-  // Ревью 47fd9dd9 (п.1): строки подзадач видны, но у участника клик не идёт в updateTask
-  // (бэк отказал бы 403 «Нет права на запись» с тостом при выключенном статусе)
-  it.each(['editor', 'reader'] as const)('участник (%s): клик по строке подзадачи не зовёт api.tasks.update', async (role) => {
-    m.project = { myRole: role }; m.width = 500;
-    const host = await mount({ subtasks: [{ id: 's1', title: SUBTASK_TITLE, isDone: false }] });
+  it('editor: подзадача кликается (update один раз), «Назначить» на месте и открывает форму правки', async () => {
+    m.project = { myRole: 'editor', formerMembers: FORMER }; m.view = VIEW; m.width = 500;
+    const host = await mount({ subtasks: [{ id: 's1', title: SUBTASK_TITLE, isDone: false }], assigneeUserId: 'u-old' });
     const row = subtaskRow(host);
-    expect(row).not.toBeNull(); // чекбокс и строка остаются видимыми
+    expect(row).not.toBeNull();
     apiSpy.tasks.update.mockClear();
     await clickEl(row!);
-    expect(apiSpy.tasks.update).not.toHaveBeenCalled();
+    expect(apiSpy.tasks.update).toHaveBeenCalledTimes(1);
+    const btn = buttonsByText(host, 'Назначить');
+    expect(btn).toHaveLength(1);
+    await clickEl(btn[0]);
+    expect(host.querySelector('[data-testid="edit-form"]')).not.toBeNull();
+  });
+});
+
+// Доработка F2-Q3 (ревью 11716b9b): корзина — автору или владельцу (зеркало бэкового
+// TaskDeleteDenied, TasksController.cs:243-248). Читатель покрыт тестами выше (там корзины
+// нет при любом авторе); здесь — остальные инварианты: чужой автор, свой автор, без автора.
+describe('панель деталей: корзина — автору или владельцу', () => {
+  it('редактор: чужой автор — корзины нет (бэк ответил бы 403 not_task_author)', async () => {
+    m.project = { myRole: 'editor' }; m.width = 500;
+    const host = await mount({ createdByUserId: 'u-other' });
+    expect(host.querySelector('[title="Удалить задачу"]')).toBeNull();
   });
 
-  // Ревью 47fd9dd9 (п.2): участнику onAssign не отдаём — «Назначить» нет в DOM, форма правки не откроется
-  it.each(['editor', 'reader'] as const)('участник (%s): «была на…» без кнопки «Назначить», формы правки нет', async (role) => {
-    m.project = { myRole: role, formerMembers: FORMER }; m.view = VIEW; m.width = 500;
-    const host = await mount({ assigneeUserId: 'u-old' });
-    expect(host.querySelector('[data-testid="former-assignee"]')).not.toBeNull(); // строка видна
-    expect(buttonsByText(host, 'Назначить')).toHaveLength(0);
-    expect(host.querySelector('[data-testid="edit-form"]')).toBeNull();
+  it('редактор: свой автор — корзина есть', async () => {
+    m.project = { myRole: 'editor' }; m.width = 500;
+    const host = await mount({ createdByUserId: ME });
+    expect(host.querySelector('[title="Удалить задачу"]')).not.toBeNull();
   });
 
+  it('редактор: задача без автора — корзины нет (fail-closed, как на бэке)', async () => {
+    m.project = { myRole: 'editor' }; m.width = 500;
+    const host = await mount();
+    expect(host.querySelector('[title="Удалить задачу"]')).toBeNull();
+  });
+
+  it('владелец: чужая задача — корзина есть (на любой)', async () => {
+    m.project = { myRole: 'owner' }; m.width = 500;
+    const host = await mount({ createdByUserId: 'u-other' });
+    expect(host.querySelector('[title="Удалить задачу"]')).not.toBeNull();
+  });
+});
+
+// Доработка F2-Q3 (ревью 54d79690): второй путь к удалению — корзина в тулбаре формы
+// правки. Тот же гейт canDeleteTask: TaskDetailsPane передаёт onDelete только при
+// canDelete; без пропа TaskEditForm кнопку не рендерит. Проверяем по маркеру пропа
+// в моке формы (DOM самой формы здесь не рисуем).
+describe('форма правки: корзина — тот же гейт (onDelete только при canDelete)', () => {
+  it('редактор + чужой автор, startInEdit: форма открыта, onDelete не передан (корзины нет)', async () => {
+    m.project = { myRole: 'editor' }; m.width = 500;
+    const host = await mount({ createdByUserId: 'u-other' }, true);
+    expect(host.querySelector('[data-testid="edit-form"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="edit-form-delete"]')).toBeNull();
+  });
+
+  it('редактор + свой автор, startInEdit: onDelete передан (корзина есть)', async () => {
+    m.project = { myRole: 'editor' }; m.width = 500;
+    const host = await mount({ createdByUserId: ME }, true);
+    expect(host.querySelector('[data-testid="edit-form-delete"]')).not.toBeNull();
+  });
+
+  it('владелец + чужой автор, startInEdit: onDelete передан (корзина есть)', async () => {
+    m.project = { myRole: 'owner' }; m.width = 500;
+    const host = await mount({ createdByUserId: 'u-other' }, true);
+    expect(host.querySelector('[data-testid="edit-form"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="edit-form-delete"]')).not.toBeNull();
+  });
+});
+
+describe('панель деталей: владелец — без изменений', () => {
   it('владелец: подзадача кликается (update один раз), «Назначить» на месте и открывает форму правки', async () => {
     m.project = { myRole: 'owner', formerMembers: FORMER }; m.view = VIEW; m.width = 500;
     const host = await mount({ subtasks: [{ id: 's1', title: SUBTASK_TITLE, isDone: false }], assigneeUserId: 'u-old' });

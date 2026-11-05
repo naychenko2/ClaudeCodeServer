@@ -1,5 +1,8 @@
 // Карточка задачи на Kanban-доске: sortable-обёртка над общим TaskCard.
 // Drag всей карточкой; клик (без перемещения) открывает задачу.
+// canDrag=false (читатель общего проекта, F2-Q3): useSortable(disabled) не отдаёт ни
+// transform, ни активационных listeners — карточка не едет за курсором вовсе, а не
+// возвращается после отпускания; клик внутри TaskCard при этом не тронут.
 
 import { memo, useCallback } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
@@ -9,13 +12,14 @@ import { TaskCard } from '../TaskCard';
 
 // memo + onOpen, принимающий задачу: onClick для TaskCard строим внутри через useCallback,
 // иначе стрелка из BoardCell создавалась бы заново и перерисовывала все карточки колонки
-export const BoardCard = memo(function BoardCard({ task, projectName, deviceName, onOpen }: {
+export const BoardCard = memo(function BoardCard({ task, projectName, deviceName, onOpen, canDrag = true }: {
   task: Task;
   projectName?: string;
   deviceName?: string;
   onOpen: (task: Task) => void;
+  canDrag?: boolean;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id, disabled: !canDrag });
   const onClick = useCallback(() => onOpen(task), [onOpen, task]);
   return (
     <div

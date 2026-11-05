@@ -13,6 +13,8 @@ import { EMPTY_CONTEXT, type ChatContextDto, type ContextRefInput } from './type
 interface Entry { state: ChatContextDto; loaded: boolean; loading: boolean }
 
 const _entries = new Map<string, Entry>();
+// Ревизия из события, пришедшего, пока GET был в полёте
+const _wanted = new Map<string, number>();
 const _undo = new Map<string, ReleaseUndoController<ContextRefInput>>();
 let _version = 0;
 const _listeners = new Set<() => void>();
@@ -52,10 +54,16 @@ function ensureLive() {
   const offEvents = chatContextApi.subscribe(ev => {
     // Чат, который не показываем, не кэшируем: прочитаем, когда понадобится
     if (!_entries.has(ev.sessionId)) return;
-    // Рассылка на бэкенде идёт без ожидания: события приходят не по порядку, берём только более новую ревизию
+    // Событие несёт только ревизию: карточки считаются под субъектом получателя, их читаем по REST.
+    // Рассылка идёт без ожидания, события приходят не по порядку — старую и равную ревизию пропускаем
     const known = _entries.get(ev.sessionId)!;
-    if (known.loaded && ev.context.revision <= known.state.revision) return;
-    apply(ev.sessionId, ev.context);
+    if (known.loaded && ev.revision <= known.state.revision) return;
+    // Запрос уже в полёте: запоминаем ожидаемую ревизию, load догрузит ещё раз, если ответ окажется старее
+    if (known.loading) {
+      _wanted.set(ev.sessionId, Math.max(_wanted.get(ev.sessionId) ?? 0, ev.revision));
+      return;
+    }
+    void load(ev.sessionId, true);
   });
   // После обрыва события могли потеряться — перечитываем всё, что показано
   const offRe = onReconnected(() => {
@@ -68,13 +76,19 @@ async function load(sessionId: string, force = false) {
   const e = _entries.get(sessionId);
   if (e && (e.loading || (e.loaded && !force))) return;
   _entries.set(sessionId, { state: e?.state ?? EMPTY_CONTEXT, loaded: e?.loaded ?? false, loading: true });
+  let again = false;
   try {
-    apply(sessionId, await chatContextApi.get(sessionId));
+    const fresh = await chatContextApi.get(sessionId);
+    apply(sessionId, fresh);
+    // Во время запроса пришло событие с более новой ревизией — ответ мог её не застать
+    again = (_wanted.get(sessionId) ?? 0) > fresh.revision;
   } catch {
     // Модуль выключен или чат не свой — контекста просто нет
     _entries.set(sessionId, { state: e?.state ?? EMPTY_CONTEXT, loaded: true, loading: false });
     emit();
   }
+  _wanted.delete(sessionId);
+  if (again) await load(sessionId, true);
 }
 
 export function getChatContextState(sessionId: string | null): ChatContextDto {
@@ -176,6 +190,7 @@ export function resetChatContext() {
   _undo.forEach(c => c.dispose());
   _undo.clear();
   _entries.clear();
+  _wanted.clear();
   emit();
 }
 

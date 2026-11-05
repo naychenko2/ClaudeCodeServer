@@ -131,7 +131,7 @@ public class MediaFormatAgentTests : IDisposable
 
         // Человек — тот же метод сервиса, который зовёт ручка …/crop: от исходника той же нити
         _records.Clear();
-        var human = await _threads.CropToAspectAsync(Owner, Scope, ChatId, agentThread, ImageThreadVersion.OriginId, "1:1", "left",
+        var human = await _threads.CropToAspectAsync(Owner, Owner, Scope, ChatId, agentThread, ImageThreadVersion.OriginId, "1:1", "left",
             ImageEditInitiator.Human, false, default);
 
         human.Ok.Should().BeTrue(human.Error);

@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.ChatContext;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -58,6 +59,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
     private readonly VideoSceneService _scenes;
     private readonly FilmService _films;
     private readonly FilmSceneSaver _saver;
+    private readonly ITurnActorRegistry? _turnActors;
     private readonly FilmAssembler _assembler;
     private readonly IDelegatedTurnGate? _turnGate;
     private readonly bool _agentLaunch;
@@ -74,8 +76,10 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         FilmSceneSaver saver,
         FilmAssembler assembler,
         IDelegatedTurnGate? turnGate = null,
-        IConfiguration? config = null)
+        IConfiguration? config = null,
+        ITurnActorRegistry? turnActors = null)
     {
+        _turnActors = turnActors;
         _sessions = sessions;
         _projects = projects;
         _engines = engines;
@@ -89,6 +93,9 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         _turnGate = turnGate;
         _agentLaunch = config?.GetValue(AgentLaunchKey, true) ?? true;
     }
+
+    // Актор приватности — тот, кто запустил ход, а не арендатор; неизвестен — null (fail-closed)
+    private string? Actor(string owner, Session session) => _turnActors?.Actor(session.Id, owner);
 
     public string Name => ServerName;
     public string Version => "1.0.0";
@@ -379,7 +386,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         // «настройки сцены → префы области → умолчание каталога» разворачивает исполнитель
         var quote = await _jobs.QuoteAsync(owner, scope,
             new VideoQuoteRequest(session.Id, sceneId, Str(args, "provider"), Str(args, "model"), count, duration,
-                null, Bool(args, "sound"), Format: shootFormat), ct);
+                null, Bool(args, "sound"), Format: shootFormat), ct, Actor(owner, session));
         if (quote.Value is not { } q) return Fail(quote.ErrorCode, quote.Error, quote.Retry);
         if (shootFormat is not null)
         {
@@ -392,7 +399,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         }
 
         var started = await _jobs.StartAsync(owner, scope,
-            new VideoLaunchRequest(q.QuoteId, session.Id, sceneId, VideoInitiators.Agent, args["params"] as JsonObject, Long(args, "seed")), ct);
+            new VideoLaunchRequest(q.QuoteId, session.Id, sceneId, VideoInitiators.Agent, args["params"] as JsonObject, Long(args, "seed")), ct, Actor(owner, session));
         if (started.Value is not { } created) return Fail(started.ErrorCode, started.Error, started.Retry);
 
         return Json(new
@@ -499,7 +506,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         if (Str(args, "sceneId") is not { } sceneId) return Deny("Не указан sceneId: возьми его из video_state.");
 
         // Тот же сервис, что у ручки «Сохранить сцену»; тихую строку и пометку «✦ Claude» пишет он сам
-        var saved = await _saver.SaveAsync(owner, scope,
+        var saved = await _saver.SaveAsync(owner, Actor(owner, session), scope,
             new SaveSceneRequest(session.Id, sceneId, Str(args, "versionId"), Str(args, "folder"), Str(args, "fileName"), Str(args, "filmPath")),
             VideoInitiators.Agent, ct);
         if (saved.Value is not { } done) return FilmFail(saved.ErrorCode, saved.Error, saved.Conflict);
@@ -531,7 +538,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             ops.Add(op!);
         }
 
-        var patched = await _films.PatchAsync(owner, scope, path, new FilmPatch(revision, ops), VideoInitiators.Agent, ct, session.Id);
+        var patched = await _films.PatchAsync(owner, Actor(owner, session), scope, path, new FilmPatch(revision, ops), VideoInitiators.Agent, ct, session.Id);
         if (patched.Value is not { } state) return FilmFail(patched.ErrorCode, patched.Error, patched.Conflict);
         return Json(new
         {
@@ -547,7 +554,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         var path = Str(args, "path") ?? _threads.View(owner, session.Id).Focus.FilmPath;
         if (path is null) return Deny("Не указан path, и открытого фильма нет: возьми фильм из video_state (films).");
 
-        var started = _assembler.Start(owner, scope, path, VideoInitiators.Agent, session.Id);
+        var started = _assembler.Start(owner, Actor(owner, session), scope, path, VideoInitiators.Agent, session.Id);
         if (started.Value is not { } status) return FilmFail(started.ErrorCode, started.Error, started.Conflict);
         return Json(new
         {
@@ -630,7 +637,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             if (_films.List(scope).Value is { } list) films = list;
             if (state.Focus.FilmPath is { } filmPath)
             {
-                var read = _films.State(owner, scope, filmPath);
+                var read = _films.State(owner, Actor(owner, session), scope, filmPath);
                 openFilm = read.Value is { } filmState
                     ? filmState
                     : new { path = filmPath, error = read.Error, code = read.ErrorCode };

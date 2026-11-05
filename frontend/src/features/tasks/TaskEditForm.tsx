@@ -39,7 +39,9 @@ interface Props {
   isMobile?: boolean;
   onSave: (dto: UpdateTaskDto) => Promise<void>;
   onCancel: () => void;
-  onDelete: () => void;
+  // Корзина в тулбаре (доработка F2-Q3, ревью 54d79690): родитель передаёт её только
+  // при canDeleteTask; без пропа кнопка не рендерится (гейт остаётся один — в родителе)
+  onDelete?: () => void;
   // AI-хаб: авто-запуск генерации при входе в правку из палитры/подсказки
   pendingAi?: 'task.description' | 'task.subtasks' | null;
   onPendingConsumed?: () => void;
@@ -336,9 +338,11 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
           <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           Готово
         </button>
-        <IconButton size="md" tone="danger" onClick={onDelete} title="Удалить задачу">
-          <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-        </IconButton>
+        {onDelete && (
+          <IconButton size="md" tone="danger" onClick={onDelete} title="Удалить задачу">
+            <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+          </IconButton>
+        )}
       </Toolbar>
 
       {/* Форма */}

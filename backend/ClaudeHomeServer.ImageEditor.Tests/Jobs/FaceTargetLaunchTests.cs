@@ -127,7 +127,7 @@ public class FaceTargetLaunchTests : IDisposable
     {
         var personalScope = ImageEditScope.Of(new Session { Id = Chat, ProjectId = null, OwnerId = Owner });
         var req = Request(_charB, FaceTargetJson(_facesKey));
-        var result = await Assembler().AssembleAsync(Owner, personalScope, req, default);
+        var result = await Assembler().AssembleAsync(Owner, Owner, personalScope, req, default);
 
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
@@ -139,7 +139,7 @@ public class FaceTargetLaunchTests : IDisposable
     public async Task Без_CharacterSlug_даёт_invalid_request()
     {
         var req = Request(null, FaceTargetJson(_facesKey, 1, ""));
-        var result = await Assembler().AssembleAsync(Owner, _scope, req, default);
+        var result = await Assembler().AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
@@ -153,7 +153,7 @@ public class FaceTargetLaunchTests : IDisposable
     {
         var req = Request(_charB, FaceTargetJson(_facesKey));
         req = req with { Mask = new ImageBytes([1, 2, 3], "image/png") };
-        var result = await Assembler().AssembleAsync(Owner, _scope, req, default);
+        var result = await Assembler().AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
@@ -165,7 +165,7 @@ public class FaceTargetLaunchTests : IDisposable
     public async Task Провайдер_не_local_даёт_invalid_request()
     {
         var req = Request(_charB, FaceTargetJson(_facesKey));
-        var result = await Assembler(jobs: QuoteJobs(provider: "fal")).AssembleAsync(Owner, _scope, req, default);
+        var result = await Assembler(jobs: QuoteJobs(provider: "fal")).AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
@@ -178,7 +178,7 @@ public class FaceTargetLaunchTests : IDisposable
     public async Task ContextRevision_даёт_invalid_request()
     {
         var req = Request(_charB, FaceTargetJson(_facesKey), contextRevision: 5);
-        var result = await Assembler().AssembleAsync(Owner, _scope, req, default);
+        var result = await Assembler().AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
@@ -192,7 +192,7 @@ public class FaceTargetLaunchTests : IDisposable
     {
         var req = Request(_charB, FaceTargetJson(_facesKey));
         req = req with { ReferencePaths = [("ref.png", ReferenceRole.Object)] };
-        var result = await Assembler().AssembleAsync(Owner, _scope, req, default);
+        var result = await Assembler().AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
@@ -206,7 +206,7 @@ public class FaceTargetLaunchTests : IDisposable
         var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
         var media = FakeMedia(faces, busy: true);
         var req = Request(_charB, FaceTargetJson(_facesKey));
-        var result = await Assembler(media: media).AssembleAsync(Owner, _scope, req, default);
+        var result = await Assembler(media: media).AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be("busy");
@@ -220,7 +220,7 @@ public class FaceTargetLaunchTests : IDisposable
         var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
         var media = FakeMedia(faces, error: "ComfyUI не ответил");
         var req = Request(_charB, FaceTargetJson(_facesKey));
-        var result = await Assembler(media: media).AssembleAsync(Owner, _scope, req, default);
+        var result = await Assembler(media: media).AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.ProviderUnavailable);
@@ -234,7 +234,7 @@ public class FaceTargetLaunchTests : IDisposable
         var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
         var media = FakeMedia(faces);
         var req = Request(_charB, FaceTargetJson("stale:v1", 1, _charB));
-        var result = await Assembler(media: media).AssembleAsync(Owner, _scope, req, default);
+        var result = await Assembler(media: media).AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be("faces_changed");
@@ -249,7 +249,7 @@ public class FaceTargetLaunchTests : IDisposable
         var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
         var media = FakeMedia(faces);
         var req = Request(_charB, FaceTargetJson(_facesKey, 99, _charB));
-        var result = await Assembler(media: media).AssembleAsync(Owner, _scope, req, default);
+        var result = await Assembler(media: media).AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
@@ -264,7 +264,7 @@ public class FaceTargetLaunchTests : IDisposable
         var faces = new[] { new LocalDetectedFace(1, 10, 10, 30, 30, 0.9, true) };
         var media = FakeMedia(faces);
         var req = Request(_charB, FaceTargetJson(_facesKey));
-        var result = await Assembler(media: media).AssembleAsync(Owner, _scope, req, default);
+        var result = await Assembler(media: media).AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
@@ -282,7 +282,7 @@ public class FaceTargetLaunchTests : IDisposable
         };
         var req = Request(null, TwoFaceJson(_facesKey, [(1, _charA), (2, _charB)]));
         var result = await Assembler(media: FakeMedia(faces), jobs: QuoteJobsN(2))
-            .AssembleAsync(Owner, _scope, req, default);
+            .AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
@@ -299,7 +299,7 @@ public class FaceTargetLaunchTests : IDisposable
     {
         var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
         var req = Request(_charB, FaceTargetJson(_facesKey, 99, _charB));
-        var result = await Assembler(media: FakeMedia(faces)).AssembleAsync(Owner, _scope, req, default);
+        var result = await Assembler(media: FakeMedia(faces)).AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
@@ -321,7 +321,7 @@ public class FaceTargetLaunchTests : IDisposable
             new LocalDetectedFace(2, 30, 10, 70, 50, 0.85, false)
         };
         var req = Request(_charB, FaceTargetJson(_facesKey, 1, _charB));
-        var result = await Assembler(media: FakeMedia(faces)).AssembleAsync(Owner, _scope, req, default);
+        var result = await Assembler(media: FakeMedia(faces)).AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.FacesTooClose);
@@ -338,7 +338,7 @@ public class FaceTargetLaunchTests : IDisposable
     {
         var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
         var req = Request(null, FaceTargetJson(_facesKey, 1, "no-such-char"));
-        var result = await Assembler(media: FakeMedia(faces)).AssembleAsync(Owner, _scope, req, default);
+        var result = await Assembler(media: FakeMedia(faces)).AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
@@ -362,7 +362,7 @@ public class FaceTargetLaunchTests : IDisposable
         var req = Request(_charB, FaceTargetJson(_facesKey, 2, _charB),
             prompt: "дополнительно в профиль");
 
-        var result = await Assembler(media: media).AssembleAsync(Owner, _scope, req, default);
+        var result = await Assembler(media: media).AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().NotBeNull(result.Error);
         var input = result.Value!;
@@ -398,7 +398,7 @@ public class FaceTargetLaunchTests : IDisposable
         var media = FakeMedia(faces);
         var req = Request(_charB, FaceTargetJson(_facesKey));
 
-        var result = await Assembler(media: media).AssembleAsync(Owner, _scope, req, default);
+        var result = await Assembler(media: media).AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().NotBeNull(result.Error);
         var input = result.Value!;
@@ -419,7 +419,7 @@ public class FaceTargetLaunchTests : IDisposable
     public async Task Без_FaceTarget_запуск_как_раньше()
     {
         var req = Request(_charB, null);
-        var result = await Assembler().AssembleAsync(Owner, _scope, req, default);
+        var result = await Assembler().AssembleAsync(Owner, Owner, _scope, req, default);
 
         // Без FaceTarget — обычный запуск (может быть Ok или Invalid по другим причинам)
         result.ErrorCode.Should().NotBe("faces_changed");
@@ -463,7 +463,7 @@ public class FaceTargetLaunchTests : IDisposable
 
         var req = Request(slug, FaceTargetJson(_facesKey));
         var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
-        var result = await Assembler(media: FakeMedia(faces)).AssembleAsync(Owner, _scope, req, default);
+        var result = await Assembler(media: FakeMedia(faces)).AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().NotBeNull(result.Error);
         result.Value!.Character.Should().NotBeNull();
@@ -496,7 +496,7 @@ public class FaceTargetLaunchTests : IDisposable
         var faces = new[] { new LocalDetectedFace(1, 10, 10, 100, 100, 0.9, false) };
         var req = Request(_charB, FaceTargetJson(_facesKey));
         var result = await Assembler(media: FakeMedia(faces), context: context)
-            .AssembleAsync(Owner, _scope, req, default);
+            .AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().NotBeNull(result.Error);
         // Персонаж — B, не A из контекста
@@ -544,7 +544,7 @@ public class FaceTargetLaunchTests : IDisposable
         var launchCts = new CancellationTokenSource();
 
         // (а) Запуск: ассемблер с FaceTarget
-        var launchTask = assembler.AssembleAsync(Owner, _scope, req, launchCts.Token);
+        var launchTask = assembler.AssembleAsync(Owner, Owner, _scope, req, launchCts.Token);
 
         // Ждём, пока детектор будет вызван (запись поставлена в кэш)
         var sourceBytes = File.ReadAllBytes(Path.Combine(_root, "test.png"));
@@ -607,7 +607,7 @@ public class FaceTargetLaunchTests : IDisposable
             ThreadSessionId: Chat, ThreadId: threadId,
             FaceTarget: new FaceTarget("origin", facesKey, [new FaceAssignment(1, _charB)]));
 
-        var result = await Assembler(media: media.Object).AssembleAsync(Owner, _scope, req, default);
+        var result = await Assembler(media: media.Object).AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().NotBeNull(result.Error);
         var input = result.Value!;
@@ -668,7 +668,7 @@ public class FaceTargetLaunchTests : IDisposable
             ThreadSessionId: Chat, ThreadId: threadId,
             FaceTarget: new FaceTarget("origin", facesKey, [new FaceAssignment(1, _charB)]));
 
-        var result = await Assembler(media: media.Object).AssembleAsync(Owner, _scope, req, default);
+        var result = await Assembler(media: media.Object).AssembleAsync(Owner, Owner, _scope, req, default);
         result.Value.Should().NotBeNull(result.Error);
         return result.Value!.Source!.ContentType;
     }
@@ -751,7 +751,7 @@ public class FaceTargetLaunchTests : IDisposable
     {
         var req = Request(null, faceTargetJson);
         var result = await Assembler(media: media, jobs: QuoteJobsN(n))
-            .AssembleAsync(Owner, _scope, req, default);
+            .AssembleAsync(Owner, Owner, _scope, req, default);
         result.Value.Should().NotBeNull(result.Error);
         return result.Value!;
     }
@@ -832,7 +832,7 @@ public class FaceTargetLaunchTests : IDisposable
 
         var req = Request(null, TwoFaceJson(_facesKey, [(1, _charA), (2, _charB)]));
         var result = await Assembler(media: media.Object, jobs: QuoteJobsN(2))
-            .AssembleAsync(Owner, _scope, req, default);
+            .AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().NotBeNull(result.Error);
         Volatile.Read(ref detectCount).Should().Be(1, "детекция одна на запуск, не по числу лиц");
@@ -879,7 +879,7 @@ public class FaceTargetLaunchTests : IDisposable
     {
         var req = Request(null, TwoFaceJson(_facesKey, [(1, _charA), (2, _charB)]));
         var result = await Assembler(media: TwoFacesMedia(), jobs: QuoteJobsN(1))
-            .AssembleAsync(Owner, _scope, req, default);
+            .AssembleAsync(Owner, Owner, _scope, req, default);
 
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.QuoteNotFound);
@@ -895,7 +895,7 @@ public class FaceTargetLaunchTests : IDisposable
         jobs.Setup(j => j.StartAsync(Owner, "p1", It.IsAny<ImageEditJobInput>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(ImageEditCallResult<ImageEditJobCreatedDto>.Ok(new ImageEditJobCreatedDto("job-launch")));
         var result = await Assembler(media: TwoFacesMedia(), jobs: jobs.Object)
-            .LaunchAsync(Owner, _scope, Request(null, faceTargetJson, prompt), default);
+            .LaunchAsync(Owner, Owner, _scope, Request(null, faceTargetJson, prompt), default);
         result.Value.Should().NotBeNull(result.Error);
         return _store.Get(Owner, Chat).Threads.Single(t => t.Id == _threadId).Launches.Single();
     }

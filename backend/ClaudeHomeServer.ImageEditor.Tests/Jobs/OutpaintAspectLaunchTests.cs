@@ -28,7 +28,7 @@ public class OutpaintAspectLaunchTests
     [InlineData("3:4")]
     public async Task Дорисовка_принимает_любые_читаемые_пропорции(string aspect)
     {
-        var result = await Assembler(ImageEditOp.Outpaint).AssembleAsync(Owner, Scope, Request(aspect), default);
+        var result = await Assembler(ImageEditOp.Outpaint).AssembleAsync(Owner, Owner, Scope, Request(aspect), default);
 
         result.Value.Should().NotBeNull(result.Error);
         result.Value!.AspectRatio.Should().Be(aspect);
@@ -37,7 +37,7 @@ public class OutpaintAspectLaunchTests
     [Fact]
     public async Task Дорисовка_отказывает_непрочитанным_пропорциям()
     {
-        var result = await Assembler(ImageEditOp.Outpaint).AssembleAsync(Owner, Scope, Request("широкая"), default);
+        var result = await Assembler(ImageEditOp.Outpaint).AssembleAsync(Owner, Owner, Scope, Request("широкая"), default);
 
         result.Value.Should().BeNull();
         result.Error.Should().Contain("не читаются");
@@ -46,7 +46,7 @@ public class OutpaintAspectLaunchTests
     [Fact]
     public async Task Белый_список_трёх_пропорций_остался_у_правки()
     {
-        var result = await Assembler(ImageEditOp.Edit).AssembleAsync(Owner, Scope, Request("4:3"), default);
+        var result = await Assembler(ImageEditOp.Edit).AssembleAsync(Owner, Owner, Scope, Request("4:3"), default);
 
         result.Value.Should().BeNull();
         result.Error.Should().Contain("не поддерживаются");

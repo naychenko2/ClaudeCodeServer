@@ -29,6 +29,7 @@ import {
   isOwnerProjectView, isSharedProjectView, matchTaskAssignee, memberOptionName,
   type AssigneePersonOption,
 } from '../TasksListFilter';
+import { canWriteTasks } from '../../projects/members/participantGate';
 import { BoardCell, ColumnHeader } from './BoardColumn';
 import { BoardToolbar, useDefectsOnly } from './BoardToolbar';
 
@@ -100,6 +101,11 @@ export function TaskBoard({
   // сбрасывается в самом сторе (reportBoardScope), а не только при выходе в хаб.
   const boardProject = isProjectBoard && quickAddProjectId ? projectsById.get(quickAddProjectId) : undefined;
   const shared = boardProject ? isSharedProjectView(boardProject) : false;
+  // Право править задачи (F2-Q3, разрез CONSULT-TASK-RIGHTS): в общем проекте читатель
+  // только смотрит — быстрое добавление в ячейках скрыто, карточки не активируются для
+  // броска (запрет на уровне dnd-активаторов, а не отказа после отпускания). Владелец,
+  // редактор, личный проект (myRole нет) и хаб (проекта нет) — как раньше.
+  const canWrite = canWriteTasks(boardProject);
   useEffect(() => {
     reportBoardScope(isProjectBoard ? (quickAddProjectId ?? null) : null, shared);
   }, [isProjectBoard, quickAddProjectId, shared]);
@@ -399,7 +405,8 @@ export function TaskBoard({
                   projectNameOf={projectNameOf}
                   deviceNameOf={deviceNameOf}
                   onOpen={handleOpen}
-                  onQuickAdd={grouped ? undefined : title => void createTask(quickAddProjectId, { title, status: col.category, columnId: isProjectBoard ? col.id : undefined })}
+                  onQuickAdd={grouped || !canWrite ? undefined : title => void createTask(quickAddProjectId, { title, status: col.category, columnId: isProjectBoard ? col.id : undefined })}
+                  canDrag={canWrite}
                   minEmptyHeight={minEmptyHeight}
                 />
               ))}

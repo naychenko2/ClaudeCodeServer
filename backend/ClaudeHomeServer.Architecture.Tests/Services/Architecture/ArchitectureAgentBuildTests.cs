@@ -106,8 +106,10 @@ public class ArchitectureAgentBuildTests : IDisposable
         exec.Started.Should().ContainSingle(t => t.Id == task.Id);
     }
 
-    // F-9: создатель сборки — человек, нажавший «Собрать»; автозапуск наследует его актора,
-    // а владелец/вызов без человека идёт как раньше (актор не передаётся)
+    // F-9: создатель сборки — человек, нажавший «Собрать»; автозапуск наследует его актора
+    // (TaskLaunchActor.For). После О2 финального ревью «Общих проектов» безымянный актор общего
+    // проекта не имеет ни одного права, поэтому вызов без человека-создателя называет владельца
+    // буквально (тот же критерий, что TaskLaunchActorTests): актор второй сборки — «u1», не null.
     [Fact]
     public async Task Создатель_сборки_становится_актором_автозапуска()
     {
@@ -120,7 +122,7 @@ public class ArchitectureAgentBuildTests : IDisposable
         tasks.Update(byEditor.TaskId!, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         var byOwner = await adapter.LaunchAsync("p1", "u1", Brief, default, createdByUserId: "u1");
         tasks.GetById(byOwner.TaskId!)!.CreatedByUserId.Should().Be("u1");
-        exec.Actors.Should().Equal("editor-1", null);
+        exec.Actors.Should().Equal("editor-1", "u1");
     }
 
     [Fact]

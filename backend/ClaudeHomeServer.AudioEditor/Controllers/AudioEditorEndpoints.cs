@@ -88,7 +88,7 @@ public abstract class AudioEditorEndpoints(
     {
         if (req is null || string.IsNullOrWhiteSpace(req.Mode))
             return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Не указан режим");
-        return Map(await jobs.QuoteAsync(Owner(scope), scope, req, ct), Ok);
+        return Map(await jobs.QuoteAsync(Owner(scope), scope, req, ct, UserId), Ok);
     }
 
     protected async Task<IActionResult> StartIn(AudioEditScope scope, AudioStartJobForm form, CancellationToken ct)
@@ -103,7 +103,7 @@ public abstract class AudioEditorEndpoints(
         {
             if (context is null) return Error(StatusCodes.Status503ServiceUnavailable, AudioEditErrorCodes.Unavailable,
                 ChatContext.AudioContextLaunch.UnavailableText);
-            var read = context.Read(Owner(scope), scope, form.SessionId, revision);
+            var read = context.Read(Owner(scope), scope, form.SessionId, revision, UserId);
             if (!read.Ok) return Map(read.Fail<object>(), Ok);
             fromContext = ChatContext.AudioContextLaunch.Extract(scope, read.State!, AudioEditJobService.OpName(quote.Op));
             form.ThreadId = fromContext.ThreadId;
@@ -145,7 +145,7 @@ public abstract class AudioEditorEndpoints(
         if (NeedsSource.Contains(quote.Op))
         {
             var main = baseVersion?.File(AudioFileRoles.Main);
-            var path = main is null ? null : AudioVersionFiles.Resolve(workspace, Owner(scope), scope, baseVersion!, main);
+            var path = main is null ? null : AudioVersionFiles.Resolve(workspace, Owner(scope), UserId, scope, baseVersion!, main);
             if (path is null || !System.IO.File.Exists(path))
                 return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
                     "Для этой операции нужен звук: возьмите в работу файл или версию со звуком");
@@ -169,7 +169,7 @@ public abstract class AudioEditorEndpoints(
                 ? (refPiece.VersionId is null ? rt.CurrentVersion : rt.Version(refPiece.VersionId))
                 : null;
             var refMain = refVersion?.File(AudioFileRoles.Main);
-            var refPath = refMain is null ? null : AudioVersionFiles.Resolve(workspace, Owner(scope), scope, refVersion!, refMain);
+            var refPath = refMain is null ? null : AudioVersionFiles.Resolve(workspace, Owner(scope), UserId, scope, refVersion!, refMain);
             if (refPath is null || !System.IO.File.Exists(refPath))
                 return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Образец из контекста не найден или без звука");
             reference = await ReadAsync(refPath, ct) is { } refBytes ? new AudioBytes(refBytes, AudioVersionFiles.ContentTypeOf(refPath)) : null;
@@ -226,7 +226,7 @@ public abstract class AudioEditorEndpoints(
             Seed: form.Seed,
             Voice: form.Voice,
             ContextRevision: form.ContextRevision);
-        return Map(await jobs.StartAsync(Owner(scope), scope, input, ct), created => StatusCode(StatusCodes.Status202Accepted, created));
+        return Map(await jobs.StartAsync(Owner(scope), scope, input, ct, UserId), created => StatusCode(StatusCodes.Status202Accepted, created));
     }
 
     protected IActionResult JobIn(AudioEditScope scope, string jobId) =>
@@ -254,7 +254,7 @@ public abstract class AudioEditorEndpoints(
         if (req.File is not null)
         {
             if (scope.Project is not { } project) return NoProjectFiles();
-            if (ProjectLinkGuard.ResolveInside(project.RootPath, req.File) is not { } full || !System.IO.File.Exists(full))
+            if (ProjectLinkGuard.ResolveInsideAs(project.RootPath, req.File, UserId) is not { } full || !System.IO.File.Exists(full))
                 return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Файл не найден в проекте");
             file = Relative(project.RootPath, full);
         }
@@ -320,7 +320,7 @@ public abstract class AudioEditorEndpoints(
     {
         if (FindVersion(scope, sessionId, threadId, versionId, out var thread, out var version) is { } denied) return denied;
         if (version!.File(role) is not { } file
-            || AudioVersionFiles.Resolve(workspace, Owner(scope), scope, version, file) is not { } path
+            || AudioVersionFiles.Resolve(workspace, Owner(scope), UserId, scope, version, file) is not { } path
             || !System.IO.File.Exists(path))
             return Error(StatusCodes.Status404NotFound, AudioEditErrorCodes.FileNotFound, "Файла нет в этой версии");
         var result = PhysicalFile(path, AudioVersionFiles.ContentTypeOf(path), enableRangeProcessing: true);
@@ -381,7 +381,7 @@ public abstract class AudioEditorEndpoints(
         var input = new Engines.AudioDspEditInput(sessionId, threadId, op, req.BaseVersionId, req.StartSec, req.EndSec,
             req.FadeInSec ?? 0, req.FadeOutSec ?? 0, req.GainDb ?? 0, req.TargetLufs, format, req.SampleRate, req.Channels,
             req.Revision);
-        return Map(await dsp.EditAsync(Owner(scope), scope, input, ct), Ok);
+        return Map(await dsp.EditAsync(Owner(scope), UserId, scope, input, ct), Ok);
     }
 
     protected async Task<IActionResult> MixIn(AudioEditScope scope, string sessionId, string threadId,
@@ -390,14 +390,14 @@ public abstract class AudioEditorEndpoints(
         if (req?.Stems is not { } stems)
             return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest, "Выберите хотя бы один стем");
         if (!TryFormat(req.Format, out var format)) return UnknownFormat();
-        return Map(await dsp.MixAsync(Owner(scope), scope,
+        return Map(await dsp.MixAsync(Owner(scope), UserId, scope,
             new Engines.AudioMixInput(sessionId, threadId, stems, req.BaseVersionId, format, req.Revision,
                 ContextRevision: req.ContextRevision), ct), Ok);
     }
 
     protected async Task<IActionResult> PeaksIn(AudioEditScope scope, string sessionId, string threadId, string versionId,
         string? role, int points, CancellationToken ct) =>
-        Map(await dsp.PeaksAsync(Owner(scope), scope, sessionId, threadId, versionId, role, points, ct), Ok);
+        Map(await dsp.PeaksAsync(Owner(scope), UserId, scope, sessionId, threadId, versionId, role, points, ct), Ok);
 
     protected async Task<IActionResult> ConcatIn(AudioEditScope scope, string sessionId, AudioConcatRequest? req,
         CancellationToken ct)
@@ -417,7 +417,7 @@ public abstract class AudioEditorEndpoints(
         var input = new AudioConcatInput(sessionId, req.Pieces ?? [], joint, req.Joints is null ? null : joints,
             req.NormalizeLoudness ?? true, req.Name, format ?? AudioFormat.Wav, req.Folder,
             ContextRevision: req.ContextRevision);
-        return Map(await concat.ConcatAsync(Owner(scope), scope, input, ct), Ok);
+        return Map(await concat.ConcatAsync(Owner(scope), UserId, scope, input, ct), Ok);
     }
 
     // null — формат не задан; незнакомое имя — false
@@ -447,12 +447,13 @@ public abstract class AudioEditorEndpoints(
 
     // ── Помощники ────────────────────────────────────────────────────────────────
 
-    // Файл проекта для входа запуска: у личной области — 400 до диска, путь — только ResolveInside
+    // Файл проекта для входа запуска: у личной области — 400 до диска, путь — только ResolveInsideAs
+    // (чужое private участника — тот же отказ, что «вне проекта»: наличие не раскрываем)
     private async Task<(byte[]? Bytes, string? Path, IActionResult? Denied)> ProjectFileAsync(
         AudioEditScope scope, string rel, CancellationToken ct)
     {
         if (scope.Project is not { } project) return (null, null, NoProjectFiles());
-        if (ProjectLinkGuard.ResolveInside(project.RootPath, rel) is not { } full || !System.IO.File.Exists(full))
+        if (ProjectLinkGuard.ResolveInsideAs(project.RootPath, rel, UserId) is not { } full || !System.IO.File.Exists(full))
             return (null, null, Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
                 "Файл не найден в проекте или путь идёт через символическую ссылку"));
         return await ReadAsync(full, ct) is { } bytes ? (bytes, full, null) : (null, null, TooLarge());

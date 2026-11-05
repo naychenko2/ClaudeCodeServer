@@ -199,6 +199,19 @@ public class McpNarrowFrameTests : IDisposable
         return IdOf(JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync()));
     }
 
+    /// <summary>
+    /// Начать в чате хода владельца — как человек в UI: явный инициатор подачи (S2a-1), без заголовка
+    /// вызывателя. Нужен пишущим вызовам общего проекта: после О2 финального ревью «Общих проектов»
+    /// (1af1d702a) безымянный ход общего проекта не имеет ни одного права и отказан ГЕЙТОМ актора,
+    /// не доходя до того, что тестирует вызов. Рамка при этом не меняется: общий чат общего проекта
+    /// остаётся Narrow и владельцу (решение 29.10). Клиент новый: у общего <see cref="_client"/>
+    /// заголовок X-Caller-Session-Id от предыдущего <see cref="CallAsync"/> перенёсся бы в подачу
+    /// сообщения, и актором стал бы чат-вызыватель (его нет → «неизвестный»).
+    /// </summary>
+    private async Task StartOwnerTurnAsync(string chatId) =>
+        (await _factory.CreateAuthenticatedClient().PostAsJsonAsync($"/api/sessions/{chatId}/messages",
+            new { text = "начни работу", wait = "none" })).EnsureSuccessStatusCode();
+
     // Не-эхо: id из аргумента вызывающий и так знает, проверяем, что название задачи не утекло
     [Theory]
     [InlineData("tasks_get")]
@@ -232,6 +245,11 @@ public class McpNarrowFrameTests : IDisposable
         text.Should().NotContain("PERSONAL").And.NotContain(looseId).And.NotContain("Несколько");
     }
 
+    /// <summary>Перенос задачи общего проекта (пустой/чужой projectId) отказан узкой рамкой, задача
+    /// остаётся в проекте. Ход в чате начинает владелец (<see cref="StartOwnerTurnAsync"/>): без
+    /// названного актора tasks_create отказался бы на ГЕЙТЕ актора и не дошёл бы до проверки
+    /// projectId — тест мерил бы гейт, а не этот контракт. Рамка при этом остаётся узкой и
+    /// владельцу, поэтому отказывает ровно он же NarrowDenied.</summary>
     [Theory]
     [InlineData("")]
     [InlineData(null)]
@@ -239,6 +257,7 @@ public class McpNarrowFrameTests : IDisposable
     public async Task Tasks_УзкаяРамка_UpdateСПустымИЛишнимProjectId_Отказ_ЗадачаОстаётсяВПроекте(string target)
     {
         var f = await ArrangeAsync();
+        await StartOwnerTurnAsync(f.SharedChat);
         var (created, createErr) = await CallAsync("tasks", f.SharedChat, "tasks_create", new { title = "в общем" });
         createErr.Should().BeFalse(created);
         var taskId = IdOf(JsonSerializer.Deserialize<JsonElement>(created));
@@ -281,10 +300,15 @@ public class McpNarrowFrameTests : IDisposable
         }
     }
 
+    /// <summary>Свой источник общего проекта открыт, личное пространство владельца — нет.
+    /// Ход начинает владелец (<see cref="StartOwnerTurnAsync"/>): после О2 (1af1d702a) безымянный
+    /// notes_create общего проекта отказан гейтом актора, и тест мерил бы гейт, а не рамку;
+    /// при названном акторе рамка общего чата остаётся узкой и владельцу.</summary>
     [Fact]
     public async Task Notes_УзкаяРамка_ПоискНеНаходитЛичныхЗаметок_СвойИсточникРаботает()
     {
         var f = await ArrangeAsync();
+        await StartOwnerTurnAsync(f.SharedChat);
         var (search, searchErr) = await CallAsync("notes", f.SharedChat, "notes_search", new { query = "PERSONAL" });
         searchErr.Should().BeFalse(search);
         f.AssertNoPersonal(search);

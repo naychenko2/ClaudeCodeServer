@@ -16,6 +16,11 @@ public class VideoEditorTenantKeyGuardTests
 
     private static readonly Regex UserIdUse = new(@"\bUserId\b", RegexOptions.Compiled);
 
+    // Строка незакрытого вызова с ключом-арендатором: содержит Tenant(scope) и обрывается на
+    // «(» или «,» — начало или середина вызова, но не закрытая запись. Только такая строка
+    // даёт право строке-продолжению (тот же якорь, что у аудио-сторожа: «gate.Try…(» на конце).
+    private static readonly Regex OpenTenantCall = new(@"\bTenant\(scope\)[^\r\n]*[\(,]$", RegexOptions.Compiled);
+
     [Fact]
     public void КонтроллерыVideoEditor_UserId_ТолькоВГейтеИЛичныхКадрах()
     {
@@ -30,6 +35,13 @@ public class VideoEditorTenantKeyGuardTests
             {
                 var code = Regex.Replace(lines[i], @"//.*$", "");
                 if (!UserIdUse.IsMatch(code)) continue;
+                // Вызов с ключом-арендатором мог перенестись: строка продолжения допустима,
+                // только если предыдущая — незакрытый вызов с Tenant(scope): «(» или «,» на конце,
+                // тот же якорь, что у аудио-сторожа («gate.Try…(» на конце строки). Без якоря
+                // проходила любая строка после закрытой записи: prefs.Get(UserId, scope) сразу за
+                // prefs.Save(Tenant(scope), …); оставалась зелёной (возврат дельта-ревью 94ef33f0).
+                var prev = i > 0 ? Regex.Replace(lines[i - 1], @"//.*$", "").TrimEnd() : "";
+                if (OpenTenantCall.IsMatch(prev)) { allowed++; continue; }
                 if (IsAllowed(code)) { allowed++; continue; }
                 violations.Add($"{Path.GetFileName(file)}:{i + 1}: {lines[i].Trim()}");
             }
@@ -40,11 +52,22 @@ public class VideoEditorTenantKeyGuardTests
         violations.Should().BeEmpty("ключ хранилищ — Tenant(scope), а не UserId вызывающего");
     }
 
-    // Объявление свойства, вызов гейта (право доступа) и личная папка кадров владельца
+    // Объявление свойства, вызов гейта (право доступа) и личная папка кадров владельца.
+    // F2-P2e/F2-P2f (98dc1bd57/826d45c07, принято ревью 9d84ad50 → 08e5a4c1): сервисы вертикали
+    // получают (ключ-арендатор, актор приватности): id вызывающего допустим аргументом ПОСЛЕ
+    // ключа арендатора Tenant(scope) на той же строке (или на строке продолжения вызова,
+    // как в AudioEditorTenantKeyGuardTests) — ключ хранилищ остаётся арендатор.
     private static bool IsAllowed(string code) =>
         Regex.IsMatch(code, @"\bUserId\s*=>")
         || Regex.IsMatch(code, @"\bgate\.Try\w+\(\s*UserId\b")
-        || Regex.IsMatch(code, @"\b_workspace\.(SaveFrame|FindFrame|FindFrameName)\(\s*UserId\b");
+        || Regex.IsMatch(code, @"\b_workspace\.(SaveFrame|FindFrame|FindFrameName)\(\s*UserId\b")
+        || AfterTenantKey(code);
+
+    private static bool AfterTenantKey(string code) {
+        var t = Regex.Match(code, @"\bTenant\(scope\)");
+        var u = Regex.Match(code, @"\bUserId\b");
+        return t.Success && u.Success && u.Index > t.Index;
+    }
 
     // .git бывает файлом (worktree), поэтому проверяем и каталог, и файл
     private static string FindRepoRoot()

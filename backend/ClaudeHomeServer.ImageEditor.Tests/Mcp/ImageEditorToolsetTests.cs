@@ -80,7 +80,8 @@ public class ImageEditorToolsetTests : IDisposable
     private ImageEditorToolset Toolset(IImageEditor[]? editors = null, bool agentLaunch = true, bool withGate = true,
         IImagePlaceSettings? placeSettings = null,
         ClaudeHomeServer.Services.ImageEditor.Faces.FaceDetectionCache? faces = null,
-        ILocalImageMedia? localMedia = null, IImageEditJobs? jobsOverride = null)
+        ILocalImageMedia? localMedia = null, IImageEditJobs? jobsOverride = null,
+        ClaudeHomeServer.Services.Access.ITurnActorRegistry? turnActors = null)
     {
         editors ??= [HiggsfieldImageEditorTests.Create().Editor];
         var workspace = new ImageEditWorkspace(Path.Combine(_dir, "image-editor"));
@@ -116,7 +117,7 @@ public class ImageEditorToolsetTests : IDisposable
         var config = TestImages.Config((ImageEditorToolset.AgentLaunchKey, agentLaunch ? "true" : "false"));
         return new ImageEditorToolset(accessor.Object, projects.Object, editors, threads, launcher,
             withGate ? _turnGate.Object : null, _jobs, placeSettings: placeSettings, events: _bus, config: config, prefs: prefs,
-            context: context, faces: faces, localMedia: localMedia);
+            context: context, faces: faces, localMedia: localMedia, turnActors: turnActors);
     }
 
     private static McpToolCallContext Ctx(string owner = Owner, string tail = ChatId) => new(owner, tail, tail);
@@ -154,6 +155,49 @@ public class ImageEditorToolsetTests : IDisposable
             await Task.Delay(10);
         }
         throw new TimeoutException("задача не завершилась");
+    }
+
+    // ── Актор приватности агентского пути (F2-P2h) ───────────────────────────
+
+    private sealed class FakeActors(string? actor) : ClaudeHomeServer.Services.Access.ITurnActorRegistry
+    {
+        public string? Actor(string sessionId, string ownerId) => actor;
+    }
+
+    private string PrivateImage(string author)
+    {
+        var rel = $".cc-attachments/private/{author}/g1/pic.png";
+        var full = Path.Combine(_root, rel.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.WriteAllBytes(full, TestImages.Png(4, 4));
+        return rel;
+    }
+
+    // Арендатор чата — Owner, а ход запустил участник: «своё» судится по актору, не по арендатору
+    [Fact]
+    public async Task ImageFocus_ПриватноеВложение_ЧужестьСудитсяПоАвтору_НеПоАрендатору()
+    {
+        const string participant = "user-p";
+        var own = PrivateImage(participant);
+        var tenants = PrivateImage(Owner);
+        var other = PrivateImage("user-x");
+
+        var withActor = Toolset(turnActors: new FakeActors(participant));
+        var ok = await Call(withActor, ImageEditorToolset.ToolFocus, new JsonObject { ["file"] = own });
+        ok.IsError.Should().BeFalse("своё private участника читается, хотя арендатор чата — другой");
+
+        foreach (var foreign in new[] { tenants, other })
+        {
+            var denied = await Call(withActor, ImageEditorToolset.ToolFocus, new JsonObject { ["file"] = foreign });
+            denied.IsError.Should().BeTrue($"чужое private ({foreign}) отказано по автору запроса");
+        }
+
+        var unknown = Toolset(turnActors: new FakeActors(null));
+        foreach (var path in new[] { own, tenants, other })
+        {
+            var denied = await Call(unknown, ImageEditorToolset.ToolFocus, new JsonObject { ["file"] = path });
+            denied.IsError.Should().BeTrue($"актор неизвестен — {path} отказано (fail-closed)");
+        }
     }
 
     // ── Состав: решение Андрея 1 ──────────────────────────────────────────────

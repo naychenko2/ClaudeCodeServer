@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Media;
@@ -177,6 +178,20 @@ public sealed class WikiSourceCapture
         // ADR-017 §8; тип — в сборке Core, шов вертикали к спинке).
         if (ProjectLinkGuard.HasLink(project.RootPath, full))
             return Refused("файл в проекте идёт через символическую ссылку — это не файл проекта");
+
+        // Чужое closed-поддерево private (тот же общий предикат, что у FilesController,
+        // WorkspaceToolset и KnowledgeController): вложения приватных чатов участников общего
+        // проекта лежат в .cc-attachments/private/{X}/ того же дерева, и чужое (X ≠ владелец)
+        // в вики проекта не берётся. Формула — каноническая (DEC-ROOTS): сегмент
+        // .cc-attachments/private/{X} на любой глубине абсолютного пути цели — поэтому корень
+        // чужого проекта внутри дерева (свой .cc-attachments) даёт тот же отказ; неразрешимый
+        // канон — fail-closed. Свой private и общая раскладка .cc-attachments/{guid}/ — не
+        // чужое: принимаются, как раньше. Отказ неотличим от «файла не найден»: существования
+        // чужого private не раскрываем (тот же инвариант, что у files_read и «чат не
+        // существует» в CaptureSession). IsContainerResolved здесь не нужен: контейнеры —
+        // каталоги, их уже отклоняет проверка файла ниже, а путь через ссылку — гейт выше.
+        if (PrivateAttachments.IsForeignResolved(project.RootPath, rel, ownerId))
+            return Refused("файл не найден");
 
         // Всё {data} — служебное пространство сервера, а не файлы проекта: {data}/wiki — страницы
         // самой вики, {data}/notes/{другойOwner}/ — чужой владелец (источник не выходит за своего).

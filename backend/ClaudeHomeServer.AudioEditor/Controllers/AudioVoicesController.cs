@@ -92,8 +92,8 @@ public class AudioVoicesController(
         if (model is null || index is null)
             return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
                 "В версии нет пары модели RVC: нужны .pth и .index");
-        var modelPath = AudioVersionFiles.Resolve(workspace, AudioEditorEndpoints.Owner(scope), scope, version, model);
-        var indexPath = AudioVersionFiles.Resolve(workspace, AudioEditorEndpoints.Owner(scope), scope, version, index);
+        var modelPath = AudioVersionFiles.Resolve(workspace, AudioEditorEndpoints.Owner(scope), UserId, scope, version, model);
+        var indexPath = AudioVersionFiles.Resolve(workspace, AudioEditorEndpoints.Owner(scope), UserId, scope, version, index);
         if (modelPath is null || indexPath is null)
             return Error(StatusCodes.Status404NotFound, AudioEditErrorCodes.FileNotFound,
                 "Файлы модели больше не найдены — рабочая папка очищена");
@@ -176,7 +176,9 @@ public class AudioVoicesController(
         return PhysicalFile(full, AudioVersionFiles.ContentTypeOf(full), enableRangeProcessing: true);
     }
 
-    // Записи из загрузки и из проекта; байты читаются до библиотеки, формат она проверит сама
+    // Записи из загрузки и из проекта; байты читаются до библиотеки, формат она проверит сама.
+    // Путь проекта — только ResolveInsideAs (чужое private участника — тот же отказ, что «вне проекта»:
+    // наличие не раскрываем, F2-M1)
     private async Task<(List<VoiceSampleUpload>? Samples, IActionResult? Bad)> SamplesAsync(
         AudioEditScope scope, VoiceSamplesForm form, CancellationToken ct)
     {
@@ -192,7 +194,7 @@ public class AudioVoicesController(
         }
         foreach (var rel in form.ProjectFiles ?? [])
         {
-            if (string.IsNullOrWhiteSpace(rel) || ProjectLinkGuard.ResolveInside(root, rel.Trim()) is not { } full
+            if (string.IsNullOrWhiteSpace(rel) || ProjectLinkGuard.ResolveInsideAs(root, rel.Trim(), UserId) is not { } full
                 || !System.IO.File.Exists(full))
                 return (null, Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
                     "Файл не найден в проекте или путь идёт через символическую ссылку"));

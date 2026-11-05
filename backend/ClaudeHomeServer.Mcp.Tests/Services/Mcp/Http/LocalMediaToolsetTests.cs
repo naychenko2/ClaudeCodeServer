@@ -46,7 +46,8 @@ public class LocalMediaToolsetTests : IDisposable
     private sealed record Env(LocalMediaToolset Toolset, McpToolCallContext Context, Session Session, Project Project,
         SessionManager Sessions, ProjectManager Projects, LocalMediaJobStore? Store);
 
-    private Env Build(bool enabled = true, bool withService = true, ISessionBroadcaster? broadcaster = null)
+    private Env Build(bool enabled = true, bool withService = true, ISessionBroadcaster? broadcaster = null,
+        ClaudeHomeServer.Services.Access.ITurnActorRegistry? turnActors = null)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -73,7 +74,7 @@ public class LocalMediaToolsetTests : IDisposable
             media = new LocalMediaService(client, store, new LocalMediaProjectAccess(projects), config,
                 NullLogger<LocalMediaService>.Instance);
         }
-        var toolset = new LocalMediaToolset(sessions, projects, media, broadcaster);
+        var toolset = new LocalMediaToolset(sessions, projects, media, broadcaster, turnActors);
         return new Env(toolset, new McpToolCallContext(TestUserId, session.Id, session.Id), session, project,
             sessions, projects, store);
     }
@@ -152,6 +153,48 @@ public class LocalMediaToolsetTests : IDisposable
             "Есть в ходе правило хвостовой секции «Картинки и видео: локальная модель по умолчанию» — вызывай по нему. "
             + "Без него — вызывай ТОЛЬКО если пользователь явно попросил локальную генерацию (локально / нашими моделями / "
             + "на своей видеокарте / бесплатно) в ТЕКУЩЕЙ просьбе; иначе используй glif/fal."));
+    }
+
+    private sealed class FakeActors(string? actor) : ClaudeHomeServer.Services.Access.ITurnActorRegistry
+    {
+        public string? Actor(string sessionId, string ownerId) => actor;
+    }
+
+    private static string PrivateImage(Env env, string author)
+    {
+        var rel = $".cc-attachments/private/{author}/g1/pic.png";
+        var full = Path.Combine(env.Project.RootPath, rel.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.WriteAllBytes(full, LocalMediaTestImages.Png(64, 64));
+        return rel;
+    }
+
+    // ActorId в запросе — актор хода (участник), а не арендатор чата: «своё» private читается,
+    // чужое (арендатора и другого участника) и неизвестный актор — отказ до ComfyUI (F2-P2j)
+    [Fact]
+    public async Task ПриватноеВложение_СубъектПриватности_АкторХода_НеАрендатор()
+    {
+        const string participant = "user-p";
+        var withActor = Build(turnActors: new FakeActors(participant));
+        var own = PrivateImage(withActor, participant);
+        var tenants = PrivateImage(withActor, TestUserId);
+        var other = PrivateImage(withActor, "user-x");
+
+        (await withActor.Toolset.CallAsync("local_face_detail", new JsonObject { ["image"] = own },
+            withActor.Context, default)).IsError.Should().BeFalse("своё private участника читается");
+        _comfy.Requests.Should().NotBeEmpty("запрос с ActorId дошёл до ComfyUI");
+
+        foreach (var foreign in new[] { tenants, other })
+        {
+            var denied = await withActor.Toolset.CallAsync("local_face_detail", new JsonObject { ["image"] = foreign },
+                withActor.Context, default);
+            denied.IsError.Should().BeTrue($"чужое private ({foreign}) отказано");
+        }
+
+        var unknown = Build(turnActors: new FakeActors(null));
+        var path = PrivateImage(unknown, participant);
+        (await unknown.Toolset.CallAsync("local_face_detail", new JsonObject { ["image"] = path },
+            unknown.Context, default)).IsError.Should().BeTrue("актор неизвестен — отказ (fail-closed)");
     }
 
     [Fact]

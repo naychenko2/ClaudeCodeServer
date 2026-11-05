@@ -332,7 +332,7 @@ public sealed class VideoEditorToolsetTests
         AgentWorld.Parse(second)["path"]!.GetValue<string>().Should().Be("video/утро/scene-01.v2.mp4", "перезаписи нет");
         ProjectFiles(w).Should().Contain(["video/утро/scene-01.mp4", "video/утро/scene-01.v2.mp4", "video/утро/утро.film"]);
         ProjectFiles(w).Should().OnlyContain(f => f.StartsWith("video/") || f.StartsWith("music/"));
-        w.F.Service.State(w.Owner, w.F.Scope, "video/утро/утро.film").Value!.Marks.Should().Contain(m => m.Claude,
+        w.F.Service.State(w.Owner, w.Owner, w.F.Scope, "video/утро/утро.film").Value!.Marks.Should().Contain(m => m.Claude,
             "строка фильма, добавленная агентом, помечена «✦ Claude»");
     }
 

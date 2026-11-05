@@ -701,7 +701,7 @@ public class ImageThreadVersionsTests : IDisposable
 
     private async Task<string> LaunchPersonal(ImageEditLaunchAssembler launcher, ImageEditJobService jobs, string threadId, int count)
     {
-        var started = await launcher.LaunchAsync(Owner, PersonalScope, PersonalRequest(await PersonalQuote(jobs, count), threadId), default);
+        var started = await launcher.LaunchAsync(Owner, Owner, PersonalScope, PersonalRequest(await PersonalQuote(jobs, count), threadId), default);
         started.Value.Should().NotBeNull(started.Error);
         return started.Value!.JobId;
     }
@@ -779,8 +779,8 @@ public class ImageThreadVersionsTests : IDisposable
             _ => PersonalRequest(quoteId, null, sourcePath: "images/hero.png"),
         };
 
-        var assembled = await launcher.AssembleAsync(Owner, PersonalScope, request, default);
-        var launched = await launcher.LaunchAsync(Owner, PersonalScope, request, default);
+        var assembled = await launcher.AssembleAsync(Owner, Owner, PersonalScope, request, default);
+        var launched = await launcher.LaunchAsync(Owner, Owner, PersonalScope, request, default);
 
         assembled.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
         launched.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);

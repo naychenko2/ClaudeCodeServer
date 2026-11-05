@@ -13,3 +13,8 @@ FilesController.Rename
 FilesController.Upload
 FilesController.Delete
 FilesController.ToMarkdown
+# F2-T1 (57aa6c829, разрез §2.1): дверь создания задачи общего проекта открыта редактору правом
+# WriteContent (матрица RoleHasRight): POST /api/projects/{p}/tasks названа здесь. Остальные
+# правки задачи — не ProjectScope-двери с WriteContent: PUT/DELETE/execute закрыты явными
+# гейтами TaskActionDenied/TaskAuthorGate/FeatureOwnerGate, колонки доски и перенос задачи — Write.
+ProjectTasksController.Create

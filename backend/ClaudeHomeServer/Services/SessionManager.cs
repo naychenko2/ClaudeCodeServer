@@ -6854,6 +6854,27 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // _turnLock свободен, транзрипт закрыт, новый ход стартует свежим процессом. Только для
         // отложенной доставки (из Pending): свежий ход человека через SendDirectAsync сюда не попадает.
         await AwaitPreviousTurnExitAsync(sessionId, entry);
+
+        // F2-O3 доработка 2 (дельта-ревью 627bd324): гонка «отзыв против уже начатой доставки».
+        // Сообщение изымается из очереди под PendingLock (DrainNextPendingAsync), а доставляется
+        // вне замка: в окне между изъятием и стартом хода может прийти отзыв участника.
+        // StopChatsOfRevokedMember чистит очередь, но до уже изъятых сообщений не дотягивается.
+        // Без перепроверки здесь стартует ход-сирота в приватном чате отозванного: его события
+        // ушли бы в user_{id}, а сам автор чата его больше не видит. Перепроверяем перед стартом:
+        // автор приватного чата всё ещё участник проекта. Нет — ход не начинаем, сообщение уже
+        // вычерпано. Образец — «Стоп успел снять цикл — ход-сироту не шлём» (ContinueWorkLoopAsync).
+        // Обычный (не приватный) чат и чат неотозванного участника не затронуты: гейт срабатывает
+        // только когда автор приватного чата выведен из проекта.
+        if (PrivateChatAuthorRevoked(entry))
+        {
+            // Ход не стартовал. При активном цикле drain выставил LoopTurnInFlight до отправки —
+            // гасим, иначе цикл завис бы на мёртвой итерации (тот же финализирующий путь, что в
+            // catch ниже). После отзыва цикла уже нет (StopChatsOfRevokedMember его снимает),
+            // поэтому ветка доходит только до общего пути.
+            if (entry.Info.WorkLoop is not null) entry.LoopTurnInFlight = false;
+            return false;
+        }
+
         try
         {
             if (next.Kind == PendingKind.User)
@@ -6886,6 +6907,22 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             Console.Error.WriteLine($"[SessionManager] Доставка отложенного сообщения ({sessionId}): {ex.Message}");
             return false;
         }
+    }
+
+    // F2-O3 доработка 2: автор приватного чата больше не участник проекта (или проекта нет).
+    // Приватный чат виден только автору (SessionAccess.CanSee): после его отзыва сообщения и
+    // ходы в этом чате некому ни показать, ни начать. Только для приватных чатов
+    // (PrivateToUserId != null): общий чат принадлежит проекту и доставляется как раньше.
+    private bool PrivateChatAuthorRevoked(SessionEntry entry)
+    {
+        if (entry.Info.PrivateToUserId is not { } author) return false;
+        var project = entry.Info.ProjectId is not null ? _projects.GetById(entry.Info.ProjectId) : null;
+        // Тот же признак видимости приватного чата, что у шлюзов этого файла (GetOwnedVisible,
+        // VisibleTo): после вывода автора из проекта CanSee гаснет (ProjectAccess.Check = null),
+        // и стартующий ход-сирота сливал бы события в user_{id} отозванного. Id автора входит
+        // только в видимость его же чата; право уже реализовано RemoveAsync — здесь перечитывается
+        // его следствие, нового права никто не получает.
+        return !Access.SessionAccess.CanSee(entry.Info, project, author);
     }
 
     // Клиенту уходят только видимые элементы: silent — ход-реакция на доклад, чей текст
@@ -7585,9 +7622,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // возврат glm-чата к «По умолчанию» (при назначении на glm) выглядел бы как переезд
             // на claude и упирался бы в guard, а переход claude-чата на «По умолчанию» с чужой
             // моделью, наоборот, проскакивал бы мимо guard и ломал транскрипт.
+            // Ключ владельца — тот, от чьего имени идёт правка (тот же, что проверяет
+            // MigrateProviderAsync), а не entry.Info.OwnerId: у проектной сессии он пуст по
+            // контракту (Models/Session.cs:382), и резолв уходил на общий слот инстанса, тогда
+            // как следующий ход резолвит модель по владельцу хода (LlmSessionContext.OwnerId —
+            // владелец проекта, SessionManager.cs:7242). Разъезд концов и есть ложная миграция:
+            // «По умолчанию» в чате проекта выглядело бы переездом на claude.
             var usageKey = UsageKeyFor(entry.Info.TaskExecution, entry.Info.TaskId, entry.Info.PersonaId);
-            var effectiveNew = _assignments.Resolve(usageKey, newModel, entry.Info.OwnerId);
-            var effectiveCur = _assignments.Resolve(usageKey, entry.Info.Model, entry.Info.OwnerId);
+            var effectiveNew = _assignments.Resolve(usageKey, newModel, ownerId);
+            var effectiveCur = _assignments.Resolve(usageKey, entry.Info.Model, ownerId);
 
             // Смена провайдера: контекст сессии живёт у провайдера (транскрипт эндпоинта),
             // и «переехавшая» сессия молча потеряла бы его. Прежний запрет «нельзя у начатой
@@ -7868,6 +7911,34 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 _log.LogInformation("Interrupt адаптера {Session}: callsite=stop (Interrupt(sessionId), stuck={Stuck})", sessionId, stuck);
                 entry.Process?.Interrupt();
             }
+        }
+    }
+
+    /// <summary>
+    /// F2-O3 (финальное ревью «Общих проектов»): отзыв участника гасит ходы и очищает очередь
+    /// его приватных чатов в этом проекте. Приватный чат виден только автору (SessionAccess.CanSee),
+    /// а автор после отзыва проекта не видит: стоящие в очереди сообщения ждали бы хода, который
+    /// некому начать, а цикл «до готово» жёг бы итерации, которых никто не увидит. В отличие от
+    /// «Стопа»: очередь ЧИСТИТСЯ, а не морозится — заморозка ждёт возобновления, которого не
+    /// будет; отметки человека и composer_restore нет: это не действие человека. Область — ровно
+    /// приватные чаты отозванного (PrivateToUserId): ходы общих чатов принадлежат проекту и
+    /// продолжаются для владельца.
+    /// </summary>
+    public void StopChatsOfRevokedMember(string projectId, string memberUserId)
+    {
+        foreach (var session in GetByProject(projectId))
+        {
+            if (session.PrivateToUserId != memberUserId) continue;
+            if (!_sessions.TryGetValue(session.Id, out var entry)) continue;
+            // Остановка хода — той же механикой, что «Стоп» (byUser: false — как штабной
+            // InterruptTurn, без отметки в истории): цикл «до готово» снимается синхронно, чтобы
+            // exited не запустил автопродолжение; живой ход прерывается; «зависший» чат
+            // (статус занят, хода нет) реанимируется — иначе остался бы занятым навсегда.
+            // Заморозку очереди InterruptCore снимает ниже этот метод: здесь очередь чистится.
+            InterruptCore(session.Id, byUser: false);
+            lock (entry.PendingLock) entry.Pending.Clear();
+            entry.QueueFrozen = false;
+            PersistPending(entry);
         }
     }
 

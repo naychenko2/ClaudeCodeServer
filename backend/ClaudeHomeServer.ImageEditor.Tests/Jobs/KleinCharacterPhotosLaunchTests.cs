@@ -109,7 +109,7 @@ public class KleinCharacterPhotosLaunchTests : IDisposable
             new ImageEditQuoteRequest("fake", "fake-klein", EditMode.Auto, ImageEditOp.Generate, 1, false,
                 References: 0, HasCharacter: true), default);
         quote.Value.Should().NotBeNull(quote.Error);
-        var assembled = await assembler.AssembleAsync(Owner, _scope,
+        var assembled = await assembler.AssembleAsync(Owner, Owner, _scope,
             new ImageEditLaunchRequest(quote.Value!.QuoteId, prompt, null, null, null, null, null, [], [], "anya",
                 CharacterPhotos: null), default);
         assembled.Value.Should().NotBeNull(assembled.Error);

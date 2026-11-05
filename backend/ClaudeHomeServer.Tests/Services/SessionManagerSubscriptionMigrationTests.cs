@@ -505,4 +505,38 @@ public class SessionManagerSubscriptionMigrationTests : IDisposable
 
         updated!.Provider.Should().Be("acc-a", "acc-b без Opus — уводим на способный аккаунт");
     }
+
+    // --- Возврат финального ревью 892deb00 (П1): «эффективные» модели резолвились по
+    // entry.Info.OwnerId, пустому у проектной сессии по контракту, — то есть по общему слоту
+    // инстанса, тогда как следующий ход резолвит их по владельцу (тот же ключ, что у
+    // LlmSessionContext.OwnerId). Сброс на «По умолчанию» в чате проекта, живущем на стороннем
+    // провайдере из личного слота владельца, ложно считался переездом на claude. ---
+
+    [Fact]
+    public async Task Update_ПроектныйЧат_ПоУмолчанию_НеУводитСПровайдераСлотаВладельца()
+    {
+        var (sut, _, _, users, projects) = BuildSut(new Dictionary<string, string?>
+        {
+            ["LlmProviders:kimi:ApiKey"] = "sk-kimi",
+            ["LlmProviders:kimi:AnthropicBaseUrl"] = "https://kimi.example.com",
+            ["LlmProviders:kimi:Models:0:Id"] = "kimi-k3",
+        });
+        var user = users.Add("u18", "password123", "user");
+        users.SetModelTiers(user.Id, "kimi-k3", null, null);
+        var project = projects.Create("OwnerSlot", MkProjectDir("ownerslot"), user.Id, "u18");
+
+        var session = await sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.Model.Should().Be("kimi-k3", "старт чата проекта — по личному слоту его владельца");
+        session.Provider.Should().Be("kimi");
+
+        var updated = await sut.UpdateAsync(session.Id, user.Id, null, "", null);
+
+        // Тот же слот с обеих сторон → тот же провайдер: переносить транскрипт некуда.
+        // До правки «По умолчанию» резолвилось на общий слот инстанса (пустой) и уходило
+        // на claude с переносом транскрипта.
+        updated!.Model.Should().BeNull("сброс на «По умолчанию» не закрепляет модель");
+        updated.Provider.Should().Be("kimi", "effectiveNew и effectiveCur — один ключ, миграции нет");
+        _broadcaster.Session.Select(t => t.Message).OfType<ProviderSwitchedMessage>()
+            .Should().BeEmpty("переезда провайдера не было");
+    }
 }

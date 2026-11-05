@@ -111,7 +111,7 @@ public sealed class McpChatsListVisibilityTests : IDisposable
         _toolset = new WorkspaceToolset(
             _projects, null!, _sessions, _personas, null!, null!, null!, null!, null!, null!,
             null!, null!, _users, null!, null!, null!, null!, null!, null!, null!,
-            null!, access, new NarrowFrame(), _actors, new ActorRightGate(_actors, access));
+            null!, access, new NarrowFrame(), _actors, new ActorRightGate(_actors, access, new NarrowFrame()));
     }
 
     public void Dispose() => Helpers.TestFs.DeleteDirectoryResilient(_tempDir);

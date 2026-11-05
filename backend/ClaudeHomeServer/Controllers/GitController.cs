@@ -36,6 +36,19 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         return s.WorktreePath ?? p.RootPath;
     }
 
+    // Чужое private участника закрыто и на читающей git-ручке (F2-P1, вердикт 892deb00): для
+    // неотслеживаемого файла DiffFileAsync отдаёт его содержимое фолбэком `git diff --no-index`
+    // (GitService.cs:296-300), а путь .cc-attachments/private/{author}/… несёт и id автора, и guid
+    // вложения — ToPrivate сохраняет guid (PrivateAttachments.cs:43-50), значит он известен каждому,
+    // кто видел вложение, пока чат был общим. Предикат — общий канонический (IsForeignResolved),
+    // ровно тот, что держит соседнюю ручку files/diff (FilesController.cs:90): по ФАКТИЧЕСКОМУ корню
+    // операции (worktree чата из RootFor), после резолва дерева, до чтения; чужесть — по сегменту
+    // closed-поддерева в каноне на любой глубине, поэтому и ссылка на корень чужого проекта не
+    // раскрывает чужое содержимое; неразрешимый канон — отказ (fail-closed). Отказ — 404, неотличимый
+    // от «нет такого файла»: чужого private для участника не существует.
+    private IActionResult? ForeignPrivateDenied(string root, string? path) =>
+        PrivateAttachments.IsForeignResolved(root, path, UserId) ? NotFound() : null;
+
     // Креды Forgejo владельца проекта — для push/pull/fetch по HTTP, и ТОЛЬКО на свой Forgejo
     // (адрес origin проверяется по Forgejo:BaseUrl). Чужому серверу пара логин-токен не подойдёт,
     // а подстановка заодно гасит системные credential helper'ы: публикация на введённый вручную
@@ -105,7 +118,12 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            return Ok(new DiffResponse(await git.DiffFileAsync(Owner(p), RootFor(p), path, staged, ct)));
+            // Гейт — по фактическому корню операции (тот же порядок, что в multi-root точках Files:
+            // резолв дерева → предикат → чтение), а не по корню проекта: worktree чата делит
+            // .cc-attachments с собой, и разыменовывается ссылка именно там
+            var root = RootFor(p);
+            if (ForeignPrivateDenied(root, path) is { } denied) return denied;
+            return Ok(new DiffResponse(await git.DiffFileAsync(Owner(p), root, path, staged, ct)));
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return BadRequest(new { error = "Недопустимый путь" }); }

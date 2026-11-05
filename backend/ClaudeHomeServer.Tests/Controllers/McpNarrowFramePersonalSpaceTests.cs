@@ -25,6 +25,10 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// Вердикт читается из ITurnFrameSource по заголовку X-Caller-Session-Id; «нет заголовка /
 /// чат не найден» — узкая рамка (fail-closed). В отказе нет id и названий из личных данных
 /// (маркеры PERSONAL-*). Dify здесь ФАКТИКА: свой стаб-хендлер, тесты не ходят в сеть.
+/// Пишущие вызовы общего проекта идут под названным актором — ход в чате проекта начинает
+/// владелец (<see cref="StartOwnerTurnAsync"/>): после О2 финального ревью «Общих проектов»
+/// (1af1d702a) безымянный вызов отрезан ГЕЙТОМ актора в транспортном контроллере и не доходит
+/// до текста отказа рамки, который здесь сверяется.
 /// </summary>
 [Trait("Category", "Host")]
 public class McpNarrowFramePersonalSpaceTests : IDisposable
@@ -99,6 +103,19 @@ public class McpNarrowFramePersonalSpaceTests : IDisposable
     }
 
     /// <summary>
+    /// Начать в чате хода владельца — явный инициатор подачи (S2a-1), без заголовка вызывателя:
+    /// подача должна быть прямым ходом человека, а не продолжением чужого чата. Нужен пишущим
+    /// вызовам общего проекта: после О2 финального ревью «Общих проектов» (1af1d702a) безымянный
+    /// ход общего проекта не имеет ни одного права и отрезан ГЕЙТОМ актора в транспортном
+    /// контроллере (McpTransportController) — ещё до того текста отказа рамки, который эти тесты
+    /// и сверяют. Рамка при этом не меняется: общий чат общего проекта остаётся Narrow и
+    /// владельцу (решение 29.10), отказывает ровно она же.
+    /// </summary>
+    private async Task StartOwnerTurnAsync(string chatId) =>
+        (await _client.PostAsJsonAsync($"/api/sessions/{chatId}/messages",
+            new { text = "начни работу", wait = "none" })).EnsureSuccessStatusCode();
+
+    /// <summary>
     /// Личный проект с маркерами (глобальная персона «PERSONAL-…» с записью в личной памяти)
     /// и общий проект (участник-редактор) с чатом. Плюс проектная персона общего проекта.
     /// </summary>
@@ -118,6 +135,8 @@ public class McpNarrowFramePersonalSpaceTests : IDisposable
         _factory.Services.GetRequiredService<ProjectManager>().SetMembers(sharedProject,
             [new ProjectMember { UserId = "участник-" + tag, Role = ProjectRole.Editor }]);
         var sharedChat = await CreateSessionAsync(sharedProject);
+        // Пишущие вызовы этого чата идут под названным актором (см. StartOwnerTurnAsync)
+        await StartOwnerTurnAsync(sharedChat);
         var projectPersona = await CreatePersonaAsync($"КОМАНДА-{tag}", "project", sharedProject);
 
         return new Fixture(tag, personalProject, personalChat, globalPersona,
@@ -152,6 +171,8 @@ public class McpNarrowFramePersonalSpaceTests : IDisposable
         var sharedSphereChat = await CreateSessionAsync(sharedInSphere);
         var personalInSphere = await CreateProjectAsync($"Личный-сфера-{f.Tag}", sphere);
         var personalSphereChat = await CreateSessionAsync(personalInSphere);
+        // Тот же порядок, что в ArrangeAsync: общий чат сферы — под названным актором
+        await StartOwnerTurnAsync(sharedSphereChat);
         var personaResp = await _client.PostAsJsonAsync("/api/personas",
             new { name = $"СФЕРА-персона-{f.Tag}", role = "Роль", scope = "sphere", sphereId = sphere });
         personaResp.EnsureSuccessStatusCode();
@@ -265,11 +286,17 @@ public class McpNarrowFramePersonalSpaceTests : IDisposable
     public async Task Memory_БезЗаголовкаИлиЧужойЧат_УзкаяРамка_FailClosed(string? chatId)
     {
         var f = await ArrangeAsync();
-        var (text, isError) = await CallAsync($"/mcp/memory/{f.GlobalPersona}/-", "memory_remember",
-            new { type = "semantic", text = "x" }, chatId);
+        // Вердикт рамки меряется читающим инструментом: после О2 (1af1d702a) пишущий вызов
+        // с неизвестного чата отрезан раньше — гейтом актора, и текста отказа рамки в нём уже нет
+        // (сам отказ — строкой ниже).
+        var (text, isError) = await CallAsync($"/mcp/memory/{f.GlobalPersona}/-", "memory_search",
+            new { query = f.Tag }, chatId);
         isError.Should().BeTrue(text);
         text.Should().Contain("Личная память глобальной персоны закрыта");
         f.AssertNoPersonal(text);
+        var (_, writeErr) = await CallAsync($"/mcp/memory/{f.GlobalPersona}/-", "memory_remember",
+            new { type = "semantic", text = "x" }, chatId);
+        writeErr.Should().BeTrue("личное пространство закрыто и для пишущего вызова");
     }
 
     [Theory]

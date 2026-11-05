@@ -296,7 +296,6 @@ public class ChatContextStoreTests : IDisposable
 
         var sessions = new Mock<ISessionDirectory>();
         sessions.Setup(s => s.GetById("s1")).Returns(session);
-        var projects = new Mock<IProjectManager>();
         var sent = new TaskCompletionSource<ServerMessage>();
         var hub = new Mock<ISessionBroadcaster>();
         hub.Setup(h => h.ToOwner("u1", It.IsAny<ServerMessage>()))
@@ -304,8 +303,7 @@ public class ChatContextStoreTests : IDisposable
             .Returns(Task.CompletedTask);
 
         var registry = Registry("image", "project-file");
-        var broadcaster = new ChatContextBroadcaster(registry, sessions.Object, projects.Object, hub.Object,
-            NullLogger<ChatContextBroadcaster>.Instance);
+        var broadcaster = new ChatContextBroadcaster(sessions.Object, hub.Object, NullLogger<ChatContextBroadcaster>.Instance);
         var store = new ChatContextStore(_root, registry, broadcaster);
 
         store.SetPrimary("u1", "s1", Item("image", "pic"), null);

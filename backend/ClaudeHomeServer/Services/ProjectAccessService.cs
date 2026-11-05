@@ -1,14 +1,17 @@
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Access;
 
 namespace ClaudeHomeServer.Services;
 
 /// <summary>
-/// Реализация <see cref="IProjectAccess"/> поверх <see cref="ProjectManager"/> и каталога
-/// сессий: решение о доступе принимает Core-примитив <see cref="ProjectAccess"/> /
-/// <see cref="SessionAccess"/>, здесь только достаём модели и собираем <see cref="RequestScope"/>.
+/// Реализация <see cref="IProjectAccess"/> поверх <see cref="ProjectManager"/>, каталога
+/// сессий и <see cref="PersonaManager"/>: решение о доступе принимает Core-примитив
+/// <see cref="ProjectAccess"/> / <see cref="SessionAccess"/>, здесь только достаём модели и
+/// собираем <see cref="RequestScope"/>.
 /// </summary>
 public sealed class ProjectAccessService(
-    ProjectManager projects, ISessionDirectory sessions, SharedProjectsGate? gate = null) : IProjectAccess
+    ProjectManager projects, ISessionDirectory sessions, SharedProjectsGate? gate = null,
+    PersonaManager? personas = null) : IProjectAccess
 {
     public RequestScope? Resolve(string? callerUserId, string? projectId, ProjectRight right = ProjectRight.Read)
     {
@@ -39,5 +42,30 @@ public sealed class ProjectAccessService(
         return session.ProjectId is not null
             ? Resolve(callerUserId, session.ProjectId, right)
             : new RequestScope(callerUserId, session.OwnerId!, ProjectRole.Owner);
+    }
+
+    public RequestScope? ResolvePersona(string? callerUserId, string? personaId, ProjectRight right = ProjectRight.Read)
+    {
+        if (string.IsNullOrEmpty(callerUserId) || string.IsNullOrEmpty(personaId) || personas is null) return null;
+        // Единственное место в пути запроса, где персона читается без проверки владельца
+        // (GetByIdInternal): право решает сама персона — её Scope/ProjectId/OwnerId, а не sub
+        // вызывающего (И-1, разрез §2). Get(id, caller) здесь означал бы прежний отказ редактору.
+        var persona = personas.GetByIdInternal(personaId);
+        if (persona is null) return null;
+
+        // Проектная персона живого проекта — через доступ к её проекту (§2.2)
+        if (persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId)
+            && projects.GetById(persona.ProjectId) is not null)
+        {
+            var scope = Resolve(callerUserId, persona.ProjectId, right);
+            // Персона «проекта» с чужим владельцем — битая запись, а не доступ (§2.2)
+            return scope is not null && persona.OwnerId == scope.TenantOwnerId ? scope : null;
+        }
+
+        // Глобальная, сферная, проектная с исчезнувшим проектом — только по владению (§2.3).
+        // Глобальные и сферные персоны владельца участнику не видны никогда (И-3).
+        return persona.OwnerId == callerUserId
+            ? new RequestScope(callerUserId, persona.OwnerId, ProjectRole.Owner)
+            : null;
     }
 }

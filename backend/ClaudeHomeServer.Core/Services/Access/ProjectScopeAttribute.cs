@@ -15,6 +15,12 @@ public enum ScopeSource
 
     /// <summary>Id чата (по умолчанию <c>sessionId</c>): чат → проект → доступ.</summary>
     Session,
+
+    /// <summary>
+    /// Id персоны (по умолчанию <c>id</c>): персона → её проект → доступ, или владение самой
+    /// персоной (<see cref="IProjectAccess.ResolvePersona"/>, разрез §2).
+    /// </summary>
+    Persona,
 }
 
 /// <summary>
@@ -32,7 +38,7 @@ public sealed class ProjectScopeAttribute : Attribute, IAsyncActionFilter, IOrde
 
     public ScopeSource From { get; init; } = ScopeSource.Project;
 
-    /// <summary>Имя параметра с id; не задано — <c>projectId</c> / <c>sessionId</c> по <see cref="From"/>.</summary>
+    /// <summary>Имя параметра с id; не задано — <c>projectId</c> / <c>sessionId</c> / <c>id</c> по <see cref="From"/>.</summary>
     public string? Key { get; init; }
 
     /// <summary>Требуемое право (по умолчанию просмотр).</summary>
@@ -56,7 +62,12 @@ public sealed class ProjectScopeAttribute : Attribute, IAsyncActionFilter, IOrde
             return;
         }
 
-        var key = Key ?? (From == ScopeSource.Session ? "sessionId" : "projectId");
+        var key = Key ?? From switch
+        {
+            ScopeSource.Session => "sessionId",
+            ScopeSource.Persona => "id",
+            _ => "projectId",
+        };
         var id = context.RouteData.Values.TryGetValue(key, out var fromRoute) ? fromRoute?.ToString()
             : context.ActionArguments.TryGetValue(key, out var fromArgs) ? ScalarId(fromArgs)
             : context.HttpContext.Request.Query.TryGetValue(key, out var fromQuery) ? fromQuery.ToString()
@@ -75,18 +86,22 @@ public sealed class ProjectScopeAttribute : Attribute, IAsyncActionFilter, IOrde
         }
 
         var access = context.HttpContext.RequestServices.GetRequiredService<IProjectAccess>();
-        var scope = From == ScopeSource.Session
-            ? access.ResolveSession(caller, id, Right)
-            : access.Resolve(caller, id, Right);
+        var scope = From switch
+        {
+            ScopeSource.Session => access.ResolveSession(caller, id, Right),
+            ScopeSource.Persona => access.ResolvePersona(caller, id, Right),
+            _ => access.Resolve(caller, id, Right),
+        };
         if (scope is null)
         {
-            // Проект виден, но права нет (читатель; в S1 и редактор) — 403, а не 404:
+            // Проект/персона видны, но права нет (читатель; в S1 и редактор) — 403, а не 404:
             // существование ему и так известно. WriteContent — то же «нет права на запись» для
             // читателя (S2c-8); RunTurn — то же «нет» для читателя на действии хода: создании чата
-            // (S2d-1c): отказ различается правом, а не статусом
-            if (From == ScopeSource.Project && Right is ProjectRight.Write or ProjectRight.Configure
+            // (S2d-1c): отказ различается правом, а не статусом. Для персоны — та же грань:
+            // читатель проекта видит её персону (RP(Read) не null), но хода с ней не ведёт (§2).
+            if (Right is ProjectRight.Write or ProjectRight.Configure
                     or ProjectRight.WriteContent or ProjectRight.RunTurn
-                && access.Resolve(caller, id, ProjectRight.Read) is not null)
+                && VisibleWithRead(access, caller, id))
             {
                 context.Result = Fail(StatusCodes.Status403Forbidden, Right switch
                 {
@@ -103,6 +118,15 @@ public sealed class ProjectScopeAttribute : Attribute, IAsyncActionFilter, IOrde
         context.HttpContext.SetRequestScope(scope);
         await next();
     }
+
+    // «Нет права» отличается от «нет объекта» той же точкой резолва, но правом Read:
+    // для чата (Session) такой грани нет — видимость там одна и она уже не прошла
+    private bool VisibleWithRead(IProjectAccess access, string? caller, string? id) => From switch
+    {
+        ScopeSource.Project => access.Resolve(caller, id, ProjectRight.Read) is not null,
+        ScopeSource.Persona => access.ResolvePersona(caller, id, ProjectRight.Read) is not null,
+        _ => false,
+    };
 
     // Составной аргумент (DTO) без id — «параметр не указан», а не ToString() с именем типа
     private static string? ScalarId(object? value) =>

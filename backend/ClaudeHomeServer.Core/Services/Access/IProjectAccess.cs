@@ -15,4 +15,16 @@ public interface IProjectAccess
     /// владение самим чатом (<see cref="SessionAccess.CanSee"/>). null — чата нет или не виден.
     /// </summary>
     RequestScope? ResolveSession(string? callerUserId, string? sessionId, ProjectRight right = ProjectRight.Read);
+
+    /// <summary>
+    /// Область для персоны (разрез «Проектные персоны общего проекта», §2): проектная персона —
+    /// через доступ к своему проекту (плюс сверка <c>persona.OwnerId</c> с владельцем проекта),
+    /// глобальная и сферная — только по владению самой персоной. null — персоны нет, вызывающий
+    /// пуст или доступа нет («нет» и «чужое» неотличимы).
+    /// </summary>
+    /// <remarks>
+    /// Дефолт — null, а не ошибка: реализации без каталога персон (и тестовые фейки) остаются
+    /// fail-closed. Одна точка правды «персона → область» (И-1): вне неё право персоны не решают.
+    /// </remarks>
+    RequestScope? ResolvePersona(string? callerUserId, string? personaId, ProjectRight right = ProjectRight.Read) => null;
 }

@@ -6,6 +6,7 @@ using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Notes;
@@ -195,6 +196,7 @@ public class PersonasController(
     }
 
     [HttpGet("{id}")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public ActionResult<Persona> Get(string id)
     {
         var persona = _personas.Get(id, UserId);
@@ -206,10 +208,12 @@ public class PersonasController(
         _crud.CreateAsync(UserId, req, CallerSessionId());
 
     [HttpPut("{id}")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public Task<ActionResult<Persona>> Update(string id, [FromBody] UpdatePersonaRequest req) =>
         _crud.UpdateAsync(UserId, id, req, CallerSessionId());
 
     [HttpDelete("{id}")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public Task<IActionResult> Delete(string id, [FromQuery] string? successorId = null) =>
         _crud.DeleteAsync(UserId, id, successorId);
 
@@ -217,12 +221,14 @@ public class PersonasController(
     // дефолтом её проекта. Вызов из чата разрешён ТОЛЬКО онбординг-сессии — гейт и
     // финализация онбординга внутри crud (по callerSessionId).
     [HttpPost("{id}/make-default")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     [DenyOnDelegatedTurn("Назначение дефолт-персоны")]
     public Task<IActionResult> MakeDefault(string id) =>
         _crud.MakeDefaultAsync(UserId, id, CallerSessionId());
 
     // Чаты, которые ведутся от лица этой персоны
     [HttpGet("{id}/chats")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public IActionResult Chats(string id)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
@@ -231,6 +237,7 @@ public class PersonasController(
 
     // Открыть новый чат с персоной (или продолжить существующий по resumeSessionId)
     [HttpPost("{id}/chats")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.RunTurn)]
     public async Task<ActionResult<Session>> CreateChat(string id, [FromBody] CreatePersonaChatRequest req)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
@@ -279,11 +286,13 @@ public class PersonasController(
     // папку, аватар персоны НЕ меняется до выбора.
     // prompt пуст → строим фото-промпт из имени/описания персоны.
     [HttpPost("{id}/avatar/generate")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public Task<ActionResult> GenerateAvatar(string id, [FromBody] GenerateAvatarRequest req) =>
         _crud.GenerateAvatarAsync(UserId, id, req);
 
     // Отдать кандидата аватара (превью в галерее выбора). access_token в query для <img>.
     [HttpGet("{id}/avatar/candidate/{file}")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public IActionResult AvatarCandidate(string id, string file)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
@@ -295,6 +304,7 @@ public class PersonasController(
 
     // Выбрать кандидата как аватар персоны: делаем основным, чистим остальных кандидатов.
     [HttpPost("{id}/avatar/select")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public Task<ActionResult<Persona>> SelectAvatar(string id, [FromBody] SelectAvatarRequest req) =>
         _crud.SelectAvatarAsync(UserId, id, req);
 
@@ -303,6 +313,7 @@ public class PersonasController(
     // (64/128/256, генерируется один раз и лежит рядом с оригиналом); без параметра —
     // оригинал (нужен для перекропа и большого вида).
     [HttpGet("{id}/avatar")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public async Task<IActionResult> Avatar(string id, [FromQuery] int? size = null)
     {
         var persona = _personas.Get(id, UserId);
@@ -342,6 +353,7 @@ public class PersonasController(
     // Оригинал загруженного аватара (для перекропа). access_token в query — как GET avatar.
     // v в URL — имя файла оригинала: меняется при повторной загрузке, кэш — как у аватара.
     [HttpGet("{id}/avatar/original")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public IActionResult AvatarOriginal(string id)
     {
         var persona = _personas.Get(id, UserId);
@@ -359,6 +371,7 @@ public class PersonasController(
     // Валидация: заявленный ContentType из белого списка И настоящие magic bytes;
     // расширение файла — по фактическому типу, а не по имени от клиента.
     [HttpPost("{id}/avatar/upload")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     [RequestSizeLimit(15_000_000)]
     public async Task<ActionResult<Persona>> UploadAvatar(string id,
         [FromForm] IFormFile? original, [FromForm] IFormFile? cropped, [FromForm] string? crop)
@@ -389,6 +402,7 @@ public class PersonasController(
 
     // Перекроп сохранённого оригинала: новая кропнутая картинка + параметры.
     [HttpPost("{id}/avatar/recrop")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     [RequestSizeLimit(5_000_000)]
     public async Task<ActionResult<Persona>> RecropAvatar(string id,
         [FromForm] IFormFile? cropped, [FromForm] string? crop)
@@ -585,6 +599,7 @@ public class PersonasController(
     // за флагом — только suggest/autoBindings и сам блок в промпте (PersonaBindingsService).
 
     [HttpGet("{id}/bindings")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public ActionResult<IReadOnlyList<PersonaBinding>> Bindings(string id)
     {
         var persona = _personas.Get(id, UserId);
@@ -594,6 +609,7 @@ public class PersonasController(
 
     // Добавить одну привязку (мгновенное сохранение)
     [HttpPost("{id}/bindings")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<ActionResult<PersonaBinding>> AddBinding(string id, [FromBody] PersonaBindingRequest req)
     {
         var persona = _personas.Get(id, UserId);
@@ -612,6 +628,7 @@ public class PersonasController(
 
     // Полная замена набора привязок (PUT-семантика; дёргается MCP personas_bindings_set)
     [HttpPut("{id}/bindings")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public Task<ActionResult<IReadOnlyList<PersonaBinding>>> SetBindings(string id,
         [FromBody] PersonaBindingsSetRequest req) =>
         // Единая точка с http-тулсетом (personas_bindings_set): дословная копия тела здесь
@@ -627,11 +644,13 @@ public class PersonasController(
     // форма, которой ошибку надо показать.
     // Валидация и запись — PersonasCrudService (та же копия правила у MCP personas_update)
     [HttpPut("{id}/voice")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public Task<ActionResult<Persona>> SetVoice(string id, [FromBody] PersonaVoice? req) =>
         _crud.SetVoiceAsync(UserId, id, req);
 
     // Изменить одну привязку
     [HttpPut("{id}/bindings/{bindingId}")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<ActionResult<PersonaBinding>> UpdateBinding(string id, string bindingId,
         [FromBody] PersonaBindingRequest req)
     {
@@ -669,6 +688,7 @@ public class PersonasController(
     }
 
     [HttpDelete("{id}/bindings/{bindingId}")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<IActionResult> DeleteBinding(string id, string bindingId)
     {
         var persona = _personas.Get(id, UserId);
@@ -684,6 +704,7 @@ public class PersonasController(
     // --- Автоматизации персоны (событийно-управляемая проактивность): правила «триггер → действие» ---
 
     [HttpGet("{id}/automation")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public ActionResult<IReadOnlyList<PersonaAutomationRule>> Automation(string id)
     {
         var persona = _personas.Get(id, UserId);
@@ -693,6 +714,7 @@ public class PersonasController(
 
     // Добавить правило (мгновенное сохранение)
     [HttpPost("{id}/automation")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult<PersonaAutomationRule>> AddAutomationRule(string id,
         [FromBody] AutomationRuleRequest req)
     {
@@ -751,6 +773,7 @@ public class PersonasController(
 
     // Полная замена набора правил (PUT-семантика)
     [HttpPut("{id}/automation")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult<IReadOnlyList<PersonaAutomationRule>>> SetAutomationRules(string id,
         [FromBody] AutomationRulesSetRequest req)
     {
@@ -764,6 +787,7 @@ public class PersonasController(
 
     // Изменить одно правило (partial-merge: null-поля наследуются от текущего)
     [HttpPut("{id}/automation/{ruleId}")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult<PersonaAutomationRule>> UpdateAutomationRule(string id, string ruleId,
         [FromBody] AutomationRuleRequest req)
     {
@@ -784,6 +808,7 @@ public class PersonasController(
     }
 
     [HttpDelete("{id}/automation/{ruleId}")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<IActionResult> DeleteAutomationRule(string id, string ruleId)
     {
         var persona = _personas.Get(id, UserId);
@@ -798,6 +823,7 @@ public class PersonasController(
 
     // Ручной прогон правила (UX «Проверить»): синтетическое событие, байпас троттлинга.
     [HttpPost("{id}/automation/{ruleId}/test")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<IActionResult> TestAutomationRule(string id, string ruleId)
     {
         var persona = _personas.Get(id, UserId);
@@ -809,6 +835,7 @@ public class PersonasController(
 
     // AI-подбор правил автоматизации под роль персоны: возвращает кандидатов, НЕ сохраняет
     [HttpPost("{id}/automation/suggest")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult> SuggestAutomation(string id)
     {
         var persona = _personas.Get(id, UserId);
@@ -829,6 +856,7 @@ public class PersonasController(
     // Генерация правил автоматизации под свободный запрос пользователя: тот же конвейер, что и
     // подбор под роль, но главный ориентир — текст пользователя. Возвращает кандидатов, НЕ сохраняет.
     [HttpPost("{id}/automation/generate")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult> GenerateAutomation(string id, [FromBody] GenerateAutomationRequest req)
     {
         var persona = _personas.Get(id, UserId);
@@ -1274,6 +1302,7 @@ public class PersonasController(
 
     // AI-подбор привязок под роль персоны: возвращает кандидатов, НЕ сохраняет
     [HttpPost("{id}/bindings/suggest")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<ActionResult> SuggestBindings(string id)
     {
         var persona = _personas.Get(id, UserId);
@@ -1294,6 +1323,7 @@ public class PersonasController(
     // Генерация привязок под свободный запрос пользователя: тот же конвейер, что и подбор
     // под роль, но главный ориентир — текст пользователя. Возвращает кандидатов, НЕ сохраняет.
     [HttpPost("{id}/bindings/generate")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<ActionResult> GenerateBindings(string id, [FromBody] GenerateBindingsRequest req)
     {
         var persona = _personas.Get(id, UserId);
@@ -1321,6 +1351,7 @@ public class PersonasController(
     // это 502, а не applied=0: у кнопки есть ветка «Не удалось применить — попробуйте
     // позже», и без ошибки она недостижима (сбой до записи ничего не меняет).
     [HttpPost("{id}/bindings/apply-defaults")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<ActionResult> ApplyDefaultBindings(string id)
     {
         var persona = _personas.Get(id, UserId);
@@ -1424,6 +1455,7 @@ public class PersonasController(
 
     // Записи памяти (type — необязательный фильтр semantic|episodic|procedural)
     [HttpGet("{id}/memory")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public ActionResult<IReadOnlyList<PersonaMemoryEntry>> Memory(string id, [FromQuery] string? type)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
@@ -1433,6 +1465,7 @@ public class PersonasController(
 
     // Поиск по памяти (relevance × recency × typeWeight)
     [HttpGet("{id}/memory/search")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public async Task<ActionResult> MemorySearch(string id, [FromQuery] string q, [FromQuery] int topK = 8)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
@@ -1446,6 +1479,7 @@ public class PersonasController(
     // системный промпт персонной сессии. Дёргается memory_recall из MCP memory-server:
     // файловый сабагент получает память того же качества, что собеседник чата.
     [HttpGet("{id}/memory/recall")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public async Task<ActionResult> MemoryRecall(string id, [FromQuery] string q, [FromQuery] int topK = 5)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
@@ -1458,6 +1492,7 @@ public class PersonasController(
 
     // Запомнить (явный write-path); salience — важность 0..1 (опционально)
     [HttpPost("{id}/memory")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<ActionResult<PersonaMemoryEntry>> Remember(string id, [FromBody] RememberRequest req)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
@@ -1475,6 +1510,7 @@ public class PersonasController(
 
     // Текущий фокус; 204 — фокуса нет
     [HttpGet("{id}/focus")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public ActionResult<PersonaWorkingFocus> GetFocus(string id)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
@@ -1484,6 +1520,7 @@ public class PersonasController(
 
     // Сбросить фокус (кнопка «Сбросить» в карточке памяти)
     [HttpDelete("{id}/focus")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<IActionResult> ClearFocus(string id)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
@@ -1494,6 +1531,7 @@ public class PersonasController(
 
     // Отредактировать текст записи (UI-редактирование)
     [HttpPut("{id}/memory/{entryId}")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<ActionResult<PersonaMemoryEntry>> UpdateMemory(string id, string entryId, [FromBody] UpdateMemoryRequest req)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
@@ -1506,6 +1544,7 @@ public class PersonasController(
 
     // Забыть запись
     [HttpDelete("{id}/memory/{entryId}")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<IActionResult> Forget(string id, string entryId)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
@@ -1516,6 +1555,7 @@ public class PersonasController(
 
     // Подтвердить предложенную autolearn запись (③-3.2) — снимает pending, попадает в recall
     [HttpPost("{id}/memory/{entryId}/confirm")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<IActionResult> ConfirmMemory(string id, string entryId)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
@@ -1529,6 +1569,7 @@ public class PersonasController(
     // Склейка (заголовок/подпись) — в PersonaMemoryService.MemoryToNote, единая точка с
     // MCP-инструментом memory_to_note.
     [HttpPost("{id}/memory/{entryId}/to-note")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public IActionResult MemoryToNote(string id, string entryId)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
@@ -1540,6 +1581,7 @@ public class PersonasController(
     // Закрепить заметку в памяти персоны (③-3.3): важное подчёркивается, попадает в recall
     // с высоким salience (1.0) как semantic-факт.
     [HttpPost("{id}/memory/from-note")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<IActionResult> NoteToMemory(string id, [FromBody] NoteToMemoryRequest req)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();

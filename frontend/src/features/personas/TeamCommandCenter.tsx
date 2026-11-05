@@ -83,12 +83,14 @@ export function TeamCommandCenter({
   const stripe = projectColor(project.id).main;
   // Права роли в командном центре (W3-F1b, матрица §2 разреза shared-projects-personas):
   // фронт прячет то, что бэк откажет участнику — смену руководителя (makeLead), ИИ-сборку
-  // команды (aiTeam), чаты с проектными персонами (chat). Ключ — только project.myRole
-  // через personaRights (W3-F1a), своей логики не заводим. Закрытое прячем целиком,
-  // а не выключаем контролы (образец contentRights.ts).
+  // команды (aiTeam), чаты с проектными персонами (chat), создание проектной персоны
+  // (createPersona — WriteContent, §2: читателю отказ, все три входа «Новая персона»
+  // прячутся целиком). Ключ — только project.myRole через personaRights (W3-F1a), своей
+  // логики не заводим. Закрытое прячем целиком, а не выключаем контролы (образец contentRights.ts).
   const mayLead = canPersona(project.myRole ?? null, 'makeLead');
   const mayAiTeam = canPersona(project.myRole ?? null, 'aiTeam');
   const mayChat = canPersona(project.myRole ?? null, 'chat');
+  const mayCreatePersona = canPersona(project.myRole ?? null, 'createPersona');
 
   useEffect(() => { sessionStorage.setItem('cc_team_tab', tab); }, [tab]);
 
@@ -216,7 +218,8 @@ export function TeamCommandCenter({
           </IconButton>
           {menuOpen && (
             <Menu onClose={() => setMenuOpen(false)} align="right" top={38} minWidth={200}>
-              <MenuItem icon={<UserPlus size={15} strokeWidth={ICON_STROKE} />} label="Новая персона" onClick={() => { setMenuOpen(false); onNewPersona(); }} />
+              {/* Создание проектной персоны (createPersona, §2): закрыто читателю */}
+              {mayCreatePersona && <MenuItem icon={<UserPlus size={15} strokeWidth={ICON_STROKE} />} label="Новая персона" onClick={() => { setMenuOpen(false); onNewPersona(); }} />}
               {/* ИИ-сборка команды (aiTeam, §2): закрыта читателю; редактору — открыта (B3) */}
               {mayAiTeam && <MenuItem icon={<Wand2 size={15} strokeWidth={ICON_STROKE} />} label="Сформировать команду" onClick={() => { setMenuOpen(false); setFormTeamOpen(true); }} />}
               <MenuItem icon={<Plus size={15} strokeWidth={ICON_STROKE} />} label="Новая задача" onClick={() => { setMenuOpen(false); setNewTaskOpen(true); }} />
@@ -243,7 +246,8 @@ export function TeamCommandCenter({
               personaById={personaById} onOpenPersona={onOpenPersona} onSwitchTab={switchTab} onOpenEvent={openEvent}
               onPickerOpen={() => setPickerOpen(true)} onNewTaskOpen={() => setNewTaskOpen(true)} onNewPersona={onNewPersona}
               onFormTeamOpen={() => setFormTeamOpen(true)} onMenuOpen={() => createTeamChat(team, onOpenSession)} stripe={stripe} isMobile={isMobile}
-              leadId={leadId} onMakeLead={requestMakeLead} mayMakeLead={mayLead} mayAiTeam={mayAiTeam} mayChat={mayChat} />
+              leadId={leadId} onMakeLead={requestMakeLead} mayMakeLead={mayLead} mayAiTeam={mayAiTeam} mayChat={mayChat}
+              mayCreatePersona={mayCreatePersona} />
           )}
           {tab === 'memory' && (
             <TeamMemoryPanel mem={mem} onAdd={addMem} onUpdate={updateMem} onRemove={removeMem} stripe={stripe} />
@@ -305,11 +309,12 @@ function OverviewPanel(props: {
   // onMakeLead не задан — блок руководителя не рисуется (флаг выключен)
   leadId: string | null; onMakeLead?: (p: Persona) => Promise<void>;
   // Гейты роли (W3-F1b, §2): mayMakeLead — контрол смены руководителя; mayAiTeam —
-  // ИИ-сборка; mayChat — чаты с проектными персонами («Созвать»). Строка-информация
+  // ИИ-сборка; mayChat — чаты с проектными персонами («Созвать»); mayCreatePersona —
+  // создание проектной персоны (все входы «Новая персона»). Строка-информация
   // «Руководитель проекта: …» остаётся: читателю она только для чтения, отказа нет.
-  mayMakeLead: boolean; mayAiTeam: boolean; mayChat: boolean;
+  mayMakeLead: boolean; mayAiTeam: boolean; mayChat: boolean; mayCreatePersona: boolean;
 }) {
-  const { project, team, events, mem, tasks, tasksFailed, onRetryTasks, inFlight, onlineSet, tasksActive, chatsToday, personaById, onOpenPersona, onSwitchTab, onOpenEvent, onPickerOpen, onNewTaskOpen, onNewPersona, onFormTeamOpen, onMenuOpen, stripe, isMobile, leadId, onMakeLead, mayMakeLead, mayAiTeam, mayChat } = props;
+  const { project, team, events, mem, tasks, tasksFailed, onRetryTasks, inFlight, onlineSet, tasksActive, chatsToday, personaById, onOpenPersona, onSwitchTab, onOpenEvent, onPickerOpen, onNewTaskOpen, onNewPersona, onFormTeamOpen, onMenuOpen, stripe, isMobile, leadId, onMakeLead, mayMakeLead, mayAiTeam, mayChat, mayCreatePersona } = props;
   const specialtyCatalog = useSpecialtyCatalog();
   const recent = (events ?? []).slice(0, 6);
   const topMem = (mem ?? []).slice(0, 3);
@@ -323,12 +328,18 @@ function OverviewPanel(props: {
         <Users size={36} color={C.textMuted} style={{ opacity: 0.5 }} />
         <div style={{ fontFamily: FONT.serif, fontSize: 16, color: C.textHeading }}>В этом проекте ещё нет команды</div>
         <div style={{ fontSize: 13, color: C.textMuted, fontFamily: FONT.sans, maxWidth: 340, lineHeight: 1.5 }}>
-          {mayAiTeam ? 'Создайте персон — или попросите LLM сформировать команду по описанию.' : 'Создайте персон.'}
+          {/* Текст пустого состояния не обещает того, что бэк откажет: читателю закрыто и
+              создание персоны (createPersona), и ИИ-сборка (aiTeam) — §2 */}
+          {!mayCreatePersona ? 'Команду проекта создают владелец и редактор.'
+            : mayAiTeam ? 'Создайте персон — или попросите LLM сформировать команду по описанию.'
+              : 'Создайте персон.'}
         </div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
-          <Button variant="primary" size="sm" leftIcon={<UserPlus size={15} />} onClick={onNewPersona}>Новая персона</Button>
-          {mayAiTeam && <Button variant="ghost" size="sm" leftIcon={<Wand2 size={15} />} onClick={onFormTeamOpen}>Сформировать команду</Button>}
-        </div>
+        {(mayCreatePersona || mayAiTeam) && (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
+            {mayCreatePersona && <Button variant="primary" size="sm" leftIcon={<UserPlus size={15} />} onClick={onNewPersona}>Новая персона</Button>}
+            {mayAiTeam && <Button variant="ghost" size="sm" leftIcon={<Wand2 size={15} />} onClick={onFormTeamOpen}>Сформировать команду</Button>}
+          </div>
+        )}
         {/* Команда пуста → строки «Руководитель проекта» с меню выше нет вовсе (нет
             кандидатов) — «Познакомиться с проектом» остаётся единственным выходом */}
         {onMakeLead && <LeadInviteRow project={project} isMobile={isMobile} />}
@@ -401,7 +412,8 @@ function OverviewPanel(props: {
               onClick={onPickerOpen}>Созвать команду</Button>
           )}
           <Button variant="ghost" size="sm" leftIcon={<Plus size={15} />} onClick={onNewTaskOpen}>Новая задача</Button>
-          <Button variant="ghost" size="sm" leftIcon={<UserPlus size={15} />} onClick={onNewPersona}>Новая персона</Button>
+          {/* «Новая персона» — создание проектной персоны (createPersona, §2): закрыто читателю */}
+          {mayCreatePersona && <Button variant="ghost" size="sm" leftIcon={<UserPlus size={15} />} onClick={onNewPersona}>Новая персона</Button>}
           {mayChat && (
             <IconButton variant="soft" size="sm" disabled={team.length < 2}
               title={team.length < 2 ? 'Нужно минимум 2 персоны в команде' : 'Создать командный чат'}

@@ -1,8 +1,10 @@
 // W3-F1b: гейт по роли в командном центре проекта (матрица §2 разреза
 // docs/research/shared-projects-personas-cut-2026-11.md §3.4). Фронт не обещает того,
 // что бэк откажет участнику: читатель — без смены руководителя (makeLead), без ИИ-сборки
-// команды (aiTeam) и без чатов с проектными персонами (chat); редактор — без смены
-// руководителя, ИИ-сборка и чаты остаются; владелец и обычный проект (myRole нет) — всё.
+// команды (aiTeam), без чатов с проектными персонами (chat) и без создания проектной
+// персоны (createPersona — WriteContent: все три входа «Новая персона» скрыты, в том
+// числе в пустом состоянии); редактор — без смены руководителя, ИИ-сборка, чаты и
+// «Новая персона» остаются; владелец и обычный проект (myRole нет) — всё.
 //
 // Окружение node (без jsdom), SSR renderToStaticMarkup — образец components/SessionList.test.ts:
 // effects не идут (лента/память/задачи остаются незагруженными), но тулбар, герой и
@@ -10,7 +12,8 @@
 // по их именам в HTML. Имена: «Сменить» — контрол руководителя (при defaultPersonaId),
 // «Сформировать команду» — ИИ-сборка (в пустом состоянии — единственный открытый
 // вход: пункт тулбар-меню в SSR закрыт, меню свёрнуто), «Созвать команду» — групповой
-// чат с персонами.
+// чат с персонами, «Новая персона» — создание персоны (в ряду героя; в пустом состоянии —
+// единственный вход: пункт тулбар-меню в SSR свёрнут).
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -67,33 +70,42 @@ function countOf(html: string, name: string): number {
 }
 
 describe('TeamCommandCenter: гейт по роли (W3-F1b)', () => {
-  it('читатель: нет «Сменить», нет «Созвать команду», нет ИИ-сборки (и в пустом состоянии)', () => {
+  it('читатель: нет «Сменить», нет «Созвать команду», нет ИИ-сборки и нет «Новой персоны» (и в пустом состоянии)', () => {
     teamRef.current = TEAM;
     const html = renderCenter(projectWith('reader'));
     expect(countOf(html, 'Сменить'), 'контрол смены руководителя у читателя').toBe(0);
     expect(countOf(html, 'Созвать команду'), 'групповой чат у читателя').toBe(0);
+    expect(countOf(html, 'Новая персона'), 'создание персоны у читателя (createPersona — WriteContent)').toBe(0);
     // Строка-информация о руководителе остаётся (она только для чтения) — это не makeLead
     expect(countOf(html, 'Руководитель проекта:')).toBe(1);
     teamRef.current = [];
-    expect(countOf(renderCenter(projectWith('reader')), 'Сформировать команду'), 'ИИ-сборка у читателя').toBe(0);
+    const emptyHtml = renderCenter(projectWith('reader'));
+    expect(countOf(emptyHtml, 'Сформировать команду'), 'ИИ-сборка у читателя').toBe(0);
+    expect(countOf(emptyHtml, 'Новая персона'), 'создание персоны у читателя в пустом состоянии').toBe(0);
   });
 
-  it('редактор: ИИ-сборка есть, «Сменить» нет; чаты с персонами открыты', () => {
+  it('редактор: ИИ-сборка и «Новая персона» есть, «Сменить» нет; чаты с персонами открыты', () => {
     teamRef.current = [];
-    expect(countOf(renderCenter(projectWith('editor')), 'Сформировать команду'), 'ИИ-сборка редактору (B3 открыта)').toBe(1);
+    const emptyHtml = renderCenter(projectWith('editor'));
+    expect(countOf(emptyHtml, 'Сформировать команду'), 'ИИ-сборка редактору (B3 открыта)').toBe(1);
+    expect(countOf(emptyHtml, 'Новая персона'), 'создание персоны редактору в пустом состоянии').toBe(1);
     teamRef.current = TEAM;
     const html = renderCenter(projectWith('editor'));
     expect(countOf(html, 'Сменить'), 'смена руководителя редактору (makeLead — Configure)').toBe(0);
     expect(countOf(html, 'Созвать команду'), 'групповой чат редактору (chat открыт)').toBe(1);
+    expect(countOf(html, 'Новая персона'), 'создание персоны редактору (ряд героя)').toBe(1);
   });
 
-  it('владелец: «Сменить», «Созвать команду» и ИИ-сборка — всё есть', () => {
+  it('владелец: «Сменить», «Созвать команду», ИИ-сборка и «Новая персона» — всё есть', () => {
     teamRef.current = TEAM;
     const html = renderCenter(projectWith('owner'));
     expect(countOf(html, 'Сменить'), 'смена руководителя владельцу').toBe(1);
     expect(countOf(html, 'Созвать команду'), 'групповой чат владельцу').toBe(1);
+    expect(countOf(html, 'Новая персона'), 'создание персоны владельцу').toBe(1);
     teamRef.current = [];
-    expect(countOf(renderCenter(projectWith('owner')), 'Сформировать команду'), 'ИИ-сборка владельцу').toBe(1);
+    const emptyHtml = renderCenter(projectWith('owner'));
+    expect(countOf(emptyHtml, 'Сформировать команду'), 'ИИ-сборка владельцу').toBe(1);
+    expect(countOf(emptyHtml, 'Новая персона'), 'создание персоны владельцу в пустом состоянии').toBe(1);
   });
 
   // «нет роли» = обычный проект / старый бэк — матрица §2 читает её как «все»
@@ -102,7 +114,10 @@ describe('TeamCommandCenter: гейт по роли (W3-F1b)', () => {
     const html = renderCenter(projectWith(undefined));
     expect(countOf(html, 'Сменить'), 'смена руководителя без роли').toBe(1);
     expect(countOf(html, 'Созвать команду'), 'групповой чат без роли').toBe(1);
+    expect(countOf(html, 'Новая персона'), 'создание персоны без роли').toBe(1);
     teamRef.current = [];
-    expect(countOf(renderCenter(projectWith(undefined)), 'Сформировать команду'), 'ИИ-сборка без роли').toBe(1);
+    const emptyHtml = renderCenter(projectWith(undefined));
+    expect(countOf(emptyHtml, 'Сформировать команду'), 'ИИ-сборка без роли').toBe(1);
+    expect(countOf(emptyHtml, 'Новая персона'), 'создание персоны без роли в пустом состоянии').toBe(1);
   });
 });

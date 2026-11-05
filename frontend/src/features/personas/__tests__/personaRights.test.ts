@@ -3,17 +3,20 @@ import type { Persona, Project, ProjectRoleView, Session } from '../../../types'
 import { type PersonaAction, canChangeCompanion, canPersona, personaRole } from '../personaRights';
 
 // Ожидаемая матрица §2 разреза, как данные: нет роли/владелец — всё; читатель — ничего;
-// редактор — только чат, карточка, память персоны, обычные привязки, ИИ-сборка команды.
-// Таблица — 4 роли × 12 действий = 48 проверок; новое действие в PersonaAction без строки
+// редактор — только чат, карточка, создание проектной персоны, память персоны, обычные
+// привязки, ИИ-сборка команды.
+// Таблица — 4 роли × 13 действий = 52 проверки; новое действие в PersonaAction без строки
 // здесь не скомпилируется.
 const ACTIONS: PersonaAction[] = [
-  'chat', 'editCard', 'editZoneModel', 'delete', 'makeLead', 'automation',
+  'chat', 'editCard', 'createPersona', 'editZoneModel', 'delete', 'makeLead', 'automation',
   'memoryWrite', 'memoryNote', 'bindingWrite', 'bindingMcpPlugin', 'skills', 'aiTeam',
 ];
 
 const EXPECTED: Record<PersonaAction, Record<'none' | 'owner' | 'editor' | 'reader', boolean>> = {
   chat: { none: true, owner: true, editor: true, reader: false },
   editCard: { none: true, owner: true, editor: true, reader: false },
+  // Создание проектной персоны — WriteContent (§2): читателю бэк откажет.
+  createPersona: { none: true, owner: true, editor: true, reader: false },
   editZoneModel: { none: true, owner: true, editor: false, reader: false },
   delete: { none: true, owner: true, editor: false, reader: false },
   makeLead: { none: true, owner: true, editor: false, reader: false },
@@ -31,7 +34,7 @@ const ROLE_VALUE: Record<(typeof ROLE_KEYS)[number], ProjectRoleView | null> = {
   none: null, owner: 'owner', editor: 'editor', reader: 'reader',
 };
 
-describe('canPersona — матрица §2: 4 роли × 12 действий', () => {
+describe('canPersona — матрица §2: 4 роли × 13 действий', () => {
   for (const roleKey of ROLE_KEYS) {
     for (const action of ACTIONS) {
       it(`${roleKey} × ${action} → ${EXPECTED[action][roleKey]}`, () => {

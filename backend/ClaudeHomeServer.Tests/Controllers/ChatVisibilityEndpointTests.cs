@@ -177,7 +177,7 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
     }
 
     private ChatsController ChatsAs(string userId) =>
-        new(_sessions, _projects, null!, null!, null!, null!, null!, null!, null!, null!,
+        new(_sessions, _projects, null!, null!, null!, null!, null!, null!, null!, null!, null!,
             NullLogger<ChatsController>.Instance) { ControllerContext = AsUser(userId) };
 
     // PUT /api/projects/{id}/sessions/{sid} (S2d-6c): Update не трогает provisioner/контекст/кэш —

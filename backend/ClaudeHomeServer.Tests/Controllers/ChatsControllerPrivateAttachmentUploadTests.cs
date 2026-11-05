@@ -161,7 +161,7 @@ public sealed class ChatsControllerPrivateAttachmentUploadTests : IDisposable
     }
 
     private ChatsController ChatsAs(string userId) =>
-        new(_sessions, _projects, _files, null!, null!, null!, null!, _users, null!, null!,
+        new(_sessions, _projects, _files, null!, null!, null!, null!, _users, null!, null!, null!,
             NullLogger<ChatsController>.Instance) { ControllerContext = AsUser(userId) };
 
     private static ControllerContext AsUser(string userId) => new()

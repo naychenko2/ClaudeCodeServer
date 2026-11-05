@@ -170,7 +170,7 @@ public sealed class PrivateChatListVisibilityTests : IDisposable
         new(_sessions, _projects, null!, null!, null!, null!, null!) { ControllerContext = AsUser(userId) };
 
     private ChatsController ChatsAs(string userId) =>
-        new(_sessions, _projects, null!, null!, null!, null!, null!, _users, null!, null!,
+        new(_sessions, _projects, null!, null!, null!, null!, null!, _users, null!, null!, null!,
             NullLogger<ChatsController>.Instance) { ControllerContext = AsUser(userId) };
 
     // W3-B4a: Chats берёт HttpContext.GetRequestScope(), поэтому прямому вызову нужна та же

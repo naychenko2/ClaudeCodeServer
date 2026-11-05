@@ -228,7 +228,7 @@ public sealed class GetOwnedVisibleTests : IDisposable
         new(_sessions, _projects, null!, null!, null!, null!, null!) { ControllerContext = AsUser(userId) };
 
     private ChatsController ChatsAs(string userId) =>
-        new(_sessions, _projects, null!, null!, null!, null!, null!, null!, null!, null!,
+        new(_sessions, _projects, null!, null!, null!, null!, null!, null!, null!, null!, null!,
             NullLogger<ChatsController>.Instance) { ControllerContext = AsUser(userId) };
 
     private static ControllerContext AsUser(string userId) => new()
@@ -269,7 +269,7 @@ public sealed class GetOwnedVisibleTests : IDisposable
     [Fact]
     public async Task ChatsController_ЧужойПриватный404_КакНаНесуществующем_СвоиИОбщийПроходят()
     {
-        var c = new ChatsController(_sessions, _projects, null!, null!, null!, null!, null!, null!, null!, null!,
+        var c = new ChatsController(_sessions, _projects, null!, null!, null!, null!, null!, null!, null!, null!, null!,
             NullLogger<ChatsController>.Instance) { ControllerContext = AsUser(_ownerId) };
 
         // Гейт закрыт — 404 без тела, неотличимо от несуществующего чата; дальше по порядку —

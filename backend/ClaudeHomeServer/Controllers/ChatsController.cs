@@ -21,7 +21,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     DefaultAssistantProvisioner provisioner, TeamWaveService teamWaves,
     ChatDigestService digest, ChatArchiveService autoArchive,
     UserStore users, PrefixFingerprintCache prefixFpCache, ChatUserStateService userState,
-    ILogger<ChatsController> logger) : ControllerBase
+    IProjectAccess access, ILogger<ChatsController> logger) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -176,17 +176,38 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     public async Task<IActionResult> CreateGroup([FromBody] CreateGroupChatRequest req)
     {
         var mode = ClaudeModeExtensions.ForNewChat(req.Mode, hasPersona: true);
+        var ids = req.PersonaIds ?? [];
+        // W3-B4c (разрез §3.2): зона — по ведущей: ResolvePersona с правом хода (И-1), сервис зовётся
+        // по арендатору проекта ведущей (И-2), вызывающий становится автором. Группа вне проекта
+        // (своя глобальная ведущая или пустой состав) — прежний путь по UserId.
+        var tenantId = UserId;
+        if (ids.FirstOrDefault(id => !string.IsNullOrWhiteSpace(id)) is { } leadId)
+        {
+            var leadScope = access.ResolvePersona(UserId, leadId, ProjectRight.RunTurn);
+            if (leadScope is null)
+                // Та же грань, что у фильтра [ProjectScope]: видимому с Read — нет права вести ход (403),
+                // остальное — несуществующее (404, существование не раскрываем). Глобальная владельца
+                // участнику не видна вовсе (И-3).
+                return access.ResolvePersona(UserId, leadId, ProjectRight.Read) is not null
+                    ? new ObjectResult(new { error = "Нет права вести ход", code = ProjectScopeAttribute.ErrorCode })
+                        { StatusCode = StatusCodes.Status403Forbidden }
+                    : NotFound();
+            tenantId = leadScope.TenantOwnerId;
+        }
         try
         {
-            var chat = await sessions.CreateGroupChatAsync(UserId, req.PersonaIds ?? [], mode, req.Name);
+            var chat = await sessions.CreateGroupChatAsync(tenantId, ids, mode, req.Name,
+                createdByUserId: UserId);
             return Ok(chat);
         }
         // Групповой чат общего проекта с глобальной персоной в составе (доработка R-S2a-8):
         // 400 с машинным кодом — тот же, что при смене собеседника.
         catch (SessionManager.GlobalPersonaInSharedException ex)
         { return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }); }
-        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+        // И-3 (W3-B4c): не-арендатору состав с персоной не этого проекта — 404, как несуществующая.
+        catch (KeyNotFoundException) when (UserId != tenantId) { return NotFound(); }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
     // Обновить состав участников группового чата (спикер сохраняется, если остался,
@@ -194,17 +215,23 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     [HttpPut("{id}/participants")]
     public IActionResult SetParticipants(string id, [FromBody] SetParticipantsRequest req)
     {
-        // S2d-3f (дефект f1e4666d): гейт GetOwnedVisible, тот же приём, что у /parent и /retitle:
-        // на чужом приватном чате — 404, неотличимый от «нет такого чата» (владелец проекта —
-        // не адресат чужого приватного, а сервис пропускал его через ResolveOwnerId проекта).
-        // Сверка арендатора внутри SetParticipants (GetOwned) остаётся как есть.
-        if (sessions.GetOwnedVisible(id, UserId) is not { } visible) return NotFound();
+        // S2d-3f (дефект f1e4666d): гейт видимости и права записи (тот же приём, что у /parent, /retitle,
+        // /archived): на чужом приватном чате — 404, неотличимый от «нет такого чата»; читатель — 403:
+        // состав группового чата — настройка чата, то же право, что у переименования и архива.
+        // W3-B4c (разрез §3.2): сервис зовётся по арендатору чата (И-2): состав группового чата общего
+        // проекта ведёт редактор, ключ — T, а не вызывающий.
+        if (sessions.DenyContentWrite(id, UserId) is { } denied) return denied;
+        var (visible, scope) = sessions.GetAccessible(id, UserId)!.Value;
+        // Приватный чат остаётся личным: его состав меняет арендатор пространства чата. Автор приватного
+        // чата общего проекта — не арендатор: тот же 404, что и до шага (S2d-3f).
+        if (visible.PrivateToUserId is not null && scope.TenantOwnerId != UserId) return NotFound();
         // S2d-7b-3: приватный чат не становится групповым (общий состав персон — режим общего контура).
         if (FeatureChatDoor.DenyPrivateMode(visible) is { } privateMode)
             return Conflict(new { error = privateMode, code = FeatureChatDoor.PrivateChatCode });
         try
         {
-            var updated = sessions.SetParticipants(id, UserId, req.PersonaIds ?? []);
+            var updated = sessions.SetParticipants(id, scope.TenantOwnerId, req.PersonaIds ?? [],
+                callerUserId: UserId);
             return updated is null ? NotFound() : Ok(updated);
         }
         // Гонка с тумблером видимости: приватность проверена повторно под замком (S2d-7b-3).
@@ -213,8 +240,10 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         // Глобальная персона в состав чата общего проекта (доработка R-S2a-8): тот же код отказа.
         catch (SessionManager.GlobalPersonaInSharedException ex)
         { return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }); }
-        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+        // И-3 (W3-B4c): не-арендатору состав с персоной не этого проекта — 404, как несуществующая.
+        catch (KeyNotFoundException) when (UserId != scope.TenantOwnerId) { return NotFound(); }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
     [HttpPut("{id}")]

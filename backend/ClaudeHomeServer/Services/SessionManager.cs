@@ -4447,13 +4447,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // первая — ведущая (стартовый активный спикер). Зона — по ведущей, как в
     // CreatePersonaChatAsync: проектная персона → сессия её проекта, глобальная → чат вне проекта.
     public async Task<Session> CreateGroupChatAsync(string ownerId, IReadOnlyList<string> personaIds,
-        ClaudeMode mode, string? name = null)
+        ClaudeMode mode, string? name = null, string? createdByUserId = null)
     {
         // Проект группового чата — проект ведущей проектной персоны; у остальных чат вне проекта,
         // и персоне сферы в нём не место
         var groupProjectId = _personas.Get(personaIds.FirstOrDefault() ?? "", ownerId) is { } l
             ? PersonaZone.OwnProjectId(l) : null;
-        var participants = ValidateParticipants(ownerId, personaIds, groupProjectId);
+        var participants = ValidateParticipants(ownerId, personaIds, groupProjectId, createdByUserId);
         var leader = participants[0];
         var participantIds = participants.Select(p => p.Id).ToList();
         // Ведущая без своей модели идёт своим уровнем, без уровня — назначением места «чат с персоной»
@@ -4481,6 +4481,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 Model = leaderModel,
                 Provider = ResolveSubscriptionProvider(leaderModel),
                 Effort = leader.Effort,
+                // W3-B4c (И-2): ключ записи — арендатор, автор — вызывающий (участник или владелец),
+                // тот же приём, что у одиночного чата (CreatePersonaChatAsync). Чат вне проекта автора не несёт.
+                CreatedByUserId = string.IsNullOrWhiteSpace(createdByUserId) ? null : createdByUserId.Trim(),
             };
             await StartNewSessionAsync(projectSession, project.RootPath, project.SystemPrompt,
                 () => _projects.GetById(project.Id)?.PermissionRules
@@ -4508,12 +4511,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Обновить состав участников группового чата. Активный спикер сохраняется,
     // если остался в составе, иначе — новая ведущая. Адаптер пересоздаётся
     // (состав участников зашит в подсказку @упоминаний и групповой слой промпта).
-    public Session? SetParticipants(string sessionId, string ownerId, IReadOnlyList<string> personaIds)
+    public Session? SetParticipants(string sessionId, string ownerId, IReadOnlyList<string> personaIds,
+        string? callerUserId = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         if (ResolveOwnerId(entry.Info) != ownerId) return null;
 
-        var participants = ValidateParticipants(ownerId, personaIds, entry.Info.ProjectId);
+        var participants = ValidateParticipants(ownerId, personaIds, entry.Info.ProjectId, callerUserId);
         // Новый участник чата общего проекта не глобальная персона (доработка R-S2a-8): та же общая
         // проверка рамки, что при создании группового чата, — по фактическому проекту этого чата.
         EnsurePersonasVisibleInFrame(entry.Info.ProjectId, participants);
@@ -4531,9 +4535,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return entry.Info;
     }
 
-    // Участники группового чата: 2-4 уникальные персоны, все принадлежат владельцу
+    // Участники группового чата: 2-8 уникальные персоны, все принадлежат владельцу (арендатору чата)
     private List<Persona> ValidateParticipants(string ownerId, IReadOnlyList<string> personaIds,
-        string? projectId = null)
+        string? projectId = null, string? callerUserId = null)
     {
         var ids = (personaIds ?? Array.Empty<string>())
             .Where(id => !string.IsNullOrWhiteSpace(id)).Distinct().ToList();
@@ -4541,6 +4545,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             throw new InvalidOperationException("В групповом чате участвуют от 2 до 8 персон");
         var result = ids.Select(id => _personas.Get(id, ownerId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}")).ToList();
+        // W3-B4c (разрез §3.2, И-2/И-3): группа проектного чата состоит только из персон этого проекта.
+        // С ключом T личные персоны владельца стали доступны участнику — сверка проекта участника
+        // закрывает это вторым рубежом: не-арендатору такая персона несуществующая (KeyNotFound →
+        // контроллер отвечает 404). Путь арендатора не тронут: отказ глобальной в общем проекте
+        // держит рамка EnsurePersonasVisibleInFrame (R-S2a-8), она ниже в этих же методах.
+        if (projectId is not null && callerUserId is not null && callerUserId != ownerId)
+            foreach (var p in result)
+                if (PersonaZone.OwnProjectId(p) != projectId)
+                    throw new KeyNotFoundException($"Персона не найдена: {p.Id}");
         // Участник сферы обязан быть виден в проекте чата (у группового чата вне проекта — нигде)
         foreach (var p in result.Where(PersonaZone.IsSpherePersona)) EnsurePersonaVisible(p, projectId);
         return result;

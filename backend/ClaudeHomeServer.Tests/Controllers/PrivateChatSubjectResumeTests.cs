@@ -197,7 +197,7 @@ public sealed class PrivateChatSubjectResumeTests : IDisposable
     // Create с непустым resume не доходит до провижнера (блока «без персоны и без resume») —
     // несуществующие для ручки зависимости как null!, образец — PrivateChatListVisibilityTests
     private ChatsController ChatsAs(string userId) =>
-        new(_sessions, _projects, null!, null!, null!, null!, null!, _users, null!, null!,
+        new(_sessions, _projects, null!, null!, null!, null!, null!, _users, null!, null!, null!,
             NullLogger<ChatsController>.Instance) { ControllerContext = AsUser(userId) };
 
     // CreateChat не трогает оркестрацию персон (memory/ask/automation/...) — те же null!.

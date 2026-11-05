@@ -51,9 +51,10 @@ grep -rc 'new SessionManager(' --include=*.cs backend | grep -v ':0'   # 44 ме
    свойство машины хода, а не дефект разметки: конец хода запускает следующий ход; процесс CLI
    отдаёт события приёмнику конца хода; ход дёргает штаб. Каждая получает один именованный
    ленивый шов, и больше их не заводится.
-3. **Штаб отдаёт свои четыре шва без правки вертикали.** `ITeamSessionDirectory` и
-   `ITeamRunState` целиком реализуемы стором (все методы читают и пишут `SessionEntry`),
-   `ITeamHistoryStore` — историей, `ITeamTurnIntake` — приёмом хода. Код `Services/Team`
+3. **Штаб отдаёт свои швы без правки вертикали.** `ITeamRunState` целиком реализуем
+   стором (все методы читают и пишут `SessionEntry`), `ITeamHistoryStore` — историей,
+   `ITeamTurnIntake` — приёмом хода. `ITeamSessionDirectory` остаётся на фасаде тонкой
+   переадресацией: один его метод рассылает через вертикаль штаба. Код `Services/Team`
    меняется только в аргументах конструкторов, которые сейчас получают `this`.
 4. **Шагов не пять, а восемь**, каждый ≤ 2 000 строк переноса. Порядок — строго снизу вверх:
    новый класс зависит только от уже вынесенных классов, Core-швов и трёх ленивых швов, но
@@ -67,14 +68,16 @@ grep -rc 'new SessionManager(' --include=*.cs backend | grep -v ':0'   # 44 ме
 ## 1. Методы и поля → роль
 
 Классы живут в `backend/ClaudeHomeServer/Services/Sessions/` (namespace
-`ClaudeHomeServer.Services.Sessions`), все `internal sealed`. Строки — по master.
+`ClaudeHomeServer.Services.Sessions`), все `internal sealed`. Строки — по master. Ниже
+таблицы сгруппированы по классам и включают приватные методы; построчная таблица всех
+227 публичных и `internal` методов — в [приложении](#приложение-публичные-и-internal-методы--класс).
 
 ### Семейство «стор метаданных» (`data/sessions.json`)
 
 | Класс | Строк | Что уезжает |
 |---|---:|---|
 | `SessionEntry.cs` (типы) | ~530 | вложенный `SessionEntry` целиком (локи и поля не дробим), `QueuedMessage`, `UserTurnSnapshot`, `TurnResult`, `ChatVisibilityResult` |
-| `SessionStore` | ~1 050 | реестр `_sessions`; `LoadSessions`, `MigratePersonaChatMode`, `SaveSessions`, `ScheduleDebouncedSave`, `FlushPendingSave`, автосейв-таймер; sweep (`TrySweepStuckActive`, `HasLiveWork`, `ParentSourceSession`, `EffectiveParentSessionId`); `ApplyStatusAsync`; выборки (`GetById`, `GetAll`, `GetByProject`, `GetVisibleByProject`, `CountByProject`, `GetProjectlessChats`, `GetSessionsWithLive*`, `GetAllOwnedBy`, `GetAllOwnedVisibleBy`, `HasSessionsOwnedBy`); **видимость и владелец** (`ResolveOwnerId`, `GetOwned`, `GetOwnedVisible`, `GetWithRight`, `GetAccessible`, `VisibleTo`, `IsVisibleTo`, `IsPrivateChat`, `IsTranscriptReservedForOthers`); автор хода (`NoteTurnActor`, `GetTurnActor`, `GetTurnFrame`, `HumanAuthorOf`, `IsOwnerOrTurnAuthor`, `PendingSentBy`, `ActorRank`, `NarrowerActor`, `ClaimFirstMessage`); наблюдатели (`AddViewer`, `RemoveViewer`, `RemoveConnectionViewers`, `HasViewers`); рантайм-чтения (`HasTurnInFlight`, `HasLiveTurnProcess`, `Busy`, `GetActiveTurnDelegation`, `RunAgentsAlive`, `NoteRunDelegation`, `WithTeamState`); вещание (`BroadcastAsync`, `BroadcastExceptAsync`, `BroadcastSessionMessageAsync`, `BroadcastStatusChangeAsync`); реализации `ITeamSessionDirectory` (включая `WriteUnlessPrivate`) и `ITeamRunState` |
+| `SessionStore` | ~1 050 | реестр `_sessions`; `LoadSessions`, `MigratePersonaChatMode`, `SaveSessions`, `ScheduleDebouncedSave`, `FlushPendingSave`, автосейв-таймер; sweep (`TrySweepStuckActive`, `HasLiveWork`, `ParentSourceSession`, `EffectiveParentSessionId`); `ApplyStatusAsync`; выборки (`GetById`, `GetAll`, `GetByProject`, `GetVisibleByProject`, `CountByProject`, `GetProjectlessChats`, `GetSessionsWithLive*`, `GetAllOwnedBy`, `GetAllOwnedVisibleBy`, `HasSessionsOwnedBy`); **видимость и владелец** (`ResolveOwnerId`, `GetOwned`, `GetOwnedVisible`, `GetWithRight`, `GetAccessible`, `VisibleTo`, `IsVisibleTo`, `IsPrivateChat`, `IsTranscriptReservedForOthers`); автор хода (`NoteTurnActor`, `GetTurnActor`, `GetTurnFrame`, `HumanAuthorOf`, `IsOwnerOrTurnAuthor`, `PendingSentBy`, `ActorRank`, `NarrowerActor`, `ClaimFirstMessage`); наблюдатели (`AddViewer`, `RemoveViewer`, `RemoveConnectionViewers`, `HasViewers`); рантайм-чтения (`HasTurnInFlight`, `HasLiveTurnProcess`, `Busy`, `GetActiveTurnDelegation`, `RunAgentsAlive`, `NoteRunDelegation`, `WithTeamState`); вещание (`BroadcastAsync`, `BroadcastExceptAsync`, `BroadcastSessionMessageAsync`, `BroadcastStatusChangeAsync`); тела методов `ITeamSessionDirectory` (`Get`, `ListChildren`, `ChildrenByParent`, `Persist`, `WriteUnlessPrivate`, `Snapshot`; сам шов остаётся на `SessionManager`, см. §3) и реализация `ITeamRunState` |
 
 ### Семейство «стор истории» (`history.json`)
 
@@ -346,7 +349,7 @@ internal interface ITurnMessageSink
 
 | Шов (`TeamCoreSeams.cs`) | Сейчас | После S3 |
 |---|---|---|
-| `ITeamSessionDirectory` | `SessionManager` | `SessionStore` |
+| `ITeamSessionDirectory` | `SessionManager` | `SessionManager`, тонкой переадресацией в `SessionStore`: `PersistAndBroadcastAsync` рассылает через `TeamStateService.BroadcastTeamImplementAsync`, то есть через вертикаль штаба, и стор этого делать не может |
 | `ITeamRunState` | `SessionManager` | `SessionStore` (все 14 методов работают с `SessionEntry`; `TrySetPermissionModeLive` — через `entry.Process`, это тоже поле записи) |
 | `ITeamHistoryStore` | `SessionManager` | `SessionHistory` |
 | `ITeamTurnIntake` | `SessionManager` | `TurnIntake` |
@@ -487,3 +490,250 @@ worktree и миграции); `HasTurnInFlight`, `Busy`, `WithTeamState`, `Clai
 3. Ход «Общих проектов» после 05.11 может добавить в файл новые методы. Каждый шаг
    начинается со сверки: методы, появившиеся после `e0ed6ea34`, получают роль по таблицам
    §1, а при неясности — вопрос ко мне до переноса.
+
+## Приложение. Публичные и internal методы → класс
+
+По строке на каждое объявление метода с видимостью `public`/`internal` в `SessionManager.cs`
+на master `e0ed6ea34`, перегрузки — отдельными строками. Явные реализации швов штаба
+(`ITeamRunState.…` и соседи) сюда не входят: их владельцы указаны в §3. Счёт:
+
+```bash
+F=/tmp/SM.cs   # git show master:backend/ClaudeHomeServer/Services/SessionManager.cs > $F
+grep -cE '^    (public|internal)\b[^=;]*\(' $F                       # 240 объявлений
+grep -E  '^    (public|internal)\b[^=;]*\(' $F \
+  | grep -cE '^    (public|internal) (sealed |static )?(record|class|enum)'   # 13 из них — типы
+# методов: 240 − 13 = 227 (154 public + 73 internal; конструктор входит) = строк таблицы ниже
+```
+
+Колонка «Тело уезжает в»: сигнатура остаётся в фасаде `SessionManager`, тело переезжает
+в названный класс. «SessionManager (штаб)» и «SessionManager (сборка)» не переезжают.
+
+| Строка | Видимость | Метод | Тело уезжает в |
+|---:|---|---|---|
+| 612 | public | `AddViewer` | SessionStore |
+| 616 | public | `RemoveViewer` | SessionStore |
+| 625 | public | `RemoveConnectionViewers` | SessionStore |
+| 635 | public | `HasViewers` | SessionStore |
+| 642 | public | `HasLiveTurnProcess` | SessionStore |
+| 752 | internal | `SetTaskLookupForTests` | SessionManager (сборка) |
+| 754 | public | `SessionManager` | SessionManager (сборка) |
+| 1076 | internal | `ResolveTasksApiUrl` | McpEndpoint |
+| 1101 | internal | `LoopbackApiUrl` | McpEndpoint |
+| 1110 | internal | `TasksMcpEnabled` | BuiltinMcpContexts |
+| 1115 | internal | `GetServiceToken` | McpEndpoint |
+| 1219 | internal | `BuildHiggsfieldContext` | BuiltinMcpContexts |
+| 1238 | internal | `BuildImageEditorContext` | BuiltinMcpContexts |
+| 1251 | internal | `BuildAudioEditorContext` | BuiltinMcpContexts |
+| 1264 | internal | `BuildVideoEditorContext` | BuiltinMcpContexts |
+| 1277 | internal | `BuildPluginsContext` | BuiltinMcpContexts |
+| 1289 | internal | `BuildTurnContextContext` | BuiltinMcpContexts |
+| 1307 | internal | `BuildLocalMediaContext` | BuiltinMcpContexts |
+| 1325 | internal | `BuildTestsContext` | BuiltinMcpContexts |
+| 1573 | internal | `MigratePersonaChatMode` | SessionStore |
+| 1647 | public | `DrainRestoredPendingAsync` | TurnRecovery |
+| 1686 | public | `TakeRestartResumeCandidates` | TurnRecovery |
+| 1747 | internal | `AddSessionForTest` | SessionStore |
+| 1756 | public | `SaveSessions` | SessionStore |
+| 1918 | internal | `EffectiveParentSessionId` | SessionStore |
+| 1923 | internal | `RunStuckActiveSweepForTests` | SessionStore |
+| 1927 | public | `GetByProject` | SessionStore |
+| 1947 | public | `GetVisibleByProject` | SessionStore |
+| 1956 | public | `GetSessionsWithLiveAgents` | SessionStore |
+| 1966 | public | `GetSessionsWithLiveBgCommands` | SessionStore |
+| 1984 | public | `GetArchiveRuleCandidates` | SessionStore |
+| 2021 | internal | `MatchesArchiveRule` | SessionStore |
+| 2029 | public | `CountByProject` | SessionStore |
+| 2036 | public | `GetProjectlessChats` | SessionStore |
+| 2048 | public | `SetPinned` | ChatSettings |
+| 2063 | public | `SetParent` | ChatSettings |
+| 2110 | public | `ApplySubjects` | ChatSettings |
+| 2140 | public | `ReleaseOrphanedHumanSubjects` | ChatSettings |
+| 2217 | public | `GetSubjectCandidates` | ChatSettings |
+| 2273 | public | `SetArchived` | ChatSettings |
+| 2300 | public | `ArchiveLegacyImageChats` | ChatSettings |
+| 2390 | public | `SetArchivedAsync` | ChatSettings |
+| 2430 | public | `ArchiveBatchAsync` | ChatSettings |
+| 2448 | public | `RestoreArchiveBatchAsync` | ChatSettings |
+| 2473 | public | `SetExpiry` | ChatSettings |
+| 2486 | public | `FreezeExpiryForHold` | ChatSettings |
+| 2502 | public | `RestoreFrozenExpiry` | ChatSettings |
+| 2514 | public | `AppendModuleRecordAsync` | ChatSettings |
+| 2560 | public | `SetChatVisibility` | ChatVisibility |
+| 2650 | public | `SaveChatAttachment` | ChatVisibility |
+| 2764 | public | `EvictForeignViewersAsync` | ChatVisibility |
+| 2780 | public | `SetNotificationsMuted` | ChatSettings |
+| 2794 | public | `SetVoiceMode` | ChatSettings |
+| 2812 | public | `MarkRead` | ChatSettings |
+| 2825 | public | `IsPrivateChat` | SessionStore |
+| 2840 | public | `TrySetExcludeFromDossiers` | ChatVisibility |
+| 2860 | public | `SetWikiMark` | ChatSettings |
+| 2876 | public | `SetContextAsync` | ChatSettings |
+| 2887 | public | `GetContext` | ChatSettings |
+| 2891 | public | `GetAll` | SessionStore |
+| 2898 | public | `RemapModels` | ChatSettings |
+| 2902 | public | `RemapModels` | ChatSettings |
+| 2919 | public | `GetChatRoot` | CliRoute |
+| 3011 | internal | `WorktreesBase` | CliRoute |
+| 3025 | internal | `CwdForOwner` | CliRoute |
+| 3221 | internal | `EffectiveRoot` | CliRoute |
+| 3230 | internal | `ReadStoredTeamPlanAsync` | SessionHistory |
+| 3253 | internal | `ResolveTeamPlanRoot` | SessionHistory |
+| 3336 | internal | `OfferProviderFallbackAsync` | ProviderMigration |
+| 3385 | public | `MigrateProviderAsync` | ProviderMigration |
+| 3582 | public | `BranchAsync` | ChatCreation |
+| 3868 | public | `EnsureHandoffAllowed` | ChatCreation |
+| 3877 | public | `WarmHandoffBlocker` | ChatCreation |
+| 3894 | public | `CreateHandoffChatAsync` | ChatCreation |
+| 3902 | internal | `ContinuationName` | ChatCreation |
+| 3919 | public | `CreateContinuationAsync` | ChatCreation |
+| 3997 | public | `GetById` | SessionStore |
+| 4012 | public | `GetActiveTurnDelegation` | SessionStore |
+| 4104 | public | `GetTurnActor` | SessionStore |
+| 4122 | public | `GetTurnFrame` | SessionStore |
+| 4134 | public | `IsOwnerOrTurnAuthor` | SessionStore |
+| 4143 | public | `PendingSentBy` | SessionStore |
+| 4157 | public | `HasActiveWorkLoop` | SessionStore |
+| 4161 | public | `SetSummaryNoteId` | ChatSettings |
+| 4172 | public | `SetArchiveSummary` | ChatSettings |
+| 4190 | public | `MarkFilesCommitted` | ChatWorktree |
+| 4219 | public | `UnmarkFileCommitted` | ChatWorktree |
+| 4253 | public | `CreateAsync` | ChatCreation |
+| 4296 | public | `CreateChatAsync` | ChatCreation |
+| 4335 | public | `PersonaVisibleIn` | ChatSettings |
+| 4339 | public | `OutOfZoneRefusal` | ChatSettings |
+| 4355 | public | `CreatePersonaChatAsync` | ChatCreation |
+| 4428 | public | `CreateGroupChatAsync` | ChatCreation |
+| 4490 | public | `SetParticipants` | ChatCreation |
+| 4530 | public | `GetPersonaChats` | ChatCreation |
+| 4540 | public | `ResolveOwnerId` | SessionStore |
+| 4553 | public | `IsVisibleTo` | SessionStore |
+| 4563 | public | `IsTranscriptReservedForOthers` | SessionStore |
+| 4569 | public | `HasSessionsOwnedBy` | SessionStore |
+| 4575 | public | `GetAllOwnedBy` | SessionStore |
+| 4585 | public | `GetAllOwnedVisibleBy` | SessionStore |
+| 4643 | public | `InvalidateHandsSessions` | PersonaLayerBuilder |
+| 4733 | internal | `ConsultantsEnabled` | PersonaLayerBuilder |
+| 4743 | internal | `PersonasEnabled` | PersonaLayerBuilder |
+| 4754 | internal | `MentionsToolsEnabled` | PersonaLayerBuilder |
+| 4811 | internal | `BuildMentionsHint` | PersonaLayerBuilder |
+| 4962 | internal | `BuildWorkspacePlan` | ExternalMcpContexts |
+| 5084 | public | `BuildChatContextProvider` | ExternalMcpContexts |
+| 5270 | public | `EnsurePersonasVisibleInFrame` | ChatSettings |
+| 5286 | public | `EnsureContinuationPersonaAllowed` | ChatSettings |
+| 5299 | public | `SetPersona` | ChatSettings |
+| 5324 | public | `SetOnboardingCreatedPersona` | ChatSettings |
+| 5335 | public | `SetOnboardingFinalized` | ChatSettings |
+| 5578 | public | `SendMessageAsync` | TurnIntake |
+| 5984 | internal | `ChatPreview` | TurnIntake |
+| 6152 | internal | `TrimVoiceMessage` | LocalVoiceTurn |
+| 6252 | public | `SendMessageAndWaitAsync` | TurnIntake |
+| 6450 | public | `SendOrEnqueueAsync` | TurnIntake |
+| 6485 | public | `ReportUpAsync` | TurnIntake |
+| 6531 | public | `ReportBlockerAsync` | TurnIntake |
+| 6535 | public | `GetPending` | PendingQueue |
+| 6574 | public | `PreemptForPending` | TurnIntake |
+| 6599 | public | `CancelPendingAsync` | TurnIntake |
+| 6623 | public | `RemovePendingByText` | PendingQueue |
+| 6840 | internal | `Busy` | SessionStore |
+| 6991 | public | `GetDeviceWaitingSessions` | TurnProcessHost |
+| 6999 | public | `ReleaseDeviceWaitAsync` | TurnProcessHost |
+| 7030 | public | `ExpireDeviceWaitAsync` | TurnProcessHost |
+| 7066 | public | `GetVisiblePending` | PendingQueue |
+| 7070 | public | `CompactAsync` | TurnProcessHost |
+| 7451 | public | `RetitleAsync` | ChatNaming |
+| 7486 | public | `SetChatIconAsync` | ChatNaming |
+| 7535 | public | `SetChatIconsAsync` | ChatNaming |
+| 7598 | public | `HasTurnInFlight` | SessionStore |
+| 7611 | public | `UpdateAsync` | ChatSettings |
+| 7750 | public | `DropWindow1MAsync` | ChatSettings |
+| 7791 | public | `RespondPermission` | TurnProcessHost |
+| 7832 | public | `RemoveAutoAllowTool` | TurnProcessHost |
+| 7842 | public | `Interrupt` | TurnProcessHost |
+| 7927 | public | `StopChatsOfRevokedMember` | TurnProcessHost |
+| 7985 | internal | `StopClosedExecutorProcess` | TurnRecovery |
+| 8041 | public | `RestartStuckTurnAsync` | TurnRecovery |
+| 8203 | public | `ResumeAfterRestartAsync` | TurnRecovery |
+| 8257 | internal | `LoopLimitOrDefault` | TurnProcessHost |
+| 8269 | public | `SetMode` | TurnIntake |
+| 8305 | public | `SetWorkLoopAsync` | TurnIntake |
+| 8412 | public | `SetTeamImplementAsync` | SessionManager (штаб) |
+| 8424 | public | `TeamImplementSetupError` | SessionManager (штаб) |
+| 8431 | public | `SetTeamImplementAutoAsync` | SessionManager (штаб) |
+| 8444 | internal | `EnterPlanPhaseMode` | SessionManager (штаб) |
+| 8452 | internal | `RestoreUserMode` | SessionManager (штаб) |
+| 8458 | internal | `NewTeamImplementBudget` | SessionManager (штаб) |
+| 8463 | internal | `BroadcastTeamImplementAsync` | SessionManager (штаб) |
+| 8478 | public | `CreateTeamPlanAsync` | SessionManager (штаб) |
+| 8488 | public | `RespondTeamPlanAsync` | SessionManager (штаб) |
+| 8499 | internal | `ResolveStalePlanCardAsync` | SessionManager (штаб) |
+| 8508 | internal | `SupersedeCurrentPlanCardAsync` | SessionManager (штаб) |
+| 8525 | public | `GetTeamImplementSessions` | SessionManager (штаб) |
+| 8534 | public | `FindActivePlanAsync` | SessionManager (штаб) |
+| 8548 | public | `ApplyPlanDecisionAsync` | SessionManager (штаб) |
+| 8616 | internal | `WithTeamState` | SessionStore |
+| 8623 | public | `ListOpenEscalationsAsync` | SessionManager (штаб) |
+| 8681 | public | `RecordToolStages` | SessionManager (штаб) |
+| 8687 | internal | `RecordToolStagesAsync` | SessionManager (штаб) |
+| 8707 | public | `RecordToolStarted` | SessionManager (штаб) |
+| 8720 | public | `MarkEscalationRemindedAsync` | SessionManager (штаб) |
+| 8752 | public | `ResolveEscalationAsync` | SessionManager (штаб) |
+| 8795 | public | `TryConsumeTeamImplementRun` | SessionManager (штаб) |
+| 8803 | public | `RefundTeamImplementRun` | SessionManager (штаб) |
+| 8811 | public | `TryConsumeTeamWakeup` | SessionManager (штаб) |
+| 8815 | public | `RefundTeamWakeup` | SessionManager (штаб) |
+| 8823 | public | `RespondTeamEscalationAsync` | SessionManager (штаб) |
+| 8835 | public | `StopTeamImplementAsync` | SessionManager (штаб) |
+| 8872 | internal | `ParseEscalationMarker` | SessionManager (штаб) |
+| 8875 | internal | `ParseWorkMarker` | SessionManager (штаб) |
+| 8878 | internal | `HasTalkMarker` | SessionManager (штаб) |
+| 8883 | internal | `HasNoReplyMarker` | SessionManager (штаб) |
+| 8886 | internal | `StripTeamProtocolMarkers` | SessionManager (штаб) |
+| 8889 | internal | `IsAmbiguousMarkerTail` | SessionManager (штаб) |
+| 8892 | internal | `TrimAmbiguousMarkerTail` | SessionManager (штаб) |
+| 8895 | internal | `TrimUnresolvedMarkerOpen` | SessionManager (штаб) |
+| 8907 | internal | `RestoreWaveWatchdogIfPaused` | SessionManager (штаб) |
+| 8935 | public | `HandleTeamTurnEndAsync` | SessionManager (штаб) |
+| 8953 | public | `HandleBgAgentDoneAsync` | SessionManager (штаб) |
+| 8962 | public | `TryAutoResolveTeamBlockerAsync` | SessionManager (штаб) |
+| 8972 | public | `TryResolveBlockerByFactAsync` | SessionManager (штаб) |
+| 9015 | internal | `StartTeamWorkAsync` | SessionManager (штаб) |
+| 9024 | internal | `RunTeamPlanningAsync` | SessionManager (штаб) |
+| 9034 | internal | `CloseTeamTalkAsync` | SessionManager (штаб) |
+| 9229 | internal | `EnterInterviewAsync` | SessionManager (штаб) |
+| 9693 | internal | `OnAskQuestionStabAsync` | SessionManager (штаб) |
+| 9739 | internal | `RaiseCoordinatorEscalationAsync` | SessionManager (штаб) |
+| 9764 | public | `SetWorktreeAsync` | ChatWorktree |
+| 9877 | public | `AttachWorktreeAsync` | ChatWorktree |
+| 9935 | internal | `ShouldNudgeSubagent` | SubagentNudgePolicy (static) |
+| 9945 | internal | `TurnInFlight` | TurnPassports |
+| 9999 | internal | `ResetsNudgeSeries` | SubagentNudgePolicy (static) |
+| 10006 | internal | `StartsNudgeSeries` | SubagentNudgePolicy (static) |
+| 10014 | internal | `RefutesTruncation` | TurnPassports |
+| 10247 | internal | `ContainsPromiseMarker` | TurnIntake |
+| 10259 | internal | `TryExtractBlockedMarker` | TurnIntake |
+| 10281 | internal | `TryExtractWaitingMarker` | TurnIntake |
+| 10311 | internal | `TickWaitingLoopsAsync` | TurnIntake |
+| 10376 | public | `AnswerQuestion` | TurnProcessHost |
+| 10406 | public | `RespondPlan` | TurnProcessHost |
+| 10437 | public | `DeleteAsync` | ChatDeletion |
+| 10615 | public | `GetHistoryAsync` | SessionHistory |
+| 10633 | public | `GetWorkflowProgress` | SessionHistory |
+| 10641 | public | `GetPendingInteraction` | SessionHistory |
+| 10647 | public | `GetLastRecallManifest` | SessionHistory |
+| 10650 | public | `GetSessionInfo` | SessionHistory |
+| 10662 | internal | `OnMessageAsync` | TurnCompletion |
+| 10670 | internal | `PipelineForTest` | TurnCompletion |
+| 10675 | internal | `DrainPipelineAsync` | TurnCompletion |
+| 10683 | internal | `OnMessageQueuedAsync` | TurnCompletion |
+| 11448 | public | `PublishGlifCostAsync` | TurnCostLedger |
+| 11499 | public | `PublishFalCostAsync` | TurnCostLedger |
+| 11559 | public | `AppendStoredAsync` | SessionHistory |
+| 11653 | public | `KillAllProcesses` | TurnProcessHost |
+| 11687 | public | `Dispose` | SessionManager (сборка) |
+| 11700 | internal | `BroadcastAsync` | SessionStore |
+| 11706 | internal | `BroadcastExceptAsync` | SessionStore |
+| 11711 | public | `BroadcastSessionMessageAsync` | SessionStore |
+| 11722 | public | `GetOwned` | SessionStore |
+| 11737 | public | `GetOwnedVisible` | SessionStore |
+| 11748 | public | `GetWithRight` | SessionStore |
+| 11762 | public | `GetAccessible` | SessionStore |

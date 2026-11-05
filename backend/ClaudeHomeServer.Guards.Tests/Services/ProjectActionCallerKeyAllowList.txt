@@ -147,7 +147,12 @@ backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 # И-5) и createdByUserId (автор, не ключ) — не ключ хранилищ.
 # Снимок 108→107: добивание старого остатка — расхождение PersonasController (111 против 112)
 # существовало на HEAD до этого шага (появилось между f654a477d и 50dc87738, автор не снижал).
-backend/ClaudeHomeServer/Controllers/PersonasController.cs|107
+# W3-B1c (read-пути {id}-действий и действия владельца): PersonasController 107→91 — шестнадцать мест
+# переведены на scope.TenantOwnerId: Get/Avatar*/AvatarOriginal/AvatarCandidate/Bindings/Automation
+# (чтение персоны), Delete/MakeDefault (ключ записи в PersonasCrudService), Memory/MemorySearch/
+# MemoryRecall/GetFocus (плюс ключ стора памяти). Вызывающий остался только в CallerSessionId,
+# viewer и createdByUserId — не ключ хранилищ.
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|91
 backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6

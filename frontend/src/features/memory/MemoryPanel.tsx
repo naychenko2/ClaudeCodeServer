@@ -56,6 +56,9 @@ export interface MemoryPanelProps<TType extends string> {
   emptyHint: string;
 }
 
+// Ноп для useInlineEdit, когда панель без права правки (onEdit нет): машина неактивна.
+const NOOP = async () => undefined;
+
 export function MemoryPanel<TType extends string>({
   entries, error, onRetry, typeMeta, typeOrder,
   addHint, addPlaceholder, onAdd, maxLength,
@@ -146,34 +149,34 @@ export function MemoryPanel<TType extends string>({
       {/* Быстрое ручное добавление — заметная карточка НАВЕРХУ (ручное первично).
           Нет onAdd (панель только для чтения) — карточки нет вовсе. */}
       {onAdd && (
-      <div style={cardStyle}>
-        <div style={{ fontFamily: FONT.serif, fontSize: 15, color: C.textHeading }}>✋ Добавить вручную</div>
-        <div style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.5, margin: '4px 0 10px' }}>{addHint}</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <select value={addType} onChange={e => setAddType(e.target.value as TType)} style={selectStyle} aria-label="Тип записи">
-            {typeOrder.map(t => <option key={t} value={t}>{typeMeta[t].title}</option>)}
-          </select>
-          <TextArea
-            value={addText}
-            onChange={v => { setAddText(v); if (addError) setAddError(null); }}
-            autoGrow
-            minHeight={44}
-            placeholder={addPlaceholder}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); } }}
-          />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-end' }}>
-            {addError && <span style={{ fontSize: 12, color: C.dangerText, fontFamily: FONT.sans, marginRight: 'auto' }}>{addError}</span>}
-            {maxLength != null && (
-              <span style={{ fontSize: 11.5, color: overLimit ? C.dangerText : C.textMuted, fontFamily: FONT.sans }}>
-                {addText.trim().length} / {maxLength}
-              </span>
-            )}
-            <Button variant="primary" size="sm" loading={adding} disabled={adding || !addText.trim() || overLimit} onClick={() => void submit()}>
-              {adding ? 'Сохраняю…' : 'Запомнить'}
-            </Button>
+        <div style={cardStyle}>
+          <div style={{ fontFamily: FONT.serif, fontSize: 15, color: C.textHeading }}>✋ Добавить вручную</div>
+          <div style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.5, margin: '4px 0 10px' }}>{addHint}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <select value={addType} onChange={e => setAddType(e.target.value as TType)} style={selectStyle} aria-label="Тип записи">
+              {typeOrder.map(t => <option key={t} value={t}>{typeMeta[t].title}</option>)}
+            </select>
+            <TextArea
+              value={addText}
+              onChange={v => { setAddText(v); if (addError) setAddError(null); }}
+              autoGrow
+              minHeight={44}
+              placeholder={addPlaceholder}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); } }}
+            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-end' }}>
+              {addError && <span style={{ fontSize: 12, color: C.dangerText, fontFamily: FONT.sans, marginRight: 'auto' }}>{addError}</span>}
+              {maxLength != null && (
+                <span style={{ fontSize: 11.5, color: overLimit ? C.dangerText : C.textMuted, fontFamily: FONT.sans }}>
+                  {addText.trim().length} / {maxLength}
+                </span>
+              )}
+              <Button variant="primary" size="sm" loading={adding} disabled={adding || !addText.trim() || overLimit} onClick={() => void submit()}>
+                {adding ? 'Сохраняю…' : 'Запомнить'}
+              </Button>
+            </div>
           </div>
         </div>
-      </div>
       )}
 
       {!isEmpty && (
@@ -244,9 +247,6 @@ export function MemoryPanel<TType extends string>({
     </div>
   );
 }
-
-// Ноп для useInlineEdit, когда панель без права правки (onEdit нет): машина неактивна.
-const NOOP = async () => undefined;
 
 const cardStyle = { background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, boxShadow: SHADOW.card, padding: 16 } as const;
 const selectStyle = {

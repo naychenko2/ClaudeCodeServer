@@ -166,6 +166,10 @@ export class OnboardingRequiredError extends Error {
 // api.sessions.create()/api.chats.create() без personaId — сервер сам провижнит
 // ассистента и продолжит создание с ним (400 остаётся только когда провижн вернул
 // null). OnboardingRequiredError — только на случай, когда и сервер не смог.
+// Исключение (W3-B4b/W3-F2a): 400 с кодом no_project_persona — в общем проекте нет
+// руководителя и провижна участника нет; это не онбординг (участник сам не починит —
+// назначает только владелец), поэтому текст сервера уходит вызывающему как есть,
+// а не оборачивается в OnboardingRequiredError.
 export async function createChatWithContextPersona(
   project?: Pick<Project, 'id' | 'defaultPersonaId'> | null,
   opts?: { mode?: string; name?: string },
@@ -183,7 +187,14 @@ export async function createChatWithContextPersona(
       ? await api.sessions.create(project.id, opts?.mode, undefined, opts?.name)
       : await api.chats.create(opts?.mode, undefined, opts?.name);
   } catch (e) {
-    if ((e as Error & { status?: number }).status === 400) {
+    const err = e as Error & { status?: number; body?: { code?: string; error?: string } };
+    if (err.status === 400) {
+      // Различаем по коду из тела ответа (как chatFieldsErrorText, api.ts:1071), не по тексту.
+      if (err.body?.code === 'no_project_persona') {
+        // Текст — серверный (единственная формулировка отказа); если тело пришло без
+        // error, оставляем message транспорта (он и есть текст тела или statusText).
+        throw new Error(err.body.error ?? err.message);
+      }
       throw new OnboardingRequiredError(project ? 'project' : 'user');
     }
     throw e;

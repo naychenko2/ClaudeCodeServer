@@ -53,11 +53,12 @@ public sealed class ProjectAccessService(
         var persona = personas.GetByIdInternal(personaId);
         if (persona is null) return null;
 
-        // Проектная персона живого проекта — через доступ к её проекту (§2.2)
-        if (persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId)
-            && projects.GetById(persona.ProjectId) is not null)
+        // Проектная персона живого проекта — через доступ к её проекту (§2.2).
+        // Зону персоны читает только PersonaZone.OwnProjectId (сторож PersonaZoneGuard)
+        var ownProject = PersonaZone.OwnProjectId(persona);
+        if (ownProject is not null && projects.GetById(ownProject) is not null)
         {
-            var scope = Resolve(callerUserId, persona.ProjectId, right);
+            var scope = Resolve(callerUserId, ownProject, right);
             // Персона «проекта» с чужим владельцем — битая запись, а не доступ (§2.2)
             return scope is not null && persona.OwnerId == scope.TenantOwnerId ? scope : null;
         }

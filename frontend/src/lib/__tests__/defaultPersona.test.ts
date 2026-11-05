@@ -131,4 +131,51 @@ describe('createChatWithContextPersona', () => {
 
     await expect(createChatWithContextPersona(null, { mode: 'auto' })).rejects.toBe(serverError);
   });
+
+  // W3-F2a (контракт W3-B4b): участник общего проекта без руководителя — 400 с кодом
+  // no_project_persona. Это не онбординг (назначает только владелец), поэтому текст
+  // сервера уходит вызывающему как есть — мокаем ошибку так же, как её строит транспорт
+  // offline.ts:1685–1690: message = body.error, поля status/body прикреплены.
+  it('400 no_project_persona — Error с текстом сервера, не OnboardingRequiredError', async () => {
+    setMeFromServer(fakeMe(null));
+    const project = { id: 'proj-1', defaultPersonaId: null } as Pick<Project, 'id' | 'defaultPersonaId'>;
+    const serverText = 'В проекте нет руководителя — попросите владельца назначить';
+    vi.mocked(api.sessions.create).mockRejectedValue(
+      Object.assign(new Error(serverText), { status: 400, body: { code: 'no_project_persona', error: serverText } }),
+    );
+
+    const error = await createChatWithContextPersona(project, { mode: 'auto' }).catch(e => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(OnboardingRequiredError);
+    expect((error as Error).message).toBe(serverText);
+  });
+
+  // Различаем по body.code, не по тексту: тот же 400 с другим кодом — прежний путь.
+  it('400 с другим кодом — как раньше, OnboardingRequiredError (scope project)', async () => {
+    setMeFromServer(fakeMe(null));
+    const project = { id: 'proj-1', defaultPersonaId: null } as Pick<Project, 'id' | 'defaultPersonaId'>;
+    vi.mocked(api.sessions.create).mockRejectedValue(
+      Object.assign(new Error('нужна персона'), { status: 400, body: { code: 'global_persona_in_shared', error: 'нет персоны' } }),
+    );
+
+    const error = await createChatWithContextPersona(project, { mode: 'auto' }).catch(e => e);
+
+    expect(error).toBeInstanceOf(OnboardingRequiredError);
+    expect((error as InstanceType<typeof OnboardingRequiredError>).scope).toBe('project');
+  });
+
+  // Тело без error (деградантный ответ транспорта): текст не выдумываем, оставляем message.
+  it('400 no_project_persona без текста в теле — message исходной ошибки сохраняется', async () => {
+    setMeFromServer(fakeMe(null));
+    const project = { id: 'proj-1', defaultPersonaId: null } as Pick<Project, 'id' | 'defaultPersonaId'>;
+    vi.mocked(api.sessions.create).mockRejectedValue(
+      Object.assign(new Error('Bad Request'), { status: 400, body: { code: 'no_project_persona' } }),
+    );
+
+    const error = await createChatWithContextPersona(project, { mode: 'auto' }).catch(e => e);
+
+    expect(error).not.toBeInstanceOf(OnboardingRequiredError);
+    expect((error as Error).message).toBe('Bad Request');
+  });
 });

@@ -3,7 +3,7 @@
 // что бэк откажет участнику: читатель — без чата с персоной («Поговорить»), без правки
 // карточки («Редактировать»), без ⋯-меню («Сделать персоной по умолчанию», «Удалить
 // персону») и без «Новой персоны»; редактор — чат и правка карточки остаются,
-// makeLead/delete (Configure) закрыты, создание открыто (editCard); владелец и обычный
+// makeLead/delete (Configure) закрыты, создание открыто (createPersona); владелец и обычный
 // проект (myRole нет) — всё, как раньше.
 //
 // Окружение node (без jsdom), SSR renderToStaticMarkup — образец TeamCommandCenter.gate.test.ts
@@ -14,7 +14,7 @@
 // title="Ещё" — триггер ⋯-меню, единственный носитель пунктов «Сделать персоной по
 // умолчанию»/«Удалить персону»: сами пункты в SSR закрыты (menuOpen=false, как в F1b),
 // но когда оба пункта закрыты ролью, скрыт и весь триггер — его отсутствие и есть
-// отсутствие makeLead/delete. title="Новая персона" — кнопка сайдбара (создание — editCard).
+// отсутствие makeLead/delete. title="Новая персона" — кнопка сайдбара (создание — createPersona).
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -79,7 +79,7 @@ describe('ProjectPersonasPanel: гейт по роли (W3-F1c)', () => {
     expect(countOf(html, CHAT), 'чат с персоной читателю (RunTurn закрыт)').toBe(0);
     expect(countOf(html, EDIT), 'правка карточки читателю').toBe(0);
     expect(countOf(html, LEAD_MENU), '⋯-меню (makeLead+delete закрыты) читателю').toBe(0);
-    expect(countOf(renderSidebar(projectWith('reader')), NEW_PERSONA), 'создание персоны (editCard) читателю').toBe(0);
+    expect(countOf(renderSidebar(projectWith('reader')), NEW_PERSONA), 'создание персоны (createPersona) читателю').toBe(0);
   });
 
   it('редактор: «Поговорить» и «Редактировать» есть, создание есть; ⋯-меню закрыто', () => {

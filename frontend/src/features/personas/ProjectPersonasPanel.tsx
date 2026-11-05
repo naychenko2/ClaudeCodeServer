@@ -42,9 +42,10 @@ export function ProjectPersonasPanel({ project, selectedId, onSelect, onNew, onS
   const projectPersonas = personas.filter(p => visibleIn(p, project.id, sphereOf) && !isGlobalPersona(p));
 
   // W3-F1c: роль этого человека в проекте — только через personaRights (матрица §2
-  // разреза shared-projects-personas-cut-2026-11). Создание персоны — по editCard:
-  // читателю бэк откажет, поэтому и кнопки «Новая персона» в панели нет.
-  const mayCreate = canPersona(personaRole({ projectId: project.id }, [project]), 'editCard');
+  // разреза shared-projects-personas-cut-2026-11). Создание персоны — по createPersona
+  // (WriteContent, как в TeamCommandCenter): читателю бэк откажет, поэтому и кнопки
+  // «Новая персона» в панели нет.
+  const mayCreate = canPersona(personaRole({ projectId: project.id }, [project]), 'createPersona');
 
   return (
     // Фон прозрачный: подложку даёт контентная зона карточки панели (белая)

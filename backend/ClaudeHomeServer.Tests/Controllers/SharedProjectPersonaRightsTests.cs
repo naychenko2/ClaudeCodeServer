@@ -4,6 +4,7 @@ using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Tests.Helpers;
@@ -41,6 +42,19 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// «запись памяти» краснеет для Editor. Снятие блокировки в Remember тест гонки не покраснил
 /// (два прогона, копия мутации): критическая секция короткая, два запроса в неё не попали —
 /// разбор в отчёте задачи.
+///
+/// W3-B3a (тот же файл, §3.1 строки «POST /», «POST /ai/quick-create», «POST /ai/team»): третья
+/// матрица — создание проектной персоны. [ProjectScope] на этих действиях невозможен (id проекта
+/// не в маршруте), право решает IProjectAccess.Resolve в теле, ключ — TenantOwnerId. Ожидания те
+/// же, что у матрицы {id}-путей: редактор — 2xx, и OwnerId новой персоны — владелец проекта
+/// (с ключом вызывающего ValidProject отбил бы ему 400, а персона досталась бы ему самому);
+/// читатель — 403 project_scope, посторонний — 404; отказанное создание не оставляет ни
+/// полусозданной персоны, ни следа в сторе. Глобальную персону участник создаёт в своём
+/// пространстве (последний тест). Мутации (проверены на копиях дерева): вернуть в Create ключ
+/// вызывающего (tenant = area.CallerUserId) — строка «создать проектную» краснеет для Editor
+/// (400 вместо 2xx: ValidProject не пропускает чужой проект); вернуть в AiTeam ключ вызывающего
+/// (AiTeamAsync(…, area.CallerUserId)) — краснеет строка «ai-команда проекта» для Editor
+/// (400 «Проект не найден» из сверки project.OwnerId с первым аргументом, PersonasCrudService.cs:444).
 /// </summary>
 [Trait("Category", "Host")]
 public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationFactory>
@@ -54,10 +68,61 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
 
     private readonly TestWebApplicationFactory _factory;
 
+    // Управляемая заглушка дешёвой модели для LLM-путей создания (W3-B3a: quick-create, ai/team):
+    // на эти две action'ы — ответ текущего теста, всё прочее — «[]», как во встроенном стабе хоста,
+    // поэтому существующие тесты класса видят ровно то же, что без заглушки (фоновые one-shot
+    // создания — типовые умения, авто-привязки, голос — остаются «ничего не подошло»). STATIC:
+    // экземпляр класса создаётся на каждый тест, а хост строится один раз на первом — раннер
+    // обязан быть тем же объектом, что зарегистрирован в хосте (тот же приём, что
+    // SharedProjectPersonaListTests).
+    private static readonly CreateLlm _llm = new();
+
     public SharedProjectPersonaRightsTests(TestWebApplicationFactory factory)
     {
         _factory = factory;
         _factory.ExtraConfig[SharedProjectsGate.SwitchKey] = "true";
+        _factory.ExtraServices = services => services.AddSingleton<ICheapTextRunner>(_llm);
+    }
+
+    /// <summary>Заглушка one-shot: Answer — ответ текущего теста; Owners — ключи, под которыми
+    /// шли вызовы (проверка И-2 на LLM-пути создания: черновик проектной персоны оплачивает
+    /// владелец проекта, а не вызывающий участник).</summary>
+    private sealed class CreateLlm : ICheapTextRunner
+    {
+        public string Answer { get; set; } = "[]";
+        public readonly List<string?> Owners = [];
+
+        // Состояние каждого теста начинается заново (методы одного класса xUnit гоняет
+        // последовательно): ответ — пустой, как у встроенного стаба хоста, ключи — чистые.
+        public void Reset()
+        {
+            Answer = "[]";
+            Owners.Clear();
+        }
+
+        public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => false;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
+
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            Owners.Add(ownerId);
+            return Task.FromResult(Answer);
+        }
+
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default)
+        {
+            Owners.Add(ownerId);
+            return Task.FromResult<string?>(Answer);
+        }
+
+        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
+            string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
+            => throw new NotSupportedException();
     }
 
     private HttpClient OwnerClient() => _factory.CreateAuthenticatedClient();
@@ -69,6 +134,15 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
 
     private string TenantId => _factory.Services.GetRequiredService<UserStore>()
         .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+
+    // Второй пользователь — участник общего проекта (Editor/Reader) или посторонний (Outsider
+    // не приглашён): его личный ключ нужен, чтобы проверить «персона не легла в вызывающего».
+    private string MemberId => _factory.Services.GetRequiredService<UserStore>()
+        .FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id;
+
+    // Стор персон на диске: DataPath тестового хоста — TempDir (TestWebApplicationFactory.cs:115),
+    // PersonasPath не переопределён → personas.json рядом с projects.json.
+    private string StorePath => Path.Combine(_factory.TempDir, "personas.json");
 
     private PersonaManager Personas => _factory.Services.GetRequiredService<PersonaManager>();
     private ProjectManager Projects => _factory.Services.GetRequiredService<ProjectManager>();
@@ -151,6 +225,27 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
             catch (JsonException) { /* ответ не JSON — кода нет */ }
         }
         return ((int)response.StatusCode, code);
+    }
+
+    // Тот же разбор ответа, что SendAsync, плюс тело: принятые LLM-пути создания проверяются по
+    // содержимому ответа (состав команды), а не только по статусу.
+    private static async Task<(int Status, string? Code, JsonElement Body)> SendBodyAsync(HttpClient client,
+        string url, object body)
+    {
+        var response = await client.PostAsJsonAsync(url, body);
+        var text = await response.Content.ReadAsStringAsync();
+        string? code = null;
+        JsonElement json = default;
+        if (text.Length > 0)
+        {
+            try
+            {
+                json = JsonSerializer.Deserialize<JsonElement>(text);
+                if (json.ValueKind == JsonValueKind.Object && json.TryGetProperty("code", out var c)) code = c.GetString();
+            }
+            catch (JsonException) { /* ответ не JSON (text/plain) — кода и тела нет */ }
+        }
+        return ((int)response.StatusCode, code, json);
     }
 
     /// <summary>Действие матрицы: {p} — id проектной персоны проекта владельца. Ожидания по ролям.</summary>
@@ -505,5 +600,204 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
         texts.Should().Contain(ownerText, "запись владельца в сторе");
         texts.Should().Contain(editorText,
             "запись редактора в том же сторе: одновременная запись ничего не перезаписала и не потеряла");
+    }
+
+    // ── W3-B3a: создание проектной персоны — право по проекту из тела, владелец = арендатор
+    // (разрез §3.1 строки «POST /», «POST /ai/quick-create», «POST /ai/team»; И-2, И-7) ──────────
+    //
+    // Та же матрица ролей, что у read/write-путей {id}, но для создания. [ProjectScope] здесь
+    // невозможен: id проекта не в маршруте и не в аргументах действия — право решает
+    // IProjectAccess.Resolve в теле (PersonasController.ProjectWriteArea), ключ дальнейших
+    // вызовов — TenantOwnerId резолва. Ожидания те же: редактор — 2xx и OwnerId новой персоны
+    // равен владельцу (с ключом вызывающего ValidProject отбил бы ему 400, а персона досталась
+    // бы ему самому), читатель — 403 project_scope, посторонний — 404. Отказанное создание не
+    // оставляет ни полусозданной записи, ни обращения к модели: право проверяется до работы.
+    // Принятые LLM-пути (quick-create, ai/team) — на управляемой заглушке: без неё тестовый хост
+    // отвечает «[]», черновик не распознан и ответ был бы 502 — проверка вышла бы про парсер,
+    // а не про право.
+
+    private sealed record CreateAct(string Name, string Path,
+        Func<string, Dictionary<string, string>, object> Body,
+        int ForOwner, int ForEditor, int ForReader, int ForOutsider)
+    {
+        public int For(string role) => role switch
+        {
+            Owner => ForOwner, Editor => ForEditor, Reader => ForReader, _ => ForOutsider,
+        };
+    }
+
+    private static readonly CreateAct[] CreateActions =
+    [
+        new("создать проектную", "/api/personas",
+            (r, ids) => new { name = "Созданная-" + r, scope = "project", projectId = ids["p"] },
+            Ok2xx, Ok2xx, 403, 404),
+        new("quick-create проектной", "/api/personas/ai/quick-create",
+            (r, ids) => new { prompt = "Аналитик для проекта " + r, scope = "project", projectId = ids["p"] },
+            Ok2xx, Ok2xx, 403, 404),
+        // ai/team пишет только черновики в ответ, персон не создаёт — это отдельная проверка ниже
+        new("ai-команда проекта", "/api/personas/ai/team",
+            (r, ids) => new { projectId = ids["p"], prompt = "Команда для анализа " + r },
+            Ok2xx, Ok2xx, 403, 404),
+    ];
+
+    // Имя, под которым принятое действие создало бы персону: «создать проектную» — из тела
+    // запроса, quick-create — из ответа заглушки, ai-team — имя черновика команды (персон ai/team
+    // не создаёт: этим же именем проверяется «ничего не создалось» и на принятых, и на отказанных
+    // ролях). Уникально на каждый прогон — стор памяти и стора персон общие (одна фабрика).
+    private static string CreatedName(string actionName, string runId) => actionName switch
+    {
+        "создать проектную" => "Созданная-" + runId,
+        "quick-create проектной" => "Черновик-" + runId,
+        _ => "Бортовой-" + runId,
+    };
+
+    private static string DraftJson(string runId) =>
+        $"{{\"name\":\"Черновик-{runId}\",\"role\":\"Аналитик\",\"description\":\"Аналитик проекта {runId}\"," +
+        "\"tone\":\"сухо и по делу\",\"color\":\"blue\"}}";
+
+    private static string TeamJson(string runId) =>
+        $"[{{\"name\":\"Бортовой-{runId}\",\"role\":\"Аналитик\",\"description\":\"Аналитик проекта\"}}]";
+
+    public static IEnumerable<object[]> CreateMatrix() =>
+        from a in CreateActions
+        from role in new[] { Owner, Editor, Reader, Outsider }
+        select new object[] { a.Name, role };
+
+    [Theory]
+    [MemberData(nameof(CreateMatrix))]
+    public async Task СозданиеПроектнойПерсоны_ДаётОжидаемыйОтказИВладельцаПоАрендатору(string actionName, string role)
+    {
+        var action = CreateActions.Single(a => a.Name == actionName);
+        var (projectId, _) = await ArrangeAsync(role);
+        var runId = RunId();
+        var name = CreatedName(actionName, runId);
+
+        _llm.Reset();
+        _llm.Answer = actionName switch
+        {
+            "quick-create проектной" => DraftJson(runId),
+            "ai-команда проекта" => TeamJson(runId),
+            _ => "[]",
+        };
+
+        var (status, code, body) = await SendBodyAsync(ClientOf(role), action.Path,
+            action.Body(runId, new Dictionary<string, string> { ["p"] = projectId }));
+
+        var expected = action.For(role);
+        if (expected == Ok2xx)
+        {
+            (status >= 200 && status < 300).Should().BeTrue($"{role}: {actionName} → {status}");
+        }
+        else
+        {
+            status.Should().Be(expected, $"{role}: {actionName}");
+            if (expected == 403)
+                code.Should().Be(NoRight, $"{role}: {actionName} — отказ различается машинным кодом");
+        }
+
+        // Состояние стора после полного запроса: созданная принадлежит владельцу проекта и видна
+        // его списку; отказанное создание не оставило записи — ни в сторе проекта, ни в личном
+        // сторе вызывающего.
+        switch (actionName, role)
+        {
+            case ("создать проектную", Owner or Editor):
+            case ("quick-create проектной", Owner or Editor):
+                var created = Personas.GetByOwner(TenantId).Single(p => p.Name == name);
+                created.OwnerId.Should().Be(TenantId,
+                    $"{role}: OwnerId новой персоны — владелец проекта, не вызывающий (И-7)");
+                created.Scope.Should().Be(PersonaScope.Project);
+                created.ProjectId.Should().Be(projectId);
+                Personas.GetByOwner(MemberId).Any(p => p.Name == name).Should().BeFalse(
+                    $"{role}: персона не легла в личное пространство вызывающего (И-2)");
+                var list = await BodyAsync(await OwnerClient().GetAsync($"/api/personas?scope=project&projectId={projectId}"));
+                list.EnumerateArray().Select(p => p.GetProperty("id").GetString()).Should().Contain(created.Id,
+                    "персона в том же сторе, что персон владельца: его список проекта её находит");
+                if (actionName == "quick-create проектной")
+                {
+                    _llm.Owners.Should().Contain(TenantId,
+                        "one-shot черновика проектной персоны оплачивает арендатор проекта (И-2)");
+                    _llm.Owners.Should().NotContain(MemberId, "ни один вызов создания не пошёл под ключом вызывающего");
+                }
+                break;
+            case ("ai-команда проекта", Owner or Editor):
+                body.GetProperty("members").EnumerateArray().Select(m => m.GetProperty("name").GetString())
+                    .Should().Contain(name, $"{role}: черновики команды дошли до фронта");
+                Personas.GetByOwner(TenantId).Any(p => p.Name == name).Should().BeFalse(
+                    "ai/team возвращает черновики и не создаёт персон");
+                _llm.Owners.Should().Contain(TenantId, "one-shot состава команды оплачивает арендатор проекта (И-2)");
+                _llm.Owners.Should().NotContain(MemberId, "ни один вызов не пошёл под ключом вызывающего");
+                break;
+            case ("создать проектную", _):
+            case ("quick-create проектной", _):
+            case ("ai-команда проекта", _):
+                Personas.GetByOwner(TenantId).Any(p => p.Name == name).Should().BeFalse(
+                    $"{role}: отказанное создание не оставило персоны в сторе проекта");
+                Personas.GetByOwner(MemberId).Any(p => p.Name == name).Should().BeFalse(
+                    $"{role}: и в личном сторе вызывающего тоже — полусозданной записи нет");
+                _llm.Owners.Should().BeEmpty($"{role}: отказ решил гейт до любой работы, в том числе до модели");
+                break;
+        }
+    }
+
+    // Глобальную и сферную персону участник создаёт как раньше — в своём пространстве (разрез
+    // §3.1 «без изменений», И-3): она принадлежит ему и владельцу общего проекта не видна.
+    [Fact]
+    public async Task ГлобальнуюПерсонуУчастникСоздаётВСвоёмПространстве()
+    {
+        await ArrangeAsync(Editor); // общий проект владельца с редактором-участником
+        var name = "Своя глобальная-" + RunId();
+
+        var created = await SecondClient().PostAsJsonAsync("/api/personas", new { name, scope = "global" });
+        created.EnsureSuccessStatusCode();
+        var id = IdOf(await created.Content.ReadAsStringAsync());
+
+        Personas.Get(id, MemberId)!.OwnerId.Should().Be(MemberId,
+            "сфера создания глобальной персоны — личное пространство вызывающего");
+        Personas.Get(id, TenantId).Should().BeNull("она не легла в стор владельца общего проекта");
+        (await OwnerClient().GetAsync($"/api/personas/{id}")).StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "И-3: личная персона участника не видна владельцу проекта");
+    }
+
+    // ── W3-B3a: гонка — владелец и редактор создают персону одного проекта одновременно ────────
+    //
+    // До B3a ключи были разные (каждый свой UserId) и записи не пересекались; теперь обе идут в
+    // стор проекта. Защита — существующая блокировка PersonaManager: вставка в ConcurrentDictionary
+    // и JsonFileStore.Save — под _saveLock, генерация handle там же (атомарна, без TOCTOU,
+    // PersonaManager.cs:423). Ожидаем ровно две персоны, обе под ключом владельца, и читаемый
+    // personas.json.
+
+    [Fact]
+    public async Task ParallelCreate_OwnerAndEditor_TwoPersonas()
+    {
+        var (projectId, fixturePersonaId) = await ArrangeAsync(Editor);
+        var ownerName = "Парная владельца-" + RunId();
+        var editorName = "Парная редактора-" + RunId();
+
+        var ownerPost = OwnerClient().PostAsJsonAsync("/api/personas",
+            new { name = ownerName, scope = "project", projectId });
+        var editorPost = SecondClient().PostAsJsonAsync("/api/personas",
+            new { name = editorName, scope = "project", projectId });
+        var ids = new List<string>();
+        foreach (var response in await Task.WhenAll(ownerPost, editorPost))
+        {
+            response.EnsureSuccessStatusCode();
+            ids.Add(IdOf(await response.Content.ReadAsStringAsync()));
+        }
+
+        var team = Personas.GetProjectTeam(TenantId, projectId);
+        team.Select(p => p.Id).Should().BeEquivalentTo(new[] { fixturePersonaId, ids[0], ids[1] },
+            "ровно три записи команды: существующая не потеряна, новые — две, без дублей");
+        foreach (var (id, name) in new[] { (ids[0], ownerName), (ids[1], editorName) })
+            Personas.Get(id, TenantId)!.OwnerId.Should().Be(TenantId,
+                $"{name}: созданная участником проекта — под ключом его арендатора (И-7)");
+
+        // Стор на диске читается: после двух одновременных сохранений personas.json — валидный JSON
+        // с обеими записями (оборванный файл или потерянная запись краснеют здесь). Имена в файле
+        // экранированы (\uXXXX), поэтому проверка — по разобранному JSON, а не по подстроке.
+        var stored = JsonDocument.Parse(File.ReadAllText(StorePath)).RootElement.EnumerateArray()
+            .Select(e => e.GetProperty("Name").GetString()).ToList();
+        stored.Should().Contain(ownerName, "запись владельца лежит на диске");
+        stored.Should().Contain(editorName,
+            "запись редактора лежит на диске: одновременное сохранение ничего не потеряло и не оборвало файл");
     }
 }

@@ -158,7 +158,15 @@ backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 # NoteToMemory (резолв персоны и ключ стора памяти). Оставшееся — список/пантеон/создание и
 # ai-пути (ключ — вызывающий по разряду), Ask (GetReachable/AskAsync), места W3-B3b
 # (avatar upload/recrop) и строки долга W3-B5a/B5b (привязки).
-backend/ClaudeHomeServer/Controllers/PersonasController.cs|64
+# W3-B3a (создание проектной персоны, разрез §3.1 строки «POST /», «POST /ai/quick-create»,
+# «POST /ai/team», И-2, И-7): 64→58 — восемь мест переведены на TenantOwnerId резолва права по
+# проекту из тела: CreateAsync в Create; ValidProject/one-shot черновика/Create/
+# TryAutoGenerateAvatar/SeedProjectDefaults/TryAutoBind в quick-create; AiTeamAsync в ai/team.
+# Добавлены два: Resolve(UserId, …) в ProjectWriteArea — id вызывающего входит только в
+# запрошенное право и в развилку 403/404 (тот же класс мест, что вердикт S2c-9 выше), ключом
+# хранилищ не стал. Глобальная/сферная персона — личное пространство вызывающего: её ключ
+# остался UserId намеренно (это не проектное действие, §3.1 «без изменений»).
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|58
 backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6

@@ -261,9 +261,39 @@ public class PersonasController(
         return persona is null ? NotFound() : Ok(persona);
     }
 
+    // Арендатор проекта, названного в ТЕЛЕ записывающего действия персон (W3-B3a, разрез §3.1
+    // строки «POST /», «POST /ai/quick-create», «POST /ai/team»). [ProjectScope] здесь невозможен:
+    // id проекта не в маршруте и не в аргументах действия — право решает IProjectAccess.Resolve в
+    // теле (тот же приём, что TaskActionDenied в TasksController.cs:232). Отказ — та же грань и та
+    // же форма, что у атрибута (ProjectScopeAttribute.cs:75-115): нет id → 400 (тот же текст тела,
+    // что отдавал ValidProject), невидимому (чужой/несуществующий проект) → 404, видимому без права
+    // (читателю) → 403 project_scope. Ключ дальнейших вызовов — TenantOwnerId резолва, не
+    // вызывающий (И-2); OwnerId новой персоны — владелец проекта (И-7).
+    private (RequestScope? Area, ActionResult? Denied) ProjectWriteArea(string? projectId)
+    {
+        if (string.IsNullOrWhiteSpace(projectId))
+            return (null, BadRequest(new { error = "Для проектной персоны нужен корректный projectId" }));
+        if (_access?.Resolve(UserId, projectId, ProjectRight.WriteContent) is { } area) return (area, null);
+        return _access?.Resolve(UserId, projectId, ProjectRight.Read) is null
+            ? (null, NotFound())
+            : (null, StatusCode(403, new { error = "Нет права на запись", code = ProjectScopeAttribute.ErrorCode }));
+    }
+
+    // Глобальную/сферную персону — личное пространство вызывающего, как раньше; проектную — по
+    // праву WriteContent на её проект, под ключом его владельца (W3-B3a; тот же приём, что
+    // ProjectTasksController.Create: право по проекту из тела, запись — по TenantOwnerId).
     [HttpPost]
-    public Task<ActionResult<Persona>> Create([FromBody] CreatePersonaRequest req) =>
-        _crud.CreateAsync(UserId, req, CallerSessionId());
+    public async Task<ActionResult<Persona>> Create([FromBody] CreatePersonaRequest req)
+    {
+        var tenant = UserId;
+        if (PersonaZone.IsProjectScope(req.Scope))
+        {
+            var (area, denied) = ProjectWriteArea(req.ProjectId);
+            if (denied is not null) return denied;
+            tenant = area!.TenantOwnerId;
+        }
+        return await _crud.CreateAsync(tenant, req, CallerSessionId());
+    }
 
     [HttpPut("{id}")]
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
@@ -609,11 +639,21 @@ public class PersonasController(
             return BadRequest(new { error = "Опишите, кто это и чем будет заниматься" });
 
         var scope = req.Scope ?? PersonaScope.Global;
-        if (PersonaZone.IsProjectScope(scope) && !_crud.ValidProject(UserId, req.ProjectId))
-            return BadRequest(new { error = "Для проектной персоны нужен корректный projectId" });
+        // Проектная персона — по праву WriteContent на её проект и под ключом его владельца
+        // (W3-B3a, разрез §3.1 «POST /ai/quick-create», И-2); глобальная/сферная — личное
+        // пространство вызывающего, как раньше.
+        var tenant = UserId;
+        if (PersonaZone.IsProjectScope(scope))
+        {
+            var (area, denied) = ProjectWriteArea(req.ProjectId);
+            if (denied is not null) return denied;
+            tenant = area!.TenantOwnerId;
+        }
 
         // 1. Черновик всех полей одним one-shot вызовом (строгий JSON-объект).
         // LLM иногда отвечает без валидного JSON — логируем сырой ответ и повторяем один раз.
+        // Ключ one-shot — тот же, что у всего создания (tenant): персона и её аватар/привязки
+        // пойдут в пространство владельца проекта, поэтому и черновик оплачивает он.
         var model = _oneShot.NormalizeModel(_config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
         DraftRaw? draft = null;
         for (var attempt = 1; attempt <= 2 && draft is null; attempt++)
@@ -622,7 +662,7 @@ public class PersonasController(
             try
             {
                 raw = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaQuickCreate,
-                    _drafts.BuildDraftPrompt(req.Prompt), model, UserId, jsonFormat: "json",
+                    _drafts.BuildDraftPrompt(req.Prompt), model, tenant, jsonFormat: "json",
                     ct: HttpContext.RequestAborted);
             }
             catch (Exception ex)
@@ -656,20 +696,20 @@ public class PersonasController(
         };
         if (PersonaManager.ExceedsContractLimit(contract, null, 0, out var tooBig))
             return BadRequest(new { error = tooBig });
-        var persona = _personas.Create(UserId, draft.Name!, draft.Role, draft.Description,
+        var persona = _personas.Create(tenant, draft.Name!, draft.Role, draft.Description,
             systemPrompt: null, model: null, effort: null, scope, req.ProjectId,
             color, draft.Greeting, memoryEnabled: true, tools: null, contract: contract);
 
         // 3. Фото-аватар — автоматически (не критично: при сбое остаются инициалы)
-        persona = await _crud.TryAutoGenerateAvatarAsync(UserId, persona, draft.AvatarPrompt);
+        persona = await _crud.TryAutoGenerateAvatarAsync(tenant, persona, draft.AvatarPrompt);
 
         // 3.5. Проектной персоне — дефолтные привязки к данным проекта (файлы/заметки/знания)
-        persona = _bindings.SeedProjectDefaults(UserId, persona);
+        persona = _bindings.SeedProjectDefaults(tenant, persona);
 
         // 4. Авто-подбор привязок (по умолчанию включён) —
         // best-effort: сбой не роняет создание, персона остаётся без привязок
         if (req.AutoBindings != false)
-            persona = await _crud.TryAutoBindAsync(UserId, persona, HttpContext.RequestAborted);
+            persona = await _crud.TryAutoBindAsync(tenant, persona, HttpContext.RequestAborted);
 
         await Broadcast("created", persona.Id);
         return Ok(persona);
@@ -678,9 +718,17 @@ public class PersonasController(
     // AI-формирование команды: по промпту + контексту проекта (CLAUDE.md) LLM предлагает набор
     // персон (роль/имя/характер/специальность) для создания в команде проекта. Возвращает
     // черновики — фронт показывает их для одобрения, затем создаёт через обычный POST /api/personas.
+    // Право и ключ — те же, что у создания проектной персоны (W3-B3a, разрез §3.1 «POST /ai/team»,
+    // И-2): WriteContent на проект из тела, AiTeamAsync — под ключом его владельца (состав команды
+    // строится по CLAUDE.md проекта и оплачивается тем же ключом).
     [HttpPost("ai/team")]
-    public Task<ActionResult> AiTeam([FromBody] AiTeamRequest req) =>
-        _crud.AiTeamAsync(UserId, req.ProjectId, req.Prompt ?? "", HttpContext.RequestAborted);
+    public async Task<ActionResult> AiTeam([FromBody] AiTeamRequest req)
+    {
+        var (area, denied) = ProjectWriteArea(req.ProjectId);
+        if (denied is not null) return denied;
+        return await _crud.AiTeamAsync(area!.TenantOwnerId, req.ProjectId, req.Prompt ?? "",
+            HttpContext.RequestAborted);
+    }
 
     // --- Привязки персоны: источники знаний и правила (фича persona-bindings) ---
     // CRUD работает независимо от флага (данные безвредны и переживают выключение);

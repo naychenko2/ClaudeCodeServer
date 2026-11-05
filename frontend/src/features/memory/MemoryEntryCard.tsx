@@ -16,14 +16,16 @@ export function MemoryEntryCard({
 }: {
   entry: MemoryEntryView;
   typeMeta: MemoryTypeMeta;
-  onRemove: () => void;
+  // Нет обработчика — нет и контрола (W3-F1h: панель только для чтения). Колонка действий
+  // рисуется только когда открыто хотя бы одно действие — пустой колонки на мобиле нет.
+  onRemove?: () => void;
   removing: boolean;
   onToNote?: () => void;
   onConfirm?: () => void;
   editing: boolean;
   editText: string;
   onEditTextChange: (v: string) => void;
-  onStartEdit: () => void;
+  onStartEdit?: () => void;
   onSaveEdit: () => void;
   onCancelEdit: () => void;
   savingEdit: boolean;
@@ -94,24 +96,30 @@ export function MemoryEntryCard({
             )}
             <div style={{ fontSize: 11, color: C.textMuted, marginTop: 6 }} title={fmtDate(entry.createdAt)}>{shortAgo(entry.createdAt)}</div>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
-            {onConfirm && (
-              <IconButton size="xs" title="Подтвердить — запомнить" color={C.success} onClick={onConfirm}>
-                <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-              </IconButton>
-            )}
-            <IconButton size="xs" title="Редактировать" onClick={onStartEdit}>
-              <Pencil size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-            </IconButton>
-            {onToNote && (
-              <IconButton size="xs" title="Превратить в заметку" onClick={onToNote}>
-                <FileText size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-              </IconButton>
-            )}
-            <IconButton size="xs" tone="danger" title={removeLabel} disabled={removing} onClick={onRemove}>
-              <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-            </IconButton>
-          </div>
+          {(onConfirm || onStartEdit || onToNote || onRemove) && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
+              {onConfirm && (
+                <IconButton size="xs" title="Подтвердить — запомнить" color={C.success} onClick={onConfirm}>
+                  <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                </IconButton>
+              )}
+              {onStartEdit && (
+                <IconButton size="xs" title="Редактировать" onClick={onStartEdit}>
+                  <Pencil size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                </IconButton>
+              )}
+              {onToNote && (
+                <IconButton size="xs" title="Превратить в заметку" onClick={onToNote}>
+                  <FileText size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                </IconButton>
+              )}
+              {onRemove && (
+                <IconButton size="xs" tone="danger" title={removeLabel} disabled={removing} onClick={onRemove}>
+                  <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                </IconButton>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

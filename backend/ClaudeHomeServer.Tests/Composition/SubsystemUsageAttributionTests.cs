@@ -184,6 +184,8 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
             if (key is not null) attribution.ObservableKeys.Should().Contain(key);
         }
         attribution.KeyOfMcp("нет-такого-тулсета").Should().BeNull();
+        attribution.KeyOfMcp("personas").Should().BeNull("тулсет без подсистемы — ядро");
+        attribution.KeyOfMcp("wsp").Should().BeNull("тулсет без подсистемы — ядро");
         attribution.KeyOf(typeof(SubsystemUsageAttributionTests)).Should().BeNull("сборка тестов не подсистема");
     }
 

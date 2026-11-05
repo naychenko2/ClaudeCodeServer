@@ -1,8 +1,9 @@
 // ПОТОЛОК РОСТА (frontend-api-split-2026-11.md): файл только худеет. Лимит строк — в
 // lib/__tests__/apiFileBudget.test.ts; он снижается после каждого выноса домена в
 // features/<домен>/api.ts, поднимать его нельзя. Новые методы — сразу в features/<домен>/.
-import type { Me, Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
+import type { Me, Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
 import { localModelApi } from '../features/localModel/api';
+import { providerAccountsApi } from '../features/providerAccounts/api';
 import { cachedToken, readStoredToken, request, writeStoredToken } from './offline';
 import type { FeatureRun } from '../types/featureRun';
 import type { FeaturesIndex, FeaturePage } from '../types/featureIndex';
@@ -35,6 +36,8 @@ export interface GlyphCandidate {
 
 // Типы «Локальных моделей» живут в features/localModel/types.ts, методы — в features/localModel/api.ts
 export type * from '../features/localModel/types';
+// Типы «Аккаунтов провайдеров» (Higgsfield) живут в features/providerAccounts/types.ts
+export type * from '../features/providerAccounts/types';
 
 // Итог «Собрать архитектуру» (POST /projects/{id}/architecture/generate).
 // graphBuiltAt — время снимка графа кода, которым помечена карта (ISO); added/matched —
@@ -683,20 +686,7 @@ export const api = {
       '/admin/backup/run', { method: 'POST' }),
   },
 
-  fal: {
-    account: (days = 7) => request<FalAccountResponse>(`/fal/account?days=${days}`),
-  },
-
-  glif: {
-    // Агрегаты расхода приходят сразу за три окна (24ч/7д/30д) — параметра периода нет
-    account: () => request<GlifAccountResponse>('/glif/account'),
-  },
-
-  // Деньги Yandex Cloud: остаток на счёте (только админу) и расход на озвучку за N дней —
-  // его продукт считает сам, у Яндекса такого разреза в API нет
-  yandex: {
-    account: (days = 30) => request<YandexAccountResponse>(`/yandex/account?days=${days}`),
-  },
+  ...providerAccountsApi,
 
   // Генератор картинок инстанса ПО МЕСТАМ (иконка проекта, аватар персоны): у каждого
   // места свой режим auto|fal|glif и своя модель. Чтение открыто всем (диалоги
@@ -2968,30 +2958,7 @@ export const api = {
     // и тихо уводит панель в MD-режим.
     embedCheck: (url: string) => checkReaderEmbeddable(url),
   },
-
-  // Higgsfield: подключается администратором один раз на весь продукт.
-  // Статус (GET /higgsfield/status) — { connected, expiresAt }:
-  // обычная карточка показывает только connected, admin-вкладка — и срок.
-  higgsfield: {
-    status: () => request<HiggsfieldStatus>('/higgsfield/status'),
-    // Тот же эндпоинт, тип расширен expiresAt для admin-вкладки.
-    adminStatus: () => request<HiggsfieldAdminStatus>('/higgsfield/status'),
-    connect: () => request<{ authorizeUrl: string }>('/higgsfield/connect', { method: 'POST' }),
-    disconnect: () => request<{ ok: true }>('/higgsfield/disconnect', { method: 'POST' }),
-  },
 };
-
-// Пользовательский вид: подключение + фактическое состояние из McpStatusStore.
-// health='failed' означает, что у апстрима проблемы прямо сейчас (HTTP-ошибка,
-// таймаут, пустой белый список) — карточка должна покраснеть, иначе громкий отказ
-// теряется (задача 67b7c30a, раздел «громкий отказ не доезжает до человека»).
-export type HiggsfieldStatus = {
-  connected: boolean;
-  health?: string | null;
-  error?: string | null;
-};
-// Админский вид: с expiresAt, чтобы администратор видел, когда токен истекёт.
-export type HiggsfieldAdminStatus = HiggsfieldStatus & { expiresAt?: string | null };
 
 async function checkReaderEmbeddable(url: string): Promise<{ embeddable: boolean }> {
   try {

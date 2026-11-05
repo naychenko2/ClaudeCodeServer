@@ -64,8 +64,9 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // Честные пределы:
 // - Токены — ОЦЕНКА EstTokens (символы дельты / 4, плюс потолок входа на каждый вызов ступени 2):
 //   по ней ночь решает бюджет ЗАРАНЕЕ, до вызова. Фактический вход NightResult.InputTokens — сумма
-//   ChatResult.InputTokens разобранных чатов (WC-4a/WC-4b): её пишут постфактум, решения она не
-//   меняет. Чатам отдано ≤ 70 % InputTokenBudget, остаток — запас на ступень 2 и ответы.
+//   ChatResult.InputTokens разобранных чатов и входа ступени 2 (WC-4a/WC-4b/WC-4c): её пишут
+//   постфактум, решения она не меняет. Чатам отдано ≤ 70 % InputTokenBudget, остаток — запас на
+//   ступень 2 и ответы.
 // - Пакеты: хроника чата — страница, а не пакет, в ChatResult.PackageIds её нет; считаются только
 //   пакеты. У исхода awaiting_human число пакетов неизвестно — он засчитывается как один (нижняя
 //   граница). applied в итоге — число применённых пакетов, toInbox — число чатов с пакетами во
@@ -76,9 +77,11 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //   (не откатывать); превышение остатка раздела закрывает только его раздел — его последующие чаты
 //   пропускаются, ночь идёт по другим разделам (решение 02.11); при остатке 0 чат не начинается.
 // - Облако: ночной разбор и ступень 2 в облако не уходят (решение Андрея 02.11): WikiIngestService
-//   (ключ wiki-nightly) и WikiChatStage2 зовут модель через RunLocalOrChosenAsync, без финального
-//   claude-шага. Падение или недоступность локали — отказ вызова: окно разбора уходит в Rejected
-//   и курсор не двигается, ступень 2 оставляет чат серым. Расход по этим вызовам не учитывается.
+//   (ключ wiki-nightly) и WikiChatStage2 зовут модель через RunLocalOrChosenDetailedAsync (та же
+//   цепочка, что RunLocalOrChosenAsync), без финального claude-шага. Падение или недоступность
+//   локали — отказ вызова: окно разбора уходит в Rejected и курсор не двигается, ступень 2
+//   оставляет чат серым. Фактический вход этих вызовов (usage того же ответа движка) суммируется
+//   в NightResult.InputTokens — меры нагрузки, не денег.
 //   Кнопка «Разобрать» и агент wiki_ingest не затронуты — облако там допустимо.
 public sealed class WikiNightlyService : BackgroundService
 {
@@ -101,10 +104,13 @@ public sealed class WikiNightlyService : BackgroundService
     /// исход; Applied — применённых пакетов; ToInbox — чатов с пакетами во «Входящих»; EstTokens —
     /// оценка расхода (см. шапку). OverrodeHuman — формулировок человека, которые ИИ заменил за ночь
     /// сам; DisputedPages — страниц, где он сам оспорил утверждение человека (conflict@human, ADR-038, предохранитель 6);
-    /// InputTokens (WC-4b) — фактический вход разборов: сумма ChatResult.InputTokens всех разобранных
-    /// чатов независимо от исхода разбора (отказанный план расход не отменяет); чат, упавший
-    /// исключением, в сумму не входит; расход ступени 2 в неё не входит — метрик шва она не даёт.
-    /// В файле итога поля аддитивны: старый итог (без поля) читается нулями.</summary>
+    /// InputTokens (WC-4b/WC-4c) — полный вход (вместе с кэшем): сумма ChatResult.InputTokens всех
+    /// разобранных чатов плюс фактический вход ступени 2. Мера нагрузки на GPU локали, а не деньги:
+    /// деньги из этого поля не считать, стоимость облачного пути — OneShotUsage.CostUsd. Сумма —
+    /// независимо от исхода (отказанный план и отказ ступени 2 понесённого расхода не отменяют);
+    /// чат, упавший исключением, в сумму не входит. 0 до WC-4c означало «не измерено», а не
+    /// «ничего не потрачено». В файле итога поля аддитивны: старый итог (без поля) читается
+    /// нулями.</summary>
     public sealed record NightResult(
         string Date, int Selected, int Analyzed, int Applied, int ToInbox, long EstTokens, string Outcome,
         int OverrodeHuman = 0, int DisputedPages = 0, long InputTokens = 0);
@@ -414,7 +420,14 @@ public sealed class WikiNightlyService : BackgroundService
                     {
                         var judged = await _stage2.JudgeAsync(ownerId, c.Session.Id, ct);
                         if (judged.Outcome != WikiChatStage2.Outcome.NotApplicable)
+                        {
                             est += (WikiChatStage2.MaxInputChars + WikiChatStage2.PromptHeader.Length) / 4;
+                            // Фактический вход ступени 2 (WC-4c): метрики того же ответа модели,
+                            // по которому вынесен вердикт. Считается по факту вызова: отказ
+                            // ступени 2 понесённого расхода не отменяет (тот же смысл, что у
+                            // ChatResult). NotApplicable — модель не звалась, расхода нет.
+                            inputTokens += judged.InputTokens;
+                        }
                         // Отказ ступени 2 → серая зона: чат отложен до следующей ночи.
                         if (judged.Outcome != WikiChatStage2.Outcome.Judged
                             || judged.Zone != WikiChatScorer.ZoneTriage) continue;

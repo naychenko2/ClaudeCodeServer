@@ -78,6 +78,22 @@ public interface ICheapTextRunner
     Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
         object? jsonFormat = null, CancellationToken ct = default);
 
+    // Та же цепочка, что RunLocalOrChosenAsync (тот же путь без финального claude-шага на
+    // локальном маршруте), но с расходом вызова: для шага локали — токены, которые отдал
+    // движок (CostUsd 0: локаль бесплатна, кеша у неё нет), для выбранной модели и облачного
+    // шага — usage провайдера. Нужен местам, которым важна фактическая нагрузка локали
+    // (ночной разбор вики и ступень 2 отбора чатов), а не деньги. null — ни выбранное, ни
+    // локаль не дали ответа. Usage = null при метриках, которых движок не дал, — вызов при
+    // этом успешен, потребитель прибавляет 0.
+    // Реализация по умолчанию обёртывает строковый метод без usage: подменённые швы и
+    // потребители, которым метрик не нужен, не меняются.
+    public async Task<OneShotResult?> RunLocalOrChosenDetailedAsync(string actionKey, string prompt,
+        string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+    {
+        var text = await RunLocalOrChosenAsync(actionKey, prompt, ownerId, jsonFormat, ct);
+        return text is null ? null : new OneShotResult(text, null, 0);
+    }
+
     // То же, что RunAsync, но с расходом вызова (OneShotResult.Usage) — для действий, которым
     // важна стоимость (сводка «Что нового»). На claude-пути usage приходит как раньше; на
     // локали и прямом адаптере usage=null (бесплатно — стоимости нет, что для них корректно).

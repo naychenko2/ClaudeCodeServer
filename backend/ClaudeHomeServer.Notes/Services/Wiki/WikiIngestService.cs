@@ -572,10 +572,11 @@ public sealed class WikiIngestService
     private async Task<ModelAnswer> CallModelAsync(string prompt, string ownerId, string passName,
         UsageAccumulator usage, CancellationToken ct, string? actionKey)
     {
-        // Решение Андрея 02.11: ночной разбор не уходит в облако. Ночь идёт через
-        // RunLocalOrChosenAsync (цепочка без финального claude-шага при локальном маршруте):
+        // Решение Андрея 02.11: ночной разбор не уходит в облако. Ночь идёт через цепочку без
+        // финального claude-шага при локальном маршруте (RunLocalOrChosenDetailedAsync):
         // падение/недоступность локали посреди вызова — отказ вызова, а не уход в Tier/облако.
-        // Расход по этим вызовам не учитывается (usage шва нет) — решение допускает потерю.
+        // Расход этих вызовов берётся из usage того же ответа движка (WC-4c): метрик не будет
+        // только если движок их не отдал — тогда плюс 0, как и раньше.
         // Кнопка «Разобрать» и агент wiki_ingest (actionKey не задан) — человеческие места,
         // облако там допустимо: прежний путь с учётом расхода.
         var noCloud = actionKey == LocalActionCatalog.WikiNightly;
@@ -585,8 +586,10 @@ public sealed class WikiIngestService
         {
             if (noCloud)
             {
-                text = await _llm.RunLocalOrChosenAsync(
+                var viaLocal = await _llm.RunLocalOrChosenDetailedAsync(
                     LocalActionCatalog.WikiNightly, prompt, ownerId, jsonFormat: "json", ct: ct);
+                text = viaLocal?.Text;
+                used = viaLocal?.Usage;
             }
             else
             {

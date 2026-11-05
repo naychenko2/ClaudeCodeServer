@@ -45,10 +45,16 @@ public class FacePoseRouteTests
             LastModel = model;
             return Task.FromResult("ok");
         }
+        // Последний вызов пишется в обоих входах: цепочка раннера зовёт облачный шаг
+        // detailed-вариантом (тот же вызов, с расходом), и LastModel обязан оставаться
+        // последним вызванным — иначе тест смотрит не на тот вызов.
         public Task<OneShotResult> RunDetailedAsync(string prompt, string? model = null,
             TimeSpan? timeout = null, CancellationToken ct = default, string? ownerId = null,
             string? effort = null, string? label = null)
-            => Task.FromResult(new OneShotResult("ok", null, 0));
+        {
+            LastModel = model;
+            return Task.FromResult(new OneShotResult("ok", null, 0));
+        }
     }
 
     private static ILocalImageMedia Media(bool configured)

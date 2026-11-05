@@ -976,6 +976,46 @@ public class WikiNightlyServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ИтогНочи_InputTokensВключаетВходСтупени2()
+    {
+        // Мутация «не прибавлять judged.InputTokens к inputTokens в RunPassAsync» → 1 000
+        // (красный): фактический вход ступени 2 выпадает из суммы.
+        Configure();
+        AddChat("g1", mark: null, history: Gray());
+        WikiChatScorer.Score(ScorerInput(_sessions.GetById("g1")!)).Zone.Should().Be(WikiChatScorer.ZoneGray,
+            "фикстура серого чата: ступень 2 спрашивается");
+        _llm.LocalInputTokens = 300;
+        _llm.Reply = a => a == LocalActionCatalog.WikiTriage
+            ? """{"hasKnowledge":true,"about":"a","reason":"r"}"""
+            : NothingJson;
+
+        await Tick(Sut((owner, chat, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
+            WikiChatIngestService.OutcomeNothingNew, null, [], InputTokens: 1_000))));
+
+        var last = Last();
+        last.Analyzed.Should().Be(1);
+        last.InputTokens.Should().Be(1_300, "разбор чата (1 000) плюс фактический вход ступени 2 (300)");
+    }
+
+    [Fact]
+    public async Task ОтказСтупени2_ЕёВходВИтогеОстаётся_ЧатНеРазобран()
+    {
+        // Расход считается по факту вызова, а не по исходу вердикта: отказ ступени 2 понесённого
+        // расхода не отменяет (тот же смысл, что у ChatResult в WC-4b). Мутация «суммировать
+        // только Judged» → 0 (красный).
+        Configure();
+        AddChat("g1", mark: null, history: Gray());
+        _llm.LocalInputTokens = 300;
+        _llm.Reply = _ => "это не json";
+
+        await Tick(Sut((owner, chat, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
+            WikiChatIngestService.OutcomeNothingNew, null, [], InputTokens: 1_000))));
+
+        _analyzed.Should().BeEmpty("отказ ступени 2 — серая зона, чат не берётся");
+        Last().InputTokens.Should().Be(300, "вызов модели состоялся — его вход в итоге");
+    }
+
+    [Fact]
     public async Task СтарыйИтогБезПоля_ЧитаетсяНулём()
     {
         // Аддитивность поля: файл итога, записанный до WC-4b, читается как раньше, нового поля в нём
@@ -1117,6 +1157,9 @@ public class WikiNightlyServiceTests : IDisposable
         public bool Route = true;
         public Func<string, string>? Reply;
         public TaskCompletionSource? Gate;
+        // Сколько «отдал» движок на detailed-вызове (полный вход). 0 — метрик не было:
+        // вызов успешен, usage=null, итог прибавляет 0 (WC-4c).
+        public long LocalInputTokens;
         // Модель вызвана и встала на гейте — событие вместо таймерного ожидания в тестах.
         public readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -1144,6 +1187,19 @@ public class WikiNightlyServiceTests : IDisposable
                 await Gate.Task.ConfigureAwait(false);
             }
             return new OneShotResult(text, new OneShotUsage(10, 0, 0, 5, 0.0, "fake"), 1);
+        }
+
+        // Ночная ветка (wiki-nightly) и ступень 2 (wiki-triage) зовут detailed-вариант шва
+        // (WC-4c): тот же ответ плюс usage «движка».
+        public Task<OneShotResult?> RunLocalOrChosenDetailedAsync(string actionKey, string prompt,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            var text = Answer(actionKey, prompt);
+            return Task.FromResult<OneShotResult?>(new OneShotResult(
+                text,
+                LocalInputTokens == 0
+                    ? null
+                    : new OneShotUsage(LocalInputTokens, 0, 0, 5, 0.0, "qwen-local"), 1));
         }
 
         private string Answer(string actionKey, string prompt)

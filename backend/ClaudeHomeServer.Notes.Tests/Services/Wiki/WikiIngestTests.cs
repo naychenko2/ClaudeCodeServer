@@ -647,6 +647,23 @@ public class WikiIngestTests : IDisposable
         return pkg.Id;
     }
 
+    // ── WC-4c: ночной разбор несёт фактический вход локали ──
+
+    [Fact]
+    public async Task НочнойРазбор_InputTokensРавенВходуЛокали()
+    {
+        // Мутация «не класть Usage в аккумулятор в ночной ветке CallModelAsync» → 0 (красный).
+        // До этого шага ночная ветка звала строковый RunLocalOrChosenAsync: метрик не было вовсе.
+        var llm = new FakeLlm(claims: NothingJson, plan: NothingJson, nightly: true);
+
+        var res = await Sut(llm).IngestAsync(User, Req(), actionKey: LocalActionCatalog.WikiNightly);
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeNothingNew, res.Reason);
+        res.InputTokens.Should().Be(1_000, "полный вход того же ответа локали, что и её текст");
+        llm.Calls.Should().ContainSingle(c => c.ActionKey == LocalActionCatalog.WikiNightly,
+            "ночная заявка идёт со своим местом, не с wiki-ingest");
+    }
+
     // ── подменённый ICheapTextRunner: классифицирует вызов по промпту, помечает всё ──
 
     private sealed class FakeLlm : ICheapTextRunner
@@ -654,9 +671,11 @@ public class WikiIngestTests : IDisposable
         public List<(string ActionKey, string Prompt, string Pass)> Calls { get; } = [];
 
         private readonly Dictionary<string, Queue<string>> _answers = new();
+        private readonly bool _nightly;
 
-        public FakeLlm(string claims, string plan, string? repair = null)
+        public FakeLlm(string claims, string plan, string? repair = null, bool nightly = false)
         {
+            _nightly = nightly;
             _answers["A"] = new Queue<string>([claims]);
             _answers["B"] = new Queue<string>([plan]);
             _answers["R"] = new Queue<string>([repair ?? plan]);
@@ -684,6 +703,13 @@ public class WikiIngestTests : IDisposable
             Task.FromResult(new OneShotResult(
                 Answer(actionKey, prompt), new OneShotUsage(10, 0, 0, 5, 0.0, "fake"), 1));
 
+        // Ночная ветка CallModelAsync зовёт detailed-вариант (тот же путь без облака): тот же
+        // ответ плюс usage движка — полный вход 1 000, вывод 50, CostUsd 0 (локаль бесплатна).
+        public Task<OneShotResult?> RunLocalOrChosenDetailedAsync(string actionKey, string prompt,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>
+            Task.FromResult<OneShotResult?>(new OneShotResult(
+                Answer(actionKey, prompt), new OneShotUsage(1_000, 0, 0, 50, 0.0, "qwen-local"), 1));
+
         private string Answer(string actionKey, string prompt)
         {
             // Проход определяется по директиве своего промпта (WikiKeeperPrompts),
@@ -693,7 +719,8 @@ public class WikiIngestTests : IDisposable
                 : prompt.Contains("turn the claims") ? "B"
                 : "?";
             Calls.Add((actionKey, prompt, pass));
-            actionKey.Should().Be(LocalActionCatalog.WikiIngest, "место разбора — wiki-ingest");
+            actionKey.Should().Be(_nightly ? LocalActionCatalog.WikiNightly : LocalActionCatalog.WikiIngest,
+                "место разбора — то, что назвал вызывающий");
             var queue = _answers.TryGetValue(pass, out var q) ? q : null;
             return queue is { Count: > 0 } ? queue.Dequeue() : "нет ответа для прохода " + pass;
         }

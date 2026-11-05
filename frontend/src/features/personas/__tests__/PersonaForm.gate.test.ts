@@ -2,9 +2,9 @@
 // docs/research/shared-projects-personas-cut-2026-11.md §3.4). Читатель — форма только для
 // чтения: поля disabled, «Удалить» нет (своей «Сохранить» у формы нет никогда — она в
 // тулбаре родителя, для читателя форма сообщает canSave=false). Редактор — карточка
-// правится; поля зоны и денег (зона, профиль доступа, модель/уровень/усилие) выключены
-// с видимым текстом «Меняет только владелец проекта», «Удалить» нет. Владелец и обычный
-// проект (myRole нет) — всё, как раньше.
+// правится; поля зоны и денег (зона, профиль доступа, модель/уровень/усилие, специальность —
+// доработка ревью fd328e70 п.3) выключены с видимым текстом «Меняет только владелец
+// проекта», «Удалить» нет. Владелец и обычный проект (myRole нет) — всё, как раньше.
 //
 // Окружение node (без jsdom), SSR renderToStaticMarkup — образец ProjectPersonasPanel.gate.test.ts
 // и components/SessionList.test.ts: effects не идут (аватар-caps, память, фокус, превью
@@ -91,6 +91,9 @@ function buttonTagWithText(html: string, text: string): string | null {
 
 const NAME_MARK = 'placeholder="Например, Ассистент"';
 const ZONE_MARK = 'title="Зона персоны"';
+// select «Специальности» — свой aria-label, он встречается только в его открывающем теге
+// (подпись поля Field рисует «Специальность» как текст, без aria-label)
+const SPEC_MARK = 'aria-label="Специальность"';
 const HINT_TEXT = 'Меняет только владелец проекта';
 
 describe('PersonaForm: гейт по роли (W3-F1e)', () => {
@@ -105,6 +108,9 @@ describe('PersonaForm: гейт по роли (W3-F1e)', () => {
     const resetTag = buttonTagWithText(html, 'Сбросить');
     expect(resetTag, 'контрола модели («Сбросить» ячейки) нет').not.toBeNull();
     expect(resetTag!, 'контроль модели читателю не выключен').toContain('disabled');
+    const specTag = openTagWith(html, '<select', SPEC_MARK);
+    expect(specTag, 'выбора специальности нет').not.toBeNull();
+    expect(specTag!, 'выбор специальности читателю не выключен').toContain('disabled');
     expect(countOf(html, 'Сохранить'), '«Сохранить» в форме читателю').toBe(0);
     expect(countOf(html, 'Удалить'), '«Удалить» в форме читателю').toBe(0);
   });
@@ -123,6 +129,11 @@ describe('PersonaForm: гейт по роли (W3-F1e)', () => {
     const inheritTag = buttonTagWithText(html, 'Вернуть наследование');
     expect(inheritTag, 'кнопки «Вернуть наследование» нет').not.toBeNull();
     expect(inheritTag!, '«Вернуть наследование» редактору не выключена').toContain('disabled');
+    // доработка ревью fd328e70 п.3: бэк (01ebbf0ed) 403-ит участнику смену специальности —
+    // фронт выключает её тем же гейтом, что зону и модель
+    const specTag = openTagWith(html, '<select', SPEC_MARK);
+    expect(specTag, 'выбора специальности нет').not.toBeNull();
+    expect(specTag!, 'выбор специальности редактору не выключен').toContain('disabled');
     // Текст кнопки идёт после иконки через пробел («</svg> Удалить персону») — строгий
     // маркер text-in-tag его не ловит, здесь достаточно самого текста: он встречается
     // только в этой кнопке (описание зоны — «Удаление…», без слова «Удалить»)
@@ -142,6 +153,9 @@ describe('PersonaForm: гейт по роли (W3-F1e)', () => {
     const resetTag = buttonTagWithText(html, 'Сбросить');
     expect(resetTag, 'контрола модели («Сбросить» ячейки) нет').not.toBeNull();
     expect(resetTag!, 'контроль модели владельцу выключен').not.toContain('disabled');
+    const specTag = openTagWith(html, '<select', SPEC_MARK);
+    expect(specTag, 'выбора специальности нет').not.toBeNull();
+    expect(specTag!, 'выбор специальности владельцу выключен').not.toContain('disabled');
     expect(countOf(html, 'Удалить персону'), '«Удалить персону» владельцу').toBe(1);
     expect(html, 'подсказки владельца в форме владельца быть не должно').not.toContain(HINT_TEXT);
   });

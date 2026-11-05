@@ -1366,13 +1366,16 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
           <TextField value={greeting} onChange={setGreeting} placeholder="Привет! Чем помочь?" disabled={readOnlyForm} />
         </Field>
 
-        <Field label="Специальность" hint="Функциональная роль для оркестрации: конвейер ролей, голос брифинга, статус команды. У «Исполнителя» и «Тестировщика» с полным профилем доступа в сабагентах есть право на правки файлов и команды — остальные специальности там только консультируют.">
+        {/* Специальность — Configure (доработка ревью fd328e70, п.3): бэк (01ebbf0ed)
+            отвечает участнику 403 owner_settings на её смену, поэтому тот же гейт, что у
+            полей зоны и денег, и та же подсказка — фронт не обещает того, что бэк откажет. */}
+        <Field label="Специальность" hint={ownerOnlyFields ? OWNER_ONLY_HINT : 'Функциональная роль для оркестрации: конвейер ролей, голос брифинга, статус команды. У «Исполнителя» и «Тестировщика» с полным профилем доступа в сабагентах есть право на правки файлов и команды — остальные специальности там только консультируют.'}>
           <select
             value={specialty}
             onChange={e => changeSpecialty(e.target.value as PersonaSpecialty)}
             style={selectStyle}
             aria-label="Специальность"
-            disabled={readOnlyForm}
+            disabled={ownerOnlyFields}
           >
             <option value="none">Не задана</option>
             {specialtyCatalog?.filter(e => e.key !== 'none').map(e => (

@@ -635,6 +635,18 @@ describe('Внешнее открытие и headless (WM-2)', () => {
     expect(has(docBody(), 'Разобрать этот чат')).toBe(true);
   });
 
+  it('один экземпляр: headless-монтирование — ровно один GET analyze-status, открытие по open нового не добавляет', async () => {
+    const counts = serve();
+    mountMenu(sessionA, { headless: true });
+    const root = roots[roots.length - 1];
+    await settle();
+    expect(counts.status).toBe(1);
+    act(() => { root.render(menuEl(sessionA, { headless: true, open: { counter: 1, anchor: null } })); });
+    await settle();
+    expect(has(docBody(), 'Разобрать этот чат')).toBe(true);
+    expect(counts.status).toBe(1);
+  });
+
   it('внешнее открытие при показанном итоге гасит точку так же, как клик по триггеру', async () => {
     serve({ status: { running: false, last: LAST_APPLIED } });
     const c = mountMenu(sessionA);

@@ -31,6 +31,10 @@ const PERSONA = {
 } as Persona;
 
 const CHAT_PANEL_SRC = readFileSync(fileURLToPath(new URL('../ChatPanel.tsx', import.meta.url)), 'utf8');
+// Исходник Composer: звено Composer.tsx → CompanionSelector guard'ится по строке
+// `locked={companionLocked}` ниже — переименуют или уберут проп, гейт в приложении
+// перестанет работать, а тест без этой строки остался бы зелёным.
+const COMPOSER_SRC = readFileSync(fileURLToPath(new URL('../Composer.tsx', import.meta.url)), 'utf8');
 
 // Строка гейта из ChatPanel: `const companionLocked = !canChangeCompanion(project, session, …)`.
 // Вычисляем её тем же выражением (eval из исходника): правка гейта в ChatPanel краснит
@@ -122,5 +126,11 @@ describe('ChatPanel: гейт дошит до запроса и до селек�
 
   it('блок передаётся в Composer (companionLocked={companionLocked})', () => {
     expect(CHAT_PANEL_SRC, 'селектор о блоке не знает').toContain('companionLocked={companionLocked}');
+  });
+
+  // Звено Composer → CompanionSelector (тот же guard по исходнику): без этой строки
+  // переименование/удаление пропа в Composer оставило бы тест зелёным при мёртвом гейте
+  it('Composer доносит блок до CompanionSelector (locked={companionLocked})', () => {
+    expect(COMPOSER_SRC, 'в Composer нет строки «locked={companionLocked}»').toContain('locked={companionLocked}');
   });
 });

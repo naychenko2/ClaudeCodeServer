@@ -18,3 +18,28 @@ FilesController.ToMarkdown
 # правки задачи — не ProjectScope-двери с WriteContent: PUT/DELETE/execute закрыты явными
 # гейтами TaskActionDenied/TaskAuthorGate/FeatureOwnerGate, колонки доски и перенос задачи — Write.
 ProjectTasksController.Create
+# W3-B1b (50dc87738, разрез shared-projects-personas-cut-2026-11 §3.1): {id}-действия PersonasController
+# размечены правом по персоне [ProjectScope(From = Persona, Right = WriteContent)]; двери ниже — по
+# строкам таблицы §3.1: PUT /{id}; avatar/generate·select·upload·recrop; voice; bindings
+# POST/PUT/DELETE и suggest/generate/apply-defaults; memory POST/PUT/DELETE и confirm; focus DELETE.
+# Право открывает только редактору, которого резолвит ResolvePersona (RP(WriteContent) в §3.1).
+# Создание персоны (POST /, /ai/quick-create, /ai/team) здесь не названо: её право — по проекту,
+# RJ(WriteContent), а не по персоне (атрибута ProjectScope у этих действий нет).
+PersonasController.Update
+PersonasController.GenerateAvatar
+PersonasController.SelectAvatar
+PersonasController.UploadAvatar
+PersonasController.RecropAvatar
+PersonasController.SetVoice
+PersonasController.AddBinding
+PersonasController.SetBindings
+PersonasController.UpdateBinding
+PersonasController.DeleteBinding
+PersonasController.SuggestBindings
+PersonasController.GenerateBindings
+PersonasController.ApplyDefaultBindings
+PersonasController.Remember
+PersonasController.ClearFocus
+PersonasController.UpdateMemory
+PersonasController.Forget
+PersonasController.ConfirmMemory

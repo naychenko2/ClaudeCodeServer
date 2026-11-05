@@ -176,7 +176,11 @@ backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 # персоны, ValidateAsync, UpdateBindings; additive-запись — AppendBinding с тем же ключом).
 # Оставшееся в файле — строки долга W3-B5b (binding-targets/suggest/generate/apply-defaults) и
 # «личные» места (списки/пантеон/создание/ai-пути/Ask).
-backend/ClaudeHomeServer/Controllers/PersonasController.cs|42
+# W3-B5a доработка (хвост 1 возврата ревью 5a794ef5): 42→41 — SetBindings (полная замена
+# PUT {id}/bindings) переведена на scope.TenantOwnerId + persona.ProjectId (сужение набора
+# для не-владельца — NonOwnerBindingEditDenied внутри SetBindingsAsync). PUT/DELETE одной
+# привязки зовут UpdateBinding/RemoveBinding с ключом арендатора — новых мест не добавили.
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|41
 backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6

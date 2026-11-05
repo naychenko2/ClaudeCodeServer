@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -652,26 +653,79 @@ public sealed class PersonasCrudService(
 
     // --- Привязки ---
 
-    // Полная замена набора привязок (PUT-семантика; дёргается MCP personas_bindings_set)
+    // Полная замена набора привязок (PUT-семантика; дёргается MCP personas_bindings_set).
+    // callerRole/projectId — сужение для не-владельца общего проекта (W3-B5a доработка, хвост 1
+    // возврата 5a794ef5): личные привязки владельца не-владелец не удаляет и не подменяет
+    // (403, тот же NonOwnerBindingEditDenied); повторённые запросом дословно — остаются как есть
+    // (id и даты не заменяются): полная замена участника — только проектной части набора.
+    // Роль по умолчанию — Owner: MCP-тулсет действует в пространстве владельца (его ключ —
+    // ownerId из токена), сужения у него нет, поведение не меняется.
     public async Task<ActionResult<IReadOnlyList<PersonaBinding>>> SetBindingsAsync(string userId,
-        string id, List<PersonaBindingRequest>? bindingRequests)
+        string id, List<PersonaBindingRequest>? bindingRequests,
+        ProjectRole callerRole = ProjectRole.Owner, string? projectId = null)
     {
         var persona = personas.Get(id, userId);
         if (persona is null) return NotFound();
 
-        var list = new List<PersonaBinding>();
+        var requested = new List<PersonaBinding>();
         foreach (var b in bindingRequests ?? [])
         {
             var (binding, parseError) = ParseBinding(b);
             if (binding is null) return BadRequest(new { error = parseError });
-            var err = await bindings.ValidateAsync(userId, binding, list, persona);
+            requested.Add(binding);
+        }
+
+        var kept = new List<PersonaBinding>();
+        if (callerRole != ProjectRole.Owner)
+        {
+            var existing = persona.Bindings ?? [];
+            // Существующие: личная привязка вне запроса — «удаление» (403), с изменёнными
+            // полями — «подмена» (403); дословная копия — остаётся оригинальным объектом.
+            foreach (var e in existing)
+            {
+                var mirror = requested.FirstOrDefault(r => SameBindingShape(r, e));
+                if (mirror is not null && SameBindingContent(mirror, e)) { kept.Add(e); continue; }
+                if (bindings.NonOwnerBindingEditDenied(callerRole, projectId, e, e)
+                        is (int deniedStatus, string deniedError))
+                    return StatusCode(deniedStatus, new { error = deniedError });
+            }
+            // Запрошенные: совпадение по ключу дубликата с существующей — «подмена» (текущая
+            // как current), остальное — новые (тот же метод, current=null).
+            foreach (var r in requested)
+            {
+                if (kept.Any(e => SameBindingShape(e, r))) continue;
+                var current = existing.FirstOrDefault(b => SameBindingShape(b, r));
+                if (bindings.NonOwnerBindingEditDenied(callerRole, projectId, r, current)
+                        is (int deniedStatus, string deniedError))
+                    return StatusCode(deniedStatus, new { error = deniedError });
+            }
+        }
+
+        var list = new List<PersonaBinding>(kept);
+        foreach (var b in requested)
+        {
+            if (kept.Any(e => SameBindingShape(e, b))) continue; // дословная копия владельца — в сторе её оригинал
+            var err = await bindings.ValidateAsync(userId, b, list, persona);
             if (err is not null) return BadRequest(new { error = err });
-            list.Add(binding);
+            list.Add(b);
         }
         var updated = personas.UpdateBindings(id, userId, list);
         await Broadcast(userId, "updated", id);
         return Ok(updated.Bindings ?? []);
     }
+
+    // Идентичность привязки запроса и существующей: тот же ключ дубликата, что в ValidateAsync
+    // (type+target+path). Содержание — с condition и mode: равное содержание значит, что копия
+    // запроса дословно сохраняет привязку владельца, а не подменяет её.
+    private static bool SameBindingShape(PersonaBinding a, PersonaBinding b) =>
+        a.Type == b.Type
+        && string.Equals(a.Target, b.Target, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(a.Path ?? "", b.Path ?? "", StringComparison.OrdinalIgnoreCase);
+
+    private static bool SameBindingContent(PersonaBinding a, PersonaBinding b) =>
+        SameBindingShape(a, b)
+        && string.Equals(a.Condition ?? "", b.Condition ?? "", StringComparison.Ordinal)
+        && a.Mode == b.Mode;
 
     // Авто-подбор и сохранение привязок для свежесозданной персоны (best-effort).
     // Подобранное ДОПОЛНЯЕТ существующие (явные из запроса и посевные): UpdateBindings

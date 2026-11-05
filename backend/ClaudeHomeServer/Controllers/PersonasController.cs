@@ -857,12 +857,21 @@ public class PersonasController(
     // Полная замена набора привязок (PUT-семантика; дёргается MCP personas_bindings_set)
     [HttpPut("{id}/bindings")]
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
-    public Task<ActionResult<IReadOnlyList<PersonaBinding>>> SetBindings(string id,
-        [FromBody] PersonaBindingsSetRequest req) =>
+    public async Task<ActionResult<IReadOnlyList<PersonaBinding>>> SetBindings(string id,
+        [FromBody] PersonaBindingsSetRequest req)
+    {
+        // W3-B5a доработка (хвост 1 возврата 5a794ef5): ключ — арендатора; сужение набора
+        // для не-владельца — тем же NonOwnerBindingEditDenied внутри SetBindingsAsync:
+        // личные привязки владельца не-владелец не удаляет и не подменяет (403), проектные — может.
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
+        if (persona is null) return NotFound();
         // Единая точка с http-тулсетом (personas_bindings_set): дословная копия тела здесь
         // уже однажды разошлась бы с сервисом — рассинхрон, ради устранения которого
         // PersonasCrudService и заводили
-        _crud.SetBindingsAsync(UserId, id, req.Bindings);
+        return await _crud.SetBindingsAsync(scope.TenantOwnerId, id, req.Bindings,
+            scope.Role, persona.ProjectId);
+    }
 
     // Голос персоны в голосовом режиме. Пустое тело (или объект без единого заполненного
     // поля) снимает голос — персона возвращается к голосу инстанса.
@@ -914,15 +923,20 @@ public class PersonasController(
         var err = await _bindings.ValidateAsync(scope.TenantOwnerId, candidate, persona.Bindings, persona);
         if (err is not null) return BadRequest(new { error = err });
 
-        current.Type = candidate.Type;
-        current.Target = candidate.Target;
-        current.Path = candidate.Path;
-        current.Condition = candidate.Condition;
-        current.Mode = candidate.Mode;
-        current.UpdatedAt = DateTime.UtcNow;
-        _personas.UpdateBindings(id, scope.TenantOwnerId, persona.Bindings!.ToList());
+        // Правка под _saveLock в PersonaManager (доработка возврата 5a794ef5): поиск, мутация
+        // и запись — атомарны относительно одновременного AppendBinding/RemoveBinding;
+        // прежняя запись всего списка из снимка вызывающего теряла параллельную привязку.
+        var updated = _personas.UpdateBinding(id, scope.TenantOwnerId, bindingId, b =>
+        {
+            b.Type = candidate.Type;
+            b.Target = candidate.Target;
+            b.Path = candidate.Path;
+            b.Condition = candidate.Condition;
+            b.Mode = candidate.Mode;
+        });
+        if (updated is null) return NotFound(new { error = "Привязка не найдена" });
         await Broadcast("updated", id);
-        return Ok(current);
+        return Ok(updated);
     }
 
     [HttpDelete("{id}/bindings/{bindingId}")]
@@ -939,8 +953,10 @@ public class PersonasController(
         if (_bindings.NonOwnerBindingEditDenied(scope.Role, persona.ProjectId, current, current)
                 is (int deniedStatus, string deniedError))
             return StatusCode(deniedStatus, new { error = deniedError });
-        var list = persona.Bindings!.Where(b => b.Id != bindingId).ToList();
-        _personas.UpdateBindings(id, scope.TenantOwnerId, list);
+        // Удаление под _saveLock в PersonaManager (та же доработка): список строится из
+        // текущего значения, а не из снимка — одновременный POST не затирается.
+        if (!_personas.RemoveBinding(id, scope.TenantOwnerId, bindingId))
+            return NotFound(new { error = "Привязка не найдена" });
         await Broadcast("updated", id);
         return NoContent();
     }

@@ -39,12 +39,15 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// строки матрицы: вернуть в AddBinding/UpdateBinding/DeleteBinding ключ вызывающего — краснеют
 /// «Notes проекта» (404: персоны под ключом вызывающего нет) и «свою проектную» (404).
 ///
-/// Конкурентность: ParallelAddBinding_OwnerAndEditor_BothKept — обе одновременные привязки
-/// остаются. UpdateBindings пишет список ЦЕЛИКОМ из снимка вызывающего (PersonaManager.cs:838-
-/// 850) — additive-запись поверх снимка теряет чужую одновременную запись (классическая
-/// потерянная правка). Поэтому POST-пути этого шага идут через AppendBinding: список строится
-/// под тем же _saveLock из ТЕКУЩЕГО значения. Полная замена (PUT {id}/bindings, MCP
-/// personas_bindings_set) остаётся за UpdateBindings — её семантика и есть last-write-wins.
+/// Конкурентность: ParallelAddBinding_OwnerAndEditor_BothKept и ParallelAddAndUpdateBinding_
+/// BothKept — одновременные записи одной персоны не перечёркивают друг друга. UpdateBindings
+/// пишет список ЦЕЛИКОМ из переданного значения — additive- и точечная правка поверх снимка
+/// теряют чужую одновременную запись (классическая потерянная правка). Поэтому все три
+/// пути идут через read-modify-write под _saveLock в PersonaManager: AppendBinding (POST),
+/// UpdateBinding/RemoveBinding (PUT/DELETE одной; доработка возврата ревью 5a794ef5).
+/// Полная замена PUT {id}/bindings остаётся last-write-wins по семантике, но с доработки
+/// — под ключом арендатора и с сужением набора для не-владельца (хвост 1 того же возврата);
+/// MCP personas_bindings_set — под ключом владельца, без сужения.
 ///
 /// Мутации (проверяются на копиях дерева, scripts/mutation-copy.sh):
 /// - NonOwnerBindingEditDenied всегда возвращает null («сужение разрешает всё») — краснеют
@@ -52,7 +55,12 @@ namespace ClaudeHomeServer.Tests.Controllers;
 ///   не удалить/не изменить» (200 вместо 403);
 /// - IsOwnerOnlyTarget в NonOwnerBindingEditDenied — false — краснеет «mcp-цель» (400 вместо 403);
 /// - IsProjectBoundTarget — true — краснеет «личная цель» (200 вместо 400);
-/// - вернуть ключ вызывающего в AddBinding — краснеет «Notes проекта» (404).
+/// - вернуть ключ вызывающего в AddBinding — краснеет «Notes проекта» (404);
+/// - вернуть запись из снимка в PUT/DELETE одной привязки (UpdateBindings поверх
+///   persona.Bindings!.ToList() вместо UpdateBinding/RemoveBinding) — краснеет
+///   ParallelAddAndUpdateBinding_BothKept по числу tool-привязок;
+/// - вернуть SetBindings на ключ вызывающего или снять сужение полной замены — краснеет
+///   ПолнаяЗаменаПривязок_НеВладелецНеТрогаетЛичныеВладельца_ПроектныеМожет (404 вместо 403).
 /// </summary>
 [Trait("Category", "Host")]
 public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicationFactory>
@@ -541,6 +549,207 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
         var view = await BodyAsync(await OwnerClient().GetAsync($"/api/personas/{personaId}/bindings"));
         view.EnumerateArray().Count(b => b.GetProperty("type").GetString() == "notes").Should().Be(2,
             "GET после гонки видит обе");
+    }
+
+    // ── Конкурентность (возврат ревью 5a794ef5): правка/удаление одной привязки не стирают ──────
+    // ── одновременное добавление ─────────────────────────────────────────────────────────────────
+    //
+    // PUT/DELETE {id}/bindings/{bindingId} писали весь список из снимка вызывающего
+    // (PersonasController.cs:923/:943 в 8f5431cb2): привязка, добавленная после момента
+    // снятия списка и до записи под _saveLock, исчезала без ошибки. Окно этой потери — тело
+    // обработчика запроса; измерено: простая пара HTTP-запросов в него не попадает (прежняя
+    // форма зелёная в любом порядке старта — окна запросов не пересекаются на микросекундах).
+    // Поэтому тест расширяет окно тем, что расширяет его по-настоящему:
+    //  - тяжёлая запись персоны (тысячи привязок): каждый Save под _saveLock занимает
+    //    блокировку на десятки миллисекунд — запись запроса встаёт в очередь за ними;
+    //  - непрерывная буря прямых AppendBinding из потока теста: у прямого вызова нет HTTP-
+    //    конвейера, его критическая секция гарантированно конкурирует с запросом и стоит в
+    //    очереди за чужими Save — то есть после момента снятия списка запросом.
+    // В прежней форме бури, попавшей после снятия, затирается записью запроса. UpdateBinding/
+    // RemoveBinding делают read-modify-write под тем же _saveLock, что AppendBinding: их
+    // поиск и мутация — внутри той же очереди, никто не затирается.
+    //
+    // Мутация «вернуть запись из снимка» (контроллер снова пишет persona.Bindings!.ToList()
+    // через UpdateBindings) — этот тест красный: стору не хватает привязок бури.
+
+    // Сколько тяжёлых привязок вешают запись персоны: их JSON — сотни килобайт, каждый Save
+    // занимает _saveLock дольше, чем длится HTTP-конвейер запроса (измерено: 10K привязок
+    // дают ~30 мс на запись).
+    private const int HeavyBindings = 5_000;
+
+    // Многопоточная буря прямых добавлений: N потоков добавляют до остановки. У прямого
+    // вызова нет HTTP-конвейера — его потоки встают в очередь на _saveLock раньше запроса,
+    // но выполняются за чужими тяжёлыми Save, то есть после момента, когда запрос снял
+    // список. Именно эта очередь и есть окно потерянной правки. Возвращает задачи
+    // (их результат — числа добавлений каждого потока) и остановку.
+    private (List<Task<int>> Work, CancellationTokenSource Stop) StartStorm(string personaId,
+        string prefix, int threads)
+    {
+        var cts = new CancellationTokenSource();
+        var work = Enumerable.Range(0, threads).Select(t => Task.Run(() =>
+        {
+            var n = 0;
+            while (!cts.IsCancellationRequested)
+            {
+                Personas.AppendBinding(personaId, TenantId, new PersonaBinding
+                { Type = PersonaBindingType.Tool, Target = $"{prefix}{t}-{n}" });
+                n++;
+            }
+            return n;
+        })).ToList();
+        return (work, cts);
+    }
+
+    [Fact]
+    public async Task ParallelAddAndUpdateBinding_BothKept()
+    {
+        var (_, personaId) = await ArrangeAsync(Editor);
+        var editedId = await SeedBindingAsync(OwnerClient(), personaId, true, "personal");
+        var condition = "Изменено " + RunId();
+
+        // Tool-ключи каталога — законная цель редактора (матрица «Tool каталога»), все разные:
+        // HTTP-добавления не сталкиваются с дубликатами.
+        var toolKeys = PersonaBindingsService.ToolCatalog.Keys.ToList();
+        toolKeys.Count.Should().BeGreaterThanOrEqualTo(11, "гоне нужны разные законные цели");
+
+        // Тяжёлая запись: существующие привязки + балласт, чтобы каждая запись персоны
+        // держала _saveLock десятки миллисекунд.
+        var seeded = Personas.Get(personaId, TenantId)!.Bindings!;
+        Personas.UpdateBindings(personaId, TenantId, [.. seeded,
+            ..Enumerable.Range(0, HeavyBindings).Select(i => new PersonaBinding
+            { Type = PersonaBindingType.Tool, Target = "heavy-" + i })]);
+
+        const int stormThreads = 8;
+        var httpKeys = toolKeys.Take(5).ToList();
+        var httpKeys2 = toolKeys.Skip(5).Take(5).ToList();
+
+        CancellationTokenSource? stop1 = null, stop2 = null;
+        try
+        {
+            // Фаза 1: буря прямых добавлений + HTTP PUT существующей + HTTP POST новых.
+            var (storm1, s1) = StartStorm(personaId, "storm1-", stormThreads);
+            stop1 = s1;
+            // Короткая пауза: потоки бури должны успеть встать в очередь на _saveLock
+            // до запросов (у них нет конвейера, им доли миллисекунды хватает).
+            await Task.Delay(5);
+            var reqs = new List<Task<HttpResponseMessage>>
+            {
+                OwnerClient().PutAsJsonAsync($"/api/personas/{personaId}/bindings/{editedId}",
+                    NotesBodyWithCondition("personal", condition)),
+            };
+            reqs.AddRange(httpKeys.Select(k =>
+                SecondClient().PostAsJsonAsync($"/api/personas/{personaId}/bindings", ToolBody(k))));
+            foreach (var r in await Task.WhenAll(reqs))
+                r.EnsureSuccessStatusCode();
+            stop1.Cancel();
+            var counts1 = await Task.WhenAll(storm1);
+
+            var persona = Personas.Get(personaId, TenantId)!;
+            HasBindingWithCondition(persona, "notes", "personal", condition).Should().BeTrue(
+                "правка владельца записана");
+            foreach (var k in httpKeys)
+                persona.Bindings!.Any(b => b.Target == k).Should().BeTrue($"HTTP-добавление «{k}» в сторе");
+            counts1.Sum().Should().BeGreaterThan(stormThreads,
+                "буря должна состояться и пережить хотя бы одну тяжёлую запись");
+            for (var t = 0; t < stormThreads; t++)
+                for (var i = 0; i < counts1[t]; i++)
+                    persona.Bindings!.Any(b => b.Target == $"storm1-{t}-{i}").Should().BeTrue(
+                        $"добавление бури {t}-{i} в сторе: правка писалась не из устаревшего снимка");
+
+            // Фаза 2: тот же сценарий с DELETE — удаление одной не стирает одновременные добавления.
+            var doomedId = await SeedBindingAsync(OwnerClient(), personaId, false, toolKeys[10]);
+            var (storm2, s2) = StartStorm(personaId, "storm2-", stormThreads);
+            stop2 = s2;
+            await Task.Delay(5);
+            var reqs2 = new List<Task<HttpResponseMessage>>
+            {
+                OwnerClient().DeleteAsync($"/api/personas/{personaId}/bindings/{doomedId}"),
+            };
+            reqs2.AddRange(httpKeys2.Select(k =>
+                SecondClient().PostAsJsonAsync($"/api/personas/{personaId}/bindings", ToolBody(k))));
+            foreach (var r in await Task.WhenAll(reqs2))
+                r.EnsureSuccessStatusCode();
+            stop2.Cancel();
+            var counts2 = await Task.WhenAll(storm2);
+
+            persona = Personas.Get(personaId, TenantId)!;
+            persona.Bindings!.Any(b => b.Id == doomedId).Should().BeFalse("привязка удалена");
+            foreach (var k in httpKeys2)
+                persona.Bindings!.Any(b => b.Target == k).Should().BeTrue($"HTTP-добавление «{k}» в сторе");
+            counts2.Sum().Should().BeGreaterThan(stormThreads, "буря должна состояться");
+            for (var t = 0; t < stormThreads; t++)
+                for (var i = 0; i < counts2[t]; i++)
+                    persona.Bindings!.Any(b => b.Target == $"storm2-{t}-{i}").Should().BeTrue(
+                        $"добавление бури {t}-{i} в сторе: удаление писалось не из устаревшего снимка");
+            HasBindingWithCondition(persona, "notes", "personal", condition).Should().BeTrue(
+                "правка первой фазы на месте");
+        }
+        finally
+        {
+            // Бурю останавливаем всегда: её поток не должен тянуть записи в следующие тесты.
+            // Тяжёлую запись не оставляем в общем сторе фикстуры: её мегабайты замедлили бы
+            // каждую запись следующих тестов.
+            stop1?.Cancel();
+            stop2?.Cancel();
+            Personas.UpdateBindings(personaId, TenantId, null);
+        }
+    }
+
+    // ── Полная замена (PUT {id}/bindings): ключ арендатора, личные привязки владельца ────────────
+    // ── не-владельцу неприкосновенны (хвост 1 возврата 5a794ef5) ─────────────────────────────────
+    //
+    // SetBindings шла с ключом вызывающего (не-владелец получал 404 fail-closed). Теперь ключ —
+    // арендатора, сужение — тот же NonOwnerBindingEditDenied: удалить или подменить личную
+    // привязку владельца участник не может (403), личная цель в запросе — 400, проектные — может.
+    // Дословно повторённая запросом личная привязка остаётся как была: id и поля не заменяются —
+    // полная замена участника касается только проектной части набора.
+
+    [Fact]
+    public async Task ПолнаяЗаменаПривязок_НеВладелецНеТрогаетЛичныеВладельца_ПроектныеМожет()
+    {
+        var (projectId, personaId) = await ArrangeAsync(Editor);
+        var personalId = await SeedBindingAsync(OwnerClient(), personaId, true, "personal");
+        var projectBindingId = await SeedBindingAsync(OwnerClient(), personaId, true, projectId);
+
+        // 1. Набор без личной привязки владельца — попытка удаления: 403, стор нетронут.
+        var (delStatus, _, delBody) = await SendAsync(SecondClient(), HttpMethod.Put,
+            $"/api/personas/{personaId}/bindings", new { bindings = new[] { NotesBody(projectId) } });
+        delStatus.Should().Be(403, "участник не удаляет личные привязки владельца");
+        delBody.Should().Contain("личной цели", "отказ — текстом сужения (тот же метод)");
+
+        // 2. Набор с изменённой копией личной — попытка подмены: 403, стор нетронут.
+        var (modStatus, _, _) = await SendAsync(SecondClient(), HttpMethod.Put,
+            $"/api/personas/{personaId}/bindings",
+            new { bindings = new[] { NotesBodyWithCondition("personal", "Подменено " + RunId()), NotesBody(projectId) } });
+        modStatus.Should().Be(403, "участник не подменяет личные привязки владельца");
+
+        var persona = Personas.Get(personaId, TenantId)!;
+        persona.Bindings!.Single(b => b.Id == personalId).Condition.Should().Be("",
+            "отказ оставил личную привязку без изменений");
+        persona.Bindings!.Any(b => b.Id == projectBindingId).Should().BeTrue("проектная тоже на месте");
+
+        // 3. Личная дословно + новая проектная вместо прежней — разрешено: личная остаётся
+        // как была, проектная часть заменена; запись — под ключом арендатора (И-2).
+        var newCondition = "Новое " + RunId();
+        var (okStatus, _, _) = await SendAsync(SecondClient(), HttpMethod.Put,
+            $"/api/personas/{personaId}/bindings",
+            new { bindings = new[] { NotesBody("personal"), NotesBodyWithCondition(projectId, newCondition) } });
+        (okStatus >= 200 && okStatus < 300).Should().BeTrue(
+            "полная замена участника — проектной части набора");
+        persona = Personas.Get(personaId, TenantId)!;
+        persona.Bindings!.Single(b => b.Id == personalId).Condition.Should().Be("",
+            "личная, повторённая дословно, остаётся как была: id и поля не заменяются");
+        persona.Bindings!.Any(b => b.Id == projectBindingId).Should().BeFalse("прежняя проектная заменена");
+        HasBindingWithCondition(persona, "notes", projectId, newCondition).Should().BeTrue(
+            "новая проективная записана под ключом арендатора");
+        Personas.Get(personaId, MemberId).Should().BeNull("под ключом вызывающего записи нет");
+
+        // 4. Владелец может удалить проектные: сужение его не касается.
+        (await OwnerClient().PutAsJsonAsync($"/api/personas/{personaId}/bindings",
+            new { bindings = new[] { NotesBody("personal") } })).EnsureSuccessStatusCode();
+        persona = Personas.Get(personaId, TenantId)!;
+        persona.Bindings!.Any(b => b.Target == projectId).Should().BeFalse("владелец удалил проектную привязку");
+        persona.Bindings!.Any(b => b.Target == "personal").Should().BeTrue("личная осталась");
     }
 
     // ── Граница W3-B5b: LLM-путь подбора не затронут шагом и живёт под ключом арендатора ───────

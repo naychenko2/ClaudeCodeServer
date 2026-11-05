@@ -868,6 +868,51 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         return persona;
     }
 
+    // Правка одной привязки (W3-B5a доработка, PUT {id}/bindings/{bindingId}; возврат ревью
+    // 5a794ef5): read-modify-write под _saveLock, как AppendBinding — поиск, мутация и запись
+    // атомарны относительно одновременных AppendBinding/RemoveBinding. Прежняя форма
+    // (контроллер мутировал найденный объект и писал весь список) затирала привязку,
+    // добавленную параллельным POST после момента снятия списка. Возвращает изменённую
+    // привязку; null — персоны или привязки уже нет (гонка с удалением: 404, а не 500).
+    public PersonaBinding? UpdateBinding(string id, string userId, string bindingId,
+        Action<PersonaBinding> mutate)
+    {
+        var persona = Get(id, userId);
+        if (persona is null) return null;
+        PersonaBinding? updated = null;
+        lock (_saveLock)
+        {
+            var current = persona.Bindings?.FirstOrDefault(b => b.Id == bindingId);
+            if (current is null) return null;
+            mutate(current);
+            current.UpdatedAt = DateTime.UtcNow;
+            persona.UpdatedAt = DateTime.UtcNow;
+            updated = current;
+        }
+        Save();
+        OnPersonaChanged?.Invoke(persona);
+        return updated;
+    }
+
+    // Удаление одной привязки (W3-B5a доработка, DELETE {id}/bindings/{bindingId}): тот же
+    // read-modify-write под _saveLock из текущего значения. Пустой список нормализуется
+    // в null (как UpdateBindings). false — персоны или привязки уже нет.
+    public bool RemoveBinding(string id, string userId, string bindingId)
+    {
+        var persona = Get(id, userId);
+        if (persona is null) return false;
+        lock (_saveLock)
+        {
+            if (persona.Bindings?.Any(b => b.Id == bindingId) != true) return false;
+            var kept = persona.Bindings!.Where(b => b.Id != bindingId).ToList();
+            persona.Bindings = kept.Count > 0 ? kept : null;
+            persona.UpdatedAt = DateTime.UtcNow;
+        }
+        Save();
+        OnPersonaChanged?.Invoke(persona);
+        return true;
+    }
+
     // Полная замена правил автоматизации персоны (событийно-управляемая проактивность);
     // сохранение мгновенное. Пустой список → null (поведение как без правил).
     // Конфигурация только: runtime-состояние (LastFiredAt/счётчики/снапшоты) живёт отдельно

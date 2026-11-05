@@ -229,7 +229,7 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
             <PersonaTasksPanel persona={persona} isMobile={isMobile} />
           ) : view === 'knowledge' ? (
             // Знания — привязки источников и правил (фича persona-bindings)
-            <PersonaBindingsPanel persona={persona} accent={accent} isMobile={isMobile} />
+            <PersonaBindingsPanel persona={persona} projects={[project]} accent={accent} isMobile={isMobile} />
           ) : view === 'automation' ? (
             // Проактивность — правила «событие → действие» (событийно-управляемая автоматизация)
             <PersonaAutomationPanel persona={persona} projects={[project]} accent={accent} isMobile={isMobile} />

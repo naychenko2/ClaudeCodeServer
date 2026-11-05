@@ -503,7 +503,7 @@ export function PersonaStudio({ persona, projects, talking, initialView, onDelet
     : view === 'knowledge'
     // Знания — привязки источников и правил (фича persona-bindings)
     ? <div style={{ flex: 1, minHeight: 0 }}>
-        <PersonaBindingsPanel persona={persona} accent={accent} isMobile={isMobile} />
+        <PersonaBindingsPanel persona={persona} projects={projects} accent={accent} isMobile={isMobile} />
       </div>
     : view === 'automation'
     // Проактивность — правила «событие → действие» (событийно-управляемая автоматизация)

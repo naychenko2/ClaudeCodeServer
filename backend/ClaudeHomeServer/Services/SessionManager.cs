@@ -4443,15 +4443,19 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return session;
     }
 
-    // Создание группового чата (флаг persona-group-chats): 2-4 персоны владельца,
+    // Создание группового чата (флаг persona-group-chats): 2-8 персоны владельца,
     // первая — ведущая (стартовый активный спикер). Зона — по ведущей, как в
     // CreatePersonaChatAsync: проектная персона → сессия её проекта, глобальная → чат вне проекта.
     public async Task<Session> CreateGroupChatAsync(string ownerId, IReadOnlyList<string> personaIds,
         ClaudeMode mode, string? name = null, string? createdByUserId = null)
     {
-        // Проект группового чата — проект ведущей проектной персоны; у остальных чат вне проекта,
-        // и персоне сферы в нём не место
-        var groupProjectId = _personas.Get(personaIds.FirstOrDefault() ?? "", ownerId) is { } l
+        // Проект группового чата — проект ведущей, то есть ПЕРВОГО НЕПУСТОГО id: тот же резолв
+        // ведущей, что в ChatsController.CreateGroup (W3-B4c П1). «Сырой» первый id мог быть пустым:
+        // тогда проект выходил null, сверка состава ValidateParticipants выключалась, а чат всё
+        // равно садился в проект ведущей ниже (по participants[0]) — граница И-3 держала только
+        // непустой первый id. У остальных чат вне проекта, и персоне сферы в нём не место.
+        var groupProjectId = personaIds.FirstOrDefault(id => !string.IsNullOrWhiteSpace(id)) is { } leadId
+            && _personas.Get(leadId, ownerId) is { } l
             ? PersonaZone.OwnProjectId(l) : null;
         var participants = ValidateParticipants(ownerId, personaIds, groupProjectId, createdByUserId);
         var leader = participants[0];

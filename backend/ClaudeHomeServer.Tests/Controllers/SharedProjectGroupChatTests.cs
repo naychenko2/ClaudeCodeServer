@@ -12,11 +12,14 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 /// <summary>
 /// Групповые чаты с проектными персонами общего проекта (W3-B4c, разрез §3.2). Зона — по ведущей:
-/// проектная персона резолвится ResolvePersona с правом хода (И-1), сервис зовётся с ключом
-/// арендатора (И-2): редактор создаёт группу из персон проекта и становится её автором, читателю
-/// отказ 403 (отказ различается правом, а не статусом). Группа проектного чата состоит только из
-/// персон этого проекта: глобальная персона владельца участнику несуществующая (404, И-3), отказ
-/// не трогает состав. Группа вне проекта (свои глобальные персоны участника) — прежний путь.
+/// ПЕРВОЙ непустой id (тот же резолв, что в ChatsController.CreateGroup: с пустым первым id граница
+/// выключалась, а чат всё равно садился в проект ведущей). Проектная персона резолвится
+/// ResolvePersona с правом хода (И-1), сервис зовётся с ключом арендатора (И-2): редактор создаёт
+/// группу из персон проекта и становится её автором, читателю отказ 403 — и на создание группы,
+/// и на смену состава (отказ различается правом, а не статусом). Группа проектного чата состоит
+/// только из персон этого проекта: глобальная персона владельца и проектная персона ДРУГОГО её
+/// проекта участнику несуществующая (404, И-3), отказ не трогает состав. Группа вне проекта
+/// (свои глобальные персоны участника) — прежний путь.
 /// Путь владельца и отказ глобальной в общем проекте (global_persona_in_shared) держат
 /// SharedProjectPersonaTests, здесь он не повторяется.
 /// </summary>
@@ -132,6 +135,30 @@ public class SharedProjectGroupChatTests : IClassFixture<TestWebApplicationFacto
             "отказ не оставил в проекте нового чата");
     }
 
+    [Fact]
+    public async Task ЧитательНеМеняетСостав_PutParticipants_403ИСоставНеМеняется()
+    {
+        var projectId = await ProjectWithMemberAsync("reader");
+        var p1 = await CreatePersonaAsync(Owner(), "Проектная-1-" + Guid.NewGuid().ToString("N")[..6], "project", projectId);
+        var p2 = await CreatePersonaAsync(Owner(), "Проектная-2-" + Guid.NewGuid().ToString("N")[..6], "project", projectId);
+        var p3 = await CreatePersonaAsync(Owner(), "Проектная-3-" + Guid.NewGuid().ToString("N")[..6], "project", projectId);
+        // Состав меняет тот, у кого есть право записи: чат создаёт владелец (читатель группу не
+        // создаёт — тест выше).
+        var created = await Owner().PostAsJsonAsync("/api/chats/group", new { personaIds = new[] { p1, p2 } });
+        created.StatusCode.Should().Be(HttpStatusCode.OK);
+        var chatId = IdOf(await created.Content.ReadAsStringAsync());
+
+        // Состав читателя законный (обе персоны этого проекта): отказ — о праве, а не о составе.
+        var r = await Member().PutAsJsonAsync($"/api/chats/{chatId}/participants",
+            new { personaIds = new[] { p1, p3 } });
+
+        r.StatusCode.Should().Be(HttpStatusCode.Forbidden,
+            "состав — настройка чата: право WriteContent (DenyContentWrite), читателю — нет");
+        (await BodyAsync(r)).GetProperty("code").GetString().Should().Be(ProjectScopeAttribute.ErrorCode);
+        // Отказ не трогает состав чата.
+        Stored(chatId).Participants.Should().Equal(p1, p2);
+    }
+
     // ── глобальная персона владельца в группе проектного чата ──────────────────────────
 
     [Fact]
@@ -169,6 +196,51 @@ public class SharedProjectGroupChatTests : IClassFixture<TestWebApplicationFacto
             "та же грань, что при создании: состав проектного чата — только персоны этого проекта");
         // Отказ не трогает состав чата.
         Stored(chatId).Participants.Should().Equal(p1, p2);
+    }
+
+    // ── проектная персона другого проекта владельца ─────────────────────────────────────
+    // Грань И-3 судится по проекту чата, а не по scope: такие персоны мутация «отвергать только
+    // глобальные» пропускала (кейсы выше — только глобальные), поэтому граница здесь отдельная.
+
+    [Fact]
+    public async Task РедакторСПерсонойДругогоПроектаВладельца_PutParticipants_404ИСоставНеМеняется()
+    {
+        var projectId = await ProjectWithMemberAsync("editor");
+        var otherProjectId = await ProjectWithMemberAsync(null);
+        var p1 = await CreatePersonaAsync(Owner(), "Проектная-1-" + Guid.NewGuid().ToString("N")[..6], "project", projectId);
+        var p2 = await CreatePersonaAsync(Owner(), "Проектная-2-" + Guid.NewGuid().ToString("N")[..6], "project", projectId);
+        var foreign = await CreatePersonaAsync(Owner(), "Чужая-проекту-" + Guid.NewGuid().ToString("N")[..6], "project", otherProjectId);
+
+        var created = await Member().PostAsJsonAsync("/api/chats/group", new { personaIds = new[] { p1, p2 } });
+        created.StatusCode.Should().Be(HttpStatusCode.OK);
+        var chatId = IdOf(await created.Content.ReadAsStringAsync());
+
+        var r = await Member().PutAsJsonAsync($"/api/chats/{chatId}/participants",
+            new { personaIds = new[] { p1, foreign } });
+
+        r.StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "И-3 по проекту, а не по scope: персона своего проекта владельца участнику несуществующая");
+        // Отказ не трогает состав чата.
+        Stored(chatId).Participants.Should().Equal(p1, p2);
+    }
+
+    [Fact]
+    public async Task ГруппаСПустымПервымIdИЧужойПерсоной_PostGroup_404ИЧатНеСоздан()
+    {
+        var projectId = await ProjectWithMemberAsync("editor");
+        var otherProjectId = await ProjectWithMemberAsync(null);
+        var p1 = await CreatePersonaAsync(Owner(), "Проектная-" + Guid.NewGuid().ToString("N")[..6], "project", projectId);
+        var foreign = await CreatePersonaAsync(Owner(), "Чужая-проекту-" + Guid.NewGuid().ToString("N")[..6], "project", otherProjectId);
+        var before = await ChatIdsAsync(Owner(), projectId);
+
+        var r = await Member().PostAsJsonAsync("/api/chats/group",
+            new { personaIds = new[] { "", p1, foreign } });
+
+        r.StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "ведущая — первый НЕПУСТОЙ id (тот же резолв, что в ChatsController): с «сырым» пустым " +
+            "первым id проект группы выходил null, сверка состава выключалась и чужая персона прошла");
+        (await ChatIdsAsync(Owner(), projectId)).Should().BeEquivalentTo(before,
+            "отказ не оставил в проекте нового чата");
     }
 
     // ── гонка двух составов: итог — один из двух целиком ───────────────────────────────

@@ -49,7 +49,10 @@ public class PersonasController(
     IConfiguration config,
     ILogger<PersonasController> log,
     IHubContext<SessionHub> hub,
-    INoteAccessor? notes = null) : ControllerBase
+    INoteAccessor? notes = null,
+    // Доступ к проекту для списков и /match по projectId (W3-B2, разрез §3.1): область и ключ —
+    // IProjectAccess.Resolve; null — fail-closed (проект недоступен)
+    IProjectAccess? access = null) : ControllerBase
 {
     private readonly PersonaManager _personas = personas;
     private readonly ProjectManager _projects = projects;
@@ -57,6 +60,7 @@ public class PersonasController(
     private readonly PersonaMemoryService _memory = memory;
     private readonly PersonaBindingsService _bindings = bindings;
     private readonly INoteAccessor? _notes = notes;
+    private readonly IProjectAccess? _access = access;
     private readonly SkillsService _skills = skills;
     private readonly KnowledgeService _knowledge = knowledge;
     private readonly Services.Images.ImageGenerationService _images = images;
@@ -89,10 +93,12 @@ public class PersonasController(
         _hub.Clients.Group("user_" + UserId)
             .SendAsync("message", new PersonasChangedMessage(action, personaId));
 
-    // Список персон владельца. scope: "context" — глобальные + этого проекта (+ extraProjectIds/
+    // Список персон. scope: "context" — глобальные + этого проекта (+ extraProjectIds/
     // extraPersonaIds — кросс-проектные привязки ProjectPersonas текущей персоны-вызывающего);
     // "project" — только привязанные к projectId; "global" — только глобальные;
-    // иначе — все персоны владельца.
+    // иначе — свои персоны + проектные персоны проектов, где вызывающий участник.
+    // Доступ к проекту в "context"/"project" — через IProjectAccess (нет доступа или проекта → 404,
+    // как несуществующему); дальнейшие вызовы — под ключом арендатора (W3-B2, разрез §3.1; И-2).
     [HttpGet]
     public ActionResult<IReadOnlyList<Persona>> List(
         [FromQuery] string? scope, [FromQuery] string? projectId,
@@ -101,17 +107,45 @@ public class PersonasController(
     {
         if (string.Equals(scope, "context", StringComparison.OrdinalIgnoreCase))
         {
-            return Ok(_personas.GetForContextWithExtras(UserId, projectId,
+            if (string.IsNullOrEmpty(projectId))
+            {
+                // Нет проекта — вызывающий сам свой арендатор: свои глобальные + extras, как раньше
+                // (тот же приём, что ResolveSession для чата вне проекта).
+                var ownTenant = UserId;
+                return Ok(_personas.GetForContextWithExtras(ownTenant, null,
+                    SplitCsv(extraProjectIds), SplitCsv(extraPersonaIds)));
+            }
+            var area = _access?.Resolve(UserId, projectId, ProjectRight.Read);
+            if (area is null) return NotFound();
+            if (area.Role != ProjectRole.Owner)
+                // Участнику — только команда проекта: глобальная и сферная персона владельца
+                // не видна ни в одном списке (И-3).
+                return Ok(_personas.GetProjectTeam(area.TenantOwnerId, projectId));
+            return Ok(_personas.GetForContextWithExtras(area.TenantOwnerId, projectId,
                 SplitCsv(extraProjectIds), SplitCsv(extraPersonaIds)));
         }
         if (string.Equals(scope, "project", StringComparison.OrdinalIgnoreCase))
-            return Ok(_personas.GetProjectTeam(UserId, projectId));
+        {
+            var area = _access?.Resolve(UserId, projectId, ProjectRight.Read);
+            if (area is null) return NotFound();
+            return Ok(_personas.GetProjectTeam(area.TenantOwnerId, projectId));
+        }
         if (string.Equals(scope, "sphere", StringComparison.OrdinalIgnoreCase))
             return Ok(_personas.GetSphereTeam(UserId, sphereId));
         if (string.Equals(scope, "global", StringComparison.OrdinalIgnoreCase))
             return Ok(_personas.GetByOwner(UserId)
                 .Where(p => p.Scope == PersonaScope.Global).ToList());
-        return Ok(_personas.GetByOwner(UserId));
+        // Без scope — свои (как раньше) + проектные персоны проектов, где вызывающий участник
+        // (разрез §3.1 «GET /api/personas без scope»). Список проектов участника — существующая
+        // видимость ProjectManager.GetAccessible (с рубильником и флагом), не новая выборка по
+        // OwnerId; ключ чужой команды — её владелец.
+        var own = _personas.GetByOwner(UserId);
+        var memberProjects = _projects.GetAccessible(UserId)
+            .Where(p => p.OwnerId != UserId)
+            .Select(p => (p.Id, p.OwnerId!))
+            .ToList();
+        return Ok(own.Concat(_personas.GetProjectTeamsOfMemberProjects(memberProjects))
+            .OrderByDescending(p => p.UpdatedAt).ToList());
     }
 
     // Подбор максимально релевантной персоны под задачу (для чат-действий AI-хаба, которые
@@ -125,10 +159,27 @@ public class PersonasController(
     public async Task<IActionResult> MatchPersona([FromBody] MatchPersonaRequest req)
     {
         var task = (req?.Task ?? "").Trim();
-        var personas = _personas.GetForContext(UserId, req?.ProjectId);
+        // W3-B2 (разрез §3.1 «POST /match»): с projectId — доступ через IProjectAccess (нет доступа
+        // или проекта → 404), кандидаты — команда проекта, ключ вызовов — арендатор (И-2); фильтр
+        // requiredTool — тоже по арендатору: доступность возможностей персоны решается в пространстве
+        // её владельца. Без проекта — вызывающий сам свой арендатор: свои глобальные, как раньше.
+        string tenant;
+        IReadOnlyCollection<Persona> personas;
+        if (req?.ProjectId is { Length: > 0 } projectId)
+        {
+            var area = _access?.Resolve(UserId, projectId, ProjectRight.Read);
+            if (area is null) return NotFound();
+            tenant = area.TenantOwnerId;
+            personas = _personas.GetProjectTeam(tenant, projectId);
+        }
+        else
+        {
+            tenant = UserId;
+            personas = _personas.GetForContext(tenant, null);
+        }
         var requiredTool = (req?.RequiredTool ?? "").Trim();
         if (requiredTool.Length > 0)
-            personas = personas.Where(p => _bindings.ToolKeyAvailable(UserId, p, requiredTool)).ToList();
+            personas = personas.Where(p => _bindings.ToolKeyAvailable(tenant, p, requiredTool)).ToList();
         if (task.Length == 0 || personas.Count == 0) return Ok(new { personaId = (string?)null });
 
         var sb = new System.Text.StringBuilder();

@@ -143,6 +143,25 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     public IReadOnlyList<Persona> GetProjectTeam(string userId, string? projectId) =>
         GetByOwner(userId).Where(p => PersonaZone.IsProjectTeam(p, projectId)).ToList();
 
+    // Проектные персоны проектов, где вызывающий — участник (W3-B2, разрез §3.1 «GET /api/personas
+    // без scope»). Список проектов готовый и принадлежит вызывающему контроллеру
+    // (ProjectManager.GetAccessible — видимость с рубильником и флагом): здесь НЕТ выборки по
+    // OwnerId, метод принимает пары (projectId, tenantOwnerId) и отдаёт команды этих проектов.
+    // Проектная персона с чужим владельцем — битая запись, а не доступ (та же сверка, что в
+    // ProjectAccessService.ResolvePersona, §2.2).
+    public List<Persona> GetProjectTeamsOfMemberProjects(
+        IReadOnlyCollection<(string ProjectId, string TenantOwnerId)> memberProjects)
+    {
+        if (memberProjects is not { Count: > 0 }) return [];
+        var tenants = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (projectId, tenantOwnerId) in memberProjects) tenants[projectId] = tenantOwnerId;
+        return _personas.Values
+            .Where(p => PersonaZone.OwnProjectId(p) is { } ownProjectId
+                && tenants.TryGetValue(ownProjectId, out var tenant)
+                && p.OwnerId == tenant)
+            .OrderByDescending(p => p.UpdatedAt).ToList();
+    }
+
     // Персона по id с проверкой владельца (null — нет или чужая)
     public Persona? Get(string id, string userId) =>
         _personas.TryGetValue(id, out var p) && p.OwnerId == userId ? p : null;

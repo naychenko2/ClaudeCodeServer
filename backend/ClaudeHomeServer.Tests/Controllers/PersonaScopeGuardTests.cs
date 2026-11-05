@@ -170,9 +170,8 @@ public class PersonaScopeGuardTests
     // Ключ — файл+метод, не номер строки. Запись без вызова не краснит: снимает шаг-владелец или W3-B8.
     private static readonly (string File, string Method, string Step)[] DebtList =
     [
-        // W3-B2 — списки и подбор (§3.1 «GET /api/personas…», «POST /match»)
-        ("PersonasController.cs", "PersonasController.List", "W3-B2"),
-        ("PersonasController.cs", "PersonasController.MatchPersona", "W3-B2"),
+        // W3-B2 закрыт (списки и /match — под ключом арендатора, SharedProjectPersonaListTests):
+        // инлайновых вызовов с ключом-вызывающим в List/MatchPersona больше нет, строки сняты.
         // W3-B1c — тела read-путей {id}-действий (§3.1 строки B1 с RP(Read))
         ("PersonasController.cs", "PersonasController.Get", "W3-B1c"),
         ("PersonasController.cs", "PersonasController.AvatarCandidate", "W3-B1c"),

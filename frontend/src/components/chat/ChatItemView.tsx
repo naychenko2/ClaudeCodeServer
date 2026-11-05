@@ -66,8 +66,7 @@ import { missReasonLabel } from '../../lib/promptCache';
 // чтобы правый край строки не заходил под плавающий аватар (FAB) на 4 px.
 const PILL_ROW_RIGHT_PAD = TB.iconHitMobile;
 
-// Подвал хода: подтверждение в подсказке к строке про промах кэша (шаг F-2, фича
-// prompt-cache). Формулировка — польза, не техника: человек понимает, что кэш
+// Подвал хода: подтверждение в подсказке к строке про промах кэша (шаг F-2, кэш промпта). Формулировка — польза, не техника: человек понимает, что кэш
 // пересобирается сам и следующий ход снова тёплый — промах не поломка. Ключи —
 // те же причины, что в карте подписей lib/promptCache; незнакомая — общий текст.
 const CACHE_MISS_HINT: Record<string, string> = {
@@ -1159,8 +1158,6 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
   const asstName = useAssistantName();
   // Подписка на стор персон: авторские аватары реплик (personaId) обновятся после загрузки стора
   usePersonasVersion();
-  // Причина промаха кэша в подвале хода (F-2) — только за фич-флагом prompt-cache
-  const promptCacheOn = useFeature(FLAGS.promptCache);
   // Вклад карточки изменённого файла-заметки: заметка ли это (match) и как её
   // открыть/нарисовать. Нет вклада — обычная карточка изменённого файла.
   const fileChangedNote = useSlotItem<never, ChatItemFileChangedApi>('chat-item-action', 'file-changed');
@@ -1771,12 +1768,12 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
               <span title="входные · выходные токены">↑{fmtTok(u.inputTokens)} ↓{fmtTok(u.outputTokens)}</span>
             </>
           )}
-          {/* Промах кэша этого хода (F-2, фича prompt-cache): короткая причина по карте
+          {/* Промах кэша этого хода (F-2): короткая причина по карте
               подписей lib/promptCache, в подсказке — что это нормально. Нет данных кэша
               (сторонний провайдер, локальный движок) или промаха — строки нет вовсе.
               Незнакомая причина в строке — «другая причина», сырой код — в подсказке
               (минор ревью F-2). */}
-          {promptCacheOn && item.promptCache && item.promptCache.missReason !== 'none' && (
+          {item.promptCache && item.promptCache.missReason !== 'none' && (
             <>
               {sep}
               <span title={CACHE_MISS_HINT[item.promptCache.missReason]

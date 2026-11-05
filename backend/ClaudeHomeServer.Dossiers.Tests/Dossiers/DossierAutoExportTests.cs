@@ -21,7 +21,7 @@ namespace ClaudeHomeServer.Tests.Services.Dossiers;
 
 // Интеграционные тесты автовыгрузки паспортов в ЛОКАЛЬНУЮ ветку ccs/dossiers/v1 после
 // захвата: настоящий git CLI и настоящий SessionManager (сессии предзагружаются в
-// sessions.json ДО конструирования — паттерн DossierGitExportTests), стор и флаги —
+// sessions.json ДО конструирования — паттерн DossierGitExportTests), стор —
 // реальные на temp-конфиге. Дебаунс тестовый — 1 с (Dossiers:AutoExportDebounceSeconds),
 // ветку ждём поллингом с дедлайном, а не фиксированной паузой (раннер CI медленнее хоста).
 [Trait("Category", "Slow")]
@@ -31,7 +31,6 @@ public class DossierAutoExportTests : IDisposable
     private readonly IConfiguration _config;
     private readonly ProjectManager _projects;
     private readonly UserStore _users;
-    private readonly FakeFeatureFlagGate _flags;
     private readonly ChatHistoryService _history;
     private readonly TestSessionBroadcaster _broadcaster = new();
     private readonly DossierStore _store;
@@ -61,7 +60,6 @@ public class DossierAutoExportTests : IDisposable
         _users = new UserStore(_config,
             new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _projects = new ProjectManager(_config, _users, new AppSettingsService(_config));
-        _flags = new FakeFeatureFlagGate(_users);
         _history = new ChatHistoryService(_config);
         _store = new DossierStore(_config);
         _digests = new DossierDiscussionStore(_config);
@@ -84,12 +82,9 @@ public class DossierAutoExportTests : IDisposable
 
     // --- Фикстуры ---
 
-    private async Task<(Project Project, User User)> MkRepoProjectAsync(string name, bool flagOn)
+    private async Task<(Project Project, User User)> MkRepoProjectAsync(string name)
     {
         var user = _users.Add("auto-" + name, "password-123456", "user");
-        if (flagOn)
-            _users.SetFeatureFlag(user.Id, FeatureFlagKeys.ChangeDossiersRecall, true).Should().BeTrue();
-
         var dir = Path.Combine(_temp, name);
         Directory.CreateDirectory(dir);
         await _git.InitAsync(null, dir);
@@ -192,12 +187,12 @@ public class DossierAutoExportTests : IDisposable
 
     private DossierAutoExporter MkAutoExporter(SessionManager sessions) =>
         new(_store, _projects, sessions, _git,
-            new InstanceSecretsProvider(_config), MkDiscussions(sessions), _flags, _state, _config);
+            new InstanceSecretsProvider(_config), MkDiscussions(sessions), _state, _config);
 
     // Автоимпортёр на тех же сторах, что и автовыгрузка, — для тестов петли
     // «автовыгрузка двигает tip → тик автоимпорта» (разбор 23.08)
     private DossierAutoImporter MkAutoImporter() => new(_projects, _store, _state, _git,
-        new InstanceSecretsProvider(_config), _flags);
+        new InstanceSecretsProvider(_config));
 
     // --- Хелперы git-проверок ---
 
@@ -222,30 +217,12 @@ public class DossierAutoExportTests : IDisposable
         throw new TimeoutException("автовыгрузка не создала ветку за отведённое время");
     }
 
-    // --- (а) гейт флага владельца: без change-dossiers-recall автовыгрузки нет ---
-
-    [Fact]
-    public async Task ФлагВыключен_АвтовыгрузкаНеСоздаётВетку()
-    {
-        var (p, user) = await MkRepoProjectAsync("repo_flag_off", flagOn: false);
-        var s = Sess("sess-auto-a", p.Id);
-        var sessions = MkSessions(s);
-        var auto = MkAutoExporter(sessions);
-        await auto.StartAsync(default);
-
-        _store.Add(Dossier(user.Id, p.Id, "aa11aa11", "feat: паспорт без флага", s.Id));
-        await auto.ExportSafeAsync(user.Id, p.Id);   // немедленная попытка, без дебаунса
-
-        (await HasBranchAsync(p.RootPath)).Should()
-            .BeFalse("флаг владельца выключен — та же граница, что у ручного POST /export");
-    }
-
     // --- (б) захват через событие стора → после дебаунса ветка создана и чиста ---
 
     [Fact]
     public async Task ЗахватЧерезСобытие_ПослеDebounceВыгружаетВетку()
     {
-        var (p, user) = await MkRepoProjectAsync("repo_auto_on", flagOn: true);
+        var (p, user) = await MkRepoProjectAsync("repo_auto_on");
         var s = Sess("sess-auto-b", p.Id);
         var auto = MkAutoExporter(MkSessions(s));
         await auto.StartAsync(default);
@@ -265,7 +242,7 @@ public class DossierAutoExportTests : IDisposable
     [Fact]
     public async Task СерияЗахватов_ДебаунсСливаетВОдинКоммит()
     {
-        var (p, user) = await MkRepoProjectAsync("repo_auto_batch", flagOn: true);
+        var (p, user) = await MkRepoProjectAsync("repo_auto_batch");
         var s = Sess("sess-auto-c", p.Id);
         var auto = MkAutoExporter(MkSessions(s));
         await auto.StartAsync(default);
@@ -289,7 +266,7 @@ public class DossierAutoExportTests : IDisposable
     [Fact]
     public async Task ОптАутВключённыйПослеЗахвата_НеПопадаетВАвтовыгрузку()
     {
-        var (p, user) = await MkRepoProjectAsync("repo_auto_optout", flagOn: true);
+        var (p, user) = await MkRepoProjectAsync("repo_auto_optout");
         var hidden = Sess("sess-auto-hidden", p.Id, excludeFromDossiers: true);
         var ok = Sess("sess-auto-ok", p.Id);
         var auto = MkAutoExporter(MkSessions(hidden, ok));
@@ -333,7 +310,7 @@ public class DossierAutoExportTests : IDisposable
     [Fact]
     public async Task АвтовыгрузкаЗатемТикАвтоимпорта_НичегоНеИмпортирует()
     {
-        var (p, user) = await MkRepoProjectAsync("repo_loop_own", flagOn: true);
+        var (p, user) = await MkRepoProjectAsync("repo_loop_own");
         _projects.Update(p.Id, name: null, rootPath: null, autoImportDossiers: true);
         var s = Sess("sess-loop-own", p.Id);
         var auto = MkAutoExporter(MkSessions(s));
@@ -355,7 +332,7 @@ public class DossierAutoExportTests : IDisposable
     [Fact]
     public async Task ЧужойTipПослеНашейВыгрузки_ИмпортируетсяТиком()
     {
-        var (p, user) = await MkRepoProjectAsync("repo_loop_foreign", flagOn: true);
+        var (p, user) = await MkRepoProjectAsync("repo_loop_foreign");
         _projects.Update(p.Id, name: null, rootPath: null, autoImportDossiers: true);
         var s = Sess("sess-loop-foreign", p.Id);
         var auto = MkAutoExporter(MkSessions(s));
@@ -387,7 +364,7 @@ public class DossierAutoExportTests : IDisposable
     [Fact]
     public async Task Автовыгрузка_КонспектыНеСнимает_СнятыйРаньшеВезётВВетку()
     {
-        var (p, user) = await MkRepoProjectAsync("repo_auto_digest", flagOn: true);
+        var (p, user) = await MkRepoProjectAsync("repo_auto_digest");
         var withDigest = Sess("sess-auto-dig", p.Id, "csid-auto-dig");
         var fresh = Sess("sess-auto-fresh", p.Id, "csid-auto-fresh");
         // Ленты у обоих чатов непустые: если бы автовыгрузка звала EnsureAsync, модель
@@ -424,7 +401,7 @@ public class DossierAutoExportTests : IDisposable
     [Fact]
     public async Task ЧужойTip_АвтовыгрузкаНеТрогаетВетку()
     {
-        var (p, user) = await MkRepoProjectAsync("repo_gate_foreign", flagOn: true);
+        var (p, user) = await MkRepoProjectAsync("repo_gate_foreign");
         var s = Sess("sess-gate-foreign", p.Id);
         var auto = MkAutoExporter(MkSessions(s));
 
@@ -446,7 +423,7 @@ public class DossierAutoExportTests : IDisposable
     [Fact]
     public async Task НашTip_СледующаяАвтовыгрузкаРаботаетКакРаньше()
     {
-        var (p, user) = await MkRepoProjectAsync("repo_gate_ours", flagOn: true);
+        var (p, user) = await MkRepoProjectAsync("repo_gate_ours");
         var s = Sess("sess-gate-ours", p.Id);
         var auto = MkAutoExporter(MkSessions(s));
 
@@ -470,7 +447,7 @@ public class DossierAutoExportTests : IDisposable
     [Fact]
     public async Task ТолькоОriginВетка_ФонНеСоздаётЛокальную()
     {
-        var (p, user) = await MkRepoProjectAsync("repo_gate_orphan", flagOn: true);
+        var (p, user) = await MkRepoProjectAsync("repo_gate_orphan");
         var s = Sess("sess-gate-orphan", p.Id);
         var auto = MkAutoExporter(MkSessions(s));
 
@@ -497,7 +474,7 @@ public class DossierAutoExportTests : IDisposable
     [Fact]
     public async Task ОбщаяПапкаДвухВладельцев_ФонМолчит_РучнойЭкспортРаботает()
     {
-        var (p, user) = await MkRepoProjectAsync("repo_gate_shared", flagOn: true);
+        var (p, user) = await MkRepoProjectAsync("repo_gate_shared");
         var neighbor = _users.Add("auto-shared-nb", "password-123456", "user");
         // Сосед подключил ту же папку своим проектом — признак фазы confirmShared
         _projects.Create("gate-shared-neighbor", p.RootPath, neighbor.Id, neighbor.Username);
@@ -525,7 +502,7 @@ public class DossierAutoExportTests : IDisposable
     [Fact]
     public async Task ВеткиНетВовсе_ФонСоздаётВетку()
     {
-        var (p, user) = await MkRepoProjectAsync("repo_gate_clean", flagOn: true);
+        var (p, user) = await MkRepoProjectAsync("repo_gate_clean");
         var s = Sess("sess-gate-clean", p.Id);
         var auto = MkAutoExporter(MkSessions(s));
 
@@ -559,7 +536,7 @@ public class DossierAutoExportTests : IDisposable
     [Fact]
     public async Task Автовыгрузка_НикогдаНеПушитВRemote()
     {
-        var (p, user) = await MkRepoProjectAsync("repo_push_guard", flagOn: true);
+        var (p, user) = await MkRepoProjectAsync("repo_push_guard");
         var s = Sess("sess-push-guard", p.Id);
         await InitBareRemoteAsync(p.RootPath, "remote_push_guard.git");
 
@@ -594,7 +571,7 @@ public class DossierAutoExportTests : IDisposable
     [Fact]
     public async Task ОстановкаСервисаДоСрабатыванияДебаунса_ВыгрузкиНеБывает()
     {
-        var (p, user) = await MkRepoProjectAsync("repo_auto_stop", flagOn: true);
+        var (p, user) = await MkRepoProjectAsync("repo_auto_stop");
         var s = Sess("sess-auto-stop", p.Id);
         var auto = MkAutoExporter(MkSessions(s));
         await auto.StartAsync(default);

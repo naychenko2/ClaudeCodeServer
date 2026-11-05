@@ -734,9 +734,6 @@ public sealed class ParticipantFrameFixture : IDisposable
         // сфера: личная группировка владельца; её персона и её полка — маркеры
         (await Client.PutAsJsonAsync($"/api/feature-flags/{FeatureFlagKeys.Spheres}", new { enabled = true }))
             .EnsureSuccessStatusCode();
-        // паспорта изменений — чтобы строки манифеста dossier_* были в составе и на вызове
-        (await Client.PutAsJsonAsync($"/api/feature-flags/{FeatureFlagKeys.ChangeDossiersRecall}", new { enabled = true }))
-            .EnsureSuccessStatusCode();
         Sphere = await PostJsonAsync("/api/project-groups", new { name = $"сфера-{Tag}" });
         SpherePersona = await CreatePersonaAsync($"PERSONAL-сферная-{Tag}", "sphere", sphereId: Sphere);
         PersonalInSphere = await CreateProjectAsync($"PERSONAL-сфера-проект-{Tag}", Sphere);

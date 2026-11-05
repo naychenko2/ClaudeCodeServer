@@ -81,9 +81,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   // «Разобрать в базу» (S7b) — за флагом llm-wiki; requestNoteIngest никогда не бросает,
   // поэтому экрану нужен только busy для кнопки и текст для тоста
   const wikiOn = useFeature(FLAGS.llmWiki);
-  // «Перенести в вики» (F5b) — за обоими флагами: llm-wiki и «Заметки и Вики». Без любого
-  // из них кнопки нет (бэк проверяет те же флаги до ветки переноса, UnifiedOffRefusal)
-  const unifiedOn = useFeature(FLAGS.notesWikiUnified);
+  // «Перенести в вики» (F5b) — только при включённом llm-wiki.
   const [ingestBusy, setIngestBusy] = useState(false);
   // Контейнер панели комментариев (портал из DocCommentedMarkdown). Плавающий сайдбар
   // связей справа от текста заметки — как у документов (см. docSide в FileViewer):
@@ -746,7 +744,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
               )}
               {/* «Перенести в вики» (F5b) — та же форма действия, что у соседних: ряд тулбара
                   на 360 не переносится, подписанная кнопка в нём не помещается */}
-              {unifiedOn && wikiOn && can('note.delete') && (
+              {wikiOn && can('note.delete') && (
                 <IconButton title="Перенести в вики" disabled={!online || transferBusy} onClick={() => setTransferConfirm(true)}>
                   <BookMarked size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
                 </IconButton>
@@ -1150,15 +1148,19 @@ const TRANSFER_TEXT = {
   alreadyMoved: 'Заметка уже перенесена в вики: в ней ссылка на страницу.',
   nameTaken: 'Страница с таким именем уже есть: переименуйте заметку и повторите перенос.',
   off: 'Перенос в вики сейчас выключен: включите «Заметки и Вики» в настройках и повторите.',
-  notInit: 'Твоя вики ещё не заведена.',
   refused: 'Перенос отказан. Повторите перенос — он доведёт его до конца.',
   failed: 'Не удалось перенести заметку. Проверьте соединение и повторите.',
 } as const;
 
-// Текст отказа переноса. У именованных кодов — свой текст; у wiki_refused и wiki_edit_invalid
-// причина — в message бэка (ADR-038 «причина текстом»: «страница „X“ уже есть: переименуйте
-// заметку…», «в заметке нет текста для утверждений: переносить нечего») — показываем его с
-// большой буквы; без message — общий текст. Сетевой сбой (не WikiError) — общий текст.
+// Текст отказа переноса. У именованных кодов — свой текст; у wiki_refused, wiki_edit_invalid и
+// wiki_not_initialized причина — в message бэка (ADR-038 «причина текстом»: «страница „X“ уже
+// есть: переименуйте заметку…», «в заметке нет текста для утверждений: переносить нечего»,
+// «вики этого владельца не заведена») — показываем его с большой буквы; без message — общий
+// текст. С LI-2 ручка переноса сама заводит вики владельца (WikiController.cs:498), и 409
+// wiki_not_initialized из действия человека не приходит: что остаётся — ответ второй линии
+// защиты (гейт WikiApplyService.cs:194), его message — честная причина. Своей готовой фразы
+// «вики не заведена» здесь нет: подразумеваемая ею просьба нажимать кнопку «Завести вики»
+// лишняя — самой кнопки нет с LI-3. Сетевой сбой (не WikiError) — общий текст.
 function transferFailText(e: unknown): string {
   if (!(e instanceof WikiError)) return TRANSFER_TEXT.failed;
   switch (e.code) {
@@ -1166,9 +1168,9 @@ function transferFailText(e: unknown): string {
     case 'wiki_note_transferred': return TRANSFER_TEXT.alreadyMoved;
     case 'wiki_page_changed': return TRANSFER_TEXT.nameTaken;
     case 'wiki_unified_off': return TRANSFER_TEXT.off;
-    case 'wiki_not_initialized': return TRANSFER_TEXT.notInit;
     case 'wiki_refused':
     case 'wiki_edit_invalid':
+    case 'wiki_not_initialized':
       return e.message ? e.message.charAt(0).toUpperCase() + e.message.slice(1) : TRANSFER_TEXT.refused;
   }
   if (e.status === 403) return 'Нет доступа.';

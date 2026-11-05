@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Заметки + Вики: панели вики на общем механизме зон · v1 · макет</title>
+<title>Заметки + Вики: панели вики на общем механизме зон · v1.3 · макет</title>
 <!--
   Макет к записке notes-wiki-panels-v1-proposal.md. Код продукта не правится.
   Привязка: featureId 05c5938f-98ae-4726-884f-d7140c91b937 (эпик «Заметки+Вики: один раздел, который ведут человек и ИИ вместе»),
@@ -15,6 +15,9 @@
   v1.1 (04.11) — по разрезу Александра (задача ac431663): раздел — бейдж шапки (только показ, выбирается в дереве),
   вход в вики — переключатель «Заметки | Вики» в панели «Заметки», на 360 — прежние шторки WikiDrawer,
   кнопка шапки «Проверить сейчас» на 360 дублируется в теле, точка «Журнала» — тон info.
+  v1.2 (04.11) — по решению Андрея (задача 5c39afdd): на десктопе одно дерево без режимов. Переключателя «Заметки | Вики»
+  нет, вход в вики — первая строка дерева «Вики»; центр следует за выбором в дереве. Пустая вики — «Вики пока пустая»
+  без кнопки: вики заводится сама. На 360 переключатель «Заметки | Вики | Граф» остаётся (дерево там в шторке).
 -->
 <style>
 /* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts.
@@ -157,6 +160,34 @@ svg.i { fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: ro
 .trow.root { color: var(--c-text-heading); font-weight: 600; }
 .trow .meta { margin-left: auto; font-size: 11px; color: var(--c-text-muted); font-weight: 400; }
 .trow .pill { margin-left: auto; font-size: 10px; padding: 1px 6px; border-radius: 6px; background: var(--c-warning-bg); color: var(--c-warning-text); font-weight: 600; }
+/* v1.3: единое дерево как в WikiUnifiedTree — значок происхождения (OriginGlyph 18×18, R.sm, иконка 10),
+   узел раздела (FS.sm 600 C.textSecondary, счётчик FONT.mono FS.xs C.textMuted), строка 30 (на 360 — 44)
+   с отступом SP.xl, выбранная — C.bgSelected + 600; фильтр-чипы (Chip toggle) с прокруткой вбок; легенда снизу */
+.og { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 6px; flex-shrink: 0; }
+.og.note { color: var(--c-text-muted); }
+.og.ai { color: var(--c-info); background: var(--c-info-bg); }
+.og.me { color: var(--c-text-secondary); background: var(--c-bg-selected); }
+.og.mix { color: var(--c-info); background: linear-gradient(135deg, var(--c-info-bg) 50%, var(--c-bg-selected) 50%); }
+.ufilter { display: flex; gap: 4px; padding: 8px; overflow: hidden; flex-shrink: 0; border-bottom: 1px solid var(--c-border); }
+.ufilter .chip { flex-shrink: 0; gap: 4px; padding: 0 8px 0 4px; }
+.ufilter .chip:first-child { padding-left: 9px; }
+.ufilter .chip .og { width: 16px; height: 16px; }
+.uerr { display: flex; align-items: center; gap: 8px; padding: 8px; font-size: 12px; color: var(--c-danger); border-bottom: 1px solid var(--c-border-light); }
+.btn.ghost { border-color: transparent; background: transparent; color: var(--c-text-primary); height: 26px; }
+.tree .tnode { display: flex; align-items: center; gap: 4px; height: 30px; padding: 0 8px 0 4px; font-size: 12px; font-weight: 600; color: var(--c-text-secondary); white-space: nowrap; }
+.tree .tnode .ic { color: var(--c-text-muted); display: flex; }
+.tree .tnode > svg { color: var(--c-text-muted); }
+.tree .tnode .cnt { margin-left: auto; font-family: "JetBrains Mono", monospace; font-size: 11px; font-weight: 400; color: var(--c-text-muted); }
+.tree .titem { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px 0 24px; border-radius: 8px; color: var(--c-text-primary); white-space: nowrap; }
+.tree .titem.sel { background: var(--c-bg-selected); color: var(--c-text-heading); font-weight: 600; }
+.lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ulegend { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; font-size: 11px; color: var(--c-text-muted); border-top: 1px solid var(--c-border); margin-top: auto; }
+.ulegend span { display: inline-flex; align-items: center; gap: 4px; }
+.ulegend .og { width: 16px; height: 16px; }
+.mob .tree .tnode, .mob .tree .titem { height: 44px; }
+.mob .ufilter .chip { height: 40px; }
+.mob .btn.ghost { height: 40px; }
+.ldrawer { position: absolute; z-index: 11; top: 0; bottom: 0; left: 0; width: min(330px, 92vw); background: var(--c-bg-white); border-radius: 0 22px 22px 0; box-shadow: var(--shadow-dropdown); display: flex; flex-direction: column; overflow: hidden; }
 .tsec { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--c-text-muted); padding: 10px 6px 4px; font-weight: 600; }
 .list { padding: 4px 0; }
 .li { padding: 9px 12px; border-bottom: 1px solid var(--c-border-light); font-size: 12px; line-height: 1.45; }
@@ -233,8 +264,8 @@ svg.i { fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: ro
 </head>
 <body>
 <div class="doc">
-  <h1>Заметки + Вики · панели вики на общем механизме зон · v1</h1>
-  <p class="lead">Сейчас у вики своя рельса внутри центра: 44 px, панель 340 px, одна за раз, шапка 48 px с крупным крестиком. Рядом, в той же странице, слева уже стоит настоящая рельса зон («Заметки», «Граф»), и они выглядят как два разных продукта. Предложение: вики не рисует ничего своего. Четыре раздела — обычные панели правой зоны того же <span class="mono">notesPanels</span>. Рельса, шапка, ширина, колонки, «Одна панель», «Свернуть все» — всё то же, что в режиме проекта. Нового в макете нет: раздел вики показан штатным бейджем шапки. <b>v1.1</b> — по разрезу Александра.</p>
+  <h1>Заметки + Вики · панели вики на общем механизме зон · v1.3</h1>
+  <p class="lead">Сейчас у вики своя рельса внутри центра: 44 px, панель 340 px, одна за раз, шапка 48 px с крупным крестиком. Рядом, в той же странице, слева уже стоит настоящая рельса зон («Заметки», «Граф»), и они выглядят как два разных продукта. Предложение: вики не рисует ничего своего. Четыре раздела — обычные панели правой зоны того же <span class="mono">notesPanels</span>. Рельса, шапка, ширина, колонки, «Одна панель», «Свернуть все» — всё то же, что в режиме проекта. Нового в макете нет: раздел вики показан штатным бейджем шапки. <b>v1.1</b> — по разрезу Александра. <b>v1.2</b> — одно дерево без режимов. <b>v1.3</b> — дерево нарисовано как в коде (<span class='mono'>WikiUnifiedTree</span>): узлы-разделы, в каждом вперемешку заметки и страницы вики со значком происхождения, над деревом фильтр «кто написал»; строки «Вики · N разделов» и группы «Заметки» больше нет.</p>
 
   <div class="toolbar">
     <span style="font-size:13px;color:var(--c-text-secondary)">Тема:</span>
@@ -251,7 +282,7 @@ svg.i { fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: ro
   </div>
 
   <h2>Десктоп · 1280</h2>
-  <p class="lead">Слева — зона «Заметки» как сейчас (рельса с ярлыком «ЗАМЕТКИ», дерево в панели). Справа — зона с ярлыком «ВИКИ». Числа в кружках — номера пояснений в записке.</p>
+  <p class="lead">Слева — зона «Заметки» (рельса с ярлыком «ЗАМЕТКИ», единое дерево в панели). Справа — зона с ярлыком «ВИКИ». Числа в кружках — номера пояснений в записке.</p>
   <div id="desk"></div>
 
   <h2>Мобильный · 360</h2>
@@ -290,6 +321,11 @@ const P = {
   eyeOff: '<path d="M10.7 5.1A10.7 10.7 0 0 1 22 12a13 13 0 0 1-1.7 2.7M14.1 14.2a3 3 0 0 1-4.2-4.2M17.5 17.5A10.7 10.7 0 0 1 2 12a13.2 13.2 0 0 1 4.4-5.4M2 2l20 20"/>',
   arrowL: '<path d="M3 19V5M13 6l-6 6 6 6M7 12h14"/>',
   back: '<path d="m15 18-6-6 6-6"/>',
+  sparkles: '<path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0l1.58 6.14a2 2 0 0 0 1.44 1.44l6.14 1.58a.5.5 0 0 1 0 .96l-6.14 1.58a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/>',
+  pen: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  globe: '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20M2 12h20"/>',
+  lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
 };
 const ic = (n, s = 17) => `<svg class="i" width="${s}" height="${s}" viewBox="0 0 24 24">${P[n]}</svg>`;
 
@@ -385,59 +421,92 @@ function panel(k, o = {}) {
   return `<div class="island ${o.hl ? 'hl' : ''}" style="${o.style || ''}">${head(k, o)}${body(k, o.state, o.mobile)}</div>`;
 }
 
-// ===== Левая панель «Заметки»: единое дерево =====
+// ===== Левая панель «Заметки»: единое дерево (как WikiUnifiedTree) =====
+// v1.3: одно дерево. Узлы — разделы (проекты, «Общее», «Личное», «Другие заметки»), внутри
+// вперемешку заметки и страницы вики, у каждой строки значок происхождения (OriginGlyph).
+// Над деревом — фильтр «кто написал», внизу — легенда. Строки «Вики · N разделов» нет.
+const OG_ICON = { note: 'file', ai: 'sparkles', me: 'pen', mix: 'users' };
+const OG_TITLE = { note: 'Заметка', ai: 'Ведёт ИИ', me: 'Написали вы', mix: 'Ведёте вместе с ИИ' };
+const og = o => `<span class="og ${o}" title="${OG_TITLE[o]}" role="img" aria-label="${OG_TITLE[o]}">${ic(OG_ICON[o], 10)}</span>`;
+// Данные дерева: kind узла даёт иконку (project — Folder, common — Globe, personal — Lock, other — Folder)
+const TREE = [
+  { key: 'aihome', label: 'AI Home', kind: 'project', items: [
+    ['p:arch', 'Архитектура панелей', 'ai'], ['p:chron', 'Хроника решений', 'mix'], ['n:call', 'Созвон с Сашей 03.11', 'note'],
+    ['p:cut', 'Разрез механизма панелей', 'me'], ['n:rev', 'Вопросы к ревью', 'note']] },
+  { key: 'home', label: 'Дом и семья', kind: 'project', items: [['p:budget', 'Бюджет на зиму', 'ai'], ['n:repair', 'Ремонт кухни', 'note'], ['p:docs', 'Документы детей', 'mix']] },
+  { key: 'travel', label: 'Путешествия', kind: 'project', items: [['p:geo', 'Грузия весной', 'ai'], ['n:pack', 'Что взять в поход', 'note']] },
+  { key: 'common', label: 'Общее', kind: 'common', items: [['p:how', 'Как я веду заметки', 'me'], ['p:gloss', 'Глоссарий', 'ai']] },
+  { key: 'personal', label: 'Личное', kind: 'personal', items: [
+    ['n:ideas', 'Идеи на ноябрь', 'note'], ['n:read', 'Список чтения', 'note'], ['p:sleep', 'Здоровье и сон', 'ai']] },
+  { key: 'other', label: 'Другие заметки', kind: 'other', items: [['n:mail', 'Черновик письма', 'note'], ['n:old', 'Старые выписки', 'note']] },
+];
+const FILTERS = [['all', 'Все', null], ['note', 'Заметки', 'note'], ['ai', 'ИИ', 'ai'], ['mix', 'Вместе', 'mix'], ['me', 'Мои', 'me']];
+const NODE_IC = { project: 'folder', common: 'globe', personal: 'lock', other: 'folder' };
+
+// o.sel — id выбранной строки; o.open — раскрытые узлы; o.filter — фильтр; o.emptyWiki — вики без страниц;
+// o.error — строка ошибки каталогов; o.mobile — шторка 360 (строки 44, чипы 40)
+function treeBody(o = {}) {
+  const filter = o.filter || 'all';
+  const data = TREE.map(g => ({ ...g, items: o.emptyWiki ? g.items.filter(i => i[2] === 'note') : g.items }))
+    .filter(g => g.kind !== 'other' || g.items.length);
+  const all = data.flatMap(g => g.items);
+  const cnt = k => k === 'all' ? all.length : all.filter(i => i[2] === k).length;
+  const shown = filter === 'all' ? data : data.map(g => ({ ...g, items: g.items.filter(i => i[2] === filter) })).filter(g => g.items.length);
+  const open = o.open || ['aihome', 'personal'];
+  const searching = filter !== 'all';
+  const chips = FILTERS.map(([k, l, g]) => `<span class="chip ${filter === k ? 'on' : ''}">${g ? og(g) : ''}${l} ${cnt(k)}</span>`).join('');
+  const rows = shown.map(g => {
+    const isOpen = searching || open.includes(g.key);
+    return `<div class="tnode">${ic(isOpen ? 'down' : 'right', 12)}<span class="ic">${ic(NODE_IC[g.kind], 12)}</span><span class="lbl">${g.label}</span><span class="cnt">${g.items.length}</span></div>
+      ${isOpen ? g.items.map(([id, t, k]) => `<div class="titem ${o.sel === id ? 'sel' : ''}">${og(k)}<span class="lbl">${t}</span></div>`).join('') : ''}`;
+  }).join('');
+  return `<div class="ufilter" role="group" aria-label="Кто написал">${chips}</div>
+    ${o.error ? `<div class="uerr"><span style="flex:1;min-width:0">Не удалось загрузить вики</span><span class="btn ghost">Повторить</span></div>` : ''}
+    <div class="tree">${rows}</div>
+    <div class="ulegend">${['note', 'ai', 'mix', 'me'].map(k => `<span>${og(k)}${{ note: 'заметка', ai: 'ИИ', mix: 'вместе', me: 'вы' }[k]}</span>`).join('')}</div>`;
+}
 function tree(o = {}) {
-  const empty = o.emptyWiki;
   return `<div class="island" style="width:280px;flex-shrink:0">
     <div class="ihead"><span class="hicon">${ic('notebook', 15)}</span><span class="ti">Заметки</span><span class="sp"></span></div>
     <div class="ibody">
-      <div style="padding:8px 8px 0;display:flex;flex-direction:column;gap:8px">
-        <div class="pills" style="flex:none"><span class="${o.wikiMode ? '' : 'on'}" style="height:28px;line-height:28px">Заметки</span><span class="${o.wikiMode ? 'on' : ''}" style="height:28px;line-height:28px">Вики</span></div>
-        <div class="field">${ic('search', 14)}Поиск по заметкам и вики</div></div>
-      <div class="tree">
-        ${empty ? '' : `
-        <div class="trow"><span class="ic">${ic('down', 13)}</span><span class="ic">${ic('folder', 15)}</span>AI Home</div>
-        <div class="trow" style="padding-left:34px"><span class="ic">${ic('file', 14)}</span>Архитектура панелей</div>
-        <div class="trow ${o.wikiPage ? 'sel' : ''}" style="padding-left:34px"><span class="ic">${ic('file', 14)}</span>Хроника решений</div>
-        <div class="trow"><span class="ic">${ic('right', 13)}</span><span class="ic">${ic('folder', 15)}</span>Дом и семья</div>`}
-        <div class="tsec">Заметки</div>
-        <div class="trow"><span class="ic">${ic('right', 13)}</span><span class="ic">${ic('folder', 15)}</span>Личное</div>
-        <div class="trow ${o.note ? 'sel' : ''}"><span class="ic">${ic('file', 14)}</span>Идеи на ноябрь</div>
-        <div class="trow"><span class="ic">${ic('file', 14)}</span>Список чтения</div>
-        <div class="trow"><span class="ic">${ic('file', 14)}</span>Созвон с Сашей 03.11</div>
-      </div>
+      <div style="padding:8px 8px 0"><div class="field">${ic('search', 14)}Поиск по заметкам и вики</div></div>
+      ${treeBody(o)}
     </div>
   </div>`;
 }
 
 // ===== Центр =====
+// Пустая вики (тексты LI-3): кнопки нет — вики заводится сама; вторая строка — по состоянию ночного разбора.
+const EMPTY_WIKI = `<div class="initbox"><div class="initcard">
+      <div class="initicon">${ic('book', 28)}</div>
+      <div class="t">Вики пока пустая</div>
+      <div class="s">Она наполнится сама, когда вы разберёте чат или перенесёте заметку.</div>
+      <div class="s" style="font-size:13px;color:var(--c-text-muted)">Ночной разбор включён — первые страницы появятся после ночи.</div>
+    </div></div>`;
 function center(kind) {
-  if (kind === 'note') return `<div class="center"><div class="hero"><div class="crumb">${ic('notebook', 13)}Личное</div><h3>Идеи на ноябрь</h3></div>
+  if (kind === 'other') return `<div class="center"><div class="hero"><div class="crumb">${og('note')}Другие заметки</div><h3>Черновик письма</h3></div>
+    <div class="doccard"><p>Заметка лежит в папке, у которой нет раздела вики, поэтому в дереве она в узле «Другие заметки». Панели справа продолжают показывать последний настоящий раздел.</p></div></div>`;
+  if (kind === 'note') return `<div class="center"><div class="hero"><div class="crumb">${og('note')}Личное</div><h3>Идеи на ноябрь</h3></div>
     <div class="doccard"><p>Довести вики до состояния, когда она ведётся сама: ночной разбор, «Входящие» раз в день, правка только там, где ИИ сомневается.</p>
     <h4>Что посмотреть</h4><p>Как ИИ разбирает чаты проекта и сколько из этого попадает во «Входящие». Если больше пяти в день — подкрутить порог уверенности.</p></div></div>`;
-  if (kind === 'wiki') return `<div class="center"><div class="hero"><div class="crumb">${ic('book', 13)}Вики · AI Home</div><h3>Хроника решений</h3></div>
+  if (kind === 'wiki') return `<div class="center"><div class="hero"><div class="crumb">${og('mix')}AI Home</div><h3>Хроника решений</h3></div>
     <div class="doccard"><h4 style="margin-top:0">Панели</h4><p>Все боковые панели продукта живут на одном механизме зон: рельса у края окна, карточки колонками, ширина <span class="repl">от 280 до 560 px</span>.</p>
     <p>Вики не заводит своей рельсы: её разделы — обычные панели правой зоны раздела «Заметки».</p><h4>Почему так</h4><p>Два разных вида панелей на одном экране читаются как два разных продукта.</p></div></div>`;
-  if (kind === 'catalog') return `<div class="center"><div class="hero"><div class="crumb">${ic('book', 13)}Вики</div><h3>Все разделы</h3></div>
-    <div class="doccard"><h4 style="margin-top:0">AI Home</h4><p>12 страниц · обновлено сегодня в 10:42</p><h4>Дом и семья</h4><p>5 страниц · обновлено вчера</p><h4>Здоровье</h4><p>3 страницы · обновлено 28.10</p></div></div>`;
-  return `<div class="center"><div class="initbox"><div class="initcard">
-      <div class="initicon">${ic('book', 28)}</div>
-      <div class="t">Вики пока не начата</div>
-      <div class="s">ИИ заведёт разделы, разберёт чаты проекта и будет вести страницы вместе с вами. Заметки останутся как есть.</div>
-      <span class="btn primary lg">Инициализировать</span>
-    </div></div></div>`;
+  if (kind === 'ai') return `<div class="center"><div class="hero"><div class="crumb">${og('ai')}Дом и семья</div><h3>Бюджет на зиму</h3></div>
+    <div class="doccard"><p>Страницу ведёт ИИ по чатам проекта «Дом и семья»: отопление, зимняя резина, подарки к Новому году.</p><h4>Что изменилось</h4><p>Вчера ночной разбор добавил строку про счёт за газ.</p></div></div>`;
+  return `<div class="center">${EMPTY_WIKI}</div>`;
 }
 
 // ===== Десктопный кадр =====
 // cols: массив колонок, колонка — массив { k, ...опции панели }; widths — ширины колонок
-function desk({ centerKind = 'note', cols = [], widths = [340, 300], rail = {}, splitHover = false, rowSplitHover = false, ann = '', treeOpts = {}, menu = '' }) {
+function desk({ centerKind = 'note', section = 'AI Home', cols = [], widths = [340, 300], rail = {}, splitHover = false, rowSplitHover = false, ann = '', treeOpts = {}, menu = '' }) {
   const open = cols.flat().map(p => p.k);
   const zone = cols.length && !rail.collapsed ? `
     <div class="vsplit ${splitHover ? 'on' : ''}">${splitHover ? '<span class="wtip">340 px</span>' : ''}</div>
     ${cols.map((col, ci) => `
       ${ci > 0 ? '<div class="vsplit"></div>' : ''}
       <div style="width:${widths[ci]}px;flex-shrink:0;display:flex;flex-direction:column;min-height:0">
-        ${col.map((p, ri) => `${ri > 0 ? `<div class="hsplit ${rowSplitHover ? 'on' : ''}"></div>` : ''}${panel(p.k, { ...p, style: `flex:${col.length > 1 || p.fill ? '1 1 0' : '0 1 auto'};${p.style || ''}` })}`).join('')}
+        ${col.map((p, ri) => `${ri > 0 ? `<div class="hsplit ${rowSplitHover ? 'on' : ''}"></div>` : ''}${panel(p.k, { section, ...p, style: `flex:${col.length > 1 || p.fill ? '1 1 0' : '0 1 auto'};${p.style || ''}` })}`).join('')}
       </div>`).join('')}
     <div style="width:8px;flex-shrink:0"></div>` : '<div style="width:8px;flex-shrink:0"></div>';
   return `<div class="desk">
@@ -455,60 +524,73 @@ function desk({ centerKind = 'note', cols = [], widths = [340, 300], rail = {}, 
 const A = (n, x, y, t) => `<div class="ann" data-n="${n}" style="left:${x}px;top:${y}px">${t}</div>`;
 
 const DESK = [
-  { tag: 'desk-one', title: 'Одна панель · режим заметки', note: 'Открыт «Журнал». Шапка в покое: иконка, название и бейдж раздела. Курсор на кнопке рельсы — иконка стала крестиком, плашка «Скрыть «Журнал»» с расшифровкой точки.',
-    cfg: { centerKind: 'note', treeOpts: { note: true }, cols: [[{ k: 'journal' }]], rail: { hoverKey: 'journal', extra: `<div class="flyout" style="top:62px">Скрыть «Журнал»<span class="sub"><span class="dotinfo"></span>ИИ заменил вашу формулировку</span><span class="ib" title="Убрать кнопку в «Ещё»">${ic('eyeOff', 14)}</span></div>` },
-      ann: A(1, 1000, 400, 'Бейдж шапки — раздел вики, выбранный в дереве; один на все панели') + A(2, 1010, 250, 'Точка рельсы тоном info (новый тон BadgeTone) — ИИ заменил вашу формулировку') } },
-  { tag: 'desk-hover', title: 'Курсор на панели · кнопка шапки · ручка ширины', note: 'У «Здоровья» единственная кнопка шапки во всей вики — «Проверить сейчас» в закреплённом слоте: в покое приглушена, под курсором на полном контрасте. Курсор на шапке: иконка панели подменилась кнопкой «Скрыть панель» (closeMode icon). Ручка ширины — IslandSplitter в зазоре со стороны центра, 280–560 px.',
-    cfg: { centerKind: 'wiki', treeOpts: { wikiPage: true, wikiMode: true }, splitHover: true, cols: [[{ k: 'health', hover: true, iconHover: true }]],
+  { tag: 'desk-one', title: 'Одна панель · выбрана заметка из «Личного»', note: 'Одно дерево: узлы-разделы, внутри вперемешку заметки и страницы вики, у каждой строки значок происхождения. Над деревом — фильтр «кто написал», внизу — легенда. Выбрана заметка «Идеи на ноябрь» в узле «Личное» — в центре заметка, бейдж шапки «Личное»: раздел узла выбранной строки. Курсор на кнопке рельсы — крестик и плашка «Скрыть «Журнал»».',
+    cfg: { centerKind: 'note', section: 'Личное', treeOpts: { sel: 'n:ideas' }, cols: [[{ k: 'journal' }]], rail: { hoverKey: 'journal', extra: `<div class="flyout" style="top:62px">Скрыть «Журнал»<span class="sub"><span class="dotinfo"></span>ИИ заменил вашу формулировку</span><span class="ib" title="Убрать кнопку в «Ещё»">${ic('eyeOff', 14)}</span></div>` },
+      ann: A(1, 1000, 400, 'Бейдж шапки — раздел узла выбранной строки (здесь «Личное»); один на все панели') + A(2, 1010, 250, 'Точка рельсы тоном info — ИИ заменил вашу формулировку') + A(6, 360, 470, 'Одно дерево: заметки и страницы в одном узле, различает значок') } },
+  { tag: 'desk-hover', title: 'Курсор на панели · выбрана страница вики', note: 'Выбрана страница «Хроника решений» (ведёте вместе с ИИ) в узле «AI Home» — в центре страница, бейдж «AI Home». У «Здоровья» единственная кнопка шапки во всей вики — «Проверить сейчас» в закреплённом слоте. Курсор на шапке: иконка панели стала «Скрыть панель». Ручка ширины — IslandSplitter, 280–560 px.',
+    cfg: { centerKind: 'wiki', treeOpts: { sel: 'p:chron' }, splitHover: true, cols: [[{ k: 'health', hover: true, iconHover: true }]],
       ann: A(3, 838, 360, 'Тянуть — ширина колонки, двойной клик — 340 px') } },
-  { tag: 'desk-two-stack', title: 'Две панели · стопкой в одной колонке', note: 'Правило режима проекта дословно: новые панели встают «по две на колонку» в порядке открытия; высоты делятся хендлом в зазоре. Раздел один на все панели — бейджи одинаковые.',
-    cfg: { centerKind: 'wiki', treeOpts: { wikiPage: true, wikiMode: true }, rowSplitHover: true, cols: [[{ k: 'inbox' }, { k: 'journal' }]],
-      ann: A(4, 880, 352, 'Хендл высоты: обе ≥ 120 px') } },
-  { tag: 'desk-two-cols', title: 'Три панели · вторая колонка', note: 'Третья панель в колонку не влезла (порог деления 260 px) и встала новой колонкой к центру — так же, как в проекте. Ширины колонок делит сплиттер между ними. Шапку можно тащить: панель переезжает между колонками и даже в левую зону.',
-    cfg: { centerKind: 'wiki', treeOpts: { wikiPage: true, wikiMode: true }, cols: [[{ k: 'health', fill: true }], [{ k: 'inbox' }, { k: 'journal' }]], widths: [300, 320] } },
-  { tag: 'desk-menu', title: 'Ящик «…» · режим зоны', note: 'Сворачивание и «Одна панель» — в ящике рельсы, как в проекте; там же редкие кнопки, которые человек сам убрал с рельсы. Отдельных кнопок «закрепить/развернуть» у панелей вики нет — их нет и у панелей проекта.',
-    cfg: { centerKind: 'note', treeOpts: { note: true }, cols: [[{ k: 'inbox' }]], rail: { menu: true },
+  { tag: 'desk-two-stack', title: 'Две панели стопкой · фильтр «ИИ»', note: 'Фильтр «ИИ» оставил только страницы, которые ведёт ИИ; узлы без совпадений скрыты, остальные раскрыты сами — свёрнутый узел спрятал бы найденное. Выбрана «Бюджет на зиму» из «Дом и семья» — бейджи обеих панелей «Дом и семья». Панели по две в колонке, высоты делит хендл.',
+    cfg: { centerKind: 'ai', section: 'Дом и семья', treeOpts: { sel: 'p:budget', filter: 'ai' }, rowSplitHover: true, cols: [[{ k: 'inbox' }, { k: 'journal' }]],
+      ann: A(4, 880, 352, 'Хендл высоты: обе ≥ 120 px') + A(7, 360, 520, 'Фильтр «кто написал» — Chip toggle с числом, лента прокручивается вбок') } },
+  { tag: 'desk-other', title: 'Заметка из «Других заметок» · бейдж не меняется', note: 'Заметка без раздела вики лежит в узле «Другие заметки». Раздела у неё нет, поэтому бейдж панелей держит последний настоящий раздел — «AI Home», откуда человек пришёл. Панели не пустеют и не прыгают.',
+    cfg: { centerKind: 'other', treeOpts: { sel: 'n:mail', open: ['aihome', 'other'] }, cols: [[{ k: 'inbox' }]],
+      ann: A(8, 1000, 140, '«Другие заметки» — не раздел: бейдж остаётся прежним') } },
+  { tag: 'desk-two-cols', title: 'Три панели · вторая колонка', note: 'Третья панель в колонку не влезла (порог деления 260 px) и встала новой колонкой к центру — так же, как в проекте. В колонке 300 px бейдж «Здоровья» сжат многоточием первым.',
+    cfg: { centerKind: 'wiki', treeOpts: { sel: 'p:chron' }, cols: [[{ k: 'health', fill: true }], [{ k: 'inbox' }, { k: 'journal' }]], widths: [300, 320] } },
+  { tag: 'desk-menu', title: 'Ящик «…» · свернуть и «Одна панель»', note: 'Сворачивание и «Одна панель» — в ящике рельсы, как в проекте. Отдельных кнопок «закрепить/развернуть» у панелей вики нет — их нет и у панелей проекта.',
+    cfg: { centerKind: 'note', section: 'Личное', treeOpts: { sel: 'n:ideas' }, cols: [[{ k: 'inbox' }]], rail: { menu: true },
       menu: `<div class="menu" style="right:48px;top:200px">
         <div class="mhint">Перетащите сюда кнопки панелей, которыми пользуетесь редко</div>
         <div class="mfoot"><div class="mi">${ic('chevsR', 15)}Свернуть все панели</div><div class="mi">${ic('square', 15)}Одна панель</div></div></div>` } },
-  { tag: 'desk-collapsed', title: 'Свёрнуто · рельса остаётся', note: 'Клик по ярлыку «ВИКИ» (под курсором — стрелки) убирает все панели зоны, набор запоминается; повторный клик возвращает. Кнопки не подсвечены, числа и точка на месте.',
-    cfg: { centerKind: 'wiki', treeOpts: { wikiPage: true, wikiMode: true }, cols: [[{ k: 'inbox' }, { k: 'journal' }]], rail: { collapsed: true, hatHover: true } } },
-  { tag: 'desk-empty-wiki', title: 'Пустая вики · вход и рельса видны', note: 'Вход — сегмент «Вики» переключателя в панели «Заметки» (как в старой раскладке); в центре «Инициализировать». Рельса вики на месте, без чисел; панели открываются и честно говорят, что появится после начала. Бейджа раздела нет — разделов ещё нет.',
-    cfg: { centerKind: 'init', treeOpts: { emptyWiki: true, wikiMode: true }, cols: [[{ k: 'inbox', state: 'empty-wiki', noChip: true }]], rail: { quiet: true },
-      ann: A(5, 300, 66, 'Вход в вики — переключатель «Заметки | Вики»; кнопки «Страницы» в рельсе нет') } },
-  { tag: 'desk-loading-error', title: 'Загрузка и ошибка', note: 'Загрузка — скелет внутри тела панели, шапка и бейдж уже на месте. Ошибка — Notice danger внутри тела с «Повторить»; соседняя панель и центр живут дальше.',
-    cfg: { centerKind: 'catalog', treeOpts: { wikiMode: true }, cols: [[{ k: 'inbox', state: 'loading' }, { k: 'journal', state: 'error' }]] } },
+  { tag: 'desk-collapsed', title: 'Свёрнуто · рельса остаётся', note: 'Клик по ярлыку «ВИКИ» убирает все панели зоны, набор запоминается; повторный клик возвращает. Кнопки не подсвечены, числа и точка на месте.',
+    cfg: { centerKind: 'wiki', treeOpts: { sel: 'p:chron' }, cols: [[{ k: 'inbox' }, { k: 'journal' }]], rail: { collapsed: true, hatHover: true } } },
+  { tag: 'desk-empty-wiki', title: 'Пустая вики · ничего не выбрано', note: 'Страниц вики ещё нет: в дереве те же узлы, в них только заметки; чипы «ИИ», «Вместе», «Мои» показывают 0. Отдельной строки «Вики · не начата» нет. Пока в дереве ничего не выбрано, центр говорит «Вики пока пустая» без кнопки — вики заведётся сама. Рельса на месте, без чисел; бейджа раздела нет.',
+    cfg: { centerKind: 'init', treeOpts: { emptyWiki: true, open: ['aihome', 'personal', 'other'] }, cols: [[{ k: 'inbox', state: 'empty-wiki', noChip: true }]], rail: { quiet: true },
+      ann: A(5, 360, 640, 'Вики пустая — видно по нулям фильтра и по центру; строки «Вики» в дереве нет') } },
+  { tag: 'desk-loading-error', title: 'Загрузка и ошибка', note: 'Каталоги вики не загрузились: под фильтром строка «Не удалось загрузить вики» с «Повторить» (ghost), заметки в дереве на месте. Панели: скелет в одной, Notice danger с «Повторить» в другой; центр живёт дальше.',
+    cfg: { centerKind: 'note', section: 'Личное', treeOpts: { sel: 'n:ideas', error: true, emptyWiki: true }, cols: [[{ k: 'inbox', state: 'loading' }, { k: 'journal', state: 'error' }]] } },
 ];
 
 // ===== Мобильный кадр: WikiTab на 360 + WikiDrawer (как есть) =====
-function mob({ mode = 'wiki', drawer = null, dot = true, emptyWiki = false, tab = 'journal', state = 'ok' }) {
+function mob({ mode = 'wiki', drawer = null, dot = true, emptyWiki = false, tab = 'journal', state = 'ok', tree = null, section = 'AI Home' }) {
   const content = emptyWiki
-    ? `<div class="initbox"><div class="initcard"><div class="initicon">${ic('book', 28)}</div><div class="t">Вики пока не начата</div><div class="s">ИИ заведёт разделы и будет вести страницы вместе с вами.</div><span class="btn primary lg">Инициализировать</span></div></div>`
-    : `<div class="doccard" style="padding:14px 16px;font-size:14px"><div style="font-size:12px;color:var(--c-text-muted);display:flex;gap:6px;align-items:center">${ic('book', 13)}Вики · AI Home</div><h3 class="serif" style="font-size:22px;margin:4px 0 8px;color:var(--c-text-heading)">Хроника решений</h3><p>Все боковые панели продукта живут на одном механизме зон: ширина <span class="repl">от 280 до 560 px</span>.</p><p>Вики не заводит своей рельсы.</p></div>`;
+    ? EMPTY_WIKI
+    : `<div class="doccard" style="padding:14px 16px;font-size:14px"><div style="font-size:12px;color:var(--c-text-muted);display:flex;gap:6px;align-items:center">${og('mix')}AI Home</div><h3 class="serif" style="font-size:22px;margin:4px 0 8px;color:var(--c-text-heading)">Хроника решений</h3><p>Все боковые панели продукта живут на одном механизме зон: ширина <span class="repl">от 280 до 560 px</span>.</p><p>Вики не заводит своей рельсы.</p></div>`;
   let dr = '';
   if (drawer) {
     const w = WIKI[tab];
     dr = `<div class="overlay"></div><div class="wdrawer">
       <div class="phead"><span class="ti">${w.title}</span><span class="ib40" title="Закрыть">${ic('x', 16)}</span></div>
       <div class="pswitch"><div class="pills">${ORDER.map(k => `<span class="${k === tab ? 'on' : ''}" title="${WIKI[k].title}">${ic(WIKI[k].icon, 16)}${WIKI[k].dot ? '<span class="ldot"></span>' : ''}</span>`).join('')}</div></div>
-      ${emptyWiki ? '' : `<div class="secline">${ic('folder', 13)}Раздел: <b style="color:var(--c-text-heading)">AI Home</b></div>`}
+      ${emptyWiki ? '' : `<div class="secline">${ic('folder', 13)}Раздел: <b style="color:var(--c-text-heading)">${section}</b></div>`}
       ${body(tab, state, true)}
+    </div>`;
+  }
+  // Шторка «Дерево разделов» (WikiTab drawerTree): то же единое дерево, что левая зона десктопа
+  if (tree) {
+    dr = `<div class="overlay"></div><div class="ldrawer">
+      <div class="phead"><span class="ti">Заметки и вики</span><span class="ib40" title="Закрыть">${ic('x', 16)}</span></div>
+      <div style="padding:8px 8px 0"><div class="field" style="height:40px">${ic('search', 14)}Поиск по заметкам и вики</div></div>
+      <div style="flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden">${treeBody({ ...tree, mobile: true })}</div>
     </div>`;
   }
   return `<div class="mob">
     <div class="hub" style="padding:0 12px"><span class="logo"></span><span style="font-size:15px;font-weight:600;color:var(--c-text-heading)">Заметки</span></div>
     <div class="mtop"><div class="pills"><span>Заметки</span><span class="on">Вики</span><span>Граф</span></div></div>
-    <div class="mtool"><span class="ib40" title="Дерево разделов">${ic('folder', 18)}</span><span class="sp"></span>
+    <div class="mtool"><span class="ib40 ${tree ? 'on' : ''}" title="Дерево разделов">${ic('folder', 18)}</span><span class="sp"></span>
       <span class="ib40 ${drawer ? 'on' : ''}" title="Входящие, журнал, здоровье, настройки">${ic('panelR', 18)}${dot ? '<span class="ldot" style="top:6px;right:6px"></span>' : ''}</span></div>
     <div class="mcontent">${content}</div>
     ${dr}
   </div>`;
 }
 const MOB = [
-  { tag: 'mob-closed', title: 'Режим вики · шторки закрыты', note: 'Как сейчас в WikiTab: слева кнопка «Дерево разделов», справа «Входящие, журнал, здоровье, настройки» с точкой info. Обе 40×40.', cfg: {} },
-  { tag: 'mob-journal', title: 'Шторка · «Журнал»', note: 'WikiDrawer справа: шапка PanelHead с крестиком 40, переключатель разделов панели иконками (PillSwitch, 40), строка раздела, тело. Одна панель за раз — на 360 это правило шторки, а не механизма зон.', cfg: { drawer: true, tab: 'journal' } },
-  { tag: 'mob-health', title: 'Шторка · «Здоровье»: кнопка шапки в теле', note: 'В шторке нет шапки PanelShell, и PanelHeaderSlot молчит. «Проверить сейчас» рисуется первой строкой тела во всю ширину, 40 px (useHasPanelHeader() === false).', cfg: { drawer: true, tab: 'health' } },
-  { tag: 'mob-empty-wiki', title: 'Пустая вики', note: '«Инициализировать» в центре; кнопка шторки на месте, без точки. В шторке пустые состояния и нет строки раздела.', cfg: { emptyWiki: true, dot: false } },
+  { tag: 'mob-closed', title: 'Вики · шторки закрыты', note: 'На 360 переключатель «Заметки | Вики | Граф» остаётся: дерево здесь в шторке, и без переключателя до него не добраться. Слева кнопка «Дерево разделов», справа «Входящие, журнал, здоровье, настройки» с точкой info. Обе 40×40.', cfg: {} },
+  { tag: 'mob-tree', title: 'Шторка дерева · одно дерево', note: 'Кнопка «Дерево разделов» открывает слева то же единое дерево, что на десктопе: узлы-разделы, в них вперемешку заметки и страницы, значки происхождения, фильтр сверху, легенда снизу. Строки 44 px, чипы 40 px. Строки «Вики · N разделов» нет и здесь.', cfg: { tree: { sel: 'p:chron' } } },
+  { tag: 'mob-tree-filter', title: 'Шторка дерева · фильтр «Вместе»', note: 'Фильтр оставил страницы, которые ведёте вместе с ИИ; узлы раскрыты сами. Лента чипов прокручивается вбок — «Мои» за краем.', cfg: { tree: { sel: 'p:chron', filter: 'mix' } } },
+  { tag: 'mob-journal', title: 'Шторка · «Журнал»', note: 'WikiDrawer справа: шапка с крестиком 40, переключатель разделов панели иконками, строка «Раздел: …» по тому же правилу, что бейдж на десктопе, тело. Одна панель за раз.', cfg: { drawer: true, tab: 'journal' } },
+  { tag: 'mob-health', title: 'Шторка · «Здоровье»: кнопка шапки в теле', note: 'В шторке нет шапки PanelShell, и PanelHeaderSlot молчит. «Проверить сейчас» рисуется первой строкой тела во всю ширину, 40 px.', cfg: { drawer: true, tab: 'health' } },
+  { tag: 'mob-empty-wiki', title: 'Пустая вики', note: '«Вики пока пустая» без кнопки, те же тексты, что на десктопе; кнопка шторки на месте, без точки. В дереве — только заметки, чипы ИИ/Вместе/Мои с нулём.', cfg: { emptyWiki: true, dot: false } },
   { tag: 'mob-error', title: 'Ошибка в шторке', note: 'То же тело, что на десктопе: Notice danger с «Повторить» (40 px).', cfg: { drawer: true, tab: 'journal', state: 'error' } },
 ];
 

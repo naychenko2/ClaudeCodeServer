@@ -60,23 +60,16 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     // since: unix-мс, фильтр «только хвост новее этого момента» (без since — всё окно).
     // Вкладка «Текст» — только admin (настройка глобальная, влияет на всех).
     // engine — только ключ словаря движков (URL из него не строится никогда): без engine или с
-    // "main" — основной стенд, поведение ручки и ответ побайтно прежние (флаг здесь не проверялся
-    // и не появляется — регрессионная guard Б3c); с другим engine — стенд именованного движка
-    // (NamedStatsAsync ниже), и для него флаг local-model-stats проверяется на сервере, как у
-    // hardware (без него 404).
+    // "main" — основной стенд, поведение ручки и ответ побайтно прежние; с другим engine — стенд именованного движка
+    // (NamedStatsAsync ниже).
     [Authorize(Roles = "admin")]
     [HttpGet("stats")]
     public async Task<IActionResult> Stats(
         [FromQuery] string? window,
         [FromQuery] long? since,
         [FromQuery] string? engine,
-        CancellationToken ct,
-        [FromServices] FeatureFlagService flags)
+        CancellationToken ct)
     {
-        // Флаг — только для новой формы ручки (с engine): без engine ответ и коды остаются прежними.
-        if (!string.IsNullOrEmpty(engine) && (UserId is not { } uid || !flags.IsEnabled(uid, FeatureFlagKeys.LocalModelStats)))
-            return NotFound();
-
         if (!TryParseWindow(window, out var windowSpan))
             return BadRequest(new { error = $"Неизвестное окно «{window}» (допустимо 1m, 5m, 15m, 1h)" });
 
@@ -179,8 +172,7 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     }
 
     // GET /api/local-model/engines — список движков для переключателя вкладок («Flash-Next / Gemma 4»)
-    // (макет §2). ТОЛЬКО admin (роль на действии, как у /stats) плюс серверный флаг
-    // local-model-stats (без него 404, как у hardware).
+    // (макет §2). ТОЛЬКО admin (роль на действии, как у /stats); не-админу — 404, как у hardware.
     // Список НИКОГДА не пуст: "main" присутствует всегда, известные из конфига движки добавляются
     // к нему; без дорожки статистики — с configured:false. Пустой список фронт читает как «ещё не
     // загружен» и держит сохранённый выбор вечно (R-F1, задача e4103736), поэтому «ничего не
@@ -189,11 +181,8 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     // у именованного движка — LocalEngines:<имя>:Title. Не задано — «Основная» / ключ с заглавной буквы.
     [Authorize(Roles = "admin")]
     [HttpGet("engines")]
-    public IActionResult Engines([FromServices] FeatureFlagService flags)
+    public IActionResult Engines()
     {
-        if (UserId is not { } id || !flags.IsEnabled(id, FeatureFlagKeys.LocalModelStats))
-            return NotFound();
-
         var list = new List<EngineEntryDto>
         {
             new() { Name = LocalModelStatsPoller.MainTrackName, Title = Label(MainLocalProvider()?.Stats?.Title) ?? "Основная", Configured = _reader?.Current.Configured == true },
@@ -401,15 +390,12 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
 
     // GET /api/local-model/hardware?window=1m|5m|15m|1h
     // Вкладка «Железо»: температуры карт (в т.ч. памяти GDDR6X), процессора, платы, дисков + ряды
-    // истории за окно. ТОЛЬКО admin (роль на действии, как у /stats; не-админ → 403) плюс серверный
-    // флаг local-model-stats (без него 404, как в MediaHistory). Неизвестное window → 400.
+    // истории за окно. ТОЛЬКО admin (роль на действии, как у /stats; не-админ → 403). Неизвестное window → 400.
     // Подсистема Llm выключена → 200 пустой отчёт (не 500).
     [Authorize(Roles = "admin")]
     [HttpGet("hardware")]
-    public IActionResult Hardware([FromQuery] string? window, [FromServices] FeatureFlagService flags)
+    public IActionResult Hardware([FromQuery] string? window)
     {
-        if (UserId is not { } id || !flags.IsEnabled(id, FeatureFlagKeys.LocalModelStats))
-            return NotFound();
         if (!TryParseWindow(window, out var windowSpan))
             return BadRequest(new { error = $"Неизвестное окно «{window}» (допустимо 1m, 5m, 15m, 1h)" });
 

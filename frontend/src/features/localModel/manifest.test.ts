@@ -6,7 +6,6 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { FLAGS, setFlagLocal } from '../../lib/featureFlags';
 import { setLocalModelAdmin, setLocalModelConfigured } from './useLocalModelStats';
 import { getLocalModelEngineStats, setLocalModelEngineStats, startEngineStatePolling } from './useLocalModelWatcher';
 import { mockEngineStats } from './localModel.fixtures';
@@ -53,8 +52,8 @@ describe('localModel/manifest: Suspense вокруг ленивной панел
 const panelAction = () => manifest.slots?.['workspace-panel-def']?.[0]?.action as unknown as WorkspacePanelDefApi;
 
 describe('localModel/manifest: значок при «второй движок без vLLM» (макет §8.6)', () => {
-  beforeEach(() => { setFlagLocal(FLAGS.localModelStats, true); setLocalModelAdmin(true); setLocalModelConfigured(null); setLocalModelEngineStats(null); });
-  afterEach(() => { setFlagLocal(FLAGS.localModelStats, false); setLocalModelAdmin(false); setLocalModelConfigured(null); setLocalModelEngineStats(null); });
+  beforeEach(() => { setLocalModelAdmin(true); setLocalModelConfigured(null); setLocalModelEngineStats(null); });
+  afterEach(() => { setLocalModelAdmin(false); setLocalModelConfigured(null); setLocalModelEngineStats(null); });
 
   it('только второй движок (main не настроен) — значок есть: configured читает и вторую дорожку', () => {
     setLocalModelConfigured(false);
@@ -66,22 +65,11 @@ describe('localModel/manifest: значок при «второй движок �
     expect(panelAction().isAvailable?.('p1')).toBe(false);
   });
 
-  it('админ без флага — значка нет, даже когда второй движок настроена', () => {
-    setFlagLocal(FLAGS.localModelStats, false);
-    setLocalModelEngineStats(mockEngineStats('ready'));
-    expect(panelAction().isAvailable?.('p1')).toBe(false);
-  });
 });
 
 describe('localModel/manifest: точка индикатора на значке (Ф6)', () => {
-  beforeEach(() => { setFlagLocal(FLAGS.localModelStats, true); setLocalModelAdmin(true); setLocalModelConfigured(true); setLocalModelEngineStats(null); });
-  afterEach(() => { setFlagLocal(FLAGS.localModelStats, false); setLocalModelAdmin(false); setLocalModelConfigured(null); setLocalModelEngineStats(null); });
-
-  it('без флага — точки нет (состояние не опрашивается)', () => {
-    setFlagLocal(FLAGS.localModelStats, false);
-    setLocalModelEngineStats(mockEngineStats('yielded'));
-    expect(panelAction().indicator?.()).toBeNull();
-  });
+  beforeEach(() => { setLocalModelAdmin(true); setLocalModelConfigured(true); setLocalModelEngineStats(null); });
+  afterEach(() => { setLocalModelAdmin(false); setLocalModelConfigured(null); setLocalModelEngineStats(null); });
 
   it('не-админ — точки нет, даже когда панель видима (состояние известно только админу)', () => {
     setLocalModelAdmin(false);

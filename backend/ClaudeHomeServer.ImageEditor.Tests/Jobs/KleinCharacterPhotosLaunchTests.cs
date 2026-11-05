@@ -100,12 +100,10 @@ public class KleinCharacterPhotosLaunchTests : IDisposable
             object? jsonFormat = null, CancellationToken ct = default) => throw new NotSupportedException();
     }
 
-    private async Task<ImageEditRequest> Run(bool flagOn, string prompt)
+    private async Task<ImageEditRequest> Run(string prompt)
     {
-        var flags = new Mock<IFeatureFlagGate>();
-        flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.CharacterSmartPhotos)).Returns(flagOn);
         var assembler = new ImageEditLaunchAssembler([_editor], _service, new SkiaImageRaster(),
-            flags: flags.Object, sceneParser: new CharacterSceneParser(new NoRunner()));
+            sceneParser: new CharacterSceneParser(new NoRunner()));
 
         var quote = await _service.QuoteAsync(Owner, Project,
             new ImageEditQuoteRequest("fake", "fake-klein", EditMode.Auto, ImageEditOp.Generate, 1, false,
@@ -130,25 +128,19 @@ public class KleinCharacterPhotosLaunchTests : IDisposable
             .Select(r => bytes.Single(kv => kv.Value.SequenceEqual(r.Bytes)).Key)];
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+    [Fact]
     [Trait("Category", "Slow")]
-    public async Task Пять_фото_разных_ракурсов_главное_первым(bool flagOn)
+    public async Task Пять_фото_разных_ракурсов_главное_первым()
     {
-        var request = await Run(flagOn, "портрет в профиль у окна");
+        var request = await Run("портрет в профиль у окна");
 
         // анфас (главное), анфас снизу, три четверти ровно, профиль, анфас — профиль сюжета набор не ломает
         SentFiles(request).Should().Equal(_files[0], _files[2], _files[4], _files[1], _files[5]);
         lock (_picks)
         {
-            if (!flagOn) _picks.Should().BeEmpty();
-            else
-            {
-                var pick = _picks.Should().ContainSingle().Subject;
-                pick.Pick.Should().Be("auto");
-                pick.Photos.Should().Equal(_files[0], _files[2], _files[4], _files[1], _files[5]);
-            }
+            var pick = _picks.Should().ContainSingle().Subject;
+            pick.Pick.Should().Be("auto");
+            pick.Photos.Should().Equal(_files[0], _files[2], _files[4], _files[1], _files[5]);
         }
     }
 }

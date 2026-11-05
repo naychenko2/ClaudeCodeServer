@@ -41,6 +41,9 @@ public class WikiChatScorerTests : IDisposable
     // зовут: список и пересчёт ничего не разбирают (running в списке — false на пустом
     // in-flight). Экземпляр настоящий, модель — Noop: он не вызывается ни разу.
     private readonly WikiChatIngestService _chat;
+    // LI-2: конструктору контроллера нужен Хранитель (analyze заводит им вику); теневые тесты
+    // этого не зовут — экземпляр настоящий, вызова нет.
+    private readonly WikiKeeper _keeper;
 
     public WikiChatScorerTests()
     {
@@ -52,12 +55,12 @@ public class WikiChatScorerTests : IDisposable
         var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var projects = new ProjectManager(_config, users, new AppSettingsService(_config));
         var notes = new NotesService(projects, _config, NullLogger<NotesService>.Instance, null, flags: new WikiFlagOn());
-        var keeper = new WikiKeeper(notes, _config);
+        _keeper = new WikiKeeper(notes, _config);
         _chat = new WikiChatIngestService(
-            new WikiSourceCapture(notes, projects, _sessions, _config, keeper),
+            new WikiSourceCapture(notes, projects, _sessions, _config, _keeper),
             new WikiIngestService(new NoopCheapRunner(), new NoSpheres(),
-                new WikiApplyService(notes, keeper, new NoSpheres(), _config), _config),
-            _sessions, keeper, _config);
+                new WikiApplyService(notes, _keeper, new NoSpheres(), _config), _config),
+            _sessions, _keeper, _config);
     }
 
     public void Dispose()
@@ -662,7 +665,7 @@ public class WikiChatScorerTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, user)], "test"));
-        return new WikiChatsController(_sessions, _chat, new WikiChatRecalc(_sessions, _config), _config, new WikiFlagOn())
+        return new WikiChatsController(_sessions, _chat, new WikiChatRecalc(_sessions, _config), _keeper, _config, new WikiFlagOn())
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

@@ -37,8 +37,8 @@ export {
 // отдельный экземпляр WikiError (QA P1, дефект B1).
 export {
   parseSectionKey, groupSectionsByKind, WikiError,
-  ensureWikiLoaded, loadWikiCatalog, loadWikiPage,
-  initializeWiki, adoptWikiPage, deleteWikiSection,
+  ensureWikiLoaded, loadWikiTree, loadWikiCatalog, loadWikiPage,
+  getWikiTreeSnapshot, initializeWiki, adoptWikiPage, deleteWikiSection,
   listWikiPackages, decideWikiPackage, acceptAllWikiPackage,
   loadWikiJournal, retractWikiSource, getWikiHealth, runWikiLint,
   analyzeWikiChat, loadWikiChatAnalyzeStatus, loadWikiChats, setWikiChatMark, ingestWikiNote, transferWikiNote,
@@ -239,7 +239,7 @@ export { WidgetCard, WidgetAction, WidgetEmpty, relTime, MiniSegment } from '../
 export { PanelZone } from '../../pages/workspace/PanelZone';
 
 // ─── pages/workspace/panelCatalog ────────────────────────────────────────────
-export { NOTES_KEYS } from '../../pages/workspace/panelCatalog';
+export { NOTES_KEYS, WIKI_PANEL_KEYS } from '../../pages/workspace/panelCatalog';
 
 // ─── pages/workspace/panelStackState ─────────────────────────────────────────
 export { notesPanels, zoneOf } from '../../pages/workspace/panelStackState';

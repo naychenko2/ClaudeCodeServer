@@ -911,7 +911,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.DeviceConnection
 // Статус рук локального проекта (ADR-016 §7) — в чат хода из донесений агента
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.ILocalHandsNotifier,
     ClaudeHomeServer.Services.Composition.LocalHandsNotifier>();
-// Живые события локальной модели (флаг local-model-stats): тиковый снимок генерации и
+// Живые события локальной модели (статистика локальных моделей): тиковый снимок генерации и
 // итог хода — в session-группу чата, только при наличии зрителя (LocalModelLiveSink).
 // Интерфейс (ILocalModelLiveSink) — в Llm; счётчик ходов (LocalModelTurnMeter) резолвит
 // его лениво, поэтому порядок регистрации не важен.
@@ -1223,7 +1223,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.RemoteCommands.IShellCom
 builder.Services.AddSingleton<ClaudeHomeServer.Services.RemoteCommands.RemoteCommandsService>();
 builder.Services.AddSingleton<IHostedService>(sp =>
     sp.GetRequiredService<ClaudeHomeServer.Services.RemoteCommands.RemoteCommandsService>());
-// Авто-возобновление ходов после рестарта (флаг turn-auto-resume): параметры из секции TurnAutoResume.
+// Авто-возобновление ходов после рестарта (ADR-033): параметры из секции TurnAutoResume.
 builder.Services.Configure<ClaudeHomeServer.Models.TurnAutoResumeOptions>(builder.Configuration.GetSection(ClaudeHomeServer.Models.TurnAutoResumeOptions.Section));
 // Фоновый оркестратор: шов-хост (адаптер над SessionManager) + hosted-сервис (в Testing не стартует)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.ITurnAutoResumeHost, ClaudeHomeServer.Services.SessionManagerTurnResumeHost>();

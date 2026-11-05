@@ -54,7 +54,6 @@ public class FaceTargetLaunchHttpTwoFacesTests : IDisposable
             .Create("ft2-" + Guid.NewGuid().ToString("N")[..6], dir, _ownerId, TestWebApplicationFactory.TestUsername).Id;
         var root = _factory.Services.GetRequiredService<ProjectManager>().GetById(_projectId)!.RootPath;
         _client = _factory.CreateAuthenticatedClient();
-        users.SetFeatureFlag(_ownerId, FeatureFlagKeys.CharacterFaceSwap, true);
 
         _slugA = Character(root, "Аня", 1);
         _slugB = Character(root, "Боря", 4);

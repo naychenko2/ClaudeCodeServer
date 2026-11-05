@@ -167,7 +167,7 @@ public record ImageEditJobInput(
     // Версия нити, от которой запущена правка (изменение 27.09 к ADR-019); null — вне нити
     string? BaseVersionId = null,
     // Подбор фото персонажа под сюжет (ADR-027 §7): выполняется в задаче перед драйвером, а не в
-    // запуске; null — флаг выключен или персонажа нет. Первый аргумент — порог уверенности ракурса:
+    // запуске; null — персонажа нет. Первый аргумент — порог уверенности ракурса:
     // CharacterPhotoPicker.LocalConfidentScore для local (MaxCharacterPhotos=1), int.MaxValue для
     // облака — у облака первым остаётся главное фото, как до подбора
     Func<int, CancellationToken, Task<CharacterPickOutcome>>? CharacterPicker = null,
@@ -331,15 +331,13 @@ public static class ImageEditErrorCodes
     public const string LoraNotVisible = "lora_not_visible";
     // 404: персонажа нет в проекте (или slug не проходит белый список)
     public const string CharacterNotFound = "character_not_found";
-    // 400: явный список фото персонажа не прошёл проверку (чужое имя, дубль, ссылка) или флаг выключен
+    // 400: явный список фото персонажа не прошёл проверку (чужое имя, дубль, ссылка)
     public const string CharacterPhotosInvalid = "character_photos_invalid";
     // 404: чата нет, он чужой или из другого проекта — неотличимо
     public const string ChatNotFound = "chat_not_found";
     // 404: нити картинки нет в этом чате (чужая неотличима от несуществующей)
     public const string ThreadNotFound = "thread_not_found";
     public const string VersionNotFound = "version_not_found";
-    // 404: фича скрыта флагом (ручка есть, но выключена) — неотличима от «ручки нет»
-    public const string FeatureDisabled = "feature_disabled";
     // 409: «Сохранить как…» на занятое имя; в теле ответа ещё suggestion — ближайшее свободное
     public const string NameTaken = "name_taken";
     // 409: запись нитей чата со старой revision; в теле ещё state — актуальное

@@ -26,6 +26,8 @@
 //  (8) не читать «## Не проверено» → «непроверенные страницы» краснеет;
 //  (9) убрать сверку total/строк → «Находки (N) не равны строкам» краснеет;
 //  (10) счёт без пояснения вида («счёт: N») → «счёт подписан по виду» краснеет.
+//
+// Блок W11 («Проверить сейчас» в шапку панели): его мутации перечислены в шапке своего describe.
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -34,6 +36,7 @@ import {
   mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps,
 } from '../../../../components/chat/__tests__/fakeDom';
 import { WikiHealth, parseHealth } from '../WikiHealth';
+import { PanelHeaderSlotContext } from '../../../../components/ui/panelHeaderSlotContext';
 
 // Мок с сохранением остальных экспортов: цепочка мокованного доходит до кита хоста
 // (WikiHealth → kit) — full-replacement мок может рваться на недостающем имени
@@ -51,7 +54,7 @@ vi.mock('../../../../lib/offline', async (orig) => ({
 }));
 
 // Флаги управляются тестом: по умолчанию выключены — прежние тесты видят прежний вид;
-// блок F5c включает llm-wiki и notes-wiki-unified (тот же приём, что в WikiPageView.test).
+// блок F5c включает llm-wiki (тот же приём, что в WikiPageView.test).
 // useFeature — хук, и мок зовёт настоящий хук при каждом вызове (F5c-rw2): если второй
 // useFeature вызывается условно, при перерисовке с другим флагом число хуков меняется и
 // React падает — тест «переключение флага при открытом Здоровье» краснеет. При безусловных
@@ -166,7 +169,7 @@ function mockHealth(content: string) {
 
 // ─── Помощники блока F5c ───
 
-const bothFlags = () => { flags.on.add('llm-wiki'); flags.on.add('notes-wiki-unified'); };
+const bothFlags = () => { flags.on.add('llm-wiki'); };
 
 const docBody = (): AnyNode => (globalThis as { document: { body: AnyNode } }).document.body;
 const docText = (): string => textNodes(docBody()).map(t => t.trim()).filter(Boolean).join(' ');
@@ -232,6 +235,32 @@ function mockAdoptFlow(firstContent: string, secondContent?: string) {
     resolve: (v: unknown) => { ctl.resolve!(v); },
     reject: (e: unknown) => { ctl.reject!(e); },
   };
+}
+
+// ─── Помощники блока W11 (шапка панели) ───
+
+// Панель под шапкой: контекст с hasHeader и живым закреплённым слотом (elPinned) —
+// ровно то, что даёт PanelShell (components/ui/PanelShell.tsx:383-392): в этот узел
+// PanelHeaderSlot телепортирует контролы. Без elPinned слот молчит — портал некуда
+// положить, и тест шапки проверял бы молчание, а не перенос кнопки в шапку.
+function mountWithHeader(key: string | null): { root: Root; container: Cont; headerEl: AnyNode } {
+  installFakeDom();
+  const doc = (globalThis as { document: { body: AnyNode; createElement(tag: string): AnyNode } }).document;
+  const headerEl = doc.createElement('div');
+  doc.body.appendChild(headerEl);
+  const tree = createElement(PanelHeaderSlotContext.Provider, {
+    value: { hasHeader: true, el: null, elLeft: null, elPinned: headerEl as unknown as HTMLElement, hold: () => {} },
+  }, createElement(WikiHealth, { selectedKey: key }));
+  const { root, container } = mount(tree);
+  roots.push(root);
+  return { root, container, headerEl };
+}
+
+// все кнопки запуска на экране: и в шапке, и в теле (ровно одна из них)
+function runBtnNodes(...roots: AnyNode[]): AnyNode[] {
+  const out: AnyNode[] = [];
+  for (const r of roots) for (const n of allNodes(r)) if (n.getAttribute('data-testid') === 'wiki-health-run') out.push(n);
+  return out;
 }
 
 beforeEach(() => {
@@ -638,15 +667,11 @@ describe('«Здоровье» раздела (S5f)', () => {
 //      («Should have a queue. You are likely calling Hooks conditionally»).
 
 describe('«Принять как мою правку» на строке дрейфа (F5c)', () => {
-  it('кнопка — только на строке «дрейфа» и только при обоих флагах', async () => {
+  it('кнопка — только на строке «дрейфа» и только при включённом llm-wiki', async () => {
     mockHealth(HEALTH);
     const c0 = render();
     await settle();
-    expect(adoptBtn(c0), 'при выключенных флагах').toBeNull();
-    flags.on.add('llm-wiki');
-    const c1 = render();
-    await settle();
-    expect(adoptBtn(c1), 'при одном llm-wiki').toBeNull();
+    expect(adoptBtn(c0), 'при выключенном llm-wiki').toBeNull();
     bothFlags();
     const c2 = render();
     await settle();
@@ -842,5 +867,92 @@ describe('«Принять как мою правку» на строке дре
     act(() => { root.render(createElement(WikiHealth, { selectedKey: 'projects/p1' })); });
     await settle();
     expect(adoptBtn(c), 'после выключения флагов').toBeNull();
+  });
+});
+
+// ─── «Проверить сейчас» в шапку панели (W11, записка Майи notes-wiki-panels-v1 п. 5 и
+// «Что нужно от кода» п. 3) ───
+// Правило: useHasPanelHeader() ? <PanelHeaderSlot pinned> : <строка в теле>. С шапкой
+// (PanelShell правой зоны) кнопка одна и стоит в закреплённом слоте шапки, в теле её нет
+// и подписи тела нет. Без шапки (шторка 360, старая раскладка без флага) — одна кнопка
+// первой строкой тела, во всю ширину, под ней подпись. Логика запуска (busy, поколение
+// запросов) не менялась: двойной клик по кнопке в шапке — один вызов POST (тот же узор,
+// что «блокировка на время запроса» в WikiInbox.test: второй клик после перерисовки
+// доходит до уже свежего замыкания run(), где guard busy=true).
+//
+// Мутации этого блока (вывод — в отчёте задачи):
+//  (W1) hasHeader всегда false («всегда рисовать в теле») → «с шапкой…» краснеет:
+//      в слоте шапки ничего нет, в теле появляются и кнопка, и подпись;
+//  (W2) hasHeader всегда true (и в тесте без провайдера elPinned=null → слот молчит) →
+//      «без шапки…» краснеет: ни кнопки в теле, ни подписи;
+//  (W3) снять guard `if (busy || !selectedKey)` в run() → «двойной клик… один вызов»
+//      краснеет (2 POST);
+//  (W4) hasHeader всегда true → ««Раздел не выбран» под шапкой…» краснеет (в теле нет
+//      ни кнопки, ни подписи).
+describe('«Проверить сейчас» в шапку панели (W11)', () => {
+  it('с шапкой: кнопка ровно одна, в закреплённом слоте шапки, не в теле; подписи тела нет', async () => {
+    mockHealth(HEALTH);
+    const { container, headerEl } = mountWithHeader('projects/p1');
+    await settle();
+    expect(findNodeByAttr(headerEl, 'data-testid', 'wiki-health-run'), 'кнопка в слоте шапки').not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-health-run'), 'кнопки нет в теле').toBeNull();
+    expect(has(container, 'Проверяет всю вики, займёт около минуты'), 'подписи тела нет').toBe(false);
+    // ровно одна кнопка запуска на всём экране: шапка + тело
+    expect(runBtnNodes(headerEl, container), 'ровно одна').toHaveLength(1);
+  });
+
+  it('без шапки: кнопка ровно одна первой строкой тела, во всю ширину, с подписью', async () => {
+    mockHealth(HEALTH);
+    const c = render();
+    await settle();
+    const btn = nodeByTestId(c, 'wiki-health-run');
+    expect(btn, 'кнопка в теле').not.toBeNull();
+    // ровно одна: ни дубля в теле, ни невидимого слота
+    expect(runBtnNodes(c), 'ровно одна').toHaveLength(1);
+    // first line of the body: the run line is the component's first child
+    const firstLine = (c as { firstChild?: AnyNode }).firstChild?.firstChild;
+    expect(findNodeByAttr(firstLine!, 'data-testid', 'wiki-health-run'), 'первой строкой').not.toBeNull();
+    // full width (Button fullWidth → style width 100%)
+    expect(((btn as { style?: Record<string, string> }).style ?? {}).width, 'во всю ширину').toBe('100%');
+    expect(has(c, 'Проверяет всю вики, займёт около минуты'), 'подпись под кнопкой').toBe(true);
+  });
+
+  it('двойной клик по кнопке в шапке — один вызов запуска (логика busy не менялась)', async () => {
+    let resolvePost: (v: unknown) => void = () => {};
+    req.mockImplementation((url: string, init?: { method?: string }) => {
+      if (init?.method === 'POST') return new Promise<unknown>(res => { resolvePost = res; });
+      if (url.startsWith('/wiki/health/')) return Promise.resolve({ section: 'projects/p1', content: HEALTH });
+      return Promise.resolve(null);
+    });
+    const { container, headerEl } = mountWithHeader('projects/p1');
+    await settle();
+    const btn = findNodeByAttr(headerEl, 'data-testid', 'wiki-health-run')!;
+    // первый клик — из свежего замыкания (busy=false): стартует и поднимает блокировку
+    act(() => { (reactProps(btn) as { onClick: () => void }).onClick(); });
+    await settle();
+    expect((reactProps(btn) as { disabled?: boolean }).disabled, 'на время запроса').toBe(true);
+    // второй клик — после перерисовки, уже из свежего замыкания run(): guard busy=true
+    // (тот же узор, что «блокировка на время запроса» в WikiInbox.test)
+    act(() => { (reactProps(btn) as { onClick: () => void }).onClick(); });
+    await settle();
+    expect(req.mock.calls.filter(([, init]) => (init as { method?: string } | undefined)?.method === 'POST'), 'один запуск').toHaveLength(1);
+    resolvePost({ ran: true, sectionsOk: 1, sectionsFailed: 0 });
+    await settle();
+    expect(req.mock.calls.filter(([, init]) => (init as { method?: string } | undefined)?.method === 'POST'), 'и после ответа').toHaveLength(1);
+    expect(findNodeByAttr(headerEl, 'data-testid', 'wiki-health-run'), 'и после прогона — одна в шапке').not.toBeNull();
+    expect(runBtnNodes(headerEl, container), 'и после прогона ровно одна').toHaveLength(1);
+  });
+
+  it('«Раздел не выбран» под шапкой: кнопка в шапке, не в теле; без шапки — в теле с подписью', async () => {
+    const { container, headerEl } = mountWithHeader(null);
+    await settle();
+    expect(findNodeByAttr(headerEl, 'data-testid', 'wiki-health-run'), 'кнопка в шапке').not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'wiki-health-run'), 'не в теле').toBeNull();
+    expect(has(container, 'Раздел не выбран'), 'empty-state остался').toBe(true);
+    // без шапки — та же ветка рисует строку тела с подписью
+    const c = mountAt(null).container;
+    await settle();
+    expect(nodeByTestId(c, 'wiki-health-run'), 'кнопка в теле').not.toBeNull();
+    expect(has(c, 'Проверяет всю вики, займёт около минуты'), 'подпись есть').toBe(true);
   });
 });

@@ -35,10 +35,9 @@ public class ImageEditorController(
     ImageContextLaunch? context = null,
     ILocalImageMedia? localMedia = null,
     CharacterTrainingPhotos? trainingPhotos = null,
-    IFeatureFlagGate? flags = null,
     CharacterPhotoLabeling? labeling = null,
     CharacterLoraRuns? loraRuns = null)
-    : ImageEditorEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster, context, flags)
+    : ImageEditorEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster, context)
 {
     [HttpGet("catalog")]
     public IActionResult Catalog(string projectId) =>
@@ -211,16 +210,13 @@ public class ImageEditorController(
     // Потолок тела формы персонажа: 10 фото по 8 МБ плюс поля
     private const long MaxCharacterBodyBytes = 100L * 1024 * 1024;
 
-    // Флаг «умного подбора фото» у владельца (ADR-027 §10): гейт меток в DTO и в PUT персонажа
-    private bool SmartPhotos => Flags?.IsEnabled(UserId, FeatureFlagKeys.CharacterSmartPhotos) == true;
-
     [HttpGet("characters")]
     public IActionResult Characters(string projectId)
     {
         if (!ProjectGate(projectId, out var project, out var denied)) return denied;
         var list = CharacterStore.List(project.RootPath);
         foreach (var m in list) labeling?.Enqueue(ImageEditScope.TenantOf(project), project.RootPath, m.Slug);
-        return Ok(list.Select(m => CharacterDto.From(m, SmartPhotos)));
+        return Ok(list.Select(m => CharacterDto.From(m, withLabels: true)));
     }
 
     // Список LoRA ComfyUI для формы персонажа. Нет шва или ComfyUI не ответил — не ошибка:
@@ -244,7 +240,7 @@ public class ImageEditorController(
         if (!ProjectGate(projectId, out var project, out var denied)) return denied;
         var manifest = CharacterStore.Get(project.RootPath, slug);
         if (manifest is not null) labeling?.Enqueue(ImageEditScope.TenantOf(project), project.RootPath, manifest.Slug);
-        return manifest is null ? CharacterNotFound() : Ok(CharacterDto.From(manifest, SmartPhotos));
+        return manifest is null ? CharacterNotFound() : Ok(CharacterDto.From(manifest, withLabels: true));
     }
 
     [HttpPost("characters")]
@@ -271,7 +267,7 @@ public class ImageEditorController(
             created = withLora ?? created;
         }
         if (created.Value is { } born) labeling?.Enqueue(ImageEditScope.TenantOf(project), project.RootPath, born.Manifest.Slug);
-        return MapCharacter(created, c => StatusCode(StatusCodes.Status201Created, CharacterDto.From(c.Manifest, SmartPhotos)));
+        return MapCharacter(created, c => StatusCode(StatusCodes.Status201Created, CharacterDto.From(c.Manifest, withLabels: true)));
     }
 
     [HttpPut("characters/{slug}")]
@@ -290,7 +286,7 @@ public class ImageEditorController(
         if (updated is null) return CharacterNotFound();
         if (updated.Value is { } change) Notify(project.RootPath, change, FileMutationKind.Write);
         if (photos.Count > 0) labeling?.Enqueue(ImageEditScope.TenantOf(project), project.RootPath, slug);
-        return MapCharacter(updated, c => Ok(CharacterDto.From(c.Manifest, SmartPhotos)));
+        return MapCharacter(updated, c => Ok(CharacterDto.From(c.Manifest, withLabels: true)));
     }
 
     [HttpDelete("characters/{slug}")]
@@ -328,20 +324,16 @@ public class ImageEditorController(
         public string? LoraTrigger { get; set; }
         public string? LoraStrength { get; set; }
         public bool? RemoveLora { get; set; }
-        // JSON {"<файл>": {"angle","pitch","emotion"}}; только при включённом флаге character-smart-photos
+        // JSON {"<файл>": {"angle","pitch","emotion"}}
         public string? PhotoLabels { get; set; }
     }
 
     private static readonly System.Text.Json.JsonSerializerOptions LabelsJson = new(System.Text.Json.JsonSerializerDefaults.Web);
 
-    // Ручные метки фото (ADR-027 §1). Флаг выключен — 400, как у явного списка фото: молча проглоченная
-    // правка хуже отказа. Значения и имена файлов проверяет CharacterStore.Update
+    // Ручные метки фото (ADR-027 §1). Значения и имена файлов проверяет CharacterStore.Update
     private (IReadOnlyDictionary<string, CharacterPhotoLabels>? Labels, IActionResult? Denied) PhotoLabelsOf(CharacterForm form)
     {
         if (string.IsNullOrWhiteSpace(form.PhotoLabels)) return (null, null);
-        if (!SmartPhotos)
-            return (null, Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
-                "Метки фото недоступны: умный подбор фото не включён"));
         try
         {
             var labels = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, CharacterPhotoLabels>>(form.PhotoLabels, LabelsJson);

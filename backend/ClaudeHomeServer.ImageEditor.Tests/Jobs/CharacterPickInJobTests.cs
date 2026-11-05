@@ -97,16 +97,14 @@ public class CharacterPickInJobTests : IDisposable
             object? jsonFormat = null, CancellationToken ct = default) => throw new NotSupportedException();
     }
 
-    // withoutGate — сборщик без шлюза флагов и разбора сюжета вовсе, то есть как на master
-    private async Task<ImageEditRequest> Run(bool flagOn, string prompt, IReadOnlyList<string>? photos = null,
+    // withoutGate — сборщик без разбора сюжета вовсе, то есть как на master
+    private async Task<ImageEditRequest> Run(string prompt, IReadOnlyList<string>? photos = null,
         bool withoutGate = false)
     {
-        var flags = new Mock<IFeatureFlagGate>();
-        flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.CharacterSmartPhotos)).Returns(flagOn);
         var assembler = withoutGate
             ? new ImageEditLaunchAssembler([_editor], _service, new SkiaImageRaster())
             : new ImageEditLaunchAssembler([_editor], _service, new SkiaImageRaster(),
-                flags: flags.Object, sceneParser: new CharacterSceneParser(new NoRunner()));
+                sceneParser: new CharacterSceneParser(new NoRunner()));
 
         var quote = await _service.QuoteAsync(Owner, Project,
             new ImageEditQuoteRequest("fake", "fake-model", EditMode.Auto, ImageEditOp.Generate, 1, false,
@@ -140,22 +138,9 @@ public class CharacterPickInJobTests : IDisposable
         r.References.Where(x => x.Role == ReferenceRole.Character).Select(x => Convert.ToHexString(x.Bytes));
 
     [Fact]
-    public async Task Флаг_выключен_запрос_драйверу_как_без_подбора()
+    public async Task Сюжет_в_профиль_берёт_фото_с_меткой_профиля()
     {
-        var request = await Run(false, "портрет в профиль у окна");
-        var baseline = Snapshot(await Run(false, "портрет в профиль у окна", withoutGate: true));
-
-        // Побайтно: роли, подписи и байты всех референсов, эталон лица и промпт — как без подбора
-        Snapshot(request).Should().Be(baseline);
-        Order(request).Should().Equal(Hex(1), Hex(2), Hex(3));
-        request.Character!.FacePhotos!.Select(Convert.ToHexString).Should().Equal(Hex(1), Hex(2), Hex(3));
-        lock (_picks) _picks.Should().BeEmpty();
-    }
-
-    [Fact]
-    public async Task Флаг_включён_сюжет_в_профиль_берёт_фото_с_меткой_профиля()
-    {
-        var request = await Run(true, "портрет в профиль у окна");
+        var request = await Run("портрет в профиль у окна");
 
         // Главное первым, подобранное профильное — вторым, остальное следом
         Order(request).Should().Equal(Hex(1), Hex(3), Hex(2));
@@ -172,10 +157,10 @@ public class CharacterPickInJobTests : IDisposable
     }
 
     [Fact]
-    public async Task Флаг_включён_сюжет_без_признаков_порядок_прежний_и_fallback()
+    public async Task Сюжет_без_признаков_порядок_прежний_и_fallback()
     {
-        var request = await Run(true, "кот на подоконнике");
-        var baseline = Snapshot(await Run(false, "кот на подоконнике"));
+        var request = await Run("кот на подоконнике");
+        var baseline = Snapshot(await Run("кот на подоконнике", withoutGate: true));
 
         Snapshot(request).Should().Be(baseline);
         Order(request).Should().Equal(Hex(1), Hex(2), Hex(3));
@@ -185,7 +170,7 @@ public class CharacterPickInJobTests : IDisposable
     [Fact]
     public async Task Явный_список_идёт_как_есть_и_помечен_manual()
     {
-        var request = await Run(true, "портрет в профиль у окна", [_files[2], _files[0]]);
+        var request = await Run("портрет в профиль у окна", [_files[2], _files[0]]);
 
         Order(request).Should().Equal(Hex(3), Hex(1));
         lock (_picks)

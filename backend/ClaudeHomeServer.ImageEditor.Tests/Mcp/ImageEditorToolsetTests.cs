@@ -78,7 +78,7 @@ public class ImageEditorToolsetTests : IDisposable
     private ChatContextStore _ctxStore = null!;
 
     private ImageEditorToolset Toolset(IImageEditor[]? editors = null, bool agentLaunch = true, bool withGate = true,
-        IImagePlaceSettings? placeSettings = null, IFeatureFlagGate? flags = null,
+        IImagePlaceSettings? placeSettings = null,
         ClaudeHomeServer.Services.ImageEditor.Faces.FaceDetectionCache? faces = null,
         ILocalImageMedia? localMedia = null, IImageEditJobs? jobsOverride = null,
         ClaudeHomeServer.Services.Access.ITurnActorRegistry? turnActors = null)
@@ -109,7 +109,7 @@ public class ImageEditorToolsetTests : IDisposable
             prefs: prefs, mirror: mirror);
         var context = new ImageContextLaunch(_ctxStore, registry, directory.Object, _store, workspace: workspace);
         var launcher = new ImageEditLaunchAssembler(editors, _jobs, new SkiaImageRaster(), threads, context: context,
-            flags: flags, faces: faces, localMedia: localMedia);
+            faces: faces, localMedia: localMedia);
 
         var accessor = new Mock<IMcpSessionAccessor>();
         accessor.Setup(a => a.GetOwned(It.IsAny<string>(), It.IsAny<string>()))
@@ -117,7 +117,7 @@ public class ImageEditorToolsetTests : IDisposable
         var config = TestImages.Config((ImageEditorToolset.AgentLaunchKey, agentLaunch ? "true" : "false"));
         return new ImageEditorToolset(accessor.Object, projects.Object, editors, threads, launcher,
             withGate ? _turnGate.Object : null, _jobs, placeSettings: placeSettings, events: _bus, config: config, prefs: prefs,
-            context: context, flags: flags, faces: faces, localMedia: localMedia, turnActors: turnActors);
+            context: context, faces: faces, localMedia: localMedia, turnActors: turnActors);
     }
 
     private static McpToolCallContext Ctx(string owner = Owner, string tail = ChatId) => new(owner, tail, tail);
@@ -1209,13 +1209,6 @@ public class ImageEditorToolsetTests : IDisposable
 
     // ── image_find_faces и face у image_generate (ADR-028, этап 2) ───────────
 
-    private static IFeatureFlagGate Flags(bool faceSwapOn)
-    {
-        var flags = new Mock<IFeatureFlagGate>();
-        flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.CharacterFaceSwap)).Returns(faceSwapOn);
-        return flags.Object;
-    }
-
     private static ILocalImageMedia FakeMedia(IReadOnlyList<LocalDetectedFace> faces,
         bool busy = false, string? error = null)
     {
@@ -1244,7 +1237,7 @@ public class ImageEditorToolsetTests : IDisposable
     }
 
     // Toolset с локальным редактором + face-зависимости
-    private ImageEditorToolset FaceToolset(IFeatureFlagGate? flags = null,
+    private ImageEditorToolset FaceToolset(
         ClaudeHomeServer.Services.ImageEditor.Faces.FaceDetectionCache? faces = null,
         ILocalImageMedia? localMedia = null)
     {
@@ -1252,7 +1245,7 @@ public class ImageEditorToolsetTests : IDisposable
         return Toolset(
             [HiggsfieldImageEditorTests.Create().Editor,
              new LocalImageEditor(media) { PollInterval = TimeSpan.FromMilliseconds(1) }],
-            flags: flags, faces: faces, localMedia: localMedia);
+            faces: faces, localMedia: localMedia);
     }
 
     // image_find_faces: успех — возвращает лица
@@ -1260,7 +1253,7 @@ public class ImageEditorToolsetTests : IDisposable
     public async Task image_find_faces_успех_возвращает_лица()
     {
         var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
-        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(), localMedia: FaceMedia(faces));
+        var toolset = FaceToolset(faces: new FaceDetectionCache(), localMedia: FaceMedia(faces));
         var thread = Thread();
 
         var result = await Call(toolset, ImageEditorToolset.ToolFindFaces,
@@ -1272,26 +1265,12 @@ public class ImageEditorToolsetTests : IDisposable
         json["faces"]![0]!["n"]!.GetValue<int>().Should().Be(1);
     }
 
-    // image_find_faces: флаг выключен
-    [Fact]
-    public async Task image_find_faces_флаг_выключен()
-    {
-        var toolset = FaceToolset(flags: Flags(false), faces: new FaceDetectionCache());
-        var thread = Thread();
-
-        var result = await Call(toolset, ImageEditorToolset.ToolFindFaces,
-            new JsonObject { ["threadId"] = thread });
-
-        result.IsError.Should().BeTrue();
-        result.Text.Should().Contain("выключена");
-    }
-
     // image_find_faces: личный чат
     [Fact]
     public async Task image_find_faces_личный_чат_отказ()
     {
         AddChat(PersonalChat, Owner, projectId: null);
-        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache());
+        var toolset = FaceToolset(faces: new FaceDetectionCache());
         var thread = Thread(chat: PersonalChat);
 
         var result = await Call(toolset, ImageEditorToolset.ToolFindFaces,
@@ -1305,7 +1284,7 @@ public class ImageEditorToolsetTests : IDisposable
     [Fact]
     public async Task image_find_faces_нет_локальных_моделей()
     {
-        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(), localMedia: null);
+        var toolset = FaceToolset(faces: new FaceDetectionCache(), localMedia: null);
         var thread = Thread();
 
         var result = await Call(toolset, ImageEditorToolset.ToolFindFaces,
@@ -1320,7 +1299,7 @@ public class ImageEditorToolsetTests : IDisposable
     public async Task image_find_faces_busy()
     {
         var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
-        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var toolset = FaceToolset(faces: new FaceDetectionCache(),
             localMedia: FaceMedia(faces, busy: true));
         var thread = Thread();
 
@@ -1336,7 +1315,7 @@ public class ImageEditorToolsetTests : IDisposable
     public async Task image_find_faces_ошибка_детекции()
     {
         var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
-        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var toolset = FaceToolset(faces: new FaceDetectionCache(),
             localMedia: FaceMedia(faces, error: "ComfyUI не ответил"));
         var thread = Thread();
 
@@ -1353,7 +1332,7 @@ public class ImageEditorToolsetTests : IDisposable
     {
         var slug = CreateCharacter("Тест");
         var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
-        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var toolset = FaceToolset(faces: new FaceDetectionCache(),
             localMedia: FaceMedia(faces));
         var thread = Thread();
 
@@ -1370,7 +1349,7 @@ public class ImageEditorToolsetTests : IDisposable
     {
         var slug = CreateCharacter("Тест");
         var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
-        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var toolset = FaceToolset(faces: new FaceDetectionCache(),
             localMedia: FaceMedia(faces));
         var thread = Thread();
 
@@ -1388,7 +1367,7 @@ public class ImageEditorToolsetTests : IDisposable
     {
         var slug = CreateCharacter("Тест");
         var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
-        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var toolset = FaceToolset(faces: new FaceDetectionCache(),
             localMedia: FaceMedia(faces));
         var thread = Thread();
 
@@ -1411,7 +1390,7 @@ public class ImageEditorToolsetTests : IDisposable
     {
         var slug = CreateCharacter("Тест");
         var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
-        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var toolset = FaceToolset(faces: new FaceDetectionCache(),
             localMedia: FaceMedia(faces));
         var thread = Thread();
 
@@ -1455,7 +1434,7 @@ public class ImageEditorToolsetTests : IDisposable
     public async Task image_find_faces_лимит_девять_вызовов_девятый_отказ()
     {
         var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
-        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(), localMedia: FaceMedia(faces));
+        var toolset = FaceToolset(faces: new FaceDetectionCache(), localMedia: FaceMedia(faces));
         var thread = ThreadWithVersions(9);
         var versionIds = VersionIds(thread);
         versionIds.Should().HaveCount(9);
@@ -1478,7 +1457,7 @@ public class ImageEditorToolsetTests : IDisposable
     public async Task image_find_faces_после_хода_счётчик_сброшен()
     {
         var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
-        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(), localMedia: FaceMedia(faces));
+        var toolset = FaceToolset(faces: new FaceDetectionCache(), localMedia: FaceMedia(faces));
         var thread = ThreadWithVersions(9);
         var versionIds = VersionIds(thread);
 
@@ -1502,7 +1481,7 @@ public class ImageEditorToolsetTests : IDisposable
     {
         var slug = CreateCharacter("Тест");
         var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
-        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(), localMedia: FaceMedia(faces));
+        var toolset = FaceToolset(faces: new FaceDetectionCache(), localMedia: FaceMedia(faces));
         var thread = ThreadWithVersions(9);
         var versionIds = VersionIds(thread);
 
@@ -1523,7 +1502,7 @@ public class ImageEditorToolsetTests : IDisposable
     {
         var slug = CreateCharacter("A");
         var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
-        var toolset = FaceToolset(flags: Flags(true), faces: new FaceDetectionCache(), localMedia: FaceMedia(faces));
+        var toolset = FaceToolset(faces: new FaceDetectionCache(), localMedia: FaceMedia(faces));
         var thread = Thread();
 
         // Персонаж «A» в контексте чата: primary-картинка + ref с kind image-character
@@ -1602,7 +1581,6 @@ public class ImageEditorToolsetTests : IDisposable
 
     // Toolset с фейковым IImageEditJobs: quote request перехватывается, запуск «уходит» в фейк
     private (ImageEditorToolset, RecordingJobs) FacesToolset(
-        IFeatureFlagGate? flags = null,
         ClaudeHomeServer.Services.ImageEditor.Faces.FaceDetectionCache? faces = null,
         ILocalImageMedia? localMedia = null)
     {
@@ -1611,7 +1589,7 @@ public class ImageEditorToolsetTests : IDisposable
         var toolset = Toolset(
             [HiggsfieldImageEditorTests.Create().Editor,
              new LocalImageEditor(media) { PollInterval = TimeSpan.FromMilliseconds(1) }],
-            flags: flags, faces: faces, localMedia: localMedia, jobsOverride: recordingJobs);
+            faces: faces, localMedia: localMedia, jobsOverride: recordingJobs);
         recordingJobs.SetToolset(toolset);
         return (toolset, recordingJobs);
     }
@@ -1634,7 +1612,7 @@ public class ImageEditorToolsetTests : IDisposable
             new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false),
             new LocalDetectedFace(2, 1, 1, 3, 3, 0.9, false),
         };
-        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var (toolset, jobs) = FacesToolset(faces: new FaceDetectionCache(),
             localMedia: FaceMedia(faces));
         var thread = Thread();
 
@@ -1662,7 +1640,7 @@ public class ImageEditorToolsetTests : IDisposable
     {
         var slugA = CreateCharacter("Аня");
         var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
-        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var (toolset, jobs) = FacesToolset(faces: new FaceDetectionCache(),
             localMedia: FaceMedia(faces));
         var thread = Thread();
 
@@ -1685,7 +1663,7 @@ public class ImageEditorToolsetTests : IDisposable
     {
         var slugA = CreateCharacter("Аня");
         var slugB = CreateCharacter("Боря");
-        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var (toolset, jobs) = FacesToolset(faces: new FaceDetectionCache(),
             localMedia: FaceMedia([new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false)]));
 
         var args = FacesArg((1, slugA));
@@ -1706,7 +1684,7 @@ public class ImageEditorToolsetTests : IDisposable
     [Fact]
     public async Task faces_пустой_отказ()
     {
-        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var (toolset, jobs) = FacesToolset(faces: new FaceDetectionCache(),
             localMedia: FaceMedia([new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false)]));
 
         var args = FacesArg();
@@ -1727,7 +1705,7 @@ public class ImageEditorToolsetTests : IDisposable
     public async Task faces_элемент_не_объект_отказ()
     {
         var slugA = CreateCharacter("Аня");
-        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var (toolset, jobs) = FacesToolset(faces: new FaceDetectionCache(),
             localMedia: FaceMedia([new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false)]));
 
         var args = FacesArg((1, slugA));
@@ -1750,7 +1728,7 @@ public class ImageEditorToolsetTests : IDisposable
     public async Task faces_номер_лица_меньше_1_отказ(int faceNo)
     {
         var slugA = CreateCharacter("Аня");
-        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var (toolset, jobs) = FacesToolset(faces: new FaceDetectionCache(),
             localMedia: FaceMedia([new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false)]));
 
         var args = FacesArg((faceNo, slugA));
@@ -1772,7 +1750,7 @@ public class ImageEditorToolsetTests : IDisposable
     {
         var slugA = CreateCharacter("Аня");
         var slugB = CreateCharacter("Боря");
-        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var (toolset, jobs) = FacesToolset(faces: new FaceDetectionCache(),
             localMedia: FaceMedia([
                 new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false),
                 new LocalDetectedFace(2, 1, 1, 3, 3, 0.9, false)]));
@@ -1799,7 +1777,7 @@ public class ImageEditorToolsetTests : IDisposable
             new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false),
             new LocalDetectedFace(2, 1, 1, 3, 3, 0.9, false),
         };
-        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var (toolset, jobs) = FacesToolset(faces: new FaceDetectionCache(),
             localMedia: FaceMedia(faces));
         var thread = Thread();
 
@@ -1827,7 +1805,7 @@ public class ImageEditorToolsetTests : IDisposable
             new LocalDetectedFace(2, 1, 1, 3, 3, 0.9, false),
             new LocalDetectedFace(3, 1, 1, 3, 3, 0.9, false),
         };
-        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var (toolset, jobs) = FacesToolset(faces: new FaceDetectionCache(),
             localMedia: FaceMedia(faces));
         var thread = Thread();
 
@@ -1853,7 +1831,7 @@ public class ImageEditorToolsetTests : IDisposable
             new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false),
             new LocalDetectedFace(2, 1, 1, 3, 3, 0.9, false),
         };
-        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var (toolset, jobs) = FacesToolset(faces: new FaceDetectionCache(),
             localMedia: FaceMedia(faces));
         var thread = Thread();
 
@@ -1876,7 +1854,7 @@ public class ImageEditorToolsetTests : IDisposable
     {
         var slugA = CreateCharacter("Аня");
         var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
-        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var (toolset, jobs) = FacesToolset(faces: new FaceDetectionCache(),
             localMedia: FaceMedia(faces));
         var thread = Thread();
 
@@ -1902,7 +1880,7 @@ public class ImageEditorToolsetTests : IDisposable
         // Один детектированный face 1: для успешных запусков; отказной вызов (повтор персонажа)
         // отбивается в тулсете до детекции, поэтому второе лицо детекции не нужно
         var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
-        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var (toolset, jobs) = FacesToolset(faces: new FaceDetectionCache(),
             localMedia: FaceMedia(faces));
         var thread = Thread();
 
@@ -1939,7 +1917,7 @@ public class ImageEditorToolsetTests : IDisposable
             new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false),
             new LocalDetectedFace(2, 1, 1, 3, 3, 0.9, false),
         };
-        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var (toolset, jobs) = FacesToolset(faces: new FaceDetectionCache(),
             localMedia: FaceMedia(faces));
         var thread = Thread();
 
@@ -1962,7 +1940,7 @@ public class ImageEditorToolsetTests : IDisposable
     {
         var slug = CreateCharacter("Тест");
         var faces = new[] { new LocalDetectedFace(1, 1, 1, 3, 3, 0.9, false) };
-        var (toolset, jobs) = FacesToolset(flags: Flags(true), faces: new FaceDetectionCache(),
+        var (toolset, jobs) = FacesToolset(faces: new FaceDetectionCache(),
             localMedia: FaceMedia(faces));
         var thread = Thread();
 

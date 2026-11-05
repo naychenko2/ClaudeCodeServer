@@ -1427,7 +1427,7 @@ export type ServerMessage = { sessionId: string } & (
   // usage для этого не годится: он суммирует все запросы хода, включая сабагентов.
   // usageModel — фактическая модель хода (её же бэк проставляет постам в истории):
   // на этом событии лента клеит модель постам текущего хода.
-  // promptCache — состояние prompt cache хода (фич-флаг prompt-cache); null/отсутствует —
+  // promptCache — состояние prompt cache хода; null/отсутствует —
   // ход без сигнала кэша и история до появления поля
   | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number; usageModel?: string; durationApiMs?: number; promptCache?: PromptCacheWire }
   | { type: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
@@ -1588,7 +1588,7 @@ export type ServerMessage = { sessionId: string } & (
   // Текст сюда не кладём — шторка забирает его отдельным REST-запросом.
   // applied=false — ход доигрывался в живом процессе, и этот промпт модели не уходил
   | { type: 'prompt_snapshot'; snapshotId: string; applied: boolean; inheritedFromId?: string }
-  // Живые метрики локальной модели (флаг local-model-stats). Эфемерные: в историю не
+  // Живые метрики локальной модели. Эфемерные: в историю не
   // пишутся, после F5 подхватываются следующим снимком/REST. phase — фаза генерации
   // (queued|prefill|generating), genTps — ток/с, waitingTotal — сколько прогонов ждут GPU.
   | { type: 'local_model_live'; phase: string; genTps?: number | null; waitingTotal?: number | null }
@@ -1596,7 +1596,7 @@ export type ServerMessage = { sessionId: string } & (
   // time-to-first-token, оценка времени в очереди, доля prefix-кэша, число выданных токенов.
   | { type: 'local_model_turn_stats'; genTps?: number | null; prefillTps?: number | null; ttftMs?: number | null; queueMsApprox?: number | null; cacheHitPerc?: number | null; outTokens?: number | null; mainRequests?: number; subagentRequests?: number; compactionRequests?: number; auxiliaryRequests?: number; agentTypes?: string[] | null; compactionKind?: 'auto' | 'manual' | 'reactive' | null; toolCallLeakTail?: number; toolCallLeakWholeCall?: number }
   // Ход ждёт свободный слот локальной модели (гейт допуска, бэк 4683acb29). В отличие от
-  // local_model_live идёт БЕЗ флага local-model-stats: человек обязан видеть, что ход ждёт,
+  // local_model_live идёт БЕЗ : человек обязан видеть, что ход ждёт,
   // а не «виснет молча». position — место в очереди (1-based), active/limit — «заняты N из M».
   // position=0 — ожидание кончилось (ход допущен/отказан/остановлен): строку снять.
   // Эфемерное: в историю не пишется, свою строку ленты снимает и на конце хода (редьюсер).

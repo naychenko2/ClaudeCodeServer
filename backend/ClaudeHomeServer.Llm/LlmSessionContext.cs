@@ -39,9 +39,9 @@ public record NotesMcpContext(string ApiUrl, Func<string> TokenFactory, string? 
 // проектного чата — пишет ли персона в команду, решает бэкенд (TeamMemoryService.
 // WriteDeniedFor: Persona.Scope==Project && Persona.ProjectId==id проекта памяти),
 // состав MCP-инструментов от этого не зависит (диета памяти команды, ч.3).
-// DossierToolsEnabled — секция dossier_lookup/dossier_get (этап 2, ADR-004 §5): включается
-// по флагу ВЛАДЕЛЬЦА change-dossiers-recall (не по свойствам хода — инвариант стабильности
-// состава tools/list); сама секция требует ещё и проектный чат.
+// DossierToolsEnabled — секция dossier_lookup/dossier_get (этап 2, ADR-004 §5): включена
+// всегда (не зависит от свойств хода — инвариант стабильности состава tools/list); сама секция
+// требует ещё и проектный чат.
 // SphereToolsEnabled — секция sphere_memory_*: гейт по флагу ВЛАДЕЛЬЦА spheres (не по членству
 // проекта и не по свойствам хода), входит в отпечаток состава сервера памяти.
 // TokenFactory, а не строка: контекст живёт столько же, сколько адаптер, а у чата старше

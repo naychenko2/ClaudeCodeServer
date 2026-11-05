@@ -1022,14 +1022,14 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
-    /// Секция dossier_* включается ТОЛЬКО связкой «проект чата + флаг владельца
-    /// change-dossiers-recall» — оба входа решаются на старте сессии (env) и от свойств
-    /// хода не зависят. Тест держит саму связку: выпадение любой оси (секция в чате вне
-    /// проекта, секция без флага) молча меняло бы состав tools/list между «одинаковыми»
-    /// ходами — грабли, ради которых существует этот сторож.
+    /// Секция dossier_* включается ТОЛЬКО связкой «проект чата + MEMORY_DOSSIER_TOOLS=1» —
+    /// оба входа решаются на старте сессии (env) и от свойств хода не зависят. Тест держит
+    /// саму связку: выпадение любой оси (секция в чате вне проекта, секция без env) молча
+    /// меняло бы состав tools/list между «одинаковыми» ходами — грабли, ради которых
+    /// существует этот сторож.
     /// </summary>
     [SkippableFact]
-    public void MemoryDossierСекция_ВключаетсяПроектомИФлагомВладельца()
+    public void MemoryDossierСекция_ВключаетсяПроектомИEnvДосье()
     {
         var tools = ListMemoryTools(
             ("MEMORY_PERSONA_ID", "p1"), ("MEMORY_PROJECT_ID", "proj1"), ("MEMORY_DOSSIER_TOOLS", "1"));
@@ -1041,14 +1041,14 @@ public class McpToolsetStabilityTests
     }
 
     [SkippableFact]
-    public void MemoryDossierСекция_БезФлагаВладельца_СекцииНет()
+    public void MemoryDossierСекция_БезEnvДосье_СекцииНет()
     {
         var tools = ListMemoryTools(
             ("MEMORY_PERSONA_ID", "p1"), ("MEMORY_PROJECT_ID", "proj1"), ("MEMORY_DOSSIER_TOOLS", "0"));
         if (tools is null) return;
 
         tools.Should().NotContain("dossier_lookup").And.NotContain("dossier_get",
-            "флаг владельца change-dossiers-recall выключен — секции быть не должно");
+            "MEMORY_DOSSIER_TOOLS=0 — секции быть не должно");
         tools.Should().Contain("memory_remember", "остальной состав не пострадал");
     }
 
@@ -1173,20 +1173,20 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
-    /// Флаг секции dossier_* решается в BuildMemoryContext по ВЛАДЕЛЬЦУ (FeatureFlagService),
+    /// Секция dossier_* в BuildMemoryContext включена безусловно (DossierToolsEnabled: true),
     /// а не по свойствам хода — значение уезжает в env MEMORY_DOSSIER_TOOLS и входит в
     /// отпечаток состава (shapes memory), значит мерцание между ходами убивало бы процесс CLI.
     /// </summary>
     [SkippableFact]
-    public void MemoryDossierГейт_РешаетсяФлагомВладельцаАНеХодом()
+    public void MemoryDossierГейт_ВсегдаВключенаАНеХодом()
     {
         var path = FindSource("Services", "SessionManager.cs");
         Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!), "private MemoryMcpContext BuildMemoryContext");
 
-        body.Should().Contain("ChangeDossiersRecall",
-            "секция dossier_* гейтится флагом владельца change-dossiers-recall");
+        body.Should().Contain("DossierToolsEnabled: true",
+            "секция dossier_* включена всегда (флаг change-dossiers-recall снят) и не зависит от хода");
         body.Should().Contain("FeatureFlagKeys.Spheres",
             "секция sphere_memory_* гейтится флагом владельца spheres, а не членством проекта");
         body.Should().NotContain("SphereOf",

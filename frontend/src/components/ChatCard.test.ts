@@ -1,5 +1,5 @@
 // Метка фичи в строке чата (Ф9, макет features-overview.html, «Дни»):
-//   • featureLabelFor — чистое решение «показывать ли метку» (чат фичи + флаг → фича;
+//   • featureLabelFor — чистое решение «показывать ли метку» (чат фичи → фича;
 //     иначе null — прежнее имя персоны);
 //   • FeatureLabel — рендер глифа + названия (обрезка с title).
 //
@@ -93,24 +93,16 @@ beforeEach(() => {
 describe('featureLabelFor', () => {
   it('чат фичи + флаг вкл → фича (метка показывается)', () => {
     setupIndex();
-    setAllFlags({ 'features-overview': true });
-    const result = featureLabelFor('chat-1', true);
+    const result = featureLabelFor('chat-1');
     expect(result?.featureId).toBe('f1');
   });
 
   it('чат без фичи → null (прежнее имя персоны)', () => {
     setupIndex();
-    setAllFlags({ 'features-overview': true });
-    const result = featureLabelFor('chat-other', true);
+    const result = featureLabelFor('chat-other');
     expect(result).toBeNull();
   });
 
-  it('флаг выключен → null (прежнее имя персоны)', () => {
-    setupIndex();
-    setAllFlags({ 'features-overview': false });
-    const result = featureLabelFor('chat-1', false);
-    expect(result).toBeNull();
-  });
 });
 
 // === FeatureLabel: рендер метки ===
@@ -158,7 +150,6 @@ describe('n1: метка фичи внутри группы (inFeatureGroup)', (
 
   it('чат фичи: метка есть вне группы, подавлена внутри', () => {
     setupIndex();
-    setAllFlags({ 'features-overview': true });
     // chat-1 — исполнитель f1 (setupIndex)
     expect(renderCard('chat-1')).toContain('data-testid="chat-feature-label"');
     expect(renderCard('chat-1', true)).not.toContain('data-testid="chat-feature-label"');
@@ -221,7 +212,6 @@ describe('Ф3.2: M2 подсказка «ключевой» (fakeDom: навед
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-18T10:00:00Z').getTime());
     featuresIndexTest.reset();
-    setAllFlags({ 'features-overview': false });
     // fake-window не несёт setTimeout/clearTimeout (Tooltip, задержка 350 мс) и
     // addEventListener/removeEventListener (useActionVisibility) — даём no-op/(fake) таймеры.
     const w = (globalThis as { window: Record<string, unknown> }).window;
@@ -348,7 +338,6 @@ describe('M4: карточка — role="button" + клавиатурная ак
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-10-18T10:00:00Z').getTime());
     featuresIndexTest.reset();
-    setAllFlags({ 'features-overview': false });
     const w = (globalThis as { window: Record<string, unknown> }).window;
     w.setTimeout = globalThis.setTimeout;
     w.clearTimeout = globalThis.clearTimeout;

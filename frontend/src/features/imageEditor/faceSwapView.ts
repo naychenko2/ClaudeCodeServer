@@ -25,8 +25,6 @@ export const FS_TEXT = {
   provider: 'Подставлять персонажа можно только локальными моделями',
   // provider_unavailable, когда локальные модели недоступны: действие не помогает (этап 2 · шаг 10d)
   localUnavailable: 'Локальные модели сейчас недоступны. Попробуйте позже',
-  // feature_disabled: флаг выключили, пока экран был открыт — режим закрывается (этап 2 · шаг 10d)
-  featureDisabled: 'Режим «Подставить персонажа» отключён',
   useLocal: 'Использовать локальные для этого запуска',
   changed: 'Картинка изменилась — лица найдены заново',
   go: 'Подставить',
@@ -224,7 +222,6 @@ export type LaunchFailure =
   | { kind: 'busy' }                 // busy → плашка 8 (danger, clock, «Видеокарта занята…»)
   | { kind: 'providerUnavailable' }  // provider_unavailable → плашка 9 / нейтрально
   | { kind: 'facesChanged' }         // faces_changed → обновление рамок + сброс выбора
-  | { kind: 'featureDisabled' }      // feature_disabled → закрытие режима
   | { kind: 'faceRefused'; face: number; message: string } // invalid_request + face → отказ по лицу
   | { kind: 'generic'; message: string }; // неизвестный код → общая ошибка
 
@@ -242,7 +239,6 @@ export function launchFailure(code: string | null, message: string | null, face?
     case 'busy': return { kind: 'busy' };
     case 'provider_unavailable': return { kind: 'providerUnavailable' };
     case 'faces_changed': return { kind: 'facesChanged' };
-    case 'feature_disabled': return { kind: 'featureDisabled' };
     default: return { kind: 'generic', message: message ?? '' };
   }
 }
@@ -255,7 +251,6 @@ export function searchFailureText(code: string): string {
     case 'busy': return FS_TEXT.queue;
     case 'provider_unavailable': return FS_TEXT.localUnavailable;
     case 'not_found': return FS_TEXT.provider;
-    case 'feature_disabled': return FS_TEXT.featureDisabled;
     default: return 'Не удалось найти лица. Попробуйте позже';
   }
 }

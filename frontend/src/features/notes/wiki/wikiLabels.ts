@@ -126,7 +126,10 @@ export function wikiErrorText(e: WikiError, ctx?: NotFoundContext): string {
     case 'task_execution': return 'Чаты исполнения задач не разбираются: их итоги уже источники';
     case 'marked_skip': return 'Чат помечен «не разбирать» — сними пометку';
     case 'personal_section': return personalSectionRefusalText;
-    case 'wiki_not_initialized': return 'Твоя вики ещё не заведена';
+    // С LI-2 analyze/ingest/transfer сами заводят вики владельца: этот 409 из действия
+    // человека не приходит, код остаётся как ответ сервисного слоя (MCP/вторая линия
+    // защиты). Текст нейтральный — без просьбы «завести»: кнопки «Завести вики» нет (LI-3).
+    case 'wiki_not_initialized': return 'Вики этого владельца не заведена';
     case 'packages_limit': return 'Открытых пакетов слишком много: разберите «Входящие», потом повторяй заявку';
     case 'wiki_note_id': return 'Нужен id заметки';
     // Здоровье (S3-3) и класс операции (хвост R-S7c-2): общие тексты по коду. У «Здоровья»

@@ -71,7 +71,6 @@ import { ChatProjectContext, ToolLivenessContext, ChatTreePathContext, ChatSessi
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { TurnPlanPill } from './chat/TurnPlanPill';
 import { useFeatureRuns } from '../lib/featureRuns';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 import { useFeaturesIndex, featureOf } from '../lib/featuresIndex';
 import { Modal, ModalActions, ConfirmDialog, Button } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
@@ -1821,19 +1820,15 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
   const lastPlanIndex = useMemo(
     () => todoBatches.reduce((max, b) => Math.max(max, b.lastIndex), -1),
     [todoBatches]);
-  // Режим «Исполнение фичи»: гейт фич-флага (dark-launch) — выключен, фича не
-  // показывается и источник не зовётся. Агрегаты берутся из REST по сессии чата.
-  const featureMode = useFeature(FLAGS.turnPlanFeatureMode);
-  const featureRuns = useFeatureRuns(session.id, featureMode);
-  // Слот строки фичи в шапке (В2) живёт под ДВУМЯ флагами — как сама строка (FeatureBanner).
+  // Режим «Исполнение фичи»: агрегаты берутся из REST по сессии чата.
+  const featureRuns = useFeatureRuns(session.id);
+  // Слот строки фичи в шапке (В2), как и сама строка (FeatureBanner).
   // Решение «есть ли у чата фича» принимается ЗДЕСЬ: React-элемент всегда truthy, и
   // переданный при пустом чате слот гасил бы линию тулбара у каждого чата без фичи
   // (ревью F2, major 2). Индекс — тот же стор, что у FeatureBanner (один запрос на
   // проект, идемпотентен), нужен ровно чтобы отличить «слот задан» от «в нём есть».
-  const featuresOverview = useFeature(FLAGS.featuresOverview);
-  const featureRowOn = featureMode && featuresOverview;
-  useFeaturesIndex(session.projectId ?? null, featureRowOn);
-  const hasFeatureRow = featureRowOn && featureOf(session.id).length > 0;
+  useFeaturesIndex(session.projectId ?? null);
+  const hasFeatureRow = featureOf(session.id).length > 0;
 
 
   // Снимок промпта и размер контекста ДЛЯ КАЖДОГО индекса ленты: у постов ассистента

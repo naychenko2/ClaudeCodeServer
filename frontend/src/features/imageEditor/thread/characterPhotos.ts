@@ -51,9 +51,9 @@ export function sceneLine(scene: ImageThreadCharacter['scene']): string | null {
   return parts.length ? CPS.scenePrefix + parts.join(', ') : null;
 }
 
-// Видимость блока: флаг включён, версия не исходник и не обрезка без ИИ, у запуска есть персонаж
-export function stripVisible(a: { smart: boolean; versionId: string; cropNote: string | null; character: ImageThreadCharacter | null }): boolean {
-  return a.smart && a.versionId !== ORIGIN && !a.cropNote && !!a.character;
+// Видимость блока: версия не исходник и не обрезка без ИИ, у запуска есть персонаж
+export function stripVisible(a: { versionId: string; cropNote: string | null; character: ImageThreadCharacter | null }): boolean {
+  return a.versionId !== ORIGIN && !a.cropNote && !!a.character;
 }
 
 // pick → бейдж: тон и текст. Акцент не берём: в шапке карточки он уже занят бейджем «В работе»

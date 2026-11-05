@@ -772,7 +772,9 @@ function analyzeOk(body: unknown): WikiChatAnalyzeOk | null {
 // «Разобрать этот чат сейчас» (S7b0a): единственный запрос, доходящий до модели. 200 и 202 —
 // для request() оба успешные тела (offline.ts:1649), различаем по форме: у 200 всегда есть
 // строковый outcome, у 202 — только running:true. Отказы: 404 not_found, 409 task_execution |
-// marked_skip | personal_section | wiki_not_initialized — WikiError с кодом.
+// marked_skip | personal_section — WikiError с кодом. С LI-2 analyze сам заводит вики владельца
+// (WikiChatsController.cs:276): 409 wiki_not_initialized из этой ручки больше не приходит;
+// код остаётся в типах — это ответ сервисного слоя (гейт WikiChatIngestService.cs:346, MCP).
 export async function analyzeWikiChat(sessionId: string): Promise<WikiChatAnalyzeResult> {
   const body = await wikiHttp<unknown>(
     `/wiki/chats/${encodeURIComponent(sessionId)}/analyze`, { method: 'POST' });
@@ -814,8 +816,10 @@ export interface WikiNoteIngestDto {
 
 // «Разобрать заметку в базу» (S7b0b): target — явный «common» для источника вне проекта
 // (ADR-036, решение 3), его проверяет захват. Отказы: 400 wiki_note_id (нет id),
-// 409 wiki_not_initialized | packages_limit (до захвата), 404 not_found (заметка не стала
-// источником: чужая, нет такой).
+// 409 packages_limit (до захвата), 404 not_found (заметка не стала источником: чужая, нет
+// такой). С LI-2 ручка сама заводит вики владельца (WikiController.cs:474): 409
+// wiki_not_initialized из неё больше не приходит; код остаётся в типах — ответ сервисного
+// слоя (гейт WikiIngestService.cs:214, MCP).
 export async function ingestWikiNote(noteId: string, target?: string | null): Promise<WikiNoteIngestDto> {
   const res = await wikiHttp<{ outcome?: unknown; packageId?: unknown; reason?: unknown }>(
     '/wiki/ingest/note',
@@ -1581,10 +1585,13 @@ export async function restoreWikiPage(
 // wiki_transfer_target). section/page ответа — ключи созданной страницы в той же форме, что
 // ключ раздела дерева и ключ страницы каталога, — экран открывает их requestOpenWikiPage (OPEN-1).
 // Отказы — WikiError с кодом: 404 not_found (заметки нет или чужая), 409 wiki_unified_off |
-// wiki_not_initialized | wiki_note_transferred (уже перенесена) | wiki_page_changed (имя занято:
-// «переименуйте заметку и повторите»), 400 wiki_edit_invalid (.violations/.issues) | wiki_note_id;
-// сервисному токену 403 — до ветки переноса. Повтор переноса доводит несделанную замену:
-// занятая страница этого же переноса узнаётся на бэке (WikiNoteTransfer.IsPageOfThisTransfer).
+// wiki_note_transferred (уже перенесена) | wiki_page_changed (имя занято: «переименуйте
+// заметку и повторите»), 400 wiki_edit_invalid (.violations/.issues) | wiki_note_id;
+// сервисному токену 403 — до ветки переноса. С LI-2 ручка сама заводит вики владельца
+// (WikiController.cs:498): 409 wiki_not_initialized из неё больше не приходит; код остаётся
+// в типах — ответ второй линии защиты (гейт WikiApplyService.cs:194, за которым страница).
+// Повтор переноса доводит несделанную замену: занятая страница этого же переноса узнаётся
+// на бэке (WikiNoteTransfer.IsPageOfThisTransfer).
 
 export interface WikiNoteTransferDto {
   section: string;
@@ -1617,8 +1624,8 @@ export async function transferWikiNote(noteId: string): Promise<WikiNoteTransfer
 // непосредственно перед запросом — единственный источник хэша на этом экране. Между чтением
 // и применением файл мог быть правлен ещё раз — это ровно 409 wiki_page_changed, бэк ничего
 // не пишет. Ответы как у edit: 200 applied/unchanged; 409 wiki_page_changed (файл правили
-// ещё раз), 409 wiki_drift (дрейф других страниц раздела), 409 wiki_unified_off (любой из
-// флагов выключен — UnifiedOffRefusal до ветки), 400 wiki_edit_invalid (.violations/.issues),
+// ещё раз), 409 wiki_drift (дрейф других страниц раздела), 409 wiki_unified_off (флаг
+// llm-wiki выключен — UnifiedOffRefusal до ветки), 400 wiki_edit_invalid (.violations/.issues),
 // 400 wiki_adopt_mode. Чистый транспорт (тот же порядок, что analyzeWikiChat/transferWikiNote):
 // состояния стора не трогает, ничего не перечитывает — перечитку здоровья и отбивку ответа
 // по пути страницы делает вызывающий.

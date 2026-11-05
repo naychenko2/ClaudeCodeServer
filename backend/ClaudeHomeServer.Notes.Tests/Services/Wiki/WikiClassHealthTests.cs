@@ -7,6 +7,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
+using ClaudeHomeServer.Tests.Helpers;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -33,6 +34,9 @@ public class WikiClassHealthTests : IDisposable
     private readonly FlagGate _flags = new();
     private readonly Notifier _notifier = new();
     private readonly WikiClassHealth _sut;
+    // Хранитель нужен конструктору контроллера настроек; в этих тестах он не зовётся: здесь
+    // читают GET — а он вики не заводит (LI-2).
+    private readonly WikiKeeper _keeper;
 
     public WikiClassHealthTests()
     {
@@ -42,6 +46,9 @@ public class WikiClassHealthTests : IDisposable
             .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = Path.Combine(_dir, "projects.json") })
             .Build();
         _sut = new(_config, _flags, _notifier);
+        var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var projects = new ProjectManager(_config, users, new AppSettingsService(_config));
+        _keeper = new WikiKeeper(new NotesService(projects, _config, NullLogger<NotesService>.Instance), _config);
     }
 
     public void Dispose()
@@ -266,7 +273,7 @@ public class WikiClassHealthTests : IDisposable
         verdict.Reason.Should().Contain("выключен");
 
         // «Снова применять само» — окно начинается заново: старые откаты в него не входят.
-        var put = Controller(User).Put(new WikiSettingsRequest { Class = ClassKey, Enable = true });
+        var put = await Controller(User).Put(new WikiSettingsRequest { Class = ClassKey, Enable = true });
         ((OkObjectResult)put.Result!).StatusCode.Should().Be(200);
 
         await _sut.EvaluateAsync(User);
@@ -306,7 +313,7 @@ public class WikiClassHealthTests : IDisposable
         dto.Classes.Should().BeEmpty();
         File.ReadAllText(SettingsPath()).Should().Be("{ это не json"); // чтение ничего не «чинит» молча
 
-        AssertCode(Controller(User).Put(new WikiSettingsRequest { OwnerId = Other, AutoApplyEnabled = false }).Result!, 403, "wiki_foreign");
+        AssertCode((await Controller(User).Put(new WikiSettingsRequest { OwnerId = Other, AutoApplyEnabled = false })).Result!, 403, "wiki_foreign");
     }
 
     // ─── c5: уведомление — один раз на переход ─────────────────────────────────
@@ -423,7 +430,7 @@ public class WikiClassHealthTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", user)], "test"));
-        return new WikiSettingsController(_sut, _flags, _config)
+        return new WikiSettingsController(_sut, _flags, _keeper, _config)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

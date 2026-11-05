@@ -445,7 +445,6 @@ describe('WorkspacePage: sessionId чата доезжает до FileViewer', (
     sessionListMock.onSessionUpdated = null;
     sessionListMock.onSelect = null;
     personasPanelMock.onShowTeam = null;
-    setAllFlags({ 'features-overview': true });
     const idx = { features: [feat()], chats: {} } as FeaturesIndex;
     indexTest.setIndex('p1', idx);
     mockData.index = idx;

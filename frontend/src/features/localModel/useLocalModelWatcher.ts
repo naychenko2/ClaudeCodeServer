@@ -4,13 +4,12 @@
 // кормит стор configured лёгким 60-с опросом и ПОДПИСЫВАЕТ страницу на
 // configured/роль: isAvailable панели — геттер, который читается в рендере
 // страницы, и без подписки смена configured не перерисовала бы рельс.
-// Без флага или не-админу — ни одного запроса к /api/local-model/*.
+// Админ опрашивает /stats, не-админ — /stats/media.
 // С Ф6 здесь же живёт состояние второй модели (движок на Video) для точки на значке
-// рельса: лёгкий 15-с опрос (макет §6) ТОЛЬКО админа с флагом — не-админ /stats
-// не спрашивает, состояние неизвестно, точка врал бы.
+// рельса: лёгкий 15-с опрос (макет §6) ТОЛЬКО админа — не-админ /stats
+// не спрашивает, состояние неизвестно, точка врала бы.
 
 import { useEffect, useSyncExternalStore } from 'react';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import {
   getLocalModelConfigured, setLocalModelAdmin, configuredSource, useLocalModelAdmin,
   useLocalModelConfigured, useLocalModelConfiguredPolling,
@@ -78,15 +77,14 @@ export function startEngineStatePolling(
 }
 
 export function useLocalModelWatcher(isAdmin: boolean): void {
-  const flag = useFeature(FLAGS.localModelStats);
   useEffect(() => { setLocalModelAdmin(isAdmin); }, [isAdmin]);
-  // Админ — /stats (флаг гейтит), не-админ — /stats/media (без флага)
-  useLocalModelConfiguredPolling(configuredSource(flag, isAdmin));
-  // Состояние второй модели — только админу с флагом: точка на значке тоже только для них
+  // Админ — /stats, не-админ — /stats/media
+  useLocalModelConfiguredPolling(configuredSource(isAdmin));
+  // Состояние второй модели — только админу: точка на значке тоже только для него
   useEffect(() => {
-    if (!isAdmin || !flag) return;
+    if (!isAdmin) return;
     return startEngineStatePolling();
-  }, [isAdmin, flag]);
+  }, [isAdmin]);
   // Подписка страницы на сторы (значение не нужно — нужен ререндер, чтобы рельса
   // перечитала геттеры): configured, роль и состояние второй движок
   useLocalModelConfigured();

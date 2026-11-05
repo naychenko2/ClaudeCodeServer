@@ -33,7 +33,6 @@ import { useCanHover } from '../lib/pointer';
 import { NO_AUTOFILL } from '../lib/noAutofill';
 import { useSlot } from '../lib/subsystems/registry';
 import type { ChatCardBadgeApi, ChatCardBadgeCtx } from '../lib/subsystems/registryCore';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 import { featureOf, useFeaturesIndex } from '../lib/featuresIndex';
 import { featureDisplayState, KEY_SESSION_TOOLTIP } from '../lib/chatGroups';
 import { FeatureGlyph } from './chat/feature/FeatureGlyphs';
@@ -150,8 +149,8 @@ function TeamImplementMarker({ session }: { session: Session }) {
 }
 
 // Метка фичи в строке чата (макет features-overview.html, «Дни»: глиф + название,
-// обрезка с title). Показывается для чата, принадлежащего фиче, под флагом
-// features-overview — вместо имени персоны. Глиф — по состоянию фичи
+// обрезка с title). Показывается для чата, принадлежащего фиче —
+// вместо имени персоны. Глиф — по состоянию фичи
 // (featureDisplayState: wait/stopped/run/loop/closed/done).
 export function FeatureLabel({ feature }: { feature: FeatureIndexFeature }) {
   const st = featureDisplayState(feature);
@@ -176,10 +175,9 @@ export function FeatureLabel({ feature }: { feature: FeatureIndexFeature }) {
   );
 }
 
-// Фича чата для метки: null — метки нет (чат без фичи или флаг выключен).
-// Чистая функция: читает индекс фич (featureOf) и флаг; тестируется без рендера.
-export function featureLabelFor(sessionId: string | null, flagOn: boolean): FeatureIndexFeature | null {
-  if (!flagOn) return null;
+// Фича чата для метки: null — метки нет (чат без фичи).
+// Чистая функция: читает индекс фич (featureOf); тестируется без рендера.
+export function featureLabelFor(sessionId: string | null): FeatureIndexFeature | null {
   const entries = featureOf(sessionId);
   return entries[0]?.feature ?? null;
 }
@@ -363,13 +361,12 @@ function ChatCardView({
   const mechanic = getLastMechanic(s.id);
   // Значки подсистем в строке названия (чат картинки — миниатюра и «картинка»)
   const badges = useSlot<ChatCardBadgeCtx, ChatCardBadgeApi>('chat-card-badge');
-  // Метка фичи: для чата, принадлежащего фиче, под флагом features-overview.
+  // Метка фичи: для чата, принадлежащего фиче.
   // useFeaturesIndex — реактивная подписка на индекс (один запрос на проект:
   // первичная загрузка при 0→1 потребителях); featureLabelFor — чистое решение
   // «показывать ли метку» (null — нет)
-  const featuresOn = useFeature(FLAGS.featuresOverview);
-  useFeaturesIndex(s.projectId ?? null, featuresOn);
-  const feature = featureLabelFor(s.id, featuresOn);
+  useFeaturesIndex(s.projectId ?? null);
+  const feature = featureLabelFor(s.id);
   // Открытое меню действий: rect кнопки-триггера (null — закрыто)
   const [menu, setMenu] = useState<DOMRect | null>(null);
   // M1: фокус на карточке-строке — подсказка «что значит ключевой» (Tooltip) поднимается
@@ -1122,7 +1119,7 @@ function ChatCardView({
           {badges.map((b, i) => b.render && <span key={b.name ?? i} style={{ display: 'contents' }}>{b.render({ session: s, isMobile })}</span>)}
           <TeamImplementMarker session={s} />
           <ExpiryBadge session={s} />
-          {/* Метка фичи: для чата, принадлежащего фиче, под флагом features-overview.
+          {/* Метка фичи: для чата, принадлежащего фиче.
               Глиф + название (обрезка с title); в «Днях» — вместо имени персоны.
               Внутри группы фичи (inFeatureGroup) — не рисуем: имя уже в заголовке (n1) */}
           {feature && !inFeatureGroup && <FeatureLabel feature={feature} />}

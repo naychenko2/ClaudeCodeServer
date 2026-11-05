@@ -27,6 +27,11 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // Страницы этот контроллер не пишет: «Завести», adopt и удаление раздела идут через
 // WikiKeeper — единственный писатель pages/ (ADR-035, решение 2). Журнал — тоже только
 // чтение: он читает log.jsonl и пакеты, ничего не меняя (S7c-0).
+//
+// С LI-2 «разобрать заметку в базу» и «перенести в вики» заводят вику заявителя тем же
+// EnsureInitializedAsync, что и POST initialize, — вместо прежнего 409 wiki_not_initialized:
+// человек не обязан заводить вику руками. Ручка initialize остаётся как есть (совместимость
+// и ручной повтор); GET-ручки вики не заводят.
 [ApiController]
 [Authorize]
 [Route("api/wiki")]
@@ -100,9 +105,9 @@ public class WikiController : ControllerBase
     private const string CodeLlmWikiOff = "wiki_llm_wiki_off";
     private const string CodeOriginKey = "wiki_origin_key";
     private const string CodeClassKey = "wiki_class_key";
-    // S7b0b «Разобрать заметку в базу»: состояния вики — 409 с кодом (тот же смысл, что у
-    // отказа инструмента wiki_ingest), заметка, не ставшая источником, — 404 not_found.
-    private const string CodeNotInitialized = "wiki_not_initialized";
+    // S7b0b «Разобрать заметку в базу»: заметка, не ставшая источником, — 404 not_found.
+    // Состояния «вики не заведена» здесь больше нет: с LI-2 вика заявителя заводится до заявки
+    // (тот же код остаётся за MCP-инструментом и сервисами — вторая линия защиты).
     private const string CodePackagesLimit = "packages_limit";
     private const string CodeNotFound = "not_found";
     private const string CodeNoteId = "wiki_note_id";
@@ -366,7 +371,7 @@ public class WikiController : ControllerBase
     /// <summary>Системная операция adopt (ADR-035, решение 6): текущий файл на диске
     /// принимается в манифест раздела, дрейф снимается, файл не трогается. Режимы (ADR-038, §6):
     /// `as-is` (по умолчанию, без флага) — как выше; `mine` («Принять как мою правку») — дифф
-    /// «манифест → диск» собирается в пакет human, под флагами llm-wiki и notes-wiki-unified,
+    /// «манифест → диск» собирается в пакет human, под флагом llm-wiki,
     /// baseHash обязателен (sha256 файла, каким его видел человек).</summary>
     [HttpPost("adopt")]
     public async Task<IActionResult> Adopt([FromBody] WikiAdoptRequest? req)
@@ -390,10 +395,9 @@ public class WikiController : ControllerBase
         return MineResult(userId, await _apply.AdoptMineAsync(userId, key!, req.Page, req.BaseHash), req.Page);
     }
 
-    // Гейт совместной правки: выключен любой из двух флагов — 409 (как в WikiPagesController).
+    // Гейт совместной правки: llm-wiki выключен — 409 (как в WikiPagesController).
     private bool UnifiedOn(string userId) =>
-        _flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) == true
-        && _flags.IsEnabled(userId, FeatureFlagKeys.NotesWikiUnified);
+        _flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) == true;
 
     private IActionResult UnifiedOffRefusal() =>
         StatusCode(409, new { code = CodeUnifiedOff, message = "правка страниц выключена: функция недоступна" });
@@ -441,9 +445,10 @@ public class WikiController : ControllerBase
     /// <summary>POST /api/wiki/ingest/note {noteId, target?}: та же склейка «захват →
     /// карточка → заявка», что у инструмента wiki_ingest (WikiCardIngest, S7b0b): два
     /// входа — одна логика. Заметка попадает в разбор только по заявке владельца и только
-    /// своя: владельца проверяет CaptureNote (тот же путь, что у MCP). Порядок отказов —
-    /// как у инструмента: не заведённая вика и лимит открытых пакетов проверяются ДО
-    /// захвата (21-я заявка не ставится, ADR-035, решение 4). Отказ захвата — 404
+    /// своя: владельца проверяет CaptureNote (тот же путь, что у MCP). С LI-2 вика заявителя
+    /// заводится до заявки (прежний 409 wiki_not_initialized этой ручки нет); лимит открытых
+    /// пакетов по-прежнему проверяется ДО захвата (21-я заявка не ставится, ADR-035,
+    /// решение 4). Отказ захвата — 404
     /// {code:"not_found"}: для вызывающего заметка не стала источником (чужой, нет такой,
     /// не источник), причина — в message. Исход заявки — 200 с outcome: её решает очередь
     /// разбора (WikiIngestService), не эта ручка; исключений наружу нет.</summary>
@@ -462,9 +467,10 @@ public class WikiController : ControllerBase
             return BadRequest(new { code = CodeNoteId, message = "нужен id заметки" });
 
         var root = WikiPaths.Root(_dataDir, userId);
-        if (!WikiPaths.IsInitialized(_dataDir, userId))
-            return StatusCode(409, new { code = CodeNotInitialized,
-                message = "вики этого владельца не заведена: её разбор работает только с заведённой" });
+        // LI-2: заявка владельца — действие человека, которому нужна вики: она заводится сама
+        // вместо прежнего 409 wiki_not_initialized. Идемпотентно и под замком владельца;
+        // проверка лимита открытых пакетов — после, как и прежде (21-я заявка не ставится).
+        await _keeper.EnsureInitializedAsync(userId);
         if (WikiPackageStore.CountOpen(root) >= WikiPackage.MaxOpenPackages)
             return StatusCode(409, new { code = CodePackagesLimit,
                 message = $"открытых пакетов уже {WikiPackage.MaxOpenPackages}: разберите Входящие, потом повторяй заявку." });
@@ -485,9 +491,10 @@ public class WikiController : ControllerBase
             return BadRequest(new { code = CodeNoteId, message = "нужен id заметки" });
         if (req.Target is not null)
             return BadRequest(new { code = CodeTransferTarget, message = "перенос идёт в раздел заметки: target не задаётся" });
-        if (!WikiPaths.IsInitialized(_dataDir, userId))
-            return StatusCode(409, new { code = CodeNotInitialized,
-                message = "вики этого владельца не заведена: перенос работает только с заведённой" });
+        // LI-2: «перенести в вики» — действие человека: вика заводится сама вместо прежнего
+        // 409 wiki_not_initialized. Гейт UnifiedOn и валидация тела проверяются выше;
+        // svc — в контроллере. Гейт IsInitialized в _transfer остаётся второй линией защиты.
+        await _keeper.EnsureInitializedAsync(userId);
 
         var res = await _transfer.TransferAsync(userId, req.NoteId);
         return res.Outcome switch

@@ -3,7 +3,10 @@
 // вместо сырой карточки; invalidLines — числом; отказы 400/403/404 — текстом, не кодом; подвкладка
 // «Журнал» в реестре ведёт на этот экран; откат по источнику — только после подтверждения модалкой,
 // карточка без диапазона; окна одного чата считаются по нормальной форме; кнопки заблокированы на
-// время запроса; пустое состояние; гонка поколений загрузки при смене фильтра (c3).
+// время запроса; пустое состояние; гонка поколений загрузки при смене фильтра (c3);
+// раздел из пропа sectionScope (W9b): с пропом — запрос с section и без Select раздела,
+// 'all'/null — без section; снятие пропа — прежняя раскладка со своим Select; смена пропа —
+// перезапрос и гонка поколений; отказ с пропом — текстом, как без пропа.
 //
 // Мокан только транспорт (offline.request) и signalr — тот же приём, что в WikiInbox.test.
 // Модалка ConfirmDialog рендерится порталом в document.body — её узлы ищутся от body.
@@ -33,6 +36,7 @@
 //     краснеет (F6b);
 // (14) не вести «Вернуть мою» на страницу (убрать requestOpenWikiPage) → ««Вернуть мою» ведёт
 //     на страницу» краснеет (F6b).
+// (16) снять проверку поколения в .then (loadSeq) → «смена пропа a → b» краснеет (W9b).
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -850,5 +854,93 @@ describe('«Журнал»: «ИИ поменял моё» (F6b)', () => {
     await settle();
     expect(rows(c)).toHaveLength(2);
     expect(has(c, 'ЗАПАЗДАЛЫЙ-A')).toBe(false);
+  });
+});
+
+// ─── W9b: раздел из пропа (панель: раздел выбирает чип в шапке, Select в теле дублировал бы его) ───
+// Смена пропа — ререндер того же корня: родитель (панель) рендерит подвкладку с новым
+// sectionScope; состояние компонента сохраняется, эффект с новым действующим разделом
+// перезапрашивает журнал.
+
+describe('«Журнал»: раздел из пропа sectionScope (W9b)', () => {
+  function renderScoped(scope: string | null | 'all' | undefined): { root: Root; container: Cont } {
+    installFakeDom();
+    const { root, container } = mount(createElement(WikiJournal, { sectionScope: scope }));
+    roots.push(root);
+    return { root, container };
+  }
+
+  it('проп задан: запрос с section, Select раздела нет; источник и чип на месте; без пропа — прежний вид', async () => {
+    seedJournal(RESP);
+    const { root, container } = renderScoped('projects/p1');
+    await settle();
+    const first = getCalls('/wiki/journal');
+    expect(first).toHaveLength(1);
+    expect(String(first[0][0])).toBe('/wiki/journal?section=projects%2Fp1');
+    // раздел выбирает чип в шапке панели — дублирующий Select в теле не рисуется
+    expect(buttonByTestId(container, 'mock-select-Все разделы')).toBeNull();
+    // остальные фильтры живы
+    expect(buttonByTestId(container, 'mock-select-Все источники')).not.toBeNull();
+    expect(chipNode(container)).not.toBeNull();
+    expect(rows(container)).toHaveLength(5);
+    // 'all' — весь журнал: новый запрос без section (действующий раздел изменился)
+    act(() => root.render(createElement(WikiJournal, { sectionScope: 'all' })));
+    await settle();
+    expect(String(getCalls('/wiki/journal')[1][0])).toBe('/wiki/journal');
+    // null — тот же действующий раздел, что 'all': эффекта нет — лишнего запроса нет
+    // (эффект держит действующий раздел, а не проп как таковой)
+    act(() => root.render(createElement(WikiJournal, { sectionScope: null })));
+    await settle();
+    expect(getCalls('/wiki/journal')).toHaveLength(2);
+    // проп снят (старая раскладка без флага) — свой Select на месте; действующий раздел снова
+    // «все» — лишнего запроса нет, данные на экране те же
+    act(() => root.render(createElement(WikiJournal, { sectionScope: undefined })));
+    await settle();
+    expect(buttonByTestId(container, 'mock-select-Все разделы')).not.toBeNull();
+    expect(getCalls('/wiki/journal')).toHaveLength(2);
+    expect(rows(container)).toHaveLength(5);
+  });
+
+  it('смена пропа a → b: ответ прежнего раздела не перезатрёт новый', async () => {
+    const B = { ...ENTRY_AUTO, ts: '2026-10-30T04:00:00Z', sourceName: 'СВЕЖИЙ-B' };
+    const LATE = { ...ENTRY_AUTO, ts: '2026-10-30T05:00:00Z', sourceName: 'ЗАПАЗДАЛЫЙ-A' };
+    let resolveLate: (v: unknown) => void = () => {};
+    let n = 0;
+    req.mockImplementation((url: string) => {
+      if (url.startsWith('/wiki/journal')) {
+        n++;
+        // первый (section 'projects/p1') задержан; второй (после смены пропа на 'common') отвечает сразу
+        if (n === 1) return new Promise(res => { resolveLate = res; });
+        return Promise.resolve({ entries: [B], take: 200, linesRead: 1, invalidLines: 0 });
+      }
+      return Promise.resolve(null);
+    });
+    const { root, container } = renderScoped('projects/p1');
+    await settle();
+    const first = getCalls('/wiki/journal');
+    expect(first).toHaveLength(1);
+    expect(String(first[0][0])).toBe('/wiki/journal?section=projects%2Fp1');
+    // первый ещё не ответил — экрана данных нет
+    expect(rows(container)).toHaveLength(0);
+    // панель меняет раздел, пока прежний запрос в пути
+    act(() => root.render(createElement(WikiJournal, { sectionScope: 'common' })));
+    await settle();
+    const second = getCalls('/wiki/journal');
+    expect(second).toHaveLength(2);
+    expect(String(second[1][0])).toBe('/wiki/journal?section=common');
+    expect(has(container, 'СВЕЖИЙ-B')).toBe(true);
+    // мутация (16): снять проверку loadSeq в .then — запоздалый ответ 'projects/p1'
+    // перезатрёт 'common' и этот assert краснеет
+    resolveLate({ entries: [LATE], take: 200, linesRead: 1, invalidLines: 0 });
+    await settle();
+    expect(has(container, 'СВЕЖИЙ-B')).toBe(true);
+    expect(has(container, 'ЗАПАЗДАЛЫЙ-A')).toBe(false);
+  });
+
+  it('отказ с пропом показан текстом, как без пропа', async () => {
+    req.mockImplementation(() => Promise.reject({ status: 403, body: null }));
+    const { container } = renderScoped('projects/p1');
+    await settle();
+    expect(has(container, 'Нет доступа')).toBe(true);
   });
 });

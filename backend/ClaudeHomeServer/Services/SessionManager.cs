@@ -1473,17 +1473,16 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // projectId — проект ТЕКУЩЕГО чата (③-3.4: даёт доступ к team_memory_* команды), не scope
     // персоны — см. BuildPersonaLayer: любая персона в проектном чате получает эти инструменты,
     // пишет ли она в команду реально — решает бэкенд-гейт (TeamMemoryService.WriteDeniedFor).
-    // DossierToolsEnabled — секция dossier_lookup/dossier_get (этап 2, ADR-004 §5): гейт по
-    // флагу ВЛАДЕЛЬЦА change-dossiers-recall. Решение стабильно в рамках сессии (флаг меняется
-    // человеком из меню редко) и входит в отпечаток состава сервера (shapes memory) — от
-    // СВОЙСТВ ХОДА состав tools/list не зависит (инвариант McpToolsetStabilityTests).
+    // DossierToolsEnabled — секция dossier_lookup/dossier_get (этап 2, ADR-004 §5): включена
+    // всегда (флаг change-dossiers-recall снят). Входит в отпечаток состава сервера (shapes
+    // memory) — от СВОЙСТВ ХОДА состав tools/list не зависит (инвариант McpToolsetStabilityTests).
     // UseHttp — сервер памяти переехал в Kestrel (ADR-012, фаза 2): ход зовёт его по http
     // (personaId/projectId едут хвостом URL), процесса node нет; false — откат на stdio.
     private MemoryMcpContext BuildMemoryContext(string ownerId, string personaId, string? projectId)
     {
         var apiUrl = ResolveTasksApiUrl(ownerId);
         return new MemoryMcpContext(apiUrl, () => GetServiceToken(ownerId), personaId, projectId,
-            DossierToolsEnabled: _flags.IsEnabled(ownerId, FeatureFlagKeys.ChangeDossiersRecall),
+            DossierToolsEnabled: true,
             UseHttp: HttpEndpointUsable(apiUrl),
             SphereToolsEnabled: _flags.IsEnabled(ownerId, FeatureFlagKeys.Spheres));
     }

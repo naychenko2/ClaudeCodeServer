@@ -17,11 +17,14 @@ using Microsoft.AspNetCore.Mvc.Infrastructure;
 namespace ClaudeHomeServer.Tests.Controllers;
 
 // B3b (ADR-038): REST правки страницы человеком — POST /api/wiki/pages/edit и /restore.
-// Контракт: svc-токен — 403 до всего; любой из двух флагов выключен — 409 wiki_unified_off;
+// Контракт: svc-токен — 403 до всего; флаг `llm-wiki` выключен — 409 wiki_unified_off;
 // baseHash сверяется под замком раздела (гонка двух сохранений: один 200, один 409
 // wiki_page_changed со свежей страницей); журнал — op edit|restore, actor user; «Вернуть мою»
 // ссылается на исходную карточку и новой не создаёт. Контроллеры строятся напрямую
 // (контракт действия, не транспорт) — фабрики хоста нет, метка Host не нужна.
+// С LI-2 edit («Править» / новая страница) заводит вика заявителя: прежнего отказа «вики не
+// заведена» этой ручке нет; svc (403) и выключенный флаг (409) — раньше заведения; restore —
+// вне этой правки (без вики там нет того, что возвращать).
 public class WikiControllerPagesTests : IDisposable
 {
     private const string User = "u1";
@@ -48,7 +51,7 @@ public class WikiControllerPagesTests : IDisposable
         var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _projects = new ProjectManager(_config, users, new AppSettingsService(_config));
         _pages = WikiPaths.Pages(_dir, User);
-        var notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, flags: new Flags(true, true));
+        var notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, flags: new Flags(true));
         _keeper = new WikiKeeper(notes, _config);
         // GET page читает журнал (overrides): имена источников там не нужны — каталог сессий не зовётся.
         _journalReader = new WikiJournalReader(notes, null!, _config);
@@ -90,27 +93,22 @@ public class WikiControllerPagesTests : IDisposable
         PackageFiles().Should().BeEmpty();
     }
 
-    // ─── 2. Флаги: выключен любой из двух — 409 wiki_unified_off ───────────
+    // ─── 2. Флаг: llm-wiki выключен — 409 wiki_unified_off ───────────
 
-    [Theory]
-    [InlineData(true, false)]  // llm-wiki включён, notes-wiki-unified — нет
-    [InlineData(false, true)]  // notes-wiki-unified включён, llm-wiki — нет
-    [InlineData(false, false)]
-    public async Task Флаг_Выключен_Edit_409_wiki_unified_off(bool llmWiki, bool unified)
+    [Fact]
+    public async Task Флаг_Выключен_Edit_409_wiki_unified_off()
     {
         var before = PageBytes();
-        var res = await Controller(flags: new Flags(llmWiki, unified)).Edit(EditReq(Replace(PageText(), Statement, Statement + " Ещё.")));
+        var res = await Controller(flags: new Flags(false)).Edit(EditReq(Replace(PageText(), Statement, Statement + " Ещё.")));
         AssertCode(res, 409, "wiki_unified_off");
         PageBytes().Should().Equal(before);
         PackageFiles().Should().BeEmpty();
     }
 
-    [Theory]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    public async Task Флаг_Выключен_Restore_409_wiki_unified_off(bool llmWiki, bool unified)
+    [Fact]
+    public async Task Флаг_Выключен_Restore_409_wiki_unified_off()
     {
-        var res = await Controller(flags: new Flags(llmWiki, unified)).Restore(
+        var res = await Controller(flags: new Flags(false)).Restore(
             new WikiPageRestoreRequest(_key, _pageKey, PageHash(), "что-то", "иное"));
         AssertCode(res, 409, "wiki_unified_off");
         PackageFiles().Should().BeEmpty();
@@ -125,6 +123,39 @@ public class WikiControllerPagesTests : IDisposable
         var res = await Controller().Edit(new WikiPageEditRequest(
             "projects/" + foreign.Id, $"Проекты/{foreign.Id}/X.md", null, "x"));
         AssertCode(res, 403, "wiki_foreign");
+    }
+
+    // ─── 2b. LI-2: правка заводит вика заявителя ────────────────────────────
+
+    [Fact]
+    public async Task EditНезаведённойВикиЗаводитЕёИСтраницаСоздана()
+    {
+        // Мутация (критерий c2): убрать EnsureInitializedAsync в Edit — u3 остаётся без
+        // pages/_schema.md, _apply отказывает, страницы нет: тест красный.
+        var (key3, pageKey3) = OwnerProject("u3");
+        var text = "---\ntype: topic\nsummary: про новое\naliases: []\nowns: []\nsources: []\nstatus: active\n---\n\n# Новая\n\n## Сводка\nНовая страница про порт пять тысяч.\n\n## Хронология\n\n## Противоречия\n\n## История\n";
+
+        var res = await Controller(user: "u3").Edit(new WikiPageEditRequest(key3, pageKey3, null, text));
+
+        Json(res, 200).GetProperty("status").GetString().Should().Be("applied");
+        WikiPaths.IsInitialized(_dir, "u3").Should().BeTrue(
+            "«править» / новая страница — действие человека: его вика создаётся сама");
+        File.Exists(Path.Combine(WikiPaths.Pages(_dir, "u3"), pageKey3.Replace('/', Path.DirectorySeparatorChar)))
+            .Should().BeTrue("действие прошло дальше заведения");
+    }
+
+    [Fact]
+    public async Task Edit_СервисныйТокенИВыключенныйФлаг_ВикиНеЗаведены()
+    {
+        // svc (403) и выключенный флаг (409) — раньше заведения: у незаведённого владельца
+        // ни байта в pages/. Мутация «заводить до проверок токена и флага» — красный.
+        var svc = await Controller(serviceToken: true, user: "u4").Edit(new WikiPageEditRequest("common", "Личное/Нет.md", null, "x"));
+        ((IStatusCodeActionResult)svc).StatusCode.Should().Be(403);
+        AssertCode(await Controller(flags: new Flags(false), user: "u4")
+            .Edit(new WikiPageEditRequest("common", "Личное/Нет.md", null, "x")), 409, "wiki_unified_off");
+
+        WikiPaths.IsInitialized(_dir, "u4").Should().BeFalse();
+        Directory.Exists(WikiPaths.Pages(_dir, "u4")).Should().BeFalse("ни байта в pages/");
     }
 
     // ─── 3. Правка: пакет human, сноска на карточку, журнал ────────────────
@@ -449,6 +480,16 @@ public class WikiControllerPagesTests : IDisposable
         (await _keeper.WritePageAsync(User, _key, _pageKey, page)).Status.Should().Be(WikiOpStatus.Applied);
     }
 
+    // Проект другого владельца и путь новой страницы в его разделе: точки LI-2 проверяются на
+    // владельце без заведённой вики (у этого стенда заведена только u1).
+    private (string Key, string PageKey) OwnerProject(string owner)
+    {
+        var root = Path.Combine(_dir, "repo", owner, "Проект");
+        Directory.CreateDirectory(root);
+        var p = _projects.Create("Проект " + owner, root, owner, owner);
+        return ("projects/" + p.Id, $"Проекты/{p.Id}/Новая.md");
+    }
+
     private string PageFile => Path.Combine(_pages, _pageKey.Replace('/', Path.DirectorySeparatorChar));
     private string PageText() => File.ReadAllText(PageFile);
     private byte[] PageBytes() => File.ReadAllBytes(PageFile);
@@ -482,7 +523,7 @@ public class WikiControllerPagesTests : IDisposable
 
     private JsonElement PageJson()
     {
-        var res = new WikiController(_keeper, _projects, new NoSpheres(), null!, _journalReader, new Flags(true, true), _config, null!, null!, null!, null!)
+        var res = new WikiController(_keeper, _projects, new NoSpheres(), null!, _journalReader, new Flags(true), _config, null!, null!, null!, null!)
         {
             ControllerContext = Ctx(),
         }.Page(_key, _pageKey);
@@ -499,29 +540,28 @@ public class WikiControllerPagesTests : IDisposable
     private static void AssertCode(IActionResult result, int status, string code) =>
         Json(result, status).GetProperty("code").GetString().Should().Be(code);
 
-    private static ControllerContext Ctx(bool serviceToken = false, bool anonymous = false)
+    private static ControllerContext Ctx(bool serviceToken = false, bool anonymous = false, string user = User)
     {
         var http = new DefaultHttpContext();
         if (!anonymous)
         {
-            var claims = new List<Claim> { new("sub", User) };
+            var claims = new List<Claim> { new("sub", user) };
             if (serviceToken) claims.Add(new("typ", "svc"));
             http.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
         }
         return new ControllerContext { HttpContext = http };
     }
 
-    private WikiPagesController Controller(bool serviceToken = false, Flags? flags = null, bool anonymous = false) =>
-        new(_apply, _projects, flags ?? new Flags(true, true))
+    private WikiPagesController Controller(bool serviceToken = false, Flags? flags = null, bool anonymous = false, string user = User) =>
+        new(_apply, _projects, _keeper, flags ?? new Flags(true))
         {
-            ControllerContext = Ctx(serviceToken, anonymous),
+            ControllerContext = Ctx(serviceToken, anonymous, user),
         };
 
-    // Два флага: llm-wiki и notes-wiki-unified; остальные ключи выключены.
-    private sealed class Flags(bool llmWiki, bool unified) : IFeatureFlagGate
+    // Один флаг: llm-wiki; остальные ключи выключены.
+    private sealed class Flags(bool llmWiki) : IFeatureFlagGate
     {
-        public bool IsEnabled(string userId, string key) =>
-            (key == FeatureFlagKeys.LlmWiki && llmWiki) || (key == FeatureFlagKeys.NotesWikiUnified && unified);
+        public bool IsEnabled(string userId, string key) => key == FeatureFlagKeys.LlmWiki && llmWiki;
     }
 
     private sealed class NoSpheres : ISphereDirectory

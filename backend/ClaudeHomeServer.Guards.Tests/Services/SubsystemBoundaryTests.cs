@@ -1519,7 +1519,7 @@ public class SubsystemBoundaryTests
                 Array.Empty<string>()),
         },
         // TurnAutoResume — чистая функция отбора кандидатов на авто-возобновление ходов
-        // (флаг turn-auto-resume). Микро-вертикаль без IAppSubsystem: одна статическая
+        // (ADR-033). Микро-вертикаль без IAppSubsystem: одна статическая
         // функция + record результата. Зависимости — только Core (Models: Session, Project).
         new object[]
         {

@@ -49,9 +49,13 @@ public interface IAppPhaseSubsystem : IAppSubsystem
 //   Active          — была ли подсистема реально зарегистрирована на старте процесса.
 //   RestartRequired — `Enabled` и `Active` различаются: чтобы изменение подействовало,
 //                     нужен рестарт (гейт читается один раз при сборке контейнера).
+//   LastUsedAt / UsedLast24h — использование (`SubsystemUsageStore`): время последнего обращения
+//                     и число обращений за 24 часа; null = данных нет (ключ не наблюдается
+//                     или обращений ещё не было).
 public sealed record SubsystemInfo(
     string Key, string Title, string Description,
-    bool Enabled, bool Active, bool RestartRequired);
+    bool Enabled, bool Active, bool RestartRequired,
+    DateTimeOffset? LastUsedAt = null, int? UsedLast24h = null);
 
 // Снимок состава подсистем, увиденного `AddSubsystems` на старте процесса:
 // и активные (прошли гейт и зарегистрировались), и задизейбленные (выпали по
@@ -75,7 +79,7 @@ public sealed class SubsystemStateStore
     // добавлена в `IEnumerable<IAppSubsystem>` — отмечаем её как активную.
     public void RecordActive(IAppSubsystem subsystem) =>
         _snapshots[subsystem.Key] = new SubsystemSnapshot(
-            subsystem.Key, subsystem.Title, subsystem.Description, Active: true);
+            subsystem.Key, subsystem.Title, subsystem.Description, Active: true, subsystem.GetType());
 
     // Регистрация попытки: подсистема передана в `AddSubsystems`, но гейт
     // `Subsystems:{Key}:Enabled=false` сказал пропустить — отмечаем как
@@ -84,25 +88,29 @@ public sealed class SubsystemStateStore
     // дошли бы до бросания исключения и сюда не попали.
     public void RecordDisabled(IAppSubsystem subsystem) =>
         _snapshots[subsystem.Key] = new SubsystemSnapshot(
-            subsystem.Key, subsystem.Title, subsystem.Description, Active: false);
+            subsystem.Key, subsystem.Title, subsystem.Description, Active: false, subsystem.GetType());
 
     // Снимок для REST: ключ/имя/описание/включённость/активность/нужен-ли-рестарт.
     // Конфиг читаем СВЕЖИЙ (на момент запроса), а не тот, что был при AddSubsystems,
     // — иначе `RestartRequired` был бы всегда false, а это самый ценный сигнал:
     // админ хочет знать, что после галочки в конфиге нужен рестарт.
-    public IReadOnlyList<SubsystemInfo> Snapshot(IConfiguration config) =>
+    public IReadOnlyList<SubsystemInfo> Snapshot(
+        IConfiguration config, IReadOnlyList<SubsystemUsageInfo>? usage = null) =>
         _snapshots.Values
             .OrderBy(s => s.Key, StringComparer.OrdinalIgnoreCase)
             .Select(s =>
             {
                 var enabled = SubsystemGate.IsEnabled(config, s.Key);
+                var used = usage?.FirstOrDefault(u => string.Equals(u.Key, s.Key, StringComparison.OrdinalIgnoreCase));
                 return new SubsystemInfo(
                     Key: s.Key,
                     Title: s.Title,
                     Description: s.Description,
                     Enabled: enabled,
                     Active: s.Active,
-                    RestartRequired: enabled != s.Active);
+                    RestartRequired: enabled != s.Active,
+                    LastUsedAt: used?.LastUsedAt,
+                    UsedLast24h: used?.Last24h);
             })
             .ToList();
 
@@ -116,7 +124,14 @@ public sealed class SubsystemStateStore
             .OrderBy(k => k, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-    private sealed record SubsystemSnapshot(string Key, string Title, string Description, bool Active);
+    // Активные подсистемы вместе с типом реализации — для карты «сборка → ключ» учёта обращений
+    // (S1b). Берём из стора, а не из IEnumerable<IAppSubsystem>: динамические модули
+    // (Notes, ImageEditor, ...) в тот список не попадают, а в стор записаны через RecordActive.
+    public IReadOnlyList<(string Key, Type Type)> ActiveTypes() =>
+        _snapshots.Values.Where(s => s.Active).Select(s => (s.Key, s.ImplType)).ToList();
+
+    private sealed record SubsystemSnapshot(
+        string Key, string Title, string Description, bool Active, Type ImplType);
 }
 
 // Единая точка проверки гейта `Subsystems:{Key}:Enabled`. Дефолт `true` —

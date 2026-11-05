@@ -17,11 +17,12 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Route("api/admin/subsystems")]
 [Authorize(Roles = "admin")]
-public class SubsystemsController(SubsystemStateStore subsystems, IConfiguration config) : ControllerBase
+public class SubsystemsController(
+    SubsystemStateStore subsystems, SubsystemUsageStore usage, IConfiguration config) : ControllerBase
 {
     [HttpGet]
     public ActionResult<IReadOnlyList<SubsystemInfo>> List()
     {
-        return Ok(subsystems.Snapshot(config));
+        return Ok(subsystems.Snapshot(config, usage.Snapshot(DateTimeOffset.UtcNow)));
     }
 }

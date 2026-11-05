@@ -1060,6 +1060,16 @@ builder.Services.AddSubsystems(builder.Configuration,
     // потребители (ClaudeSession, мост панели) берут IPluginDirSource/IPluginCapability
     // опционально через Core-швы, порядок с остальными не связан.
     new ClaudeHomeServer.Services.Plugins.PluginsSubsystem());
+
+// Учёт обращений к подсистемам: карта «сборка → ключ» и стор строятся из АКТИВНЫХ подсистем
+// после AddSubsystems; сброс на диск — hosted-сервис (в инспекционной копии не пишет)
+builder.Services.AddSingleton(sp => new ClaudeHomeServer.Services.Composition.SubsystemUsageAttribution(
+    sp.GetRequiredService<ClaudeHomeServer.Services.Composition.SubsystemStateStore>(),
+    sp.GetServices<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset>()));
+builder.Services.AddSingleton(sp => new ClaudeHomeServer.Services.Composition.SubsystemUsageStore(
+    sp.GetRequiredService<ClaudeHomeServer.Services.Composition.SubsystemUsageAttribution>().ObservableKeys));
+if (!inspectionMode)
+    builder.Services.AddHostedService<ClaudeHomeServer.Services.Composition.SubsystemUsageFlushService>();
 // Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
 // и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
 // пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error
@@ -1916,6 +1926,9 @@ app.UseAuthorization();
 // X-Caller-Session-Id. Ставим ПОСЛЕ авторизации: иначе 401 попадал бы в статистику как
 // отказ инструмента, хотя до контроллера запрос и не дошёл
 app.UseMcpCallLog();
+
+// Учёт обращений по ключу подсистемы (HTTP + MCP): после авторизации — 401/403 в счёт не идут
+app.UseSubsystemUsage();
 
 // Gateway внешних модулей (контракт §5.2): срезка клиентских identity-заголовков,
 // валидация cc_token и инъекция модульного токена — ДО YARP-прокси

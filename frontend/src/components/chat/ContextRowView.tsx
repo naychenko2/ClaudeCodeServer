@@ -658,7 +658,8 @@ export function ContextRowView(props: ContextRowViewProps) {
     // Десктоп — отступ сверху, как у прежней Git-полосы (10): тень губы вверх (SHADOW.liftSoft из
     // composerLip) ложится на этот зазор, а не на низ ленты. Хост — колонка: ушко (LipEar)
     // alignSelf: flex-end у правого края, остальные дети растягиваются на всю ширину, как в блоке.
-    <div data-context-row-host="" style={{ position: 'relative', display: 'flex', flexDirection: 'column', margin: `${isMobile ? SP.xs : SP.sm + 2}px 0 0` }}>
+    // zIndex 1 — губа лежит над aurora-сиянием композера (z 0): свет поднимается от её кромки, а не рисуется поверх
+    <div data-context-row-host="" style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', margin: `${isMobile ? SP.xs : SP.sm + 2}px 0 0` }}>
       {props.offer && <UndoNotice offer={props.offer} onUndo={props.onUndo} />}
       {props.notice && <LipEarBaseContext.Provider value="lip">{props.notice}</LipEarBaseContext.Provider>}
       {subNote && subNote !== dismissedNote && !menu && <FormatNote text={subNote} onClose={() => setDismissedNote(subNote)} />}

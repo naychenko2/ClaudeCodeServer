@@ -48,7 +48,9 @@ public class VoiceResolver(IPersonaVoiceLookup personas, IConfiguration config, 
     {
         // Незнакомый голос (переименовали в SpeechKit, правили json руками) — дефолтный:
         // роль при этом теряет смысл, её набор у каждого голоса свой
-        var name = TtsVoiceCatalog.IsKnown(voice.Voice) ? voice.Voice!.Trim() : _defaultVoice;
+        var name = TtsVoiceCatalog.IsKnown(voice.Voice)
+            ? voice.Voice!.Trim()
+            : _defaultVoice;
         var role = TtsVoiceCatalog.SupportsRole(name, voice.Role) ? voice.Role!.Trim() : null;
         var speed = voice.Speed is { } s ? Clamp(s) : _defaultSpeed;
         return new VoiceChoice(name, role, speed);
@@ -58,9 +60,12 @@ public class VoiceResolver(IPersonaVoiceLookup personas, IConfiguration config, 
 
     private static string ResolveConfiguredVoice(string? configured, ILogger logger)
     {
-        var voice = TtsVoiceCatalog.Resolve(configured);
-        if (!string.IsNullOrWhiteSpace(configured) && !TtsVoiceCatalog.IsKnown(configured))
-            logger.LogWarning("Голос синтеза «{Voice}» не значится среди голосов SpeechKit v3 — " +
+        var voice = TtsVoiceCatalog.Canonical(configured) ?? TtsVoiceCatalog.Default;
+        // Сравнение по каноническому имени: «Zahar» или алиас «madirus» — тот же голос, и
+        // предупреждать об опечатке тут не о чем
+        if (!string.IsNullOrWhiteSpace(configured)
+            && TtsVoiceCatalog.Canonical(voice) != TtsVoiceCatalog.Canonical(configured))
+            logger.LogWarning("Голос синтеза «{Voice}» не значится среди доступных голосов SpeechKit v3 — " +
                               "озвучка пойдёт голосом «{Fallback}». Проверь Yandex:SpeechKit:Voice.",
                 configured, voice);
         return voice;

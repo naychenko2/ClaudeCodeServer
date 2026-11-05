@@ -560,9 +560,13 @@ export class VoicePreviewError extends Error {}
 // глушить и примерку тоже. Обратное неверно — вызывающий не должен запускать превью поверх
 // идущего ответа: озвучка хода оборвалась бы, а петля разговора получила бы ложное
 // «озвучка закончилась». Гейт на isSpeaking() — на стороне кнопки.
-export async function previewVoice(voice: string, role?: string, speed?: number): Promise<void> {
+//
+// text — своя фраза вместо общего образца (подбор голоса слушают фразой самой персоны); в
+// ключе кеша она тоже есть, так что повторное ▶ того же кандидата не оплачивается заново
+export async function previewVoice(voice: string, role?: string, speed?: number, text?: string): Promise<void> {
   watchConnection();
-  const key = `${voice}|${role ?? ''}|${speed ?? ''}`;
+  const sample = text?.trim() || VOICE_SAMPLE_TEXT;
+  const key = `${voice}|${role ?? ''}|${speed ?? ''}|${sample}`;
   const token = ++speakToken;
 
   let blob = sampleCache.get(key) ?? null;
@@ -570,7 +574,7 @@ export async function previewVoice(voice: string, role?: string, speed?: number)
     try {
       blob = await request('/tts', {
         method: 'POST',
-        body: JSON.stringify({ text: VOICE_SAMPLE_TEXT, voice, role, speed }),
+        body: JSON.stringify({ text: sample, voice, role, speed }),
         parse: 'blob',
         timeoutMs: 45_000,
       });

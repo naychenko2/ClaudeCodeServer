@@ -66,7 +66,8 @@ public static class GaugeRegistrar
     /// (считается по исчезновению записи из error-множества, не по попытке лечения).
     /// </summary>
     public static void RegisterKnowledgeReconcile(
-        Func<IEnumerable<Measurement<long>>> errorDocumentsProvider, Func<long> recoveredProvider)
+        Func<IEnumerable<Measurement<long>>> errorDocumentsProvider, Func<long> recoveredProvider,
+        Func<IEnumerable<Measurement<long>>>? staleQueuingProvider = null)
     {
         if (Interlocked.Exchange(ref _reconcileRegistered, 1) == 1) return;
 
@@ -75,6 +76,16 @@ public static class GaugeRegistrar
             observeValues: errorDocumentsProvider,
             unit: "{document}",
             description: "Документы Dify в статусе error по типу датасета и лечимости");
+
+        // Отдельный гейдж, а не тег статуса на error_documents: у зависших в очереди другая
+        // причина (Dify потерял celery-задачу, а не упали эмбеддинги), и новый тег молча
+        // удвоил бы суммы в уже настроенных запросах и алертах по error_documents. Теги те же.
+        if (staleQueuingProvider is not null)
+            ServerMetrics.MeterInstance.CreateObservableGauge(
+                "ccs.dify.stale_queuing_documents",
+                observeValues: staleQueuingProvider,
+                unit: "{document}",
+                description: "Документы Dify, зависшие в очереди дольше порога, по типу датасета и лечимости");
 
         ServerMetrics.MeterInstance.CreateObservableCounter(
             "ccs.dify.documents_recovered",

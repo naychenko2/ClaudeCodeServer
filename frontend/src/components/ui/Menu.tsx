@@ -51,7 +51,7 @@ export function popupMaxWidth(left: number, maxWidth: number, viewportWidth: num
 
 // innerScroll (наш) + boundary (origin): оба пропса живут вместе — внутренний скролл
 // карточки и горизонтальные рамки попапа
-export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, maxWidth = 380, anchor, boundary, maxHeight = 300, gap = 6, anchorSide, anchorAlign = 'end', preferUp, inertBackdrop, fullWidth, innerScroll, children }: {
+export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, maxWidth = 380, anchor, boundary, maxHeight = 300, gap = 6, anchorSide, anchorAlign = 'end', preferUp, inertBackdrop, fullWidth, innerScroll, header, children }: {
   onClose: () => void;
   align?: 'left' | 'right';
   top?: number;
@@ -96,8 +96,16 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
   fullWidth?: boolean;
   // Прокрутку организует содержимое (середина скроллится, подвал стоит): карточка сама не прокручивается
   innerScroll?: boolean;
+  // Шапка над списком ВНЕ прокрутки (поиск, фильтры): в anchor-режиме прокручиваются только
+  // пункты. Липкая шапка внутри скролла не годится — внутренний отступ карточки идёт выше
+  // неё, и над полем поиска просвечивала строка списка.
+  // Только anchor-режим: в обычном карточка высоту не ограничивает и не прокручивается,
+  // так что шапка там просто первая строка. Пример — витрина UI-кита, раздел оверлеев
+  header?: ReactNode;
   children: ReactNode;
 }) {
+  // Проверка на truthy, как в Modal: header={cond && <X/>} при ложном cond даёт false
+  const hasHeader = Boolean(header);
   const opener = useRef<Element | null>(typeof document !== 'undefined' ? document.activeElement : null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
@@ -171,9 +179,14 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
         // maxHeight участвует только в расчёте openUp выше — без явного ограничения
         // здесь высокое содержимое (длинный список этапов плана) вылезало за экран,
         // а не обрезалось/скроллилось.
-        ...(anchorSide ? { maxHeight, overflow: 'hidden' } : anchor ? { maxHeight, overflow: innerScroll ? 'hidden' : 'auto' } : null),
+        ...(anchorSide ? { maxHeight, overflow: 'hidden' } : anchor ? { maxHeight, overflow: innerScroll || hasHeader ? 'hidden' : 'auto' } : null),
       }}>
-        {children}
+        {!hasHeader ? children : (
+          <>
+            <div style={{ flexShrink: 0 }}>{header}</div>
+            <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>{children}</div>
+          </>
+        )}
       </div>
     </>
   );

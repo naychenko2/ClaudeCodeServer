@@ -182,6 +182,28 @@ public class NotesRecallTurnSectionTests : IDisposable
         contribution.ManifestItems!.Should().NotContain(i => i.Ref == noteId);
     }
 
+    // Правка origin: чанк, чей docId делят несколько заметок, отдаёт хит КАЖДОЙ из них
+    // (раньше — одной). Мутация «.Take(1)» над byDocId[ch.DocumentId] в MapHits краснит этот тест.
+    [Fact]
+    public async Task ОбщийDocId_ЧанкОтдаётХитКаждойЗаметкиДокумента()
+    {
+        _index.SharedDocId = "doc-shared";
+        var notesDir = Path.Combine(_dir, "projects", "p1", "notes");
+        File.WriteAllText(Path.Combine(notesDir, "Первая.md"), "# Первая\n\nТекст первой заметки.");
+        File.WriteAllText(Path.Combine(notesDir, "Вторая.md"), "# Вторая\n\nТекст второй заметки.");
+
+        await _kb.SyncAllAsync(User);
+        _index.Indexed.Where(i => i.Title.StartsWith("Первая") || i.Title.StartsWith("Вторая"))
+            .Select(i => i.DocId).Should().OnlyContain(d => d == "doc-shared", "фейк выдаёт обеим заметкам один DocId");
+
+        _index.Response[DatasetIdOf(":notes")] = [new DifyRetrieveChunk("фрагмент", 0.8, "doc-shared", "Первая")];
+
+        var hits = await _kb.SearchAsync(User, "текст", 8);
+
+        hits.Select(h => h.Title).Should().BeEquivalentTo(["Первая", "Вторая"],
+            "чанк общего документа принадлежит обеим заметкам, хит нужен каждой");
+    }
+
     private void WriteWiki(string relUnderPages, string content)
     {
         // EnsureInitialized создаёт только _schema.md: папку раздела делает сам пишущий.
@@ -231,6 +253,8 @@ public class NotesRecallTurnSectionTests : IDisposable
         public readonly List<(string Name, string Id)> Datasets = new();
         public readonly List<(string Title, string DocId)> Indexed = new();
         public readonly Dictionary<string, List<DifyRetrieveChunk>> Response = new();
+        // Не null — все документы получают этот DocId (имитация общего документа Dify)
+        public string? SharedDocId;
 
         public Task<string> CreateDatasetAsync(string name, string permission = "only_me",
             string? description = null, string? indexingTechnique = null)
@@ -248,7 +272,7 @@ public class NotesRecallTurnSectionTests : IDisposable
             string content, List<string>? tags = null,
             IReadOnlyDictionary<string, string>? metadata = null)
         {
-            var docId = "doc-" + (Indexed.Count + 1);
+            var docId = SharedDocId ?? "doc-" + (Indexed.Count + 1);
             Indexed.Add((fileName, docId));
             return Task.FromResult(new DifyDocumentInfo(docId, fileName, "completed"));
         }

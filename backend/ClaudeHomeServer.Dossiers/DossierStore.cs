@@ -308,11 +308,7 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant, IDisposa
             lock (_kLock)
             {
                 if (!_kStore.TryGetValue(key, out var state)) return [];
-                var byDocId = state.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
-                return docIds
-                    .Where(byDocId.ContainsKey)
-                    .Select(d => (d, byDocId[d]))
-                    .ToList();
+                return Knowledge.KnowledgeSyncTarget.MatchDocIds(state.Docs, d => d.DocId, docIds);
             }
         }
         finally { _syncLock.Release(); }

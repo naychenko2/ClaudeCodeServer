@@ -3162,7 +3162,8 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
             композера (ограничен CHAT_MAX_W и центрирован). Внешняя обёртка растянута
             left:0/right:0, и замер по ней всегда давал пересечение с углом кнопки —
             круг был ужат даже когда композер визуально далеко */}
-        <div ref={embedded ? undefined : composerObstacleRef} style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', pointerEvents: 'auto' }}>
+        {/* data-composer-stack — по нему Composer находит верхнюю губу и поднимает над ней сияние */}
+        <div data-composer-stack="" ref={embedded ? undefined : composerObstacleRef} style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', pointerEvents: 'auto' }}>
           {mode === 'bypass' && (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6, padding: '6px 12px',
@@ -3171,6 +3172,19 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
               <span style={{ display: 'flex' }}><ModeIcon mode="bypass" /></span>
               Режим «Без ограничений» — {asstName} действует без подтверждений
             </div>
+          )}
+          {/* Закреплённая полоса «практика ждёт вашего решения»: пока в ленте есть
+              открытая карточка эскалации, человек видит её над композером, даже если
+              её уже унесло вверх потоком докладов. Клик раздвигает окно ленты,
+              скроллит к карточке и мягко подсвечивает (.escalation-flash в index.css).
+              Стоит НАД строкой контекста: та — верхняя губа поля ввода (заезжает под
+              него отрицательным отступом), и полоса между ними разрывала стык */}
+          {topEscalation && (
+            <EscalationStickyBanner
+              top={topEscalation}
+              others={openEscalations.length - 1}
+              onJump={jumpToEscalation}
+            />
           )}
           {/* Строка контекста над композером: ветка, «С чем», что подключено (ADR-023).
               Офлайн её нет: композер — одна заглушка, и губе не к чему прилегать.
@@ -3196,17 +3210,6 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
             style={{ display: 'none' }}
             onChange={e => { const fs = Array.from(e.target.files ?? []); e.target.value = ''; if (fs.length) void handleComposerFiles(fs); }}
           />
-          {/* Закреплённая полоса «практика ждёт вашего решения»: пока в ленте есть
-              открытая карточка эскалации, человек видит её над композером, даже если
-              её уже унесло вверх потоком докладов. Клик раздвигает окно ленты,
-              скроллит к карточке и мягко подсвечивает (.escalation-flash в index.css) */}
-          {topEscalation && (
-            <EscalationStickyBanner
-              top={topEscalation}
-              others={openEscalations.length - 1}
-              onJump={jumpToEscalation}
-            />
-          )}
           {continueOpen && <ContinueChatDialog onConfirm={handleContinue} onClose={() => setContinueOpen(false)} />}
           <Composer
             // key по чату: Composer полностью перемонтируется при смене сессии, поэтому

@@ -59,8 +59,10 @@ public sealed class PersonasCrudService(
 
     // --- Создание / правка / удаление / дефолт (тела POST/PUT/DELETE/make-default) ---
 
+    // onAutoVoice — исход автоподбора голоса, если он запускался (MCP сообщает его модели);
+    // голос был задан явно (в т.ч. пустым объектом) — не вызывается
     public async Task<ActionResult<Persona>> CreateAsync(string userId, CreatePersonaRequest req,
-        string? callerSessionId, CancellationToken ct = default)
+        string? callerSessionId, CancellationToken ct = default, Action<AutoVoiceResult>? onAutoVoice = null)
     {
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest("Не задано имя персоны");
@@ -78,6 +80,9 @@ public sealed class PersonasCrudService(
             return BadRequest(new { error = "Модель уровня — это id модели или preset:{id}; tier:* здесь нельзя" });
         if (PersonaManager.ExceedsContractLimit(req.Contract, req.SystemPrompt, 0, out var tooBig))
             return BadRequest(new { error = tooBig });
+        // Явный голос — до создания: кривой не должен оставлять полусозданную персону
+        if (VoiceError(req.Voice) is { } voiceError)
+            return BadRequest(new { error = voiceError });
 
         // Серверный предохранитель знакомства (план 2.9): в личном знакомстве (сессия с
         // OnboardingKind == "user") нельзя создавать НОВУЮ персону — интервью дорабатывает
@@ -161,6 +166,16 @@ public sealed class PersonasCrudService(
         // через форму/мастер этот параметр не шлёт — там инициалы или явный выбор
         if (req.AutoAvatar == true)
             persona = await TryAutoGenerateAvatarAsync(userId, persona, req.AvatarPrompt);
+        // Голос: явный (непустой) — пишем как есть; явный пустой объект — «без голоса», не
+        // подбираем; не передан — подбираем по характеру (best-effort). Последним шагом —
+        // после всех прочих one-shot вызовов создания, так их порядок не меняется
+        if (req.Voice is { IsEmpty: false } explicitVoice)
+            persona = personas.SetVoice(persona.Id, userId, explicitVoice);
+        else if (req.Voice is null)
+        {
+            (persona, var autoVoice) = await TryAutoVoiceAsync(userId, persona, ct);
+            onAutoVoice?.Invoke(autoVoice);
+        }
         // Персона, созданная из онбординг-сессии (через MCP personas_create), запоминается на ней:
         // финализация досеет профиль дефолта ТОЛЬКО ей, а не выбранной существующей
         // (та прав не получает — молчаливая дозапись Access=Full+manage была бы эскалацией).
@@ -174,8 +189,10 @@ public sealed class PersonasCrudService(
         return Ok(persona);
     }
 
+    // broadcast: false — вызывающий доводит правку следующей мутацией (голос в MCP
+    // personas_update) и шлёт одно событие «updated» сам, по её итогу
     public async Task<ActionResult<Persona>> UpdateAsync(string userId, string id,
-        UpdatePersonaRequest req, string? callerSessionId)
+        UpdatePersonaRequest req, string? callerSessionId, bool broadcast = true)
     {
         if (personas.Get(id, userId) is not { } current) return NotFound();
         if (req.Scope == PersonaScope.Project && !ValidProject(userId, req.ProjectId))
@@ -246,7 +263,7 @@ public sealed class PersonasCrudService(
         // перезаписывающее его правки. Посторонние поля (цвет, модель, аватар, привязки) не снимают.
         if (isAssistantDraft && IsCharacterRelevantChange(beforeName, beforeRole, beforeGreeting, beforeContract, persona))
             users.SetAssistantPersona(userId, null);
-        await Broadcast(userId, "updated", id);
+        if (broadcast) await Broadcast(userId, "updated", id);
         return Ok(persona);
     }
 
@@ -308,9 +325,12 @@ public sealed class PersonasCrudService(
 
     // Назначить персону дефолтной: глобальную — личным дефолтом владельца
     // (User.DefaultPersonaId), проектную — дефолтом её проекта
-    // (Project.DefaultPersonaId). REST из UI свободен; вызов из чата (callerSessionId
-    // от MCP personas_set_default) разрешён ТОЛЬКО онбординг-сессии — иначе любая
-    // manage-персона могла бы переназначить дефолт владельца из любого разговора.
+    // (Project.DefaultPersonaId). REST из UI свободен. Вызов из чата (callerSessionId
+    // от MCP personas_set_default) разрешён онбординг-сессии — любой персоне, а обычному
+    // чату — только руководителя ПРОЕКТА ЭТОГО ЧАТА из его же команды. Личный дефолт
+    // владельца из обычного чата не меняется: он определяет, кто отвечает во всех новых
+    // чатах вне проектов, и переназначать его одной репликой модели — слишком широкий рычаг.
+    // Персоны сферы руководителями проекта не назначаются (их проект — не ProjectId).
     // Из онбординг-сессии назначение финализирует онбординг: досев профиля дефолта,
     // «просыпание» персоны в том же чате, событие onboarding_completed.
     public async Task<IActionResult> MakeDefaultAsync(string userId, string id, string? callerSessionId)
@@ -318,16 +338,24 @@ public sealed class PersonasCrudService(
         var persona = personas.Get(id, userId);
         if (persona is null) return NotFound();
 
-        // MCP-гейт: ход из чата обязан идти из онбординг-сессии (смена дефолта — в настройках)
+        // MCP-гейт: из обычного чата — только руководитель проекта этого чата
         Session? onboarding = null;
         if (callerSessionId is { Length: > 0 } callerSessionIdValue)
         {
-            onboarding = sessions.GetOwned(callerSessionIdValue, userId);
-            if (onboarding?.OnboardingKind is null)
+            var caller = sessions.GetOwned(callerSessionIdValue, userId);
+            if (caller?.OnboardingKind is not null)
+                onboarding = caller;
+            else if (!PersonaZone.IsProjectPersona(persona))
                 return BadRequest(new
                 {
-                    error = "Назначение дефолт-персоны из чата доступно только сессии онбординга. "
-                        + "Смена дефолта выполняется в настройках — попроси об этом пользователя.",
+                    error = "Из обычного чата можно назначить только руководителя проекта — проектную "
+                        + "персону. Личную дефолт-персону меняют в настройках — попроси об этом пользователя.",
+                });
+            else if (caller?.ProjectId is null || !PersonaZone.IsProjectTeam(persona, caller.ProjectId))
+                return BadRequest(new
+                {
+                    error = "Руководителем можно назначить только персону команды проекта этого чата. "
+                        + "Руководителя другого проекта назначают из его чата или в настройках проекта.",
                 });
         }
 
@@ -1054,6 +1082,305 @@ public sealed class PersonasCrudService(
             },
             UpdatedAt = DateTime.UtcNow,
         };
+    }
+
+    // --- Голос (PUT /voice, POST ai/voice/candidates, автоподбор при создании) ---
+
+    // Проверка голоса для записи. Строгая (текст ошибки — человеку или модели), в отличие от
+    // пути озвучки: там кривое значение молча вырождается в дефолт, а здесь ошибку надо
+    // показать. null/пустой объект — «снять голос», он валиден. Единственная копия правила:
+    // ей пользуются и форма (REST), и агент (MCP personas_create/update).
+    //
+    // Темп у LiveTTS не отвергаем: он хранится и не применяется, а отказ сломал бы старые
+    // формы и агента
+    internal static string? VoiceError(PersonaVoice? voice)
+    {
+        if (voice is null || voice.IsEmpty) return null;
+        if (!Services.Tts.TtsVoiceCatalog.IsKnown(voice.Voice))
+            return string.IsNullOrWhiteSpace(voice.Voice)
+                ? "Амплуа и темп задаются вместе с голосом"
+                : $"Неизвестный голос синтеза: {voice.Voice}; допустимы: "
+                  + string.Join(", ", Services.Tts.TtsVoiceCatalog.All.Select(v => v.Voice));
+        if (!string.IsNullOrWhiteSpace(voice.Role)
+            && !Services.Tts.TtsVoiceCatalog.SupportsRole(voice.Voice, voice.Role))
+        {
+            var roles = Services.Tts.TtsVoiceCatalog.RolesFor(voice.Voice);
+            return roles.Count == 0
+                ? $"Голос {voice.Voice} не поддерживает амплуа"
+                : $"Голос {voice.Voice} не умеет «{voice.Role}»; доступны: {string.Join(", ", roles)}";
+        }
+        if (voice.Speed is { } speed and (< 0.1 or > 3.0))
+            return "Темп речи допустим в диапазоне 0.1–3.0";
+        return null;
+    }
+
+    // Голос персоны в голосовом режиме. Пустой объект (или null) снимает голос — персона
+    // возвращается к голосу инстанса
+    public async Task<ActionResult<Persona>> SetVoiceAsync(string userId, string id, PersonaVoice? voice)
+    {
+        if (personas.Get(id, userId) is null) return NotFound();
+        if (VoiceError(voice) is { } error)
+            return BadRequest(new { error });
+
+        var persona = personas.SetVoice(id, userId, voice);
+        // Как и все соседние мутации: смена голоса должна долетать до других вкладок и
+        // списка персон, иначе там останется прежний голос до перезагрузки
+        await Broadcast(userId, "updated", id);
+        return Ok(persona);
+    }
+
+    public enum VoicePickOutcome { Picked, NoneFits, Unrecognized }
+
+    // Исход подбора: модель выбрала голос, честно сказала «ничего не подходит» или ответила
+    // мусором (Raw — для лога и диагностики вызывающего)
+    public sealed record VoicePick(VoicePickOutcome Outcome, string? Voice, string? Role, string Raw);
+
+    // Подбор голоса по характеру персоны (one-shot LLM) для автоподбора при создании. Сбой
+    // вызова пробрасывается — автоподбор его глотает
+    public async Task<VoicePick> PickVoiceAsync(string userId, AiVoiceRequest req, CancellationToken ct = default)
+    {
+        var raw = await RunVoicePromptAsync(userId, BuildVoicePrompt(req), ct);
+
+        if (ParseVoiceAnswer(raw) is { } picked)
+            return new VoicePick(VoicePickOutcome.Picked, picked.Voice, picked.Role, raw);
+        return raw.Contains("none", StringComparison.OrdinalIgnoreCase)
+            ? new VoicePick(VoicePickOutcome.NoneFits, null, null, raw)
+            : new VoicePick(VoicePickOutcome.Unrecognized, null, null, raw);
+    }
+
+    // Один вызов модели на оба подбора: модель и маршрут у них общие (действие PersonaVoice)
+    private Task<string> RunVoicePromptAsync(string userId, string prompt, CancellationToken ct)
+    {
+        var model = oneShot.NormalizeModel(config["Notes:AiModel"] ?? config["Tasks:AiModel"] ?? "haiku");
+        return cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaVoice, prompt, model, userId, ct: ct);
+    }
+
+    // Сколько обычных голосов форма показывает за один заход
+    public const int VoiceCandidateCount = 3;
+
+    // Кандидат подбора для формы: голос, амплуа и одна строка «почему подходит»
+    public sealed record VoiceCandidate(string Voice, string? Role, string Why);
+
+    // Исход подбора кандидатов. Live — отдельный живой вариант (LiveTTS), форма показывает
+    // его с ценой. Exhausted — непоказанных обычных голосов после этого захода не осталось,
+    // «Подобрать ещё» больше нечего предложить
+    public sealed record VoiceCandidates(VoicePickOutcome Outcome, IReadOnlyList<VoiceCandidate> Candidates,
+        VoiceCandidate? Live, bool Exhausted, string Raw);
+
+    // Подбор нескольких кандидатов для кнопки «Подобрать под персону». В отличие от
+    // автоподбора (PickVoiceAsync) здесь человек выбирает сам, поэтому живой голос
+    // предлагается — но отдельной строкой, а не вперемешку с обычными. exclude — уже
+    // показанные голоса: их нет ни в промпте, ни в разборе ответа
+    public async Task<VoiceCandidates> PickVoiceCandidatesAsync(string userId, AiVoiceRequest req,
+        IEnumerable<string>? exclude, CancellationToken ct = default)
+    {
+        var shown = NormalizeShown(exclude);
+        var general = Services.Tts.TtsVoiceCatalog.All
+            .Where(v => AutoPickable(v.Voice) && !shown.Contains(v.Voice)).ToList();
+        var live = Services.Tts.TtsVoiceCatalog.All
+            .Where(v => v.Model == Services.Tts.TtsVoiceCatalog.LiveTts && !shown.Contains(v.Voice)).ToList();
+        // Предлагать нечего — модель не зовём: запрос стоит денег, а ответ известен заранее
+        if (general.Count == 0 && live.Count == 0)
+            return new VoiceCandidates(VoicePickOutcome.NoneFits, [], null, true, "");
+
+        var raw = await RunVoicePromptAsync(userId, BuildCandidatesPrompt(req, general, live), ct);
+        var (candidates, liveCandidate) = ParseCandidates(raw, shown);
+        var exhausted = general.Count <= candidates.Count;
+
+        if (candidates.Count > 0 || liveCandidate is not null)
+            return new VoiceCandidates(VoicePickOutcome.Picked, candidates, liveCandidate, exhausted, raw);
+        return raw.Contains("none", StringComparison.OrdinalIgnoreCase)
+            ? new VoiceCandidates(VoicePickOutcome.NoneFits, [], null, exhausted, raw)
+            : new VoiceCandidates(VoicePickOutcome.Unrecognized, [], null, exhausted, raw);
+    }
+
+    // Показанные голоса — в каноне каталога (алиас madirus и madi_ru — один голос);
+    // незнакомое молча выкидываем, длину списка режем: это тело запроса извне
+    private static HashSet<string> NormalizeShown(IEnumerable<string>? exclude) =>
+        (exclude ?? []).Take(64)
+            .Select(Services.Tts.TtsVoiceCatalog.Canonical)
+            .OfType<string>()
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    // Ответ модели на подбор кандидатов: по строке на кандидата, «ключ [амплуа] | почему».
+    // Голос ищем ТОЛЬКО в части до разделителя: в пояснении легко встретить имя вроде
+    // «Вера», и слово vera тихо стало бы живым голосом. Обычные — до трёх, без повторов и
+    // без показанных; живой — первый подходящий LiveTTS.
+    //
+    // Строка, кончающаяся двоеточием, — не кандидат никогда (даже с разделителем внутри):
+    // это преамбула вроде «Голоса для Vera:» или «Для Vera — три голоса:», и vera из неё
+    // тихо стала бы живым голосом. Строка без разделителя — не кандидат, если в ответе есть
+    // строки по формату. Ответ из одних голых ключей при этом разбирается как раньше
+    internal static (IReadOnlyList<VoiceCandidate> Candidates, VoiceCandidate? Live) ParseCandidates(
+        string raw, IReadOnlySet<string>? shown = null)
+    {
+        var candidates = new List<VoiceCandidate>();
+        VoiceCandidate? live = null;
+        if (string.IsNullOrWhiteSpace(raw)) return (candidates, live);
+
+        var lines = raw.Split('\n');
+        var anySeparated = lines.Any(l => SeparatorAt(l) >= 0);
+        foreach (var line in lines)
+        {
+            // Двоеточие в конце — преамбула и при найденном разделителе: «Для Vera — три голоса:»
+            if (line.TrimEnd().EndsWith(':')) continue;
+            var sep = SeparatorAt(line);
+            if (sep < 0 && anySeparated) continue;
+            var key = sep < 0 ? line : line[..sep];
+            var why = sep < 0 ? "" : line[(sep + 1)..].Trim().Trim('"', '«', '»').Trim();
+            if (why.Length > 140) why = why[..140].TrimEnd() + "…";
+
+            var words = System.Text.RegularExpressions.Regex.Matches(key, @"[A-Za-z_]+")
+                .Select(m => m.Value).ToList();
+            var voice = words.Select(Services.Tts.TtsVoiceCatalog.Canonical).FirstOrDefault(v => v is not null);
+            if (voice is null || shown?.Contains(voice) == true) continue;
+            if (candidates.Any(c => c.Voice == voice) || live?.Voice == voice) continue;
+
+            var role = words.FirstOrDefault(w => Services.Tts.TtsVoiceCatalog.SupportsRole(voice, w));
+            var candidate = new VoiceCandidate(voice, role, why);
+            if (AutoPickable(voice))
+            {
+                if (candidates.Count < VoiceCandidateCount) candidates.Add(candidate);
+            }
+            else live ??= candidate;
+        }
+        return (candidates, live);
+    }
+
+    // Разделитель «ключ | почему»: модель пишет то черту, то длинное тире
+    private static int SeparatorAt(string line)
+    {
+        var sep = line.IndexOf('|');
+        return sep >= 0 ? sep : line.IndexOf('—');
+    }
+
+    internal static string BuildCandidatesPrompt(AiVoiceRequest req,
+        IReadOnlyCollection<Services.Tts.TtsVoiceCatalog.VoiceInfo> general,
+        IReadOnlyCollection<Services.Tts.TtsVoiceCatalog.VoiceInfo> live)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Подбери голоса синтеза речи, которыми может говорить персона-ассистент.");
+        AppendPersona(sb, req);
+
+        sb.AppendLine();
+        sb.AppendLine("Обычные голоса (ключ · описание · пол · доступные амплуа):");
+        AppendVoices(sb, general);
+        if (live.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Живые голоса LiveTTS (ключ · описание · пол · доступные амплуа):");
+            AppendVoices(sb, live);
+        }
+
+        sb.AppendLine();
+        sb.AppendLine($"Выбери до {VoiceCandidateCount} лучших обычных голосов" +
+                      (live.Count > 0 ? " и ОДИН живой голос последней строкой" : "") + ". " +
+                      "Каждый — отдельной строкой в формате: ключ амплуа | почему подходит. " +
+                      "Амплуа указывай только из списка доступных для этого голоса или не указывай вовсе. " +
+                      "«Почему подходит» — коротко, по-русски, до 80 символов. " +
+                      "Если ни один голос не подходит — ответь: none. " +
+                      "Никакого другого текста.");
+        return sb.ToString();
+    }
+
+    // Исход автоподбора: голос выбран; модель честно сказала «ничего не подходит»; подбор не
+    // вышел (мусор в ответе или сбой вызова)
+    public enum AutoVoiceResult { Picked, NoneFits, Failed }
+
+    // Автоподбор голоса свежесозданной персоне, best-effort: модель промолчала, ответила
+    // мусором или упала — персона остаётся без голоса (говорит голосом инстанса), создание
+    // не срывается
+    public async Task<(Persona Persona, AutoVoiceResult Result)> TryAutoVoiceAsync(string userId,
+        Persona persona, CancellationToken ct = default)
+    {
+        try
+        {
+            var pick = await PickVoiceAsync(userId, new AiVoiceRequest(persona.Name, persona.Role,
+                persona.Description, persona.Contract?.Character ?? persona.SystemPrompt,
+                persona.Contract?.Tone), ct);
+            switch (pick.Outcome)
+            {
+                case VoicePickOutcome.NoneFits:
+                    return (persona, AutoVoiceResult.NoneFits);
+                case VoicePickOutcome.Unrecognized:
+                    log.LogWarning("автоподбор голоса: ответ не распознан для {Persona}; сырой ответ: {Raw}",
+                        persona.Id, pick.Raw.Length > 600 ? pick.Raw[..600] + "…" : pick.Raw);
+                    return (persona, AutoVoiceResult.Failed);
+                default:
+                    return (personas.SetVoice(persona.Id, userId,
+                        new PersonaVoice { Voice = pick.Voice, Role = pick.Role }), AutoVoiceResult.Picked);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+        {
+            log.LogWarning(ex, "автоподбор голоса для {Persona} не удался", persona.Id);
+            return (persona, AutoVoiceResult.Failed);
+        }
+    }
+
+    // Автоподбор предлагает ТОЛЬКО голоса general: LiveTTS дороже в ~1,5 раза и выбирается лишь
+    // явно. Набор один и для промпта, и для разбора ответа — фильтра в одном промпте мало
+    private static bool AutoPickable(string voice) =>
+        Services.Tts.TtsVoiceCatalog.ModelFor(voice) == Services.Tts.TtsVoiceCatalog.General;
+
+    // Ответ модели: «голос» либо «голос амплуа». Ищем ключ каталога по границам слова —
+    // модель любит добавить объяснение, и подстрочный поиск увёл бы парсер не туда.
+    // Голос LiveTTS в ответе — не голос: у проекта есть персоны «Вера» и handle sergey, и
+    // слово vera из пояснения тихо выдало бы дорогую модель
+    internal static (string Voice, string? Role)? ParseVoiceAnswer(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var words = System.Text.RegularExpressions.Regex.Matches(raw, @"[A-Za-z_]+")
+            .Select(m => m.Value).ToList();
+
+        foreach (var word in words)
+        {
+            var voice = Services.Tts.TtsVoiceCatalog.Canonical(word);
+            if (voice is null || !AutoPickable(voice)) continue;
+            // Амплуа берём только рядом стоящее и только поддержанное этим голосом
+            var role = words.FirstOrDefault(w => Services.Tts.TtsVoiceCatalog.SupportsRole(voice, w));
+            return (voice, role);
+        }
+        return null;
+    }
+
+    internal static string BuildVoicePrompt(AiVoiceRequest req)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Подбери голос синтеза речи, которым будет говорить персона-ассистент.");
+        AppendPersona(sb, req);
+
+        sb.AppendLine();
+        sb.AppendLine("Доступные голоса (ключ · описание · пол · доступные амплуа):");
+        AppendVoices(sb, Services.Tts.TtsVoiceCatalog.All.Where(v => AutoPickable(v.Voice)));
+
+        sb.AppendLine();
+        sb.AppendLine("Ответь ОДНОЙ строкой: ключ голоса, либо ключ голоса и амплуа через пробел. " +
+                      "Амплуа указывай только из списка доступных для этого голоса. " +
+                      "Если ни один голос не подходит — ответь: none. " +
+                      "Никаких пояснений.");
+        return sb.ToString();
+    }
+
+    // Описание персоны и перечень голосов — общие у автоподбора и подбора кандидатов
+    private static void AppendPersona(System.Text.StringBuilder sb, AiVoiceRequest req)
+    {
+        if (!string.IsNullOrWhiteSpace(req.Name)) sb.AppendLine($"Имя: {req.Name.Trim()}");
+        if (!string.IsNullOrWhiteSpace(req.Role)) sb.AppendLine($"Роль: {req.Role.Trim()}");
+        if (!string.IsNullOrWhiteSpace(req.Description)) sb.AppendLine($"Описание: {req.Description.Trim()}");
+        if (!string.IsNullOrWhiteSpace(req.Character)) sb.AppendLine($"Характер: {req.Character.Trim()}");
+        if (!string.IsNullOrWhiteSpace(req.Tone)) sb.AppendLine($"Тон: {req.Tone.Trim()}");
+    }
+
+    private static void AppendVoices(System.Text.StringBuilder sb,
+        IEnumerable<Services.Tts.TtsVoiceCatalog.VoiceInfo> voices)
+    {
+        foreach (var v in voices)
+        {
+            var roles = v.Roles.Count > 0 ? string.Join(", ", v.Roles) : "нет";
+            var gender = v.Gender == Services.Tts.TtsVoiceCatalog.Gender.Female ? "женский" : "мужской";
+            sb.AppendLine($"{v.Voice} · {v.Label} · {gender} · амплуа: {roles}");
+        }
     }
 
     // --- Общие хелперы (нужны и контроллеру, и http-тулсету) ---

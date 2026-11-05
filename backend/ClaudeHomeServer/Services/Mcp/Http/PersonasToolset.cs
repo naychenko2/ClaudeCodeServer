@@ -187,7 +187,8 @@ public sealed partial class PersonasToolset(
             case "personas_set_default":
             {
                 // Анти-рекурсия — тот же гейт, что [DenyOnDelegatedTurn] на REST-паре;
-                // онбординг-гейт (только сессия знакомства) проверяет crud по callerSessionId.
+                // гейт по чату-вызывателю (онбординг — любая персона, обычный чат — только
+                // руководитель своего проекта) проверяет crud по callerSessionId.
                 // failOpenWhenUnknown: false формально недостижим (сессия резолвится выше
                 // TryResolve и сюда попадает только непустой id) — fail-closed защита на
                 // будущее, если гейт вынесут из-под резолва
@@ -202,15 +203,36 @@ public sealed partial class PersonasToolset(
             }
 
             case "personas_create":
+            {
                 if (ScopeDenial(arguments, null, isCreate: true) is { } createDenied) return Deny(createDenied);
-                return Unwrap(await crud.CreateAsync(ownerId,
-                    BuildCreateRequest(arguments, projectId), session.Id));
+                PersonasCrudService.AutoVoiceResult? autoVoice = null;
+                var createdResult = Unwrap(await crud.CreateAsync(ownerId,
+                    BuildCreateRequest(arguments, projectId), session.Id, onAutoVoice: r => autoVoice = r));
+                if (createdResult.IsError) return createdResult;
+                // Автоподбор голоса best-effort: без голоса персона говорит голосом инстанса, и
+                // модель должна знать почему. Голос задан явно (в т.ч. пустым) — подбора не было
+                return autoVoice switch
+                {
+                    PersonasCrudService.AutoVoiceResult.Failed => Text(createdResult.Text
+                        + "\n\nГолос подобрать не удалось — персона говорит голосом инстанса. "
+                        + "Задай его через personas_update (voice, voiceRole)."),
+                    PersonasCrudService.AutoVoiceResult.NoneFits => Text(createdResult.Text
+                        + "\n\nПодходящего голоса в каталоге не нашлось — персона говорит голосом "
+                        + "инстанса. Если нужен свой — задай через personas_update (voice, voiceRole)."),
+                    _ => createdResult,
+                };
+            }
 
             case "personas_update":
             {
                 var id = StringArg(arguments, "id");
-                if (ScopeDenial(arguments, personas.Get(id, ownerId), isCreate: false) is { } updateDenied)
+                var current = personas.Get(id, ownerId);
+                if (ScopeDenial(arguments, current, isCreate: false) is { } updateDenied)
                     return Deny(updateDenied);
+                // Голос проверяем ДО любых правок: отказ не должен оставлять персону полуизменённой
+                var voicePatch = VoicePatch(arguments, current);
+                if (voicePatch is not null && PersonasCrudService.VoiceError(voicePatch) is { } voiceError)
+                    return Deny(voiceError);
                 // Привязки — отдельным путём (как stdio): себе менять нельзя
                 if (arguments.ContainsKey("bindings"))
                 {
@@ -220,11 +242,19 @@ public sealed partial class PersonasToolset(
                     if (setResult.IsError) return setResult;
                 }
                 var req = BuildUpdateRequest(arguments, projectId);
+                if (req is not null)
+                {
+                    // С голосом событие «updated» шлёт запись голоса — одно на всю правку
+                    var updated = Unwrap(await crud.UpdateAsync(ownerId, id, req, session.Id,
+                        broadcast: voicePatch is null));
+                    if (updated.IsError || voicePatch is null) return updated;
+                }
+                // Голос — своим путём (у него своя запись и валидация, как PUT /voice)
+                if (voicePatch is not null)
+                    return Unwrap(await crud.SetVoiceAsync(ownerId, id, voicePatch));
                 // Изменены только привязки — вернуть актуальную персону (семантика stdio)
-                if (req is null)
-                    return personas.Get(id, ownerId) is { } current
-                        ? Json(current) : Deny($"Персона {id} не найдена.");
-                return Unwrap(await crud.UpdateAsync(ownerId, id, req, session.Id));
+                return personas.Get(id, ownerId) is { } fresh
+                    ? Json(fresh) : Deny($"Персона {id} не найдена.");
             }
 
             case "personas_delete":
@@ -789,6 +819,40 @@ public sealed partial class PersonasToolset(
         return any ? contract : null;
     }
 
+    // Голос из аргументов personas_create: voice не передан — null (подбор по характеру),
+    // пустая строка — пустой объект (без голоса), иначе голос с амплуа voiceRole
+    internal static PersonaVoice? CreateVoiceArg(JsonObject arguments)
+    {
+        if (!arguments.ContainsKey("voice") && !arguments.ContainsKey("voiceRole")) return null;
+        return new PersonaVoice
+        {
+            Voice = NullIfBlank(StringArg(arguments, "voice")),
+            Role = NullIfBlank(StringArg(arguments, "voiceRole")),
+        };
+    }
+
+    // Патч голоса для personas_update: null — голос не трогали. voice "" — сброс (пустой
+    // объект); новый voice без voiceRole — нейтральное амплуа (старое могло не подойти новому
+    // голосу); один voiceRole — амплуа текущего голоса. Темп переносится от текущего голоса:
+    // агент его не задаёт, и смена голоса не должна молча сбрасывать настройку человека
+    internal static PersonaVoice? VoicePatch(JsonObject arguments, Persona? current)
+    {
+        var hasVoice = arguments.ContainsKey("voice");
+        var hasRole = arguments.ContainsKey("voiceRole");
+        if (!hasVoice && !hasRole) return null;
+
+        var voice = hasVoice ? NullIfBlank(StringArg(arguments, "voice")) : current?.Voice?.Voice;
+        if (hasVoice && voice is null) return new PersonaVoice();
+        return new PersonaVoice
+        {
+            Voice = voice,
+            Role = hasRole ? NullIfBlank(StringArg(arguments, "voiceRole")) : null,
+            Speed = current?.Voice?.Speed,
+        };
+    }
+
+    private static string? NullIfBlank(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
     private static PersonaSpecialty? SpecialtyArg(JsonObject arguments) =>
         Enum.TryParse<PersonaSpecialty>(StringArg(arguments, "specialty"), true, out var parsed) ? parsed : null;
 
@@ -841,7 +905,8 @@ public sealed partial class PersonasToolset(
             AutoAvatar: true,
             AvatarPrompt: OptionalArg(arguments, "avatarPrompt"),
             Handle: OptionalArg(arguments, "handle"),
-            ModelTier: OptionalArg(arguments, "modelTier"));
+            ModelTier: OptionalArg(arguments, "modelTier"),
+            Voice: CreateVoiceArg(arguments));
     }
 
     // null — в аргументах не было ни одного изменяемого поля (только привязки)

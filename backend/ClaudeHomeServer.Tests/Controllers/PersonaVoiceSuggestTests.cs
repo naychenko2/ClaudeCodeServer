@@ -1,4 +1,6 @@
 using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Controllers;
@@ -57,6 +59,91 @@ public class PersonaVoiceSuggestTests
         PersonaVoiceSuggest("none").Should().BeNull();
     }
 
+    // --- Валидация голоса для записи (общая у PUT /voice и MCP personas_create/update) ---
+
+    [Fact]
+    public void Валидация_ПустойГолос_Годится_ЭтоСброс()
+    {
+        VoiceError(null).Should().BeNull();
+        VoiceError(new PersonaVoice()).Should().BeNull();
+    }
+
+    [Fact]
+    public void Валидация_ИзвестныйГолосИЕгоАмплуа_Годятся()
+    {
+        VoiceError(new PersonaVoice { Voice = "masha", Role = "friendly" }).Should().BeNull();
+        VoiceError(new PersonaVoice { Voice = "madirus" }).Should().BeNull("алиас тоже голос");
+    }
+
+    [Fact]
+    public void Валидация_НеизвестныйГолос_ОтказСоСпискомГолосов()
+    {
+        var error = VoiceError(new PersonaVoice { Voice = "зорро" });
+        error.Should().Contain("Неизвестный голос синтеза: зорро").And.Contain("masha");
+    }
+
+    [Fact]
+    public void Валидация_ЧужоеАмплуа_ОтказСоСпискомДопустимых()
+    {
+        VoiceError(new PersonaVoice { Voice = "masha", Role = "whisper" })
+            .Should().Contain("не умеет «whisper»").And.Contain("friendly");
+        VoiceError(new PersonaVoice { Voice = "filipp", Role = "strict" })
+            .Should().Contain("не поддерживает амплуа");
+    }
+
+    [Fact]
+    public void Валидация_АмплуаБезГолоса_И_ТемпВнеДиапазона_Отказ()
+    {
+        VoiceError(new PersonaVoice { Role = "strict" })
+            .Should().Contain("вместе с голосом");
+        VoiceError(new PersonaVoice { Voice = "masha", Speed = 5 })
+            .Should().Contain("0.1–3.0");
+    }
+
+    // --- LiveTTS: явный выбор — да, автоподбор — нет ---
+
+    [Theory]
+    [InlineData("vera casual")]
+    [InlineData("sergey support")]
+    [InlineData("sofia")]
+    public void LiveTts_ОтветМоделиСГолосомLiveTts_НеГолос(string raw)
+    {
+        // vera и sergey — ещё и персоны проекта: слово из пояснения не должно тихо выдать
+        // дорогую модель, которую автоподбор вообще не предлагает
+        PersonaVoiceSuggest(raw).Should().BeNull();
+    }
+
+    [Fact]
+    public void LiveTts_ЛатинскоеИмяПерсоныВПояснении_НеСтановитсяГолосом()
+    {
+        PersonaVoiceSuggest("For Vera I suggest masha friendly").Should().Be(("masha", "friendly"));
+    }
+
+    [Fact]
+    public void LiveTts_ВПромптеАвтоподбора_ГолосовLiveTtsНет()
+    {
+        var prompt = PersonasCrudService.BuildVoicePrompt(new AiVoiceRequest("Вера", null, null, null, null));
+
+        prompt.Should().Contain("masha ·").And.Contain("zahar ·");
+        foreach (var voice in new[] { "sofia", "vera", "irina", "denis", "sergey", "vasily" })
+            prompt.Should().NotContain($"{voice} ·");
+    }
+
+    [Fact]
+    public void Валидация_LiveTts_ДоступнаВсегда()
+    {
+        // Голос и его амплуа принимаются, темп не отвергается (хранится, не применяется)
+        VoiceError(new PersonaVoice { Voice = "sofia", Role = "casual", Speed = 1.2 }).Should().BeNull();
+        VoiceError(new PersonaVoice { Voice = "sofia", Role = "good" })
+            .Should().Contain("не умеет «good»").And.Contain("casual").And.Contain("support");
+
+        // В перечне допустимых — и general, и LiveTTS
+        VoiceError(new PersonaVoice { Voice = "зорро" })!.Split("допустимы:")[1]
+            .Should().Contain("sofia").And.Contain("masha");
+    }
+
+    private static string? VoiceError(PersonaVoice? voice) => PersonasCrudService.VoiceError(voice);
+
     private static (string Voice, string? Role)? PersonaVoiceSuggest(string raw) =>
-        PersonasController.ParseVoiceAnswer(raw);
+        PersonasCrudService.ParseVoiceAnswer(raw);
 }

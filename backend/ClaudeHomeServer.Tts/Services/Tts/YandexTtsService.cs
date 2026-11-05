@@ -36,6 +36,16 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
     // а не в коде. Дефолт — 0,1626 ₽ (снято 20.08.2026, docs/research/speechkit-pricing.md §1)
     private readonly double _rubPerRequest =
         config.GetValue<double?>("Yandex:SpeechKit:RubPerRequest") ?? 0.1626;
+    // LiveTTS тарифицируется отдельно: 0,25 ₽ за запрос (снято 24.10.2026, тот же прайс)
+    private readonly double _liveTtsRubPerRequest =
+        config.GetValue<double?>("Yandex:SpeechKit:LiveTtsRubPerRequest") ?? 0.25;
+
+    // Бюджет ОДНОГО куска целиком — заголовки и тело под общим дедлайном. Два независимых
+    // потолка по 30 с давали худший случай ~60 с на кусок, а примерка голоса на фронте
+    // ждёт 45 с. Сеттер — для тестов: ждать настоящие 30 с в прогоне незачем
+    internal TimeSpan ChunkTimeout { get; init; } = TimeSpan.FromSeconds(30);
+    // Часы дедлайна куска; сеттер — для тестов, чтобы не опираться на настенное время
+    internal TimeProvider Time { get; init; } = TimeProvider.System;
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_apiKey) && !string.IsNullOrWhiteSpace(_folderId);
 
@@ -57,7 +67,14 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
         if (!IsConfigured || string.IsNullOrWhiteSpace(text)) return TtsResult.Nothing;
 
         var client = http.CreateClient(HttpClientName);
-        client.Timeout = TimeSpan.FromSeconds(30);
+        client.Timeout = ChunkTimeout;
+
+        // Модель в одном вызове одна — по голосу, поэтому и цена запроса одна на весь текст
+        var price = TtsVoiceCatalog.ModelFor(voice.Voice) == TtsVoiceCatalog.LiveTts
+            ? _liveTtsRubPerRequest
+            : _rubPerRequest;
+        // Округление до копеек — иначе в JSONL расхода поедут хвосты double
+        double Rub(int requests) => Math.Round(requests * price, 4);
 
         var billed = 0;
         using var result = new MemoryStream();
@@ -76,6 +93,13 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
                 // и уже оплаченные запросы просто исчезнут из учёта
                 return new TtsResult(null, billed, Rub(billed));
             }
+            catch (Exception ex)
+            {
+                // Непредвиденный сбой — тоже обычный отказ: вызывающий отдаст честный 502 (или
+                // русский текст в «Звуке») и запишет расход за уже принятые запросы, а не 500
+                logger.LogError(ex, "Непредвиденный сбой синтеза SpeechKit");
+                return new TtsResult(null, billed, Rub(billed));
+            }
             // Принятый запрос оплачен независимо от того, вытащили ли мы из ответа аудио
             if (accepted) billed++;
             // причина в логе; полкуска озвучки хуже честного фолбэка, но уже оплаченные
@@ -88,14 +112,15 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
             : new TtsResult(null, billed, Rub(billed));
     }
 
-    // Рубли за N запросов; округление до копеек — иначе в JSONL расхода поедут хвосты double
-    private double Rub(int requests) => Math.Round(requests * _rubPerRequest, 4);
-
     // Accepted — Яндекс ответил успехом, то есть запрос затарифицирован (даже если аудио в
     // ответе не оказалось). Отказ и обрыв связи — Accepted=false, см. комментарий у SynthesizeAsync.
     private async Task<(byte[]? Audio, bool Accepted)> SynthesizeChunkAsync(HttpClient client,
         string chunk, VoiceChoice voice, CancellationToken ct)
     {
+        // Один дедлайн на кусок: Timeout клиента при ResponseHeadersRead тело не покрывает,
+        // а отдельный потолок на тело складывался бы с ним, а не укладывался в него
+        using var deadline = new CancellationTokenSource(client.Timeout, Time);
+        using var chunkCts = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
         try
         {
             using var req = new HttpRequestMessage(HttpMethod.Post, Endpoint);
@@ -103,26 +128,57 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
             req.Headers.TryAddWithoutValidation("x-folder-id", _folderId);
             req.Content = new StringContent(BuildPayload(chunk, voice), Encoding.UTF8, "application/json");
 
-            using var resp = await client.SendAsync(req, ct);
+            // Только заголовки: тело читаем сами ПОСЛЕ проверки статуса, иначе сбой чтения тела
+            // у принятого (200) запроса выглядел бы обрывом связи и выпадал из учёта
+            using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, chunkCts.Token);
             if (!resp.IsSuccessStatusCode)
             {
-                // 403 при живом ключе — почти всегда не тот ключ, а не та РОЛЬ: без отдельного
-                // сообщения причина полдня ищется не там (ключ-то работает в STT)
-                if (resp.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                // Тело отказа — под тем же дедлайном, что и тело успеха: зависшее тело ошибки
+                // держало бы кусок без потолка. Не дочитали — статус в лог всё равно уходит
+                string error;
+                try
+                {
+                    error = await resp.Content.ReadAsStringAsync(chunkCts.Token);
+                }
+                catch (Exception) when (!ct.IsCancellationRequested)
+                {
+                    error = "";
+                }
+                // 403 при живом ключе — два разных случая, и без отдельного сообщения причина
+                // полдня ищется не там: «Feature permission denied» — LiveTTS не включена на
+                // аккаунте/облаке; иначе почти всегда не та РОЛЬ (ключ-то работает в STT)
+                if (resp.StatusCode == System.Net.HttpStatusCode.Forbidden
+                    && error.Contains("Feature permission denied", StringComparison.OrdinalIgnoreCase))
+                    logger.LogWarning("SpeechKit отверг синтез голосом «{Voice}» (403): LiveTTS (фича) не включена " +
+                                      "на аккаунте/облаке SpeechKit — включи фичу в облаке.",
+                        voice.Voice);
+                else if (resp.StatusCode == System.Net.HttpStatusCode.Forbidden)
                     logger.LogWarning("SpeechKit отверг синтез (403): ключ жив, но у сервисного аккаунта " +
                                       "нет роли ai.speechkit-tts.user — выдай её в Yandex Cloud.");
                 else
                     logger.LogWarning("SpeechKit ответил {Status} на синтез: {Body}",
-                        (int)resp.StatusCode, await resp.Content.ReadAsStringAsync(ct));
+                        (int)resp.StatusCode, error);
                 return (null, false);
             }
 
-            var body = await resp.Content.ReadAsStringAsync(ct);
-            var audio = ExtractAudio(body);
-            if (audio is null)
-                logger.LogWarning("SpeechKit ответил 200, но пригодного аудио в ответе нет: {Body}",
-                    body.Length > 500 ? body[..500] : body);
-            return (audio, true);
+            // С этого места запрос оплачен: что бы ни случилось с чтением и разбором тела,
+            // наружу уходит Accepted=true, иначе расход за принятый запрос потеряется.
+            // Отмена клиентом посреди чтения — тоже «оплачено, аудио нет», а не исключение
+            try
+            {
+                var body = await resp.Content.ReadAsStringAsync(chunkCts.Token);
+                var audio = ExtractAudio(body);
+                if (audio is null)
+                    logger.LogWarning("SpeechKit ответил 200, но пригодного аудио в ответе нет: {Body}",
+                        body.Length > 500 ? body[..500] : body);
+                return (audio, true);
+            }
+            catch (Exception ex)
+            {
+                if (!ct.IsCancellationRequested)
+                    logger.LogWarning(ex, "SpeechKit ответил 200, но ответ не удалось прочитать или разобрать");
+                return (null, true);
+            }
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
                                    && !ct.IsCancellationRequested)
@@ -135,26 +191,38 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
 
     // Тело запроса v3. hints — массив, где каждый элемент задаёт ОДНУ подсказку: голос,
     // скорость и роль в один объект не сложить.
+    //
+    // ЕДИНСТВЕННАЯ точка правила «модель по голосу»: VoiceChoice собирают два места
+    // (VoiceResolver и YandexTtsEngine для модуля «Звук»), и правило в любом из них оставило
+    // бы второе без него. У LiveTTS — поле model и никогда speed (на него 400, что бы ни
+    // пришло в VoiceChoice); у general — speed и никакого model, как было до LiveTTS.
     private static string BuildPayload(string text, VoiceChoice voice)
     {
+        var liveTts = TtsVoiceCatalog.ModelFor(voice.Voice) == TtsVoiceCatalog.LiveTts;
+
         // Роль добавляется только когда она есть: пустая строка в hints — это для SpeechKit
         // не «нейтрально», а ошибка 400
-        var hints = new List<object> { new { voice = voice.Voice }, new { speed = voice.Speed } };
+        var hints = new List<object> { new { voice = voice.Voice } };
+        if (!liveTts) hints.Add(new { speed = voice.Speed });
         if (!string.IsNullOrWhiteSpace(voice.Role)) hints.Add(new { role = voice.Role });
 
-        return JsonSerializer.Serialize(new
+        var payload = new Dictionary<string, object>
         {
-            text,
-            outputAudioSpec = new { containerAudio = new { containerAudioType = "MP3" } },
-            hints,
-            loudnessNormalizationType = "LUFS",
-        });
+            ["text"] = text,
+            ["outputAudioSpec"] = new { containerAudio = new { containerAudioType = "MP3" } },
+            ["hints"] = hints,
+            ["loudnessNormalizationType"] = "LUFS",
+        };
+        if (liveTts) payload["model"] = TtsVoiceCatalog.LiveTts;
+        return JsonSerializer.Serialize(payload);
     }
 
     // Ответ v3 — поток JSON-объектов, по строке на кусок аудио; данные лежат в
-    // result.audioChunk.data (base64). Любая неожиданность — строка с ошибкой, строка без
-    // аудио, оборванный на середине поток — это отказ ЦЕЛИКОМ: половина фразы в ушах хуже
-    // честного фолбэка на голос браузера.
+    // result.audioChunk.data (base64). Строка без аудио (audioChunk нет или null) — не отказ:
+    // LiveTTS замыкает поток чанком chunkType TEXT_ONLY с audioChunk: null, его пропускаем.
+    // Остальные неожиданности — строка с ошибкой, кривой аудиочанк, оборванный на середине
+    // поток — отказ ЦЕЛИКОМ: половина фразы в ушах хуже честного фолбэка на голос браузера.
+    // Наружу не бросает: InvalidOperationException (не тот вид JSON-значения) — тоже отказ.
     internal static byte[]? ExtractAudio(string body)
     {
         if (string.IsNullOrWhiteSpace(body)) return null;
@@ -168,12 +236,16 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
             try
             {
                 using var doc = JsonDocument.Parse(trimmed);
-                if (!doc.RootElement.TryGetProperty("result", out var result)) return null;
-                if (!result.TryGetProperty("audioChunk", out var piece)) return null;
-                if (!piece.TryGetProperty("data", out var data)) return null;
+                if (!doc.RootElement.TryGetProperty("result", out var result)
+                    || result.ValueKind != JsonValueKind.Object) return null;
+                // Чанк без аудио (TEXT_ONLY у LiveTTS) — пропускаем
+                if (!result.TryGetProperty("audioChunk", out var piece)
+                    || piece.ValueKind == JsonValueKind.Null) continue;
+                if (piece.ValueKind != JsonValueKind.Object
+                    || !piece.TryGetProperty("data", out var data)) return null;
                 audio.Write(data.GetBytesFromBase64());
             }
-            catch (Exception ex) when (ex is JsonException or FormatException)
+            catch (Exception ex) when (ex is JsonException or FormatException or InvalidOperationException)
             {
                 return null;
             }

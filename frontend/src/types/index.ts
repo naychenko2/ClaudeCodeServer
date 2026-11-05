@@ -3125,18 +3125,37 @@ export interface PersonaContract {
   instructions?: string;      // полный регламент роли (длинный markdown)
 }
 
-// Голос из каталога синтеза: канонический ключ, подпись для человека, пол и амплуа
+// Голос из каталога синтеза: канонический ключ, подпись для человека, пол и амплуа.
+// model — модель синтеза (general / livetts), speedSupported — настраивается ли темп;
+// старый сервер их не шлёт
 export interface TtsVoiceInfo {
   voice: string;
   label: string;
   gender: 'female' | 'male';
   roles: string[];
+  model?: string;
+  speedSupported?: boolean;
 }
 
 // configured=false — синтеза на сервере нет: предлагать слушать нечего
 export interface TtsVoicesResponse {
   configured: boolean;
   voices: TtsVoiceInfo[];
+}
+
+// Кандидат подбора голоса под персону: голос, амплуа (null — обычное) и почему подходит
+export interface VoiceCandidate {
+  voice: string;
+  role: string | null;
+  why: string;
+}
+
+// Ответ подбора: до трёх обычных голосов, отдельно живой (LiveTTS, дороже) и признак
+// «непоказанных обычных голосов больше нет»
+export interface VoiceCandidatesResponse {
+  candidates: VoiceCandidate[];
+  live: VoiceCandidate | null;
+  exhausted: boolean;
 }
 
 // Как персона звучит в голосовом режиме; отсутствует — голосом инстанса из конфига
@@ -3338,6 +3357,9 @@ export interface CreatePersonaDto {
   handle?: string;
   // Контракт характера; при обновлении: undefined — не менять, пустые слоты — сбросить
   contract?: PersonaContract;
+  // Только создание: голос персоны; undefined — сервер подберёт его по характеру сам.
+  // При обновлении бэкенд поле игнорирует — голос правится PUT /personas/{id}/voice
+  voice?: PersonaVoice;
   model?: string;
   // Уровень модели персоны: '' = сбросить, undefined — не менять/не задавать
   modelTier?: ModelTierValue | '';

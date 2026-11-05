@@ -179,6 +179,26 @@ public class PersonasToolsetParityTests
         }
     }
 
+    /// <summary>Голос персоны: voice/voiceRole есть у create/update в обеих ветках.</summary>
+    [SkippableFact]
+    public void Голос_ВCreateИUpdate_ВОбеихВетках()
+    {
+        var stdio = ListStdioTools(("PERSONAS_MANAGE", "1"));
+        if (stdio is null) return;
+        var http = PersonasToolset.ManageHeadTools(true).ToDictionary(t => t.Name);
+
+        foreach (var name in new[] { "personas_create", "personas_update" })
+        {
+            var stdioProps = stdio.Single(t => t.Name == name).Schema.GetProperty("properties");
+            var httpProps = http[name].InputSchema["properties"]!.AsObject();
+            foreach (var key in new[] { "voice", "voiceRole" })
+            {
+                stdioProps.TryGetProperty(key, out _).Should().BeTrue($"{name}.{key} обязан быть в stdio-ветке");
+                httpProps.ContainsKey(key).Should().BeTrue($"{name}.{key} обязан быть в http-ветке");
+            }
+        }
+    }
+
     /// <summary>Хвост маршрута — та же точка правды, что у tasks/notes/memory.</summary>
     [Fact]
     public void ХвостМаршрута_СтроитсяОднойФормой() =>

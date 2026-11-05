@@ -24,11 +24,21 @@ public interface ITtsEngine
     double MaxSpeed { get; }
 
     // role — null или пусто: нейтрально. Незнакомый голос, чужое голосу амплуа, скорость вне
-    // [MinSpeed; MaxSpeed] и текст длиннее MaxChars — отказ ДО запроса к поставщику, без оплаты
+    // [MinSpeed; MaxSpeed] и текст длиннее MaxChars — отказ ДО запроса к поставщику, без оплаты.
+    // Отказ по скорости — только у голосов со скоростью (SpeedSupported): у остальных она не
+    // уходит поставщику вовсе, и её значение ни на что не влияет
     Task<TtsSynthesis> SynthesizeAsync(string text, string voice, string? role, double speed, CancellationToken ct);
 }
 
-public sealed record TtsEngineVoice(string Voice, string Label, IReadOnlyList<string> Roles);
+// Model — модель синтеза голоса (General или LiveTts): у них разная цена и разные параметры, и
+// потребитель шва показывает их отдельными моделями. Голоса выключенной на сервере модели шов не
+// отдаёт вовсе. SpeedSupported — принимает ли голос темп
+public sealed record TtsEngineVoice(string Voice, string Label, IReadOnlyList<string> Roles,
+    string Model = TtsEngineVoice.General, bool SpeedSupported = true)
+{
+    public const string General = "general";
+    public const string LiveTts = "livetts";
+}
 
 // Audio — mp3 (null при отказе). Rub — за запросы, которые поставщик уже принял: тарификация идёт
 // за запрос, и при обрыве на середине оплаченное не пропадает, поэтому Rub бывает и у отказа

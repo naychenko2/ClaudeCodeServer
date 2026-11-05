@@ -4,6 +4,7 @@ using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Tts;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -62,6 +63,54 @@ public class VoiceResolverTests : IDisposable
         choice.Speed.Should().Be(1.2);
     }
 
+    // Логгер, который только считает предупреждения: другого от него здесь не нужно
+    private sealed class WarningCounter : ILogger<VoiceResolver>
+    {
+        public int Warnings;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning) Warnings++;
+        }
+    }
+
+    [Theory]
+    [InlineData("Zahar", "zahar")]
+    [InlineData(" MARINA ", "marina")]
+    [InlineData("madirus", "madi_ru")]
+    public void ГолосКонфига_РегистрИАлиас_БезПредупреждения(string configured, string expected)
+    {
+        // Тот же голос в другом регистре или под алиасом — не опечатка: голос канонический,
+        // ложного предупреждения в лог на старте нет
+        var logger = new WarningCounter();
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Yandex:SpeechKit:Voice"] = configured,
+        }).Build();
+
+        var choice = new VoiceResolver(new PersonaVoiceLookup(_personas), config, logger).Resolve(null, "user-1");
+
+        choice.Voice.Should().Be(expected);
+        logger.Warnings.Should().Be(0);
+    }
+
+    [Fact]
+    public void ГолосКонфига_Опечатка_Предупреждение()
+    {
+        var logger = new WarningCounter();
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Yandex:SpeechKit:Voice"] = "zaharr",
+        }).Build();
+
+        var choice = new VoiceResolver(new PersonaVoiceLookup(_personas), config, logger).Resolve(null, "user-1");
+
+        choice.Voice.Should().Be(TtsVoiceCatalog.Default);
+        logger.Warnings.Should().Be(1);
+    }
+
     [Fact]
     public void ГолосПерсоны_Перебиваетконфиг()
     {
@@ -101,9 +150,34 @@ public class VoiceResolverTests : IDisposable
     public void НезнакомыйГолосПерсоны_Дефолт()
     {
         // Голос переименовали в SpeechKit или json правили руками — озвучка обязана жить
-        var persona = PersonaWith("user-1", new PersonaVoice { Voice = "зорро" });
+        var persona = PersonaWith("user-1", new PersonaVoice { Voice = "зорро", Role = "casual" });
 
-        Make("zahar").Resolve(persona.Id, "user-1").Voice.Should().Be("zahar");
+        // Без исключения и с голосом general: старый бинарь с голосом LiveTTS в personas.json
+        // попадает ровно сюда, и откат обязан звучать, а не падать
+        var resolver = Make("zahar");
+        var choice = resolver.Invoking(r => r.Resolve(persona.Id, "user-1")).Should().NotThrow().Subject;
+        choice.Voice.Should().Be("zahar");
+        choice.Role.Should().BeNull();
+        TtsVoiceCatalog.ModelFor(choice.Voice).Should().Be(TtsVoiceCatalog.General);
+    }
+
+    // --- LiveTTS: доступна всегда, голос персоны и инстанса звучат как есть ---
+
+    [Fact]
+    public void LiveTts_ГолосИАмплуаПерсоны()
+    {
+        var persona = PersonaWith("user-1", new PersonaVoice { Voice = "sofia", Role = "casual", Speed = 1.3 });
+
+        var choice = Make("zahar").Resolve(persona.Id, "user-1");
+
+        // Темп остаётся в VoiceChoice — выкидывает его BuildPayload, единая точка правила
+        choice.Should().BeEquivalentTo(new VoiceChoice("sofia", "casual", 1.3));
+    }
+
+    [Fact]
+    public void LiveTts_ГолосИнстансаВКонфиге_Звучит()
+    {
+        Make("sofia").Resolve(null, "user-1").Voice.Should().Be("sofia");
     }
 
     [Fact]

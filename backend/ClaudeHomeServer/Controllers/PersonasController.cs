@@ -1399,27 +1399,60 @@ public class PersonasController(
     // Каталог возможных целей привязки для пикера фронта: type = project | knowledge |
     // notes | tool | skill; для notes с ?source= — папки внутри источника; для узкого пикера
     // ProjectPersonas — personasInProject?source={projectId} (персоны команды проекта).
+    // W3-B5b (разрез §3.1 строка «GET /binding-targets»; И-2, И-4): с ?personaId= каталог
+    // строится для этой персоны и под её ключом-арендатором (для своей персоны или без
+    // personaId — вызывающий сам, как раньше). Чужая проектная персона (вызывающий — участник
+    // её проекта) — только цели этого проекта: каждый элемент каталога проходит тот же
+    // NonOwnerBindingEditDenied, что запись привязки (И-4): личные цели владельца и mcp/плагин-
+    // цели в выдачу редактору не попадают. Чужая глобальная/сферная персона или посторонний —
+    // 404 (И-3, существование не раскрываем).
     [HttpGet("binding-targets")]
     public async Task<ActionResult> BindingTargets([FromQuery] string? type, [FromQuery] string? source,
         [FromQuery] string? personaId)
     {
+        // Цель каталога — через единую точку резолва (ResolvePersona, И-1): проектная персона
+        // резолвится к арендатору её проекта, чужие глобальная/сферная — не видны вовсе.
+        RequestScope? scope = null;
+        Persona? targetPersona = null;
+        if (!string.IsNullOrWhiteSpace(personaId))
+        {
+            scope = _access?.ResolvePersona(UserId, personaId, ProjectRight.Read);
+            if (scope is null) return NotFound();
+            targetPersona = _personas.Get(personaId, scope.TenantOwnerId);
+            if (targetPersona is null) return NotFound();
+        }
+        // Ключ каталога — арендатор: для своей персоны или без personaId он совпадает с вызывающим.
+        var tenant = scope?.TenantOwnerId ?? UserId;
+        // Сужение — только не-владельцу чужой персоны; владелец своей — без сужения (И-4).
+        var narrow = scope is not null && scope.Role != ProjectRole.Owner;
+        // Допустимость цели каталога — тот же метод И-4, что у записи привязки: проба никуда
+        // не пишется, она только решает, отдавать ли элемент.
+        bool TargetAllowed(PersonaBindingType probeType, string probeTarget) =>
+            !narrow || _bindings.NonOwnerBindingEditDenied(scope!.Role, targetPersona!.ProjectId,
+                new PersonaBinding { Type = probeType, Target = probeTarget }) is null;
+
         switch (type?.Trim().ToLowerInvariant())
         {
             case "project":
-                return Ok(_projects.GetByOwner(UserId)
+                return Ok(_projects.GetByOwner(tenant)
+                    .Where(p => TargetAllowed(PersonaBindingType.Project, p.Id))
                     .Select(p => new { id = p.Id, label = p.Name, hint = p.RootPath, meta = (string?)null }));
 
             case "personasinproject" when !string.IsNullOrWhiteSpace(source):
                 // Второй уровень пикера ProjectPersonas: команда конкретного (чужого) проекта —
-                // сужение привязки до одной персоны вместо всей команды.
-                return Ok(_personas.GetByOwner(UserId)
+                // сужение привязки до одной персоны вместо всей команды. Не-владельцу — только
+                // команда ЭТОГО проекта (цель ProjectPersonas = этот projectId, И-4).
+                return Ok(_personas.GetByOwner(tenant)
                     .Where(p => PersonaZone.IsProjectTeam(p, source))
+                    .Where(p => TargetAllowed(PersonaBindingType.ProjectPersonas, source))
                     .Select(p => new { id = p.Id, label = PersonaManager.PersonaLabel(p), hint = p.Description, meta = source }));
 
             case "knowledge":
                 // Все базы знаний Dify, доступные пользователю (его проекты/заметки + датасеты
                 // без префикса-владельца или с его префиксом); чужие пользователи скрыты.
-                return Ok((await _bindings.KnowledgeTargetsAsync(UserId))
+                // Не-владельцу чужой персоны — только датасет этого проекта (тот же метод).
+                return Ok((await _bindings.KnowledgeTargetsAsync(tenant))
+                    .Where(d => TargetAllowed(PersonaBindingType.Knowledge, d.Id))
                     .Select(d => new
                     {
                         id = d.Id,
@@ -1430,9 +1463,12 @@ public class PersonasController(
 
             case "notes" when !string.IsNullOrWhiteSpace(source):
                 {
-                    // Папки источника — из путей его заметок (все промежуточные уровни)
+                    // Папки источника — из путей его заметок (все промежуточные уровни).
+                    // Не-владельцу чужой персоны папки отдаются только для источника ЭТОГО
+                    // проекта: чужой источник (личный vault, другой проект) закрыт целиком.
+                    if (!TargetAllowed(PersonaBindingType.Notes, source)) return Ok(new object[0]);
                     var folders = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var s in _notes?.GetSummaries(UserId, source, null) ?? [])
+                    foreach (var s in _notes?.GetSummaries(tenant, source, null) ?? [])
                     {
                         var dir = System.IO.Path.GetDirectoryName(s.Path)?.Replace('\\', '/');
                         while (!string.IsNullOrEmpty(dir))
@@ -1445,25 +1481,22 @@ public class PersonasController(
                 }
 
             case "notes":
-                return Ok((_notes?.GetSources(UserId) ?? [])
+                return Ok((_notes?.GetSources(tenant) ?? [])
+                    .Where(s => TargetAllowed(PersonaBindingType.Notes, s.Key))
                     .Select(s => new { id = s.Key, label = s.Label, hint = (string?)null, meta = (string?)null }));
 
             case "tool":
                 {
-                    Persona? persona = null;
-                    if (!string.IsNullOrWhiteSpace(personaId))
-                    {
-                        persona = _personas.Get(personaId, UserId);
-                        if (persona is null) return NotFound();
-                    }
-
-                    // Каталог владельца: статические ключи плюс серверы его личного MCP-реестра
-                    return Ok(_bindings.ToolCatalogFor(UserId)
+                    // Каталог владельца персоны (не-владельцу чужой персоны — без mcp:*: это
+                    // право Configure, тот же метод И-4): статические ключи плюс серверы
+                    // личного MCP-реестра арендатора.
+                    return Ok(_bindings.ToolCatalogFor(tenant)
+                        .Where(kv => TargetAllowed(PersonaBindingType.Tool, kv.Key))
                         .Select(kv =>
                         {
-                            if (persona is null)
+                            if (targetPersona is null)
                                 return (object)new { id = kv.Key, label = kv.Value.Label, hint = kv.Value.Hint, meta = (string?)null };
-                            var (enabled, origin) = _bindings.GetToolDefaultState(UserId, persona, kv.Key);
+                            var (enabled, origin) = _bindings.GetToolDefaultState(tenant, targetPersona, kv.Key);
                             return (object)new
                             {
                                 id = kv.Key,
@@ -1477,7 +1510,10 @@ public class PersonasController(
                 }
 
             case "skill":
+                // Глобальные скиллы — общая цель (без «plugin:»); плагин-цели владельца
+                // не-владельцу закрыты (право Configure) — здесь их и так нет.
                 return Ok(_skills.GetGlobalSkills()
+                    .Where(s => TargetAllowed(PersonaBindingType.Skill, s.Name))
                     .Select(s => new { id = s.Name, label = s.Name, hint = s.Description, meta = (string?)null }));
 
             default:
@@ -1586,12 +1622,16 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<ActionResult> SuggestBindings(string id)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B5b (разрез §3.1 строка «POST {id}/bindings/suggest»; И-2, И-4): ключ — арендатора;
+        // кандидаты для не-владельца сужены тем же NonOwnerBindingEditDenied до ответа.
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
 
         try
         {
-            var candidates = await _crud.SuggestBindingsAsync(UserId, persona, ct: HttpContext.RequestAborted);
+            var candidates = await _crud.SuggestBindingsAsync(scope.TenantOwnerId, persona,
+                callerRole: scope.Role, projectId: persona.ProjectId, ct: HttpContext.RequestAborted);
             return Ok(new { candidates });
         }
         catch (Exception ex)
@@ -1607,15 +1647,18 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<ActionResult> GenerateBindings(string id, [FromBody] GenerateBindingsRequest req)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B5b (та же строка §3.1; И-2, И-4): ключ — арендатора; сужение кандидатов — тем же
+        // методом до ответа (тот же путь обработки, что у suggest).
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Prompt))
             return BadRequest(new { error = "Опишите, какая привязка нужна персоне" });
 
         try
         {
-            var candidates = await _crud.SuggestBindingsAsync(UserId, persona, req.Prompt.Trim(),
-                ct: HttpContext.RequestAborted);
+            var candidates = await _crud.SuggestBindingsAsync(scope.TenantOwnerId, persona, req.Prompt.Trim(),
+                callerRole: scope.Role, projectId: persona.ProjectId, ct: HttpContext.RequestAborted);
             return Ok(new { candidates });
         }
         catch (Exception ex)
@@ -1635,14 +1678,18 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<ActionResult> ApplyDefaultBindings(string id)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B5b (та же строка §3.1; И-2, И-4): ключ — арендатора; типовые цели материализуются
+        // только разрешённые вызывающему — сужение тем же методом ДО записи (личных целей
+        // владельца и mcp/плагин-целей участник персоне не добавляет).
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         if (persona.Specialty == PersonaSpecialty.None)
             return BadRequest(new { error = "У персоны не задана специальность — типовых умений роли нет" });
         try
         {
-            var (updated, applied) = await _crud.MaterializeDefaultBindingsAsync(UserId, persona,
-                HttpContext.RequestAborted);
+            var (updated, applied) = await _crud.MaterializeDefaultBindingsAsync(scope.TenantOwnerId, persona,
+                scope.Role, persona.ProjectId, HttpContext.RequestAborted);
             return Ok(new { persona = updated, applied });
         }
         catch (Exception ex)

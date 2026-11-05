@@ -151,7 +151,7 @@ public sealed class PersonasCrudService(
         var (withDefaults, defaultsApplied) = (persona, 0);
         try
         {
-            (withDefaults, defaultsApplied) = await MaterializeDefaultBindingsAsync(userId, persona, ct);
+            (withDefaults, defaultsApplied) = await MaterializeDefaultBindingsAsync(userId, persona, ct: ct);
         }
         catch (Exception ex)
         {
@@ -755,8 +755,14 @@ public sealed class PersonasCrudService(
     // наружу: вызывающий сам решает семантику — создание персоны глотает его (best-effort),
     // а кнопка «Применить типовые» отдаёт ошибку, иначе её ветка «Не удалось применить»
     // недостижима (до записи привязок сбой ничего не меняет).
+    // callerRole/projectId — сужение целей для не-владельца общего проекта (W3-B5b, разрез
+    // §3.1 строка «apply-defaults», И-4): типовой профиль материализуется только в цели,
+    // разрешённые вызывающему (тот же NonOwnerBindingEditDenied, что у записи привязки);
+    // личных целей владельца и mcp/плагин-целей участник персоне не добавляет. Роль по
+    // умолчанию — Owner: создание и MCP-тулсет действуют в пространстве владельца, сужения нет.
     public async Task<(Persona Persona, int Applied)> MaterializeDefaultBindingsAsync(string userId,
-        Persona persona, CancellationToken ct = default)
+        Persona persona, ProjectRole callerRole = ProjectRole.Owner, string? projectId = null,
+        CancellationToken ct = default)
     {
         if (persona.Specialty == PersonaSpecialty.None) return (persona, 0);
         var profile = specialtySettings.EffectiveDefaultBindings(userId, persona.Specialty);
@@ -775,6 +781,9 @@ public sealed class PersonasCrudService(
                 Condition = entry.Condition,
                 Mode = entry.Mode,
             };
+            // W3-B5b: плагин-скилл владельца — цель его личного пакета (право Configure):
+            // не-владелец её не материализует.
+            if (bindings.NonOwnerBindingEditDenied(callerRole, projectId, binding) is not null) continue;
             if (await bindings.ValidateAsync(userId, binding, accepted, persona) is not null) continue;
             accepted.Add(binding);
             added.Add(binding);
@@ -782,7 +791,8 @@ public sealed class PersonasCrudService(
 
         var aiEntries = profile.Where(e => e.Type != PersonaBindingType.Skill).ToList();
         if (aiEntries.Count > 0)
-            added.AddRange(await SuggestBindingsAsync(userId, persona, profile: aiEntries, acceptedSeed: accepted, ct: ct));
+            added.AddRange(await SuggestBindingsAsync(userId, persona, profile: aiEntries, acceptedSeed: accepted,
+                callerRole: callerRole, projectId: projectId, ct: ct));
 
         if (added.Count > 0)
             persona = personas.UpdateBindings(persona.Id, userId,
@@ -797,9 +807,16 @@ public sealed class PersonasCrudService(
     // профиля (по одному на запись), условие и режим подставляются из профиля сервером.
     // acceptedSeed — уже подготовленные к добавлению привязки (например, скиллы профиля):
     // валидация дубликатов должна видеть их рядом с текущими привязками персоны.
+    // callerRole/projectId — сужение кандидатов для не-владельца общего проекта (W3-B5b,
+    // разрез §3.1 строка «suggest/generate», И-4): кандидат отбрасывается тем же
+    // NonOwnerBindingEditDenied ДО валидации и до ответа — праву отказа не мешает ни
+    // валидность цели, ни её отсутствие в каталоге. Роль по умолчанию — Owner: авто-подбор
+    // при создании и MCP-тулсет действуют в пространстве владельца, сужения нет.
     public async Task<List<PersonaBinding>> SuggestBindingsAsync(string userId, Persona persona,
         string? userPrompt = null, IReadOnlyList<SpecialtyDefaultBinding>? profile = null,
-        List<PersonaBinding>? acceptedSeed = null, CancellationToken ct = default)
+        List<PersonaBinding>? acceptedSeed = null,
+        ProjectRole callerRole = ProjectRole.Owner, string? projectId = null,
+        CancellationToken ct = default)
     {
         // Полный каталог знаний (датасеты проектов/заметок + прочие доступные Dify-датасеты) —
         // валидация всё равно принимает любой из KnowledgeTargetsAsync, каталог промпта не должен быть уже
@@ -835,6 +852,9 @@ public sealed class PersonasCrudService(
                 var (binding, _) = ParseBinding(new PersonaBindingRequest(
                     r.Type ?? "", r.Target ?? "", r.Path, "", "auto"));
                 if (binding is null) continue;
+                // W3-B5b: чужая цель отбрана по праву до валидации и до занятия слота
+                // (тот же метод И-4) — слот остаётся свободным для разрешённой цели.
+                if (bindings.NonOwnerBindingEditDenied(callerRole, projectId, binding) is not null) continue;
                 var index = -1;
                 for (var i = 0; i < slots.Count; i++)
                     if (!slots[i].Used && slots[i].Entry.Type == binding.Type) { index = i; break; }
@@ -855,6 +875,9 @@ public sealed class PersonasCrudService(
             var (binding, _) = ParseBinding(new PersonaBindingRequest(
                 r.Type ?? "", r.Target ?? "", r.Path, r.Condition, r.Mode ?? "auto"));
             if (binding is null) continue;
+            // W3-B5b: сужение кандидатов не-владельца — тот же NonOwnerBindingEditDenied
+            // до валидации и до ответа (разрез §3.1, И-4).
+            if (bindings.NonOwnerBindingEditDenied(callerRole, projectId, binding) is not null) continue;
             var err = await bindings.ValidateAsync(userId, binding, accepted, persona);
             if (err is not null) continue;
             accepted.Add(binding);

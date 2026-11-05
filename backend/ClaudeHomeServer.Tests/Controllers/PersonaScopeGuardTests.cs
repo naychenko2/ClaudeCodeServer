@@ -193,11 +193,14 @@ public class PersonaScopeGuardTests
         // UpdateBinding/DeleteBinding больше нет, строки сняты. Их ValidateAsync/UpdateBindings
         // паттерн §5 п.2 не видит (_bindings./_personas.UpdateBindings вне CallRe) — смысл шага
         // держат строки матрицы: вернуть ключ вызывающего в любой из трёх — они красные.
-        // W3-B5b — подбор привязок и каталог целей (§3.1 «suggest/generate/apply-defaults», «binding-targets»)
-        ("PersonasController.cs", "PersonasController.BindingTargets", "W3-B5b"),
-        ("PersonasController.cs", "PersonasController.SuggestBindings", "W3-B5b"),
-        ("PersonasController.cs", "PersonasController.GenerateBindings", "W3-B5b"),
-        ("PersonasController.cs", "PersonasController.ApplyDefaultBindings", "W3-B5b"),
+        // W3-B5b закрыт (подбор привязок и каталог целей — под ключом арендатора, сужение
+        // кандидатов тем же NonOwnerBindingEditDenied, SharedProjectPersonaBindingsTests):
+        // инлайновых вызовов с ключом-вызывающим в BindingTargets/SuggestBindings/
+        // GenerateBindings/ApplyDefaultBindings больше нет, строки сняты. Сужение каталога
+        // и кандидатов идёт через _bindings.NonOwnerBindingEditDenied / ResolvePersona —
+        // вне CallRe; смысл шага держат строки «только цели этого проекта» и «подбор/
+        // генерация/типовые»: убрать фильтр в каталоге или сужение в PersonasCrudService —
+        // они красные.
         // W3-B4b закрыт (руководитель по ключу арендатора, явная personaId через ResolvePersona,
         // SharedProjectPersonaSessionTests): инлайновых вызовов с ключом-вызывающим в Create больше нет.
         // W3-B3a закрыт (создание проектной персоны: право по проекту из тела, ключ и OwnerId новой
@@ -264,10 +267,10 @@ public class PersonaScopeGuardTests
         // инлайновые вызовы на ResolvePersona и он законно падает (W3-B4b снял два места в
         // SessionsController.Create, W3-B2 — места списков, W3-B1c — 10 тел read-путей,
         // W3-B1d — 14 тел write-путей в PersonasController, W3-B3b — UploadAvatar/RecropAvatar,
-        // W3-B5a — AddBinding/UpdateBinding/DeleteBinding). 6 — по текущему составу с запасом
-        // (10: 4 оставшихся места в PersonasController — W3-B5b — и 6 вне него: 5 «личных»
-        // allow-list и TaskPersonaValidator — W3-B7): обнуление области всё ещё красное.
-        found.Should().BeGreaterThan(6, "сверка не должна быть вакуумной: базовый состав инлайновых вызовов — десятки");
+        // W3-B5a — AddBinding/UpdateBinding/DeleteBinding, W3-B5b — BindingTargets/Suggest/
+        // Generate/ApplyDefault). 4 — по текущему составу с запасом (6: 5 «личных» allow-list
+        // и TaskPersonaValidator — W3-B7): обнуление области всё ещё красное.
+        found.Should().BeGreaterThan(4, "сверка не должна быть вакуумной: базовый состав инлайновых вызовов — десятки");
         offenders.Should().BeEmpty(
             "вызовы PersonaManager, ключованные вызывающим, допустимы только из «личных» мест и списка долга "
             + "(W3-B1b, разрез §5 п.2); новый вызов вне списков — через ResolvePersona");

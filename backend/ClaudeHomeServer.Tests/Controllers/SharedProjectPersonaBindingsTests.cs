@@ -49,6 +49,13 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// — под ключом арендатора и с сужением набора для не-владельца (хвост 1 того же возврата);
 /// MCP personas_bindings_set — под ключом владельца, без сужения.
 ///
+/// W3-B5b (та же строка §3.1 «GET /binding-targets», «POST {id}/bindings/suggest, /generate,
+/// /apply-defaults»; И-2, И-4): каталог целей и ИИ-подбор — под ключом арендатора; элемент
+/// каталога и кандидат подбора проходят тот же NonOwnerBindingEditDenied до ответа/записи:
+/// редактор не видит в выдаче и не получает от подбора ни одной личной цели владельца и ни
+/// одной mcp/плагин-цели. Без personaId или для своей персоны — как раньше; owner — без
+/// сужения (регрессии нет).
+///
 /// Мутации (проверяются на копиях дерева, scripts/mutation-copy.sh):
 /// - NonOwnerBindingEditDenied всегда возвращает null («сужение разрешает всё») — краснеют
 ///   «mcp-цель» (200/400 вместо 403), «личная цель» (200 вместо 400) и обе строки «личную
@@ -60,7 +67,14 @@ namespace ClaudeHomeServer.Tests.Controllers;
 ///   persona.Bindings!.ToList() вместо UpdateBinding/RemoveBinding) — краснеет
 ///   ParallelAddAndUpdateBinding_BothKept по числу tool-привязок;
 /// - вернуть SetBindings на ключ вызывающего или снять сужение полной замены — краснеет
-///   ПолнаяЗаменаПривязок_НеВладелецНеТрогаетЛичныеВладельца_ПроектныеМожет (404 вместо 403).
+///   ПолнаяЗаменаПривязок_НеВладелецНеТрогаетЛичныеВладельца_ПроектныеМожет (404 вместо 403);
+/// - W3-B5b: убрать фильтр TargetAllowed в BindingTargets — краснеет
+///   BindingTargets_РедакторЧужойПроектнойПерсоны_ТолькоЦелиЭтогоПроекта (редактор видит
+///   «personal» и чужие проекты);
+/// - W3-B5b: снять проверку NonOwnerBindingEditDenied в SuggestBindingsAsync /
+///   MaterializeDefaultBindingsAsync (или не передать callerRole из контроллера) — краснеют
+///   ПодборИГенерацияПривязок_РедакторуТолькоРазрешённыеЦели и
+///   ТиповыеУмения_РедакторНеДобавляетЛичныхЦелейВладельца (applied=1 вместо 0).
 /// </summary>
 [Trait("Category", "Host")]
 public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicationFactory>
@@ -91,6 +105,18 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
 
     private sealed class NoLlm : ICheapTextRunner
     {
+        // W3-B5b: маркер «живого» подбора. Промпты suggest/generate/материализации несут имя
+        // персоны («Персона: {role} ({name})») — тесты W3-B5b ставят маркер в имя, остальные
+        // ответы стаба остаются «[]» (прежнее поведение всех прочих тестов класса).
+        public const string Marker = "ТестовыйПодбор";
+
+        // Фиксированный набор кандидатов: личный vault владельца, чужая база знаний, mcp-сервер
+        // владельца и ключ статического каталога. Первые три — чужие или невалидные цели,
+        // «web» — разрешённая: по ней видно, что конвейер живой, по прочим — что сужение работает.
+        private const string CandidatesJson =
+            """[{"type":"notes","target":"personal"},{"type":"knowledge","target":"dataset-тест"},""" +
+            """{"type":"tool","target":"mcp:тест"},{"type":"tool","target":"web"}]""";
+
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => false;
         public bool HasRoute(string actionKey) => false;
@@ -98,7 +124,7 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
-            => Task.FromResult("[]");
+            => Task.FromResult(prompt.Contains(Marker) ? CandidatesJson : "[]");
 
         public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
             object? jsonFormat = null, CancellationToken ct = default)
@@ -141,8 +167,10 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
     /// <summary>Проект владельца с проектной персоной и редактором-участником роли role
     /// (Owner/Outsider — участников нет). Под ключом владельца — личный источник заметок
     /// ("personal") и проект-цель: они нужны, чтобы ValidateAsync(арендатор) пропускал обе
-    /// цели и отказ различался сужением, а не «цель не найдена».</summary>
-    private async Task<(string ProjectId, string PersonaId)> ArrangeAsync(string role)
+    /// цели и отказ различался сужением, а не «цель не найдена».
+    /// nameSuffix — добавка к имени персоны (W3-B5b: маркер стаба — промпты подбора несут
+    /// имя персоны, по нему стаб отвечает фиксированным набором кандидатов).</summary>
+    private async Task<(string ProjectId, string PersonaId)> ArrangeAsync(string role, string? nameSuffix = null)
     {
         var owner = OwnerClient();
         await SetFlagAsync(owner);
@@ -164,7 +192,7 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
         Notes.Create(TenantId, new CreateNoteRequest(Title: "Личная " + RunId(), Content: "тело"));
 
         var persona = await owner.PostAsJsonAsync("/api/personas",
-            new { name = "Привязываемая" + Guid.NewGuid().ToString("N")[..6], scope = "project", projectId });
+            new { name = "Привязываемая" + Guid.NewGuid().ToString("N")[..6] + nameSuffix, scope = "project", projectId });
         persona.EnsureSuccessStatusCode();
         var personaId = IdOf(await persona.Content.ReadAsStringAsync());
 
@@ -752,11 +780,12 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
         persona.Bindings!.Any(b => b.Target == "personal").Should().BeTrue("личная осталась");
     }
 
-    // ── Граница W3-B5b: LLM-путь подбора не затронут шагом и живёт под ключом арендатора ───────
+    // ── Граница W3-B5a: LLM-путь подбора не затронут шагом B5a и живёт под ключом ──────────────
     //
-    // SuggestBindings (ключ ещё UserId — строка долга W3-B5b) для владельца — персона
-    // находится под его ключом и путь доходит до сервиса (заглушка «[]» → candidates пуст,
-    // 200); читателя отказывает [ProjectScope] до любой работы. Сужение этого пути не касается.
+    // С момента W3-B5b ключ этого пути — тоже арендатора и сужение кандидатов для
+    // не-владельца включено (тесты ниже); здесь остаётся граница B5a: для владельца
+    // (Role=Owner) сужения нет и путь доходит до сервиса (заглушка «[]» → candidates пуст,
+    // 200); читателя отказывает [ProjectScope] до любой работы.
 
     [Fact]
     public async Task ПодборПривязок_НеЗатронутСужением_Читателю403ДоРаботы()
@@ -789,5 +818,174 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
         postStatus.Should().Be(404, "404, а не 403: существование персоны не раскрываем");
 
         HasBinding(Personas.Get(personaId, TenantId)!, "tool", "web").Should().BeFalse("отказ — без записи");
+    }
+
+    // ── W3-B5b: binding-targets чужой проектной персоны — только цели этого проекта ───────────────
+    //
+    // Каталог строится под ключом арендатора и каждый его элемент проходит тот же
+    // NonOwnerBindingEditDenied, что запись привязки: Notes — только источник этого проекта
+    // (личной «personal» и чужих проектов владельца не видно), Project — только этот проект,
+    // Tool — статический каталог без mcp:* (это право Configure), Knowledge — только датасет
+    // проекта (в тестовом хосте датасета нет → пусто), Skill — глобальные без plugin:.
+    // Без personaId — своё пространство вызывающего, как раньше.
+    // Мутация: убрать фильтр TargetAllowed в BindingTargets — тест красный (редактор видит
+    // «personal» и чужой проект); тест владельца ниже при этом зелёный — сужение до него
+    // не доходит.
+
+    private static List<string> IdsOf(JsonElement doc) =>
+        doc.EnumerateArray().Select(i => i.GetProperty("id").GetString()!).ToList();
+
+    // Второй проект того же владельца: валидная цель ValidateAsync(арендатор) — и чужая для
+    // редактора. В его каталоге её быть не должно, в каталоге владельца — должна.
+    private async Task<string> CreateOwnerProjectAsync(string tag)
+    {
+        var dir = Directory.CreateDirectory(
+            Path.Combine(_factory.TempDir, tag + "_" + Guid.NewGuid().ToString("N")[..8])).FullName;
+        var created = await OwnerClient().PostAsJsonAsync("/api/projects",
+            new { name = "ПроектКаталога" + Guid.NewGuid().ToString("N")[..6], rootPath = dir });
+        created.EnsureSuccessStatusCode();
+        return IdOf(await created.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task BindingTargets_РедакторЧужойПроектнойПерсоны_ТолькоЦелиЭтогоПроекта()
+    {
+        var (projectId, personaId) = await ArrangeAsync(Editor);
+        var otherId = await CreateOwnerProjectAsync("pbt");
+
+        var notes = IdsOf(await BodyAsync(await SecondClient().GetAsync(
+            $"/api/personas/binding-targets?type=notes&personaId={personaId}")));
+        notes.Should().Contain(projectId, "цель этого проекта законна участнику (И-4)");
+        notes.Should().NotContain("personal", "личный vault владельца редактору не показывается");
+        notes.Should().NotContain(otherId, "другие проекты владельца редактору не показываются");
+
+        var projects = IdsOf(await BodyAsync(await SecondClient().GetAsync(
+            $"/api/personas/binding-targets?type=project&personaId={personaId}")));
+        projects.Should().BeEquivalentTo(new[] { projectId },
+            "каталог проектов редактора — только проект персоны");
+
+        var tools = IdsOf(await BodyAsync(await SecondClient().GetAsync(
+            $"/api/personas/binding-targets?type=tool&personaId={personaId}")));
+        tools.Should().Contain("web", "Tool без mcp: — разрешённая цель (матрица «Tool каталога»)");
+        tools.Should().NotContain(t => t.StartsWith("mcp:", StringComparison.OrdinalIgnoreCase),
+            "MCP-серверы живут в личном реестре владельца (право Configure)");
+
+        var knowledge = IdsOf(await BodyAsync(await SecondClient().GetAsync(
+            $"/api/personas/binding-targets?type=knowledge&personaId={personaId}")));
+        knowledge.Should().BeEmpty(
+            "датасета у проекта в тестовом хосте нет; личные базы владельца закрыты тем же методом");
+
+        var skills = IdsOf(await BodyAsync(await SecondClient().GetAsync(
+            $"/api/personas/binding-targets?type=skill&personaId={personaId}")));
+        skills.Should().NotContain(s => s.StartsWith("plugin:", StringComparison.OrdinalIgnoreCase),
+            "плагин-скиллы владельца не-владельцу закрыты (право Configure)");
+
+        // Без personaId — своё пространство вызывающего, как раньше: свой личный vault виден,
+        // личный проект владельца — нет.
+        var own = IdsOf(await BodyAsync(await SecondClient().GetAsync(
+            "/api/personas/binding-targets?type=notes")));
+        own.Should().Contain("personal", "без personaId каталог — свой, поведение не меняется");
+        own.Should().NotContain(otherId, "личный проект участнику не виден");
+    }
+
+    // ── W3-B5b: регрессии нет — владелец своей проектной персоне видит личные цели ───────────────
+
+    [Fact]
+    public async Task BindingTargets_ВладелецСвоейПроектнойПерсоне_ЛичныеЦелиНаМесте()
+    {
+        var (projectId, personaId) = await ArrangeAsync(Owner);
+        var otherId = await CreateOwnerProjectAsync("pbw");
+
+        var notes = IdsOf(await BodyAsync(await OwnerClient().GetAsync(
+            $"/api/personas/binding-targets?type=notes&personaId={personaId}")));
+        notes.Should().Contain("personal", "своей персоны владельца сужение не касается (И-4)");
+        notes.Should().Contain(projectId).And.Contain(otherId, "оба своих проекта — в своём каталоге");
+
+        var projects = IdsOf(await BodyAsync(await OwnerClient().GetAsync(
+            $"/api/personas/binding-targets?type=project&personaId={personaId}")));
+        projects.Should().Contain(projectId).And.Contain(otherId);
+    }
+
+    // ── W3-B5b: ИИ-подбор и генерация — редактору только разрешённые цели ────────────────────────
+    //
+    // Маркер «ТестовыйПодбор» в имени персоны включает стабу фиксированный набор кандидатов
+    // (промпты подбора несут имя персоны): личные заметки владельца, несуществующая база
+    // знаний, mcp-сервер, ключ статического каталога. Для редактора первые три отбиты
+    // сужением ДО ответа; «web» остаётся — конвейер живой, тест не вакуумный. Для владельца
+    // «personal» доходит до ответа (регрессии нет; mcp и knowledge у него отбиты валидацией —
+    // их нет в тестовом хосте, это не этот шаг). suggest и generate идут по одному пути
+    // обработки кандидатов — проверяются оба.
+    // Мутация: снять проверку NonOwnerBindingEditDenied в SuggestBindingsAsync — красный:
+    // редактор видит «notes|personal».
+
+    private static List<string> CandidateKeys(JsonElement body) =>
+        body.GetProperty("candidates").EnumerateArray()
+            .Select(c => c.GetProperty("type").GetString() + "|" + c.GetProperty("target").GetString())
+            .ToList();
+
+    [Fact]
+    public async Task ПодборИГенерацияПривязок_РедакторуТолькоРазрешённыеЦели()
+    {
+        var (_, personaId) = await ArrangeAsync(Editor, nameSuffix: NoLlm.Marker);
+
+        var suggest = await BodyAsync(await SecondClient().PostAsync(
+            $"/api/personas/{personaId}/bindings/suggest",
+            new StringContent("", Encoding.UTF8, "application/json")));
+        var suggestKeys = CandidateKeys(suggest);
+        suggestKeys.Should().Contain("tool|web", "разрешённый кандидат дошёл — подбор живой");
+        suggestKeys.Should().NotContain("notes|personal", "личную цель владельца редактору не отдают (И-4)");
+        suggestKeys.Should().NotContain("knowledge|dataset-тест", "чужая база знаний редактору не отдаётся");
+        suggestKeys.Should().NotContain("tool|mcp:тест", "mcp-сервер — право Configure, не-владельцу не отдаётся");
+
+        var generate = await BodyAsync(await SecondClient().PostAsJsonAsync(
+            $"/api/personas/{personaId}/bindings/generate",
+            new { prompt = NoLlm.Marker + " подбери что-нибудь полезное" }));
+        var generateKeys = CandidateKeys(generate);
+        generateKeys.Should().Contain("tool|web", "тот же путь под свободным запросом");
+        generateKeys.Should().NotContain("notes|personal").And.NotContain("tool|mcp:тест");
+
+        var ownerGenerate = await BodyAsync(await OwnerClient().PostAsJsonAsync(
+            $"/api/personas/{personaId}/bindings/generate",
+            new { prompt = NoLlm.Marker + " подбери что-нибудь полезное" }));
+        var ownerKeys = CandidateKeys(ownerGenerate);
+        ownerKeys.Should().Contain("notes|personal", "своей персоны владельца сужение не касается (И-4)");
+        ownerKeys.Should().Contain("tool|web");
+    }
+
+    // ── W3-B5b: «Применить типовые» — редактор не привязывает чужую персону к личным целям ────────
+    //
+    // Кодовый профиль библиотекаря (Knowledge+Notes) — обе цели подбирает AI. По маркеру в
+    // имени стаб отдаёт «personal»-заметки и несуществующую базу знаний. Для редактора обе
+    // чужие: applied=0, стор нетронут. Владелец тем же вызовом добавляет «personal» —
+    // кандидаты были достижимы тем же конвейером, тест не вакуумный.
+    // Мутация: снять проверку NonOwnerBindingEditDenied в SuggestBindingsAsync /
+    // MaterializeDefaultBindingsAsync — красный: applied=1 вместо 0 и личная привязка в сторе.
+
+    [Fact]
+    public async Task ТиповыеУмения_РедакторНеДобавляетЛичныхЦелейВладельца()
+    {
+        var (_, personaId) = await ArrangeAsync(Editor, nameSuffix: NoLlm.Marker);
+        // Специальность — поле владельца (W3-B3b, owner_settings). Правка специальности профиля не
+        // материализует (точки материализации — создание персоны и кнопка «Применить типовые»):
+        // здесь профиль материализует только сам вызов кнопки.
+        (await OwnerClient().PutAsJsonAsync($"/api/personas/{personaId}", new { specialty = "librarian" }))
+            .EnsureSuccessStatusCode();
+
+        var (status, _, body) = await SendAsync(SecondClient(), HttpMethod.Post,
+            $"/api/personas/{personaId}/bindings/apply-defaults");
+        (status >= 200 && status < 300).Should().BeTrue($"сужение apply-defaults — не статусный отказ: {body}");
+        JsonSerializer.Deserialize<JsonElement>(body).GetProperty("applied").GetInt32()
+            .Should().Be(0, "ни одна цель профиля не законна редактору: ничего не записано");
+        var persona = Personas.Get(personaId, TenantId)!;
+        (persona.Bindings?.Count ?? 0).Should().Be(0, "отказанный подбор не оставил следа в сторе");
+        HasBinding(persona, "notes", "personal").Should().BeFalse("привязки к личной цели владельца нет (И-4)");
+
+        var (ownerStatus, _, ownerBody) = await SendAsync(OwnerClient(), HttpMethod.Post,
+            $"/api/personas/{personaId}/bindings/apply-defaults");
+        (ownerStatus >= 200 && ownerStatus < 300).Should().BeTrue();
+        JsonSerializer.Deserialize<JsonElement>(ownerBody).GetProperty("applied").GetInt32()
+            .Should().Be(1, "своей персоны владельца сужения нет: «personal» записана");
+        HasBinding(Personas.Get(personaId, TenantId)!, "notes", "personal").Should().BeTrue(
+            "тот же конвейер без сужения доносит личную цель — различие только в сужении");
     }
 }

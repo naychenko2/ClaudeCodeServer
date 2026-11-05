@@ -180,7 +180,14 @@ backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 # PUT {id}/bindings) переведена на scope.TenantOwnerId + persona.ProjectId (сужение набора
 # для не-владельца — NonOwnerBindingEditDenied внутри SetBindingsAsync). PUT/DELETE одной
 # привязки зовут UpdateBinding/RemoveBinding с ключом арендатора — новых мест не добавили.
-backend/ClaudeHomeServer/Controllers/PersonasController.cs|41
+# W3-B5b (каталог целей и ИИ-подбор, разрез §3.1 строки «GET /binding-targets»,
+# «suggest/generate/apply-defaults», И-2): 41→28 — тринадцать мест переведены на ключ
+# арендатора: BindingTargets (GetByOwner/KnowledgeTargetsAsync/GetSummaries/GetSources/
+# ToolCatalogFor/GetToolDefaultState/резолв персоны — через ResolvePersona с Read, он и есть
+# новый оставленный вызов с id вызывающего: резолв, не ключ хранилищ) и Suggest/Generate/
+# ApplyDefault (резолв персоны + вызовы _crud.* с TenantOwnerId). Сужение кандидатов —
+# NonOwnerBindingEditDenied в сервисе, id вызывающего там не появляется.
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|28
 backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6

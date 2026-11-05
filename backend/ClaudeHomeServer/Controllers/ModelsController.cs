@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Tasks;
 using Microsoft.AspNetCore.Authorization;
@@ -17,7 +18,10 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
     SpecialtySettingsStore specialty, UserStore users,
     AppSettingsService appSettings, LocalActionOverridesStore localActions,
     SessionManager sessions, TaskManager tasks,
-    ClaudeHomeServer.Services.Llm.Claude.ClaudeCliUpdateWatcher cliUpdates) : ControllerBase
+    ClaudeHomeServer.Services.Llm.Claude.ClaudeCliUpdateWatcher cliUpdates,
+    // W3-B7: допуск персоны превью — одна точка «персона → область» (ResolvePersona);
+    // null — fail-closed: чужая/несуществующая персона не резолвится (404)
+    IProjectAccess? access = null) : ControllerBase
 {
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
     private bool IsAdmin => User.IsInRole("admin");
@@ -130,7 +134,18 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
             return Ok(PreviewResponse(td with { Chain = chain }, frozen: null, chip: null));
         }
 
-        var persona = !string.IsNullOrEmpty(personaId) ? personas.Get(personaId, ownerId) : null;
+        // Персона превью (W3-B7, разрез §3.2 «ModelsController»): допуск — ResolvePersona по
+        // праву Read (И-1), ключ резолва модели — её арендатор (И-2): для проектной персоны
+        // общего проекта это владелец проекта (его слоты и его деньги), а не вызывающий.
+        // Несуществующая и чужая персона — 404: раньше чужая personaId молча давала превью
+        // места, и участник не мог посмотреть модель той персоны, чей ход он запускает.
+        var hasPersona = !string.IsNullOrEmpty(personaId);
+        var personaScope = hasPersona ? access?.ResolvePersona(ownerId, personaId, ProjectRight.Read) : null;
+        if (hasPersona && personaScope is null)
+            return NotFound(new { error = "Персона не найдена" });
+        var persona = personaScope is null ? null : personas.Get(personaId!, personaScope.TenantOwnerId);
+        // Ключ резолва — арендатор персоны; без персоны — прежний путь по вызывающему
+        var modelOwnerId = personaScope?.TenantOwnerId ?? ownerId;
 
         PersonaSpecialty spec = PersonaSpecialty.None;
         if (!string.IsNullOrWhiteSpace(specialty) && SpecialtyCatalog.TryGetByKey(specialty, out var entry))
@@ -138,7 +153,7 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
         else if (persona is not null) spec = persona.Specialty;
 
         ModelTier? overrideTier = ModelTiers.TryParse(tier, out var ot) ? ot : null;
-        var d = assignments.Preview(place, persona, spec, ownerId, overrideTier);
+        var d = assignments.Preview(place, persona, spec, modelOwnerId, overrideTier);
 
         // Контекст чата (C1): модель следующего хода существующего чата. Резолв — ровно
         // боевой (ClaudeSession.EffectiveTurnChain → ResolveChain(usageKey, session.Model)):

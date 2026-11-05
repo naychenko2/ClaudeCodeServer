@@ -12,7 +12,9 @@ import { act } from 'react';
 import { beforeAll, afterAll, beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { ChatCard, FeatureLabel, featureLabelFor } from './ChatCard';
 import { __test as featuresIndexTest } from '../lib/featuresIndex';
-import { setAllFlags } from '../lib/featureFlags';
+import { FLAGS, setAllFlags } from '../lib/featureFlags';
+import { registerSubsystem } from '../lib/subsystems/registryCore';
+import type { ChatWikiMenuCtx } from '../lib/subsystems/registryCore';
 import { installFakeDom, uninstallFakeDom, mount, findNodeByAttr, textNodes, reactProps } from './chat/__tests__/fakeDom';
 import type { FeatureIndexFeature, FeatureRailKey, FeatureRailSegment } from '../types/featureIndex';
 import type { Session } from '../types';
@@ -45,6 +47,15 @@ vi.mock('../lib/toast', () => ({ showToast: () => {} }));
 vi.mock('../lib/personas', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../lib/personas')>();
   return { ...orig, getPersonaById: () => undefined, usePersonasVersion: () => 0, ensurePersonasLoaded: () => Promise.resolve() };
+});
+
+// WM-4: стор «дерева вики» подменён контролируемым значением — тесту нужно состояние
+// initialized без сети. useWikiChatAvailable работает с этим стором НАСТОЯЩИЙ: тест проверяет
+// фактическую обвязку карточки (projectId, dossierDeniedReason, флаг), а не замокированный хук.
+const { mockWikiTree } = vi.hoisted(() => ({ mockWikiTree: { value: null as unknown } }));
+vi.mock('../lib/wiki', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../lib/wiki')>();
+  return { ...orig, useWikiTree: () => mockWikiTree.value, ensureWikiLoaded: async () => {} };
 });
 
 // Фикстура: 7 сегментов (design не включена — необязательный этап); по умолчанию «идёт» (prod active run).
@@ -402,5 +413,201 @@ describe('M4: карточка — role="button" + клавиатурная ак
     const nested = { key: 'Enter', target: {}, currentTarget: card, preventDefault: () => {} } as unknown as Parameters<typeof p.onKeyDown>[0];
     act(() => { (p.onKeyDown as (e: unknown) => void)(nested); });
     expect(onSelect, 'Enter на вложенной кнопке вызвал onSelect (M4: target ≠ currentTarget)').not.toHaveBeenCalled();
+  });
+});
+
+// === WM-4: пункт «Вики» в меню карточки ===
+// Действие «Вики» в карточке: доступность считает НАСТОЯЩИЙ useWikiChatAvailable (флаг,
+// проект, initialized-дерево, гейт владельца — через dossierDeniedReason), подменю — вклад
+// «Заметок» слота chat-header-action. Тест регистрирует свой вклад-шпион: проверяется
+// обвязка карточки — «недоступно → пункта нет нигде», клик по строке → закрытие меню карточки
+// и открытие вклада по якорю headless, вклад живёт только пока открыт, onClose снимает его.
+// Само меню (пункты, опрос, итоги) тестируется в WikiChatActions.test.ts.
+describe('WM-4: пункт «Вики» в меню карточки', () => {
+  type FNodeT = Parameters<typeof findNodeByAttr>[0];
+
+  // Проектный чат с сообщениями — базовый случай, где «Вики» доступно.
+  const session = (over: Partial<Session> = {}): Session => ({
+    id: 'chat-1', projectId: 'p1', mode: 'auto', status: 'finished', messageCount: 5,
+    createdAt: '2026-10-18T10:00:00Z', updatedAt: '2026-10-18T10:00:00Z',
+    origin: 'manual', ...over,
+  } as Session);
+
+  // Тестовый вклад-шпион: пишет каждый ctx рендера в wikiCtx; тело — маркер экземпляра и
+  // кнопка, зовущая ctx.onClose, — как это делает пункт реального меню после действия.
+  const wikiCtx: ChatWikiMenuCtx[] = [];
+  const registerTestWikiMenu = () => registerSubsystem({
+    key: 'test-wiki-menu', title: 'тестовый вклад', order: 999, core: true,
+    slots: { 'chat-header-action': [{
+      name: 'wiki-chat-menu',
+      render: (ctx: ChatWikiMenuCtx) => {
+        wikiCtx.push(ctx);
+        return createElement('span', { 'data-testid': 'test-wiki-menu' },
+          createElement('button', { 'data-testid': 'test-wiki-close', onClick: () => ctx.onClose?.() }, 'закрыть'));
+      },
+    }] },
+  });
+  // Повторная регистрация того же key заменяет манифест: без slots вклада нет
+  const unregisterTestWikiMenu = () => registerSubsystem({ key: 'test-wiki-menu', title: 'тестовый вклад', order: 999, core: true });
+
+  beforeAll(() => { installFakeDom(); });
+  afterAll(() => { uninstallFakeDom(); });
+  // Карточки прошлых случаев остаются смонтированными, а их открытые меню и состояние
+  // wikiOpen живут на общих сторах: смена флага/реестра в следующем случае перерисовала бы
+  // их и добавила строки/вызовы в чужую проверку. Каждый случай снимает свои карточки.
+  const roots: { unmount: () => void }[] = [];
+  const unmountAll = () => { for (const r of roots) act(() => r.unmount()); roots.length = 0; };
+  beforeEach(() => {
+    mockWikiTree.value = { initialized: true };
+    registerTestWikiMenu();
+  });
+  afterEach(() => {
+    unmountAll();
+    unregisterTestWikiMenu();
+    mockWikiTree.value = null;
+    wikiCtx.length = 0;
+    delete (globalThis as { localStorage?: unknown }).localStorage;
+  });
+
+  // hovered+isActive — действия карточки видны при любом раскладе useCanHover
+  const mountCard = (over: Partial<Session> = {}, cardProps: Record<string, unknown> = {}) => {
+    const { root, container } = mount(createElement(ChatCard, {
+      session: session(over), isActive: false, hovered: true, isMobile: false, online: true,
+      onSelect: () => {}, onHover: () => {}, onDelete: () => {}, ...cardProps,
+    }));
+    roots.push(root);
+    return container;
+  };
+
+  // Меню карточки открываем кнопкой «⋮» — тот же обработчик, что в продукте
+  const openCardMenu = (c: FNodeT) => {
+    const btn = findNodeByAttr(c, 'title', 'Действия с чатом');
+    expect(btn, 'кнопка «⋮» не найдена').not.toBeNull();
+    act(() => { (reactProps(btn!)!.onClick as (e: unknown) => void)({ stopPropagation: () => {}, currentTarget: btn }); });
+  };
+  // Меню карточки — портал в body (ui/Menu, anchor-режим): строки ищем там
+  const menuRows = (label: string): FNodeT[] => {
+    const out: FNodeT[] = [];
+    const walk = (x: FNodeT) => {
+      if (x.nodeType === 1 && x.nodeName === 'BUTTON' && textNodes(x).join('').trim() === label) { out.push(x); return; }
+      for (const c of x.childNodes) walk(c);
+    };
+    walk((globalThis as { document: { body: FNodeT } }).document.body);
+    return out;
+  };
+  const clickRow = (row: FNodeT | undefined, what: string) => {
+    expect(row, what).not.toBeNull();
+    act(() => { (reactProps(row!)!.onClick as (e: unknown) => void)({ stopPropagation: () => {} }); });
+  };
+  const countTestId = (root: FNodeT, testId: string): number => {
+    let n = 0;
+    const walk = (x: FNodeT) => {
+      if (x.nodeType === 1 && x.getAttribute('data-testid') === testId) n++;
+      for (const c of x.childNodes) walk(c);
+    };
+    walk(root);
+    return n;
+  };
+
+  it('проектный чат + флаг + заведённая вики: ровно 1 строка «Вики»; клик — меню карточки закрыто, вклад вызван 1 раз headless по якорю', () => {
+    setAllFlags({ [FLAGS.llmWiki]: true });
+    const c = mountCard();
+    openCardMenu(c);
+    const rows = menuRows('Вики');
+    expect(rows.length, 'строка «Вики» в меню карточки не одна').toBe(1);
+    // Доступное действие — рабочий пункт: не серый и не disabled
+    expect((reactProps(rows[0]) as { disabled?: boolean } | null)!.disabled, 'строка «Вики» disabled').toBeFalsy();
+    expect(wikiCtx.length, 'вклад смонтирован до клика по «Вики» (меню не должен жить заранее)').toBe(0);
+    clickRow(rows[0], 'строка «Вики» пропала');
+    // Меню карточки закрыто: «Удалить» — последняя его строка, её тоже нет
+    expect(menuRows('Удалить').length, 'меню карточки не закрылось при клике по «Вики»').toBe(0);
+    // Вклад вызван ровно один раз и по контракту
+    expect(wikiCtx.length, 'вклад вызван не один раз').toBe(1);
+    const ctx = wikiCtx[0];
+    expect(ctx.headless, 'headless не true (карточка не должна давать свой триггер)').toBe(true);
+    expect(ctx.open?.anchor ?? null, 'открыть по якорю — anchor не передан').not.toBeNull();
+    expect(ctx.open!.counter, 'counter не положительный').toBeGreaterThan(0);
+    expect(ctx.session.id).toBe('chat-1');
+    expect(ctx.hasMessages, 'hasMessages не отражает messageCount > 0').toBe(true);
+    expect(typeof ctx.onClose, 'onClose не передан').toBe('function');
+    // Ровно один экземпляр в разметке
+    expect(countTestId(c, 'test-wiki-menu'), 'экземпляров вклада не один').toBe(1);
+  });
+
+  it('чат без сообщений: строка «Вики» есть, hasMessages=false (гард пункта «Разобрать» — внутри меню)', () => {
+    setAllFlags({ [FLAGS.llmWiki]: true });
+    const c = mountCard({ messageCount: 0 });
+    openCardMenu(c);
+    clickRow(menuRows('Вики')[0], 'строки «Вики» нет у чата без сообщений');
+    expect(wikiCtx.length).toBe(1);
+    expect(wikiCtx[0].hasMessages, 'hasMessages true для чата без сообщений').toBe(false);
+  });
+
+  it('флаг выкл / чат вне проекта / вики не заведена / отказ владельца: ни строки, ни быстрой кнопки, ни вклада', () => {
+    const cases: { name: string; flags: boolean; session?: Partial<Session>; tree?: unknown; card?: Record<string, unknown> }[] = [
+      { name: 'флаг выкл', flags: false },
+      { name: 's.projectId = null', flags: true, session: { projectId: null } },
+      { name: 'initialized=false', flags: true, tree: { initialized: false } },
+      { name: 'dossierDeniedReason задан', flags: true, card: { dossierDeniedReason: 'только владелец проекта' } },
+    ];
+    for (const kase of cases) {
+      setAllFlags(kase.flags ? { [FLAGS.llmWiki]: true } : {});
+      mockWikiTree.value = kase.tree !== undefined ? kase.tree : { initialized: true };
+      const c = mountCard(kase.session ?? {}, kase.card ?? {});
+      openCardMenu(c);
+      // Инвариант «недоступно → скрыто целиком»: ни строки меню (даже серой/disabled)…
+      expect(menuRows('Вики').length, `${kase.name}: строка «Вики» появилась в меню`).toBe(0);
+      // …ни быстрой кнопки в кластере/свайпе…
+      expect(findNodeByAttr(c, 'title', 'Вики'), `${kase.name}: быстрая кнопка «Вики» появилась`).toBeNull();
+      // …ни вклада
+      expect(countTestId(c, 'test-wiki-menu'), `${kase.name}: вклад смонтирован`).toBe(0);
+      // Этот случай закрыт: его карточки (с открытым меню) не должны пережить смену флага
+      // в следующем — открытый меню-портал перерисовался бы на новом флаге и дал чужую строку
+      unmountAll();
+    }
+  });
+
+  it('глазик показал «Вики» в быстром ряду: клик по кнопке открывает вклад по её собственному rect', () => {
+    setAllFlags({ [FLAGS.llmWiki]: true });
+    // Сохранённая настройка «показывать всё» + готовые маркеры миграций (иначе миграция
+    // сама спрячет subject/wiki в пустом наборе): 'wiki' выходит в быстрый ряд
+    const store: Record<string, string> = {
+      cc_chat_card_hidden: '[]',
+      cc_chat_card_hidden_subject_v1: '1',
+      cc_chat_card_hidden_wiki_v1: '1',
+    };
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string) => store[k] ?? null,
+      setItem: (k: string, v: string) => { store[k] = v; },
+    };
+    const c = mountCard();
+    const btn = findNodeByAttr(c, 'title', 'Вики');
+    expect(btn, 'быстрая кнопка «Вики» не появилась в ряду').not.toBeNull();
+    expect(menuRows('Вики').length, 'меню карточки не нужно для быстрой кнопки').toBe(0);
+    act(() => { (reactProps(btn!)!.onClick as (e: unknown) => void)({ stopPropagation: () => {}, currentTarget: btn }); });
+    expect(wikiCtx.length, 'быстрая кнопка не вызвала вклад').toBe(1);
+    expect(wikiCtx[0].headless, 'headless не true').toBe(true);
+    expect(wikiCtx[0].open?.anchor ?? null, 'быстрая кнопка не передала свой rect как якорь').not.toBeNull();
+    expect(countTestId(c, 'test-wiki-menu'), 'быстрая кнопка дала больше одного экземпляра').toBe(1);
+  });
+
+  it('вклад живёт только пока открыт: до клика — 0, после onClose — 0; повторное открытие — новый counter, один экземпляр', () => {
+    setAllFlags({ [FLAGS.llmWiki]: true });
+    const c = mountCard();
+    openCardMenu(c);
+    expect(wikiCtx.length, 'вклад смонтирован заранее').toBe(0);
+    clickRow(menuRows('Вики')[0], 'строки «Вики» нет');
+    expect(countTestId(c, 'test-wiki-menu'), 'вклад не смонтирован после клика').toBe(1);
+    // Действие пункта зовёт onClose (как в реальном меню) → карточка снимает состояние
+    const closeBtn = findNodeByAttr(c, 'data-testid', 'test-wiki-close');
+    expect(closeBtn, 'кнопки закрытия тестового вклада нет').not.toBeNull();
+    act(() => { (reactProps(closeBtn!)!.onClick as () => void)(); });
+    expect(countTestId(c, 'test-wiki-menu'), 'вклад остался в разметке после onClose').toBe(0);
+    // Повторное открытие — новый counter и по-прежнему один экземпляр (дубля нет)
+    openCardMenu(c);
+    clickRow(menuRows('Вики')[0], 'после onClose строки «Вики» нет');
+    expect(countTestId(c, 'test-wiki-menu'), 'повторное открытие дало больше одного экземпляра').toBe(1);
+    expect(wikiCtx.length, 'вклад вызван не дважды за два открытия').toBe(2);
+    expect(wikiCtx[1].open!.counter, 'counter при повторном открытии не вырос').toBeGreaterThan(wikiCtx[0].open!.counter);
   });
 });

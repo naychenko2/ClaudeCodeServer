@@ -50,7 +50,10 @@ grep -rln 'new SessionManager(' --include=*.cs backend | wc -l  # 55 файло�
    `ClaimFirstMessage`, проверки зоны персоны). Остаются **три настоящие рекурсии**, и они
    свойство машины хода, а не дефект разметки: конец хода запускает следующий ход; процесс CLI
    отдаёт события приёмнику конца хода; ход дёргает штаб. Каждая получает один именованный
-   ленивый шов, и больше их не заводится.
+   ленивый шов. К ним добавляются два именованных разрыва циклов через внешние сервисы
+   (`IFeatureChatLinks` у видимости, `ReviewTreePool` у удаления): всего **пять ленивых
+   швов**, и больше их не заводится. `IServiceProvider` остаётся у одной роли —
+   `BuiltinMcpContexts` (§6, правило 5).
 3. **Штаб отдаёт свои швы без правки вертикали.** `ITeamRunState` целиком реализуем
    стором (все методы читают и пишут `SessionEntry`), `ITeamHistoryStore` — историей,
    `ITeamTurnIntake` — приёмом хода. `ITeamSessionDirectory` остаётся на фасаде тонкой
@@ -58,7 +61,7 @@ grep -rln 'new SessionManager(' --include=*.cs backend | wc -l  # 55 файло�
    меняется только в аргументах конструкторов, которые сейчас получают `this`.
 4. **Шагов переноса не пять, а семь** (S3-1…S3-7), каждый ≤ 2 000 строк переноса; за ними
    сжатие фасада, разбитое на S3-8a, серию S3-8b и S3-8c, и отдельная карточка документации. Порядок — строго снизу вверх:
-   новый класс зависит только от уже вынесенных классов, Core-швов и трёх ленивых швов, но
+   новый класс зависит только от уже вынесенных классов, Core-швов и пяти ленивых швов, но
    никогда от `SessionManager`. После S3 в `SessionManager` остаются фасад внешнего API,
    штабная логика ядра и сборка — **≈ 1,7 тыс. строк** вместо 11,8.
 5. **Найдены два пробела в тестах инвариантов:** guard смены среды исполнения
@@ -78,7 +81,7 @@ grep -rln 'new SessionManager(' --include=*.cs backend | wc -l  # 55 файло�
 | Класс | Строк | Что уезжает |
 |---|---:|---|
 | `SessionEntry.cs` (типы) | ~530 | вложенный `SessionEntry` целиком (локи и поля не дробим), `QueuedMessage`, `UserTurnSnapshot`, `TurnResult`, `ChatVisibilityResult` |
-| `SessionStore` | ~1 050 | реестр `_sessions`; `LoadSessions`, `MigratePersonaChatMode`, `SaveSessions`, `ScheduleDebouncedSave`, `FlushPendingSave`, автосейв-таймер; sweep (`TrySweepStuckActive`, `HasLiveWork`, `ParentSourceSession`, `EffectiveParentSessionId`); `ApplyStatusAsync`; выборки (`GetById`, `GetAll`, `GetByProject`, `GetVisibleByProject`, `CountByProject`, `GetProjectlessChats`, `GetSessionsWithLive*`, `GetAllOwnedBy`, `GetAllOwnedVisibleBy`, `HasSessionsOwnedBy`); **видимость и владелец** (`ResolveOwnerId`, `GetOwned`, `GetOwnedVisible`, `GetWithRight`, `GetAccessible`, `VisibleTo`, `IsVisibleTo`, `IsPrivateChat`, `IsTranscriptReservedForOthers`); автор хода (`NoteTurnActor`, `GetTurnActor`, `GetTurnFrame`, `HumanAuthorOf`, `IsOwnerOrTurnAuthor`, `PendingSentBy`, `ActorRank`, `NarrowerActor`, `ClaimFirstMessage`); наблюдатели (`AddViewer`, `RemoveViewer`, `RemoveConnectionViewers`, `HasViewers`); рантайм-чтения (`HasTurnInFlight`, `HasLiveTurnProcess`, `Busy`, `GetActiveTurnDelegation`, `RunAgentsAlive`, `NoteRunDelegation`, `WithTeamState`); вещание (`BroadcastAsync`, `BroadcastExceptAsync`, `BroadcastSessionMessageAsync`, `BroadcastStatusChangeAsync`); тела методов `ITeamSessionDirectory` (`Get`, `ListChildren`, `ChildrenByParent`, `Persist`, `WriteUnlessPrivate`, `Snapshot`; сам шов остаётся на `SessionManager`, см. §3) и реализация `ITeamRunState` |
+| `SessionStore` | ~1 050 | реестр `_sessions`; `LoadSessions`, `MigratePersonaChatMode`, `SaveSessions`, `ScheduleDebouncedSave`, `FlushPendingSave`, автосейв-таймер; sweep (`TrySweepStuckActive`, `HasLiveWork`, `ParentSourceSession`, `EffectiveParentSessionId`); `ApplyStatusAsync`; выборки (`GetById`, `GetAll`, `GetByProject`, `GetVisibleByProject`, `CountByProject`, `GetProjectlessChats`, `GetSessionsWithLive*`, `GetAllOwnedBy`, `GetAllOwnedVisibleBy`, `HasSessionsOwnedBy`); **видимость и владелец** (`ResolveOwnerId`, `GetOwned`, `GetOwnedVisible`, `VisibleTo`, `IsVisibleTo`, `IsPrivateChat`, `IsTranscriptReservedForOthers`); автор хода (`NoteTurnActor`, `GetTurnActor`, `GetTurnFrame`, `HumanAuthorOf`, `IsOwnerOrTurnAuthor`, `PendingSentBy`, `ActorRank`, `NarrowerActor`, `ClaimFirstMessage`); наблюдатели (`AddViewer`, `RemoveViewer`, `RemoveConnectionViewers`, `HasViewers`); рантайм-чтения (`HasTurnInFlight`, `HasLiveTurnProcess`, `Busy`, `GetActiveTurnDelegation`, `RunAgentsAlive`, `NoteRunDelegation`, `WithTeamState`); вещание (`BroadcastAsync`, `BroadcastExceptAsync`, `BroadcastSessionMessageAsync`, `BroadcastStatusChangeAsync`); тела методов `ITeamSessionDirectory` (`Get`, `ListChildren`, `ChildrenByParent`, `Persist`, `WriteUnlessPrivate`, `Snapshot`; сам шов остаётся на `SessionManager`, см. §3) и реализация `ITeamRunState` |
 
 ### Семейство «стор истории» (`history.json`)
 
@@ -199,7 +202,7 @@ grep -rln 'new SessionManager(' --include=*.cs backend | wc -l  # 55 файло�
 | 45 | `TaskManager` | `ITaskLookup` (адаптер `TaskLookupAdapter` → DI) → стор; SM (`TeamTurnCompletionService`) |
 | 46 | `ILoggerFactory` | SM (логгеры сервисов штаба) |
 | 47 | `IProjectDeviceGate` | `TurnProcessHost` |
-| 48 | `IServiceProvider` | встроенные MCP (ленивый `McpToolsetRegistry`, как сейчас), удаление |
+| 48 | `IServiceProvider` | только `BuiltinMcpContexts`: резолвит через провайдер лишь `McpToolsetRegistry` и `IDeviceExecChannel`, как сейчас (правило 5, §6). Остальные ленивые резолвы ядра — именованные `Lazy<T>`: `ChatVisibility` получает `Lazy<IFeatureChatLinks>?`, `ChatDeletion` — `Lazy<ReviewTreePool?>`; `SessionStore` `IProjectAccess` не получает (`GetWithRight`/`GetAccessible` остаются в фасаде, §4) |
 | 49 | `SubsystemStateStore` | встроенные MCP |
 | 50 | `ISphereDirectory` | слой персоны, настройки |
 | 51 | `IPluginDirSource` | фабрика контекста запуска, создание |
@@ -223,11 +226,11 @@ grep -rln 'new SessionManager(' --include=*.cs backend | wc -l  # 55 файло�
 | `CliRoute` | providers, pool, assignments, users, homes, launchers, sandbox, projects, store, `ArchivedTranscriptStore` | **10** |
 | `ChatWorktree` | git, codeGraphs, inspector, fileWatchers, warmup, projects, store, route | 8 |
 | `ChatSettings` | store, history, route, `ProviderMigration`, projects, providers, assignments, pool, personas, spheres | **10** |
-| `ChatVisibility` | store, history, route, queue, projects | 5 |
+| `ChatVisibility` | store, history, route, queue, projects, `Lazy<IFeatureChatLinks>?` | 6 |
 | `ProviderMigration` | store, history, route, providers, pool, `Lazy<ITeamNotifier>` | 6 |
 | `ChatNaming` | store, history, cheap, config | 4 |
 | `McpEndpoint` | config, server, jwt | 3 |
-| `BuiltinMcpContexts` | endpoint, flags, bindings, services, subsystemStates, launchers, projects, higgsfieldOAuth, users, config | **10** |
+| `BuiltinMcpContexts` | endpoint, flags, bindings, services (`IServiceProvider`: только `McpToolsetRegistry` и `IDeviceExecChannel`), subsystemStates, launchers, projects, higgsfieldOAuth, users, config | **10** |
 | `PersonaLayerBuilder` | personas, bindings, agentSync, spheres, flags, projects, users, store, endpoint, config | **10** |
 | `ExternalMcpContexts` | mcpRegistry, mcpSecrets, mcpOAuth, modules, moduleTokens, endpoint, bindings, projects, store | 9 |
 | `TurnPassports` | bus, promptSnapshots, mcpStatus, subagentRuns, turnRuns, contributors, store, queue, `Lazy<ITurnStarter>` | 9 |
@@ -238,7 +241,7 @@ grep -rln 'new SessionManager(' --include=*.cs backend | wc -l  # 55 файло�
 | `LocalVoiceTurn` | router, ollama, store, history, completion | 5 |
 | `TurnIntake` | store, history, queue, processHost, completion, settings, naming, voice, `Lazy<ITeamNotifier>`, config | **10** |
 | `ChatCreation` | store, history, route, settings, processHost, projects, assignments, pluginDir | 8 |
-| `ChatDeletion` | store, history, route, worktree, processHost, promptSnapshots, services, projects | 8 |
+| `ChatDeletion` | store, history, route, worktree, processHost, promptSnapshots, `Lazy<ReviewTreePool?>`, projects | 8 |
 
 Шесть классов стоят ровно на потолке (`CliRoute`, `ChatSettings`, `BuiltinMcpContexts`,
 `PersonaLayerBuilder`, `TurnLaunchContextFactory`, `TurnIntake`). В первой редакции было
@@ -312,12 +315,27 @@ flowchart BT
   Migr -. "Lazy ITeamNotifier" .-> SM
   Done -. "Lazy ITeamNotifier" .-> SM
   Intake -. "Lazy ITeamNotifier" .-> SM
+  Vis -. "Lazy IFeatureChatLinks" .-> SM
+  Del -. "Lazy ReviewTreePool" .-> SM
 ```
 
-Пунктир — три ленивых шва, единственные рёбра вверх. Все три — рекурсия, которая уже есть
-в коде (сейчас она идёт вызовом метода внутри одного класса), а не новая связность.
+Пунктир — пять ленивых швов, единственные рёбра вверх. Три первых (`ITurnStarter`,
+`ITurnMessageSink`, `ITeamNotifier`) — рекурсия, которая уже есть в коде (сейчас она идёт
+вызовом метода внутри одного класса), а не новая связность. Два последних — разрывы
+настоящих циклов через сервисы вне ядра, которые сейчас резолвятся через провайдер:
+`FeatureChatLinks(ISessionDirectory, …)` → `SessionDirectoryAdapter(SessionManager)` и
+`ReviewTreePool(GitService, SessionManager, …)`. Явная зависимость там невозможна, поэтому
+ленивость не прячется в провайдере, а названа типом.
 
-### Три ленивых шва
+### Пять ленивых швов
+
+`ITurnStarter`, `ITurnMessageSink`, `ITeamNotifier` — швы машины хода (ниже).
+`IFeatureChatLinks` (существующий интерфейс) — у `ChatVisibility`, вводится в S3-3:
+параметр опциональный, `null` в тестовых сборках без DI даёт `boundToFeature=false`, как
+сейчас. `ReviewTreePool` (конкретный тип) — у `ChatDeletion`, вводится в S3-5 как
+`Lazy<ReviewTreePool?>(() => sp.GetService<ReviewTreePool>())`, семантика `GetService`
+сохраняется. Замена `_services?.GetService<X>()` на `_x?.Value` — механическая, поведение не
+меняется.
 
 Интерфейсы — в `Services/Sessions/SessionCoreSeams.cs`, по образцу `TeamCoreSeams.cs`.
 Реализация связывается в `AddSessionCore` как `Lazy<T>` от синглтона. До шага, где
@@ -386,7 +404,7 @@ worktree и миграции); `HasTurnInFlight`, `Busy`, `WithTeamState`, `Clai
 | Guard смены провайдера у начатого чата (перенос транскрипта, отказы на текущем ключе, несовместимой модели, пути вне монтирований) | `ProviderMigration`, вызов из `ChatSettings.UpdateAsync` | S3-3 | `SessionManagerCrudTests`: `Update_СменаПровайдераБезТранскрипта_Проходит` (:607), `…БезХодов_Проходит` (:625), `…СТранскриптом_ФайлПереезжаетВПрофильЦели` (:639); `SessionManagerSubscriptionMigrationTests.MigrateProvider_*` (12 тестов, в т.ч. `ТекущийКлюч_БросаетОшибку`, `НесовместимаяСМодельюПодписка_БросаетОшибку`); `SessionManagerContainerMigrationTests.MigrateProvider_Container_ПутьВнеМонтирований_400`; `SessionManagerLocalTranscriptTests.СменаПровайдера_НеПереноситТранскрипт` (:211) | — |
 | Guard смены среды исполнения при существующих чатах | `UsersController.cs:78` → `SessionStore.HasSessionsOwnedBy` | S3-1 | **Нет теста** ни на контроллер (409), ни на `HasSessionsOwnedBy` | S3-1 добавляет оба до переноса: чаты проекта владельца, личные чаты, архивные — все считаются |
 | Guard привязки worktree к начатому чату | `ChatWorktree.AttachWorktreeAsync` | S3-3 | `SessionManagerHierarchyTests.AttachWorktree_НачатыйЧат_Отказ` (:673) | — |
-| Per-owner изоляция и видимость (приватные чаты) | `SessionStore` — единственная точка: `GetOwned`, `GetOwnedVisible`, `GetWithRight`, `GetAccessible`, `IsVisibleTo`, `IsTranscriptReservedForOthers`, `GetTurnFrame` | S3-1 | `SessionManagerCrudTests`: `ПроектнаяСессия_ВладелецРезолвитсяЧерезПроект` (:169), `MarkRead_ЧужойВладелецИлиНесуществующая_False` (:492), `Update_ЧужойВладелец_НеНаходитЧат` (:734); `SessionManagerTeamSetupTests`: `SetTeamImplement_ЧужойВладелец_Null` (:679), `RespondTeamPlan_ЧужойВладелец_Null` (:1140); эндпоинт-тесты «Общих проектов» (`ChatVisibilityEndpointTests` и соседи) | см. таблицу путей ниже |
+| Per-owner изоляция и видимость (приватные чаты) | `SessionStore` — единственная точка правды владения и видимости: `GetOwned`, `GetOwnedVisible`, `IsVisibleTo`, `IsTranscriptReservedForOthers`, `GetTurnFrame`, `ResolveOwnerId`. `GetWithRight`, `GetAccessible` — фасад (композиция стора и `IProjectAccess`): `store.GetById` + `IProjectAccess.ResolveSession`, фолбэк через `store.ResolveOwnerId`; точка правды прав — `IProjectAccess`, третьей точки нет | S3-1 | `SessionManagerCrudTests`: `ПроектнаяСессия_ВладелецРезолвитсяЧерезПроект` (:169), `MarkRead_ЧужойВладелецИлиНесуществующая_False` (:492), `Update_ЧужойВладелец_НеНаходитЧат` (:734); `SessionManagerTeamSetupTests`: `SetTeamImplement_ЧужойВладелец_Null` (:679), `RespondTeamPlan_ЧужойВладелец_Null` (:1140); эндпоинт-тесты «Общих проектов» (`ChatVisibilityEndpointTests` и соседи) | см. таблицу путей ниже |
 | `UpdatedAt` не двигают настройки, архивация и возврат | `ChatSettings` (сеттеры), `SessionStore.ApplyStatusAsync(touchUpdatedAt)` и sweep (`touchUpdatedAt: false`) | S3-1, S3-3 | `ChatArchiveFlagTests` (:77, :122, :159, :300, :317), `SessionManagerCrudTests.MarkRead_УстанавливаетLastReadAt_НеТрогаяUpdatedAt` (:194), `MarkFilesCommitted_ПишетПути_ПереживаетПерезагрузку_НеТрогаетUpdatedAt` (:317), `ThreadsEndpointTests.Смена_фокуса_не_двигает_UpdatedAt_и_не_пишет_sessions_json` (:75) | — |
 | Удаление чата уносит только `{csid}.jsonl`, не по маске и не папку; `resumeSessionId` по белому списку | `CliRoute.DeleteTranscript` / `CleanupOrphanBranchTranscript`; проверка `TranscriptMigrator.IsSafeSessionId` — `TurnProcessHost.StartNewSessionAsync` | S3-2, S3-5 | `SessionManagerCrudTests.DeleteAsync_УдаляетТранскриптCliИНеТрогаетЧужой` (:907), `DeleteAsync_ОбщийТранскриптДругогоЧата_НеУдаляет` (:1205) | — |
 | Состав `tools/list` не зависит от хода | сборщики контекстов MCP | S3-4 | `McpToolsetStabilityTests` (Guards.Tests) | При переносе сигнатуры сборщиков не получают параметров хода |
@@ -402,7 +420,8 @@ worktree и миграции); `HasTurnInFlight`, `Busy`, `WithTeamState`, `Clai
 
 | Группа фасада | Проверка владельца | Класс после S3 |
 |---|---|---|
-| Чтение по id: `GetOwned`, `GetOwnedVisible`, `GetWithRight`, `GetAccessible`, `IsVisibleTo`, `GetSessionInfo`, `GetHistoryAsync` (через контроллер) | сам метод | `SessionStore` (+ `SessionHistory`) |
+| Чтение по id: `GetOwned`, `GetOwnedVisible`, `IsVisibleTo`, `GetSessionInfo`, `GetHistoryAsync` (через контроллер) | сам метод | `SessionStore` (+ `SessionHistory`) |
+| Чтение по id с правом: `GetWithRight`, `GetAccessible` | сам метод | фасад (композиция стора и `IProjectAccess`) |
 | Списки: `GetByProject`, `GetVisibleByProject`, `GetAllOwnedBy`, `GetAllOwnedVisibleBy`, `GetProjectlessChats`, `GetPersonaChats`, `GetArchiveRuleCandidates`, `GetSubjectCandidates` | фильтр по владельцу и видимости | `SessionStore`, `ChatSettings`, `ChatCreation` |
 | Мутации настроек — 34 публичных метода с параметром `ownerId` по `grep` на master плюс многострочные сигнатуры (`SetParent`, `SetArchivedAsync`, `MarkRead`, `UpdateAsync`, `SetPersona`, `MigrateProviderAsync`…) | `GetOwned`/`GetOwnedVisible` первой строкой | `ChatSettings`, `ChatVisibility`, `ProviderMigration`, `ChatNaming` |
 | Создание и продолжение: `Create*`, `BranchAsync`, `CreateHandoffChatAsync`, `CreateContinuationAsync` | `GetOwnedVisible` источника, `IsTranscriptReservedForOthers` | `ChatCreation` |
@@ -420,8 +439,8 @@ worktree и миграции); `HasTurnInFlight`, `Busy`, `WithTeamState`, `Clai
 Ролей больше пяти, поэтому **предлагаю семь шагов переноса вместо пяти** плюс сжатие
 фасада. Каждый шаг меньше 2 000 строк: у шагов переноса считаются строки, уходящие из
 `SessionManager`, у шагов S3-8 — строки правки в тестах и конструкторе. Порядок задан
-графом: класс шага зависит только от классов прежних шагов, Core-швов и трёх ленивых швов,
-реализованных пока `SessionManager`.
+графом: класс шага зависит только от классов прежних шагов, Core-швов и пяти ленивых швов
+(три машины хода реализует пока `SessionManager`).
 
 **Почему процесс CLI раньше конца хода.** Первая редакция ставила конец хода (S3-5) раньше
 процесса (S3-6) и при этом записывала `TurnCompletion` зависимость от `TurnProcessHost` —
@@ -436,9 +455,9 @@ worktree и миграции); `HasTurnInFlight`, `Busy`, `WithTeamState`, `Clai
 |---|---|---:|---|
 | **S3-1** Стор метаданных | `SessionEntry.cs`, `SessionStore`, создание `AddSessionCore`, сторож формы ядра (§6) | ~1 580 | порядок старта (`LoadSessions` в конструкторе до таймеров); тест «один реестр»; тесты guard'а среды |
 | **S3-2** История, очередь, маршрут | `SessionHistory`, `TurnCostLedger`, `PendingQueue`, `CliRoute` | ~1 130 | гонка `_falPersistLock` (`FalPersistLockDedupTests`, `FalAccumulatorRaceRegressionTests`); транскрипт только `{csid}.jsonl` |
-| **S3-3** Рабочая папка и жизненный цикл | `ChatWorktree`, `ChatNaming`, `ProviderMigration`, `ChatSettings`, `ChatVisibility`; первый ленивый шов (`Lazy<ITeamNotifier>`) | ~1 890 | `UpdatedAt` (`ChatArchiveFlagTests`), guard'ы провайдера и worktree, `VisibilityLock` под переносом (`ChatVisibilityEndpointTests`) |
+| **S3-3** Рабочая папка и жизненный цикл | `ChatWorktree`, `ChatNaming`, `ProviderMigration`, `ChatSettings`, `ChatVisibility`; ленивые швы `Lazy<ITeamNotifier>` и `Lazy<IFeatureChatLinks>?` | ~1 890 | `UpdatedAt` (`ChatArchiveFlagTests`), guard'ы провайдера и worktree, `VisibilityLock` под переносом (`ChatVisibilityEndpointTests`) |
 | **S3-4** Контекст запуска | `McpEndpoint`, `BuiltinMcpContexts`, `PersonaLayerBuilder`, `ExternalMcpContexts`, `TurnPassports`; `ITurnStarter` (реализует SM) | ~1 350 | `McpToolsetStabilityTests`, golden-фикстуры промпта, тесты паспортов сабагентов |
-| **S3-5** Процесс, создание, удаление | `TurnLaunchContextFactory`, `TurnProcessHost`, `TurnRecovery`, `ChatCreation`, `ChatDeletion`; `ITurnMessageSink` (реализует SM) | ~1 940 | `TurnAutoResume/*`, `SessionManagerQueueTests`, `DeviceWaitTestHost`, `SessionManagerBranchTests`, удаление транскрипта, `resumeSessionId` по белому списку |
+| **S3-5** Процесс, создание, удаление | `TurnLaunchContextFactory`, `TurnProcessHost`, `TurnRecovery`, `ChatCreation`, `ChatDeletion`; `ITurnMessageSink` (реализует SM); `Lazy<ReviewTreePool?>` у удаления | ~1 940 | `TurnAutoResume/*`, `SessionManagerQueueTests`, `DeviceWaitTestHost`, `SessionManagerBranchTests`, удаление транскрипта, `resumeSessionId` по белому списку |
 | **S3-6** Конец хода | `TurnCompletion`, `LocalVoiceTurn`; `ITurnMessageSink` переключается с SM на `TurnCompletion`; два метода в `ITeamNotifier` | ~1 080 | характеризационный тест `ErrorMessage` → `Error`; `SessionManagerTeamLoopTests`, `SessionManagerWorkLoopTests`, `VoiceLocalTurnTests` |
 | **S3-7** Приём хода | `TurnIntake` (с циклом «до готово»); `ITurnStarter` и `ITeamTurnIntake` переключаются с SM на него | ~1 540 | `SessionManagerHierarchyTests.RunDelegation`, `SessionManagerHumanTextMarkerTests`, `TaskExecutionService*Tests` |
 | **S3-8a** Тестовая сборка ядра | помощник сборки ядра через `AddSessionCore` в `TestKit.Host` (на него ссылаются все шесть тестовых проектов); `SessionManagerTestBase` (3 места) строит SM через него. Конструктор SM и запасные сборки не трогаются | ~250 (помощник ~120, база −130) | `SessionManagerCrudTests`, `ChatArchiveFlagTests` и остальные наследники базы (9 файлов); Host-тест «один реестр» из S3-1 зелёный на помощнике |
@@ -484,18 +503,24 @@ worktree и миграции); `HasTurnInFlight`, `Busy`, `WithTeamState`, `Clai
   `ValidateOnBuild` в `Program.cs` не включён, поэтому DI-цикл проявится только при
   резолве — его ловит Host-тест, который резолвит `SessionManager` из
   `TestWebApplicationFactory`.
-- **Сторож формы ядра** (S3-1, Guards.Tests или Tests, рефлексией по сборке Main), четыре
-  правила:
+- **Сторож формы ядра** (S3-1, Guards.Tests или Tests, рефлексией по сборке Main), пять
+  правил:
   1. у типов namespace `Services.Sessions` ни один параметр конструктора не имеет тип
      `SessionManager`;
   2. параметров ≤ 10 (без `ILogger<T>`);
-  3. `Lazy<T>` допустим только для `ITurnStarter`, `ITurnMessageSink`, `ITeamNotifier`;
+  3. `Lazy<T>` допустим только для пяти типов: `ITurnStarter`, `ITurnMessageSink`,
+     `ITeamNotifier`, `IFeatureChatLinks`, `ReviewTreePool`;
   4. **на типы `Services.Sessions` ссылаются только `SessionManager`, сами
      `Services.Sessions` и тесты** (default-deny). Это правило закрывает обход фасада, то есть
-     новые пути входа к per-owner изоляции.
+     новые пути входа к per-owner изоляции;
+  5. `IServiceProvider` в конструкторе допустим только у `BuiltinMcpContexts` (поимённый
+     allow-list из одной роли); резолвить через него ей разрешено лишь `McpToolsetRegistry`
+     и `IDeviceExecChannel`. Это ограничение рефлексией не видно: оно записывается
+     комментарием у поля и проверяется на ревью. Фасад `SessionManager` вне namespace
+     `Services.Sessions`, правило его не касается, а его провайдер уходит в S3-8c.
 
   Сторож обязан пройти мутацией: временный параметр `SessionManager` в `SessionStore`
-  должен его покрасить.
+  должен его покрасить (правило 1), временный провайдер в `SessionStore` — тоже (правило 5).
 - Сторожа границ подсистем (`SubsystemBoundaryTests`) этот разрез не задевает: классы
   остаются в сборке Main, новой строки в `Boundaries` не нужно.
 
@@ -507,7 +532,7 @@ worktree и миграции); `HasTurnInFlight`, `Busy`, `WithTeamState`, `Clai
    методом; похудеть он должен за счёт шины, это отдельный курс.
 3. **Не делить `SessionEntry` по классам-владельцам** в этой линии: на нём пять локов, и их
    порядок сейчас верен.
-4. **Не заводить интерфейс на каждый класс.** Интерфейсы нужны только трём ленивым швам и
+4. **Не заводить интерфейс на каждый класс.** Интерфейсы нужны только ленивым швам машины хода и
    четырём швам штаба. Остальные классы `internal sealed` и внедряются как конкретные типы.
 5. **Не переносить одновременно с правкой поведения.** Найденный при переносе дефект —
    отдельная карточка.
@@ -516,8 +541,9 @@ worktree и миграции); `HasTurnInFlight`, `Busy`, `WithTeamState`, `Clai
 
 1. `AsyncAgentInFlight`: если метод читает только `entry.Process`, он уходит в стор, и в
    `ITeamNotifier` добавляется один метод, а не два (S3-6).
-2. `ChatDeletion` получает `IServiceProvider`. Выяснить, что именно удаление резолвит
-   лениво, и по возможности заменить на явную зависимость (S3-5).
+2. ~~Что удаление резолвит лениво~~ — закрыт решением 05.11 (`1dda7103`): это
+   `ReviewTreePool`, явная зависимость невозможна из-за цикла, `ChatDeletion` получает
+   `Lazy<ReviewTreePool?>` (S3-5).
 3. Ход «Общих проектов» после 05.11 может добавить в файл новые методы. Каждый шаг
    начинается со сверки: методы, появившиеся после `e0ed6ea34`, получают роль по таблицам
    §1, а при неясности — вопрос ко мне до переноса.
@@ -766,5 +792,5 @@ grep -E  '^    (public|internal)\b[^=;]*\(' $F \
 | 11711 | public | `BroadcastSessionMessageAsync` | SessionStore |
 | 11722 | public | `GetOwned` | SessionStore |
 | 11737 | public | `GetOwnedVisible` | SessionStore |
-| 11748 | public | `GetWithRight` | SessionStore |
-| 11762 | public | `GetAccessible` | SessionStore |
+| 11748 | public | `GetWithRight` | фасад (композиция стора и `IProjectAccess`) |
+| 11762 | public | `GetAccessible` | фасад (композиция стора и `IProjectAccess`) |

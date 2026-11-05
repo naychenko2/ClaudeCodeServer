@@ -1245,6 +1245,47 @@ class RerunTests(unittest.TestCase):
         self.assertEqual(("App.Tests.A.One", "App.Tests.A", "App.Tests"), (entry["fqn"], entry["class"], entry["assembly"]))
         self.assertRegex(entry["time"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d")
 
+    def journal(self):
+        with open(os.path.join(self.tmp, ts.FLAKY_JOURNAL), encoding="utf-8") as f:
+            return [json.loads(line) for line in f]
+
+    def test_журнал_флаков_копит_записи_двух_прогонов_с_веткой_и_коммитом(self):
+        orig = ts.git_head
+        ts.git_head = lambda: ("feat/x", "abc123")
+        try:
+            self.second = {"App.Tests.A.One": "Passed"}
+            self.assertEqual(0, self.rerun(self.shard(1, self.RED))[0])
+            red2 = [("App.Tests.A.One", "Passed", None), ("App.Tests.A.Two", "Failed", None),
+                    ("App.Tests.B.Three", "Passed", None)]
+            self.second = {"App.Tests.A.Two": "Passed"}
+            self.assertEqual(0, self.rerun(self.shard(1, red2, name="shard2"))[0])
+        finally:
+            ts.git_head = orig
+        rows = self.journal()
+        self.assertEqual(["App.Tests.A.One", "App.Tests.A.Two"], [r["fqn"] for r in rows],
+                         "журнал дописывается, а не перезаписывается, как flaky.json")
+        self.assertEqual(["App.Tests.A.Two"], [e["fqn"] for e in self.flaky_json()["flaky"]],
+                         "flaky.json — только текущий прогон")
+        for r in rows:
+            self.assertEqual(("App.Tests.A", "App.Tests", "feat/x", "abc123"),
+                             (r["class"], r["assembly"], r["branch"], r["commit"]))
+            self.assertRegex(r["time"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+
+    def test_журнал_флаков_обрезается_до_предела(self):
+        entry = lambda i: {"fqn": f"App.Tests.A.T{i}", "class": "App.Tests.A", "assembly": "App.Tests"}
+        with contextlib.redirect_stderr(io.StringIO()):
+            ts.append_flaky_journal(self.tmp, [entry(i) for i in range(4)], limit=5)
+            ts.append_flaky_journal(self.tmp, [entry(i) for i in range(4, 7)], limit=5)
+        self.assertEqual([f"App.Tests.A.T{i}" for i in range(2, 7)], [r["fqn"] for r in self.journal()])
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, ts.FLAKY_JOURNAL + ".tmp")))
+
+    def test_настоящая_ветка_и_коммит_берутся_из_git(self):
+        branch, commit = ts.git_head()
+        if commit is None:
+            self.skipTest("дерево скрипта не git")
+        self.assertRegex(commit, r"^[0-9a-f]{40}$")
+        self.assertTrue(branch)
+
     def test_упал_дважды_красный_и_флаки_отдельно(self):
         red = [("App.Tests.A.One", "Failed", None), ("App.Tests.A.Two", "Failed", None),
                ("App.Tests.B.Three", "Passed", None)]

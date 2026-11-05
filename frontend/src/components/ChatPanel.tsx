@@ -12,6 +12,8 @@ import { buildBranchAnchors, branchAnchorText as branchAnchorTextOf, BRANCH_BEFO
 import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
 import { denialTextOf, guardTurnAction, ownerDecisionDeniedReason, ownerSettingsDeniedReason, turnDeniedReason } from '../features/projects/members/participantGate';
+import { canChangeCompanion } from '../features/personas/personaRights';
+import { useMe } from '../lib/defaultPersona';
 import { isArchivedChat } from '../lib/chatFilters';
 import { archiveApi } from '../api/chats';
 import { projectMainColor } from '../features/projects/projectUtil';
@@ -693,10 +695,22 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
     return () => { alive = false; };
   }, [online, project?.id]);
 
+  // W3-F1i (матрица §3.2, правило W3-B4b): участник общего проекта меняет собеседника
+  // только в своём чате (автор — session.createdByUserId). Решение — только
+  // canChangeCompanion (personaRights, W3-F1a), здесь лишь применяем. Владелец, обычный
+  // проект (myRole нет) и чат вне проекта — без гейта, как раньше. Пока /me не пришёл,
+  // фронт не знает, кто «я», — свой чат редактора временно закрыт (fail-closed:
+  // без своей id утверждать авторство нечем; сервер всё равно отказал бы в чужом)
+  const me = useMe();
+  const companionLocked = !canChangeCompanion(project, session, me.userId ?? '');
+
   // Назначить/сменить/снять собеседника чата: персона либо .md-агент — взаимоисключающе
   // (проектная сессия ↔ чат вне проекта — разные эндпоинты). Разрешено и по ходу
   // разговора — тогда в ленту добавляется локальный разделитель «Теперь отвечает: …».
   const handleCompanionChange = useCallback(async (sel: { persona?: Persona | null; agent?: AgentInfo | null }) => {
+    // Закрыто по праву — запрос не уходит вовсе (селектор выключен; этот ранний выход
+    // держит и остальные входы: пилюли пустого состояния идут через handlePersonaChange → сюда)
+    if (companionLocked) return;
     const personaId = sel.persona?.id ?? null;
     const agentName = sel.agent?.fileName ?? null;
     try {
@@ -714,7 +728,7 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
     } catch (e) {
       showToast('Собеседник', e instanceof Error ? e.message : 'Не удалось сменить собеседника', 'info');
     }
-  }, [project, session.id, session.personaId, onSessionUpdated, items.length, noteCompanionSwitch]);
+  }, [companionLocked, project, session.id, session.personaId, onSessionUpdated, items.length, noteCompanionSwitch]);
 
   // Обратная совместимость для пилюль «Поговорить с…» пустого состояния (выбор только персоны)
   const handlePersonaChange = useCallback(
@@ -3244,6 +3258,7 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
             selectedAgentName={session.agentName ?? null}
             onCompanionChange={handleCompanionChange}
             canPickCompanion={online}
+            companionLocked={companionLocked}
             model={session.model}
             onModelChange={handleModelChange}
             chatStarted={!!session.claudeSessionId}

@@ -11,7 +11,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { SessionList } from './SessionList';
+import { reportNewChatError, SessionList } from './SessionList';
 import { setAllFlags } from '../lib/featureFlags';
 import { __test as featuresIndexTest } from '../lib/featuresIndex';
 import { ALL_FEATURE_KINDS, type FeatureKind } from '../lib/chatFilters';
@@ -730,5 +730,31 @@ describe('SessionList: chat_visibility_changed (S2d-F2)', () => {
     expect(onActiveDeleted).not.toHaveBeenCalled();
     expect(toastMock).not.toHaveBeenCalled();
     root.unmount();
+  });
+});
+
+// === W3-F2b: отказ «Нового чата» показывается тостом (дефект 05.11) ===
+// До фикса onNew был `void createNew()`: rejection createChatWithContextPersona
+// (например no_project_persona) оставался необработанным, в UI тишина.
+// reportNewChatError — обработчик .catch: тост с текстом сервера (Error.message)
+// или общий текст для не-Error. Мутация: убрать вызов showToast из reportNewChatError
+// → оба кейса красные (мокаемый toast не вызывается ни разу).
+describe('SessionList: reportNewChatError — отказ «Нового чата» как тост', () => {
+  it('Error: тост «Новый чат» с текстом сервера ровно один раз', () => {
+    toastMock.mockReset();
+    reportNewChatError(new Error('В проекте нет руководителя — попросите владельца назначить'));
+    expect(toastMock).toHaveBeenCalledTimes(1);
+    const [title, text] = toastMock.mock.calls[0] as [string, string];
+    expect(title).toBe('Новый чат');
+    expect(text).toBe('В проекте нет руководителя — попросите владельца назначить');
+  });
+
+  it('не-Error: тост с общим текстом «Не удалось создать чат»', () => {
+    toastMock.mockReset();
+    reportNewChatError({ status: 500 });
+    expect(toastMock).toHaveBeenCalledTimes(1);
+    const [title, text] = toastMock.mock.calls[0] as [string, string];
+    expect(title).toBe('Новый чат');
+    expect(text).toBe('Не удалось создать чат');
   });
 });

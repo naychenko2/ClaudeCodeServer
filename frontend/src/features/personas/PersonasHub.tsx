@@ -115,7 +115,7 @@ export function PersonasHub({ personas, talking, onTalk, onOpenSession, onNew, o
 
               {/* Твои помощники */}
               <section ref={assistantsSectionRef}>
-                <SectionTitle title="Твои помощники" sub="Кликни, чтобы открыть, или наведи, чтобы поговорить" />
+                <SectionTitle title="Твои помощники" sub="Кликни, чтобы открыть" />
                 {hasPersonas ? (
                   <div style={showcaseGrid}>
                     {personas.map(p => {

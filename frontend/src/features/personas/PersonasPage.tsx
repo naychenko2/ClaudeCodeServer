@@ -547,7 +547,6 @@ export function PersonaStudio({ persona, projects, talking, initialView, onDelet
         onCancelEdit={() => { if (status.dirty) setConfirmDiscard(() => () => setEditing(false)); else setEditing(false); }}
         status={status}
         talking={talking}
-        onTalk={onTalk}
         onDelete={mayDelete ? () => onDelete() : undefined}
         isDefault={isDefault}
         onMakeDefault={mayLead ? requestMakeDefault : undefined}

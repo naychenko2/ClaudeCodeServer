@@ -152,7 +152,13 @@ backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 # (чтение персоны), Delete/MakeDefault (ключ записи в PersonasCrudService), Memory/MemorySearch/
 # MemoryRecall/GetFocus (плюс ключ стора памяти). Вызывающий остался только в CallerSessionId,
 # viewer и createdByUserId — не ключ хранилищ.
-backend/ClaudeHomeServer/Controllers/PersonasController.cs|91
+# W3-B1d (write-пути {id}-действий): PersonasController 91→64 — двадцать семь мест переведены на
+# scope.TenantOwnerId: Add/Set/Update/Delete/Test/Suggest/Generate-автоматика (резолв персоны,
+# UpdateRules, TestAsync), Remember/UpdateMemory/Forget/ConfirmMemory/ClearFocus/MemoryToNote/
+# NoteToMemory (резолв персоны и ключ стора памяти). Оставшееся — список/пантеон/создание и
+# ai-пути (ключ — вызывающий по разряду), Ask (GetReachable/AskAsync), места W3-B3b
+# (avatar upload/recrop) и строки долга W3-B5a/B5b (привязки).
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|64
 backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6

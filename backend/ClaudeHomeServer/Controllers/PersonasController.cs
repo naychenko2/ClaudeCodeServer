@@ -288,9 +288,10 @@ public class PersonasController(
     [DenyOnDelegatedTurn("Назначение дефолт-персоны")]
     public Task<IActionResult> MakeDefault(string id)
     {
-        // W3-B1c (разрез §3.1 строка POST {id}/make-default; И-2): ключ назначения — арендатор:
-        // MakeDefaultAsync сверяет project.OwnerId с первым аргументом — с ключом вызывающего
-        // проектная персона не смогла бы стать руководителем своего проекта.
+        // W3-B1c (разрез §3.1 строка POST {id}/make-default; И-2): ключ назначения — арендатор.
+        // Right=Configure допускает только владельца (проверено матрицей: редактору/читателю — 403),
+        // а MakeDefaultAsync сверяет project.OwnerId с первым аргументом: для владельца ключи
+        // совпадают, поведение не меняется — ключ из резолва здесь единая точка правды, не права.
         var scope = HttpContext.GetRequestScope();
         return _crud.MakeDefaultAsync(scope.TenantOwnerId, id, CallerSessionId());
     }
@@ -811,7 +812,11 @@ public class PersonasController(
     public async Task<ActionResult<PersonaAutomationRule>> AddAutomationRule(string id,
         [FromBody] AutomationRuleRequest req)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1d (разрез §3.1 строка «POST {id}/automation»; И-2): ключ чтения персоны и записи
+        // правил — арендатор. Право (Configure) из фильтра допускает только владельца: для него
+        // ключ совпадает с вызывающим, но берут его из резолва атрибута, а не из UserId.
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         // Валидация projectId в triggerArgs
         var error = ValidateTriggerProjectId(persona, req);
@@ -823,7 +828,7 @@ public class PersonasController(
         var dup = persona.AutomationRules?.FirstOrDefault(r => AutomationSignature(r) == AutomationSignature(rule));
         if (dup is not null) return Ok(dup);
         var list = new List<PersonaAutomationRule>(persona.AutomationRules ?? []) { rule };
-        _personas.UpdateRules(id, UserId, list);
+        _personas.UpdateRules(id, scope.TenantOwnerId, list);
         await Broadcast("updated", id);
         return Ok(rule);
     }
@@ -870,10 +875,12 @@ public class PersonasController(
     public async Task<ActionResult<IReadOnlyList<PersonaAutomationRule>>> SetAutomationRules(string id,
         [FromBody] AutomationRulesSetRequest req)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1d (разрез §3.1 строка «PUT {id}/automation»; И-2): та же ключевая замена, что в AddAutomationRule
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         var list = (req.Rules ?? []).Select(r => ParseRule(r)).ToList();
-        var updated = _personas.UpdateRules(id, UserId, list);
+        var updated = _personas.UpdateRules(id, scope.TenantOwnerId, list);
         await Broadcast("updated", id);
         return Ok(updated.AutomationRules ?? []);
     }
@@ -884,7 +891,9 @@ public class PersonasController(
     public async Task<ActionResult<PersonaAutomationRule>> UpdateAutomationRule(string id, string ruleId,
         [FromBody] AutomationRuleRequest req)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1d (разрез §3.1 строка «PUT {id}/automation/{ruleId}»; И-2): ключ — арендатор
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         var current = persona.AutomationRules?.FirstOrDefault(r => r.Id == ruleId);
         if (current is null) return NotFound(new { error = "Правило не найдено" });
@@ -895,7 +904,7 @@ public class PersonasController(
 
         var merged = ParseRule(req, current);
         var list = (persona.AutomationRules ?? []).Select(r => r.Id == ruleId ? merged : r).ToList();
-        _personas.UpdateRules(id, UserId, list);
+        _personas.UpdateRules(id, scope.TenantOwnerId, list);
         await Broadcast("updated", id);
         return Ok(merged);
     }
@@ -904,12 +913,14 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<IActionResult> DeleteAutomationRule(string id, string ruleId)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1d (разрез §3.1 строка «DELETE {id}/automation/{ruleId}»; И-2): ключ — арендатор
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         var list = persona.AutomationRules?.Where(r => r.Id != ruleId).ToList();
         if (list is null || list.Count == (persona.AutomationRules?.Count ?? 0))
             return NotFound(new { error = "Правило не найдено" });
-        _personas.UpdateRules(id, UserId, list);
+        _personas.UpdateRules(id, scope.TenantOwnerId, list);
         await Broadcast("updated", id);
         return NoContent();
     }
@@ -919,10 +930,14 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<IActionResult> TestAutomationRule(string id, string ruleId)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1d (разрез §3.1 строка «POST {id}/automation/{ruleId}/test»; И-2): ключ — арендатор:
+        // TestAsync ищет правило по GetByOwner(ownerId) — параметр сервиса именован ownerId,
+        // ключ ему дают из резолва, а не из UserId.
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         if (persona.AutomationRules?.Any(r => r.Id == ruleId) != true) return NotFound();
-        _ = _automation.TestAsync(UserId, id, ruleId);   // в фон — ход может быть долгим
+        _ = _automation.TestAsync(scope.TenantOwnerId, id, ruleId);   // в фон — ход может быть долгим
         return Accepted();
     }
 
@@ -931,7 +946,9 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult> SuggestAutomation(string id)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1d (разрез §3.1 строка «POST {id}/automation/suggest»; И-2): ключ чтения персоны — арендатор
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
 
         try
@@ -952,7 +969,9 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult> GenerateAutomation(string id, [FromBody] GenerateAutomationRequest req)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1d (разрез §3.1 строка «POST {id}/automation/generate»; И-2): та же ключевая замена, что в suggest
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Prompt))
             return BadRequest(new { error = "Опишите, что должна отслеживать персона" });
@@ -1596,13 +1615,18 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<ActionResult<PersonaMemoryEntry>> Remember(string id, [FromBody] RememberRequest req)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
+        // W3-B1d (разрез §3.1 строка «POST {id}/memory»; И-2): запись памяти — под ключом арендатора,
+        // как её чтение в B1c: редактор общего проекта (право WriteContent из фильтра) пишет в тот
+        // же стор персоны, который читает владелец; с ключом вызывающего персону не нашёл бы
+        // ни гейт тела, ни валидация RememberAsync — запись стала бы 404. Отказ 403/404 — за фильтром (И-3).
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest("Пустой текст");
         if (!Enum.TryParse<PersonaMemoryType>(req.Type, true, out var type)) type = PersonaMemoryType.Semantic;
         // Семантический write-path: близкий факт усилит существующую запись, а не создаст дубль
-        var entry = await _memory.RememberAsync(UserId, id, type, req.Text, req.Tags, req.SourceSessionId, req.Salience);
+        var entry = await _memory.RememberAsync(scope.TenantOwnerId, id, type, req.Text, req.Tags, req.SourceSessionId, req.Salience);
         if (entry is null) return NotFound();
-        _memory.EnforceCap(UserId, id);   // потолок и для явного write-path
+        _memory.EnforceCap(scope.TenantOwnerId, id);   // потолок и для явного write-path
         await Broadcast("memory", id);
         return Ok(entry);
     }
@@ -1627,8 +1651,11 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<IActionResult> ClearFocus(string id)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
-        _memory.ClearFocus(UserId, id);
+        // W3-B1d (разрез §3.1 строка «DELETE {id}/focus»; И-2): фокус лежит в сторе под ключом
+        // арендатора (тот же ключ, что чтение GetFocus в B1c) — сброс идёт им же
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
+        _memory.ClearFocus(scope.TenantOwnerId, id);
         await Broadcast("memory", id);
         return NoContent();
     }
@@ -1638,9 +1665,11 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<ActionResult<PersonaMemoryEntry>> UpdateMemory(string id, string entryId, [FromBody] UpdateMemoryRequest req)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
+        // W3-B1d (разрез §3.1 строка «PUT {id}/memory/{entryId}»; И-2): ключ записи — арендатор
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest("Пустой текст");
-        var entry = _memory.Update(UserId, id, entryId, req.Text);
+        var entry = _memory.Update(scope.TenantOwnerId, id, entryId, req.Text);
         if (entry is null) return NotFound();
         await Broadcast("memory", id);
         return Ok(entry);
@@ -1651,8 +1680,10 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<IActionResult> Forget(string id, string entryId)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
-        if (!_memory.Forget(UserId, id, entryId)) return NotFound();
+        // W3-B1d (разрез §3.1 строка «DELETE {id}/memory/{entryId}»; И-2): ключ записи — арендатор
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
+        if (!_memory.Forget(scope.TenantOwnerId, id, entryId)) return NotFound();
         await Broadcast("memory", id);
         return NoContent();
     }
@@ -1662,8 +1693,10 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<IActionResult> ConfirmMemory(string id, string entryId)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
-        if (!_memory.Confirm(UserId, id, entryId)) return NotFound();
+        // W3-B1d (разрез §3.1 строка «POST {id}/memory/{entryId}/confirm»; И-2): ключ записи — арендатор
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
+        if (!_memory.Confirm(scope.TenantOwnerId, id, entryId)) return NotFound();
         await Broadcast("memory", id);
         return NoContent();
     }
@@ -1676,8 +1709,12 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public IActionResult MemoryToNote(string id, string entryId)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
-        return _memory.MemoryToNote(UserId, id, entryId) is { } note
+        // W3-B1d (разрез §3.1 строка «POST {id}/memory/{entryId}/to-note»; И-2): ключ — арендатор:
+        // заметка выходит в vault владельца (Create(ownerId) в сервисе) — право Configure,
+        // участник до тела не доходит, ключ берётся из резолва
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
+        return _memory.MemoryToNote(scope.TenantOwnerId, id, entryId) is { } note
             ? Ok(new { noteId = note.NoteId, noteTitle = note.NoteTitle })
             : NotFound("Запись памяти не найдена");
     }
@@ -1688,8 +1725,11 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<IActionResult> NoteToMemory(string id, [FromBody] NoteToMemoryRequest req)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
-        if (!await _memory.NoteToMemoryAsync(UserId, id, req.NoteId)) return NotFound("Заметка не найдена");
+        // W3-B1d (разрез §3.1 строка «POST {id}/memory/from-note»; И-2): ключ — арендатор:
+        // заметка читается в vault владельца (GetDetail(ownerId) в сервисе), запись — в тот же стор
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
+        if (!await _memory.NoteToMemoryAsync(scope.TenantOwnerId, id, req.NoteId)) return NotFound("Заметка не найдена");
         await Broadcast("memory", id);
         return Ok();
     }

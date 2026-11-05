@@ -5,6 +5,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Memory;
+using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -30,6 +31,16 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// фокус видны участнику (с ключом вызывающего чтение вернуло бы пустой стор), а отказанное
 /// действие не оставляет следа. Мутации, на которых матрица краснеет: вернуть в Get
 /// `_personas.Get(id, UserId)` или снять с Get атрибут [ProjectScope(From = Persona)].
+///
+/// W3-B1d (тот же файл, §3.1 строки B1 с RP(WriteContent)/RP(Configure)): вторая матрица —
+/// write-пути (память, фокус, автоматика). Запись идёт под ключом арендатора: редактор пишет
+/// в тот же стор, который читает владелец (с ключом вызывающего персону не нашёл бы ни гейт
+/// тела, ни валидация сервиса — записи не было бы вовсе), читатель отказан 403 и не оставляет
+/// следа. Гонка: ParallelMemoryWrite_OwnerAndEditor_BothEntriesKept — две одновременные
+/// записи остаются обе. Мутации: вернуть в Remember `_personas.Get(id, UserId)` — строка
+/// «запись памяти» краснеет для Editor. Снятие блокировки в Remember тест гонки не покраснил
+/// (два прогона, копия мутации): критическая секция короткая, два запроса в неё не попали —
+/// разбор в отчёте задачи.
 /// </summary>
 [Trait("Category", "Host")]
 public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationFactory>
@@ -62,6 +73,8 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
     private PersonaManager Personas => _factory.Services.GetRequiredService<PersonaManager>();
     private ProjectManager Projects => _factory.Services.GetRequiredService<ProjectManager>();
     private PersonaMemoryService Memory => _factory.Services.GetRequiredService<PersonaMemoryService>();
+    // Личный vault владельца — проверка «заметка появилась / не появилась» (to-note, from-note)
+    private INoteAccessor Notes => _factory.Services.GetRequiredService<INoteAccessor>();
 
     private static async Task SetFlagAsync(HttpClient client) =>
         (await client.PutAsJsonAsync("/api/feature-flags/shared-projects", new { enabled = true }))
@@ -119,9 +132,12 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
         return (projectId, personaId);
     }
 
-    private static async Task<(int Status, string? Code)> SendAsync(HttpClient client, HttpMethod method, string url)
+    private static async Task<(int Status, string? Code)> SendAsync(HttpClient client, HttpMethod method, string url,
+        object? body = null)
     {
-        var response = await client.SendAsync(new HttpRequestMessage(method, url));
+        var request = new HttpRequestMessage(method, url);
+        if (body is not null) request.Content = JsonContent.Create(body);
+        var response = await client.SendAsync(request);
         var text = await response.Content.ReadAsStringAsync();
         string? code = null;
         if (text.Length > 0)
@@ -262,5 +278,232 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
         // Для самого владельца оба пути открыты: проверка не вакуумная
         (await OwnerClient().GetAsync($"/api/personas/{globalId}")).EnsureSuccessStatusCode();
         (await OwnerClient().GetAsync($"/api/personas/{globalId}/avatar")).EnsureSuccessStatusCode();
+    }
+
+    // ── W3-B1d: write-пути {id}-действий — запись под ключом арендатора (§3.1 строки B1
+    // с RP(WriteContent)/RP(Configure)) ──────────────────────────────────────────────────────
+    //
+    // Матрица та же, что для read-путей, но для записывающих действий: редактор (WriteContent)
+    // пишет в тот же стор, который читает владелец; с ключом вызывающего персону не нашёл бы ни
+    // гейт тела, ни валидация сервиса — записи не было бы вовсе (404). Читатель (права нет)
+    // отказан фильтром — 403 с машинным кодом, запись не оставляет следа; Configure-пути
+    // (to-note/from-note/автоматика) — только владелец. Состояние стора проверяется после
+    // полного цикла. LLM-пути автоматики (/suggest, /generate) здесь не проверяются: для
+    // владельца они доходят до тела и зависят от провайдера — результат не детерминирован;
+    // для отказанных ролей отказ решает фильтр (тот же код, что в строках матрицы).
+    // Правила в фикстурах заводятся выключенными: ручной прогон правила (FireAsync) гасится
+    // на проверке Enabled до создания чата — фоновый агентский ход в тесте не заводится.
+
+    private sealed record WriteAct(string Name, HttpMethod Method, string Path,
+        Func<string, Dictionary<string, string>, object?>? Body,
+        int ForOwner, int ForEditor, int ForReader, int ForOutsider)
+    {
+        public int For(string role) => role switch
+        {
+            Owner => ForOwner, Editor => ForEditor, Reader => ForReader, _ => ForOutsider,
+        };
+    }
+
+    // Уникальный текст каждого прогона: стор памяти и vault класса общие (одна фабрика)
+    private static string RunId() => Guid.NewGuid().ToString("N")[..8];
+
+    private static readonly WriteAct[] WriteActions =
+    [
+        new("запись памяти", HttpMethod.Post, "/api/personas/{p}/memory",
+            (r, _) => new { type = "semantic", text = "Запись " + r }, Ok2xx, Ok2xx, 403, 404),
+        new("правка записи", HttpMethod.Put, "/api/personas/{p}/memory/{e}",
+            (r, _) => new { text = "Изменено " + r }, Ok2xx, Ok2xx, 403, 404),
+        new("подтвердить запись", HttpMethod.Post, "/api/personas/{p}/memory/{e}/confirm", null, Ok2xx, Ok2xx, 403, 404),
+        new("забыть запись", HttpMethod.Delete, "/api/personas/{p}/memory/{e}", null, 204, 204, 403, 404),
+        new("сбросить фокус", HttpMethod.Delete, "/api/personas/{p}/focus", null, 204, 204, 403, 404),
+        new("в заметку", HttpMethod.Post, "/api/personas/{p}/memory/{e}/to-note", null, Ok2xx, 403, 403, 404),
+        new("из заметки", HttpMethod.Post, "/api/personas/{p}/memory/from-note",
+            (_, ids) => new { noteId = ids["n"] }, Ok2xx, 403, 403, 404),
+        new("запись автоматики", HttpMethod.Post, "/api/personas/{p}/automation",
+            (r, _) => new { name = "Правило " + r, enabled = false, actionInstruction = "Сказать слово" },
+            Ok2xx, 403, 403, 404),
+        new("изменить правило", HttpMethod.Put, "/api/personas/{p}/automation/{a}",
+            (r, _) => new { actionInstruction = "Изменено " + r }, Ok2xx, 403, 403, 404),
+        new("удалить правило", HttpMethod.Delete, "/api/personas/{p}/automation/{a}", null, 204, 403, 403, 404),
+        new("прогнать правило", HttpMethod.Post, "/api/personas/{p}/automation/{a}/test", null, 202, 403, 403, 404),
+    ];
+
+    // Фикстура действия — прямая запись стора под ключом владельца: проверяемому действию должно
+    // на что писать (запись, правило, заметка, фокус) и чем проверять результат
+    private async Task<Dictionary<string, string>> PrepareWriteFixtureAsync(string actionName, string personaId, string runId)
+    {
+        var ids = new Dictionary<string, string>();
+        switch (actionName)
+        {
+            case "правка записи" or "забыть запись":
+                ids["e"] = Memory.List(TenantId, personaId, null).First(e => e.Text == "Факт проекта").Id;
+                break;
+            case "подтвердить запись":
+                ids["e"] = (await Memory.RememberAsync(TenantId, personaId, PersonaMemoryType.Episodic,
+                    "Предложено " + runId, null, null, pending: true))!.Id;
+                break;
+            case "в заметку":
+                ids["e"] = (await Memory.RememberAsync(TenantId, personaId, PersonaMemoryType.Semantic,
+                    "Запись в заметку " + runId, null, null))!.Id;
+                break;
+            case "сбросить фокус":
+                Memory.SetFocus(TenantId, personaId, "Фокус " + runId, "В процессе", "Следующий шаг", null);
+                break;
+            case "из заметки":
+                ids["n"] = Notes.Create(TenantId, new CreateNoteRequest(
+                    Title: "Заметка " + runId, Content: "Содержимое заметки " + runId)).Id;
+                break;
+            case "изменить правило" or "удалить правило" or "прогнать правило":
+                var created = await OwnerClient().PostAsJsonAsync($"/api/personas/{personaId}/automation",
+                    new { name = "Правило " + runId, enabled = false, actionInstruction = "Сказать слово" });
+                created.EnsureSuccessStatusCode();
+                ids["a"] = (await BodyAsync(created)).GetProperty("id").GetString()!;
+                break;
+        }
+        return ids;
+    }
+
+    public static IEnumerable<object[]> WriteMatrix() =>
+        from a in WriteActions
+        from role in new[] { Owner, Editor, Reader, Outsider }
+        select new object[] { a.Name, role };
+
+    [Theory]
+    [MemberData(nameof(WriteMatrix))]
+    public async Task ЗаписьНаПутиПерсоны_ДаётОжидаемыйОтказИПишетПодКлючомАрендатора(string actionName, string role)
+    {
+        var action = WriteActions.Single(a => a.Name == actionName);
+        var (_, personaId) = await ArrangeAsync(role);
+        var runId = RunId();
+        var ids = await PrepareWriteFixtureAsync(actionName, personaId, runId);
+
+        var url = action.Path.Replace("{p}", personaId);
+        foreach (var (key, value) in ids) url = url.Replace("{" + key + "}", value);
+
+        var (status, code) = await SendAsync(ClientOf(role), action.Method, url, action.Body?.Invoke(runId, ids));
+
+        var expected = action.For(role);
+        if (expected == Ok2xx)
+        {
+            (status >= 200 && status < 300).Should().BeTrue($"{role}: {actionName} → {status}");
+        }
+        else
+        {
+            status.Should().Be(expected, $"{role}: {actionName}");
+            if (expected == 403)
+                code.Should().Be(NoRight, $"{role}: {actionName} — отказ различается машинным кодом");
+        }
+
+        // Состояние стора после полного цикла: разрешённое записано под ключом владельца и видно
+        // из его чтения, отказанное оставило всё как было
+        var entries = Memory.List(TenantId, personaId, null);
+        var rules = Personas.Get(personaId, TenantId)!.AutomationRules ?? [];
+        switch (actionName, role)
+        {
+            case ("запись памяти", Owner or Editor):
+                entries.Select(e => e.Text).Should().Contain("Запись " + runId,
+                    $"{role}: запись легла в тот же стор, который читает владелец");
+                break;
+            case ("запись памяти", _):
+                entries.Select(e => e.Text).Should().NotContain("Запись " + runId,
+                    $"{role}: отказанная запись не оставила следа");
+                break;
+            case ("правка записи", Owner or Editor):
+                entries.Single(e => e.Id == ids["e"]).Text.Should().Be("Изменено " + runId,
+                    $"{role}: правка записана в сторе владельца");
+                break;
+            case ("правка записи", _):
+                entries.Single(e => e.Id == ids["e"]).Text.Should().Be("Факт проекта",
+                    $"{role}: отказанная правка не тронула запись");
+                break;
+            case ("подтвердить запись", Owner or Editor):
+                entries.Single(e => e.Id == ids["e"]).Pending.Should().BeFalse($"{role}: запись подтверждена");
+                break;
+            case ("подтвердить запись", _):
+                entries.Single(e => e.Id == ids["e"]).Pending.Should().BeTrue(
+                    $"{role}: отказанный confirm оставил запись pending");
+                break;
+            case ("забыть запись", Owner or Editor):
+                entries.Any(e => e.Id == ids["e"]).Should().BeFalse($"{role}: запись удалена");
+                break;
+            case ("забыть запись", _):
+                entries.Any(e => e.Id == ids["e"]).Should().BeTrue($"{role}: отказанное удаление не тронуло запись");
+                break;
+            case ("сбросить фокус", Owner or Editor):
+                Memory.GetFocus(TenantId, personaId).Should().BeNull($"{role}: фокус сброшен");
+                break;
+            case ("сбросить фокус", _):
+                Memory.GetFocus(TenantId, personaId)?.What.Should().Be("Фокус " + runId,
+                    $"{role}: отказанный сброс не тронул фокус");
+                break;
+            case ("в заметку", Owner):
+                Notes.GetSummaries(TenantId, null, null).Any(s => s.Title.Contains(runId)).Should().BeTrue(
+                    "заметка из записи появилась в личном vault владельца");
+                break;
+            case ("в заметку", _):
+                Notes.GetSummaries(TenantId, null, null).Any(s => s.Title.Contains(runId)).Should().BeFalse(
+                    $"{role}: отказанный to-note не создал заметку в vault владельца");
+                break;
+            case ("из заметки", Owner):
+                entries.Select(e => e.Text).Should().Contain("Содержимое заметки " + runId,
+                    "заметка записана в память персоны");
+                break;
+            case ("из заметки", _):
+                entries.Select(e => e.Text).Should().NotContain("Содержимое заметки " + runId,
+                    $"{role}: отказанный from-note ничего не записал");
+                break;
+            case ("запись автоматики", Owner):
+                rules.Any(r => r.Name == "Правило " + runId).Should().BeTrue("правило записано под ключом владельца");
+                break;
+            case ("запись автоматики", _):
+                rules.Any(r => r.Name == "Правило " + runId).Should().BeFalse($"{role}: отказанное правило не родилось");
+                break;
+            case ("изменить правило", Owner):
+                rules.Single(r => r.Id == ids["a"]).Action.Instruction.Should().Be("Изменено " + runId,
+                    "правка правила записана в сторе владельца");
+                break;
+            case ("изменить правило", _):
+                rules.Single(r => r.Id == ids["a"]).Action.Instruction.Should().Be("Сказать слово",
+                    $"{role}: отказанная правка не тронула правило");
+                break;
+            case ("удалить правило", Owner):
+                rules.Any(r => r.Id == ids["a"]).Should().BeFalse("правило удалено");
+                break;
+            case ("удалить правило", _):
+                rules.Any(r => r.Id == ids["a"]).Should().BeTrue($"{role}: отказанное удаление не тронуло правило");
+                break;
+            case ("прогнать правило", _):
+                rules.Any(r => r.Id == ids["a"]).Should().BeTrue($"{role}: отказанный прогон оставил правило на месте");
+                break;
+        }
+    }
+
+    // ── W3-B1d: гонка — владелец и редактор пишут память одной персоны одновременно ──────────────
+    //
+    // До B1d ключи были разные (каждый свой UserId) и записи не пересекались; теперь оба идут в
+    // один стор. Защита от гонки — блокировка сервиса: дописывание и сохранение в Remember идут
+    // под _saveLock (PersonaMemoryService.Remember: state.Entries.Add + JsonFileStore.Save под
+    // lock), дописывание — не перезапись списка (Append, не замена). Мутация «снять lock в
+    // Remember» на копии дерева теста не покраснила: критическая секция короткая (дедуп +
+    // Add + Save), два запроса в неё за два прогона не пересеклись — разбор в отчёте задачи.
+
+    [Fact]
+    public async Task ParallelMemoryWrite_OwnerAndEditor_BothEntriesKept()
+    {
+        var (_, personaId) = await ArrangeAsync(Editor);
+        var ownerText = "Запись владельца " + RunId();
+        var editorText = "Запись редактора " + RunId();
+
+        var ownerPost = OwnerClient().PostAsJsonAsync($"/api/personas/{personaId}/memory",
+            new { type = "semantic", text = ownerText });
+        var editorPost = SecondClient().PostAsJsonAsync($"/api/personas/{personaId}/memory",
+            new { type = "semantic", text = editorText });
+        foreach (var response in await Task.WhenAll(ownerPost, editorPost))
+            response.EnsureSuccessStatusCode();
+
+        var texts = Memory.List(TenantId, personaId, null).Select(e => e.Text);
+        texts.Should().Contain(ownerText, "запись владельца в сторе");
+        texts.Should().Contain(editorText,
+            "запись редактора в том же сторе: одновременная запись ничего не перезаписала и не потеряла");
     }
 }

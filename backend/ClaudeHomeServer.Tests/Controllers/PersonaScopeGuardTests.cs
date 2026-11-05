@@ -175,21 +175,10 @@ public class PersonaScopeGuardTests
         // W3-B1c закрыт (тела read-путей {id}-действий — через GetRequestScope и ключ арендатора,
         // SharedProjectPersonaRightsTests): инлайновых вызовов с ключом-вызывающим в Get/Avatar*/
         // AvatarOriginal/AvatarCandidate/Bindings/Automation/Memory*/GetFocus больше нет, строки сняты.
-        // W3-B1d — тела write-путей {id}-действий (§3.1 строки B1 с RP(Configure)/RP(WriteContent))
-        ("PersonasController.cs", "PersonasController.AddAutomationRule", "W3-B1d"),
-        ("PersonasController.cs", "PersonasController.SetAutomationRules", "W3-B1d"),
-        ("PersonasController.cs", "PersonasController.UpdateAutomationRule", "W3-B1d"),
-        ("PersonasController.cs", "PersonasController.DeleteAutomationRule", "W3-B1d"),
-        ("PersonasController.cs", "PersonasController.TestAutomationRule", "W3-B1d"),
-        ("PersonasController.cs", "PersonasController.SuggestAutomation", "W3-B1d"),
-        ("PersonasController.cs", "PersonasController.GenerateAutomation", "W3-B1d"),
-        ("PersonasController.cs", "PersonasController.Remember", "W3-B1d"),
-        ("PersonasController.cs", "PersonasController.ClearFocus", "W3-B1d"),
-        ("PersonasController.cs", "PersonasController.UpdateMemory", "W3-B1d"),
-        ("PersonasController.cs", "PersonasController.Forget", "W3-B1d"),
-        ("PersonasController.cs", "PersonasController.ConfirmMemory", "W3-B1d"),
-        ("PersonasController.cs", "PersonasController.MemoryToNote", "W3-B1d"),
-        ("PersonasController.cs", "PersonasController.NoteToMemory", "W3-B1d"),
+        // W3-B1d закрыт (тела write-путей {id}-действий — та же ключевая замена,
+        // SharedProjectPersonaRightsTests): инлайновых вызовов с ключом-вызывающим в Add/Set/Update/
+        // Delete/Test/Suggest/Generate-автоматике, Remember/ClearFocus/UpdateMemory/Forget/
+        // ConfirmMemory/MemoryToNote/NoteToMemory больше нет, строки сняты.
         // W3-B3b — аватар: загрузка и перекроп (§3.1 «POST {id}/avatar/upload, /avatar/recrop»)
         ("PersonasController.cs", "PersonasController.UploadAvatar", "W3-B3b"),
         ("PersonasController.cs", "PersonasController.RecropAvatar", "W3-B3b"),
@@ -259,10 +248,11 @@ public class PersonaScopeGuardTests
 
         // Пол «невакуумности» следует за долгом: базовый состав был 40+; шаги волны переводят
         // инлайновые вызовы на ResolvePersona и он законно падает (W3-B4b снял два места в
-        // SessionsController.Create, W3-B2 — места списков, W3-B1c — 10 тел read-путей в
-        // PersonasController). 25 — по текущему составу с запасом (29: 23 в PersonasController +
-        // 6 «личных» мест): обнуление области всё ещё красное.
-        found.Should().BeGreaterThan(25, "сверка не должна быть вакуумной: базовый состав инлайновых вызовов — десятки");
+        // SessionsController.Create, W3-B2 — места списков, W3-B1c — 10 тел read-путей,
+        // W3-B1d — 14 тел write-путей в PersonasController). 10 — по текущему составу с запасом
+        // (15: 9 оставшихся мест в PersonasController — W3-B3b/W3-B5 — и 6 «личных»):
+        // обнуление области всё ещё красное.
+        found.Should().BeGreaterThan(10, "сверка не должна быть вакуумной: базовый состав инлайновых вызовов — десятки");
         offenders.Should().BeEmpty(
             "вызовы PersonaManager, ключованные вызывающим, допустимы только из «личных» мест и списка долга "
             + "(W3-B1b, разрез §5 п.2); новый вызов вне списков — через ResolvePersona");

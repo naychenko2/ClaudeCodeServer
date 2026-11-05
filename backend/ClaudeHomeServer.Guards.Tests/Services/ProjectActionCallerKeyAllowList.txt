@@ -131,7 +131,7 @@ backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 # в проверку видимости ключа транскрипта (IsTranscriptReservedForOthers → VisibleTo →
 # SessionAccess.CanSee), тот же класс мест, что SessionsController ниже. Ключом хранилищ он не
 # служит: история и транскрипт нового чата ключуются его ClaudeSessionId (HistoryKeyOf).
-backend/ClaudeHomeServer/Controllers/PersonasController.cs|112
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|111
 backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6

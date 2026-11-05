@@ -34,7 +34,9 @@ public interface IContextKindProvider
     string? DescribeFormat(ContextScope scope, ContextItem primary) => null;
 }
 
-public sealed record ContextScope(string OwnerId, Session Session, Project? Project);
+// OwnerId — арендатор (ключ хранилищ), ActorId — вызывающий: субъект приватности файлов проекта. В общем проекте они
+// расходятся; null — актор неизвестен, чужим считается любое private (fail-closed)
+public sealed record ContextScope(string OwnerId, Session Session, Project? Project, string? ActorId = null);
 
 public sealed record ContextItemSummary(string Label, string? Version, string? Thumb, bool Missing);
 

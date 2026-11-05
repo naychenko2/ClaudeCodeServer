@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -15,8 +16,8 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// S2c-9 (решение Андрея 01.11): полная карточка чужой задачи открыта участнику общего проекта
 /// по праву чтения. GET /api/tasks/{id}: редактор и читатель получают 200 с Description и
 /// ResultMarkdown; посторонний, отозванный, участник с выключенным флагом, личная задача владельца —
-/// 404 («нет» и «чужое» не различаем). Правка задачи участнику по-прежнему отказ (403) —
-/// SharedProjectWriteDenied этот шаг не трогает.
+/// 404 («нет» и «чужое» не различаем). Правка остаётся отказом читателю (403 project_scope);
+/// редактору дверь правки открыл F2-T1 — её матрица в SharedProjectTaskWriteRightsTests.
 ///
 /// Список и карточка идут через одну проекцию для участника (TaskView): id заметки личного vault
 /// владельца участнику не уходит (он раскрывает путь и название личной заметки), id заметки этого
@@ -178,14 +179,12 @@ public class SharedProjectTaskCardReadTests : IClassFixture<TestWebApplicationFa
         (await Owner().GetAsync($"/api/tasks/{personalId}")).EnsureSuccessStatusCode();
     }
 
-    // ── правка участником по-прежнему отказ (этот шаг её не открывает) ───────────────
+    // ── правка читателю по-прежнему отказ (редактору её открыл F2-T1: SharedProjectTaskWriteRightsTests) ──
 
-    [Theory]
-    [InlineData("editor")]
-    [InlineData("reader")]
-    public async Task Участник_ПравитКарточку_403(string role)
+    [Fact]
+    public async Task Читатель_ПравитКарточку_403()
     {
-        var projectId = await ProjectWithMemberAsync(role);
+        var projectId = await ProjectWithMemberAsync("reader");
         var taskId = SeedTaskAsync(projectId);
 
         var r = await Member().PutAsJsonAsync($"/api/tasks/{taskId}", new { title = "перебил участник" });
@@ -387,7 +386,8 @@ public class SharedProjectTaskCardReadTests : IClassFixture<TestWebApplicationFa
     public async Task БезХодаУчастника_tasks_get_ПраваАрендатора_SourceNoteIdВиден()
     {
         var (_, taskId, chatId) = await SharedProjectWithChatAndTaskAsync();
-        // хода нет: актор неизвестен — права арендатора (разрез §2), проекция не применяется
+        // хода нет: актор неизвестен. После О2 (892deb00) безымянному открыто только то, что не
+        // требует права: tasks_get — чтение, оно открыто; проекция актора-участника не применяется.
 
         var (text, isError) = await McpCallAsync(Owner(), chatId, "tasks_get", new { id = taskId });
 
@@ -434,17 +434,22 @@ public class SharedProjectTaskCardReadTests : IClassFixture<TestWebApplicationFa
             .Should().Be(NoteId("personal", "Личная/заметка.md"), "проецируется ответ, не запись");
     }
 
-    /// <summary>Без хода участника (актор неизвестен — фон) ответы записи остаются полными:
-    /// права арендатора, как до правки (разрез §2).</summary>
+    /// <summary>Без хода участника (актор неизвестен — фон) пишущий вызов общего проекта ОТКАЗАН
+    /// гейтом актора: после О2 финального ревью «Общих проектов» (892deb00) безымянный ход общего
+    /// проекта не имеет ни одного права — открыто только не требующее права (пара:
+    /// БезХодаУчастника_tasks_get… — чтение тому же актору открыто, и оно остаётся полным).
+    /// Отказ не трогает запись: карточка владельца всё так же полна.</summary>
     [Fact]
-    public async Task БезХодаУчастника_ОтветыЗаписи_ПраваАрендатора_SourceNoteIdВиден()
+    public async Task БезХодаУчастника_ОтветыЗаписи_ОтказГейта_ЗаписьНеМеняется()
     {
         var (_, taskId, chatId) = await SharedProjectWithChatAndTaskAsync();
 
         var (text, isError) = await McpCallAsync(Owner(), chatId, "tasks_update", new { id = taskId, title = "переписал штаб" });
 
-        isError.Should().BeFalse(text);
-        JsonSerializer.Deserialize<JsonElement>(text)
-            .GetProperty("sourceNoteId").GetString().Should().Be(NoteId("personal", "Личная/заметка.md"));
+        isError.Should().BeTrue(text);
+        text.Should().Contain(ActorRightGate.DeniedText,
+            "безымянный ход общего проекта: права не даются ни одному пишущему инструменту");
+        (await GetCardAsync(Owner(), taskId)).GetProperty("sourceNoteId").GetString()
+            .Should().Be(NoteId("personal", "Личная/заметка.md"), "отказ был до мутации: запись не тронута");
     }
 }

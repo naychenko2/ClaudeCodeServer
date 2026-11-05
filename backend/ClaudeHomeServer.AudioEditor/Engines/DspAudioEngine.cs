@@ -81,7 +81,7 @@ public sealed class DspAudioEngine(
     public bool Available => dsp?.Available == true;
 
     public async Task<AudioEditCallResult<AudioDspVersionDto>> EditAsync(
-        string ownerId, AudioEditScope scope, AudioDspEditInput input, CancellationToken ct)
+        string ownerId, string? actorId, AudioEditScope scope, AudioDspEditInput input, CancellationToken ct)
     {
         if (dsp is null || !dsp.Available) return Fail(AudioEditErrorCodes.DspUnavailable, DspUnavailableText);
         if (!Enum.IsDefined(input.Op)) return Invalid("Неизвестная операция правки");
@@ -91,7 +91,7 @@ public sealed class DspAudioEngine(
         var (thread, version) = basis!.Value;
 
         if (version.File(AudioFileRoles.Main) is not { } main) return Invalid("У версии нет звука");
-        var (audio, path, denied) = await ReadAsync(ownerId, scope, version, main, ct);
+        var (audio, path, denied) = await ReadAsync(ownerId, actorId, scope, version, main, ct);
         if (audio is null) return denied!;
         var format = input.Format ?? FormatOf(path!);
 
@@ -114,7 +114,7 @@ public sealed class DspAudioEngine(
     }
 
     public async Task<AudioEditCallResult<AudioDspVersionDto>> MixAsync(
-        string ownerId, AudioEditScope scope, AudioMixInput input, CancellationToken ct)
+        string ownerId, string? actorId, AudioEditScope scope, AudioMixInput input, CancellationToken ct)
     {
         if (dsp is null || !dsp.Available) return Fail(AudioEditErrorCodes.DspUnavailable, DspUnavailableText);
         if (input.Format is { } f && !Enum.IsDefined(f)) return Invalid("Неизвестный формат результата");
@@ -126,12 +126,12 @@ public sealed class DspAudioEngine(
         if (input.ContextRevision is { } revision)
         {
             if (context is null) return Fail(AudioEditErrorCodes.Unavailable, ChatContext.AudioContextLaunch.UnavailableText);
-            var read = context.Read(ownerId, scope, input.SessionId, revision);
+            var read = context.Read(ownerId, scope, input.SessionId, revision, actorId);
             if (!read.Ok) return read.Fail<AudioDspVersionDto>();
             var inputs = ChatContext.AudioContextLaunch.Extract(scope, read.State!, null);
             // Нить маршрута сверяется со стором: основной объект сменился — это тот же 409, что и устаревшая ревизия
             if (inputs.ThreadId != input.ThreadId.Trim())
-                return context.Stale(ownerId, scope, input.SessionId).Fail<AudioDspVersionDto>();
+                return context.Stale(ownerId, scope, input.SessionId, actorId).Fail<AudioDspVersionDto>();
             baseVersionId = inputs.VersionId;
         }
         var (basis, error) = Base(ownerId, scope, input.SessionId, input.ThreadId, baseVersionId, input.Revision);
@@ -147,7 +147,7 @@ public sealed class DspAudioEngine(
                 return Invalid($"В версии нет стема «{stem.Role}»");
             // Молчащий стем ffmpeg всё равно не услышит — с диска его не читаем
             if (stem.Muted) continue;
-            var (audio, path, denied) = await ReadAsync(ownerId, scope, version, file, ct);
+            var (audio, path, denied) = await ReadAsync(ownerId, actorId, scope, version, file, ct);
             if (audio is null) return denied!;
             firstPath ??= path;
             stems.Add(new AudioStem(audio, stem.GainDb));
@@ -165,7 +165,7 @@ public sealed class DspAudioEngine(
     }
 
     // Пики волны файла версии для плеера: role null — главный файл
-    public async Task<AudioEditCallResult<AudioPeaksDto>> PeaksAsync(string ownerId, AudioEditScope scope,
+    public async Task<AudioEditCallResult<AudioPeaksDto>> PeaksAsync(string ownerId, string? actorId, AudioEditScope scope,
         string sessionId, string threadId, string versionId, string? role, int points, CancellationToken ct)
     {
         if (dsp is null || !dsp.Available)
@@ -181,7 +181,7 @@ public sealed class DspAudioEngine(
         if (version.File(role ?? AudioFileRoles.Main) is not { } file)
             return AudioEditCallResult<AudioPeaksDto>.Fail(AudioEditErrorCodes.FileNotFound, "Файла нет в этой версии");
 
-        var (audio, _, denied) = await ReadAsync(ownerId, scope, version, file, ct);
+        var (audio, _, denied) = await ReadAsync(ownerId, actorId, scope, version, file, ct);
         if (audio is null) return AudioEditCallResult<AudioPeaksDto>.Fail(denied!.ErrorCode!, denied.Error!);
         var peaks = await dsp.PeaksAsync(audio, points, ct);
         return peaks.Peaks is { } values
@@ -205,9 +205,9 @@ public sealed class DspAudioEngine(
     }
 
     private async Task<(byte[]? Audio, string? Path, AudioEditCallResult<AudioDspVersionDto>? Denied)> ReadAsync(
-        string ownerId, AudioEditScope scope, AudioThreadVersion version, AudioVersionFile file, CancellationToken ct)
+        string ownerId, string? actorId, AudioEditScope scope, AudioThreadVersion version, AudioVersionFile file, CancellationToken ct)
     {
-        if (AudioVersionFiles.Resolve(workspace, ownerId, scope, version, file) is not { } path || !File.Exists(path))
+        if (AudioVersionFiles.Resolve(workspace, ownerId, actorId, scope, version, file) is not { } path || !File.Exists(path))
             return (null, null, Fail(AudioEditErrorCodes.FileNotFound,
                 scope.IsPersonal && version.IsOrigin
                     ? "В личном чате файлов проекта нет"

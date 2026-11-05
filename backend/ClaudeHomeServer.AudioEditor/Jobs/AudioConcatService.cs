@@ -37,7 +37,8 @@ public sealed record AudioConcatResultDto(string ThreadId, string VersionId, str
 //
 // Инварианты:
 // - в личной области файлы проекта запрещены — отказ ДО обращения к диску (как ScopeRefusal);
-// - путь проекта — только через ProjectLinkGuard.ResolveInside, путь версии — только внутри папки её задачи;
+// - путь проекта — только через ProjectLinkGuard.ResolveInsideAs (чужое private — тот же отказ),
+//   путь версии — только внутри папки её задачи;
 // - версия-результат несёт jobId (рабочая папка не чистит её по TTL) и лицензии кусков: склейка трека
 //   YuE2 остаётся CC BY-NC.
 public sealed class AudioConcatService(
@@ -58,14 +59,14 @@ public sealed class AudioConcatService(
     private sealed record Piece(byte[] Audio, string Label, string? License);
 
     public async Task<AudioEditCallResult<AudioConcatResultDto>> ConcatAsync(
-        string ownerId, AudioEditScope scope, AudioConcatInput input, CancellationToken ct)
+        string ownerId, string? actorId, AudioEditScope scope, AudioConcatInput input, CancellationToken ct)
     {
         if (dsp is null || !dsp.Available) return Fail(AudioEditErrorCodes.DspUnavailable, DspUnavailableText);
         var requested = input.Pieces;
         if (input.ContextRevision is { } revision)
         {
             if (context is null) return Fail(AudioEditErrorCodes.Unavailable, ChatContext.AudioContextLaunch.UnavailableText);
-            var read = context.Read(ownerId, scope, input.SessionId, revision);
+            var read = context.Read(ownerId, scope, input.SessionId, revision, actorId);
             if (!read.Ok) return read.Fail<AudioConcatResultDto>();
             requested = ChatContext.AudioContextLaunch.Extract(scope, read.State!, AudioEditJobService.OpName(AudioOp.Concat)).Pieces;
             if (requested.Count < AudioDspLimits.MinConcatPieces)
@@ -85,7 +86,7 @@ public sealed class AudioConcatService(
         var pieces = new List<Piece>();
         for (var i = 0; i < requested.Count; i++)
         {
-            var (piece, error) = await ResolveAsync(ownerId, scope, sessionId, requested[i], ct);
+            var (piece, error) = await ResolveAsync(ownerId, actorId, scope, sessionId, requested[i], ct);
             if (piece is null) return Invalid($"Кусок {i + 1}: {error}");
             pieces.Add(piece);
         }
@@ -137,7 +138,7 @@ public sealed class AudioConcatService(
     }
 
     private async Task<(Piece? Piece, string? Error)> ResolveAsync(
-        string ownerId, AudioEditScope scope, string sessionId, AudioConcatPiece piece, CancellationToken ct)
+        string ownerId, string? actorId, AudioEditScope scope, string sessionId, AudioConcatPiece piece, CancellationToken ct)
     {
         var hasThread = !string.IsNullOrWhiteSpace(piece.ThreadId);
         var hasFile = !string.IsNullOrWhiteSpace(piece.ProjectFile);
@@ -146,7 +147,7 @@ public sealed class AudioConcatService(
         if (hasFile)
         {
             var file = piece.ProjectFile!.Trim();
-            return await ReadProjectAsync(scope, file, file, null, ct);
+            return await ReadProjectAsync(actorId, scope, file, file, null, ct);
         }
 
         var thread = threads.Store.Get(ownerId, sessionId).Threads.FirstOrDefault(t => t.Id == piece.ThreadId!.Trim());
@@ -156,7 +157,7 @@ public sealed class AudioConcatService(
         var label = $"{AudioJobThreads.Name(thread)} {(version.IsOrigin ? "исходник" : $"в{version.Number}")}";
 
         // Исходник — файл проекта: те же правила, что у куска-файла
-        if (version.IsOrigin) return await ReadProjectAsync(scope, main.Path, label, version.License, ct);
+        if (version.IsOrigin) return await ReadProjectAsync(actorId, scope, main.Path, label, version.License, ct);
         // Версия запуска и правки без ИИ (DspAudioEngine) — файл в папке своей задачи. Без jobId — только
         // старые записи до этапа 5: файла на диске у них нет
         if (version.JobId is not { } jobId) return (null, "у этой версии нет файла на сервере");
@@ -164,12 +165,13 @@ public sealed class AudioConcatService(
         return await ReadAsync(full, label, version.License, ct);
     }
 
-    // Отказ личной области — до диска: Project у неё нет, RootPath не читаем
+    // Отказ личной области — до диска: Project у неё нет, RootPath не читаем. Чужое private
+    // (.cc-attachments/private/{X}) отдаёт тот же отказ, что «путь вне проекта»: наличие не раскрываем
     private static async Task<(Piece? Piece, string? Error)> ReadProjectAsync(
-        AudioEditScope scope, string relative, string label, string? license, CancellationToken ct)
+        string? actorId, AudioEditScope scope, string relative, string label, string? license, CancellationToken ct)
     {
         if (scope.IsPersonal || scope.Project is not { } project) return (null, PersonalProjectFileText);
-        return await ReadAsync(ProjectLinkGuard.ResolveInside(project.RootPath, relative), label, license, ct);
+        return await ReadAsync(ProjectLinkGuard.ResolveInsideAs(project.RootPath, relative, actorId), label, license, ct);
     }
 
     private static async Task<(Piece? Piece, string? Error)> ReadAsync(string? full, string label, string? license, CancellationToken ct)

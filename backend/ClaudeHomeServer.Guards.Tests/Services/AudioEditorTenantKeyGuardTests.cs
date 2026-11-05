@@ -18,6 +18,13 @@ public class AudioEditorTenantKeyGuardTests
     private static readonly Regex Declaration = new(@"\bUserId\s*=>\s*User\.FindFirstValue", RegexOptions.Compiled);
     private static readonly Regex GateArgument = new(@"\bgate\.Try\w+\(\s*UserId\b", RegexOptions.Compiled);
 
+    // F2-P2e/F2-P2f (98dc1bd57/826d45c07, принято ревью 9d84ad50 → 08e5a4c1): сервисы вертикали
+    // получают (ключ-арендатор, актор приватности). id вызывающего допустим аргументом ПОСЛЕ
+    // ключа арендатора Owner(scope) на той же строке — ключ хранилищ остаётся арендатор;
+    // и как субъект общего предиката приватности (чужое private судится по вызывающему).
+    private static readonly Regex TenantKey = new(@"\bOwner\(scope\)", RegexOptions.Compiled);
+    private static readonly Regex PrivacySubject = new(@"ProjectLinkGuard\.ResolveInsideAs", RegexOptions.Compiled);
+
     [Fact]
     public void КонтроллерыЗвука_UserId_ТолькоВГейте()
     {
@@ -36,6 +43,10 @@ public class AudioEditorTenantKeyGuardTests
                 if (GateArgument.IsMatch(line)) { gateCalls++; continue; }
                 // Вызов гейта мог перенестись: допустим аргумент на строке сразу после «gate.Try…(»
                 if (i > 0 && Regex.IsMatch(lines[i - 1], @"\bgate\.Try\w+\(\s*$")) { gateCalls++; continue; }
+                var tenant = TenantKey.Match(line);
+                var caller = UserIdUse.Match(line);
+                if (tenant.Success && caller.Success && caller.Index > tenant.Index) continue;
+                if (PrivacySubject.IsMatch(line)) continue;
                 Assert.Fail($"{Path.GetFileName(file)}:{i + 1} — UserId вне гейта: «{line.Trim()}». " +
                             "Ключ хранилищ — Owner(scope), а не вызывающий");
             }

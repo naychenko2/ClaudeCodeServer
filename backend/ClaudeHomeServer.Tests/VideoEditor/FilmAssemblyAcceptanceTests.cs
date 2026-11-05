@@ -96,7 +96,7 @@ public sealed class FilmAssemblyAcceptanceTests : IDisposable
         var assembler = new FilmAssembler(service, registry, new ConfigurationBuilder().Build(), NullLogger<FilmAssembler>.Instance, dsp);
         var scope = VideoEditScope.Of(new Project { Id = "p1", OwnerId = Owner, RootPath = _root });
 
-        assembler.Start(Owner, scope, "video/a/a.film", VideoInitiators.Human).IsOk.Should().BeTrue();
+        assembler.Start(Owner, Owner, scope, "video/a/a.film", VideoInitiators.Human).IsOk.Should().BeTrue();
         await assembler.WhenIdleAsync();
 
         var status = registry.Get(Owner, "p1", "video/a/a.film")!;
@@ -109,7 +109,7 @@ public sealed class FilmAssemblyAcceptanceTests : IDisposable
         info.Seconds.Should().BeApproximately(7.5, 0.4, "3 + 3 − 0,5 наплыва + 2");
         service.List(scope).Value!.Single().Stale.Should().BeFalse();
 
-        assembler.Start(Owner, scope, "video/a/a.film", VideoInitiators.Human).IsOk.Should().BeTrue();
+        assembler.Start(Owner, Owner, scope, "video/a/a.film", VideoInitiators.Human).IsOk.Should().BeTrue();
         await assembler.WhenIdleAsync();
 
         File.Exists(Path.Combine(_root, "video", "a", "film.v2.mp4")).Should().BeTrue("пересборка не затирает film.mp4");

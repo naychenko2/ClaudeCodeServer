@@ -3,7 +3,7 @@
 // и редактора, S2a-10a; ответы на разрешения/планы — только Configure владельца); фронт лишь
 // не обещает того, что бэк откажет.
 
-import type { Project, Session } from '../../../types';
+import type { Project, Session, Task } from '../../../types';
 
 // Участник — не владелец общего проекта. myRole авторитетна, когда она есть
 export function isParticipant(project: Pick<Project, 'myRole'> | null | undefined): boolean {
@@ -144,6 +144,40 @@ export function isNotChatAuthorError(e: unknown): boolean {
 // Создавать чаты в проекте читателю нельзя: входы создания скрыты
 export function canCreateChats(project: Pick<Project, 'myRole'> | null | undefined): boolean {
   return project?.myRole !== 'reader';
+}
+
+// Задачи общего проекта (разрез CONSULT-TASK-RIGHTS, F2-Q3): правят владелец и редактор,
+// читатель только смотрит. Фронт не обещает того, чего он не делает: входы создания
+// скрыты, контролы записи выключены с этой подсказкой, перетаскивание на доске не
+// активируется вовсе. Вне проекта (хаб) и в личном проекте (myRole нет) — как раньше.
+export const TASK_WRITE_DENIED = 'Менять задачи может редактор';
+
+export function canWriteTasks(project: Pick<Project, 'myRole'> | null | undefined): boolean {
+  return project?.myRole !== 'reader';
+}
+
+// null — можно; строка — текст для подсказки выключенного контрола (тот же текст, что
+// в панели «Задачи»: одна строка на весь фронт задач)
+export function taskWriteDeniedReason(project: Pick<Project, 'myRole'> | null | undefined): string | null {
+  return canWriteTasks(project) ? null : TASK_WRITE_DENIED;
+}
+
+// Удаление задачи (доработка F2-Q3, ревью 11716b9b): зеркало бэкового TaskDeleteDenied
+// (TasksController.cs:243-248) — разрешено автору или владельцу задачи. Порядок тот же:
+// сначала роль — читателю отказ до авторства (бэковый 403 project_scope); затем авторство —
+// редактору на чужой задаче (бэковый 403 not_task_author, фронт не обещает корзину).
+// Автор неизвестен (CreatedByUserId == null — старые и серверные записи) автором не
+// считается: тот же fail-closed, что у chatDeleteDeniedReason. Вне проекта и в своём
+// проекте (myRole нет) — можно, как раньше.
+export function canDeleteTask(
+  project: Pick<Project, 'myRole'> | null | undefined,
+  task: Pick<Task, 'createdByUserId'> | null | undefined,
+  myUserId: string | null | undefined,
+): boolean {
+  const role = project?.myRole;
+  if (!role || role === 'owner') return true;
+  if (role === 'reader') return false;
+  return !!task?.createdByUserId && task.createdByUserId === myUserId;
 }
 
 // Гейт «запустить ход / ответить на вопрос» для входов вне композера (чипы-подсказки,

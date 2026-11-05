@@ -85,7 +85,13 @@ public class TasksToolsetAssigneeTests : IClassFixture<TestWebApplicationFactory
 
     /// <summary>Проект владельца с чатом в нём и задачей в этом проекте; role — роль второго
     /// пользователя ("editor"/"reader"; null — участника нет). Флаг shared-projects поднят
-    /// обоим: без него участник не резолвится точкой доступа — тот же отказ, что у REST-двери.</summary>
+    /// обоим: без него участник не резолвится точкой доступа — тот же отказ, что у REST-двери.
+    ///
+    /// Ход в чате начинает владелец: после О2 финального ревью «Общих проектов» (892deb00)
+    /// безымянный вызов общего проекта не имеет ни одного права и был бы отказан ГЕЙТОМ актора,
+    /// не дойдя до резолва исполнителя (тест мерил бы не то). Именованный актор — тот же
+    /// уровень прав, что давал тестам прежний «актор неизвестен = права арендатора»; в личном
+    /// чате (ЛичнаяЗадача*) такой ход не нужен: там безымянный разрешён.</summary>
     private async Task<(string ProjectId, string SessionId, string TaskId)> SharedProjectWithTaskAsync(string? role)
     {
         var owner = Owner();
@@ -106,6 +112,12 @@ public class TasksToolsetAssigneeTests : IClassFixture<TestWebApplicationFactory
         var session = await owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "acceptEdits" });
         session.EnsureSuccessStatusCode();
         var sessionId = IdOf(await session.Content.ReadAsStringAsync());
+
+        // Актор вызова называется явно (тот же приём, что StartTurnAsync в TasksRunExecutorActorTests)
+        (await owner.PostAsJsonAsync($"/api/sessions/{sessionId}/messages",
+            new { text = "назначение исполнителя", wait = "none" })).EnsureSuccessStatusCode();
+        Sessions.GetTurnActor(sessionId, OwnerId).Should().Be(OwnerId,
+            "без названного актора tasks_create отказался бы на гейте, а не на резолве исполнителя");
 
         var (text, isError) = await CallToolAsync(sessionId, "tasks_create", new { title = "Задача проекта" });
         isError.Should().BeFalse(text);

@@ -410,11 +410,15 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             // любой серверный/агентский путь — null; происхождение НЕ выводится из отсутствия
             // маркеров (CreatedByPersonaId/SourceSessionId): серверный вызов без маркеров
             // (merge-задача TasksController, сборка архитектора ArchitectureAgentLauncherAdapter)
-            // неотличим от человеческого и автора не получает. В текущем пути записи
-            // создающий человек и есть владелец: Write участника в общем проекте закрыт
-            // (пометка плана S2b), ключ хранилищ — владелец.
-            CreatedByUserId = req.CreatedByHuman ? ownerId
-                : string.IsNullOrWhiteSpace(req.CreatedByActorUserId) ? null : req.CreatedByActorUserId.Trim(),
+            // неотличим от человеческого и автора не получает.
+            // Автор — явный актор, когда он назван (F2-T1): в общем проекте запись лежит под
+            // арендатором (OwnerId — ключ хранилищ, перенос на арендатора в Update), а поставил её
+            // участник с правом WriteContent, поэтому автор не совпадает с владельцем записи.
+            // Актор не назван — человеческий путь: создающий человек и есть владелец записи
+            // (прежнее поведение, личных и своих проектов).
+            CreatedByUserId = string.IsNullOrWhiteSpace(req.CreatedByActorUserId)
+                ? (req.CreatedByHuman ? ownerId : null)
+                : req.CreatedByActorUserId.Trim(),
             ReportToSessionId = string.IsNullOrEmpty(req.ReportToSessionId) ? null : req.ReportToSessionId,
             DelegationDepth = ComputeDelegationDepth(req.SourceSessionId),
             Order = NextOrder(ownerId),
@@ -1232,12 +1236,12 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         // чтения «Me» (ResolveMeUserId) опирается на OwnerId записи, и он обязан быть
         // владельцем проекта: иначе при открытии записи участникам (S2c) задача, созданная
         // участником, уедет из календаря и выдачи арендатора. Автор при этом не меняется —
-        // он в CreatedByUserId. Сегодня это no-op: право Write участника закрыто (матрица
-        // ProjectAccess и запрет в ProjectAccessService), и все точки создания проектных задач
-        // зовут id арендатора (контроллер — UserId вызывающего-владельца, NoteTaskSync —
-        // проект только своего владельца, TeamWave — owner чата): OwnerId проектной задачи
-        // сейчас всегда равен владельцу проекта. Личная задача (ProjectId null) и вызывающий
-        // без проекта (tenantOwnerId null) — без изменения.
+        // он в CreatedByUserId. С F2-T1 это уже не no-op в человеческой двери: POST
+        // /api/projects/{p}/tasks открыт редактору (WriteContent) и зовёт id арендатора,
+        // поэтому запись участника приходит здесь же, под ключом проекта. Остальные точки
+        // создания зовут id арендатора и раньше (NoteTaskSync — проект только своего
+        // владельца, TeamWave — owner чата, тулсет задач — токен арендатора). Личная задача
+        // (ProjectId null) и вызывающий без проекта (tenantOwnerId null) — без изменения.
         if (task.ProjectId is not null && tenantOwnerId is not null && task.OwnerId != tenantOwnerId)
             task.OwnerId = tenantOwnerId;
 
@@ -2034,8 +2038,10 @@ public record CreateTaskRequest(
     bool CreatedByHuman = false,
     // Актор-создатель, подставленный СЕРВЕРОМ (F-9): актор хода-создателя в MCP (GetTurnActor),
     // автор чата-штаба у волны, вызывающий человек у сборки архитектора/мержа. Автозапуск
-    // исполнителя наследует именно его (TaskLaunchActor). Из тела REST не принимается:
-    // человеческие эндпоинты зануляют поле (CreatedByHuman выигрывает и так). Фон/система — null.
+    // исполнителя наследует именно его (TaskLaunchActor). Из тела REST не принимается: его
+    // ставит сам контроллер — для личной задачи зануляет (создающий и есть владелец записи),
+    // для задачи общего проекта называет id вызывающего-участника: автор там не совпадает с
+    // ключом записи (F2-T1, см. CreatedByUserId выше). Фон/система без актора — null.
     string? CreatedByActorUserId = null,
     // Дерево для чата-исполнителя (см. TaskItem.WorktreePath): путь СУЩЕСТВУЮЩЕГО worktree
     // проекта и его ветка. У личной задачи игнорируются.

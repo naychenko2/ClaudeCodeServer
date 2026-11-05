@@ -41,7 +41,7 @@ public sealed class FilmFormatLockTests : IDisposable
     {
         var settings = new VideoSceneSettingsDto(null, null, name, "fal", "veo", 5, aspect, false, 1);
         var (scene, version) = _w.SceneWithClip(settings: settings, name: name);
-        var saved = await Saver().SaveAsync(Owner, _w.Scope,
+        var saved = await Saver().SaveAsync(Owner, Owner, _w.Scope,
             new SaveSceneRequest(Session, scene.SceneId, version.VersionId, "video/утро", null, Film), VideoInitiators.Human, default);
         saved.IsOk.Should().BeTrue(saved.Error);
         return _w.Threads.Get(Owner, Session).Scenes.Single(s => s.SceneId == scene.SceneId);
@@ -72,7 +72,7 @@ public sealed class FilmFormatLockTests : IDisposable
         var scenes = _w.Threads.Get(Owner, Session).ToDto().Scenes;
         scenes.Single(s => s.Name == "Сцена 2").FormatMismatch.Should().BeTrue();
         scenes.Single(s => s.Name == "Сцена 1").FormatMismatch.Should().BeNull();
-        var marks = _w.Service.State(Owner, _w.Scope, Film).Value!.Marks;
+        var marks = _w.Service.State(Owner, Owner, _w.Scope, Film).Value!.Marks;
         marks.Select(m => m.FormatMismatch).Should().Equal(null, true);
     }
 
@@ -102,7 +102,7 @@ public sealed class FilmFormatLockTests : IDisposable
         var second = await SaveScene("16:9", "Сцена 2");
         var revision = _w.Films.ReadFile(_w.Full(Film)).Revision;
 
-        var patched = await _w.Service.PatchAsync(Owner, _w.Scope, Film,
+        var patched = await _w.Service.PatchAsync(Owner, Owner, _w.Scope, Film,
             new FilmPatch(revision, [new FilmPatchOp(FilmPatchOps.Move, From: 1, To: 0)]), VideoInitiators.Human, default, Session);
 
         patched.IsOk.Should().BeTrue(patched.Error);
@@ -121,7 +121,7 @@ public sealed class FilmFormatLockTests : IDisposable
         var revision = _w.Films.ReadFile(_w.Full(Film)).Revision;
         _dsp.Size = (1080, 1920);
 
-        var patched = await _w.Service.PatchAsync(Owner, _w.Scope, Film,
+        var patched = await _w.Service.PatchAsync(Owner, Owner, _w.Scope, Film,
             new FilmPatch(revision, [new FilmPatchOp(FilmPatchOps.Add, File: "video/утро/a.mp4")]), VideoInitiators.Human, default, Session);
 
         patched.IsOk.Should().BeTrue(patched.Error);

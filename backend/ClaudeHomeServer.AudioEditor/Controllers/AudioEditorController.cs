@@ -147,7 +147,7 @@ public class AudioEditorController(
         var items = new List<AudioProjectSaver.Item>();
         foreach (var file in version.Files)
         {
-            if (AudioVersionFiles.Resolve(_workspace, Owner(scope), scope, version, file) is not { } path || !System.IO.File.Exists(path))
+            if (AudioVersionFiles.Resolve(_workspace, Owner(scope), UserId, scope, version, file) is not { } path || !System.IO.File.Exists(path))
                 return Error(StatusCodes.Status404NotFound, AudioEditErrorCodes.FileNotFound,
                     "Файлы версии больше не найдены — рабочая папка очищена");
             items.Add(new AudioProjectSaver.Item(file.Role, path));

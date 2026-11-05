@@ -29,12 +29,16 @@ public class TaskLaunchActorTests : IDisposable
         Directory.Delete(_dir, recursive: true);
     }
 
+    // После О2 финального ревью «Общих проектов» null в акторе значит «никаких прав» (общий
+    // проект), поэтому создатель-владелец и legacy-запись называются именем владельца
+    // буквально; безымянной остаётся только запись без владельца.
     [Theory]
     [InlineData("editor", "owner", "editor")]   // создатель — участник: он и актор
-    [InlineData("owner", "owner", null)]        // создатель — владелец: как раньше
-    [InlineData(null, "owner", null)]           // старая запись / фон: считаем владельцем
-    [InlineData("", "owner", null)]
-    [InlineData("  ", "owner", null)]
+    [InlineData("owner", "owner", "owner")]     // создатель — владелец: его имя
+    [InlineData(null, "owner", "owner")]        // старая запись / фон: считаем владельцем буквально
+    [InlineData("", "owner", "owner")]
+    [InlineData("  ", "owner", "owner")]
+    [InlineData(null, "", null)]               // записи нет → актора нет (fail-closed)
     public void For_СоздательУчастникИлиВладелецИлиНеизвестен(string? creator, string owner, string? expected)
     {
         var task = new TaskItem { Title = "t", OwnerId = owner, CreatedByUserId = creator };
@@ -50,9 +54,16 @@ public class TaskLaunchActorTests : IDisposable
         var plain = _tasks.Create("p", "owner", new CreateTaskRequest("t"));
         plain.CreatedByUserId.Should().BeNull("фон/система — null");
 
-        // человеческий путь: создатель — владелец записи, присланный актор игнорируется
+        // Человеческий путь без названного актора: создающий и есть владелец записи (личная
+        // задача, свой проект). Названный актор — автор: в общем проекте запись лежит под
+        // арендатором, а поставил её участник с правом WriteContent (F2-T1), поэтому автор и
+        // владелец записи разные. Тело поля не касается: человеческие эндпоинты либо зануляют
+        // его, либо называют id вызывающего сами (TasksController) — подменить ему нечем.
         var human = _tasks.Create("p", "user-1", new CreateTaskRequest("t", CreatedByHuman: true, CreatedByActorUserId: "evil"));
-        human.CreatedByUserId.Should().Be("user-1");
+        human.CreatedByUserId.Should().Be("evil", "названный актор — автор, даже когда запись лежит под другим владельцем");
+
+        var humanNoActor = _tasks.Create("p", "user-1", new CreateTaskRequest("t", CreatedByHuman: true));
+        humanNoActor.CreatedByUserId.Should().Be("user-1", "без названного актора человек и есть владелец записи");
     }
 
     private sealed class RecordingExecutor : ITaskExecutor
@@ -90,7 +101,9 @@ public class TaskLaunchActorTests : IDisposable
         await scheduler.TickAsync(new DateTime(2026, 7, 3, 12, 30, 0, DateTimeKind.Utc));
 
         exec.Calls.Should().Contain((byEditor.Id, true, "editor"));
-        exec.Calls.Should().Contain((byOwner.Id, true, (string?)null));
-        exec.Calls.Should().Contain((legacy.Id, true, (string?)null));
+        // владельца и legacy называем явно: безымянный ход общего проекта (О2) не имел бы
+        // ни одного права и не мог бы выполнить свою задачу
+        exec.Calls.Should().Contain((byOwner.Id, true, "owner"));
+        exec.Calls.Should().Contain((legacy.Id, true, "owner"));
     }
 }

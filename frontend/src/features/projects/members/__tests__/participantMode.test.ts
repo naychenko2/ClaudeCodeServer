@@ -97,7 +97,7 @@ vi.mock('../../../../components/ui/Button', async () => {
 import { MembersStack } from '../MembersStack';
 import { OwnerSettingsNotice } from '../OwnerSettingsNotice';
 import {
-  ACCESS_REVOKED_TITLE, accessRevokedOwnerLine, canCreateChats, composerExecBlocked, guardTurnAction, ownerDecisionDeniedReason, turnDeniedReason, participantComposerGate, participantComposerText,
+  ACCESS_REVOKED_TITLE, accessRevokedOwnerLine, canCreateChats, canWriteTasks, composerExecBlocked, guardTurnAction, ownerDecisionDeniedReason, taskWriteDeniedReason, TASK_WRITE_DENIED, turnDeniedReason, participantComposerGate, participantComposerText,
 } from '../participantGate';
 
 type FN = InstanceType<typeof FakeNode>;
@@ -172,6 +172,21 @@ describe('композер участника', () => {
     expect(canCreateChats(reader)).toBe(false);
     expect(canCreateChats(editor)).toBe(true);
     expect(canCreateChats(own)).toBe(true);
+  });
+
+  // F2-Q3 (разрез CONSULT-TASK-RIGHTS): задачами общего проекта правят владелец и редактор,
+  // читатель только смотрит. Отказ — не «участнику вообще», а именно читателю; текст один
+  // на весь фронт задач (панель «Задачи», доска, панель деталей) и называет редактора
+  it('задачи: право записи у редактора и владельца, отказ только читателю; текст называет редактора', () => {
+    expect(canWriteTasks(reader)).toBe(false);
+    expect(canWriteTasks(editor)).toBe(true);
+    expect(canWriteTasks(own)).toBe(true);
+    expect(canWriteTasks(base)).toBe(true);   // обычный проект / старый бэк — без изменений
+    expect(canWriteTasks(null)).toBe(true);
+    expect(taskWriteDeniedReason(reader)).toBe(TASK_WRITE_DENIED);
+    expect(taskWriteDeniedReason(editor)).toBeNull();
+    expect(taskWriteDeniedReason(base)).toBeNull();
+    expect(TASK_WRITE_DENIED).toBe('Менять задачи может редактор');
   });
 
   // Composer целиком в fake-DOM не поднять (сотни хуков, рефы textarea): решение о блокировке

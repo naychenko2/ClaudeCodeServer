@@ -11,11 +11,12 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 /// <summary>
 /// Задачи и модель архитектуры общего проекта для участника (shared-projects, S1-3c).
-/// В S1 участник ЧИТАЕТ: список задач проекта и модель — 200 (от арендатора проекта,
-/// <c>RequestScope.TenantOwnerId</c>), любая запись задачи и модели — 403 «нет права на
-/// запись» (право записи участнику откроет S2b). Видно это только при рубильнике И флаге:
-/// посторонний и участник с выключенным флагом получают 404 — существование не раскрываем.
-/// Полная карточка задачи (<c>GET /api/tasks/{id}</c>) участнику ещё не открыта: её перевод — S2b.
+/// Участник ЧИТАЕТ: список задач проекта и модель — 200 (от арендатора проекта,
+/// <c>RequestScope.TenantOwnerId</c>). Запись задач разделена по ролям (F2-T1, разрез §2.1):
+/// читателю — 403 «нет права на запись» на всех дверях, редактору открыты WriteContent
+/// (матрица — SharedProjectTaskWriteRightsTests). Запись модели архитектуры остаётся
+/// владельцу и редактору не открыта. Видно это только при рубильнике И флаге: посторонний и
+/// участник с выключенным флагом получают 404 — существование не раскрываем.
 /// </summary>
 [Trait("Category", "Host")]
 public class SharedProjectReadTests : IClassFixture<TestWebApplicationFactory>
@@ -107,10 +108,11 @@ public class SharedProjectReadTests : IClassFixture<TestWebApplicationFactory>
         seen.Single(t => t.Id == taskId).Title.Should().Be("Задача владельца");
     }
 
+    // Читатель: ни одна дверь записи задач не открыта (F2-T1, разрез §2.1). Редактору эти же
+    // ручки открыты WriteContent — матрица и положительные проверки в SharedProjectTaskWriteRightsTests.
     [Theory]
-    [InlineData("editor")]
     [InlineData("reader")]
-    public async Task Участник_ПишетЗадачу_403_И_ЗадачаНеМеняется(string role)
+    public async Task Читатель_ПишетЗадачу_403_И_ЗадачаНеМеняется(string role)
     {
         var (projectId, taskId) = await SharedProjectAsync(role);
         var member = Member();

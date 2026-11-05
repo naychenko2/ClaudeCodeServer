@@ -1062,7 +1062,10 @@ public class ClaudeSession : ILlmSessionAdapter
         var needsNormalization = provider.NormalizeToolInputArrays;
         var viaLocalStats = provider.IsLocal && _localModelStats?.CurrentValue.Enabled == true;
         if (!needsNormalization && !viaLocalStats) return false;
-        if (_serverGateway is null || string.IsNullOrWhiteSpace(_llmGatewayApiUrl) || string.IsNullOrEmpty(Info.OwnerId))
+        // Ключ — владелец хода (_turnOwnerId), а не Info.OwnerId: у проектной сессии OwnerId пуст
+        // по контракту (Models/Session.cs:382), и такой чат на шлюз не уходил (дефект 29.09):
+        // ни нормализатора tool_use.input, ни статистики локальных моделей за ход.
+        if (_serverGateway is null || string.IsNullOrWhiteSpace(_llmGatewayApiUrl) || string.IsNullOrEmpty(_turnOwnerId))
             return false;
         if (_serverGateway.Enabled) return true;
         // Одно предупреждение за жизнь процесса (см. _gatewayDisabledWarned): повторные
@@ -1102,7 +1105,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // Отзыв — финализация прогона (FinalizeRunAsync) или сбой запуска.
     private (string TurnId, string Token) BindGatewayTurn(IDictionary<string, string> env)
     {
-        var start = _serverGateway!.Start(Info.OwnerId!, Info.Id, EffectiveModel);
+        var start = _serverGateway!.Start(_turnOwnerId!, Info.Id, EffectiveModel);
         if (start.Token is not { } issued)
             throw new InvalidOperationException(start.FailureText ?? "Шлюз LLM не выдал ходу маршрут.");
         env["ANTHROPIC_BASE_URL"] = GatewayBaseUrl(issued.Grant.TurnId);
@@ -4418,9 +4421,11 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         else if (localProvider is not null)
         {
-            // Локальный ход МИМО шлюза (прямой путь CLI → прокси локальной модели): шлюз не
-            // включается у сессии без владельца (UseServerGateway требует Info.OwnerId — у части
-            // боевых чатов он пуст, проверено на sessions.json 2026-10-18) и при LlmGateway:Enabled=false.
+            // Локальный ход МИМО шлюза (прямый путь CLI → прокси локальной модели): шлюз не
+            // включается, если владелец хода неизвестен (UseServerGateway требует _turnOwnerId;
+            // раньше требовал Info.OwnerId, пустого у проектной сессии по контракту
+            // Models/Session.cs:382, — такой чат на шлюз не уходил, дефект 29.09) и при
+            // LlmGateway:Enabled=false.
             // Прокси читает маркер сжатия из сырого x-claude-code-compaction сам, поэтому
             // подсказочные заголовки нужны и здесь — без них автосжатие не уходит в облако по маркеру.
             // vLLM лишние x-claude-code-* принимает (проверено живьём: 200), значение стабильно по сессии.

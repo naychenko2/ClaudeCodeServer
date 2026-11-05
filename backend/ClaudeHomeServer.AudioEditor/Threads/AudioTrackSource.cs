@@ -10,7 +10,8 @@ namespace ClaudeHomeServer.Services.AudioEditor.Threads;
 // отдаёт основной файл версии.
 //
 // Файл версии — только через AudioVersionFiles.Resolve: исходник внутри проекта, версия внутри рабочей папки
-// своей задачи, символическая ссылка наружу — отказ.
+// своей задачи, символическая ссылка наружу — отказ. Нить создаёт сам владелец «Видео» (черновик музыки),
+// а исходник-файл проекта в ней не бывает: актором служит владелец нити.
 public sealed class AudioTrackSource(
     AudioThreadStore store,
     AudioJobThreads threads,
@@ -49,7 +50,7 @@ public sealed class AudioTrackSource(
             var scope = AudioEditScope.Of(session);
             // Исходник нити по файлу лежит в проекте: диск проекта нужен только ему
             if (!scope.IsPersonal && projects.GetById(scope.Key) is { } project) scope = AudioEditScope.Of(project);
-            if (AudioVersionFiles.Resolve(workspace, owner, scope, version, main) is not { } path || !File.Exists(path))
+            if (AudioVersionFiles.Resolve(workspace, owner, owner, scope, version, main) is not { } path || !File.Exists(path))
                 return null;
             return new AudioTrackFile(await File.ReadAllBytesAsync(path, ct), Path.GetExtension(path).ToLowerInvariant());
         }

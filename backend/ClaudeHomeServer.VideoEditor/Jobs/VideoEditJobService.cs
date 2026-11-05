@@ -154,7 +154,7 @@ public sealed class VideoEditJobService : IDisposable
     // ── Котировка ────────────────────────────────────────────────────────────────
 
     public async Task<VideoEditCallResult<VideoQuoteResponse>> QuoteAsync(
-        string ownerId, VideoEditScope scope, VideoQuoteRequest request, CancellationToken ct)
+        string ownerId, VideoEditScope scope, VideoQuoteRequest request, CancellationToken ct, string? actorId = null)
     {
         // Ревизия контекста: сцена и кадры берутся из стора, одноимённые поля запроса игнорируются
         VideoContextInputs? fromContext = null;
@@ -162,7 +162,7 @@ public sealed class VideoEditJobService : IDisposable
         {
             if (_context is null)
                 return Fail<VideoQuoteResponse>(VideoEditorErrors.ProviderUnavailable, VideoContextLaunch.UnavailableText);
-            var read = _context.Read(ownerId, scope, request.SessionId, revision);
+            var read = _context.Read(ownerId, scope, request.SessionId, revision, actorId);
             if (!read.Ok) return read.Fail<VideoQuoteResponse>();
             fromContext = VideoContextLaunch.Extract(read.State!);
             if (fromContext.SceneId is null)
@@ -308,7 +308,7 @@ public sealed class VideoEditJobService : IDisposable
     // ── Запуск ───────────────────────────────────────────────────────────────────
 
     public async Task<VideoEditCallResult<VideoJobCreated>> StartAsync(
-        string ownerId, VideoEditScope scope, VideoLaunchRequest input, CancellationToken ct)
+        string ownerId, VideoEditScope scope, VideoLaunchRequest input, CancellationToken ct, string? actorId = null)
     {
         if (!_quotes.TryGetValue(input.QuoteId, out var quote)
             || quote.OwnerId != ownerId || quote.ScopeKey != scope.Key || quote.ExpiresAt < Now())
@@ -320,10 +320,10 @@ public sealed class VideoEditJobService : IDisposable
         {
             if (_context is null)
                 return Fail<VideoJobCreated>(VideoEditorErrors.ProviderUnavailable, VideoContextLaunch.UnavailableText);
-            var read = _context.Read(ownerId, scope, input.SessionId, revision);
+            var read = _context.Read(ownerId, scope, input.SessionId, revision, actorId);
             if (!read.Ok) return read.Fail<VideoJobCreated>();
             if (quote.ContextRevision != revision)
-                return _context.Stale(ownerId, scope, input.SessionId).Fail<VideoJobCreated>();
+                return _context.Stale(ownerId, scope, input.SessionId, actorId).Fail<VideoJobCreated>();
             fromContext = VideoContextLaunch.Extract(read.State!);
             if (fromContext.SceneId is null)
                 return Fail<VideoJobCreated>(VideoEditorErrors.InvalidRequest, VideoContextLaunch.NotSceneText);
@@ -375,9 +375,9 @@ public sealed class VideoEditJobService : IDisposable
             return Fail<VideoJobCreated>(VideoEditorErrors.InvalidRequest, QuoteMismatchText);
 
         // Кадры читаются ДО слота и до денег: нет кадра — отказ без следа
-        var frameA = await _frames.ReadAsync(ownerId, scope, settings.FrameA, ct);
+        var frameA = await _frames.ReadAsync(ownerId, actorId, scope, settings.FrameA, ct);
         if (frameA.ErrorCode is not null) return Fail<VideoJobCreated>(frameA.ErrorCode, frameA.Error!);
-        var frameB = await _frames.ReadAsync(ownerId, scope, settings.FrameB, ct);
+        var frameB = await _frames.ReadAsync(ownerId, actorId, scope, settings.FrameB, ct);
         if (frameB.ErrorCode is not null) return Fail<VideoJobCreated>(frameB.ErrorCode, frameB.Error!);
 
         // Подрезка кадров под пропорции формата сцены — ДО модели, там же до слота и денег (ADR-025 §5): так local H3
@@ -732,7 +732,7 @@ public sealed class VideoEditJobService : IDisposable
     // dryRun подрезки кадров A/B (ADR-025 §5): тот же расчёт, что у съёмки, ничего не пишет и не тратит. Пропорции —
     // из запроса, иначе из желания сцены или формата проекта; без них подрезать нечего — отказ с подсказкой
     public async Task<VideoEditCallResult<VideoFramesPreviewDto>> PreviewFramesAsync(string ownerId, VideoEditScope scope,
-        VideoFramesPreviewRequest request, CancellationToken ct)
+        VideoFramesPreviewRequest request, CancellationToken ct, string? actorId = null)
     {
         if (!_threads.OwnScene(ownerId, scope.Key, request.SessionId, request.SceneId))
             return Fail<VideoFramesPreviewDto>(VideoEditorErrors.SceneNotFound, "Сцена не найдена");
@@ -750,7 +750,7 @@ public sealed class VideoEditJobService : IDisposable
         var previews = new List<VideoFramePreviewDto?>();
         foreach (var frame in new[] { settings.FrameA, settings.FrameB })
         {
-            var read = await _frames.ReadAsync(ownerId, scope, frame, ct);
+            var read = await _frames.ReadAsync(ownerId, actorId, scope, frame, ct);
             if (read.ErrorCode is not null) return Fail<VideoFramesPreviewDto>(read.ErrorCode, read.Error!);
             if (read.Bytes is not { } bytes) { previews.Add(null); continue; }
             var (preview, code, error) = _frames.Preview(bytes, aspect, anchor);

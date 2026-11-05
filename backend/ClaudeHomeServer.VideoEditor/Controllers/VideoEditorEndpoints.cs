@@ -72,7 +72,7 @@ public abstract class VideoEditorEndpoints(
             || (req.ContextRevision is null && string.IsNullOrWhiteSpace(req.SceneId)))
             return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Не указана сцена");
         return Map(await jobs.QuoteAsync(Tenant(scope), scope,
-            req with { SessionId = req.SessionId.Trim(), SceneId = req.SceneId?.Trim() ?? "" }, ct), Ok);
+            req with { SessionId = req.SessionId.Trim(), SceneId = req.SceneId?.Trim() ?? "" }, ct, UserId), Ok);
     }
 
     // Запуск человека: Initiator из тела игнорируется — агент запускает через тулсет, а не ручкой
@@ -89,7 +89,7 @@ public abstract class VideoEditorEndpoints(
             QuoteId = req.QuoteId.Trim(), SessionId = req.SessionId.Trim(), SceneId = req.SceneId?.Trim() ?? "",
             Initiator = VideoInitiators.Human,
         };
-        return Map(await jobs.StartAsync(Tenant(scope), scope, input, ct), created => StatusCode(StatusCodes.Status202Accepted, created));
+        return Map(await jobs.StartAsync(Tenant(scope), scope, input, ct, UserId), created => StatusCode(StatusCodes.Status202Accepted, created));
     }
 
     protected IActionResult JobIn(VideoEditScope scope, string jobId) =>
@@ -114,7 +114,7 @@ public abstract class VideoEditorEndpoints(
         if (req is null || string.IsNullOrWhiteSpace(req.SessionId) || string.IsNullOrWhiteSpace(req.SceneId))
             return Error(StatusCodes.Status400BadRequest, VideoEditorErrors.InvalidRequest, "Не указана сцена");
         return Map(await jobs.PreviewFramesAsync(Tenant(scope), scope,
-            req with { SessionId = req.SessionId.Trim(), SceneId = req.SceneId.Trim() }, ct), Ok);
+            req with { SessionId = req.SessionId.Trim(), SceneId = req.SceneId.Trim() }, ct, UserId), Ok);
     }
 
     // ── Сцены ────────────────────────────────────────────────────────────────────

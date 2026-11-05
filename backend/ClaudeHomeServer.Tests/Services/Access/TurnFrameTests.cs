@@ -122,6 +122,34 @@ public class TurnFrameTests
         TurnFrame.Resolve(project, PrivateChat(TenantId), TenantId, actorId).Should().Be(TurnFrameKind.Narrow);
     }
 
+    // --- F2-O3 (финальное ревью «Общих проектов»): приватный чат с автором не-арендатором —
+    // Narrow независимо от формы проекта; отзыв последнего участника не расширяет рамку
+
+    [Theory]
+    [InlineData(OtherId)]  // актор — сам отозванный
+    [InlineData(TenantId)] // актор — владелец проекта
+    [InlineData(null)]     // актор неизвестен
+    public void ОтзывПоследнегоУчастника_ПриватныйЧатОтозванного_РамкаНеРасширяется(string? actorId)
+    {
+        // После отзыва последнего участника проект формально становится «личным» (Members пуст,
+        // нормализован в null), но чат остаётся приватным отозванного: ход в нём не должен
+        // получить личное пространство владельца (projects_list, files_read других проектов,
+        // search_unified). Приватность чата важнее формы проекта.
+        var project = PersonalProject();
+        project.Members = [];
+        TurnFrame.Resolve(project, PrivateChat(OtherId), TenantId, actorId).Should().Be(TurnFrameKind.Narrow);
+    }
+
+    [Fact]
+    public void ОтзывПоследнегоУчастника_ПриватныйЧатВладельца_РамкаШирокая()
+    {
+        // Граница нового правила: приоритет приватности играет только когда автор — не арендатор.
+        // Приватный чат владельца в опустевшем проекте остаётся Wide: пространство своё.
+        var project = PersonalProject();
+        project.Members = [];
+        TurnFrame.Resolve(project, PrivateChat(TenantId), TenantId, TenantId).Should().Be(TurnFrameKind.Wide);
+    }
+
     // --- личный проект: широкая рамка — защищать не от чего
 
     [Theory]

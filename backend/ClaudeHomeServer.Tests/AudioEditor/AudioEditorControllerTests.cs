@@ -501,6 +501,62 @@ public class AudioEditorControllerTests : IClassFixture<AudioEditorControllerTes
         (await _client.PostAsync($"{Root}/jobs", form)).StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
+    // F2-P2b: вход запуска (referencePath) проходит общий предикат private: чужое
+    // .cc-attachments/private/{X} — 400 как «вне проекта» (наличие не раскрываем), свой private и
+    // обычный файл проекта читаются как раньше
+    [Fact]
+    public async Task Чужой_private_в_запуске_400_свой_private_и_обычный_файл_приняты()
+    {
+        Start();
+        var foreign = Path.Combine(_projectRoot, ".cc-attachments", "private", "other-user", "g1");
+        var own = Path.Combine(_projectRoot, ".cc-attachments", "private", _ownerId, "g1");
+        Directory.CreateDirectory(foreign);
+        Directory.CreateDirectory(own);
+        File.WriteAllBytes(Path.Combine(foreign, "secret.mp3"), [7]);
+        File.WriteAllBytes(Path.Combine(own, "mine.mp3"), [8]);
+
+        var chatId = await ProjectChat();
+        var threadId = await OpenFile(Chat(chatId));
+
+        foreach (var file in new[]
+                 {
+                     ".cc-attachments/private/other-user/g1/secret.mp3",
+                     ".cc-attachments/PRIVATE/other-user/g1/../g1/secret.mp3",
+                 })
+        {
+            var denied = await StartWithReference(chatId, threadId, file);
+            denied.StatusCode.Should().Be(HttpStatusCode.BadRequest, file);
+            var body = await Json(denied);
+            body.GetProperty("code").GetString().Should().Be(AudioEditErrorCodes.InvalidRequest, file);
+            // дошёл именно до отказа пути, а не до котировки: текст — тот же, что у «вне проекта»
+            body.GetProperty("error").GetString().Should().Contain("Файл не найден в проекте", file);
+        }
+
+        foreach (var file in new[] { $".cc-attachments/private/{_ownerId}/g1/mine.mp3", "intro.mp3" })
+        {
+            var ok = await StartWithReference(chatId, threadId, file);
+            ok.StatusCode.Should().Be(HttpStatusCode.Accepted, file + await ok.Content.ReadAsStringAsync());
+            var jobId = (await Json(ok)).GetProperty("jobId").GetString()!;
+            await _factory.Services.GetRequiredService<AudioEditJobService>().WhenDone(jobId);
+        }
+    }
+
+    private async Task<HttpResponseMessage> StartWithReference(string chatId, string threadId, string referencePath)
+    {
+        // Котировка несёт ровно то, что уйдёт в запуск (иначе отказ «Котировка не соответствует запросу»)
+        var quote = await Json(await _client.PostAsJsonAsync($"{Root}/quote",
+            new { mode = "voice", operation = "speak", provider = "fake", model = "fake-model", count = 1, text = "Привет" }));
+        using var form = new MultipartFormDataContent
+        {
+            { new StringContent(quote.GetProperty("quoteId").GetString()!), "quoteId" },
+            { new StringContent(chatId), "sessionId" },
+            { new StringContent(threadId), "threadId" },
+            { new StringContent("Привет"), "text" },
+            { new StringContent(referencePath), "referencePath" },
+        };
+        return await _client.PostAsync($"{Root}/jobs", form);
+    }
+
     // ── Личный чат ─────────────────────────────────────────────────────────────
 
     [Fact]

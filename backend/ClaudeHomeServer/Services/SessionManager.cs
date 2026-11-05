@@ -4360,6 +4360,21 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var persona = _personas.Get(personaId, ownerId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {personaId}");
 
+        // И-6 (W3-B4a, разрез §3.1): проектная персона никогда не создаёт чат вне своего проекта.
+        // Проект чужого владельца (или уже удалённый) — отказ, а не тихий фолбэк в чат вне проекта:
+        // с ключом арендатора (PersonasController) такой чат родился бы в личном пространстве
+        // владельца от лица участника. Из HTTP путь закрыт самим резолвом (ResolvePersona: битая
+        // запись — 404, ProjectAccessService.cs:63) — это второй рубеж для прямых внутренних
+        // вызовов: преемник/продолжение (:3833/:3942), исполнитель задач (TaskExecutionService.cs:2429),
+        // автономность (PersonaAutomationService.cs:269).
+        if (PersonaZone.IsProjectPersona(persona))
+        {
+            var ownProject = string.IsNullOrEmpty(persona.ProjectId) ? null : _projects.GetById(persona.ProjectId);
+            if (ownProject is null || ownProject.OwnerId != ownerId)
+                throw new InvalidOperationException(
+                    $"Персона «{persona.Name}» не работает вне своего проекта");
+        }
+
         // Проект сессии: у проектной персоны — её собственный; у глобальной — контекстный
         var targetProjectId = PersonaZone.IsProjectPersona(persona)
             ? persona.ProjectId
@@ -4525,12 +4540,14 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return result;
     }
 
-    // Чаты владельца, ведущиеся от лица конкретной персоны (для раздела «Персоны») — список
-    // человеческой ручки (S2d-4a): плюс VisibleTo, чужой приватный чат в нём не живёт
-    public IReadOnlyList<Session> GetPersonaChats(string ownerId, string personaId) =>
+    // Чаты области арендатора, ведущиеся от лица конкретной персоны (для раздела «Персоны») —
+    // список человеческой ручки (S2d-4a): VisibleTo фильтрует по вызывающему (И-5, W3-B4a):
+    // после перехода ключа на арендатора viewer обязан остаться caller — иначе участник
+    // увидел бы приватные чаты владельца с этой персоной.
+    public IReadOnlyList<Session> GetPersonaChats(string ownerId, string personaId, string viewer) =>
         _sessions.Values
             .Select(e => e.Info)
-            .Where(s => s.PersonaId == personaId && ResolveOwnerId(s) == ownerId && VisibleTo(s, ownerId))
+            .Where(s => s.PersonaId == personaId && ResolveOwnerId(s) == ownerId && VisibleTo(s, viewer))
             .OrderByDescending(s => s.UpdatedAt)
             .ToList();
 

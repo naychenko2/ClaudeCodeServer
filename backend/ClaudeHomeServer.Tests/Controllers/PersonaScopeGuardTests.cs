@@ -202,9 +202,6 @@ public class PersonaScopeGuardTests
         // W3-B3b — аватар: загрузка и перекроп (§3.1 «POST {id}/avatar/upload, /avatar/recrop»)
         ("PersonasController.cs", "PersonasController.UploadAvatar", "W3-B3b"),
         ("PersonasController.cs", "PersonasController.RecropAvatar", "W3-B3b"),
-        // W3-B4a — чаты с персоной (§3.1 «GET/POST {id}/chats», дефект «Новый чат»)
-        ("PersonasController.cs", "PersonasController.Chats", "W3-B4a"),
-        ("PersonasController.cs", "PersonasController.CreateChat", "W3-B4a"),
         // W3-B5a — привязки CRUD (§3.1 «POST/PUT/DELETE {id}/bindings»)
         ("PersonasController.cs", "PersonasController.AddBinding", "W3-B5a"),
         ("PersonasController.cs", "PersonasController.UpdateBinding", "W3-B5a"),

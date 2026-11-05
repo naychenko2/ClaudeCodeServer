@@ -231,8 +231,13 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona)]
     public IActionResult Chats(string id)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
-        return Ok(_sessions.GetPersonaChats(UserId, id));
+        // W3-B4a (разрез §3.1, строка {id}/chats; И-2, И-5): ключ — арендатор, не вызывающий:
+        // чаты проектной персоны живут в пространстве её проекта, и участник общего проекта
+        // ведётся туда, а не к своему ключу (раньше — 404). Список фильтруется видимостью
+        // вызывающего: приватные чаты владельца с этой персоной в список участника не входят.
+        var scope = HttpContext.GetRequestScope();
+        // viewer — именованный аргумент: это не ключ хранилища, а фильтр видимости вызывающего (И-5).
+        return Ok(_sessions.GetPersonaChats(scope.TenantOwnerId, id, viewer: UserId));
     }
 
     // Открыть новый чат с персоной (или продолжить существующий по resumeSessionId)
@@ -240,26 +245,32 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.RunTurn)]
     public async Task<ActionResult<Session>> CreateChat(string id, [FromBody] CreatePersonaChatRequest req)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
+        // W3-B4a (дефект прода 05.11: «Новый чат» с персоной общего проекта → 404): персона и
+        // область — из резолва атрибута (ResolvePersona, §3.1): редактора ведёт к арендатору
+        // проекта, вызывающий идёт только в автора (createdByUserId, И-2). Своего резолва
+        // персоны здесь больше нет: одна точка правды — IProjectAccess.ResolvePersona (И-1).
+        var scope = HttpContext.GetRequestScope();
         // FIN3-2 (доработка по возврату ревью cea595f7): тот же гейт, что на POST /sessions
         // (SessionsController.cs:55), для обеих веток CreatePersonaChatAsync — проектной
-        // (contextProjectId, SessionManager.cs:4378) и чата вне проекта: ClaudeSessionId =
-        // resumeSessionId (:4390/:4415) — ключ истории (HistoryKeyOf) и транскрипта CLI.
-        // Отказ неотличим от несуществующего; неизвестный ключ не трогается. Гейт здесь, не в
-        // сервисе: исключение из StartNewSessionAsync дало бы 400 в catch ниже, а нужен 404.
+        // (contextProjectId) и чата вне проекта: ClaudeSessionId = resumeSessionId — ключ
+        // истории (HistoryKeyOf) и транскрипта CLI. Отказ неотличим от несуществующего;
+        // неизвестный ключ не трогается. Гейт здесь, не в сервисе: исключение из
+        // StartNewSessionAsync дало бы 400 в catch ниже, а нужен 404.
         if (req.ResumeSessionId is { Length: > 0 } resumeId && _sessions.IsTranscriptReservedForOthers(resumeId, UserId))
             return NotFound(new { error = "Чат не найден" });
         var mode = ClaudeModeExtensions.ForNewChat(req.Mode, hasPersona: true);
         try
         {
-            var chat = await _sessions.CreatePersonaChatAsync(UserId, id, mode, req.ResumeSessionId, req.Name,
-                contextProjectId: req.ProjectId);
+            var chat = await _sessions.CreatePersonaChatAsync(scope.TenantOwnerId, id, mode, req.ResumeSessionId, req.Name,
+                contextProjectId: req.ProjectId, createdByUserId: UserId);
             return Ok(chat);
         }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
         // Чат от лица глобальной персоны в общем проекте (доработка R-S2a-8): 400 с машинным кодом.
         catch (SessionManager.GlobalPersonaInSharedException ex)
         { return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }); }
+        // И-6 (W3-B4a): проектная персона с проектом чужого владельца — отказ 400, а не тихий
+        // чат вне проекта; через ResolvePersona этот путь из HTTP не достижим, это второй рубеж.
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 

@@ -131,7 +131,14 @@ backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 # в проверку видимости ключа транскрипта (IsTranscriptReservedForOthers → VisibleTo →
 # SessionAccess.CanSee), тот же класс мест, что SessionsController ниже. Ключом хранилищ он не
 # служит: история и транскрипт нового чата ключуются его ClaudeSessionId (HistoryKeyOf).
-backend/ClaudeHomeServer/Controllers/PersonasController.cs|112
+# W3-B4a (дефект «Новый чат» с персоной общего проекта): PersonasController 112→108 — четыре места
+# переведены на ключ арендатора: резолв _personas.Get(id, UserId) в Chats/CreateChat снят (одна точка
+# правды — ResolvePersona атрибута), GetPersonaChats и CreatePersonaChatAsync зовутся с
+# scope.TenantOwnerId; вызывающий остался только как именованный аргумент viewer (фильтр видимости,
+# И-5) и createdByUserId (автор, не ключ) — не ключ хранилищ.
+# Снимок 108→107: добивание старого остатка — расхождение PersonasController (111 против 112)
+# существовало на HEAD до этого шага (появилось между f654a477d и 50dc87738, автор не снижал).
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|107
 backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6
@@ -162,7 +169,10 @@ backend/ClaudeHomeServer/Controllers/ProjectsController.cs|15
 # история и транскрипт нового чата ключуются его ClaudeSessionId (HistoryKeyOf), арендатор —
 # ResolveOwnerId; неизвестные ключи гейт не трогает (ветвление подаёт свой новый csid).
 backend/ClaudeHomeServer/Controllers/SessionsController.cs|19
-backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
+# Снимок 10→8: добивание остатка bc38eb0ba (W3-B5c «навыки персоны — только владельцу»): ключ записи
+# привязки и резолв в POST /api/skills/suggest переведены на TenantOwnerId/ResolvePersona, счётчик
+# тогда не был снижен — сторож краснел с того коммита.
+backend/ClaudeHomeServer/Controllers/SkillsController.cs|8
 # S2d-4i: TasksController 86→92 — шесть write-ответов (POST задачи проекта, POST личной задачи, PUT,
 # merge ×2, execute) отдают копию хранимой задачи с маской чужих приватных чатов: тот же класс мест,
 # что S2d-4b выше. id вызывающего входит только в решение о видимости ССЫЛКИ на чат

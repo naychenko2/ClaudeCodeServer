@@ -513,6 +513,36 @@ describe('Меню «Вики» в чате (S7b → WM-2)', () => {
     expect(await menuHas(c, '1 пакет откатан')).toBe(true);
     expect(has(docBody(), 'чат помечен «не разбирать»')).toBe(true);
   });
+
+  // Дефект 1ef0d0c1: карточка снимает вклад по onClose — зови его до закрытия диалога, и диалог исчезнет вместе с ним
+  it('«Откатить всё» с onClose (карточка): диалог показан, onClose не вызван до закрытия диалога; после «Отмена» — вызван', async () => {
+    serve();
+    const onClose = vi.fn();
+    const c = mountMenu(sessionA, { onClose });
+    await settle();
+    openMenu(c);
+    await settle();
+    click(buttonByExactText(docBody(), 'Откатить всё из этого чата'), 'откат');
+    await settle();
+    expect(has(docBody(), 'Чат получит пометку «не разбирать»')).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
+    click(buttonByExactText(docBody(), 'Отмена'), 'отмена');
+    await settle();
+    expect(has(docBody(), 'Чат получит пометку «не разбирать»')).toBe(false);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('прочие пункты с onClose зовут его сразу после клика', async () => {
+    serve();
+    const onClose = vi.fn();
+    const c = mountMenu(sessionA, { onClose });
+    await settle();
+    openMenu(c);
+    await settle();
+    click(item('Разобрать этот чат'), 'разобрать');
+    await settle();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('Точка статуса и «увидел» (WM-2)', () => {
@@ -844,9 +874,9 @@ describe('Достижимость из шапки чата (ключ «wiki» �
     await loadWikiTree();
   }
 
-  function headerHtml(isMobile: boolean, opts: { compact?: boolean; project?: Record<string, unknown> | null } = {}): string {
+  function headerProps(isMobile: boolean, opts: { compact?: boolean; project?: Record<string, unknown> | null } = {}) {
     const project = opts.project === undefined ? { id: 'p1' } : opts.project;
-    return renderToStaticMarkup(createElement(ChatHeaderBar, {
+    return {
       session: { id: CHAT_A, name: 'Рефью звука', projectId: project ? 'p1' : undefined },
       project, hasMessages: true, online: true,
       cost: { cost: 0, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, turns: 0, results: 0 },
@@ -857,7 +887,11 @@ describe('Достижимость из шапки чата (ключ «wiki» �
       ctxEstimate: { window: 200000, fresh: false, level: 'normal' }, isWaiting: false, items: [],
       persona: null, agent: null, participants: [],
       island: false, compact: opts.compact ?? false, contextBar: null, scrolled: false,
-    } as never));
+    } as never;
+  }
+
+  function headerHtml(isMobile: boolean, opts: { compact?: boolean; project?: Record<string, unknown> | null } = {}): string {
+    return renderToStaticMarkup(createElement(ChatHeaderBar, headerProps(isMobile, opts)));
   }
 
   const ROW_TESTIDS = ['wiki-chat-analyze', 'wiki-chat-retract', 'wiki-chat-chronicle', 'wiki-chat-mark-important', 'wiki-chat-mark-skip'];
@@ -946,6 +980,53 @@ describe('Достижимость из шапки чата (ключ «wiki» �
     await seedTree(true);
     const html = withBrowserStub(1440, () => headerHtml(false, { project: { id: 'p1', myRole: 'owner' } }));
     expect(count(html, WRAP)).toBe(1);
+  });
+
+  // M1+M2: путь «⋯» и правого клика живьём (fakeDom): клик по строке «Вики» открывает меню вклада.
+  // Мутация `case 'wiki': break` в runAction краснит первый тест; убрать requestWikiOpen из пункта
+  // правого клика — второй
+  describe('вход в меню «Вики» из «⋯» и правого клика', () => {
+    function mountHeader(): Cont {
+      for (const r of roots.splice(0)) act(() => r.unmount());
+      installFakeDom();
+      const g = globalThis as Record<string, unknown>;
+      if (!g.getComputedStyle) g.getComputedStyle = () => ({ overflowY: 'visible' });
+      Object.assign(g.window as object, { innerWidth: 1440, innerHeight: 900 });
+      g.localStorage = {
+        getItem: (k: string) => (k === 'cc_chat_header_hidden' ? JSON.stringify(['wiki']) : null),
+        setItem: () => {}, removeItem: () => {},
+      };
+      g.Notification = { permission: 'denied' };
+      g.DOMRect = class { constructor(public x = 0, public y = 0, public width = 0, public height = 0) {} };
+      const { root, container } = mount(createElement(ChatHeaderBar, headerProps(false)));
+      roots.push(root);
+      return container;
+    }
+
+    it('«⋯» → строка «Вики» → появляется пункт «Разобрать этот чат»', async () => {
+      await seedTree(true);
+      const c = mountHeader();
+      await settle();
+      expect(has(docBody(), 'Разобрать этот чат')).toBe(false);
+      click(findNodeByAttr(c, 'aria-label', 'Ещё действия'), '«⋯»');
+      await settle();
+      click(item('Вики'), 'строка «Вики»');
+      await settle();
+      expect(has(docBody(), 'Разобрать этот чат')).toBe(true);
+    });
+
+    it('правый клик по шапке → «Вики» → появляется пункт «Разобрать этот чат»', async () => {
+      await seedTree(true);
+      const c = mountHeader();
+      await settle();
+      const bar = allNodes(c).find(n => (reactProps(n) as { onContextMenu?: unknown } | null)?.onContextMenu);
+      if (!bar) throw new Error('нет узла с onContextMenu');
+      act(() => { (reactProps(bar) as { onContextMenu: (e: unknown) => void }).onContextMenu({ preventDefault: () => {}, clientX: 10, clientY: 10 }); });
+      await settle();
+      click(item('Вики'), 'пункт «Вики» правого клика');
+      await settle();
+      expect(has(docBody(), 'Разобрать этот чат')).toBe(true);
+    });
   });
 
   it('манифест: вклад wiki-chat-menu есть, старого wiki-chat-actions больше нет', () => {

@@ -256,13 +256,16 @@ export function WikiChatMenu({ session, hasMessages, online, isMobile, headless,
       .finally(() => { if (markGen.current === mine) setMarkBusy(false); });
   };
 
+  // Диалог закрыт (подтвердили или отменили) — только теперь сообщаем наружу: карточка снимает вклад по onClose
+  const closeConfirm = () => { setConfirmOpen(false); onClose?.(); };
+
   const doRetract = () => {
     if (retractBusy) return;
     const mine = ++seq.current; // откат делает идущий/прежний разбор неактуальным — поколение поднимается
     setRetractBusy(true);
     retractWikiSource(`session:${session.id}`)
       .then(r => {
-        setConfirmOpen(false);
+        closeConfirm();
         if (seq.current !== mine) return;
         setRetractText(retractResultText(r, 'чат'));
         setSeen(false);
@@ -270,7 +273,7 @@ export function WikiChatMenu({ session, hasMessages, online, isMobile, headless,
         setChroniclePath(null);
       })
       .catch(e => {
-        setConfirmOpen(false);
+        closeConfirm();
         if (seq.current !== mine) return;
         setRetractText(e instanceof WikiError ? wikiErrorText(e) : 'Не удалось откатить всё из этого чата');
         setSeen(false);
@@ -316,15 +319,15 @@ export function WikiChatMenu({ session, hasMessages, online, isMobile, headless,
     : !seen && (status || retractText || markError) ? (status ? status.color : C.textMuted)
       : null;
 
-  // Действие пункта закрывает меню (ItemRow зовёт onDone после onClick) — наружу сообщаем так же
-  const act = (fn: () => void) => () => { fn(); onClose?.(); };
-
+  // Действие пункта закрывает меню (ItemRow зовёт onDone после onClick) — наружу сообщаем так же,
+  // инлайном в каждом onClick. Пункт с внутренним подтверждением (откат) зовёт onClose только после
+  // закрытия диалога: иначе карточка снимет вклад, а с ним и диалог
   const items: OverflowItem[] = [
     {
       key: 'analyze',
       icon: <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
-      label: 'Разобрать этот чат',
-      sublabel: refused ? 'Разобрать ещё раз' : 'сейчас, не дожидаясь ночи',
+      label: refused ? 'Разобрать ещё раз' : 'Разобрать этот чат',
+      sublabel: 'сейчас, не дожидаясь ночи',
       // Длинный человеческий итог переносится по словам: nowrap моно-значения съел бы подпись
       value: status ? (
         <span title={status.raw ?? undefined} style={{ color: status.color, display: 'inline-block', maxWidth: 170, whiteSpace: 'normal', textAlign: 'right' }}>
@@ -332,13 +335,13 @@ export function WikiChatMenu({ session, hasMessages, online, isMobile, headless,
         </span>
       ) : undefined,
       disabled: !online || !hasMessages || state.kind === 'running',
-      onClick: act(analyze),
+      onClick: () => { analyze(); onClose?.(); },
     },
     ...(chroniclePath ? [{
       key: 'chronicle',
       icon: <ScrollText size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
       label: 'Открыть хронику',
-      onClick: act(openChronicle),
+      onClick: () => { openChronicle(); onClose?.(); },
     }] : []),
     {
       key: 'mark-important',
@@ -349,7 +352,7 @@ export function WikiChatMenu({ session, hasMessages, online, isMobile, headless,
       active: mark === 'important',
       separator: true,
       disabled: !online || markBusy || taskChat,
-      onClick: act(() => toggleMark('important')),
+      onClick: () => { toggleMark('important'); onClose?.(); },
     },
     {
       key: 'mark-skip',
@@ -359,7 +362,7 @@ export function WikiChatMenu({ session, hasMessages, online, isMobile, headless,
       value: mark === 'skip' ? <Check size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> : undefined,
       active: mark === 'skip',
       disabled: !online || markBusy || taskChat,
-      onClick: act(() => toggleMark('skip')),
+      onClick: () => { toggleMark('skip'); onClose?.(); },
     },
     {
       key: 'retract',
@@ -369,7 +372,7 @@ export function WikiChatMenu({ session, hasMessages, online, isMobile, headless,
       separator: true,
       danger: true,
       disabled: !online || retractBusy,
-      onClick: act(() => setConfirmOpen(true)),
+      onClick: () => setConfirmOpen(true),
     },
   ];
 
@@ -399,7 +402,7 @@ export function WikiChatMenu({ session, hasMessages, online, isMobile, headless,
           confirmLabel="Откатить всё"
           confirmVariant="danger"
           onConfirm={doRetract}
-          onCancel={() => setConfirmOpen(false)}
+          onCancel={closeConfirm}
         />
       )}
     </span>

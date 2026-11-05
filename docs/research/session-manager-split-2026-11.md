@@ -1,7 +1,7 @@
 # Разрез SessionManager по ролям (S3-0, ноябрь 2026)
 
 Провёл Александр (тимлид) 2026-11-05 по задаче S3-0 фичи «Внутренняя оптимизация AI Home».
-Документ — вход для шагов S3-1…S3-8. Только разметка, кода нет. Предыдущие разведки той же
+Документ — вход для шагов S3-1…S3-8c. Только разметка, кода нет. Предыдущие разведки той же
 линии: [session-core-split-2026-09.md](session-core-split-2026-09.md) (слои ядра, «что не
 резать») и [team-di-migration-2026-09.md](team-di-migration-2026-09.md) (образец: четыре шва
 штаба). Их выводы здесь не повторяются, но соблюдаются: `OnMessageAsync` не режем по типам
@@ -11,17 +11,16 @@
 
 | | |
 |---|---|
-| Разобранная версия | `master` @ `e0ed6ea34` (2026-11-05) |
-| Строк в `SessionManager.cs` | **11 819** |
+| Разобранная версия | `master` @ `e0ed6ea34` (2026-11-05); цифры ниже сверены на `master` @ `03d78e1aa` |
+| Строк в `SessionManager.cs` | **11 818** (`wc -l`) |
 | Параметров конструктора | **52** (в постановке 42 — устаревшая цифра) |
-| Мест `new SessionManager(` | **44** (тесты 11 проектов + `TestKit.Host`) |
-| Продуктовых файлов, упоминающих тип | 202 |
+| Мест `new SessionManager(` | **57 в 55 файлах**: `ClaudeHomeServer.Tests` — 44 файла, `Dossiers.Tests` — 3, `Mcp.Tests`, `Spend.Tests`, `Team.Tests` — по 2, `LocalStats.Tests` и `TestKit.Host` — по 1 |
+| Файлов вне тестов, упоминающих тип | 212 (115 из них в `backend/ClaudeHomeServer`); у Глеба 221/118 — другим счётом, на шаги не влияет |
 
-**Ветка `refactor/opt-session-manager` отстаёт от master на 543 коммита, из них 44 трогают
-`SessionManager.cs` (+809/−89, почти всё — «Общие проекты»: видимость, приватные чаты, автор
-хода).** В ветке файл — 11 098 строк. Разрез сделан по master. **Перед S3-1 ветку нужно
-обновить с master**, иначе S3-1 режет файл без `VisibilityLock`/`GetOwnedVisible`, и мерж
-обратно превратится в ручной перенос 44 коммитов по переехавшим методам.
+В первой редакции было 11 819 строк, 44 места (число по ветке, не по master) и 202 файла;
+здесь цифры приведены к master. Ветка `refactor/opt-session-manager` обновлена с master
+(`5bfb4891a`, master в ней целиком), так что S3-1 режет файл уже с `VisibilityLock` и
+`GetOwnedVisible`.
 
 Как мерил:
 
@@ -30,7 +29,8 @@ git show master:backend/ClaudeHomeServer/Services/SessionManager.cs > /tmp/SM.cs
 # объявления методов (отступ 0–4, включая явные реализации I*.Method):
 grep -nE '^\s{0,4}(public|private|internal|protected)[^=;]*\(' /tmp/SM.cs
 # параметры конструктора — разбор сигнатуры без комментариев (52)
-grep -rc 'new SessionManager(' --include=*.cs backend | grep -v ':0'   # 44 места
+grep -rn 'new SessionManager(' --include=*.cs backend | wc -l   # 57 мест
+grep -rln 'new SessionManager(' --include=*.cs backend | wc -l  # 55 файлов
 ```
 
 Размер метода — от его объявления до следующего, **включая комментарии** (в этом файле их
@@ -56,7 +56,8 @@ grep -rc 'new SessionManager(' --include=*.cs backend | grep -v ':0'   # 44 ме
    `ITeamTurnIntake` — приёмом хода. `ITeamSessionDirectory` остаётся на фасаде тонкой
    переадресацией: один его метод рассылает через вертикаль штаба. Код `Services/Team`
    меняется только в аргументах конструкторов, которые сейчас получают `this`.
-4. **Шагов не пять, а восемь**, каждый ≤ 2 000 строк переноса. Порядок — строго снизу вверх:
+4. **Шагов переноса не пять, а семь** (S3-1…S3-7), каждый ≤ 2 000 строк переноса; за ними
+   сжатие фасада, разбитое на S3-8a, серию S3-8b и S3-8c, и отдельная карточка документации. Порядок — строго снизу вверх:
    новый класс зависит только от уже вынесенных классов, Core-швов и трёх ленивых швов, но
    никогда от `SessionManager`. После S3 в `SessionManager` остаются фасад внешнего API,
    штабная логика ядра и сборка — **≈ 1,7 тыс. строк** вместо 11,8.
@@ -123,7 +124,7 @@ grep -rc 'new SessionManager(' --include=*.cs backend | grep -v ':0'   # 44 ме
 ### Что остаётся в `SessionManager` (~1,7 тыс. строк)
 
 - **Фасад внешнего API** — все публичные и `internal` члены с прежними сигнатурами,
-  тела — делегирование (202 продуктовых файла и 44 места конструирования не меняются).
+  тела — делегирование (212 файлов вне тестов и 57 мест конструирования не меняются).
   `GetHistoryAsync` фасада = `SessionHistory.GetHistoryAsync` + `TurnCostLedger.Backfill*`.
 - **Штабная логика ядра** (~960 строк): 10 фасадных обёрток из
   [team-di-migration](team-di-migration-2026-09.md) §1, `ApplyPlanDecisionAsync`,
@@ -233,20 +234,29 @@ grep -rc 'new SessionManager(' --include=*.cs backend | grep -v ':0'   # 44 ме
 | `TurnLaunchContextFactory` | builtin, personaLayer, external, launchers, projects, pluginDir, route, `Lazy<ITurnStarter>`, `Lazy<ITurnMessageSink>`, config | **10** |
 | `TurnProcessHost` | adapters, factory, store, history, route, queue, bus, deviceGate, config | 9 |
 | `TurnRecovery` | store, history, processHost, queue, settings, `Lazy<ITurnStarter>`, config | 7 |
-| `TurnCompletion` | store, history, queue, processHost, route, worktree, `ProviderMigration`, ledger, `Lazy<ITurnStarter>`, `Lazy<ITeamNotifier>` | **10** |
+| `TurnCompletion` | store, history, queue, route, worktree, `ProviderMigration`, ledger, `Lazy<ITurnStarter>`, `Lazy<ITeamNotifier>` | 9 |
 | `LocalVoiceTurn` | router, ollama, store, history, completion | 5 |
 | `TurnIntake` | store, history, queue, processHost, completion, settings, naming, voice, `Lazy<ITeamNotifier>`, config | **10** |
 | `ChatCreation` | store, history, route, settings, processHost, projects, assignments, pluginDir | 8 |
 | `ChatDeletion` | store, history, route, worktree, processHost, promptSnapshots, services, projects | 8 |
 
-Восемь классов стоят ровно на потолке. **Новая зависимость любого из них — сигнал резать
-класс, а не поднимать лимит.** В `SessionManager` после S3-8 останется ~20 параметров
+Шесть классов стоят ровно на потолке (`CliRoute`, `ChatSettings`, `BuiltinMcpContexts`,
+`PersonaLayerBuilder`, `TurnLaunchContextFactory`, `TurnIntake`). В первой редакции было
+семь, а не восемь, как там написано: седьмым был `TurnCompletion` с фиктивной зависимостью
+`processHost`. Тело конца хода (`OnMessageQueuedAsync`, `ProcessPipelineItemAsync`,
+`ApplyStatusQueuedAsync`, `FireAndForget`, `SessionManager.cs:10662-11652`) не зовёт ни
+одного метода `TurnProcessHost`, а `entry.Process` (`:10719`, `:11305`) — поле записи,
+то есть стор. Проверка: `grep` имён всех методов `TurnProcessHost` из §1 по этому
+диапазону даёт ноль вхождений. **Новая зависимость любого из них — сигнал резать
+класс, а не поднимать лимит.** В `SessionManager` после S3-8c останется ~20 параметров
 (роли, нужные фасаду, плюс штаб). Он не новый класс и под лимит не попадает, но число
-надо фиксировать в итоге S3-8.
+надо фиксировать в итоге S3-8c.
 
 ## 3. Швы и направление вызовов
 
-Слои снизу вверх; стрелка «A → B» означает «A зовёт B». Внутри одного слоя вызовов нет.
+Слои снизу вверх; стрелка «A → B» означает «A зовёт B». Фасад `SessionManager` делегирует
+всем классам, в том числе соседям по слою 5. Внутри слоя 4 три ребра: `Voice → Done`, `Intake → Done`, `Recovery → Host`; циклов
+среди них нет. Ребра `Done → Host` из первой редакции нет: зависимость была фиктивной (§2).
 
 ```mermaid
 flowchart BT
@@ -288,7 +298,6 @@ flowchart BT
   L2 --> L1
   L3 --> L2
   Host --> Factory
-  Done --> Host
   Voice --> Done
   Recovery --> Host
   Intake --> Done
@@ -329,7 +338,8 @@ internal interface ITurnStarter
 }
 
 // Приёмник событий процесса CLI: делегат OnMessage в LlmSessionContext.
-// Владелец — TurnCompletion (с S3-5), до того — SessionManager.
+// Вводится в S3-5 (его зовёт TurnLaunchContextFactory); реализует SessionManager,
+// с S3-6 — TurnCompletion.
 internal interface ITurnMessageSink
 {
     Task OnMessageQueuedAsync(string sessionId, TurnAccumulator accumulator,
@@ -340,7 +350,7 @@ internal interface ITurnMessageSink
 `ITeamNotifier` уже существует (`Services/Team/ITeamNotifier.cs`); его реализует
 `SessionManager`, как и сейчас. Новый шов не заводим, достраиваем существующий: конец хода
 зовёт в штаб ещё `HandleBgAgentDoneAsync` и `RestoreWaveWatchdogIfPaused`, и эти два метода
-добавляются в `ITeamNotifier` в S3-5. Перед добавлением проверить, не читает ли
+добавляются в `ITeamNotifier` в S3-6. Перед добавлением проверить, не читает ли
 `AsyncAgentInFlight` только поля записи: если только их, метод уезжает в стор, а не в шов.
 Маркеры протокола (`StripTeamProtocolMarkers` и соседи) зовутся напрямую из Core
 `TeamProtocolMarkers`, потому что обёртки над ним в ядре статические.
@@ -372,13 +382,13 @@ worktree и миграции); `HasTurnInFlight`, `Busy`, `WithTeamState`, `Clai
 
 | Инвариант | Где живёт после S3 | Шаг | Чем держится сейчас | Пробел |
 |---|---|---|---|---|
-| Фолбэк хода только по цепочке; `None` фолбэк не запускает, ход кончается `error`, а не finished | `FallbackLlmSessionAdapter` и `TurnErrorClassifier` (Llm, **не переезжают**); маппинг `ErrorMessage` → `SessionStatus.Error` — `TurnCompletion` | S3-5 | `FallbackLlmSessionAdapterTests`: `НеизвестнаяОшибка_ФолбэкНеЗапускается` (:376), `ЦепочкаИсчерпана_АвтоподборНеСрабатывает` (:703), `ЦепочкаИсчерпана_ErrorMessageВердиктаИдётСExpectResultFollows` (:743); `TurnErrorClassifierTests.ОшибкиЗапроса_НеАвторизация_ОстаётсяNone` (:298); на ядре — `SessionManagerTeamLoopTests.КонецХода_ПарнаяErrorИResultОдногоХода_ШинаРазбираетОдинРазНеДубли` (:793), `SessionManagerWorkLoopTests.ContinueWorkLoop_ОшибкаХода_ЯвноеСообщениеИСниманиеЦикла` (:55) | Нет прямого теста «`ErrorMessage` без `ExpectResultFollows` → `Status=Error`, не `Finished`» на ядре. S3-5 добавляет его **до** переноса `OnMessageQueuedAsync` и проверяет мутацией |
+| Фолбэк хода только по цепочке; `None` фолбэк не запускает, ход кончается `error`, а не finished | `FallbackLlmSessionAdapter` и `TurnErrorClassifier` (Llm, **не переезжают**); маппинг `ErrorMessage` → `SessionStatus.Error` — `TurnCompletion` | S3-6 | `FallbackLlmSessionAdapterTests`: `НеизвестнаяОшибка_ФолбэкНеЗапускается` (:376), `ЦепочкаИсчерпана_АвтоподборНеСрабатывает` (:703), `ЦепочкаИсчерпана_ErrorMessageВердиктаИдётСExpectResultFollows` (:743); `TurnErrorClassifierTests.ОшибкиЗапроса_НеАвторизация_ОстаётсяNone` (:298); на ядре — `SessionManagerTeamLoopTests.КонецХода_ПарнаяErrorИResultОдногоХода_ШинаРазбираетОдинРазНеДубли` (:793), `SessionManagerWorkLoopTests.ContinueWorkLoop_ОшибкаХода_ЯвноеСообщениеИСниманиеЦикла` (:55) | Нет прямого теста «`ErrorMessage` без `ExpectResultFollows` → `Status=Error`, не `Finished`» на ядре. S3-6 добавляет его **до** переноса `OnMessageQueuedAsync` и проверяет мутацией |
 | Guard смены провайдера у начатого чата (перенос транскрипта, отказы на текущем ключе, несовместимой модели, пути вне монтирований) | `ProviderMigration`, вызов из `ChatSettings.UpdateAsync` | S3-3 | `SessionManagerCrudTests`: `Update_СменаПровайдераБезТранскрипта_Проходит` (:607), `…БезХодов_Проходит` (:625), `…СТранскриптом_ФайлПереезжаетВПрофильЦели` (:639); `SessionManagerSubscriptionMigrationTests.MigrateProvider_*` (12 тестов, в т.ч. `ТекущийКлюч_БросаетОшибку`, `НесовместимаяСМодельюПодписка_БросаетОшибку`); `SessionManagerContainerMigrationTests.MigrateProvider_Container_ПутьВнеМонтирований_400`; `SessionManagerLocalTranscriptTests.СменаПровайдера_НеПереноситТранскрипт` (:211) | — |
 | Guard смены среды исполнения при существующих чатах | `UsersController.cs:78` → `SessionStore.HasSessionsOwnedBy` | S3-1 | **Нет теста** ни на контроллер (409), ни на `HasSessionsOwnedBy` | S3-1 добавляет оба до переноса: чаты проекта владельца, личные чаты, архивные — все считаются |
 | Guard привязки worktree к начатому чату | `ChatWorktree.AttachWorktreeAsync` | S3-3 | `SessionManagerHierarchyTests.AttachWorktree_НачатыйЧат_Отказ` (:673) | — |
 | Per-owner изоляция и видимость (приватные чаты) | `SessionStore` — единственная точка: `GetOwned`, `GetOwnedVisible`, `GetWithRight`, `GetAccessible`, `IsVisibleTo`, `IsTranscriptReservedForOthers`, `GetTurnFrame` | S3-1 | `SessionManagerCrudTests`: `ПроектнаяСессия_ВладелецРезолвитсяЧерезПроект` (:169), `MarkRead_ЧужойВладелецИлиНесуществующая_False` (:492), `Update_ЧужойВладелец_НеНаходитЧат` (:734); `SessionManagerTeamSetupTests`: `SetTeamImplement_ЧужойВладелец_Null` (:679), `RespondTeamPlan_ЧужойВладелец_Null` (:1140); эндпоинт-тесты «Общих проектов» (`ChatVisibilityEndpointTests` и соседи) | см. таблицу путей ниже |
 | `UpdatedAt` не двигают настройки, архивация и возврат | `ChatSettings` (сеттеры), `SessionStore.ApplyStatusAsync(touchUpdatedAt)` и sweep (`touchUpdatedAt: false`) | S3-1, S3-3 | `ChatArchiveFlagTests` (:77, :122, :159, :300, :317), `SessionManagerCrudTests.MarkRead_УстанавливаетLastReadAt_НеТрогаяUpdatedAt` (:194), `MarkFilesCommitted_ПишетПути_ПереживаетПерезагрузку_НеТрогаетUpdatedAt` (:317), `ThreadsEndpointTests.Смена_фокуса_не_двигает_UpdatedAt_и_не_пишет_sessions_json` (:75) | — |
-| Удаление чата уносит только `{csid}.jsonl`, не по маске и не папку; `resumeSessionId` по белому списку | `CliRoute.DeleteTranscript` / `CleanupOrphanBranchTranscript`; проверка `TranscriptMigrator.IsSafeSessionId` — `TurnProcessHost.StartNewSessionAsync` | S3-2, S3-6 | `SessionManagerCrudTests.DeleteAsync_УдаляетТранскриптCliИНеТрогаетЧужой` (:907), `DeleteAsync_ОбщийТранскриптДругогоЧата_НеУдаляет` (:1205) | — |
+| Удаление чата уносит только `{csid}.jsonl`, не по маске и не папку; `resumeSessionId` по белому списку | `CliRoute.DeleteTranscript` / `CleanupOrphanBranchTranscript`; проверка `TranscriptMigrator.IsSafeSessionId` — `TurnProcessHost.StartNewSessionAsync` | S3-2, S3-5 | `SessionManagerCrudTests.DeleteAsync_УдаляетТранскриптCliИНеТрогаетЧужой` (:907), `DeleteAsync_ОбщийТранскриптДругогоЧата_НеУдаляет` (:1205) | — |
 | Состав `tools/list` не зависит от хода | сборщики контекстов MCP | S3-4 | `McpToolsetStabilityTests` (Guards.Tests) | При переносе сигнатуры сборщиков не получают параметров хода |
 | Голосовая оговорка — последним блоком слоя персоны | `PersonaLayerBuilder` | S3-4 | golden-фикстуры контрибьюторов промпта (Prompts.Tests), тесты `voice-mode` | Прогнать фикстуры в S3-4 обязательно |
 | **Реестр сессий один** (вторая точка правды) | `SessionStore` — синглтон | S3-1 | — (новый риск разреза) | S3-1 добавляет Host-тест: `SessionManager`, получивший стор из DI, держит тот же экземпляр, что `sp.GetRequiredService<SessionStore>()` |
@@ -407,35 +417,56 @@ worktree и миграции); `HasTurnInFlight`, `Busy`, `WithTeamState`, `Clai
 
 ## 5. Порядок шагов
 
-Ролей больше пяти, поэтому **предлагаю восемь шагов вместо пяти**. Каждый шаг меньше
-2 000 строк переноса. Порядок задан графом: класс шага зависит только от классов прежних
-шагов, Core-швов и трёх ленивых швов, реализованных пока `SessionManager`.
+Ролей больше пяти, поэтому **предлагаю семь шагов переноса вместо пяти** плюс сжатие
+фасада. Каждый шаг меньше 2 000 строк: у шагов переноса считаются строки, уходящие из
+`SessionManager`, у шагов S3-8 — строки правки в тестах и конструкторе. Порядок задан
+графом: класс шага зависит только от классов прежних шагов, Core-швов и трёх ленивых швов,
+реализованных пока `SessionManager`.
 
-| Шаг | Что выносится | Строк из SM | Риск и обязательная проверка |
+**Почему процесс CLI раньше конца хода.** Первая редакция ставила конец хода (S3-5) раньше
+процесса (S3-6) и при этом записывала `TurnCompletion` зависимость от `TurnProcessHost` —
+шаг S3-5 был неисполним без ссылки на `SessionManager` или `Lazy<>`, то есть без нарушения
+правил 1 и 3 сторожа (§6). Зависимость оказалась фиктивной (§2) и снята, так что
+корректны оба порядка. Оставлен порядок трекера (`d81e92db` — процесс CLI, `e8c7f589` —
+конец хода): он не требует перезаводить карточки, а шов `ITurnMessageSink` в нём честно
+переходный — его вводит S3-5 для `TurnLaunchContextFactory`, реализует пока
+`SessionManager`, а S3-6 переключает на `TurnCompletion`.
+
+| Шаг | Что выносится | Строк (S3-1…7 — из SM, S3-8 — правки) | Риск и обязательная проверка |
 |---|---|---:|---|
 | **S3-1** Стор метаданных | `SessionEntry.cs`, `SessionStore`, создание `AddSessionCore`, сторож формы ядра (§6) | ~1 580 | порядок старта (`LoadSessions` в конструкторе до таймеров); тест «один реестр»; тесты guard'а среды |
 | **S3-2** История, очередь, маршрут | `SessionHistory`, `TurnCostLedger`, `PendingQueue`, `CliRoute` | ~1 130 | гонка `_falPersistLock` (`FalPersistLockDedupTests`, `FalAccumulatorRaceRegressionTests`); транскрипт только `{csid}.jsonl` |
 | **S3-3** Рабочая папка и жизненный цикл | `ChatWorktree`, `ChatNaming`, `ProviderMigration`, `ChatSettings`, `ChatVisibility`; первый ленивый шов (`Lazy<ITeamNotifier>`) | ~1 890 | `UpdatedAt` (`ChatArchiveFlagTests`), guard'ы провайдера и worktree, `VisibilityLock` под переносом (`ChatVisibilityEndpointTests`) |
 | **S3-4** Контекст запуска | `McpEndpoint`, `BuiltinMcpContexts`, `PersonaLayerBuilder`, `ExternalMcpContexts`, `TurnPassports`; `ITurnStarter` (реализует SM) | ~1 350 | `McpToolsetStabilityTests`, golden-фикстуры промпта, тесты паспортов сабагентов |
-| **S3-5** Конец хода | `TurnCompletion`, `LocalVoiceTurn`, `ITurnMessageSink`; два метода в `ITeamNotifier` | ~1 080 | характеризационный тест `ErrorMessage` → `Error`; `SessionManagerTeamLoopTests`, `SessionManagerWorkLoopTests`, `VoiceLocalTurnTests` |
-| **S3-6** Процесс, создание, удаление | `TurnLaunchContextFactory`, `TurnProcessHost`, `TurnRecovery`, `ChatCreation`, `ChatDeletion` | ~1 940 | `TurnAutoResume/*`, `SessionManagerQueueTests`, `DeviceWaitTestHost`, `SessionManagerBranchTests`, удаление транскрипта |
+| **S3-5** Процесс, создание, удаление | `TurnLaunchContextFactory`, `TurnProcessHost`, `TurnRecovery`, `ChatCreation`, `ChatDeletion`; `ITurnMessageSink` (реализует SM) | ~1 940 | `TurnAutoResume/*`, `SessionManagerQueueTests`, `DeviceWaitTestHost`, `SessionManagerBranchTests`, удаление транскрипта, `resumeSessionId` по белому списку |
+| **S3-6** Конец хода | `TurnCompletion`, `LocalVoiceTurn`; `ITurnMessageSink` переключается с SM на `TurnCompletion`; два метода в `ITeamNotifier` | ~1 080 | характеризационный тест `ErrorMessage` → `Error`; `SessionManagerTeamLoopTests`, `SessionManagerWorkLoopTests`, `VoiceLocalTurnTests` |
 | **S3-7** Приём хода | `TurnIntake` (с циклом «до готово»); `ITurnStarter` и `ITeamTurnIntake` переключаются с SM на него | ~1 540 | `SessionManagerHierarchyTests.RunDelegation`, `SessionManagerHumanTextMarkerTests`, `TaskExecutionService*Tests` |
-| **S3-8** Сжатие фасада | конструктор SM принимает роли (~20 параметров вместо 52); единая тестовая сборка через `AddSessionCore` в `SessionManagerTestBase` и для 44 мест конструирования; карта проекта и ADR-014 | ~0 (−200 в конструкторе) | механическая правка 44 тестовых мест; без неё запасные `new` в конструкторе SM копят дубль сборки |
+| **S3-8a** Тестовая сборка ядра | помощник сборки ядра через `AddSessionCore` в `TestKit.Host` (на него ссылаются все шесть тестовых проектов); `SessionManagerTestBase` (3 места) строит SM через него. Конструктор SM и запасные сборки не трогаются | ~250 (помощник ~120, база −130) | `SessionManagerCrudTests`, `ChatArchiveFlagTests` и остальные наследники базы (9 файлов); Host-тест «один реестр» из S3-1 зелёный на помощнике |
+| **S3-8b-1** Перевод `ClaudeHomeServer.Tests` | 43 файла вне базы (Controllers — 8, Services — 35) на помощник S3-8a | ~650 (≈15 строк на место) | `TaskWriteResponseChatMaskTests`, `PrivateChatListVisibilityTests`, `PrivateChatSubjectResumeTests`, `TurnAutoResume/*`, `VoiceLocalTurnTests`, `WebSearchToolsetTests`; полный прогон проекта шардами |
+| **S3-8b-2** `Dossiers.Tests` | 3 файла | ~50 | `DossierGitExportTests`, `DossierAutoExportTests`, `DossierDiscussionExportTests` |
+| **S3-8b-3** `Mcp.Tests` | 2 файла | ~30 | `LocalMediaToolsetTests`, `TestsToolsetTests` |
+| **S3-8b-4** `Spend.Tests` | 2 файла | ~30 | `SpendControllerTests`, `SpendBackfillTests` |
+| **S3-8b-5** `Team.Tests` | 2 файла | ~30 | `TeamBlockerResolveTests`, `TeamWaveServiceTests` |
+| **S3-8b-6** `LocalStats.Tests` и `TestKit.Host` | `LocalModelLiveSinkTests`, `DeviceWaitTestHost` | ~40 | `LocalModelLiveSinkTests`; потребители `DeviceWaitTestHost` в `ClaudeHomeServer.Tests` |
+| **S3-8c** Сжатие конструктора | конструктор SM принимает роли (~20 параметров вместо 52), запасные `?? new …` сняты. Начинается со сверки: `grep -rn 'new SessionManager(' backend` находит только помощник S3-8a | ~−200 в SM, ~30 в помощнике | сборка решения; все тестовые проекты из S3-8b; Host-тест резолва SM из `TestWebApplicationFactory` |
+| **S3-D** Документация (отдельная карточка, не шаг кода) | карта проекта (`CLAUDE.md`, абзац о ядре сессий) и ADR-014: итог S3, число параметров SM после S3-8c | — | `ProjectMapHygieneGuardTests` |
 
 Итог переноса ≈ 10 500 строк, в `SessionManager` остаётся ≈ 1 300 строк плюс ≈ 400 строк
 делегирующего фасада.
 
-Если Егору нужны ровно пять карточек, допустимая склейка одна: **S3-4 + S3-5** (≈ 2 430,
-под потолком 2 500; классы этих шагов друг от друга не зависят). Другие пары превышают
-потолок или склеивают слои, между которыми есть зависимость. S3-8 делать отдельной
-карточкой обязательно: это единственный шаг, который правит десятки тестовых файлов.
+Склеек шагов переноса не предлагаю: в принятом порядке любая соседняя пара выше потолка
+2 500 (S3-4 + S3-5 ≈ 3 290, S3-6 + S3-7 ≈ 2 620). Шаги S3-8b-2…S3-8b-6 мелкие, и их допустимо
+вести одной карточкой исполнителя, но коммитом на проект: так упавший проект откатывается,
+не трогая соседей. S3-8a и S3-8c не склеиваются ни с чем: первый задаёт помощник, второй
+ломает сборку, если пропущено хоть одно место конструирования.
 
 ### Переходный режим каждого шага
 
 - Новый параметр конструктора `SessionManager` — **опциональный с запасной сборкой**
   (`store ?? new SessionStore(...)`), по прецеденту `_assignments = assignments ?? new …`.
-  Без этого ломаются 44 места конструирования. Запасная сборка снимается в S3-8.
-- Публичные сигнатуры фасада не меняются; тесты зовут фасад и переписываются только в S3-8.
+  Без этого ломаются 57 мест конструирования. Запасная сборка снимается в S3-8c.
+- Публичные сигнатуры фасада не меняются; тесты зовут фасад, а способ сборки SM в них
+  меняется только в S3-8a и S3-8b.
 - Перенос метода — дословный, вместе с комментариями; поведение не меняется. Правки внутри
   перенесённых тел (переименования, уборка) в те же шаги не входят.
 
@@ -484,9 +515,9 @@ worktree и миграции); `HasTurnInFlight`, `Busy`, `WithTeamState`, `Clai
 ## Открытые вопросы (решить в шаге, не до него)
 
 1. `AsyncAgentInFlight`: если метод читает только `entry.Process`, он уходит в стор, и в
-   `ITeamNotifier` добавляется один метод, а не два (S3-5).
+   `ITeamNotifier` добавляется один метод, а не два (S3-6).
 2. `ChatDeletion` получает `IServiceProvider`. Выяснить, что именно удаление резолвит
-   лениво, и по возможности заменить на явную зависимость (S3-6).
+   лениво, и по возможности заменить на явную зависимость (S3-5).
 3. Ход «Общих проектов» после 05.11 может добавить в файл новые методы. Каждый шаг
    начинается со сверки: методы, появившиеся после `e0ed6ea34`, получают роль по таблицам
    §1, а при неясности — вопрос ко мне до переноса.

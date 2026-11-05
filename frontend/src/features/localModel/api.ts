@@ -96,7 +96,8 @@ export const localModelApi = {
 export type { LocalModelStats };
 
 // Стенд второй модели (разрез v2, §5): список движков для переключателя и блок «Дежурство».
-// Типы — в общем слое (lib/api.ts), здесь только ре-экспорт для панели и её компонентов.
+// Типы — в ./types.ts, здесь только ре-экспорт для панели и её компонентов;
+// lib/api.ts переэкспортирует их через `export type *` (адрес типов прежний).
 export type {
   LocalModelEngine,
   LocalModelEngineName,
@@ -117,7 +118,8 @@ export type {
 // время — unix-мс, chужие прогоны анонимны, gpus может быть null.
 export type { LocalModelMedia, MediaGpu, MediaSteps, MediaRunning, MediaQueue, MediaDone };
 
-// false — живые вызовы через общий lib/api.ts (JWT, ошибки, офлайн-кэш GET).
+// false — живые вызовы напрямую через `request` из lib/offline (JWT, ошибки, офлайн-кэш GET),
+// минуя `api` (иначе цикл: api подмешивает этот модуль).
 // true — панель и значок на моках (localModel.fixtures.ts) — режим витрины.
 export const USE_MOCK = false;
 

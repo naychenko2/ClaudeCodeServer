@@ -76,13 +76,13 @@ describe('chatActionDeniedReason (диспетчер)', () => {
     expect(chatActionDeniedReason('tags', { myRole: 'reader' }, { createdByUserId: ME }, ME)).toBe(CHAT_WRITE_DENIED);
   });
   it('настройки владельца («Срок», «Мьют», «Досье») — закрыты и редактору, и читателю', () => {
-    for (const key of ['expiry', 'notify', 'dossier']) {
+    for (const key of ['expiry', 'notify', 'dossier', 'wiki']) {
       expect(chatActionDeniedReason(key, { myRole: 'editor' }, { createdByUserId: ME }, ME)).toBe(OWNER_SETTINGS_DENIED);
       expect(chatActionDeniedReason(key, { myRole: 'reader' }, { createdByUserId: ME }, ME)).toBe(OWNER_SETTINGS_DENIED);
     }
   });
   it('настройки открыты владельцу, обычному проекту и чату вне проекта — как раньше', () => {
-    for (const key of ['tags', 'expiry', 'notify', 'dossier']) {
+    for (const key of ['tags', 'expiry', 'notify', 'dossier', 'wiki']) {
       expect(chatActionDeniedReason(key, { myRole: 'owner' }, { createdByUserId: ME }, ME)).toBeNull();
       expect(chatActionDeniedReason(key, {}, { createdByUserId: ME }, ME)).toBeNull();
       expect(chatActionDeniedReason(key, null, { createdByUserId: ME }, null)).toBeNull();
@@ -204,6 +204,8 @@ describe('проводка owner-гейта в кнопки настроек ш�
     expect(bar).toContain('<ExpiryButton session={session} project={project}');
     expect(bar).toContain('<NotifyButton session={session} project={project}');
     expect(bar).toContain('<DossierOptOutButton session={session} project={project}');
+    // «Вики» участнику скрыта целиком (а не серая): отказ идёт в доступность, не в disabled
+    expect(bar).toContain("useWikiChatAvailable(project?.id, !!actionDenied('wiki'))");
     for (const key of ['tags', 'notify', 'dossier', 'expiry']) {
       expect(bar).toContain(`disabled={!!actionDenied('${key}')}`);
       expect(bar).toContain(`hint={actionDenied('${key}') ?? undefined}`);

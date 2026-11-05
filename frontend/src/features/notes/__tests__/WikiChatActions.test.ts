@@ -13,8 +13,9 @@
 // Внешнее открытие (open: counter+anchor) и headless — без своего триггера.
 // «Откатить всё» — REST только после подтверждения, sourceRef без диапазона окна.
 // «Открыть хронику» (OPEN-1): запрос в стор вики + 'cc-open-note'.
-// Достижимость: РЕАЛЬНАЯ шапка (ChatHeaderBar) с РЕАЛЬНЫМ манифестом рисует старый вклад
-// wiki-chat-actions — теперь это то же меню, без ряда (его снимет WM-3).
+// Достижимость (WM-3): РЕАЛЬНАЯ шапка (ChatHeaderBar) с РЕАЛЬНЫМ манифестом рисует ОДИН
+// экземпляр вклада wiki-chat-menu (в ряду или headless у «⋯»); без флага, вне проекта, у
+// участника и при незаведённой/незагруженной вики экземпляра нет вовсе.
 //
 // Стор вики и флаги — настоящие; мокан только транспорт (offline.request) и signalr.
 // Шапка — через renderToStaticMarkup (эффекты в SSR не работают — запросов нет).
@@ -43,7 +44,7 @@ import { ChatHeaderBar } from '../../../components/chat/ChatHeaderBar';
 import { registerSubsystem, type ChatHeaderSummaryCtx } from '../../../lib/subsystems/registryCore';
 // Стор вики — настоящий (тот же экземпляр, что у компонента через кит): запрос «Открыть
 // хронику» проверяется в самом сторе; тестам прямой импорт разрешён (notesStoreImportGuard)
-import { __test as wikiStore, consumeOpenWikiPage } from '../../../lib/wiki';
+import { __test as wikiStore, consumeOpenWikiPage, loadWikiTree } from '../../../lib/wiki';
 
 // Тот же приём, что в WikiJournal.test: мокан только транспорт. Мок с сохранением
 // остальных экспортов: компонент берёт эти модули через кит хоста, а цепочка кита шире
@@ -799,11 +800,12 @@ describe('Склонение итога отката (доработка S7b, п
   });
 });
 
-describe('Достижимость из шапки чата (старый вклад wiki-chat-actions до WM-3)', () => {
+describe('Достижимость из шапки чата (ключ «wiki» каталога, WM-3)', () => {
   // Окружение для SSR-рендера реальной шапки: window с шириной (useWindowWidth — тот же
-  // источник, по которому сама шапка решает isCompact), localStorage, Notification.
-  // Эффекты в SSR не работают — запросов нет; проверяется состав ряда действий.
-  function withBrowserStub<T>(width: number, fn: () => T): T {
+  // источник, по которому сама шапка решает isCompact), localStorage (с набором скрытых
+  // ключей шапки — глазик), Notification. Эффекты в SSR не работают — запросов нет;
+  // проверяется состав шапки. Дерево вики кладётся в стор заранее (loadWikiTree).
+  function withBrowserStub<T>(width: number, fn: () => T, hidden: string[] = []): T {
     const g = globalThis as Record<string, unknown>;
     const saved = { window: g.window, localStorage: g.localStorage, Notification: g.Notification };
     g.window = Object.assign(new EventTarget(), {
@@ -811,7 +813,10 @@ describe('Достижимость из шапки чата (старый вкл
       matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
       dispatchEvent: () => true,
     });
-    g.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
+    g.localStorage = {
+      getItem: (k: string) => (k === 'cc_chat_header_hidden' ? JSON.stringify(hidden) : null),
+      setItem: () => {}, removeItem: () => {},
+    };
     g.Notification = { permission: 'denied' };
     try {
       return fn();
@@ -822,10 +827,16 @@ describe('Достижимость из шапки чата (старый вкл
     }
   }
 
-  function headerHtml(isMobile: boolean, compact = false): string {
+  async function seedTree(initialized: boolean) {
+    req.mockImplementation((url: string) => Promise.resolve(String(url) === '/wiki/tree' ? { initialized, sections: [] } : null));
+    await loadWikiTree();
+  }
+
+  function headerHtml(isMobile: boolean, opts: { compact?: boolean; project?: Record<string, unknown> | null } = {}): string {
+    const project = opts.project === undefined ? { id: 'p1' } : opts.project;
     return renderToStaticMarkup(createElement(ChatHeaderBar, {
-      session: { id: CHAT_A, name: 'Рефью звука' },
-      project: null, hasMessages: true, online: true,
+      session: { id: CHAT_A, name: 'Рефью звука', projectId: project ? 'p1' : undefined },
+      project, hasMessages: true, online: true,
       cost: { cost: 0, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, turns: 0, results: 0 },
       falCost: { total: 0, count: 0, byModel: new Map() },
       glifCost: { count: 0, credits: 0, hasCredits: false, byType: new Map() },
@@ -833,48 +844,102 @@ describe('Достижимость из шапки чата (старый вкл
       isMobile, isCompacting: false, canCompact: false, onCompact: () => {},
       ctxEstimate: { window: 200000, fresh: false, level: 'normal' }, isWaiting: false, items: [],
       persona: null, agent: null, participants: [],
-      island: false, compact, contextBar: null, scrolled: false,
+      island: false, compact: opts.compact ?? false, contextBar: null, scrolled: false,
     } as never));
   }
 
   const ROW_TESTIDS = ['wiki-chat-analyze', 'wiki-chat-retract', 'wiki-chat-chronicle', 'wiki-chat-mark-important', 'wiki-chat-mark-skip'];
+  const WRAP = 'data-testid="wiki-chat-menu"';
+  const count = (html: string, needle: string) => html.split(needle).length - 1;
 
-  it('шапка на десктопе 1440: кнопка-меню «Вики» вместо ряда — ни одного data-testid ряда', () => {
+  beforeEach(() => {
     setAllSubsystems(['notes']);
     setAllFlags({ 'llm-wiki': true });
+  });
+
+  it('десктоп 1440: одна кнопка-меню «Вики» в ряду, без ряда пунктов', async () => {
+    await seedTree(true);
     const html = withBrowserStub(1440, () => headerHtml(false));
-    expect(html).toContain(`title="${TRIGGER_TITLE}"`);
+    expect(count(html, `title="${TRIGGER_TITLE}"`)).toBe(1);
+    expect(count(html, WRAP)).toBe(1);
     for (const id of ROW_TESTIDS) expect(html).not.toContain(id);
     expect(html).not.toContain('Откатить всё из этого чата'); // пункты — только в открытом меню
   });
 
-  it('шапка на 360: та же одна кнопка-меню', () => {
-    setAllSubsystems(['notes']);
-    setAllFlags({ 'llm-wiki': true });
+  it('360: та же одна кнопка-меню', async () => {
+    await seedTree(true);
     const html = withBrowserStub(360, () => headerHtml(true));
-    expect(html).toContain(TRIGGER_TITLE);
-    for (const id of ROW_TESTIDS) expect(html).not.toContain(id);
+    expect(count(html, `title="${TRIGGER_TITLE}"`)).toBe(1);
+    expect(count(html, WRAP)).toBe(1);
   });
 
-  it('шапка с compact при широком окне: тоже меню', () => {
-    setAllSubsystems(['notes']);
-    setAllFlags({ 'llm-wiki': true });
-    const html = withBrowserStub(1280, () => headerHtml(false, true));
-    expect(html).toContain(`title="${TRIGGER_TITLE}"`);
-    for (const id of ROW_TESTIDS) expect(html).not.toContain(id);
+  it('колонка стены (compact) при широком окне: тоже одна кнопка-меню', async () => {
+    await seedTree(true);
+    const html = withBrowserStub(1280, () => headerHtml(false, { compact: true }));
+    expect(count(html, `title="${TRIGGER_TITLE}"`)).toBe(1);
+    expect(count(html, WRAP)).toBe(1);
   });
 
-  it('флаг llm-wiki выключен — в шапке нет меню «Вики»', () => {
-    setAllSubsystems(['notes']); // подсистема активна — нет именно из-за выключенного флага
+  it('глазик «Вики» скрыт: кнопки в ряду нет, экземпляр остаётся один (headless у «⋯»)', async () => {
+    await seedTree(true);
+    const html = withBrowserStub(1440, () => headerHtml(false), ['wiki']);
+    expect(html).not.toContain(`title="${TRIGGER_TITLE}"`);
+    expect(count(html, WRAP)).toBe(1);
+    expect(html).toContain('Ещё действия');
+  });
+
+  it('флаг llm-wiki выключен — «Вики» нет нигде, в том числе экземпляра вклада', async () => {
+    await seedTree(true);
     setAllFlags({});
-    expect(withBrowserStub(1440, () => headerHtml(false))).not.toContain(TRIGGER_TITLE);
-    expect(withBrowserStub(360, () => headerHtml(true))).not.toContain(TRIGGER_TITLE);
+    for (const html of [
+      withBrowserStub(1440, () => headerHtml(false)),
+      withBrowserStub(360, () => headerHtml(true)),
+      withBrowserStub(1440, () => headerHtml(false), ['wiki']),
+    ]) {
+      expect(html).not.toContain(TRIGGER_TITLE);
+      expect(html).not.toContain(WRAP);
+    }
   });
 
-  it('манифест: вклад wiki-chat-menu в слоте chat-header-action и старый wiki-chat-actions (до WM-3)', () => {
+  it('чат вне проекта — «Вики» нет нигде', async () => {
+    await seedTree(true);
+    const html = withBrowserStub(1440, () => headerHtml(false, { project: null }));
+    expect(html).not.toContain(TRIGGER_TITLE);
+    expect(html).not.toContain(WRAP);
+  });
+
+  it('вики не заведена (initialized=false) — «Вики» нет нигде', async () => {
+    await seedTree(false);
+    const html = withBrowserStub(1440, () => headerHtml(false));
+    expect(html).not.toContain(TRIGGER_TITLE);
+    expect(html).not.toContain(WRAP);
+  });
+
+  it('дерево ещё не загружено — «Вики» нет (скрыто, а не серым)', () => {
+    const html = withBrowserStub(1440, () => headerHtml(false));
+    expect(html).not.toContain(TRIGGER_TITLE);
+    expect(html).not.toContain(WRAP);
+  });
+
+  it('участник проекта (редактор, читатель) — «Вики» нет нигде', async () => {
+    await seedTree(true);
+    for (const role of ['editor', 'reader']) {
+      const html = withBrowserStub(1440, () => headerHtml(false, { project: { id: 'p1', myRole: role } }));
+      expect(html).not.toContain(TRIGGER_TITLE);
+      expect(html).not.toContain(WRAP);
+    }
+  });
+
+  it('владелец общего проекта видит «Вики»', async () => {
+    await seedTree(true);
+    const html = withBrowserStub(1440, () => headerHtml(false, { project: { id: 'p1', myRole: 'owner' } }));
+    expect(count(html, WRAP)).toBe(1);
+  });
+
+  it('манифест: вклад wiki-chat-menu есть, старого wiki-chat-actions больше нет', () => {
     const names = (notesManifest.slots?.['chat-header-action'] ?? []).map((i: { name: string }) => i.name);
     expect(names).toContain('wiki-chat-menu');
-    expect(names).toContain('wiki-chat-actions');
+    expect(names).not.toContain('wiki-chat-actions');
   });
 });
 

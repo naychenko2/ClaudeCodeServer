@@ -8,11 +8,11 @@
 // диалогом), и склеивать эти реализации в один рантайм смысла нет.
 
 export type ChatActionKey =
-  | 'rename' | 'pin' | 'tags' | 'subject' | 'wall' | 'notify' | 'dossier' | 'expiry' | 'archive' | 'delete';
+  | 'rename' | 'pin' | 'tags' | 'subject' | 'wall' | 'notify' | 'dossier' | 'wiki' | 'expiry' | 'archive' | 'delete';
 
 // Порядок — канонический: в каком бы месте действие ни рисовалось, соседи те же
 export const CHAT_ACTION_ORDER: ChatActionKey[] = [
-  'rename', 'pin', 'tags', 'subject', 'wall', 'notify', 'dossier', 'expiry', 'archive', 'delete',
+  'rename', 'pin', 'tags', 'subject', 'wall', 'notify', 'dossier', 'wiki', 'expiry', 'archive', 'delete',
 ];
 
 export const CHAT_ACTION_LABELS: Record<ChatActionKey, string> = {
@@ -24,6 +24,7 @@ export const CHAT_ACTION_LABELS: Record<ChatActionKey, string> = {
   wall: 'На стену',
   notify: 'Уведомления',
   dossier: 'Досье решений',
+  wiki: 'Вики',
   expiry: 'Срок хранения',
   archive: 'В архив',
   delete: 'Удалить',
@@ -42,7 +43,7 @@ export const CHAT_ACTION_LABELS: Record<ChatActionKey, string> = {
 // (см. ChatCard.quickButtons) — поэтому спрятавший действие человек всё равно
 // сможет вытащить чат обратно из карточки
 export const CARD_ACTIONS_HIDDEN_BY_DEFAULT: ChatActionKey[] = [
-  'rename', 'subject', 'wall', 'notify', 'dossier', 'expiry', 'archive',
+  'rename', 'subject', 'wall', 'notify', 'dossier', 'wiki', 'expiry', 'archive',
 ];
 
 // Шапка открытого чата: Теги · Срок хранения (у срока ещё и роль индикатора —
@@ -120,8 +121,7 @@ export function migrateCardSubjectHidden(hidden: string[]): string[] {
 // Перевод сохранённого набора плитки: кнопка «Вики» появится позже, и у тех, кто
 // успел тронуть глазик, её ключа в наборе нет — новая кнопка вылезала в ряд, хотя
 // по дефолту она в меню. Прячем её один раз; вернуть в ряд можно тем же глазиком,
-// повторно миграция не сработает (маркер). Ключ 'wiki' в каталог добавится следующим
-// шагом — здесь функция работает со string[], как соседняя
+// повторно миграция не сработает (маркер)
 export function migrateCardWikiHidden(hidden: string[]): string[] {
   return hidden.includes('wiki') ? hidden : [...hidden, 'wiki'];
 }

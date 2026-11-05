@@ -1,5 +1,5 @@
 import { memo, useCallback, useState, useRef, useEffect, useLayoutEffect, type CSSProperties, type ReactNode } from 'react';
-import { AlertCircle, AlarmClock, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, FileText, GitCommitVertical, History, Hourglass, Eye, EyeOff, Layers, MessageSquareShare, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
+import { AlertCircle, AlarmClock, Archive, ArchiveRestore, Bell, BellOff, Bot, BookOpen, CheckCircle2, Clock, Columns3, FileText, GitCommitVertical, History, Hourglass, Eye, EyeOff, Layers, MessageSquareShare, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT, FS } from '../lib/design';
 import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem, Tooltip, handlePressableKey } from './ui';
@@ -516,6 +516,8 @@ function ChatCardView({
     wall: !!onAddToWall,
     notify: canMute,
     dossier: canEditChat && !!s.projectId,
+    // Карточку оживляет WM-4; до тех пор действия «Вики» в списке нет
+    wiki: false,
     expiry: canEditChat,
     // Архивный пункт рисуется на меню (см. ниже) и/или в быстром кластере — но
     // только когда родительский список дал колбэк onArchive (= отвечает за сеть
@@ -615,6 +617,10 @@ function ChatCardView({
         icon: <History size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
         title: s.excludeFromDossiers ? 'Решения не сохраняются' : 'Решения сохраняются',
         onClick: e => { e.stopPropagation(); void toggleDossier(); },
+      };
+      case 'wiki': return {
+        icon: <BookOpen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, title: 'Вики',
+        onClick: e => { e.stopPropagation(); },
       };
       case 'expiry': return {
         icon: <Hourglass size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,

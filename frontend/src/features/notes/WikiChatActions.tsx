@@ -25,13 +25,10 @@
 // (в ядре — шапка, «⋯», карточка). Внешнее открытие — по якорю (open), без своего
 // триггера — headless. Итог разбора — человеческим текстом значением пункта «Разобрать»,
 // на триггере точка статуса; точка гаснет, когда человек открыл меню (cc_wiki_seen_<chat>
-// хранит finishedAt увиденного исхода). Старый вклад 'wiki-chat-actions' пока рисует то же
-// меню (isMobile = прежний compact): его снимает WM-3.
-
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { BookOpen, Ban, Check, ScrollText, Star, Undo2 } from 'lucide-react';
 import {
-  C, SP, FLAGS, useFeature, useWindowWidth, TABLET_WIDE_MIN,
+  C, SP, FLAGS, useFeature,
   analyzeWikiChat, ingestWikiNote, loadWikiChatAnalyzeStatus, loadWikiChats, requestOpenWikiPage, retractWikiSource, setWikiChatMark,
   WikiError, type WikiChatAnalyzeOk, type WikiChatMark, type WikiNoteIngestDto,
 } from 'aihome_shell/kit';
@@ -40,7 +37,7 @@ import { ToolbarOverflowMenu, type OverflowItem } from '../../components/Toolbar
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { TASK_HINT, isTaskChat } from './wiki/WikiChatTriageList';
 import { analyzeRefusalText, personalSectionRefusalText, retractResultText, wikiErrorText } from './wiki/wikiLabels';
-import type { ChatHeaderSummaryCtx, ChatWikiMenuCtx } from '../../lib/subsystems/registryCore';
+import type { ChatWikiMenuCtx } from '../../lib/subsystems/registryCore';
 
 // Пауза между опросами analyze-status: analyze ждёт исход сам ≤10 с (WikiChatsController),
 // 202 значит «долше» — частый опрос не нужен, редкий не успевает за пользователем
@@ -116,14 +113,6 @@ function msgDot(color: string): CSSProperties {
     position: 'absolute', top: 0, right: 0, width: 8, height: 8, borderRadius: '50%',
     background: color, border: `2px solid ${C.bgPanel}`, pointerEvents: 'none',
   };
-}
-
-// Старый вклад шапки 'wiki-chat-actions' (до WM-3): то же меню, не-headless. Шапка сама знает,
-// что она сжата (в т.ч. узкая колонка «Стены») — её признак главнее ширины окна (порог
-// TABLET_WIDE_MIN — тот же, что читает ChatHeaderBar)
-export function WikiChatActions({ session, hasMessages, online, compact }: ChatHeaderSummaryCtx) {
-  const windowCompact = useWindowWidth() < TABLET_WIDE_MIN;
-  return <WikiChatMenu session={session} hasMessages={hasMessages} online={online} isMobile={compact ?? windowCompact} />;
 }
 
 export function WikiChatMenu({ session, hasMessages, online, isMobile, headless, open, onClose }: ChatWikiMenuCtx) {

@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
-import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles, SlidersHorizontal, MessageSquareShare } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo, Fragment, type ReactNode } from 'react';
+import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles, SlidersHorizontal, MessageSquareShare, BookOpen } from 'lucide-react';
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag, ChatItem } from '../../types';
 import { api, chatFieldsErrorText } from '../../lib/api';
@@ -23,6 +23,7 @@ import { personaTitleLines } from '../../lib/personas';
 import { isProjectPersona, isSpherePersona, zoneLabel } from '../../lib/personaZone';
 import { useSpheres } from '../../lib/useSpheres';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
+import { useWikiChatAvailable } from '../../hooks/useWikiChatAvailable';
 import { useLocalModelLive, type LocalModelLiveState } from '../../features/localModel/useLocalModelLive';
 import { useLocalModelAdmin } from '../../features/localModel/useLocalModelStats';
 import { localModelTail, localModelQueueText, formatTps } from '../../features/localModel/localModelTail';
@@ -47,7 +48,7 @@ import { chatActionDeniedReason, isNotChatAuthorError } from '../../features/pro
 import { readStoredUserId } from '../../lib/offline';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import { useSlotItem } from '../../lib/subsystems/registry';
-import type { ChatHeaderSummaryCtx, ChatHeaderMenuItemCtx, ChatHeaderBadgeCtx } from '../../lib/subsystems/registryCore';
+import type { ChatHeaderSummaryCtx, ChatHeaderMenuItemCtx, ChatHeaderBadgeCtx, ChatWikiMenuCtx } from '../../lib/subsystems/registryCore';
 import type { ExtractedTaskCandidate } from '../../types';
 import { ChatOriginBadge } from '../ChatOriginBadge';
 import { CHAT_SWITCHER_MIN_W, ChatSwitcherTrigger } from '../../features/home/ChatSwitcherSheet';
@@ -1340,9 +1341,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // AI-действия чата к заметкам не относятся и остаются.
   const summaryAction = useSlotItem<ChatHeaderSummaryCtx>('chat-header-action', 'session-summary');
   const summaryMenuItem = useSlotItem<ChatHeaderMenuItemCtx>('chat-header-action', 'summary-menu-item');
-  // Действия «Вики» в ряду (S7b): «Разобрать этот чат», «Открыть хронику», «Откатить всё…».
-  // Гейт флага llm-wiki — внутри вклада: при выключенном он рендерит null, ряда не касается.
-  const wikiActions = useSlotItem<ChatHeaderSummaryCtx>('chat-header-action', 'wiki-chat-actions');
+  // Меню «Вики» — вклад «Заметок» (WM-2). Доступность («Вики» есть в шапке вообще) считает
+  // useWikiChatAvailable; сам вклад — ОДИН экземпляр на шапку (в ряду либо headless у «⋯»)
+  const wikiMenu = useSlotItem<ChatWikiMenuCtx>('chat-header-action', 'wiki-chat-menu');
   const spendBadgeSlot = useSlotItem<ChatHeaderBadgeCtx>('chat-header-badge', 'spend-badge');
   // УЗКИЙ планшет (601 – TABLET_WIDE_MIN): мобильная механика — объединённый чип,
   // wide-поповер, плотная группа кнопок, заголовок с многоточием. Объединяем с mobile
@@ -1826,7 +1827,6 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // На узких раскладках артефакты и настройки — плотная пара справа (gap 0 вместо
   // TB.gap), читаются как единая группа действий чата; на десктопе — как раньше, врозь.
   const summaryBtn = summaryAction?.render?.({ session, hasMessages, online });
-  const wikiActionsBtn = wikiActions?.render?.({ session, hasMessages, online, compact: isCompact || compact });
   const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} />;
   const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} locked={!!actionDenied('rename')} />;
 
@@ -1842,6 +1842,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // просто отключались, потому что ряд не вмещал их все. Теперь состав ряда
   // выбирает пользователь глазиком (по умолчанию наружу выведен только срок),
   // а «⋯» на месте всегда — значит прятать сами действия незачем
+  const wikiAvailable = useWikiChatAvailable(project?.id, !!actionDenied('wiki')) && online;
   const headerActionAvailable: Record<ChatActionKey, boolean> = {
     rename: online,
     pin: online && !session.projectId,
@@ -1851,6 +1852,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     wall: !!onAddToWall,
     notify: online && isNotifySupported(),
     dossier: !!project && online,
+    wiki: wikiAvailable,
     expiry: online,
     // Архив доступен и в узкой колонке «Стены»: сетевой клиент
     // PUT /api/chats/{id}/archived есть в любом онлайн-чате, а ряд от него не распухнет —
@@ -1868,6 +1870,24 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Исполнение действий шапки. Часть уже живёт готовыми кнопками (у них свои
   // поповеры и состояния) — их узлы в rowNode; остальные исполняются здесь
   const [renameDialog, setRenameDialog] = useState<string | null>(null);
+  // Запрос «открой меню «Вики» по якорю» из строки «⋯» и правого клика; counter растёт на каждый запрос
+  // Запрос живёт один рендер: меню забирает его в своём эффекте, шапка тут же гасит — иначе
+  // переезд экземпляра между рядом и «⋯» (глазик) открыл бы свежесмонтированное меню заново.
+  // Номер запроса сквозной (ref): меню сравнивает его с последним обработанным
+  const wikiReqSeq = useRef(0);
+  const [wikiOpen, setWikiOpen] = useState<{ counter: number; anchor: DOMRect | null } | null>(null);
+  useEffect(() => { if (wikiOpen) setWikiOpen(null); }, [wikiOpen]);
+  const requestWikiOpen = (anchor: DOMRect | null) => setWikiOpen({ counter: ++wikiReqSeq.current, anchor });
+  // Смена чата закрывает меню: чат меняет session во вкладе, его попап сбрасывается по session.id
+  // ОДИН экземпляр вклада на шапку: рисуется либо в ряду (со своим триггером), либо headless
+  // рядом с «⋯» — иначе два опроса analyze-status на один чат
+  const wikiMenuNode = (headless: boolean): ReactNode => (
+    // key по чату: смена чата размонтирует меню — открытое меню и его опрос прежнего чата закрываются
+    <Fragment key={session.id}>
+      {wikiMenu?.render?.({ session, hasMessages, online, isMobile: isCompact || !!compact, headless, open: wikiOpen ?? undefined })}
+    </Fragment>
+  );
+  const wikiHeadless = wikiAvailable && !rowActions.includes('wiki') ? wikiMenuNode(true) : null;
   const [deleteAsk, setDeleteAsk] = useState(false);
   // Сохранение имени — одна точка на кнопку «Сохранить» и на Enter в поле
   // Отказ бэка «только автор» (устаревшая роль на клиенте) показываем текстом ответа
@@ -1891,6 +1911,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           .catch(() => showToast('Чат', 'Не удалось изменить закрепление', 'info'));
         break;
       case 'tags': if (anchor) setTagMenu(anchor); break;
+      case 'wiki': requestWikiOpen(anchor ?? null); break;
       case 'wall': onAddToWall?.(); break;
       case 'notify':
         void updateChatFields(session, { notificationsMuted: notifyOn })
@@ -1952,6 +1973,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         icon: <History size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
         label: session.excludeFromDossiers ? 'Досье: не сохраняются' : 'Досье: сохраняются',
       };
+      case 'wiki': return { icon: <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Вики' };
       case 'expiry': return {
         icon: <Hourglass size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
         label: session.expiresAfterMinutes != null ? `Хранить: ${formatTimeLeft(session) ?? 'по сроку'}` : 'Срок хранения',
@@ -1975,6 +1997,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const rowNode = (key: ChatActionKey): ReactNode => {
     if (key === 'dossier') return dossierBtn;
     if (key === 'expiry') return expiryBadge;
+    if (key === 'wiki') return wikiMenuNode(false);
     if (key === 'notify') return notifyBtn;
     const m = actionMeta(key);
     const denied = actionDenied(key);
@@ -2140,7 +2163,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Ghost-заглушение ряда действий — только на десктопе (класс сам гасится вне
   // hover-media): компактные раскладки получают полную непрозрачность
   const actionBtns = isCompact
-    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{wikiActionsBtn}{privateBtn}{rowActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}{headerOverflow}</div>
+    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{privateBtn}{rowActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}{wikiHeadless}{headerOverflow}</div>
     // На десктопе кнопки — неразрывная группа: при переносе кластера уходят вниз целиком,
     // оставаясь последними у правого края (мышечная память на позицию). Ghost-класс
     // приглушает ряд в покое; «⋯» стоит ВНЕ него — это единственный путь к скрытым
@@ -2148,9 +2171,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     : (
       <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>
         <div className="cc-ghost-actions" style={{ display: 'flex', alignItems: 'center', gap: TB.gap }}>
-          {retitleBtn}{extractBtn}{summaryBtn}{wikiActionsBtn}{privateBtn}
+          {retitleBtn}{extractBtn}{summaryBtn}{privateBtn}
           {rowActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}
         </div>
+        {wikiHeadless}
         {headerOverflow}
       </div>
     );
@@ -2245,6 +2269,14 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         action={visAction('expiry')}
         onClick={() => { const a = ctxMenu; setCtxMenu(null); setExpiryMenu(a); }}
       />
+      {wikiAvailable && (
+        <MenuItem
+          icon={<BookOpen size={15} strokeWidth={2} />}
+          label="Вики"
+          action={visAction('wiki')}
+          onClick={() => { const a = ctxMenu; setCtxMenu(null); requestWikiOpen(a); }}
+        />
+      )}
       {canContinue && (
         <MenuItem
           icon={<MessageSquareShare size={15} strokeWidth={2} />}

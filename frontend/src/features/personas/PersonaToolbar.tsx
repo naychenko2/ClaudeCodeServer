@@ -68,7 +68,6 @@ interface EditProps extends CommonProps {
   // Правка карточки; onEdit не задан — «Редактировать» не рисуется (гейт по роли, W3-F1c)
   onEdit?: () => void;
   onCancelEdit: () => void;
-  talking?: boolean;
   // Удаление персоны; onDelete не задан — пункта «Удалить персону» нет (гейт по роли)
   onDelete?: () => void;
   // Дефолт-персона: признак «эта персона — дефолт своей зоны» и действие
@@ -192,7 +191,7 @@ export function PersonaToolbar(props: EditProps | CreateProps) {
       </div>
 
       {editing ? (
-        // Режим правки профиля: вкладки/Поговорить/меню скрыты (чтобы не потерять
+        // Режим правки профиля: вкладки и меню скрыты (чтобы не потерять
         // несохранённое переключением), справа — Отмена + Сохранить
         <>
           <button onClick={onCancelEdit} style={tbBtnGhost}>Отмена</button>

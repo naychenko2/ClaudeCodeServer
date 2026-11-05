@@ -198,7 +198,6 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
           onEdit={mayEdit ? () => setEditing(true) : undefined}
           onCancelEdit={() => { if (status.dirty) setConfirmDiscard(() => () => setEditing(false)); else setEditing(false); }}
           status={status}
-          talking={talking}
           onDelete={mayDelete ? () => onDelete(persona) : undefined}
           isDefault={isDefault}
           onMakeDefault={mayLead ? () => requestMakeDefault(persona) : undefined}

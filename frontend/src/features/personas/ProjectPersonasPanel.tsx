@@ -20,6 +20,7 @@ import { DeletePersonaDialog } from './DeletePersonaDialog';
 import { useIsMobile } from '../../lib/breakpoints';
 import { visibleIn, isGlobalPersona } from '../../lib/personaZone';
 import { useSphereOf } from '../../lib/useSphereOf';
+import { personaRole, canPersona } from './personaRights';
 
 // Проектная вкладка «Команда»: САЙДБАРНЫЙ СПИСОК персон этого проекта.
 // Форма редактирования/создания живёт отдельно — в центральной зоне (ProjectPersonaPane).
@@ -40,6 +41,11 @@ export function ProjectPersonasPanel({ project, selectedId, onSelect, onNew, onS
   // Только персоны этого проекта (глобальные живут в хабе «Персоны»)
   const projectPersonas = personas.filter(p => visibleIn(p, project.id, sphereOf) && !isGlobalPersona(p));
 
+  // W3-F1c: роль этого человека в проекте — только через personaRights (матрица §2
+  // разреза shared-projects-personas-cut-2026-11). Создание персоны — по editCard:
+  // читателю бэк откажет, поэтому и кнопки «Новая персона» в панели нет.
+  const mayCreate = canPersona(personaRole({ projectId: project.id }, [project]), 'editCard');
+
   return (
     // Фон прозрачный: подложку даёт контентная зона карточки панели (белая)
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -47,7 +53,7 @@ export function ProjectPersonasPanel({ project, selectedId, onSelect, onNew, onS
         personas={projectPersonas}
         selectedId={selectedId}
         onSelect={onSelect}
-        onNew={onNew}
+        onNew={mayCreate ? onNew : undefined}
         teamCenter={onShowTeam ? { active: !!teamActive, onClick: onShowTeam } : undefined}
       />
     </div>
@@ -75,6 +81,17 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
   const personas = usePersonas();
   const persona = personaId ? personas.find(p => p.id === personaId) ?? null : null;
   const isMobile = useIsMobile();
+
+  // W3-F1c: гейт по роли в этом проекте (матрица §2 разреза shared-projects-personas-cut-2026-11
+  // §3.4): закрытое прячется целиком — тулбар и визитка не обещают того, что бэк откажет
+  // участнику. Роль — только через personaRights; проект здесь в пропсах, и каждая его
+  // персона принадлежит этому же проекту (projectId = project.id), поэтому роль одна
+  // на всю зону. Нет myRole (обычный проект / старый бэк) — всё открыто, как раньше.
+  const role = personaRole({ projectId: project.id }, [project]);
+  const mayChat = canPersona(role, 'chat');
+  const mayEdit = canPersona(role, 'editCard');
+  const mayDelete = canPersona(role, 'delete');
+  const mayLead = canPersona(role, 'makeLead');
 
   // Активный вид (для существующей персоны): профиль (дефолт), умения, память, задачи.
   // Смена персоны в списке сбрасывает вид обратно на профиль (или на initialView, если задан).
@@ -177,14 +194,14 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
           view={view}
           onView={goView}
           editing={editing}
-          onEdit={() => setEditing(true)}
+          onEdit={mayEdit ? () => setEditing(true) : undefined}
           onCancelEdit={() => { if (status.dirty) setConfirmDiscard(() => () => setEditing(false)); else setEditing(false); }}
           status={status}
           talking={talking}
           onTalk={() => talk(persona)}
-          onDelete={() => onDelete(persona)}
+          onDelete={mayDelete ? () => onDelete(persona) : undefined}
           isDefault={isDefault}
-          onMakeDefault={() => requestMakeDefault(persona)}
+          onMakeDefault={mayLead ? () => requestMakeDefault(persona) : undefined}
           onSave={() => void formRef.current?.save()}
           onBack={onBack}
           onClose={onClose}
@@ -227,7 +244,7 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
               onOpenMemory={() => goView('memory')}
               onOpenKnowledge={() => goView('knowledge')}
               onSaved={() => setEditing(false)}
-              onDelete={() => onDelete(persona)}
+              onDelete={mayDelete ? () => onDelete(persona) : undefined}
             />
           ) : (
             // Профиль — read-only визитка; чаты проектной персоны открываются на месте
@@ -236,9 +253,9 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
               accent={accent}
               zoneLabel={`Проект · ${project.name}`}
               talking={talking}
-              onTalk={() => talk(persona)}
+              onTalk={mayChat ? () => talk(persona) : undefined}
               onOpenSession={onOpenChat}
-              onEditProfile={() => setEditing(true)}
+              onEditProfile={mayEdit ? () => setEditing(true) : undefined}
               onOpenKnowledge={() => goView('knowledge')}
               onOpenTasks={() => goView('tasks')}
               onOpenAutomation={() => goView('automation')}
@@ -248,8 +265,9 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
           )
         ) : null}
       </div>
-      {/* Плавающая «Редактировать» на мобиле — вместо карандаша в тулбаре */}
-      {isMobile && persona && view === 'preview' && !editing && (
+      {/* Плавающая «Редактировать» на мобиле — вместо карандаша в тулбаре; правка карточки
+          закрыта роли (editCard) — кнопки нет (W3-F1c) */}
+      {isMobile && persona && view === 'preview' && !editing && mayEdit && (
         <PersonaEditFab accent={accent} onClick={() => setEditing(true)} />
       )}
       {deleteTarget && (

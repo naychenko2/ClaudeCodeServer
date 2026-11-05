@@ -64,11 +64,13 @@ interface EditProps extends CommonProps {
   onView: (v: PersonaView) => void;
   // Идёт ли редактирование профиля (форма развёрнута вместо визитки)
   editing: boolean;
-  onEdit: () => void;
+  // Правка карточки; onEdit не задан — «Редактировать» не рисуется (гейт по роли, W3-F1c)
+  onEdit?: () => void;
   onCancelEdit: () => void;
   talking?: boolean;
   onTalk: () => void;
-  onDelete: () => void;
+  // Удаление персоны; onDelete не задан — пункта «Удалить персону» нет (гейт по роли)
+  onDelete?: () => void;
   // Дефолт-персона: признак «эта персона — дефолт своей зоны» и действие
   // назначения; onMakeDefault не задан — пункт меню не рисуется
   isDefault?: boolean;
@@ -198,45 +200,54 @@ export function PersonaToolbar(props: EditProps | CreateProps) {
         </>
       ) : (
         <>
-          {/* Редактировать + ⋯-меню (Удалить) — только десктоп. На мобиле «Редактировать»
-              вынесена в плавающую кнопку PersonaEditFab, «Удалить» — в «Опасную зону» формы. */}
-          {!isMobile && (
+          {/* Редактировать + ⋯-меню (Удалить, «по умолчанию») — только десктоп и только те
+              контролы, которые разрешены роли: onEdit/onMakeDefault/onDelete не задан —
+              контрола нет (гейт по роли, W3-F1c); закрыты оба пункта меню — скрыт и весь
+              триггер: пустого меню не показываем. На мобиле «Редактировать» вынесена
+              в плавающую кнопку PersonaEditFab, «Удалить» — в «Опасную зону» формы. */}
+          {!isMobile && (onEdit || onMakeDefault || onDelete) && (
             <>
-              {/* Первый шаг деградации: в узком контейнере кнопка теряет подпись */}
-              {narrow ? (
-                <IconButton onClick={onEdit} title="Редактировать" size="md">
-                  <Pencil size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-                </IconButton>
-              ) : (
-                <button onClick={onEdit} title="Редактировать"
-                  style={{ ...tbBtnGhost, display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                  <Pencil size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-                  Редактировать
-                </button>
+              {onEdit && (
+                /* Первый шаг деградации: в узком контейнере кнопка теряет подпись */
+                narrow ? (
+                  <IconButton onClick={onEdit} title="Редактировать" size="md">
+                    <Pencil size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+                  </IconButton>
+                ) : (
+                  <button onClick={onEdit} title="Редактировать"
+                    style={{ ...tbBtnGhost, display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                    <Pencil size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+                    Редактировать
+                  </button>
+                )
               )}
-              <div style={{ position: 'relative', flexShrink: 0 }}>
-                <IconButton onClick={() => setMenuOpen(o => !o)} title="Ещё" size="md">
-                  <EllipsisVertical size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-                </IconButton>
-                {menuOpen && (
-                  <Menu onClose={() => setMenuOpen(false)} align="right" top={38} minWidth={220}>
-                    {/* Назначение дефолт-персоны зоны */}
-                    {onMakeDefault && !isDefault && (
-                      <MenuItem
-                        icon={<Star size={15} strokeWidth={ICON_STROKE} />}
-                        label="Сделать персоной по умолчанию"
-                        onClick={() => { setMenuOpen(false); onMakeDefault(); }}
-                      />
-                    )}
-                    <MenuItem
-                      danger
-                      icon={<Trash2 size={15} strokeWidth={ICON_STROKE} />}
-                      label="Удалить персону"
-                      onClick={() => { setMenuOpen(false); onDelete(); }}
-                    />
-                  </Menu>
-                )}
-              </div>
+              {(onMakeDefault || onDelete) && (
+                <div style={{ position: 'relative', flexShrink: 0 }}>
+                  <IconButton onClick={() => setMenuOpen(o => !o)} title="Ещё" size="md">
+                    <EllipsisVertical size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+                  </IconButton>
+                  {menuOpen && (
+                    <Menu onClose={() => setMenuOpen(false)} align="right" top={38} minWidth={220}>
+                      {/* Назначение дефолт-персоны зоны */}
+                      {onMakeDefault && !isDefault && (
+                        <MenuItem
+                          icon={<Star size={15} strokeWidth={ICON_STROKE} />}
+                          label="Сделать персоной по умолчанию"
+                          onClick={() => { setMenuOpen(false); onMakeDefault(); }}
+                        />
+                      )}
+                      {onDelete && (
+                        <MenuItem
+                          danger
+                          icon={<Trash2 size={15} strokeWidth={ICON_STROKE} />}
+                          label="Удалить персону"
+                          onClick={() => { setMenuOpen(false); onDelete(); }}
+                        />
+                      )}
+                    </Menu>
+                  )}
+                </div>
+              )}
             </>
           )}
 

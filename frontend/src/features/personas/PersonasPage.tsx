@@ -34,6 +34,7 @@ import { PersonaActivityFeed } from './PersonaActivityFeed';
 import { usePersonasActivity } from './personasActivity';
 import { DeletePersonaDialog } from './DeletePersonaDialog';
 import { isProjectPersona, isSpherePersona, zoneLabel as zoneLabelOf } from '../../lib/personaZone';
+import { personaRole, canPersona } from './personaRights';
 import { useSpheres } from '../../lib/useSpheres';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
 
@@ -396,8 +397,10 @@ function PersonaCreatePane({ projects, onOpenStudio, onStartChat, onCancel, onBa
 
 // Студия персоны: центральная область = обзор-визитка (дефолт), инлайн-форма
 // профиля ИЛИ долгая память. Чата здесь нет — разговор живёт среди обычных
-// чатов (кнопка «Поговорить»).
-function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTalk, onOpenSession, onOpenSpecialties, onBack, isMobile, hero }: {
+// чатов (кнопка «Поговорить»). Экспортирована: её гейт по роли проверяется
+// PersonasPage.gate.test.ts отдельным рендером (whole-page SSR не годится:
+// страница тянет за собой хаб, рельсу панелей и навигацию).
+export function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTalk, onOpenSession, onOpenSpecialties, onBack, isMobile, hero }: {
   persona: Persona;
   projects: Project[];
   talking: boolean;
@@ -438,9 +441,17 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
 
   const isProjectScope = isProjectPersona(persona);
   const spheres = useSpheres(useFeature(FLAGS.spheres));
-  const zoneName = isProjectScope
-    ? (projects.find(p => p.id === persona.projectId)?.name ?? persona.projectId ?? 'Проект')
-    : null;
+  // W3-F1d: гейт по роли в студии персоны (матрица §2 разреза
+  // docs/research/shared-projects-personas-cut-2026-11.md §3.4): роль — только через
+  // personaRole по проекту персоны; список projects здесь же, откуда берётся имя зоны.
+  // Закрытое прячется целиком: тулбар и визитка не обещают того, что бэк откажет
+  // участнику. Нет роли (своя персона / обычный проект / старый бэк) и владелец — всё, как раньше.
+  const project = isProjectScope ? projects.find(p => p.id === persona.projectId) : undefined;
+  const role = personaRole(persona, projects);
+  const mayChat = canPersona(role, 'chat');
+  const mayDelete = canPersona(role, 'delete');
+  const mayLead = canPersona(role, 'makeLead');
+  const zoneName = isProjectScope ? (project?.name ?? persona.projectId ?? 'Проект') : null;
   const zoneLabel = isProjectScope ? `Проект · ${zoneName}`
     : isSpherePersona(persona) ? zoneLabelOf(persona, { sphereName: id => spheres.find(x => x.id === id)?.name }, true)
     : 'Глобальный';
@@ -449,26 +460,37 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
   const [liveColor, setLiveColor] = useState<string | undefined>(undefined);
   const accent = AGENT_COLORS[liveColor ?? persona.avatar?.color ?? ''] ?? C.accent;
 
-  // Смена дефолт-персоны: глобальную можно назначить личным дефолтом из меню тулбара;
-  // проектную здесь не трогаем — её дефолт живёт в проекте
+  // Смена дефолта: бэковый make-default действует по области персоны (PersonasController:
+  // «глобальную — личным дефолтом владельца, проектную — дефолтом её проекта»), поэтому
+  // состояние и тексты здесь тоже по области: глобальная — против me.defaultPersonaId,
+  // проектная — против project.defaultPersonaId (её руководитель, как в панели проекта).
+  // Локальная отметка после успешного назначения держит бейдж и подтверждение честными:
+  // projects родителя по broadcast не перечитывается, own-persona — обновится через refreshMe.
   const me = useMe();
-  const isDefault = !isProjectScope && me.defaultPersonaId === persona.id;
+  const [assignedDefaultId, setAssignedDefaultId] = useState<string | null>(null);
+  const defaultOwnerId = assignedDefaultId ?? (isProjectScope ? project?.defaultPersonaId ?? null : me.defaultPersonaId);
+  const isDefault = defaultOwnerId === persona.id;
   // Кандидат ждёт подтверждения: смена СУЩЕСТВУЮЩЕГО дефолта — только через диалог
   // (защита от случайного клика мимо пункта меню); первое назначение — сразу.
   const [confirmDefault, setConfirmDefault] = useState(false);
   const allPersonas = usePersonas();
-  const currentDefault = me.defaultPersonaId ? allPersonas.find(p => p.id === me.defaultPersonaId) : undefined;
+  const currentDefault = defaultOwnerId ? allPersonas.find(p => p.id === defaultOwnerId) : undefined;
   const makeDefault = async () => {
     try {
       await api.personas.makeDefault(persona.id);
       await refreshMe();
-      showToast('Персоны', `«${personaLabel(persona)}» — теперь ваша персона по умолчанию.`);
+      setAssignedDefaultId(persona.id);
+      showToast('Персоны', isProjectScope
+        ? `«${personaLabel(persona)}» — теперь руководитель проекта.`
+        : `«${personaLabel(persona)}» — теперь ваша персона по умолчанию.`);
     } catch (e) {
-      showToast('Персоны', e instanceof Error ? e.message : 'Не удалось назначить персону по умолчанию.');
+      showToast('Персоны', e instanceof Error ? e.message : isProjectScope
+        ? 'Не удалось назначить руководителя проекта.'
+        : 'Не удалось назначить персону по умолчанию.');
     }
   };
   const requestMakeDefault = () => {
-    if (me.defaultPersonaId && me.defaultPersonaId !== persona.id) setConfirmDefault(true);
+    if (defaultOwnerId && defaultOwnerId !== persona.id) setConfirmDefault(true);
     else void makeDefault();
   };
 
@@ -500,7 +522,7 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
     // Профиль — read-only визитка со сводкой и недавними разговорами
     : <div style={{ flex: 1, minHeight: 0 }}>
         <PersonaPreview persona={persona} accent={accent} talking={talking} zoneLabel={zoneLabel}
-          onTalk={onTalk} onOpenSession={onOpenSession}
+          onTalk={mayChat ? onTalk : undefined} onOpenSession={onOpenSession}
           onEditProfile={() => setEditing(true)}
           onOpenKnowledge={() => goView('knowledge')}
           onOpenTasks={() => goView('tasks')}
@@ -524,9 +546,9 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
         status={status}
         talking={talking}
         onTalk={onTalk}
-        onDelete={onDelete}
+        onDelete={mayDelete ? () => onDelete() : undefined}
         isDefault={isDefault}
-        onMakeDefault={!isProjectScope ? requestMakeDefault : undefined}
+        onMakeDefault={mayLead ? requestMakeDefault : undefined}
         onSave={() => void formRef.current?.save()}
         onBack={onBack}
         isMobile={isMobile}
@@ -553,9 +575,14 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
         />
       )}
       {confirmDefault && (
+        // Текст — по области действия: у проектной персоны это смена руководителя проекта
+        // (та же формулировка, что в панели проекта ProjectPersonasPanel), у глобальной —
+        // личный дефолт. Разные дела одним словом «собеседник» называть нельзя.
         <ConfirmDialog
-          title="Сменить основного собеседника?"
-          subtitle={<>Сейчас это <b>{currentDefault ? personaLabel(currentDefault) : '—'}</b>. Новые чаты начнёт <b>{personaLabel(persona)}</b> — прежняя останется на месте, её можно позвать в любой момент.</>}
+          title={isProjectScope ? 'Сменить руководителя проекта?' : 'Сменить основного собеседника?'}
+          subtitle={isProjectScope
+            ? <>Сейчас проект ведёт <b>{currentDefault ? personaLabel(currentDefault) : '—'}</b>. Руководителем станет <b>{personaLabel(persona)}</b> — прежняя останется в команде проекта.</>
+            : <>Сейчас это <b>{currentDefault ? personaLabel(currentDefault) : '—'}</b>. Новые чаты начнёт <b>{personaLabel(persona)}</b> — прежняя останется на месте, её можно позвать в любой момент.</>}
           confirmLabel="Сменить"
           onConfirm={() => { setConfirmDefault(false); void makeDefault(); }}
           onCancel={() => setConfirmDefault(false)}

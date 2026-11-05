@@ -333,8 +333,31 @@ public class PersonasController(
         if (req.ModelTier is not null && ModelTiers.IsValidWireValue(req.ModelTier)
             && (ModelTiers.TryParse(req.ModelTier, out var tier) ? (ModelTier?)tier : null) != current.ModelTier)
             return true;
+        // П1 ревью e6029e19: профиль доступа — не только поле Access. Специальность — его часть
+        // всегда: её смена подставляет шаблон в access/tools/disallowed (SpecialtyTemplatesService.cs:41,
+        // SpecialtyCatalog.cs:37-38), поэтому сверяется полем напрямую, без симуляции эффекта шаблона:
+        // запрос с той же специальностью шаблон не применяет (SpecialtyTemplatesService.cs:34) — отказом
+        // не считается.
+        if (req.Specialty is { } specialty && specialty != current.Specialty) return true;
+        // Списки — сравнение с ЭФФЕКТИВНЫМ значением после записи, теми же нормализаторами, что у
+        // писателя (PersonaManager.cs:772-776): полный набор allowed схлопывается в null, запреты живут
+        // только при Custom (effectiveAccess — что реально останется после записи). Запрос, не меняющий
+        // эффективное значение, — не отказ: форма шлёт карточку целиком.
+        if (req.Tools is not null && !SameToolSet(PersonaManager.NormalizeTools(req.Tools), current.Tools))
+            return true;
+        var effectiveAccess = access ?? current.Access;
+        if (req.DisallowedTools is not null && !SameToolSet(
+                effectiveAccess == PersonaAccess.Custom ? PersonaManager.NormalizeDisallowed(req.DisallowedTools) : null,
+                current.DisallowedTools))
+            return true;
         return false;
     }
+
+    // Список ключей инструментов — сравнение множеством: порядок в JSON не значим (писатель тоже
+    // Distinct, без порядка). null — «без ограничений»/«нет запретов», равно только null.
+    private static bool SameToolSet(List<string>? a, List<string>? b) =>
+        (a ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            .SetEquals((b ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase));
 
     private static bool ChangedOwnerField(string? requested, string? current)
     {

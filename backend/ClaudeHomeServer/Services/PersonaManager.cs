@@ -229,7 +229,9 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // и нормализуется в null (поведение как раньше, по фич-флагам владельца).
     private static readonly string[] AllTools = ["tasks", "notes", "web"];
 
-    private static List<string>? NormalizeTools(List<string>? tools)
+    // internal — тот же нормализатор нужен гейту owner_settings в контроллере, чтобы сверять
+    // запрос с ЭФФЕКТИВНЫМ значением записи, а не с дословным телом (PersonasController.ChangesOwnerSettings)
+    internal static List<string>? NormalizeTools(List<string>? tools)
     {
         if (tools is null) return null;
         var clean = tools.Select(t => t.Trim().ToLowerInvariant())

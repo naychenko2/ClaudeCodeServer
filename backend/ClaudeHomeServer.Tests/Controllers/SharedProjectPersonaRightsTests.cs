@@ -68,6 +68,16 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// зону» для Editor (200 вместо 403, зона бы уехала в чужой проект); вернуть ключ вызывающего
 /// в Update/SetVoice/SelectAvatar — краснеют строки «править имя», «голос», «выбор аватара»
 /// для Editor (404: персоны под его ключом нет).
+///
+/// Доработка по ревью e6029e19 (W3-B3b returned, contract): профиль доступа — не только поле
+/// Access: DisallowedTools, Tools и Specialty — его части, и гейт сверяет их со ЭФФЕКТИВНЫМ
+/// значением записи (те же нормализаторы, что у писателя). Строки матрицы: «сменить профиль
+/// доступа», «сменить зону», «сменить уровень модели», «сменить ячейку матрицы» и два обхода
+/// прежнего гейта: «очистить запреты при неизменённом доступе» (Access тот же, меняется только
+/// DisallowedTools) и «сменить специальность» (шаблон специальности даёт Access/Tools из
+/// шаблона при неизменном Access в теле). Мутации: снять сверку DisallowedTools — краснеет
+/// строка «очистить запреты» для Editor; снять сверку Specialty — краснеет «сменить
+/// специальность» для Editor (обе — 200 вместо 403).
 /// </summary>
 [Trait("Category", "Host")]
 public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationFactory>
@@ -879,13 +889,36 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
         new("сменить модель и имя", (r, _) => new { model = "sonnet", name = "Имя-" + r }, Ok2xx, 403, 403, 404, OwnerSettingsGate.ErrorCode),
         new("сменить зону на другой проект", (r, ids) => new { projectId = ids["p2"] }, Ok2xx, 403, 403, 404, OwnerSettingsGate.ErrorCode),
         new("сменить усилие", (r, _) => new { effort = "low" }, Ok2xx, 403, 403, 404, OwnerSettingsGate.ErrorCode),
+        // П1 ревью e6029e19: профиль доступа (Access/DisallowedTools/Tools/Specialty) — тоже поле
+        // владельца. Каждая новая строка несёт name: на отказанной роли проверяется «прочие поля
+        // DTO не записаны», на разрешённой — записаны обе части правки.
+        new("сменить профиль доступа", (r, _) => new { access = "readOnly", name = "Имя-" + r }, Ok2xx, 403, 403, 404, OwnerSettingsGate.ErrorCode),
+        new("сменить зону", (r, _) => new { scope = "global", name = "Имя-" + r }, Ok2xx, 403, 403, 404, OwnerSettingsGate.ErrorCode),
+        new("сменить уровень модели", (r, _) => new { modelTier = "strong", name = "Имя-" + r }, Ok2xx, 403, 403, 404, OwnerSettingsGate.ErrorCode),
+        new("сменить ячейку матрицы", (r, _) => new { tierStrong = "sonnet", name = "Имя-" + r }, Ok2xx, 403, 403, 404, OwnerSettingsGate.ErrorCode),
+        // Обход (A): Access не меняется (тот же Custom), меняется только список запретов —
+        // прямой сверки поля DTO раньше было недостаточно (PersonasCrudService.cs:232 → PersonaManager.cs:775)
+        new("очистить запреты при неизменённом доступе",
+            (r, _) => new { access = "custom", disallowedTools = Array.Empty<string>(), name = "Имя-" + r },
+            Ok2xx, 403, 403, 404, OwnerSettingsGate.ErrorCode),
+        // Обход (B): специальность через шаблон меняет профиль доступа (SpecialtyTemplatesService.cs:41,
+        // SpecialtyCatalog.cs:37-38) — при неизменном Access в теле
+        new("сменить специальность", (r, _) => new { specialty = "backendExecutor", name = "Имя-" + r }, Ok2xx, 403, 403, 404, OwnerSettingsGate.ErrorCode),
     ];
 
-    // Для «сменить зону» — второй проект того же владельца: правка ProjectId на чужой проект
-    // (не текущий) — смена зоны, она же проверка И-7.
-    private async Task<Dictionary<string, string>> PrepareUpdateFixtureAsync(string actionName)
+    // Подготовка фитчюра под строку: «сменить зону» — второй проект того же владельца (правка
+    // ProjectId на чужой проект — смена зоны, она же проверка И-7); «очистить запреты» — персона
+    // с owner-списком запретов под Custom: обход (A) ровно про него — Access в запросе тот же,
+    // меняется только DisallowedTools.
+    private async Task<Dictionary<string, string>> PrepareUpdateFixtureAsync(string actionName, string personaId)
     {
         var ids = new Dictionary<string, string>();
+        if (actionName == "очистить запреты при неизменённом доступе")
+        {
+            Personas.Update(personaId, TenantId, null, null, null, null, null, null, null, null, null, null, null,
+                access: PersonaAccess.Custom, disallowedTools: ["web"]);
+            return ids;
+        }
         if (actionName != "сменить зону на другой проект") return ids;
         var dir = Directory.CreateDirectory(Path.Combine(_factory.TempDir, "prx_" + Guid.NewGuid().ToString("N")[..8])).FullName;
         var created = await OwnerClient().PostAsJsonAsync("/api/projects",
@@ -907,7 +940,7 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
         var action = UpdateActions.Single(a => a.Name == actionName);
         var (projectId, personaId) = await ArrangeAsync(role);
         var runId = RunId();
-        var ids = await PrepareUpdateFixtureAsync(actionName);
+        var ids = await PrepareUpdateFixtureAsync(actionName, personaId);
         ids["p"] = projectId; // текущий проект персоны — для строк с неизменённой зоной
 
         // Снимок ДО запроса: personas.Get отдаёт живую ссылку — сравнивать можно только со
@@ -974,6 +1007,60 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
                 break;
             case ("сменить усилие", _):
                 persona.Effort.Should().BeNull($"{role}: отказанное усилие не записано");
+                break;
+            case ("сменить профиль доступа", Owner):
+                persona.Access.Should().Be(PersonaAccess.ReadOnly, "владелец меняет профиль доступа");
+                persona.Name.Should().Be("Имя-" + runId, "и прочие поля той же правки записаны");
+                break;
+            case ("сменить профиль доступа", _):
+                persona.Access.Should().Be(PersonaAccess.Full, $"{role}: отказанный профиль доступа не записан");
+                persona.Name.Should().Be(beforeName, $"{role}: и имя из того же DTO не записано");
+                break;
+            case ("сменить зону", Owner):
+                persona.Scope.Should().Be(PersonaScope.Global, "владелец переводит персону в глобальную зону");
+                persona.Name.Should().Be("Имя-" + runId);
+                break;
+            case ("сменить зону", _):
+                persona.Scope.Should().Be(PersonaScope.Project, $"{role}: отказанная смена зоны не записана");
+                persona.ProjectId.Should().Be(projectId, $"{role}: проект персоны прежний");
+                persona.Name.Should().Be(beforeName, $"{role}: имя из того же DTO не записано");
+                break;
+            case ("сменить уровень модели", Owner):
+                persona.ModelTier.Should().NotBeNull("владелец выбирает уровень модели");
+                persona.Name.Should().Be("Имя-" + runId);
+                break;
+            case ("сменить уровень модели", _):
+                persona.ModelTier.Should().BeNull($"{role}: отказанный уровень модели не записан");
+                persona.Name.Should().Be(beforeName, $"{role}: имя из того же DTO не записано");
+                break;
+            case ("сменить ячейку матрицы", Owner):
+                persona.TierStrong.Should().NotBeNull("владелец заполняет ячейку матрицы");
+                persona.Name.Should().Be("Имя-" + runId);
+                break;
+            case ("сменить ячейку матрицы", _):
+                persona.TierStrong.Should().BeNull($"{role}: отказанная ячейка матрицы не записана");
+                persona.Name.Should().Be(beforeName, $"{role}: имя из того же DTO не записано");
+                break;
+            case ("очистить запреты при неизменённом доступе", Owner):
+                persona.Access.Should().Be(PersonaAccess.Custom, "Access в запросе был текущим — он и остался");
+                persona.DisallowedTools.Should().BeNull("владелец обнуляет свои запреты");
+                persona.Name.Should().Be("Имя-" + runId);
+                break;
+            case ("очистить запреты при неизменённом доступе", _):
+                persona.DisallowedTools.Should().Equal(new[] { "web" },
+                    $"{role}: обход (A) — обнуление чужих запретов отказано до записи");
+                persona.Access.Should().Be(PersonaAccess.Custom, $"{role}: профиль на месте");
+                persona.Name.Should().Be(beforeName, $"{role}: имя из того же DTO не записано");
+                break;
+            case ("сменить специальность", Owner):
+                persona.Specialty.Should().Be(PersonaSpecialty.BackendExecutor, "владелец выбирает специальность");
+                persona.Name.Should().Be("Имя-" + runId);
+                break;
+            case ("сменить специальность", _):
+                persona.Specialty.Should().Be(PersonaSpecialty.None,
+                    $"{role}: обход (B) — специальность через шаблон меняет профиль доступа, отказана до записи");
+                persona.Access.Should().Be(PersonaAccess.Full, $"{role}: и эффект шаблона (Access) не записан");
+                persona.Name.Should().Be(beforeName, $"{role}: имя из того же DTO не записано");
                 break;
         }
     }

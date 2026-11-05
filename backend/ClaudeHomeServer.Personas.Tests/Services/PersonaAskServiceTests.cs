@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -180,12 +181,17 @@ public class PersonaAskServiceTests
         calls.Should().Be(0, "факты приватного чата не уходят в общую полку персоны");
     }
 
+    /// <summary>
+    /// Несуществующая сессия в X-Caller-Session-Id: актор хода неизвестен, и по правилу F2-O2
+    /// («неизвестный актор не получает прав») persona_ask отвергается гейтом актора до тулсета —
+    /// ответ не «ответ персоны», а отказ; до автообучения путь не доходит, извлечения нет.
+    /// </summary>
     [Fact]
-    public async Task PersonaAsk_НесуществующаяСессияВЗаголовке_ОтветЕстьИзвлечениеНоль()
+    public async Task PersonaAsk_НесуществующаяСессияВЗаголовке_ОтказИзвлечениеНоль()
     {
         var (text, calls) = await AskViaMcpAsync(routePrivate: false, headerSession: "ghost-session", expectExtraction: false);
-        text.Should().Be(LongAnswer);
-        calls.Should().Be(0, "вызыватель не определён — fail-closed");
+        text.Should().Be(ActorRightGate.DeniedText, "актор неизвестен — прав нет, вызов отсекается до тулсета");
+        calls.Should().Be(0, "отказ до тулсета — извлечение не запускается");
     }
 
     [Fact]

@@ -5,7 +5,7 @@
 // каждое направление держим в своей папке, чтобы их состав был виден за минуту.
 //
 // Контракт записи — по `SubsystemInfo` на бэке (PascalCase → camelCase JSON).
-// Шесть полей:
+// Шесть полей (плюс необязательные lastUsedAt и usedLast24h — использование):
 //   key             — якорь строки и одновременно ключ `Subsystems:{Key}:Enabled`
 //                     в `appsettings.json`;
 //   title           — имя подсистемы («Заметки»);
@@ -31,6 +31,10 @@ export interface Subsystem {
   enabled: boolean;
   active: boolean;
   restartRequired: boolean;
+  // Использование (SubsystemUsageStore): null = данных нет (подсистема не наблюдается
+  // или обращений ещё не было).
+  lastUsedAt?: string | null;
+  usedLast24h?: number | null;
 }
 
 export const subsystemsApi = {

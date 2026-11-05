@@ -59,7 +59,7 @@ public sealed class SubsystemUsageAttribution
 }
 
 // Мидлвар учёта обращений: после UseRouting у конечной точки видно действие контроллера.
-// Считаем ПОСЛЕ next — по итоговому статусу: 401/403 (до обработчика запрос не дошёл) не в счёт.
+// Считаем ПОСЛЕ next — по итоговому статусу: 401/403/404 (до обработчика запрос не дошёл или маршрут не найден) не в счёт.
 // SignalR-хаб и ручки ядра неатрибутируемы и не считаются. MCP — по сегменту /mcp/{name}.
 public sealed class SubsystemUsageMiddleware(
     RequestDelegate next, SubsystemUsageAttribution attribution, SubsystemUsageStore store)
@@ -69,7 +69,8 @@ public sealed class SubsystemUsageMiddleware(
         await next(ctx);
 
         var status = ctx.Response.StatusCode;
-        if (status is StatusCodes.Status401Unauthorized or StatusCodes.Status403Forbidden) return;
+        if (status is StatusCodes.Status401Unauthorized or StatusCodes.Status403Forbidden
+            or StatusCodes.Status404NotFound) return;
 
         try
         {

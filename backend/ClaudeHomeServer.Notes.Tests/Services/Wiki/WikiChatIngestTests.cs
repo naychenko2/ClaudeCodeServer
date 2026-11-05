@@ -1232,6 +1232,48 @@ public class WikiChatIngestTests : IDisposable
         entry.Cursor.Should().Be(endOfFirst, "курсор — конец последнего успешного окна одного разбора");
     }
 
+    // ── WC-4a: фактические входные токены разбора доходят до его результата ────────────
+
+    // c1: два окна — сумма входных токенов ВСЕХ вызовов модели обоих окон, на том же
+    // сценарии частичного исхода WC-3: окно 2 отказано ПОСЛЕ ответившего вызова, и его
+    // расход понесён — он остаётся в исходе. Мутации: «не прибавлять расход окна»
+    // (снять inputTokens += ing.InputTokens) → 0; «прибавлять только успешные окна»
+    // (перенести прибавление в ветки applied/awaiting/nothing_new) → 300 вместо 600.
+    [Fact]
+    public async Task ДваОкна_InputTokensСуммируются()
+    {
+        AddSession();
+        SetHistory(ChatId, TwoWindowHistory());
+
+        var llm = new FakeLlm(
+            ("A", Claims(Claim1)), ("B", Plan1),
+            ("A", "модель ответила прозой вместо JSON"))
+        { InputTokensByCall = [100, 200, 300] };
+        var res = await Sut(llm).AnalyzeAsync(User, ChatId);
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, res.Reason);
+        res.Partial.Should().BeTrue("тот же сценарий, что у частичного исхода WC-3");
+        llm.CountOf("A").Should().Be(2, "оба окна дошли до модели");
+        res.InputTokens.Should().Be(600,
+            "100+200 первого окна и 300 ответившего, но отказанного второго: расход не зависит от исхода окна");
+    }
+
+    // c2: штатный «нечего добавить» после двух ответивших вызовов — расход не ноль: он был,
+    // даже с тем, что писать нечего. Мутация «nothing_new обнуляет расход» → 0.
+    [Fact]
+    public async Task ОкноНичегоНового_InputTokensНеНоль()
+    {
+        AddSession();
+        SetShortHistory();
+
+        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", NothingJson))
+        { InputTokensByCall = [100, 200] };
+        var res = await Sut(llm).AnalyzeAsync(User, ChatId);
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeNothingNew, res.Reason);
+        res.InputTokens.Should().Be(300, "«нечего добавить» не отменяет понесённого расхода");
+    }
+
     // ── доработка S4c (ревью d857da6c): чат-разбор — та же проводка настроек владельца ──
     // Отдельного решения «само / Входящие» у этого пути нет: он зовёт WikiIngestService
     // (WikiChatIngestService.cs:238), а тот читает settings.json владельца (мера 7).
@@ -1409,6 +1451,10 @@ public class WikiChatIngestTests : IDisposable
         // Локальный раннер «недоступен»: RunLocalOrChosenAsync бросает; облачные входы при этом
         // ответили бы (Answer) — так видно, что облако не позвано.
         public Exception? LocalThrow;
+        // Входные токены вызовов по их порядку (WC-4a): тест на сумму результата ставит свои
+        // значения — тогда «не прибавить окно» видно числом, а не только фактом «не ноль».
+        // Не задан — прежние 10 на каждый вызов (существующие тесты метрик не проверяют).
+        public List<long>? InputTokensByCall;
 
         private readonly Dictionary<string, Queue<string>> _answers = new();
         private readonly List<Action> _beforeNextCall = [];
@@ -1456,7 +1502,9 @@ public class WikiChatIngestTests : IDisposable
             // отдаёт управление, и к этому моменту заявка уже стоит в очереди.
             if (GateAAsync is not null && Calls[^1].Pass == "A" && CountOf("A") == 1)
                 await GateAAsync.Task.ConfigureAwait(false);
-            return new OneShotResult(text, new OneShotUsage(10, 0, 0, 5, 0.0, "fake"), 1);
+            // Answer уже записал этот вызов в Calls: его позиция — индекс метрик теста (WC-4a).
+            var input = InputTokensByCall is { } t && Calls.Count <= t.Count ? t[Calls.Count - 1] : 10L;
+            return new OneShotResult(text, new OneShotUsage(input, 0, 0, 5, 0.0, "fake"), 1);
         }
 
         private string Answer(string actionKey, string prompt, CancellationToken ct)

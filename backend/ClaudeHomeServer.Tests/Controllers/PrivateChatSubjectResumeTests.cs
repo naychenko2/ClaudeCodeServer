@@ -192,7 +192,7 @@ public sealed class PrivateChatSubjectResumeTests : IDisposable
         new(_sessions, _projects, null!) { ControllerContext = AsUser(userId) };
 
     private SessionsController SessionsAs(string userId) =>
-        new(_sessions, _projects, null!, _personas, null!, null!) { ControllerContext = AsUser(userId) };
+        new(_sessions, _projects, null!, _personas, null!, null!, null!) { ControllerContext = AsUser(userId) };
 
     // Create с непустым resume не доходит до провижнера (блока «без персоны и без resume») —
     // несуществующие для ручки зависимости как null!, образец — PrivateChatListVisibilityTests

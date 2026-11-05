@@ -18,7 +18,7 @@ namespace ClaudeHomeServer.Controllers;
 public class SessionsController(SessionManager sessions, ProjectManager projects,
     DefaultAssistantProvisioner provisioner,
     PersonaManager personas, SessionContextResolver contextResolver,
-    PrefixFingerprintCache prefixFpCache) : ControllerBase
+    PrefixFingerprintCache prefixFpCache, IProjectAccess access) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -68,32 +68,44 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
             // руководителем чат от личного ассистента — и вместе с ним молча потерял бы
             // командные механики (SessionManager отдаёт их только персоне-руководителю).
             // Резолв в живую персону, а не проверка поля: сирота не должна подменять правило.
+            // Ключ руководителя — арендатор (W3-B4b, И-2): участник получает руководителя
+            // проекта, а не свою подмену. Фолбэк на личного ассистента — право владельца:
+            // участнику провижн не запускается — инвариант «участник не получает чат общего
+            // проекта с глобальной персоной (своей или владельца)».
+            var scope = HttpContext.GetRequestScope();
             var lead = projects.GetById(projectId)?.DefaultPersonaId is { } leadId
-                ? personas.Get(leadId, UserId)
+                ? personas.Get(leadId, scope.TenantOwnerId)
                 : null;
             // Руководитель вне своей зоны (персона сферы, проект вышел из сферы) не считается
             if (lead is not null && !sessions.PersonaVisibleIn(lead, projectId)) lead = null;
             if (lead is not null) personaId = lead.Id;
-            else
+            else if (scope.Role == ProjectRole.Owner)
             {
                 var provisioned = await provisioner.EnsureAsync(UserId, HttpContext.RequestAborted);
                 if (provisioned is null)
                     return BadRequest(new { error = "Новый чат создаётся только с персоной: укажите personaId" });
                 personaId = provisioned.Id;
             }
+            else return NoProjectPersonaDenied();
         }
         try
         {
-            // Явное назначение собеседника (доработка R-S2a-8): глобальной персоне чат общего
-            // проекта не назначается — общая проверка рамки SessionManager. Персона резолвится
-            // по id вызывающего или владельца проекта: участник назначает свою, арендатор — свою;
-            // чужой id вне проверки (и сегодня, и дальше). Фолбэк сервера ниже (без personaId в
-            // теле) — не назначение вызывающим, проверка его не касается.
+            // Явное назначение собеседника: одна точка правды «персона → область» — ResolvePersona
+            // с правом хода (И-1, W3-B4b). Двойной поиск «по вызывающему, потом по арендатору» снят:
+            // его вторая точка молча резолвила участнику персону владельца из другого проекта.
+            // Глобальная своей проходит дальше рамки (ниже): отказ — тот же 400
+            // global_persona_in_shared (S2a-8). Чужая глобальная (владельца) участнику не видна
+            // вовсе (И-3) — 404, неотличимо от несуществующей.
             if (!string.IsNullOrWhiteSpace(req.PersonaId))
             {
-                var assigned = personas.Get(req.PersonaId, UserId)
-                    ?? (projects.GetById(projectId)?.OwnerId is { } tenantId ? personas.Get(req.PersonaId, tenantId) : null);
+                var pScope = access.ResolvePersona(UserId, req.PersonaId, ProjectRight.RunTurn);
+                if (pScope is null) return NotFound(new { error = "Персона не найдена" });
+                var assigned = personas.Get(req.PersonaId, pScope.TenantOwnerId);
                 if (assigned is null) return NotFound(new { error = "Персона не найдена" });
+                // Проектная персона назначается только чату своего проекта (разрез §3.2):
+                // персона другого проекта — не собеседник этого, даже когда оба доступны вызывающему
+                if (PersonaZone.OwnProjectId(assigned) is { } ownProject && ownProject != projectId)
+                    return NotFound(new { error = "Персона не найдена" });
                 sessions.EnsurePersonasVisibleInFrame(projectId, new[] { assigned });
             }
             var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.AcceptEdits;
@@ -189,19 +201,48 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         new(new { error = "Пока чат приватный, «Не сохранять решения» нельзя выключить", code = "private_chat_dossiers" })
             { StatusCode = StatusCodes.Status409Conflict };
 
+    // В общем проекте нет руководителя, а личного ассистента участнику не подставляют (W3-B4b):
+    // провижн глобальной персоны — право владельца. 400 с машинным кодом — фронт по нему
+    // показывает текст «попросите владельца назначить» (W3-F2a).
+    private static ObjectResult NoProjectPersonaDenied() =>
+        new(new { error = "В проекте нет руководителя — попросите владельца назначить", code = "no_project_persona" })
+            { StatusCode = StatusCodes.Status400BadRequest };
+
     // Назначить/сменить/снять собеседника (персону или .md-агента) у проектной сессии — в т.ч. по ходу разговора.
-    // Гейт — GetOwnedVisible (S2d-3e): чужой приватный чат неотличим от «нет такого» (решение 28.10).
-    // Запись остаётся на авторе-арендаторе (SetPersona внутри сверяет ResolveOwnerId): участник и до
-    // шага не менял собеседника проектной сессии — для него отказ тот же, 404.
+    // Гейт права — [ProjectScope(Right = RunTurn)] (W3-B4b): читатель — 403 project_scope («нет права
+    // вести ход», тот же отказ, что у отправки сообщения). Дальше — видимость чата (GetAccessible,
+    // S2d-3e: чужой приватный неотличим от «нет такого») и авторство: менять собеседника участник
+    // может только в чате, автор которого он (CreatedByUserId; неизвестный автор автором не считается
+    // — тот же fail-closed, что у удаления чата); владельцу — в любом чате проекта. Иначе — 403
+    // owner_settings, как прочие настройки чата (S2a-10b). Персона — ResolvePersona(Read) и сверка
+    // с проектом (И-1); запись — SetPersona с ключом арендатора (И-2), под блокировкой спикера в SessionManager.
     [HttpPost("{sessionId}/persona")]
-    [ProjectScope(Right = ProjectRight.Write)]
+    [ProjectScope(Right = ProjectRight.RunTurn)]
     public IActionResult SetPersona(string projectId, string sessionId, [FromBody] SetPersonaRequest req)
     {
-        var session = sessions.GetOwnedVisible(sessionId, UserId);
-        if (session == null || session.ProjectId != projectId) return NotFound();
+        if (sessions.GetAccessible(sessionId, UserId) is not { } found || found.Session.ProjectId != projectId)
+            return NotFound();
+        var session = found.Session;
+        var scope = found.Scope;
+        if (session.CreatedByUserId != UserId && scope.Role != ProjectRole.Owner)
+            return OwnerSettingsGate.Denied();
         try
         {
-            var updated = sessions.SetPersona(sessionId, UserId, req.PersonaId, req.AgentName);
+            if (!string.IsNullOrWhiteSpace(req.PersonaId))
+            {
+                var pScope = access.ResolvePersona(UserId, req.PersonaId, ProjectRight.Read);
+                if (pScope is null) return NotFound(new { error = "Персона не найдена" });
+                var persona = personas.Get(req.PersonaId, pScope.TenantOwnerId);
+                if (persona is null) return NotFound(new { error = "Персона не найдена" });
+                // Персона другого проекта — не собеседник этого (та же сверка, что при создании чата)
+                if (PersonaZone.OwnProjectId(persona) is { } ownProject && ownProject != projectId)
+                    return NotFound(new { error = "Персона не найдена" });
+                // Глобальной персоне общего проекта отказывает рамка (S2a-8) — и автору-участнику,
+                // и владельцу: тот же машинный код, что при создании чата. Под try: без catch она
+                // давала бы 500 вместо 400 (тот же порядок, что в Create).
+                sessions.EnsurePersonasVisibleInFrame(projectId, new[] { persona });
+            }
+            var updated = sessions.SetPersona(sessionId, scope.TenantOwnerId, req.PersonaId, req.AgentName);
             return updated == null ? NotFound() : Ok(updated);
         }
         // Глобальная персона чату общего проекта (S2a-8): 400 с машинным кодом, чтобы фронт

@@ -168,7 +168,12 @@ backend/ClaudeHomeServer/Controllers/ProjectsController.cs|15
 # (IsTranscriptReservedForOthers → VisibleTo → SessionAccess.CanSee). Ключом хранилищ он не служит:
 # история и транскрипт нового чата ключуются его ClaudeSessionId (HistoryKeyOf), арендатор —
 # ResolveOwnerId; неизвестные ключи гейт не трогает (ветвление подаёт свой новый csid).
-backend/ClaudeHomeServer/Controllers/SessionsController.cs|19
+# W3-B4b (разрез §3.2 «SessionsController»): 19→18 — три места переведены на ключ арендатора:
+# резолв руководителя при создании чата и явной personaId (Get(…, UserId) и двойной поиск сняты,
+# допуск — ResolvePersona с ключом области), запись SetPersona(…, TenantOwnerId). Добавлены два
+# допуска ResolvePersona(…, UserId, …) — id вызывающего входит только в решение «персона → область»,
+# ключом хранилищ он не стал. Сторож посчитал это снижением.
+backend/ClaudeHomeServer/Controllers/SessionsController.cs|18
 # Снимок 10→8: добивание остатка bc38eb0ba (W3-B5c «навыки персоны — только владельцу»): ключ записи
 # привязки и резолв в POST /api/skills/suggest переведены на TenantOwnerId/ResolvePersona, счётчик
 # тогда не был снижен — сторож краснел с того коммита.

@@ -16,7 +16,10 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// поле в теле игнорируется). Читатель — 403 (проект ему виден, права хода нет — отказ различается
 /// правом, а не статусом), посторонний — 404 (существование не раскрываем). Глобальная персона
 /// чату общего проекта не назначается и редактору — 400 global_persona_in_shared (перевод Create
-/// с Write на RunTurn её не ослабляет). Личный проект владельца и чат вне проекта — прежнее поведение.
+/// с Write на RunTurn её не ослабляет). С W3-B4b чат без personaId в общем проекте ведёт
+/// руководитель по ключу арендатора, а личная подмена — только право владельца: тесты создания
+/// редактором ставят руководителя (случай «без руководителя» — SharedProjectPersonaSessionTests).
+/// Личный проект владельца и чат вне проекта — прежнее поведение.
 /// </summary>
 [Trait("Category", "Host")]
 public class SharedProjectChatCreateTests : IClassFixture<TestWebApplicationFactory>
@@ -68,6 +71,20 @@ public class SharedProjectChatCreateTests : IClassFixture<TestWebApplicationFact
         return projectId;
     }
 
+    /// <summary>Руководитель проекта: проектная персона владельца + make-default (единственная
+    /// REST-точка DefaultPersonaId). С W3-B4b без него чат редактора в общем проекте не создаётся
+    /// (личная подмена — право владельца), поэтому тесты создания им ставят руководителя.</summary>
+    private async Task<string> SetLeaderAsync(string projectId)
+    {
+        var created = await Owner().PostAsJsonAsync("/api/personas",
+            new { name = "Руководитель-" + Guid.NewGuid().ToString("N")[..6], scope = "project", projectId });
+        created.EnsureSuccessStatusCode();
+        var personaId = IdOf(await created.Content.ReadAsStringAsync());
+        (await Owner().PostAsJsonAsync($"/api/personas/{personaId}/make-default", new { }))
+            .EnsureSuccessStatusCode();
+        return personaId;
+    }
+
     private static async Task<JsonElement> BodyAsync(HttpResponseMessage r) =>
         JsonSerializer.Deserialize<JsonElement>(await r.Content.ReadAsStringAsync());
 
@@ -84,6 +101,7 @@ public class SharedProjectChatCreateTests : IClassFixture<TestWebApplicationFact
     public async Task РедакторСоздаётЧат_201ИСтановитсяАвтором()
     {
         var projectId = await ProjectWithMemberAsync("editor");
+        await SetLeaderAsync(projectId);
 
         var r = await Member().PostAsJsonAsync($"/api/projects/{projectId}/sessions",
             new { mode = "auto", name = "Чат редактора" });
@@ -101,6 +119,7 @@ public class SharedProjectChatCreateTests : IClassFixture<TestWebApplicationFact
     public async Task АвторТолькоИзJWT_ПолеТелаЗапросаИгнорируется()
     {
         var projectId = await ProjectWithMemberAsync("editor");
+        await SetLeaderAsync(projectId);
 
         var r = await Member().PostAsJsonAsync($"/api/projects/{projectId}/sessions",
             new { mode = "auto", createdByUserId = OwnerId() });

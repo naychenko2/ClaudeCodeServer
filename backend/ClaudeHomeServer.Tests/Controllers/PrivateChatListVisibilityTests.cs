@@ -167,7 +167,7 @@ public sealed class PrivateChatListVisibilityTests : IDisposable
         new(_users, _sessions) { ControllerContext = AsUser(userId) };
 
     private SessionsController SessionsAs(string userId) =>
-        new(_sessions, _projects, null!, null!, null!, null!) { ControllerContext = AsUser(userId) };
+        new(_sessions, _projects, null!, null!, null!, null!, null!) { ControllerContext = AsUser(userId) };
 
     private ChatsController ChatsAs(string userId) =>
         new(_sessions, _projects, null!, null!, null!, null!, null!, _users, null!, null!,

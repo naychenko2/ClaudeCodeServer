@@ -210,8 +210,8 @@ public class PersonaScopeGuardTests
         ("PersonasController.cs", "PersonasController.SuggestBindings", "W3-B5b"),
         ("PersonasController.cs", "PersonasController.GenerateBindings", "W3-B5b"),
         ("PersonasController.cs", "PersonasController.ApplyDefaultBindings", "W3-B5b"),
-        // W3-B4b — создание чата проекта: руководитель и двойной поиск (§3.1 «SessionsController.Create»)
-        ("SessionsController.cs", "SessionsController.Create", "W3-B4b"),
+        // W3-B4b закрыт (руководитель по ключу арендатора, явная personaId через ResolvePersona,
+        // SharedProjectPersonaSessionTests): инлайновых вызовов с ключом-вызывающим в Create больше нет.
         // W3-B7 — задачи и модели: персона-исполнитель/постановщик (§3.1 «TasksController…», TaskPersonaValidator)
         ("TasksController.cs", "ProjectTasksController.Create", "W3-B7"),
         ("TasksController.cs", "TasksController.Update", "W3-B7"),
@@ -265,7 +265,11 @@ public class PersonaScopeGuardTests
             }
         }
 
-        found.Should().BeGreaterThan(40, "сверка не должна быть вакуумной: базовый состав инлайновых вызовов — десятки");
+        // Пол «невакуумности» следует за долгом: базовый состав был 40+; шаги волны переводят
+        // инлайновые вызовы на ResolvePersona и он законно падает (W3-B4b снял два места в
+        // SessionsController.Create, W3-B2 — места списков). 35 — по текуному составу с запасом:
+        // обнуление области всё ещё красное.
+        found.Should().BeGreaterThan(35, "сверка не должна быть вакуумной: базовый состав инлайновых вызовов — десятки");
         offenders.Should().BeEmpty(
             "вызовы PersonaManager, ключованные вызывающим, допустимы только из «личных» мест и списка долга "
             + "(W3-B1b, разрез §5 п.2); новый вызов вне списков — через ResolvePersona");

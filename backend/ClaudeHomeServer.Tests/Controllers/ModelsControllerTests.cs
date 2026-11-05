@@ -662,6 +662,13 @@ public class ModelsControllerTests : IClassFixture<TestWebApplicationFactory>
         (await owner.PostAsJsonAsync($"/api/projects/{projectId}/members",
             new { username = TestWebApplicationFactory.SecondUsername, role = "editor" }))
             .StatusCode.Should().Be(HttpStatusCode.OK);
+        // W3-B4b: чат без personaId в общем проекте ведёт руководитель, а личная подмена —
+        // право владельца; фикстуре, где чат создаёт участник, нужен руководитель проекта
+        var leadId = D(await owner.PostAsJsonAsync("/api/personas",
+            new { name = "Руководитель-" + Guid.NewGuid().ToString("N")[..6], scope = "project", projectId }))
+            .GetProperty("id").GetString()!;
+        (await owner.PostAsJsonAsync($"/api/personas/{leadId}/make-default", new { }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
         return (owner, member, projectId);
     }
 

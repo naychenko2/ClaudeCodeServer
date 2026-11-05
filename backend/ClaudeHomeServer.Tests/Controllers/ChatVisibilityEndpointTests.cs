@@ -183,7 +183,7 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
     // PUT /api/projects/{id}/sessions/{sid} (S2d-6c): Update не трогает provisioner/контекст/кэш —
     // несуществующие для ручки зависимости, как null! в ChatsAs выше.
     private SessionsController SessionsAs(string userId) =>
-        new(_sessions, _projects, null!, _personas, null!, null!) { ControllerContext = AsUser(userId) };
+        new(_sessions, _projects, null!, _personas, null!, null!, null!) { ControllerContext = AsUser(userId) };
 
     private static ControllerContext AsUser(string userId) => new()
     {

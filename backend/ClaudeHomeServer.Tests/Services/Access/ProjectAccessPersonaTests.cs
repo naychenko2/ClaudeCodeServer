@@ -343,6 +343,22 @@ public sealed class ProjectAccessPersonaTests : IDisposable
         Denied(ctx).StatusCode.Should().Be(404);
     }
 
+    [Theory]
+    [InlineData(ProjectRight.Read)]
+    [InlineData(ProjectRight.RunTurn)]
+    public async Task Фильтр_Персона_Несуществующая_404_ДажеВладельцу(ProjectRight right)
+    {
+        // W3-B1a, минор ревью: 404 несуществующей персоны был покрыт только посторонним.
+        // Владелец и несуществующая персона — то же «нет объекта», существование не раскрываем;
+        // для RunTurn и VisibleWithRead даёт null (той же точки резолва), поэтому не 403.
+        var attr = new ProjectScopeAttribute { From = ScopeSource.Persona, Right = right };
+        var (ctx, called, next) = Ctx(attr, _ownerId, "нет-такой-персоны");
+        await attr.OnActionExecutionAsync(ctx, next);
+
+        called[0].Should().BeFalse();
+        Denied(ctx).StatusCode.Should().Be(404);
+    }
+
     [Fact]
     public async Task Фильтр_Персона_Редактор_RunTurn_ОбластьВHttpContext_КлючВладелец()
     {

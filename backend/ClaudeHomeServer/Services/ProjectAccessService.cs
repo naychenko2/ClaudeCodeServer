@@ -5,13 +5,15 @@ namespace ClaudeHomeServer.Services;
 
 /// <summary>
 /// Реализация <see cref="IProjectAccess"/> поверх <see cref="ProjectManager"/>, каталога
-/// сессий и <see cref="PersonaManager"/>: решение о доступе принимает Core-примитив
-/// <see cref="ProjectAccess"/> / <see cref="SessionAccess"/>, здесь только достаём модели и
-/// собираем <see cref="RequestScope"/>.
+/// сессий и шова персон <see cref="IPersonaLookup"/>: решение о доступе принимает
+/// Core-примитив <see cref="ProjectAccess"/> / <see cref="SessionAccess"/>, здесь только
+/// достаём модели и собираем <see cref="RequestScope"/>. Персон здесь читается ровно
+/// <c>GetByIdInternal</c> — полный <see cref="PersonaManager"/> не нужен (тот же вывод,
+/// что у шова, W3-B1a).
 /// </summary>
 public sealed class ProjectAccessService(
     ProjectManager projects, ISessionDirectory sessions, SharedProjectsGate? gate = null,
-    PersonaManager? personas = null) : IProjectAccess
+    IPersonaLookup? personas = null) : IProjectAccess
 {
     public RequestScope? Resolve(string? callerUserId, string? projectId, ProjectRight right = ProjectRight.Read)
     {

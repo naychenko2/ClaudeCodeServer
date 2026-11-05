@@ -172,17 +172,9 @@ public class PersonaScopeGuardTests
     [
         // W3-B2 закрыт (списки и /match — под ключом арендатора, SharedProjectPersonaListTests):
         // инлайновых вызовов с ключом-вызывающим в List/MatchPersona больше нет, строки сняты.
-        // W3-B1c — тела read-путей {id}-действий (§3.1 строки B1 с RP(Read))
-        ("PersonasController.cs", "PersonasController.Get", "W3-B1c"),
-        ("PersonasController.cs", "PersonasController.AvatarCandidate", "W3-B1c"),
-        ("PersonasController.cs", "PersonasController.Avatar", "W3-B1c"),
-        ("PersonasController.cs", "PersonasController.AvatarOriginal", "W3-B1c"),
-        ("PersonasController.cs", "PersonasController.Bindings", "W3-B1c"),
-        ("PersonasController.cs", "PersonasController.Automation", "W3-B1c"),
-        ("PersonasController.cs", "PersonasController.Memory", "W3-B1c"),
-        ("PersonasController.cs", "PersonasController.MemorySearch", "W3-B1c"),
-        ("PersonasController.cs", "PersonasController.MemoryRecall", "W3-B1c"),
-        ("PersonasController.cs", "PersonasController.GetFocus", "W3-B1c"),
+        // W3-B1c закрыт (тела read-путей {id}-действий — через GetRequestScope и ключ арендатора,
+        // SharedProjectPersonaRightsTests): инлайновых вызовов с ключом-вызывающим в Get/Avatar*/
+        // AvatarOriginal/AvatarCandidate/Bindings/Automation/Memory*/GetFocus больше нет, строки сняты.
         // W3-B1d — тела write-путей {id}-действий (§3.1 строки B1 с RP(Configure)/RP(WriteContent))
         ("PersonasController.cs", "PersonasController.AddAutomationRule", "W3-B1d"),
         ("PersonasController.cs", "PersonasController.SetAutomationRules", "W3-B1d"),
@@ -267,9 +259,10 @@ public class PersonaScopeGuardTests
 
         // Пол «невакуумности» следует за долгом: базовый состав был 40+; шаги волны переводят
         // инлайновые вызовы на ResolvePersona и он законно падает (W3-B4b снял два места в
-        // SessionsController.Create, W3-B2 — места списков). 35 — по текуному составу с запасом:
-        // обнуление области всё ещё красное.
-        found.Should().BeGreaterThan(35, "сверка не должна быть вакуумной: базовый состав инлайновых вызовов — десятки");
+        // SessionsController.Create, W3-B2 — места списков, W3-B1c — 10 тел read-путей в
+        // PersonasController). 25 — по текущему составу с запасом (29: 23 в PersonasController +
+        // 6 «личных» мест): обнуление области всё ещё красное.
+        found.Should().BeGreaterThan(25, "сверка не должна быть вакуумной: базовый состав инлайновых вызовов — десятки");
         offenders.Should().BeEmpty(
             "вызовы PersonaManager, ключованные вызывающим, допустимы только из «личных» мест и списка долга "
             + "(W3-B1b, разрез §5 п.2); новый вызов вне списков — через ResolvePersona");

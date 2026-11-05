@@ -252,7 +252,12 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona)]
     public ActionResult<Persona> Get(string id)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1c (разрез §3.1 строка GET {id}; И-1, И-2): персона и область — из резолва
+        // атрибута (ResolvePersona): проектная персона читается под ключом арендатора её проекта.
+        // Отказ 404/403 решает фильтр (И-3: чужая глобальная к телу не доходит), проверка здесь —
+        // fail-closed на гонку между резолвом и чтением.
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         return persona is null ? NotFound() : Ok(persona);
     }
 
@@ -267,8 +272,13 @@ public class PersonasController(
 
     [HttpDelete("{id}")]
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
-    public Task<IActionResult> Delete(string id, [FromQuery] string? successorId = null) =>
-        _crud.DeleteAsync(UserId, id, successorId);
+    public Task<IActionResult> Delete(string id, [FromQuery] string? successorId = null)
+    {
+        // W3-B1c (разрез §3.1 строка DELETE {id}; И-2): право (Configure, только владелец) на атрибуте,
+        // ключ удаления — арендатор: проектная персона удаляется из стора владельца.
+        var scope = HttpContext.GetRequestScope();
+        return _crud.DeleteAsync(scope.TenantOwnerId, id, successorId);
+    }
 
     // Назначить персону дефолтной: глобальную — личным дефолтом владельца, проектную —
     // дефолтом её проекта. Вызов из чата разрешён ТОЛЬКО онбординг-сессии — гейт и
@@ -276,8 +286,14 @@ public class PersonasController(
     [HttpPost("{id}/make-default")]
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     [DenyOnDelegatedTurn("Назначение дефолт-персоны")]
-    public Task<IActionResult> MakeDefault(string id) =>
-        _crud.MakeDefaultAsync(UserId, id, CallerSessionId());
+    public Task<IActionResult> MakeDefault(string id)
+    {
+        // W3-B1c (разрез §3.1 строка POST {id}/make-default; И-2): ключ назначения — арендатор:
+        // MakeDefaultAsync сверяет project.OwnerId с первым аргументом — с ключом вызывающего
+        // проектная персона не смогла бы стать руководителем своего проекта.
+        var scope = HttpContext.GetRequestScope();
+        return _crud.MakeDefaultAsync(scope.TenantOwnerId, id, CallerSessionId());
+    }
 
     // Чаты, которые ведутся от лица этой персоны
     [HttpGet("{id}/chats")]
@@ -359,7 +375,9 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona)]
     public IActionResult AvatarCandidate(string id, string file)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
+        // W3-B1c (разрез §3.1 строка GET {id}/avatar/candidate; И-2): ключ чтения персоны — арендатор
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
         var safe = Path.GetFileName(file);   // защита от path-traversal
         var full = SafePath.Join(_personas.AssetsDir, Path.Combine(id, "candidates", safe));
         if (!System.IO.File.Exists(full)) return NotFound();
@@ -380,7 +398,10 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona)]
     public async Task<IActionResult> Avatar(string id, [FromQuery] int? size = null)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1c (разрез §3.1 строка GET {id}/avatar; И-2): ключ чтения персоны — арендатор:
+        // аватар проектной персоны лежит в пространстве владельца проекта.
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null || persona.Avatar.Kind != PersonaAvatarKind.Image
             || string.IsNullOrEmpty(persona.Avatar.ImageFile))
             return NotFound();
@@ -420,7 +441,9 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona)]
     public IActionResult AvatarOriginal(string id)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1c (разрез §3.1 строка GET {id}/avatar/original; И-2): ключ чтения персоны — арендатор
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null || string.IsNullOrEmpty(persona.Avatar.OriginalFile))
             return NotFound();
 
@@ -666,7 +689,10 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona)]
     public ActionResult<IReadOnlyList<PersonaBinding>> Bindings(string id)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1c (разрез §3.1 строка GET {id}/bindings; И-2): ключ чтения персоны — арендатор:
+        // участник видит привязки владельца, в том числе к личным целям (И-4: видеть, не менять).
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         return Ok(persona.Bindings ?? []);
     }
@@ -771,7 +797,10 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona)]
     public ActionResult<IReadOnlyList<PersonaAutomationRule>> Automation(string id)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1c (разрез §3.1 строка GET {id}/automation, только чтение; И-2): ключ чтения — арендатор;
+        // write-пути автоматики (Configure) остаются W3-B1d.
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         return Ok(persona.AutomationRules ?? []);
     }
@@ -1522,9 +1551,12 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona)]
     public ActionResult<IReadOnlyList<PersonaMemoryEntry>> Memory(string id, [FromQuery] string? type)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
+        // W3-B1c (разрез §3.1 строка GET {id}/memory; И-2): память проектной персоны ключована
+        // арендатором: и чтение персоны, и чтение памяти — под ключом владельца.
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
         PersonaMemoryType? filter = Enum.TryParse<PersonaMemoryType>(type, true, out var t) ? t : null;
-        return Ok(_memory.List(UserId, id, filter));
+        return Ok(_memory.List(scope.TenantOwnerId, id, filter));
     }
 
     // Поиск по памяти (relevance × recency × typeWeight)
@@ -1532,9 +1564,11 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona)]
     public async Task<ActionResult> MemorySearch(string id, [FromQuery] string q, [FromQuery] int topK = 8)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
+        // W3-B1c (разрез §3.1 строка GET {id}/memory/search; И-2): поиск — по памяти арендатора
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
         if (string.IsNullOrWhiteSpace(q)) return BadRequest("Пустой запрос");
-        var hits = await _memory.SearchAsync(UserId, id, q, Math.Clamp(topK, 1, 20));
+        var hits = await _memory.SearchAsync(scope.TenantOwnerId, id, q, Math.Clamp(topK, 1, 20));
         return Ok(hits);
     }
 
@@ -1546,11 +1580,14 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona)]
     public async Task<ActionResult> MemoryRecall(string id, [FromQuery] string q, [FromQuery] int topK = 5)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
+        // W3-B1c (разрез §3.1 строка GET {id}/memory/recall; И-2): recall строится из памяти
+        // арендатора — того же качества, что recall персонной сессии под токеном арендатора.
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
         if (string.IsNullOrWhiteSpace(q)) return BadRequest("Пустой запрос");
         var minScore = double.TryParse(_config["Persona:RecallMinScore"],
             System.Globalization.CultureInfo.InvariantCulture, out var ms) ? ms : 0.30;
-        var recall = await _memory.BuildRecallAsync(UserId, id, q, Math.Clamp(topK, 1, 20), minScore);
+        var recall = await _memory.BuildRecallAsync(scope.TenantOwnerId, id, q, Math.Clamp(topK, 1, 20), minScore);
         return Ok(new { text = recall?.Text });
     }
 
@@ -1577,8 +1614,11 @@ public class PersonasController(
     [ProjectScope(From = ScopeSource.Persona)]
     public ActionResult<PersonaWorkingFocus> GetFocus(string id)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
-        var focus = _memory.GetFocus(UserId, id);
+        // W3-B1c (разрез §3.1 строка GET {id}/focus; И-2): фокус проектной персоны лежит
+        // в сторе памяти под ключом арендатора.
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
+        var focus = _memory.GetFocus(scope.TenantOwnerId, id);
         return focus is null ? NoContent() : Ok(focus);
     }
 

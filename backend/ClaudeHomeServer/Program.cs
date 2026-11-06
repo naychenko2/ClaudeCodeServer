@@ -270,16 +270,15 @@ using (var dynamicModuleLogFactory = LoggerFactory.Create(logging => logging
     }
     // Третий сценарий отключения: `DynamicModules:N:Enabled=true` (ModuleLoader грузит dll)
     // + `Subsystems:{key}:Enabled=false` (ModuleLoader возвращает null до загрузки — рубильник
-    // гейта первым бьёт по `ModuleLoader.TryLoadOne`, см. Services/DynamicModules/ModuleLoader.cs
-    // строка «if (!SubsystemGate.IsEnabled(...)) return null»). Цикл выше отбирает только
-    // `!m.Enabled` и обходит такой модуль, `RecordActive` ему тоже не достаётся — модуль
-    // выпадает из снимка ВООБЩЕ, и админ не отличает «выключено намеренно» от «не подключали».
-    // Снимок должен показывать обе группы (Активные/Задизейбленные — контракт
-    // SubsystemStateStore), поэтому добавляем запись здесь. Дубля с предыдущим циклом нет:
-    // он фильтрует по `!m.Enabled` (DynamicModules), этот — по `m.Enabled && !SubsystemGate.IsEnabled`
-    // (DynamicModules вкл, Subsystems выкл). Пересечение пусто.
-    foreach (var desc in dynamicModuleRegistry.All
-        .Where(m => m.Enabled && !ClaudeHomeServer.Services.Composition.SubsystemGate.IsEnabled(builder.Configuration, m.Key)))
+    // бьёт первым в `ModuleLoader.TryLoadOne`). Цикл выше отбирает только `!m.Enabled` и
+    // обходит такой модуль, `RecordActive` ему тоже не достаётся — модуль выпадает из снимка
+    // ВООБЩЕ, и админ не отличает «выключено намеренно» от «не подключали». Снимок должен
+    // показывать обе группы (Активные/Задизейбленные — контракт SubsystemStateStore),
+    // поэтому добавляем запись здесь; отбор таких модулей — `ModuleRegistry.SubsystemGatedOff`
+    // (реестр — единственный владелец дескрипторов и их `Enabled`). Дубля с предыдущим
+    // циклом нет: тот берёт `!m.Enabled`, этот — включённые записи с выключенным рубильником
+    // подсистемы. Пересечение пусто.
+    foreach (var desc in dynamicModuleRegistry.SubsystemGatedOff(builder.Configuration))
     {
         dynamicModuleStore.RecordDisabled(new DisabledModuleStub(desc));
     }
@@ -470,12 +469,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.IGitCommitInspector,
 // синглтон `CodeGraphService`, что и подсистем.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.ICodeGraphInspector,
     ClaudeHomeServer.Services.CodeGraph.CodeGraphInspector>();
-// Шов снимка графа для раздела «Архитектура» (Viaduct 10.1, разрез Architecture↔CodeGraph).
-// Под гейтом CodeGraph: у контроллера Architecture шов необязателен (нет → 503
-// graph_unavailable), а форвардер без CodeGraphService не резолвится.
-if (SubsystemGate.IsEnabled(builder.Configuration, ClaudeHomeServer.Services.CodeGraph.CodeGraphSubsystem.SubsystemKey))
-    builder.Services.AddSingleton<ClaudeHomeServer.Services.CodeGraph.IArchitectureCodeSource,
-        ClaudeHomeServer.Services.CodeGraph.ArchitectureCodeSource>();
+// Шов снимка графа для раздела «Архитектура» (Viaduct 10.1, разрез Architecture↔CodeGraph):
+// регистрация форвардера под гейтом CodeGraph переехала в Composition/ArchitectureCodeGraphGlue.cs (S6-1).
+builder.Services.AddArchitectureCodeSource(builder.Configuration);
 builder.Services.AddSingleton<SphereManager>();
 // Форвардер: единый стор сфер; PersonaManager берёт зону персон через ISphereDirectory
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Spheres.ISphereDirectory>(sp => sp.GetRequiredService<SphereManager>());
@@ -919,12 +915,11 @@ builder.Services.AddHostedService<ClaudeHomeServer.Services.Devices.DeviceHelloR
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.IDeviceExecOpenSender,
     ClaudeHomeServer.Services.Devices.DeviceHubExecOpenSender>();
 // Каталог релизов агента устройства (agent-distribution Р3, Р5): его читают и ack хаба, и
-// анонимная раздача AgentDownloadsController. Тумблер Subsystems:desktop:Enabled пока гасит
-// только раздачу агента (Devices не оформлена подсистемой IAppSubsystem, ключ тумблера —
-// `desktop` ради совместимости с конфигами): нет регистрации — каталог null, раздача
-// отвечает 503 с причиной, ack не называет версий.
-if (SubsystemGate.IsEnabled(builder.Configuration, "desktop"))
-    builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.AgentReleaseCatalog>();
+// анонимная раздача AgentDownloadsController. Регистрация под легасийным тумблером
+// `desktop` (Devices не оформлена подсистемой IAppSubsystem, ключ ради совместимости с
+// конфигами) переехала в Composition/DeviceAgentGlue.cs (S6-1): нет регистрации — каталог
+// null, раздача отвечает 503 с причиной, ack не называет версий.
+builder.Services.AddAgentReleaseCatalog(builder.Configuration);
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.DeviceExecChannel>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IDeviceExecChannel>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Devices.DeviceExecChannel>());
@@ -1259,43 +1254,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSync
 // и датасеты {user}:sphere:*, а реконсайлер не чинит упавшие документы полки.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Memory.SphereMemoryService>());
-// Гейт подсистемы Notes: NotesKnowledgeService не попадёт в DI при выключенной подсистеме
-// (NotesSubsystem.Register не вызывается) — безусловный форвардер уронил бы резолв ВСЕЙ
-// коллекции IKnowledgeSyncParticipant (а не только заметки), блокер ревью notes-optional Б2.
-// NotesKnowledgeService реализует INoteSemanticIndex (Core) и IKnowledgeSyncParticipant:
-// резолвим через INoteSemanticIndex и кастим — не тянем конкретный тип Notes-сборки
-// в Main (теперь динамический модуль).
-// Кроме гейта требуется ФАКТ загрузки модуля: Notes — динамическая сборка, и dll может
-// не доехать до деплоя (пробел publish-копирования). Тогда гейт говорит «включено»,
-// а INoteSemanticIndex в DI нет — безусловный резолв ронял старт ВСЕГО хоста
-// (KnowledgeIndexReconciler тянет коллекцию IKnowledgeSyncParticipant). ActiveKeys
-// записывается ModuleLoader'ом выше по фактической загрузке.
-var notesModuleActive = dynamicModuleStore.ActiveKeys().Contains("notes");
-if (SubsystemGate.IsEnabled(builder.Configuration, "notes") && notesModuleActive)
-{
-    builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
-        sp => (ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant)
-            sp.GetRequiredService<ClaudeHomeServer.Services.Notes.INoteSemanticIndex>());
-}
-else if (SubsystemGate.IsEnabled(builder.Configuration, "notes"))
-{
-    // Гейт говорит «включено», но dll динамического модуля не загрузилась. Тихо не оставляем:
-    // заметки без `NotesKnowledgeService` НЕ попадут в реконсайлер Dify (KnowledgeIndexReconciler
-    // тянет коллекцию IKnowledgeSyncParticipant для error-документов и пересборки) и не будут
-    // синхронизированы в базе знаний вообще — это уже не «форвардер не зарегистрирован», а
-    // потерянный контур данных. Модуль выключен намеренно (`Subsystems:Notes:Enabled=false`)
-    // случай выше не покрывает — там Notes нет в списке, предупреждение избыточно.
-    // Используем Console.Error вместо ILogger: builder.Build() ещё не вызван, а
-    // IL-логгер ModuleLoader резолвится из временного SP, который закрыт в using-блоке
-    // выше (его LoggerFactory уже disposed). Тот же префикс, что у других стартовых
-    // предупреждений в Program.cs (`[HandleMigration]`, `[TranscriptRoots]`).
-    Console.Error.WriteLine(
-        "[Knowledge] WARNING: подсистема Notes включена (`Subsystems:Notes:Enabled=true`), " +
-        "но её сборка не загружена — заметки не будут синхронизироваться в Knowledge " +
-        "(Dify-датасет) и не появятся среди участников реконсайлера. Проверьте путь " +
-        "`DynamicModules:1:Backend:AssemblyPath` и факт копирования `ClaudeHomeServer.Notes.dll` " +
-        "в publish.");
-}
+// Участие заметок в реконсайлере Dify (разрез Notes↔Knowledge): форвардер с гейтом
+// подсистемы и проверкой фактической загрузки динамического модуля переехал в
+// Composition/NotesKnowledgeGlue.cs (S6-1).
+builder.Services.AddNotesKnowledgeParticipant(builder.Configuration);
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
     sp => sp.GetRequiredService<ProjectKnowledgeSyncService>());
 
@@ -1371,23 +1333,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpPersonaBind
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IDelegatedTurnGate,
     ClaudeHomeServer.Services.Composition.DelegatedTurnGateAdapter>();
 
-// Этап 5, волна E: forwarder-регистрации двух Core-интерфейсов выноса Notes.
-// Реализации (`TaskBridge` поверх TaskManager, `NotesHubNotifier` поверх IHubContext<SessionHub>)
-// живут в Main как тонкие обёртки; Notes (в отдельной сборке) получает только
-// Core-контракты. Гейт `Subsystems:Notes:Enabled`: при выключенной подсистеме
-// и сами реализации, и форвардеры швов в DI не нужны — резолв `INoteTaskBridge`/
-// `INotesHubNotifier` иначе свалится на первом же обращении из Notes.
-// Условие `&& notesModuleActive` — как выше: швы регистрируем только при
-// фактически загруженном динамическом модуле Notes.
-if (SubsystemGate.IsEnabled(builder.Configuration, "notes") && notesModuleActive)
-{
-    builder.Services.AddSingleton<ClaudeHomeServer.Services.Tasks.TaskBridge>();
-    builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.NotesHubNotifier>();
-    builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INoteTaskBridge>(
-        sp => sp.GetRequiredService<ClaudeHomeServer.Services.Tasks.TaskBridge>());
-    builder.Services.AddSingleton<ClaudeHomeServer.Services.Notes.INotesHubNotifier>(
-        sp => sp.GetRequiredService<ClaudeHomeServer.Services.Composition.NotesHubNotifier>());
-}
+// Этап 5, волна E: forwarder-регистрации двух Core-интерфейсов выноса Notes
+// (разрез Notes↔Tasks) с гейтом и проверкой загрузки модуля переехали в
+// Composition/NotesTasksGlue.cs (S6-1).
+builder.Services.AddNotesTaskBridge(builder.Configuration);
 
 // Этап 5, Ф4: шов ISessionBroadcaster (Core) → SessionHubBroadcaster (Main, поверх
 // IHubContext<SessionHub>). Префиксы групп "user_"/"project_" собираются только здесь —

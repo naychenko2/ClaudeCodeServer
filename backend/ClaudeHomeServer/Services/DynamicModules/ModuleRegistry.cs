@@ -43,4 +43,14 @@ public sealed class ModuleRegistry
         var active = states.ActiveKeys().ToHashSet(StringComparer.OrdinalIgnoreCase);
         return _modules.Where(m => m.Enabled && m.Frontend is not null && active.Contains(m.Key));
     }
+
+    // Третий сценарий отключения: запись DynamicModules включена, а рубильник подсистемы
+    // (`Subsystems:{key}:Enabled=false`) выключен — ModuleLoader такую сборку не грузит
+    // (свой рубильник бьёт до загрузки в TryLoadOne), и в снимок подсистем запись несёт
+    // вызывающий через RecordDisabled. Отбор — здесь, а не в вызывающем: реестр — единственный
+    // владелец дескрипторов и их `Enabled`. Дубля с отбором `!m.Enabled` нет: пересечение
+    // пусто (тот берёт выключенные DynamicModules, этот — включённые DynamicModules
+    // с выключенным рубильником подсистемы).
+    public IEnumerable<ModuleDescriptor> SubsystemGatedOff(IConfiguration config) =>
+        _modules.Where(m => m.Enabled && !SubsystemGate.IsEnabled(config, m.Key));
 }

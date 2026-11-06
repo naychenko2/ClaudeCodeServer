@@ -30,14 +30,20 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 /// на контроллере или тулсете — так привязаны вертикальные ручки, живущие в сборке Main
 /// (VideoController.cs:19, TtsController.cs:25, TasksController.cs:30, …); для обработчика в сборке
 /// самой вертикали — карта «сборка → ключ». Параметр маршрута подставляется фиктивным значением
-/// по его inline-конверсии (в решении встречается только <c>:int</c> — GitController.cs:220,
+/// по его inline-конверсии (в решении встречается только <c>:int</c> — GitController.cs:221,
 /// ImageEditorController.cs:77; таблица ниже покрывает и остальные стандартные конверсии, чтобы
 /// не разъехаться с первым <c>:guid</c>).
 ///
 /// Граница, которую надо знать, читая красный/зелёный: обработчик без атрибута и не из сборки
 /// своей вертикали — ядро, и строка матрицы его не мерит. Из отключаемых ключей так сейчас
 /// стоят <c>project-icons</c> (его сервис вызывает неатрибутованный ProjectsController — нарушение
-/// видно только пунктом 4), <c>changelog</c> и <c>project-services</c> (их ручки не атрибутированы).
+/// видно только пунктом 4), <c>changelog</c> и <c>project-services</c> (их ручки не атрибутированы)
+/// и <c>llm</c> (его услуги вызывают неатрибутованные Main-контроллеры UsageController.cs:12
+/// (UsageService), ProvidersController.cs:10 (IProviderBalanceService), ModelsController.cs:15
+/// (LlmProviderRegistry) — все они резолвят сервисы гейтнутой сборки ClaudeHomeServer.Llm,
+/// LlmSubsystem.cs:93-95). После S2a-2 строка <c>llm</c> измерит пустой состав её маршрутов и
+/// будет зелёной при мёртвых /api/usage, /api/providers, /api/models; явную привязку этих ручек
+/// делает S2b-1 атрибутом <c>[SubsystemUsage("llm")]</c>).
 /// Это не «матрица молчит»: это finding S2a-1, и его закрывает S2b-1.
 ///
 /// ═══ Почему именно старт с выключенным ключом, а не горячее выключение ═══
@@ -97,7 +103,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             + "обязательным параметром → GET /api/projects/{id}/background/tile.svg, POST …/generate, POST …/reset. S2a-2",
         ["code-graph"] = "первый запрос к хосту не отвечен: FileWatcherService (backend/ClaudeHomeServer/Services/FileWatcherService.cs:103) "
             + "требует CodeGraphService выключенной вертикали обязательным параметром. S2a-2",
-        ["dossiers"] = "первый запрос к хосту не отвечен: MemoryToolset (backend/ClaudeHomeServer/Services/Mcp/Http/MemoryToolset.cs:44) "
+        ["dossiers"] = "первый запрос к хосту не отвечен: MemoryToolset (backend/ClaudeHomeServer/Services/Mcp/Http/MemoryToolset.cs:45) "
             + "требует DossierStore выключенной вертикали обязательным параметром. S2a-2",
         ["deploy"] = "первый запрос к хосту не отвечен: WorkspaceToolset (backend/ClaudeHomeServer/Services/Mcp/Http/WorkspaceToolset.cs:71) "
             + "требует DeployService выключенной вертикали обязательным параметром. S2a-2",
@@ -108,14 +114,19 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
         ["knowledge"] = "первый запрос к хосту не отвечен: PersonaBindingsService (backend/ClaudeHomeServer/Services/PersonaBindingsService.cs:138) "
             + "требует WorkspaceKnowledgeStore выключенной вертикали обязательным параметром. S2a-2",
         ["llm"] = "первый запрос к хосту не отвечен: SessionManager (backend/ClaudeHomeServer/Services/SessionManager.cs:740) "
-            + "требует UsageService выключенной вертикали обязательным параметром. S2a-2",
+            + "требует UsageService выключенной вертикали обязательным параметром. Соседняя дыра той же "
+            + "строки: ручки вертикали неатрибутованы — UsageController (backend/ClaudeHomeServer/Controllers/UsageController.cs:12), "
+            + "ProvidersController (backend/ClaudeHomeServer/Controllers/ProvidersController.cs:10), ModelsController "
+            + "(backend/ClaudeHomeServer/Controllers/ModelsController.cs:15) резолвят услуги гейтнутой сборки "
+            + "ClaudeHomeServer.Llm (LlmSubsystem.cs:93-95), и после S2a-2 строка мерит их пустым составом; "
+            + "привязка — S2b-1. S2a-2",
         ["memory"] = "первый запрос к хосту не отвечен: PersonaRecallSourceAdapter (backend/ClaudeHomeServer/Services/Composition/PromptSeamAdapters.cs:18) "
             + "требует PersonaMemoryService выключенной вертикали обязательным параметром. S2a-2",
         ["project-icons"] = "хост стартует и ключ виден выключенным, но соседняя ручка мертва: ProjectsController "
             + "(backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) требует ProjectIconGlyphService обязательным "
             + "параметром → GET /api/projects 500. Единственная строка, где рвётся не старт, а сосед. S2a-2",
         ["project-services"] = "хост не собирается: Program.cs:2335 GetRequiredService<DevServerService> — соседние строки "
-            + "того же блока (Program.cs:2331 TurnTokenService, Program.cs:2339 TaskManager) уже читают отключаемые "
+            + "того же блока (Program.cs:2332 TurnTokenService, Program.cs:2340 TaskManager) уже читают отключаемые "
             + "вертикали через GetService, эта — нет. S2a-2",
         ["reader"] = "первый запрос к хосту не отвечен: WebSearchToolset (backend/ClaudeHomeServer/Services/Mcp/Http/WebSearchToolset.cs:43) "
             + "требует ReaderService выключенной вертикали обязательным параметром. S2a-2",

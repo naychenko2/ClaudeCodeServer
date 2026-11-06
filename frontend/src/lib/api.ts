@@ -1,10 +1,12 @@
 // ПОТОЛОК РОСТА (frontend-api-split-2026-11.md): файл только худеет. Лимит строк — в
 // lib/__tests__/apiFileBudget.test.ts; он снижается после каждого выноса домена в
 // features/<домен>/api.ts, поднимать его нельзя. Новые методы — сразу в features/<домен>/.
-import type { Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
+import type { Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
 import { localModelApi } from '../features/localModel/api';
 import { providerAccountsApi } from '../features/providerAccounts/api';
 import { accountApi } from '../features/account/api';
+import { modelsApi } from '../features/models/api';
+import { spendApi } from '../features/spend/api';
 import { modulesApi } from '../features/modules/api';
 import { cachedToken, readStoredToken, request, writeStoredToken } from './offline';
 import type { FeatureRun } from '../types/featureRun';
@@ -550,52 +552,11 @@ export const api = {
   // Методы «Аккаунта» (auth/push/users/settings/слоты моделей) — в features/account/api.ts
   ...accountApi,
 
-  usage: {
-    get: () => request<UsageResponse>('/usage'),
-    // Лёгкий ответ для шапки чата (перф-3 B6): только последний снимок на окно, без истории —
-    // в десятки раз меньше; тип тот же UsageResponse (проекция той же службы, не второй источник)
-    getLimits: () => request<UsageResponse>('/usage?scope=limits'),
-    // Снять пометку «модель недоступна на этой подписке» досрочно (кнопка «Проверить
-    // сейчас», только админ). Модель — ровно в том виде, в каком пришла в выдаче: в именах
-    // встречаются точки и суффикс окна «[1m]», поэтому она в теле, а не в пути. В ответе —
-    // обновлённый список, повторный запрос /usage не нужен
-    clearModelAvailability: (key: string, model: string) =>
-      request<{ unavailableModels: ModelUnavailableMark[] }>(
-        `/usage/subscriptions/${encodeURIComponent(key)}/model-availability/clear`,
-        { method: 'POST', body: JSON.stringify({ model }) }),
-  },
+  // Расход токенов и лимиты подписок — в features/spend/api.ts
+  ...spendApi,
 
-  // Аналитика расхода токенов (Spend Analytics v2). query — готовая строка
-  // из spendQuery() (период/скоуп/фильтры), чтобы не дублировать сборку параметров.
-  spend: {
-    overview: (query: string) => request<SpendOverviewResponse>(`/spend/overview${query}`),
-    pivot: (query: string) => request<SpendPivotResponse>(`/spend/pivot${query}`),
-    turns: (query: string) => request<SpendTurnsResponse>(`/spend/turns${query}`),
-    turn: (id: string) => request<SpendTurnDetailResponse>(`/spend/turns/${encodeURIComponent(id)}`),
-    taskPrompt: (taskId: string) =>
-      request<SpendTaskPromptResponse>(`/spend/tasks/${encodeURIComponent(taskId)}/prompt`),
-    widget: () => request<SpendWidgetResponse>('/spend/widget'),
-    // Суммарные токены за жизнь чата: значение устойчивое (не счётчик «сейчас»), поэтому
-    // в офлайне показываем последнее известное — по-чатовой класс кэша.
-    badge: (sessionId: string) => request<SpendBadgeResponse>(`/spend/sessions/${encodeURIComponent(sessionId)}/badge`, { chatScope: sessionId }),
-  },
-
-  // Исполнитель фоновых действий — правит только админ (настройка серверная, общая для всех).
-  // route: 'local' | 'claude' | id модели провайдера. Текущее состояние приходит в блоке
-  // ollama ответа /usage.
-  localActions: {
-    setRoute: (key: string, route: string) =>
-      request<{ key: string; route: string; source: string; preset?: PlacePresetRef | null; engine?: string | null }>(`/admin/local-actions/${key}`,
-        { method: 'PUT', body: JSON.stringify({ route }) }),
-    reset: (key: string) =>
-      request<{ key: string; route: string; source: string; preset?: PlacePresetRef | null; engine?: string | null }>(`/admin/local-actions/${key}`,
-        { method: 'DELETE' }),
-    // Массовый автоподбор исполнителя всем действиям по пресету; актуальные маршруты фронт
-    // затем перечитывает из /usage. preset: 'tiers' | 'tiers-local'.
-    applyPreset: (preset: 'tiers' | 'tiers-local') =>
-      request<{ preset: string; count: number }>(`/admin/local-actions/preset`,
-        { method: 'POST', body: JSON.stringify({ preset }) }),
-  },
+  // Провайдеры, модели и исполнитель фоновых действий — в features/models/api.ts
+  ...modelsApi,
 
   ...localModelApi,
 
@@ -816,56 +777,6 @@ export const api = {
       }
       return res.text();
     },
-  },
-
-  providers: {
-    balance: (key: string) => request<ProviderBalanceInfo>(`/providers/${key}/balance`),
-    usage: (key: string) =>
-      request<{
-        balance: ProviderBalanceInfo | null;
-        snapshots: { timestamp: string; balance: number; currency: string }[];
-      }>(`/providers/${key}/usage`),
-  },
-
-  models: {
-    list: () =>
-      request<{
-        models: { value: string; displayName: string; description?: string | null; provider?: string | null; contextWindow?: number | null; isCurated?: boolean; resolvedVersion?: string | null }[];
-        providers?: Record<string, import('./models').ProviderCapabilities>;
-        // Резолвнутые модели агентных мест (ключ каталога → модель или null): по ним
-        // пикеры подписывают пункт «По умолчанию (<модель>)»
-        assignments?: Record<string, string | null>;
-      }>('/models'),
-    // Версия claude CLI хоста и последняя вышедшая (только админ). refresh — перечитать
-    // локальную версию (после claude update), npm сервер при этом не опрашивает.
-    // updateAvailable = null — сравнить нельзя.
-    claudeCli: (refresh = false) =>
-      request<{
-        current: string | null; latest: string | null; updateAvailable: boolean | null; checkedAt: string | null;
-        // Из CHANGELOG пропущенных версий (current, latest]; пусто — списка нет.
-        // isFamilyDefault — самая новая в семействе: алиас пойдёт на неё после обновления
-        newModels?: { name: string; id: string; cliVersion: string; isFamilyDefault: boolean }[];
-        changes?: { version: string; items: string[]; hidden: number }[];
-        hiddenCount?: number;
-        truncated?: boolean;
-      }>(
-        `/models/claude-cli${refresh ? '?refresh=true' : ''}`),
-    // Эффективный резолв для строки «Сейчас пойдёт» (считается той же кодовой дорогой,
-    // что запуск хода — второй точки истины нет). sessionId вместе с personaId добавляет
-    // в ответ subagentChip — чип модели на карточке персоны-сабагента.
-    preview: (q: { place?: string; personaId?: string; specialty?: string; tier?: string; sessionId?: string }) => {
-      const qs = new URLSearchParams();
-      if (q.place) qs.set('place', q.place);
-      if (q.personaId) qs.set('personaId', q.personaId);
-      if (q.specialty) qs.set('specialty', q.specialty);
-      if (q.tier) qs.set('tier', q.tier);
-      if (q.sessionId) qs.set('sessionId', q.sessionId);
-      const s = qs.toString();
-      return request<ModelPreviewResponse>(`/models/preview${s ? `?${s}` : ''}`);
-    },
-    // Места, где выбран пресет (диалог удаления)
-    presetUsage: (id: string) =>
-      request<PresetUsageResponse>(`/models/presets/${encodeURIComponent(id)}/usage`),
   },
 
   // Выкатка боевого продукта трей-раннером (только админам и только при Deploy:Enabled).

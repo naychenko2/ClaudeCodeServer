@@ -1516,12 +1516,20 @@ public class TasksController(
 
         // Исполнитель: ровно одна персона с Specialty=DevopsExecutor, допустимая в проекте эпика.
         // Те же externalScopes, что в Create: кросс-проектная ProjectTasks-привязка не даёт ложного 409.
-        var devops = personas.GetByOwner(UserId)
+        // Ключ поиска и валидации — арендатор проекта эпика, а не вызывающий (остаток W3-B7,
+        // разрез §3.2 строка B7): merge-задача принадлежит проекту эпика и берёт персону проекта
+        // (или глобальную персону арендатора). До этой правки поиск шел «среди своих» вызывающего —
+        // та же ловушка ключа, что в Create до TaskPersonaGate. Дверь мержа остаётся по вызывающему:
+        // чужая фича — 404 раньше этого кода (FeatureProjector.Project по задачам вызывающего,
+        // тест «РедакторНеМержитФичуАрендатора»); для владельца проекта оба ключа совпадают.
+        // Проект существует и ProjectId не null: гард worktree выше вернул 409 при любом из этих.
+        var tenantId = projects.GetById(run.Epic.ProjectId!)!.OwnerId!;
+        var devops = personas.GetByOwner(tenantId)
             .Where(p => p.Specialty == PersonaSpecialty.DevopsExecutor)
             .Where(p =>
             {
-                var scopes = bindings.BuildExternalTaskScopes(UserId, p);
-                return TaskPersonaValidator.Error(personas, UserId, p.Id,
+                var scopes = bindings.BuildExternalTaskScopes(tenantId, p);
+                return TaskPersonaValidator.Error(personas, tenantId, p.Id,
                     taskProjectId: run.Epic.ProjectId, externalScopes: scopes, spheres: spheres) is null;
             })
             .ToList();
@@ -1852,16 +1860,18 @@ public static class TaskPersonaGate
 }
 
 // Валидация персоны-исполнителя/постановщика задачи: персона существует и принадлежит
-// владельцу; проектная персона допустима только у задач своего проекта, если не имеет
-// кросс-проектной ProjectTasks-привязки с полным доступом (externalScopes). null — ошибок нет.
+// арендатору проекта задачи (ключ — tenantId, а не вызывающий: W3-B7, разрез §3.2 строка B7;
+// личной задачи арендатор — сам вызывающий); проектная персона допустима только у задач
+// своего проекта, если не имеет кросс-проектной ProjectTasks-привязки с полным доступом
+// (externalScopes). null — ошибок нет.
 public static class TaskPersonaValidator
 {
-    public static string? Error(PersonaManager personas, string userId, string personaId,
+    public static string? Error(PersonaManager personas, string tenantId, string personaId,
         string? taskProjectId,
         IReadOnlyList<(string ProjectId, bool ReadOnly)>? externalScopes = null,
         ISphereDirectory? spheres = null)
     {
-        var persona = personas.Get(personaId, userId);
+        var persona = personas.Get(personaId, tenantId);
         if (persona is null) return "Персона не найдена или недоступна";
         // Персона сферы — исполнитель в любом проекте своей сферы: синтетические полные скоупы
         // зоны приходят в externalScopes (PersonaBindingsService.BuildExternalTaskScopes)

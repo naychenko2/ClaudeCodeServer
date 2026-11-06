@@ -265,7 +265,12 @@ backend/ClaudeHomeServer/Controllers/SkillsController.cs|8
 # added — пять вызовов
 # «TaskPersonaGate.Denied(…, UserId, …)» (id вызывающего входит только в допуск персоны, ключ
 # валидации — tenantId) и «ResolvePersona(callerUserId, …)» в теле гейта. Сторож посчитал это снижением.
-backend/ClaudeHomeServer/Controllers/TasksController.cs|93
+# W3-B7 доработа (остаток по отчёту W3-B8): TasksController 93→89 — мерж фичи резолвит исполнителя
+# DevOps по ключу арендатора проекта эпика: снято «personas.GetByOwner(UserId)»,
+# «BuildExternalTaskScopes(UserId, …)», «TaskPersonaValidator.Error(personas, UserId, …)»; параметр
+# валидатора переименован в tenantId (тело «personas.Get(personaId, tenantId)» больше не ключ
+# вызывающего). Дверь мержа по-прежнему по вызывающему (чужая фича — 404 до этого кода).
+backend/ClaudeHomeServer/Controllers/TasksController.cs|89
 # QA-P1: TurnRightExtensions 6→7 — DenyContentWrite (право записи контента чата: переименование и
 # архив, редактор и выше) идёт тем же уровнем Deny, что RunTurn и Configure: id вызывающего входит
 # только в IProjectAccess.ResolveSession (запрошенное право WriteContent) и GetAccessible (развилка

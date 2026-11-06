@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Git;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -32,6 +34,12 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// ключ резолва — арендатор персоны: для проектной персоны общего проекта модель считается по
 /// слотам и деньгам владельца проекта, а не участника. Чужая и несуществующая personaId — 404:
 /// раньше чужая personaId молча давала превью места вместо отказа.
+///
+/// Мерж фичи (POST /api/tasks/features/{id}/merge, остаток W3-B7 по отчёту W3-B8): поиск
+/// исполнителя DevOps и валидация — по ключу арендатора проекта эпика, а не вызывающего.
+/// Сам мерж разрешён только владельцу фичи (чужая фича — 404, решение дельта-ревью 94ef33f0
+/// п.2): личная (глобальная) персона участника не принадлежит арендатору и исполнителем
+/// задач проекта не становится (И-3).
 /// </summary>
 [Trait("Category", "Host")]
 public class SharedProjectPersonaTaskTests : IClassFixture<TestWebApplicationFactory>
@@ -115,6 +123,52 @@ public class SharedProjectPersonaTaskTests : IClassFixture<TestWebApplicationFac
 
     private async Task<string> ProjectTaskIdAsync(string projectId, string title) =>
         await PostAsync(Owner(), $"/api/projects/{projectId}/tasks", new { title });
+
+    // ── фикстура мержа (остаток W3-B7): Ready-фича общего проекта ──────────────────────
+
+    private string OwnerId => _factory.Services.GetRequiredService<UserStore>()
+        .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+
+    /// <summary>Проектная персона-исполнитель DevopsExecutor проекта. Создаётся напрямую через
+    /// PersonaManager (тот же приём, что merge-тесты TasksControllerTests): это фикстура, а не
+    /// предмет проверки; уникальное имя — чтобы не конфликтовать с персонами других тестов класса.</summary>
+    private ClaudeHomeServer.Models.Persona DevopsProjectPersona(string projectId) =>
+        _factory.Services.GetRequiredService<PersonaManager>()
+            .Create(OwnerId, "DevOps-" + Guid.NewGuid().ToString("N")[..6],
+                null, null, null, null, null, PersonaScope.Project, projectId,
+                null, null, true, null, null, PersonaAccess.Full, null,
+                PersonaSpecialty.DevopsExecutor);
+
+    private ClaudeHomeServer.Models.Persona DevopsMemberPersona() =>
+        _factory.Services.GetRequiredService<PersonaManager>()
+            .Create(MemberId, "DevOps-member-" + Guid.NewGuid().ToString("N")[..6],
+                null, null, null, null, null, PersonaScope.Global, null,
+                null, null, true, null, null, PersonaAccess.Full, null,
+                PersonaSpecialty.DevopsExecutor);
+
+    /// <summary>Эпик фичи с РЕАЛЬНЫМ git-worktree (гард мержа проверяет его в
+    /// git worktree list) и принятый финал: фича Ready. Форма —
+    /// TasksControllerTests.CreateFeatureEpicWithWorktreeAsync/CreateAcceptedFinal.</summary>
+    private async Task<string> ReadyFeatureAsync(string projectId)
+    {
+        var projectRoot = _factory.Services.GetRequiredService<ProjectManager>().GetById(projectId)!.RootPath;
+        var wt = NewDir("spm");
+        var branch = "feat/spm-" + Guid.NewGuid().ToString("N")[..6];
+        var git = _factory.Services.GetRequiredService<GitService>();
+        await git.InitAsync(null, projectRoot);
+        await git.WorktreeAddAsync(null, projectRoot, wt, branch);
+
+        var epicId = await PostAsync(Owner(), $"/api/projects/{projectId}/tasks",
+            new { title = "Эпик мержа" + Guid.NewGuid().ToString("N")[..6], role = "feature",
+                  worktreePath = wt, worktreeBranch = branch });
+        (await Owner().PostAsJsonAsync($"/api/projects/{projectId}/tasks",
+            new { title = "Финал фичи", featureId = epicId, role = "final", status = "done",
+                  verification = new { verdict = "accepted" } })).EnsureSuccessStatusCode();
+        return epicId;
+    }
+
+    private void DeletePersona(ClaudeHomeServer.Models.Persona persona) =>
+        _factory.Services.GetRequiredService<PersonaManager>().Delete(persona.Id, persona.OwnerId);
 
     // ── POST /api/projects/{pid}/tasks: персона-исполнитель ──────────────────────────
 
@@ -339,5 +393,82 @@ public class SharedProjectPersonaTaskTests : IClassFixture<TestWebApplicationFac
         // Без personaId путь места не тронут резолвом персоны
         var plain = await PreviewRawAsync(Member(), "place=chat-new");
         plain.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    // ── POST /api/tasks/features/{id}/merge: мерж фичи общего проекта (остаток W3-B7) ────
+
+    [Fact]
+    public async Task ВладелецМержитФичуОбщегоПроекта_ПроектнаяПерсонаDevOps_200_МержЗадачаНазначенаЕй()
+    {
+        var (projectId, _) = await SharedAsync();
+        var devops = DevopsProjectPersona(projectId);
+        var epicId = await ReadyFeatureAsync(projectId);
+
+        try
+        {
+            var response = await Owner().PostAsync($"/api/tasks/features/{epicId}/merge", null);
+            var body = await response.Content.ReadAsStringAsync();
+            response.StatusCode.Should().Be(HttpStatusCode.OK,
+                "исполнитель мержа резолвится по ключу арендатора проекта задачи: " + body);
+
+            var task = Tasks.GetById(IdOf(body))!;
+            task.Role.Should().Be("merge");
+            task.PersonaId.Should().Be(devops.Id,
+                "проектная персона проекта задачи найдена валидатором и назначена исполнителем");
+            task.OwnerId.Should().Be(OwnerId, "ключ записи merge-задачи — арендатор проекта");
+        }
+        finally
+        {
+            DeletePersona(devops);
+        }
+    }
+
+    [Fact]
+    public async Task МержФичиОбщегоПроектаНеБерётГлобальнуюПерсонуDevOpsУчастника_409_ИсполнителяНет()
+    {
+        // Поиск — по персоне АРЕНДАТОРА, а не «по anybody из проекта»: личная (глобальная)
+        // персона участника не принадлежит арендатору и не может исполнять задачи проекта (И-3).
+        var (projectId, _) = await SharedAsync();
+        var memberDevops = DevopsMemberPersona();
+        var epicId = await ReadyFeatureAsync(projectId);
+
+        try
+        {
+            var denied = await Owner().PostAsync($"/api/tasks/features/{epicId}/merge", null);
+            denied.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            (await BodyOfAsync(denied)).GetProperty("error").GetString()
+                .Should().Contain("Нет исполнителя DevOps",
+                    "в проекте задачи нет допустной персоны-исполнителя: отказ тот же, что без персон вовсе");
+            Tasks.GetByProject(projectId).Should().NotContain(t => t.Role == "merge",
+                "отказ не заводит merge-задачу");
+        }
+        finally
+        {
+            DeletePersona(memberDevops);
+        }
+    }
+
+    [Fact]
+    public async Task РедакторНеМержитФичуАрендатора_404_ДажеСПроектнойПерсонойDevOpsВПроекте()
+    {
+        // Дверь мержа остаётся по вызывающему (фича не его — 404, тот же 404 и тело, что у
+        // GET features/{id}; решение дельта-ревью 94ef33f0 п.2). Правка ключа валидации эту
+        // дверь не расширяет: до правки персон в проекте нет, а отказ тот же.
+        var (projectId, _) = await SharedAsync();
+        var devops = DevopsProjectPersona(projectId);
+        var epicId = await ReadyFeatureAsync(projectId);
+
+        try
+        {
+            var denied = await Member().PostAsync($"/api/tasks/features/{epicId}/merge", null);
+            denied.StatusCode.Should().Be(HttpStatusCode.NotFound);
+            (await BodyOfAsync(denied)).GetProperty("error").GetString().Should().Be("Фича не найдена");
+            Tasks.GetByProject(projectId).Should().NotContain(t => t.Role == "merge",
+                "отказанное действие не заводит merge-задачу");
+        }
+        finally
+        {
+            DeletePersona(devops);
+        }
     }
 }

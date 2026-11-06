@@ -176,13 +176,10 @@ public class PersonaScopeGuardTests
     // остаются и решением этого шага не стали: вызовы через _crud.* (правка карточки,
     // голос, выбор аватара, ValidateAsync/UpdateBindings, путь создания) паттерн не видит; смысл
     // тех шагов держат строки матриц SharedProjectPersonaRightsTests/SharedProjectPersonaBindingsTests.
-    private static readonly (string File, string Method, string Step)[] DebtList =
-    [
-        // W3-B8: без этой записи сторож красный — W3-B7 оставил инлайновый вызов с параметром,
-        // названным ключом вызывающего: TasksController.cs:1864 → W3-B7. Код здесь не правится;
-        // доработку заведёт Софья.
-        ("TasksController.cs", "TaskPersonaValidator.Error", "W3-B7 (остаток: TasksController.cs:1864)"),
-    ];
+    // Остаток W3-B7 закрыт доработкой (задача d18fb86a): параметр TaskPersonaValidator.Error
+    // переименован в tenantId, все вызовы (мерж фичи, TasksToolset) идут с ключом арендатора
+    // проекта задачи. Список долга пуст; новый инлайн с ключом вызывающего красит сторож.
+    private static readonly (string File, string Method, string Step)[] DebtList = [];
 
     // Паттерн §5 п.2: _personas./personas.(Get|GetProjectTeam|GetForContext|GetForContextWithExtras|
     // GetByHandle)(…UserId…) — вызов PersonaManager, ключованный вызывающим.
@@ -236,8 +233,9 @@ public class PersonaScopeGuardTests
         // SessionsController.Create, W3-B2 — места списков, W3-B1c — 10 тел read-путей,
         // W3-B1d — 14 тел write-путей в PersonasController, W3-B3b — UploadAvatar/RecropAvatar,
         // W3-B5a — AddBinding/UpdateBinding/DeleteBinding, W3-B5b — BindingTargets/Suggest/
-        // Generate/ApplyDefault). 4 — по текущему составу с запасом (6: 5 «личных» allow-list
-        // и TaskPersonaValidator — W3-B7): обнуление области всё ещё красное.
+        // Generate/ApplyDefault; остаток W3-B7 закрыт доработой d18fb86a — валидатор ключуется
+        // tenantId). 4 — по текущему составу с запасом (5 «личных» allow-list мест, долга нет):
+        // обнуление области всё ещё красное.
         found.Should().BeGreaterThan(4, "сверка не должна быть вакуумной: базовый состав инлайновых вызовов — десятки");
         offenders.Should().BeEmpty(
             "вызовы PersonaManager, ключованные вызывающим, допустимы только из «личных» мест и списка долга "

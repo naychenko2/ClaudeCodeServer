@@ -250,16 +250,21 @@ public sealed class TasksToolset(
 
                 var columnId = StringArg(arguments, "columnId");
                 var cat = BoardColumnHelper.Category(project, columnId);
+                // Ключ валидатора персоны — арендатор целевого проекта задачи, а не владельца
+                // токена (остаток W3-B7, разрез §3.2 строка B7): в проектном чате они совпадают
+                // (GetOwned через ResolveOwnerId по проекту), но ключ обязан приходить из проекта
+                // задачи, а не из токена. Личная задача (проекта нет) — её арендатор сам вызывающий.
+                var tenantId = project?.OwnerId ?? context.OwnerId;
                 var personaId = StringArg(arguments, "personaId");
                 // Скоупы у валидатора — НАЗНАЧАЕМОЙ персоны (как REST Create), а не вызывателя:
                 // правило «проектная персона — только задачи своего проекта» обходилось бы
                 // чужой привязкой вызывателя (блокер приёмки волны 2.1)
                 if (personaId.Length > 0
-                    && TaskPersonaValidator.Error(personas, context.OwnerId, personaId, targetProjectId,
-                        AssignedPersonaScopes(context.OwnerId, personaId), spheres) is { } personaError)
+                    && TaskPersonaValidator.Error(personas, tenantId, personaId, targetProjectId,
+                        AssignedPersonaScopes(tenantId, personaId), spheres) is { } personaError)
                     return Deny(personaError);
                 if (selfPersonaId is not null
-                    && TaskPersonaValidator.Error(personas, context.OwnerId, selfPersonaId, targetProjectId, extraScopes, spheres) is { } creatorError)
+                    && TaskPersonaValidator.Error(personas, tenantId, selfPersonaId, targetProjectId, extraScopes, spheres) is { } creatorError)
                     return Deny(creatorError);
 
                 // Дефект: гейты DefectRules.EnsureNotClosedAtCreate (статус/категория колонки)
@@ -428,10 +433,15 @@ public sealed class TasksToolset(
                 else if (existing.ColumnId is not null && targetProject?.BoardColumns is { } currentColumns)
                     effectiveColumn = currentColumns.FirstOrDefault(c => c.Id == existing.ColumnId);
                 var personaId = StringArg(arguments, "personaId");
+                // Ключ валидатора — арендатор проекта задачи (остаток W3-B7, разрез §3.2 строка B7),
+                // тот же вывод, что у «me» ниже: существующая задача общего проекта лежит под
+                // арендатором, и её проектная персона принадлежит ему. Осиротевший проект задачи —
+                // ключ по токену, как прежде (задача под ним же, сверка OwnerId выше).
+                var tenantId = targetProject?.OwnerId ?? context.OwnerId;
                 // Скоупы назначаемой персоны, не вызывателя — как REST Update (блокер 2.1)
                 if (personaId.Length > 0
-                    && TaskPersonaValidator.Error(personas, context.OwnerId, personaId, targetProjectId,
-                        AssignedPersonaScopes(context.OwnerId, personaId), spheres) is { } personaError)
+                    && TaskPersonaValidator.Error(personas, tenantId, personaId, targetProjectId,
+                        AssignedPersonaScopes(tenantId, personaId), spheres) is { } personaError)
                     return Deny(personaError);
 
                 // Человек-исполнитель (S2b-2b): «me»/«claude» — прежний путь (enum), но они

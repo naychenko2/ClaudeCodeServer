@@ -23,6 +23,7 @@ import { Badge, Button, ConfirmDialog, EmptyState, Modal, Notice } from '../comp
 import { AlertCircle, Blocks, Lock, RotateCcw } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
 import { useIsMobile } from '../lib/breakpoints';
+import { useNow } from '../lib/useNow';
 import { useComponentsAdmin } from '../features/components/useComponentsAdmin';
 import { ComponentRow, formatCount, formatUsedAgo, pluralForms, pluralRequests } from '../features/components/ComponentRow';
 import type { Subsystem } from '../api/subsystems';
@@ -53,6 +54,10 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-components-s
 export function ComponentsPage({ onClose }: Props) {
   const { items, loading, loadError, reload, toggle, writeState } = useComponentsAdmin();
   const isMobile = useIsMobile();
+  // Один «сейчас» на всю панель: строки и диалог подтверждения идут по одним часам
+  // (паттерн FeatureTimelineTab, GC-F8R2), а не по Date.now() каждой фазы рендера:
+  // открытая панель не должна держать замороженное «12 мин назад» (хвост ревью R-S2c-3).
+  const now = useNow(60_000);
   // Диалог держим ключом, а не копией строки: если список перечитался,
   // подтверждение относится к нынешней строке или исчезает вместе с ней.
   const [confirmingKey, setConfirmingKey] = useState<string | null>(null);
@@ -96,8 +101,14 @@ export function ComponentsPage({ onClose }: Props) {
           />
         </div>
       )}
-      {/* Перечитывание упало при уже известном списке: прежние строки — последнее
-          известное состояние (их НЕ чистим), над ними — причина и «Повторить». */}
+      {/* Перечитывание упало при уже известном списке: на экране только Notice с причиной
+          и «Повторить» — строки закрыты общим !loadError ниже и не рендерятся. Хук items
+          при этом не чистит (useComponentsAdmin), так что при автоперечитывании прежние
+          строки остались бы последним известным состоянием — если до этого дойдёт,
+          решать здесь. В нынешнем потоке состояние недостижимо: второй GET возможен
+          только по «Повторить», а он требует loadError, который после успешного GET
+          сброшен (хвост ревью R-S2c-3: комментарий раньше описывал поведение, которого
+          нет). */}
       {!loading && loadError && items.length > 0 && (
         <Notice
           tone="danger"
@@ -132,6 +143,7 @@ export function ComponentsPage({ onClose }: Props) {
                   sub={s}
                   write={writeState[s.key] ?? 'idle'}
                   isMobile
+                  now={now}
                   onToggle={(next) => requestToggle(s, next)}
                   onRevert={() => void toggle(s.key, s.active)}
                   onRetry={() => void toggle(s.key, !s.enabled)}
@@ -147,6 +159,7 @@ export function ComponentsPage({ onClose }: Props) {
                   sub={s}
                   write={writeState[s.key] ?? 'idle'}
                   isMobile={false}
+                  now={now}
                   onToggle={(next) => requestToggle(s, next)}
                   onRevert={() => void toggle(s.key, s.active)}
                   onRetry={() => void toggle(s.key, !s.enabled)}
@@ -169,7 +182,7 @@ export function ComponentsPage({ onClose }: Props) {
       {confirming && (
         <ConfirmDialog
           title={`Выключить «${confirming.title}»?`}
-          subtitle={<ConfirmBody sub={confirming} />}
+          subtitle={<ConfirmBody sub={confirming} now={now} />}
           confirmLabel="Выключить"
           confirmVariant="danger"
           onConfirm={async () => {
@@ -186,9 +199,9 @@ export function ComponentsPage({ onClose }: Props) {
 // Тело подтверждения (решение 8): факт использования + что будет с данными.
 // «Файлы на диске останутся» — то, ради чего диалог честный: выключение не удаляет
 // ничего, и передумать можно тем же тумблером до перезапуска.
-function ConfirmBody({ sub }: { sub: Subsystem }) {
+function ConfirmBody({ sub, now }: { sub: Subsystem; now: number }) {
   const used = sub.usedLast24h ?? 0;
-  const ago = formatUsedAgo(sub.lastUsedAt);
+  const ago = formatUsedAgo(sub.lastUsedAt, now);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
       <div style={{

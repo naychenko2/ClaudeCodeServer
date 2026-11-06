@@ -40,7 +40,10 @@ export function formatCount(n: number): string {
 // «сейчас» / «12 мин назад» / «3 ч назад» / «22 дня назад»; null — данных нет.
 // Math.round, а не floor: «12 мин назад», записанное ровно 12 минуты назад,
 // не должно становиться «11» от миллисекунд задержки между записью и показом.
-export function formatUsedAgo(lastUsedAt: string | null, now: number = Date.now()): string | null {
+// `now` — обязательный и живой: часы панели из useNow вызывающего, а не Date.now()
+// в фазе рендера (дефолта здесь больше нет: он и был причиной замирающей метки —
+// хвост ревью R-S2c-3).
+export function formatUsedAgo(lastUsedAt: string | null, now: number): string | null {
   if (!lastUsedAt) return null;
   const t = Date.parse(lastUsedAt);
   if (!Number.isFinite(t)) return null;
@@ -92,8 +95,8 @@ function StatusBadge({ status }: { status: RowStatus }) {
 // Пустое значение отличается от нуля: без lastUsedAt — «—» и «нет данных с
 // запуска», обе строки приглушены; с нулём обращений — время обычное, счётчик
 // «0 за сутки».
-function UsageCell({ sub }: { sub: Subsystem }) {
-  const ago = formatUsedAgo(sub.lastUsedAt);
+function UsageCell({ sub, now }: { sub: Subsystem; now: number }) {
+  const ago = formatUsedAgo(sub.lastUsedAt, now);
   const day = sub.usedLast24h ?? 0;
   if (ago === null) {
     return (
@@ -112,8 +115,8 @@ function UsageCell({ sub }: { sub: Subsystem }) {
 }
 
 // Мобильная строка использования — одной строкой (решение 3): «12 мин назад · 37 за сутки».
-function usageLineText(sub: Subsystem): string {
-  const ago = formatUsedAgo(sub.lastUsedAt);
+function usageLineText(sub: Subsystem, now: number): string {
+  const ago = formatUsedAgo(sub.lastUsedAt, now);
   if (ago === null) return 'нет данных с запуска';
   return `${ago} · ${formatCount(sub.usedLast24h ?? 0)} за сутки`;
 }
@@ -189,6 +192,9 @@ interface Props {
   sub: Subsystem;
   write: RowWriteState;
   isMobile: boolean;
+  // «Сейчас» панели — из useNow вызывающего (один тик на все строки и диалог),
+  // а не Date.now() каждой фазы рендера: метка использования не замирает (хвост R-S2c-3).
+  now: number;
   onToggle: (next: boolean) => void;
   // «Вернуть» = записать enabled обратно в active (обратный toggle).
   onRevert: () => void;
@@ -197,7 +203,7 @@ interface Props {
   onRetry: () => void;
 }
 
-export function ComponentRow({ sub, write, isMobile, onToggle, onRevert, onRetry }: Props) {
+export function ComponentRow({ sub, write, isMobile, now, onToggle, onRevert, onRetry }: Props) {
   const status = rowStatus(sub);
   const pending = status === 'pendingOn' || status === 'pendingOff';
   const saving = write === 'saving';
@@ -243,7 +249,7 @@ export function ComponentRow({ sub, write, isMobile, onToggle, onRevert, onRetry
           )}
         </div>
 
-        <UsageCell sub={sub} />
+        <UsageCell sub={sub} now={now} />
 
         <div>
           <StatusBadge status={status} />
@@ -284,7 +290,7 @@ export function ComponentRow({ sub, write, isMobile, onToggle, onRevert, onRetry
         <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>{sub.key}</span>
         <StatusBadge status={status} />
       </div>
-      <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.sm }}>{usageLineText(sub)}</div>
+      <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.sm }}>{usageLineText(sub, now)}</div>
       {pending && <div style={{ marginTop: SP.md }}><PendingHint sub={sub} onRevert={onRevert} /></div>}
       {error && <div style={{ marginTop: SP.md }}><WriteErrorNotice error={error} onRetry={onRetry} /></div>}
     </div>

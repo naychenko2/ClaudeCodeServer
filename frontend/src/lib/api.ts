@@ -1,10 +1,11 @@
 // ПОТОЛОК РОСТА (frontend-api-split-2026-11.md): файл только худеет. Лимит строк — в
 // lib/__tests__/apiFileBudget.test.ts; он снижается после каждого выноса домена в
 // features/<домен>/api.ts, поднимать его нельзя. Новые методы — сразу в features/<домен>/.
-import type { Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
+import type { Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
 import { localModelApi } from '../features/localModel/api';
 import { providerAccountsApi } from '../features/providerAccounts/api';
 import { accountApi } from '../features/account/api';
+import { hostControlApi } from '../features/hostControl/api';
 import { modelsApi } from '../features/models/api';
 import { spendApi } from '../features/spend/api';
 import { modulesApi } from '../features/modules/api';
@@ -38,6 +39,8 @@ export type * from '../features/providerAccounts/types';
 export type * from '../features/account/types';
 // Тип внешнего модуля (ModuleInfo) живёт в features/modules/types.ts
 export type * from '../features/modules/types';
+// Типы питания и пульта удалённых команд живут в features/hostControl/types.ts
+export type * from '../features/hostControl/types';
 
 // Итог «Собрать архитектуру» (POST /projects/{id}/architecture/generate).
 // graphBuiltAt — время снимка графа кода, которым помечена карта (ISO); added/matched —
@@ -132,68 +135,6 @@ export interface DeployProgressFile {
   line: string | null;
   updatedAt: string | null;
 }
-
-// Ответ GET /api/admin/power/status: доступно ли управление питанием машины и не
-// запланировано ли уже действие (его видят все окна, а не только то, из которого нажали)
-export interface PowerPending {
-  action: PowerActionKind;
-  runAt: string;
-  secondsLeft: number;
-  requestedBy: string;
-}
-
-export type PowerActionKind = 'shutdown' | 'restart' | 'sleep';
-
-export interface PowerState {
-  enabled: boolean;
-  available: boolean;
-  delaySeconds: number;
-  pending: PowerPending | null;
-}
-
-// Пульт удалённых команд (docs/research/remote-commands-plan.md §7). Список действий
-// объявлен в конфиге сервера на диске; по HTTP ездит только `key`, тексты команд наружу
-// не отдаются никогда.
-export type RemoteCommandMode = 'oneshot' | 'daemon';
-
-// `unknown` — «проверить не удалось» (команду не запустить, таймаут, опечатка в конфиге),
-// а НЕ «остановлен»: у пульта это два разных факта, и путать их нельзя.
-export type RemoteCommandState = 'running' | 'stopped' | 'unknown';
-
-export interface RemoteCommandAction {
-  key: string;
-  title: string;
-  mode: RemoteCommandMode;
-  state: RemoteCommandState;
-  busy: boolean;
-  // null — до первой проверки: после рестарта сервера кэш статуса пуст, и это честно видно
-  checkedAt: string | null;
-  lastExitCode: number | null;
-  // Ссылка «Открыть» из конфига действия (http/https) — например, vscode.dev/tunnel/имя
-  // для туннеля VS Code. Null — кнопки нет.
-  url: string | null;
-}
-
-export interface RemoteCommandsState {
-  enabled: boolean;
-  actions: RemoteCommandAction[];
-}
-
-// Ответ start/stop/refresh. `busy` приходит от refresh при чужой идущей операции (он не
-// берёт gate и отдаёт кэш), `detail` — короткая причина и хвост вывода при провале.
-export interface RemoteCommandResult {
-  ok: boolean;
-  state: RemoteCommandState;
-  busy?: boolean;
-  detail?: string | null;
-  checkedAt?: string | null;
-  lastExitCode?: number | null;
-}
-
-// Потолок ожидания ответа на операцию пульта. Больше самого щедрого серверного
-// TimeoutSeconds из примера конфига (Dify — 180 с) с запасом на дорогу: обрывать запрос
-// раньше, чем сервер закончит команду, значит показывать «нет связи» поверх живого старта.
-const REMOTE_COMMAND_TIMEOUT_MS = 200_000;
 
 // Потолок ожидания preview/start. DevServerService.StartAsync (у сервера и у агента один) ждёт
 // порт по часам: не дольше DevServerLaunchPolicy.DotnetRunReadyTimeout (300 с, `dotnet run`
@@ -561,14 +502,8 @@ export const api = {
   ...localModelApi,
 
 
-  // Бэкапы — только админ (инстансная штука). Настройки правятся руками в секции Backup
-  // конфига, отсюда только чтение статуса и ручной снимок. Восстановления тут нет: оно
-  // требует остановленного сервера и живёт в CLI (exe --restore) и меню трея.
-  backup: {
-    get: () => request<BackupStatus>('/admin/backup'),
-    run: () => request<{ file: string; createdAt: string; summary: BackupSummary }>(
-      '/admin/backup/run', { method: 'POST' }),
-  },
+  // Питание, пульт команд, бэкапы и файлы хоста — в features/hostControl/api.ts
+  ...hostControlApi,
 
   ...providerAccountsApi,
 
@@ -809,40 +744,6 @@ export const api = {
       }),
     youtubeAuthUrl: () => request<{ url: string }>('/video/youtube/auth-url'),
     youtubeDisconnect: () => request<{ ok: boolean }>('/video/youtube/disconnect', { method: 'POST' }),
-  },
-
-  power: {
-    // live: true — не подставлять ответ офлайн-кэша: важен сам факт, что сервер отвечает.
-    // Машину гасят удалённо, и «всё в порядке» из IndexedDB поверх уже погашенного продукта
-    // было бы ровно тем враньём, на котором подрывалась модалка выкатки.
-    status: () => request<PowerState>('/admin/power/status', { cache: 'no-store', live: true }),
-    schedule: (action: PowerActionKind) =>
-      request<{ action: PowerActionKind; runAt: string; secondsLeft: number }>(
-        '/admin/power', { method: 'POST', body: JSON.stringify({ action }) }),
-    cancel: () => request<{ cancelled: boolean }>('/admin/power/cancel', { method: 'POST' }),
-  },
-
-  remoteCommands: {
-    // live: true — по той же причине, что у питания и выкатки: важен сам факт ответа сервера.
-    // Подставленный из офлайн-кэша список сказал бы «туннель запущен» поверх машины, до
-    // которой уже не достучаться, — а пульт для того и нужен, чтобы этому верить.
-    // GET не исполняет ни одной команды (инвариант §9.3): отдаётся кэш статуса.
-    status: () => request<RemoteCommandsState>('/admin/remote-commands', { cache: 'no-store', live: true }),
-    // Операции синхронные в пределах серверного TimeoutSeconds (у долгих действий вроде Dify
-    // это 180 с), поэтому фронту нужен свой запас: с дефолтным лимитом запрос оборвался бы
-    // раньше сервера, и человек увидел бы «нет связи» поверх идущего старта.
-    start: (key: string) =>
-      request<RemoteCommandResult>(`/admin/remote-commands/${encodeURIComponent(key)}/start`,
-        { method: 'POST', timeoutMs: REMOTE_COMMAND_TIMEOUT_MS, live: true }),
-    stop: (key: string) =>
-      request<RemoteCommandResult>(`/admin/remote-commands/${encodeURIComponent(key)}/stop`,
-        { method: 'POST', timeoutMs: REMOTE_COMMAND_TIMEOUT_MS, live: true }),
-    refresh: (key: string) =>
-      request<RemoteCommandResult>(`/admin/remote-commands/${encodeURIComponent(key)}/refresh`,
-        { method: 'POST', timeoutMs: REMOTE_COMMAND_TIMEOUT_MS, live: true }),
-    output: (key: string) =>
-      request<{ text: string }>(`/admin/remote-commands/${encodeURIComponent(key)}/output`,
-        { cache: 'no-store', live: true }),
   },
 
   deploy: {
@@ -2435,14 +2336,6 @@ export const api = {
         throw new Error(err.error ?? res.statusText);
       }
     },
-  },
-
-  // Просмотр файла вне корня проекта (абсолютный путь) — например, файл открытый
-  // из карточки инструмента чата в другом проекте/дереве. Формат ответа тот же, что
-  // у files/content; 403 — путь вне досягаемости песочницы, 400 — путь не абсолютный.
-  hostFiles: {
-    getContent: (path: string) =>
-      request<{ content: string | null; isBinary: boolean; isImage: boolean; isVideo?: boolean; isAudio?: boolean; isDocument?: boolean; docKind?: string; mimeType?: string; base64?: string; fileSize?: number }>(`/host-files/content?path=${encodeURIComponent(path)}`),
   },
 
   // Git проекта (раздел «Файлы» → «Изменения»/«История»); ошибки операций — 409 { error }

@@ -53,6 +53,16 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 /// явная привязка <c>[SubsystemUsage("llm")]</c>).
 /// Это не «матрица молчит»: это finding S2a-1, и его закрывает S2b-1.
 ///
+/// ═══ Строки ядра и CanDisable (S2b-1) ═══
+///
+/// Ключ с `CanDisable=false` (вертикали, которых ядро требует обязательными параметрами) и строка
+/// `core:` (`RecordCore` — сессии/чат, проекты, вход, файлы: не `IAppSubsystem`, гейта нет) в строке
+/// матрицы как «выключаемые» не меряются: тест строки пропускает их Skip-ом. Согласованность
+/// держит сторож <see cref="Сторож_согласованности_CanDisable_и_метки_ядро_сквозная"/>: метка
+/// «ядро/сквозная» в <see cref="KnownViolations"/> требует `CanDisable=false` в классе подсистемы,
+/// а `CanDisable=false` — задокументированной строки (или `core:`). Строки ядра входят в
+/// <see cref="MatrixKeys"/>: сторож полноты видит их состав, тест строки их пропускает.
+///
 /// ═══ Почему именно старт с выключенным ключом, а не горячее выключение ═══
 ///
 /// Гейт читается один раз при сборке контейнера (<c>AddSubsystems</c>, <c>ModuleLoader.TryLoadOne</c>),
@@ -91,6 +101,10 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
         "test-runs", "changelog", "tasks", "skills", "plugins",
         // Динамические модули — DynamicModules (index 0 — __stub).
         "__stub", "notes", "spend", "imageeditor", "architecture", "audioeditor", "videoeditor",
+        // Строки ядра — RecordCore(Program.cs): не `IAppSubsystem`, гейта нет, не отключаются.
+        // Строка матрицы пропускает их как «невыключаемые» (Skip по IsCoreKey), а панель
+        // «Компоненты» показывает их группой ядра (canDisable=false).
+        "core:sessions", "core:projects", "core:auth", "core:files",
     ];
 
     /// <summary>
@@ -112,13 +126,15 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// HTTP-кода (WorkspaceToolset.cs:1757, WebSearchToolset.cs:120, PersonasCrudService.cs:549
     /// и :640), и GetService на пути остановки хоста (Program.cs:2338).
     ///
-    /// <c>images</c> в этом шаге не чинится: три её ручки не атрибутированы (перечень в строке),
-    /// привязка — S2b-1. Прочие строки — «ядро/сквозная»: потребитель является ядром сессий и проектов
-    /// (SessionManager.cs:739-743 для llm, ProjectsController.cs:25 для
-    /// git/tasks/knowledge/dossiers/memory/project-icons, SessionHub.cs:26 → FileWatcherService.cs:103
-    /// для code-graph, SessionManager.cs:745 → PersonaBindingsService.cs:139 для skills) или швом
-    /// контекста хода (PromptSeamAdapters.cs:18, ADR-023). Их решает S2b-1: CanDisable или
-    /// опционализация названного шва.
+    /// Метка «ядро/сквозная» — объявление ядра: строка с ней требует `CanDisable=false` в классе
+    /// подсистемы, и согласованность метки с кодом держит сторож
+    /// <see cref="Сторож_согласованности_CanDisable_и_метки_ядро_сквозная"/>. S2b-1 (сдача 1) объявил
+    /// ядром все такие строки: code-graph, dossiers, git, knowledge, memory, project-icons,
+    /// project-services, skills, tasks — их выключение невозможно, пока ядро требует их сервисов
+    /// обязательными параметрами (цепочки в самих строках); опционализация этих швов — отдельное
+    /// решение, не этого шага. Строка <c>llm</c> намеренно БЕЗ метки: по решению постановщика
+    /// вертикаль остаётся отключаемой, `CanDisable=false` — только по явному решению Александра/Андрея.
+    /// <c>images</c> чинится в сдаче 2 S2b-1 (привязка ручек + отказ 503) и снимается из перечня.
     /// </summary>
     internal static readonly Dictionary<string, string> KnownViolations = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -138,13 +154,13 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             + "(backend/ClaudeHomeServer/Services/PersonaBindingsService.cs:138), который сам обязателен ядру "
             + "сессий (backend/ClaudeHomeServer/Services/SessionManager.cs:745). Первый запрос к хосту не отвечен. "
             + "CanDisable или опционализацию этого шва решает S2b-1.",
-        ["llm"] = "ядро/сквозная: ядро сессий (backend/ClaudeHomeServer/Services/SessionManager.cs:739-743) требует "
+        // Строка без метки «ядро/сквозная» намеренно: по решению постановщика (S2a-2, S2b-1)
+        // вертикаль остаётся отключаемой, CanDisable=false — только по явному решению Александра/Андрея.
+        ["llm"] = "ядро сессий (CanDisable не объявлен — вертикаль отключаемая): ядро сессий "
+            + "(backend/ClaudeHomeServer/Services/SessionManager.cs:739-743) требует "
             + "ILlmSessionAdapterFactory, UsageService и LlmProviderRegistry гейтнутой сборки ClaudeHomeServer.Llm "
-            + "(backend/ClaudeHomeServer.Llm/LlmSubsystem.cs:93-95) обязательными параметрами. Соседняя дыра той же "
-            + "строки: ручки вертикали неатрибутованы — UsageController (backend/ClaudeHomeServer/Controllers/UsageController.cs:12), "
-            + "ProvidersController (backend/ClaudeHomeServer/Controllers/ProvidersController.cs:10), ModelsController "
-            + "(backend/ClaudeHomeServer/Controllers/ModelsController.cs:15). Первый запрос к хосту не отвечен. "
-            + "Решает S2b-1: CanDisable и привязка [SubsystemUsage(\"llm\")].",
+            + "(backend/ClaudeHomeServer.Llm/LlmSubsystem.cs:93-95) обязательными параметрами — "
+            + "первый запрос к хосту не отвечен.",
         ["memory"] = "ядро/сквозная: шов контекста хода PersonaRecallSourceAdapter "
             + "(backend/ClaudeHomeServer/Services/Composition/PromptSeamAdapters.cs:18, ADR-023) и ядро проектов "
             + "(backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) требуют PersonaMemoryService "
@@ -250,11 +266,81 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             .Should().BeEmpty("причина пропущенной строки обязана называть файл:строку того, что падает");
     }
 
-    private static async Task<List<string>> LiveKeysAsync(TestWebApplicationFactory factory)
+    private static async Task<List<string>> LiveKeysAsync(TestWebApplicationFactory factory) =>
+        [.. (await SnapshotRowsAsync(factory)).Select(s => s.GetProperty("key").GetString()!)];
+
+    private static async Task<List<JsonElement>> SnapshotRowsAsync(TestWebApplicationFactory factory)
     {
         var snapshot = await factory.CreateAuthenticatedClient()
             .GetFromJsonAsync<JsonElement>("/api/admin/subsystems");
-        return [.. snapshot.EnumerateArray().Select(s => s.GetProperty("key").GetString()!)];
+        return [.. snapshot.EnumerateArray()];
+    }
+
+    private static JsonElement RowOf(IEnumerable<JsonElement> rows, string key) =>
+        rows.Single(r => string.Equals(r.GetProperty("key").GetString(), key, StringComparison.OrdinalIgnoreCase));
+
+    /// Метка «ядро/сквозная» в причине KnownViolations — объявление ядра. Её ровно этот префикс
+    /// и есть: строка без него (llm) — задокументированное нарушение НЕ-ядра, и сторож её
+    /// не трогает. Переформулировать причину «ядро/сквозная…» в «похожее на ядро…» — способ
+    /// обойти сторож, и он же способ потерять объявление: менять формулировку может только
+    /// тот, кто меняет CanDisable в классе подсистемы.
+    private const string CoreReasonPrefix = "ядро/сквозная";
+
+    /// <summary>
+    /// Сторож согласованности CanDisable и метки «ядро/сквозная» (S2b-1), оба направления:
+    /// 1. ключ с `CanDisable=false` в снапшоте обязан быть строкой ядра (`core:`) или строкой
+    ///    KnownViolations — иначе его тестовая строка мерит его как «выключаемый», а он не;
+    /// 2. ключ KnownViolations с причиной «ядро/сквозная» обязан иметь `CanDisable=false`
+    ///    в классе подсистемы — метка без кода была бы обещанием, которое никто не держит.
+    /// Мутация «убрать CanDisable=false у любого из этих ключей» краснит направление 2.
+    /// </summary>
+    [Fact]
+    public async Task Сторож_согласованности_CanDisable_и_метки_ядро_сквозная()
+    {
+        var rows = await SnapshotRowsAsync(Enabled);
+
+        // 1. CanDisable=false — только как задокументированная строка ядра.
+        var undeclared = rows
+            .Where(r => !r.GetProperty("canDisable").GetBoolean())
+            .Select(r => r.GetProperty("key").GetString()!)
+            .Where(k => !SubsystemStateStore.IsCoreKey(k) && !KnownViolations.ContainsKey(k))
+            .ToList();
+        undeclared.Should().BeEmpty(
+            "вертикаль с CanDisable=false вне KnownViolations тест строки мерит как «выключаемую»; "
+            + "или верни CanDisable=true, или документируй строку ядра");
+
+        // 2. Метка «ядро/сквозная» требует CanDisable=false в классе.
+        var notDeclared = KnownViolations.Keys
+            .Where(k => KnownViolations[k].StartsWith(CoreReasonPrefix, StringComparison.Ordinal))
+            .Where(k => RowOf(rows, k).GetProperty("canDisable").GetBoolean())
+            .ToList();
+        notDeclared.Should().BeEmpty(
+            "строка KnownViolations с меткой «ядро/сквозная» обязана иметь CanDisable=false "
+            + "в классе подсистемы (список причин — в шапке KnownViolations)");
+    }
+
+    /// <summary>
+    /// Ручка состава отдаёт `canDisable` у каждой записи, и строки ядра в составе есть
+    /// (критерий c1 S2b-1): core:sessions, core:projects, core:auth, core:files —
+    /// active=true, canDisable=false.
+    /// </summary>
+    [Fact]
+    public async Task Состав_отдаёт_canDisable_и_строки_ядра()
+    {
+        var rows = await SnapshotRowsAsync(Enabled);
+        rows.Should().NotBeEmpty("включённый хост обязан отдавать непустой состав");
+
+        foreach (var r in rows)
+            r.TryGetProperty("canDisable", out _).Should().BeTrue(
+                $"запись «{r.GetProperty("key").GetString()}» без поля canDisable — панель «Компоненты» "
+                + "не сможет отличить строку ядра от тумблера");
+
+        foreach (var key in new[] { "core:sessions", "core:projects", "core:auth", "core:files" })
+        {
+            var row = RowOf(rows, key);
+            row.GetProperty("active").GetBoolean().Should().BeTrue($"{key} — ядро, оно всегда активно");
+            row.GetProperty("canDisable").GetBoolean().Should().BeFalse($"{key} — строка ядра, не отключается");
+        }
     }
 
     // ─── Строка матрицы ────────────────────────────────────────────────────────────
@@ -265,6 +351,12 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     [MemberData(nameof(MatrixRows))]
     public async Task КаждаяПодсистема_ВыключаетсяБезПятисотки(string key)
     {
+        // Строки ядра (RecordCore) не имеют гейта: их нечего мерить как «отказ выключенной
+        // вертикали». Вертикали с CanDisable=false до Skip-а не доходят — они в KnownViolations
+        // ниже, и согласованность метки с CanDisable держит сторож «Сторож_согласованности…».
+        Skip.If(SubsystemStateStore.IsCoreKey(key),
+            "core: строка — RecordCore, гейта нет, как «выключаемая» не меряется");
+
         // Документированное нарушение S2a-1 вынесено из прогона Skip-ом с причиной: матрица
         // остаётся зелёной и полной, а перечень нарушений — входом S2a-2/S2b-1.
         Skip.If(KnownViolations.TryGetValue(key, out var known), known);

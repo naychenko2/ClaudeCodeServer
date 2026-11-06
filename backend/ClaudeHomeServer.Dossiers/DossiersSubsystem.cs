@@ -64,6 +64,11 @@ public sealed class DossiersSubsystem : IAppSubsystem
 
     public string Title => "Паспорта изменений";
 
+    // Ядро (CanDisable=false, S2b-1): ядро проектов (Controllers/ProjectsController.cs:25) требует
+    // DossierStore обязательным параметром; та же зависимость — у MemoryToolset
+    // (Services/Mcp/Http/MemoryToolset.cs:45).
+    public bool CanDisable => false;
+
     public void Register(IServiceCollection services, IConfiguration config)
     {
         services.AddSingleton<InstanceSecretsProvider>();

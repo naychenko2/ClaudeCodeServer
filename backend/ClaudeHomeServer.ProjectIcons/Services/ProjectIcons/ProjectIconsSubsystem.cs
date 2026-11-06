@@ -27,6 +27,11 @@ public sealed class ProjectIconsSubsystem : IAppSubsystem
 
     public string Title => "Значки проектов";
 
+    // Ядро (CanDisable=false, S2b-1): ядро проектов (Controllers/ProjectsController.cs:25) требует
+    // ProjectIconGlyphService обязательным параметром — при выключенной вертикали мёртв
+    // GET /api/projects. Настоящая починка (опционализация этой зависимости) — отдельное решение.
+    public bool CanDisable => false;
+
     public void Register(IServiceCollection services, IConfiguration config)
     {
         services.AddSingleton<ProjectIconGlyphService>();

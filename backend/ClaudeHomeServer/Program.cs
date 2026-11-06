@@ -1061,6 +1061,21 @@ builder.Services.AddSubsystems(builder.Configuration,
     // опционально через Core-швы, порядок с остальными не связан.
     new ClaudeHomeServer.Services.Plugins.PluginsSubsystem());
 
+// Строки ядра состава (S2b-1): функциональность продукта, которая не `IAppSubsystem` —
+// сессии и чат, проекты, вход, файлы. Они всегда в процессе, гейта не имеют и в панели
+// «Компоненты» показываются отдельной группой без тумблеров (canDisable=false,
+// docs/mockups/components-admin-v1-proposal.md). Ключ с префиксом `core:` — чтобы не
+// столкнулся с ключом вертикали; в ActiveKeys (`/api/auth/me`) они не попадают.
+var subsystemsState = builder.Services.SubsystemsState();
+subsystemsState.RecordCore("core:sessions", "Сессии и чат",
+    "Чаты, сессии и ходы: ядро рантайма, всегда включено.");
+subsystemsState.RecordCore("core:projects", "Проекты",
+    "Реестр проектов и их настройки: ядро, всегда включено.");
+subsystemsState.RecordCore("core:auth", "Вход",
+    "Вход, пользователи и токены: ядро входа, всегда включено.");
+subsystemsState.RecordCore("core:files", "Файлы",
+    "Файлы проектов и наблюдение за диском: ядро работы с диском, всегда включено.");
+
 // Учёт обращений к подсистемам: карта «сборка → ключ» и стор строятся из АКТИВНЫХ подсистем
 // после AddSubsystems; сброс на диск — hosted-сервис (в инспекционной копии не пишет)
 builder.Services.AddSingleton(sp => new ClaudeHomeServer.Services.Composition.SubsystemUsageAttribution(

@@ -73,6 +73,11 @@ public sealed class MemorySubsystem : IAppSubsystem
 
     public string Title => "Память персон и команды";
 
+    // Ядро (CanDisable=false, S2b-1): шов контекста хода PersonaRecallSourceAdapter
+    // (Services/Composition/PromptSeamAdapters.cs:18, ADR-023) и ядро проектов
+    // (Controllers/ProjectsController.cs:25) требуют PersonaMemoryService обязательным параметром.
+    public bool CanDisable => false;
+
     public void Register(IServiceCollection services, IConfiguration config)
     {
         // Персональная память — фасад стора + Dify-датасет, recall по типизированным

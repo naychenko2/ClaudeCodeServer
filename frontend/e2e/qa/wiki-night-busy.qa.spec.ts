@@ -168,6 +168,41 @@ test('кнопка на 360 и в тёмной теме: диалог влеза
   await expect(dialogTitle, 'диалог закрыт').toHaveCount(0);
   await page.waitForTimeout(3000);
   expect(spendCount(), 'отмена на 360 не запускает разбор').toBe(before);
+
+  // Тот же проход на 360: кнопка переходит в «Идёт разбор…» и неактивна.
+  await runBtn.click();
+  await page.getByRole('button', { name: 'Запустить', exact: true }).click();
+  await expect(runBtn, 'на 360 кнопка «Идёт разбор…»').toHaveText('Идёт разбор…', { timeout: 30_000 });
+  await expect(runBtn, 'на 360 кнопка неактивна во время прохода').toBeDisabled();
+  await page.screenshot({ path: `${SHOTS}/wn-360-dark-running.png` });
+  await expect(runBtn, 'после прохода кнопка снова активна').toBeEnabled({ timeout: 300_000 });
+});
+
+test('кнопка и диалог: 1280 в тёмной теме и 360 в светлой', async ({ page, context, browser }) => {
+  // 1280, тёмная тема.
+  await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await context.addInitScript(() => localStorage.setItem('theme-mode', 'dark'));
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openSettings(page);
+  await expect(page.locator('[data-testid="wiki-nightly-run"]'), 'кнопка в тёмной теме на 1280 видна').toBeVisible();
+  await page.locator('[data-testid="wiki-nightly-run"]').click();
+  await expect(page.getByRole('heading', { name: 'Запустить ночной разбор сейчас?' }), 'диалог в тёмной теме').toBeVisible();
+  await page.screenshot({ path: `${SHOTS}/wn-1280-dark-dialog.png` });
+  await page.getByRole('button', { name: 'Отмена', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Запустить ночной разбор сейчас?' }), 'диалог закрыт').toHaveCount(0);
+
+  // 360, светлая тема.
+  const ctx2 = await browser.newContext({ viewport: { width: 360, height: 720 } });
+  await ctx2.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
+  await ctx2.addInitScript(() => localStorage.setItem('theme-mode', 'light'));
+  const page2 = await ctx2.newPage();
+  await openSettings(page2);
+  await expect(page2.locator('[data-testid="wiki-nightly-run"]'), 'кнопка в светлой теме на 360 видна').toBeVisible();
+  await page2.locator('[data-testid="wiki-nightly-run"]').click();
+  await expect(page2.getByRole('heading', { name: 'Запустить ночной разбор сейчас?' }), 'диалог в светлой теме на 360').toBeVisible();
+  await page2.screenshot({ path: `${SHOTS}/wn-360-light-dialog.png` });
+  await page2.getByRole('button', { name: 'Отмена', exact: true }).click();
+  await ctx2.close();
 });
 
 test('двойной клик по «Запустить» в диалоге — только один проход', async ({ page, context }) => {

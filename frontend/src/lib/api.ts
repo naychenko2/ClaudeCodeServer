@@ -1,7 +1,7 @@
 // ПОТОЛОК РОСТА (frontend-api-split-2026-11.md): файл только худеет. Лимит строк — в
 // lib/__tests__/apiFileBudget.test.ts; он снижается после каждого выноса домена в
 // features/<домен>/api.ts, поднимать его нельзя. Новые методы — сразу в features/<домен>/.
-import type { Project, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, PermissionRule, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, ApplyDefaultBindingsResult, LocalHandsChatStatus, BackgroundResult, ChangedBySession, ExternalPreviewLink, ExternalLinkIssued, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult } from '../types';
+import type { Project, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, PermissionRule, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ApplyDefaultBindingsResult, LocalHandsChatStatus, BackgroundResult, ChangedBySession, ExternalPreviewLink, ExternalLinkIssued, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult } from '../types';
 import { localModelApi } from '../features/localModel/api';
 import { providerAccountsApi } from '../features/providerAccounts/api';
 import { accountApi } from '../features/account/api';
@@ -23,6 +23,7 @@ import { skillsApi } from '../features/skills/api';
 import { plansApi } from '../features/plan/api';
 import { imageGenerationApi } from '../features/imageGeneration/api';
 import { mcpApi } from '../features/mcp/api';
+import { readerApi } from '../features/reader/api';
 import { cachedToken, readStoredToken, request, writeStoredToken } from './offline';
 import type { FeatureRun } from '../types/featureRun';
 import type { FeaturesIndex, FeaturePage } from '../types/featureIndex';
@@ -138,6 +139,8 @@ export type { WorkflowAgentInfo, WorkflowAgentBlock };
 
 // Типы «Знаний» (DifyDocument) живут в features/knowledge/types.ts
 export type * from '../features/knowledge/types';
+// Типы ридера (ReaderReadResult) живут в features/reader/types.ts
+export type * from '../features/reader/types';
 
 // Контекст worktree-чата для git-запросов: пока активен чат в отдельном git worktree,
 // ВСЕ git-вызовы его проекта несут ?sessionId= — бэкенд переводит операции в дерево чата.
@@ -2070,69 +2073,6 @@ export const api = {
   // Карта плана — в features/plan/api.ts
   ...plansApi,
 
-  reader: {
-    // Контракт ADR-005 (docs/adr/ADR-005-link-reader-server.md): успех — { title, siteName?,
-    // byline?, markdown }, отказ — { error: { code, httpStatus? } }. Отказ — ОЖИДАЕМЫЙ исход
-    // (часть сайтов не читается, это норма, а не поломка), поэтому здесь гасим исключение
-    // request() при non-2xx и возвращаем обе ветки как данные — вызывающему нечего ловить.
-    read: (url: string) => readReaderPage(url),
-    // Серверная проба встраиваемости (ADR-006 §1): POST /api/reader/embed-check, вердикт по
-    // заголовкам финального ответа (X-Frame-Options / CSP frame-ancestors). Поле reason —
-    // телеметрия/отладка; фронт на него НЕ ветвится — любой исход, кроме явного
-    // embeddable:true (включая 401/403/429 и сетевые сбои), означает «не встраивается»
-    // и тихо уводит панель в MD-режим.
-    embedCheck: (url: string) => checkReaderEmbeddable(url),
-  },
+  // «Ридер ссылок» с хелперами — в features/reader/api.ts
+  ...readerApi,
 };
-
-async function checkReaderEmbeddable(url: string): Promise<{ embeddable: boolean }> {
-  try {
-    const data = await request<{ embeddable?: unknown }>('/reader/embed-check', {
-      method: 'POST',
-      body: JSON.stringify({ url }),
-    });
-    return { embeddable: !!data && data.embeddable === true };
-  } catch {
-    // Сбой пробы — не исключение для показа, а сигнал идти MD-путём (ADR-006 §1)
-    return { embeddable: false };
-  }
-}
-
-function normalizeReaderError(raw: unknown, httpStatus?: number | null): { code: ReaderErrorCode; httpStatus?: number | null } {
-  const code = raw && typeof raw === 'object' && 'code' in raw && typeof (raw as { code?: unknown }).code === 'string'
-    ? (raw as { code: string }).code
-    : null;
-  const known = code != null && READER_ERROR_CODES.has(code as ReaderErrorCode);
-  const rawStatus = raw && typeof raw === 'object' && 'httpStatus' in raw
-    ? (raw as { httpStatus?: number | null }).httpStatus
-    : null;
-  return { code: known ? (code as ReaderErrorCode) : 'server-error', httpStatus: rawStatus ?? httpStatus ?? null };
-}
-
-const READER_ERROR_CODES = new Set<ReaderErrorCode>([
-  'invalid-url', 'local-address', 'dns-failed', 'unreachable', 'tls-invalid',
-  'timeout', 'auth-required', 'blocked-by-site', 'not-found', 'server-error',
-  'too-many-redirects', 'not-a-page', 'pdf', 'too-large', 'not-readable',
-]);
-
-export type ReaderReadResult =
-  | { ok: true; page: ReaderPage }
-  | { ok: false; error: { code: ReaderErrorCode; httpStatus?: number | null } };
-
-// Backend может сигналить отказ ЛИБО non-2xx статусом (request() бросает исключение,
-// тело ошибки летит в err.body), ЛИБО 200 с discriminated union в теле — конвенция ещё
-// не устоялась (эндпоинт делает Денис параллельно), поэтому распознаём оба варианта.
-async function readReaderPage(url: string): Promise<ReaderReadResult> {
-  try {
-    const data = await request<ReaderPage | { error: unknown }>('/reader/read', {
-      method: 'POST', body: JSON.stringify({ url }),
-    });
-    if (data && typeof data === 'object' && 'error' in data) {
-      return { ok: false, error: normalizeReaderError((data as { error: unknown }).error) };
-    }
-    return { ok: true, page: data as ReaderPage };
-  } catch (e) {
-    const err = e as Error & { status?: number; body?: { error?: unknown } };
-    return { ok: false, error: normalizeReaderError(err.body?.error, err.status) };
-  }
-}

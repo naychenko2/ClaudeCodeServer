@@ -5,8 +5,11 @@ using Xunit;
 namespace ClaudeHomeServer.Tests.Services;
 
 // Сторож старта: после рестарта учёт аренд пула пуст, и без RestoreLeasesAsync слот открытого
-// ревью отдали бы другой задаче и сбросили под ногами ревьюера. Вызов стоит в Program.cs вне
-// подсистем, поэтому удаление строки никто бы не заметил — держим его текстовым сторожем.
+// ревью отдали бы другой задаче и сбросили под ногами ревьюера. Вызов стоит в стартовом ряду
+// вне подсистем, поэтому удаление строки никто бы не заметил — держим его текстовым сторожем.
+// С S6-2 стартовый ряд живёт в `Services/Composition/StartupWarmup.cs`, поэтому сторож
+// проверяет обе половины цепочки: Program.cs зовёт ряд (`RunStartupWarmup`), и в ряду есть
+// сам `RestoreLeasesAsync`. Одна половина без другой аренд не вернёт.
 // Ищем вызов по имени, а не по всей цепочке: перенос строки или локальная переменная не должны краснить сторож.
 public class ReviewTreeLeaseRestoreGuardTests
 {
@@ -46,12 +49,21 @@ public class ReviewTreeLeaseRestoreGuardTests
         throw new DirectoryNotFoundException("Корень репозитория (.git + backend/) не найден выше каталога тестов");
     }
 
+    // Вызов стартового ряда из Program.cs: ряд, который никто не позвал, аренд не вернёт.
+    private static readonly Regex WarmupCall = new(@"\.RunStartupWarmup\s*\(", RegexOptions.Compiled);
+
     [Fact]
     public void Program_НаСтартеВосстанавливаетАрендыСлотовРевью()
     {
-        var text = File.ReadAllText(Path.Combine(RepoRoot(), "backend", "ClaudeHomeServer", "Program.cs"));
+        var root = RepoRoot();
+        var program = File.ReadAllText(Path.Combine(root, "backend", "ClaudeHomeServer", "Program.cs"));
+        var warmup = File.ReadAllText(Path.Combine(root, "backend", "ClaudeHomeServer",
+            "Services", "Composition", "StartupWarmup.cs"));
 
-        var verdict = Verdict(text);
+        WarmupCall.IsMatch(StripCommentsAndLiterals(program)).Should().BeTrue(
+            "Program.cs обязан звать стартовый ряд RunStartupWarmup: без этого восстановления не произойдёт");
+
+        var verdict = Verdict(warmup);
 
         verdict.Should().BeNull(
             "без восстановления аренд после рестарта слот открытого ревью отдадут другой задаче");

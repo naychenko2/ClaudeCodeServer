@@ -114,5 +114,12 @@ public sealed class MemorySubsystem : IAppSubsystem
         // тип оказывается отсутствующим). Прецедент — `PersonaMemoryAutolearnService`.
         services.AddSingleton<TeamMemoryAutolearnService>();
         services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<TeamMemoryAutolearnService>());
+
+        // Общий LLM-резолвер записи памяти (Mem0 ADD/UPDATE/DELETE/NOOP) — авто-путь обоих
+        // слоёв памяти (S6-2: перенесён из Program.cs). Тип живёт в этой же сборке
+        // (`MemoryWriteResolver.cs`), потребители — только фасады выше (все берут его
+        // опциональным параметром): за пределами вертикали его никто не резолвит, поэтому
+        // он собственность Memory, а не композиционный корень.
+        services.AddSingleton<MemoryWriteResolver>();
     }
 }

@@ -4388,6 +4388,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // Персона сферы без проекта сферы чата не получает: её зона — только проекты сферы
         if (PersonaZone.IsSpherePersona(persona)) EnsurePersonaVisible(persona, targetProjectId);
 
+        // Глобальной персоне чат общего проекта не назначается (доработка R-S2a-8, дефект D1 W3-B4a):
+        // общая проверка рамки — по целевому проекту чата ДО выбора ветки и до всякой работы.
+        // Вердикт рамки — по свойствам проекта без актора (TurnFrame), поэтому он одинаков для
+        // владельца и для участника; раньше проверка жила в ветке владельца ниже, и участнику
+        // общего проекта чат молча уходил вне проекта (И-6: тихого фолбэка в личный чат нет).
+        EnsurePersonasVisibleInFrame(targetProjectId, new[] { persona });
+
         // Персона без своей модели идёт своим уровнем, без уровня — назначением места «чат с персоной».
         // Дефолт места (Strong) передаётся в резолв, чтобы ячейка персоны без явного уровня сработала.
         var personaModel = ResolveDefaultModel(Llm.LocalActionCatalog.ChatPersona,
@@ -4398,9 +4405,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (!string.IsNullOrEmpty(targetProjectId)
             && _projects.GetById(targetProjectId) is { } project && project.OwnerId == ownerId)
         {
-            // Глобальной персоне чат общего проекта не назначается (доработка R-S2a-8): общая проверка
-            // рамки — здесь проект чата известен точно (иначе чат вышел бы вне проекта, где отказа нет).
-            EnsurePersonasVisibleInFrame(project.Id, new[] { persona });
+            // Рамка уже проверена выше — по целевому проекту, для любого актора (дефект D1).
             var projectSession = new Session
             {
                 ProjectId = project.Id,

@@ -25,6 +25,10 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// И-6: проектная персона, чей проект принадлежит не ownerId (битая запись), — исключение в
 /// SessionManager, а не тихий фолбэк в чат вне проекта: с ключом арендатора такой чат
 /// родился бы в личном пространстве владельца от лица участника.
+/// И-6 / дефект D1 (доработка W3-B4a): своя глобальная персона участника в общем проекте —
+/// тот же отказ 400 global_persona_in_shared, что у владельца и что на POST /sessions:
+/// рамка проверяется по целевому проекту чата, а не внутри ветки владельца, — чата вне
+/// проекта после отказа нет.
 /// </summary>
 [Trait("Category", "Host")]
 public class SharedProjectPersonaChatTests : IClassFixture<TestWebApplicationFactory>
@@ -210,5 +214,37 @@ public class SharedProjectPersonaChatTests : IClassFixture<TestWebApplicationFac
         Stored(ownerChatId).CreatedByUserId.Should().Be(OwnerId());
         Stored(memberChatId).CreatedByUserId.Should().Be(MemberId(),
             "автор каждого чата — свой вызывающий, гонка его не путает");
+    }
+
+    /// <summary>Своя глобальная персона участника (личная дефолт-персона).</summary>
+    private static async Task<string> CreateGlobalPersonaAsync(HttpClient client, string name)
+    {
+        var r = await client.PostAsJsonAsync("/api/personas", new { name, scope = "global" });
+        r.EnsureSuccessStatusCode();
+        return IdOf(await r.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task УчастникСГлобальнойПерсонойВОбщемПроекте_400ИБезЧатаВнеПроекта()
+    {
+        var projectId = await ProjectWithMemberAsync("editor");
+        var globalId = await CreateGlobalPersonaAsync(Member(), "Личная-" + Guid.NewGuid().ToString("N")[..6]);
+
+        // Путь фронта в сценарии дефекта D1 (defaultPersona.ts:179): «Новый чат» в проекте
+        // без руководителя падает на личную дефолт-персону — POST {id}/chats с projectId в теле.
+        var sessionsSvc = _factory.Services.GetRequiredService<SessionManager>();
+        var outsideBefore = sessionsSvc.GetAllOwnedBy(MemberId()).Count(s => s.ProjectId is null);
+
+        var r = await Member().PostAsJsonAsync($"/api/personas/{globalId}/chats",
+            new { mode = "auto", projectId });
+
+        r.StatusCode.Should().Be(HttpStatusCode.BadRequest,
+            "дефект D1: раньше был 200 — рамка жила в ветке владельца, чат молча уходил вне проекта");
+        (await BodyAsync(r)).GetProperty("code").GetString()
+            .Should().Be(SessionManager.GlobalPersonaInSharedException.Code,
+                "та же рамка и тот же машинный код, что у владельца и что на POST /sessions");
+        (await PersonaChatIdsAsync(Member(), globalId)).Should().BeEmpty("отказ не оставил чата с персоной");
+        sessionsSvc.GetAllOwnedBy(MemberId()).Count(s => s.ProjectId is null).Should().Be(outsideBefore,
+            "у участника не появилось чата с projectId = null");
     }
 }

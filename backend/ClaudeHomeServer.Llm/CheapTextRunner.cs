@@ -251,7 +251,7 @@ public sealed class CheapTextRunner(
                     }
                 }
             }
-            else if (LocalStepReady(actionKey, route.Kind))
+            else if (LocalStepReady(actionKey, route.Kind, allowCloudFallback))
             {
                 var (local, localUsage) = await RunLocalAsync(actionKey, prompt, jsonFormat, ownerId, ct);
                 if (!string.IsNullOrWhiteSpace(local)) return (local, localUsage);
@@ -359,9 +359,15 @@ public sealed class CheapTextRunner(
     // (LocalActionRouter.LocalBlockedByTurn): фоновый запрос кэшем не пользуется, а KV-бюджет
     // занимает и вытесняет префикс чата (живой прогон 2026-09-23). Действие не теряется —
     // оно идёт дальше по своей цепочке, к облачному шагу.
-    private bool LocalStepReady(string actionKey, RouteKind kind)
+    // Исключение — режим «без облака» на локальном маршруте (allowCloudFallback=false и
+    // Kind=Local, RunLocalOrChosen*): там облачного шага нет, пропуск = потеря вызова,
+    // поэтому занятость не применяется — идём в движок (вариант А, 06.11). Очередь в движке
+    // слотов не ждёт: TrackedLocalLlmClient берёт слот через TryEnter без ожидания и при
+    // полном счётчике отдаёт null — этот отказ ловит повтор ночи (WN-2), а не цепочка.
+    private bool LocalStepReady(string actionKey, RouteKind kind, bool allowCloudFallback)
     {
         if (!LocalStepApplies(actionKey, kind) || !ollama.Enabled) return false;
+        if (!allowCloudFallback && kind == RouteKind.Local) return true;
         if (!router.LocalBlockedByTurn) return true;
         log.LogDebug(
             "cheap-runner: действие {Action} — на локальном движке идёт ход, шаг локали пропускаю",
@@ -497,7 +503,9 @@ public sealed class CheapTextRunner(
                 }
                 call?.Step(EngineCallLink.Claude);
             }
-            else if (LocalStepReady(actionKey, route.Kind))
+            // Цепочка RunDetailedAsync всегда заканчивается на claude-шаге — режим «без облака»
+            // сюда не доходит, занятость пропускает шаг как раньше.
+            else if (LocalStepReady(actionKey, route.Kind, allowCloudFallback: true))
             {
                 var local = (await RunLocalAsync(actionKey, prompt, jsonFormat, ownerId, ct)).Text;
                 // usage локали здесь не берётся — тот же контракт, что у шага движка выше.

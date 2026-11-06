@@ -60,10 +60,16 @@ public sealed class PersonasCrudService(
 
     // --- Создание / правка / удаление / дефолт (тела POST/PUT/DELETE/make-default) ---
 
-    // onAutoVoice — исход автоподбора голоса, если он запускался (MCP сообщает его модели);
-    // голос был задан явно (в т.ч. пустым объектом) — не вызывается
+    // onAutoVoice — исход автоподбора голоса, если он запускается (MCP сообщает его модели);
+    // голос был задан явно (в т.ч. пустым объектом) — не вызывается.
+    // callerRole/projectId — сужение ИИ-подбора при создании (W3-B5b доработка, ревью aaf13fce):
+    // контроллер передаёт роль вызывающего из области запроса (ProjectWriteArea) и проект персоны —
+    // типовые умения и autoBindings не пишут участнику личных целей владельца и mcp/плагин-целей.
+    // Роль по умолчанию — Owner: MCP-тулсет и создание владельцем действуют в пространстве
+    // владельца, сужения нет.
     public async Task<ActionResult<Persona>> CreateAsync(string userId, CreatePersonaRequest req,
-        string? callerSessionId, CancellationToken ct = default, Action<AutoVoiceResult>? onAutoVoice = null)
+        string? callerSessionId, ProjectRole callerRole = ProjectRole.Owner, string? projectId = null,
+        CancellationToken ct = default, Action<AutoVoiceResult>? onAutoVoice = null)
     {
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest("Не задано имя персоны");
@@ -151,7 +157,8 @@ public sealed class PersonasCrudService(
         var (withDefaults, defaultsApplied) = (persona, 0);
         try
         {
-            (withDefaults, defaultsApplied) = await MaterializeDefaultBindingsAsync(userId, persona, ct: ct);
+            (withDefaults, defaultsApplied) = await MaterializeDefaultBindingsAsync(userId, persona,
+                callerRole: callerRole, projectId: projectId, ct: ct);
         }
         catch (Exception ex)
         {
@@ -161,7 +168,8 @@ public sealed class PersonasCrudService(
         // Авто-подбор привязок (autoBindings) — best-effort:
         // сбой подбора не роняет создание, персона остаётся без привязок
         if (defaultsApplied == 0 && req.AutoBindings == true)
-            persona = await TryAutoBindAsync(userId, persona, ct);
+            persona = await TryAutoBindAsync(userId, persona,
+                callerRole: callerRole, projectId: projectId, ct: ct);
         // Фото-аватар (autoAvatar) — явный опт-ин для путей, где человек не выбирает
         // аватар сам (напр. пакетное создание команды из ai/team); ручное создание
         // через форму/мастер этот параметр не шлёт — там инициалы или явный выбор
@@ -730,11 +738,15 @@ public sealed class PersonasCrudService(
     // Авто-подбор и сохранение привязок для свежесозданной персоны (best-effort).
     // Подобранное ДОПОЛНЯЕТ существующие (явные из запроса и посевные): UpdateBindings
     // заменяет список целиком, отдавать ему только новых кандидатов — молчаливая потеря.
-    public async Task<Persona> TryAutoBindAsync(string userId, Persona persona, CancellationToken ct = default)
+    // callerRole/projectId — то же сужение кандидатов, что у SuggestBindingsAsync (W3-B5b
+    // доработка): создающий-участник не получает через подбор личных целей владельца.
+    public async Task<Persona> TryAutoBindAsync(string userId, Persona persona,
+        ProjectRole callerRole = ProjectRole.Owner, string? projectId = null, CancellationToken ct = default)
     {
         try
         {
-            var candidates = await SuggestBindingsAsync(userId, persona, ct: ct);
+            var candidates = await SuggestBindingsAsync(userId, persona,
+                callerRole: callerRole, projectId: projectId, ct: ct);
             if (candidates.Count > 0)
                 return personas.UpdateBindings(persona.Id, userId,
                     (persona.Bindings ?? []).Concat(candidates).ToList());
@@ -759,7 +771,9 @@ public sealed class PersonasCrudService(
     // §3.1 строка «apply-defaults», И-4): типовой профиль материализуется только в цели,
     // разрешённые вызывающему (тот же NonOwnerBindingEditDenied, что у записи привязки);
     // личных целей владельца и mcp/плагин-целей участник персоне не добавляет. Роль по
-    // умолчанию — Owner: создание и MCP-тулсет действуют в пространстве владельца, сужения нет.
+    // умолчанию — Owner: MCP-тулсет действует в пространстве владельца, сужения нет;
+    // создание проектной персоны участником передаёт роль из области запроса (доработка
+    // ревью aaf13fce — CreateAsync и кнопка «Применить типовые»).
     public async Task<(Persona Persona, int Applied)> MaterializeDefaultBindingsAsync(string userId,
         Persona persona, ProjectRole callerRole = ProjectRole.Owner, string? projectId = null,
         CancellationToken ct = default)
@@ -810,8 +824,10 @@ public sealed class PersonasCrudService(
     // callerRole/projectId — сужение кандидатов для не-владельца общего проекта (W3-B5b,
     // разрез §3.1 строка «suggest/generate», И-4): кандидат отбрасывается тем же
     // NonOwnerBindingEditDenied ДО валидации и до ответа — праву отказа не мешает ни
-    // валидность цели, ни её отсутствие в каталоге. Роль по умолчанию — Owner: авто-подбор
-    // при создании и MCP-тулсет действуют в пространстве владельца, сужения нет.
+    // валидность цели, ни её отсутствие в каталоге. Роль по умолчанию — Owner: MCP-тулсет
+    // действует в пространстве владельца, сужения нет; авто-подбор при создании получает
+    // роль вызывающего из области запроса (доработка ревью aaf13fce — CreateAsync,
+    // TryAutoBindAsync, quick-create).
     public async Task<List<PersonaBinding>> SuggestBindingsAsync(string userId, Persona persona,
         string? userPrompt = null, IReadOnlyList<SpecialtyDefaultBinding>? profile = null,
         List<PersonaBinding>? acceptedSeed = null,

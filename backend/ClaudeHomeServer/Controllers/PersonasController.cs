@@ -282,17 +282,26 @@ public class PersonasController(
     // Глобальную/сферную персону — личное пространство вызывающего, как раньше; проектную — по
     // праву WriteContent на её проект, под ключом его владельца (W3-B3a; тот же приём, что
     // ProjectTasksController.Create: право по проекту из тела, запись — по TenantOwnerId).
+    // Роль вызывающего и проект персоны идут дальше — в ИИ-подбор при создании (доработка
+    // ревью aaf13fce): авто-привязки и типовые умения не пишут участнику личных целей
+    // владельца и mcp/плагин-целей. Для глобальной/сферной — вызывающий сам свой арендатор:
+    // роль остаётся Owner, сужения нет.
     [HttpPost]
     public async Task<ActionResult<Persona>> Create([FromBody] CreatePersonaRequest req)
     {
         var tenant = UserId;
+        var callerRole = ProjectRole.Owner;
+        string? boundProjectId = null;
         if (PersonaZone.IsProjectScope(req.Scope))
         {
             var (area, denied) = ProjectWriteArea(req.ProjectId);
             if (denied is not null) return denied;
             tenant = area!.TenantOwnerId;
+            callerRole = area!.Role;
+            boundProjectId = req.ProjectId;
         }
-        return await _crud.CreateAsync(tenant, req, CallerSessionId());
+        return await _crud.CreateAsync(tenant, req, CallerSessionId(),
+            callerRole: callerRole, projectId: boundProjectId);
     }
 
     [HttpPut("{id}")]
@@ -721,13 +730,19 @@ public class PersonasController(
         var scope = req.Scope ?? PersonaScope.Global;
         // Проектная персона — по праву WriteContent на её проект и под ключом его владельца
         // (W3-B3a, разрез §3.1 «POST /ai/quick-create», И-2); глобальная/сферная — личное
-        // пространство вызывающего, как раньше.
+        // пространство вызывающего, как раньше. Роль вызывающего и проект идут в авто-подбор
+        // привязок ниже (доработка ревью aaf13fce): участнику подбор не пишет личных целей
+        // владельца и mcp/плагин-целей.
         var tenant = UserId;
+        var callerRole = ProjectRole.Owner;
+        string? boundProjectId = null;
         if (PersonaZone.IsProjectScope(scope))
         {
             var (area, denied) = ProjectWriteArea(req.ProjectId);
             if (denied is not null) return denied;
             tenant = area!.TenantOwnerId;
+            callerRole = area!.Role;
+            boundProjectId = req.ProjectId;
         }
 
         // 1. Черновик всех полей одним one-shot вызовом (строгий JSON-объект).
@@ -789,7 +804,8 @@ public class PersonasController(
         // 4. Авто-подбор привязок (по умолчанию включён) —
         // best-effort: сбой не роняет создание, персона остаётся без привязок
         if (req.AutoBindings != false)
-            persona = await _crud.TryAutoBindAsync(tenant, persona, HttpContext.RequestAborted);
+            persona = await _crud.TryAutoBindAsync(tenant, persona,
+                callerRole: callerRole, projectId: boundProjectId, ct: HttpContext.RequestAborted);
 
         await Broadcast("created", persona.Id);
         return Ok(persona);

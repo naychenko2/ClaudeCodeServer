@@ -56,6 +56,11 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// одной mcp/плагин-цели. Без personaId или для своей персоны — как раньше; owner — без
 /// сужения (регрессии нет).
 ///
+/// W3-B5b доработка (ревью aaf13fce): роль вызывающего из области запроса доходит до ИИ-подбора
+/// при создании (POST /api/personas с autoBindings и quick-create → CreateAsync/TryAutoBindAsync) —
+/// созданная редактором персона не получает через авто-подбор личных целей владельца и mcp:*;
+/// владелец тем же вызовом — как раньше.
+///
 /// Мутации (проверяются на копиях дерева, scripts/mutation-copy.sh):
 /// - NonOwnerBindingEditDenied всегда возвращает null («сужение разрешает всё») — краснеют
 ///   «mcp-цель» (200/400 вместо 403), «личная цель» (200 вместо 400) и обе строки «личную
@@ -74,7 +79,13 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// - W3-B5b: снять проверку NonOwnerBindingEditDenied в SuggestBindingsAsync /
 ///   MaterializeDefaultBindingsAsync (или не передать callerRole из контроллера) — краснеют
 ///   ПодборИГенерацияПривязок_РедакторуТолькоРазрешённыеЦели и
-///   ТиповыеУмения_РедакторНеДобавляетЛичныхЦелейВладельца (applied=1 вместо 0).
+///   ТиповыеУмения_РедакторНеДобавляетЛичныхЦелейВладельца (applied=1 вместо 0);
+/// - W3-B5b доработка (ревью aaf13fce): не передать callerRole/projectId в CreateAsync и
+///   TryAutoBindAsync (Owner по умолчанию) — краснеют
+///   СозданиеПроектнойПерсоныРедактором_АвтоПодборНеПишетЛичныхЦелейВладельца и
+///   КвикСозданиеПроектнойПерсоныРедактором_АвтоПодборНеПишетЛичныхЦелейВладельца:
+///   созданная редактором персона получает «notes|personal» (прочие чужие цели в тестовом
+///   хосте отбивает и валидация — личная цель единственная проходит её под ключом владельца).
 /// </summary>
 [Trait("Category", "Host")]
 public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicationFactory>
@@ -117,6 +128,12 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
             """[{"type":"notes","target":"personal"},{"type":"knowledge","target":"dataset-тест"},""" +
             """{"type":"tool","target":"mcp:тест"},{"type":"tool","target":"web"}]""";
 
+        // Черновик quick-create (W3-B5b доработка): имя несёт маркер — промпты авто-подбора
+        // привязок несут имя персоны, поэтому следующий за черновиком suggest отвечает
+        // CandidatesJson и созданная персона проходит тот же конвейер подбора, что тесты выше.
+        private const string DraftJson =
+            """{"name":"ТестовыйПодбор","role":"Аналитик","description":"Тестовый аналитик привязок","tone":"сухо и по делу","color":"blue"}""";
+
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => false;
         public bool HasRoute(string actionKey) => false;
@@ -124,7 +141,8 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
-            => Task.FromResult(prompt.Contains(Marker) ? CandidatesJson : "[]");
+            => Task.FromResult(!prompt.Contains(Marker) ? "[]"
+                : actionKey == LocalActionCatalog.PersonaQuickCreate ? DraftJson : CandidatesJson);
 
         public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
             object? jsonFormat = null, CancellationToken ct = default)
@@ -987,5 +1005,82 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
             .Should().Be(1, "своей персоны владельца сужения нет: «personal» записана");
         HasBinding(Personas.Get(personaId, TenantId)!, "notes", "personal").Should().BeTrue(
             "тот же конвейер без сужения доносит личную цель — различие только в сужении");
+    }
+
+    // ── W3-B5b доработка (ревью aaf13fce): создание — ИИ-подбор сужен не-владельцу ──────────────
+    //
+    // POST /api/personas (autoBindings) и quick-create несли роль вызывающего дальше, чем право
+    // на запись: CreateAsync/TryAutoBindAsync принимали только TenantOwnerId, авто-подбор шел
+    // с ролью по умолчанию Owner и писал созданной редактором персоне личные цели владельца
+    // и mcp:* — через ход с этой персоной участник получал личные данные владельца. Теперь
+    // роль и проект из области запроса доходят до подбора: редактор получает только
+    // разрешённые цели (каталожный «web» записан — конвейер живой, тест не вакуумный),
+    // владелец тем же вызовом — личную цель (регрессии нет).
+    // Мутация: не передать callerRole/projectId в CreateAsync/TryAutoBindAsync (Owner по
+    // умолчанию) — оба теста краснеют: «notes|personal» в сторе редактора (mcp/чужая база
+    // отбивает и валидация — по ней различие не виден, по личной цели — виден).
+
+    // Создание проектной персоны вызывающим с autoBindings: true и маркером в имени:
+    // по маркеру стаб отдаёт фиксированный набор кандидатов (тот же, что у suggest-тестов).
+    private async Task<string> CreateWithAutoBindingsAsync(HttpClient client, string projectId, string tag)
+    {
+        var created = await client.PostAsJsonAsync("/api/personas",
+            new { name = tag + RunId() + NoLlm.Marker, scope = "project", projectId, autoBindings = true });
+        created.EnsureSuccessStatusCode();
+        return IdOf(await created.Content.ReadAsStringAsync());
+    }
+
+    private async Task<string> QuickCreateWithAutoBindingsAsync(HttpClient client, string projectId)
+    {
+        var created = await client.PostAsJsonAsync("/api/personas/ai/quick-create",
+            new { prompt = NoLlm.Marker + " собери аналитика для проекта", scope = "project", projectId });
+        created.EnsureSuccessStatusCode();
+        return IdOf(await created.Content.ReadAsStringAsync());
+    }
+
+    // Итог авто-подбора на свежесозданной персоне: суженный — без личных целей владельца,
+    // mcp:* и чужой базы, но с разрешённым «web»; несуженный — с личной целью (не вакуум).
+    private void AssertAutoBindResult(string personaId, bool narrowed)
+    {
+        var persona = Personas.Get(personaId, TenantId)!;
+        if (narrowed)
+        {
+            HasBinding(persona, "notes", "personal").Should().BeFalse(
+                "ИИ-подбор при создании не пишет участнику личную цель владельца (И-4)");
+            (persona.Bindings ?? []).Any(b => b.Type == PersonaBindingType.Tool
+                && b.Target.StartsWith("mcp:", StringComparison.OrdinalIgnoreCase)).Should().BeFalse(
+                "mcp-цель — право Configure, авто-подбор не добавляет её участнику");
+            HasBinding(persona, "knowledge", "dataset-тест").Should().BeFalse("чужая база знаний не записана");
+            HasBinding(persona, "tool", "web").Should().BeTrue(
+                "разрешённый кандидат записан: подбор жив, различие — только в сужении");
+        }
+        else
+        {
+            HasBinding(persona, "notes", "personal").Should().BeTrue(
+                "своего создания владельца сужение не касается (регрессии нет)");
+            HasBinding(persona, "tool", "web").Should().BeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task СозданиеПроектнойПерсоныРедактором_АвтоПодборНеПишетЛичныхЦелейВладельца()
+    {
+        var (projectId, _) = await ArrangeAsync(Editor);
+
+        AssertAutoBindResult(await CreateWithAutoBindingsAsync(SecondClient(), projectId, "АвтоРед"),
+            narrowed: true);
+        AssertAutoBindResult(await CreateWithAutoBindingsAsync(OwnerClient(), projectId, "АвтоВлац"),
+            narrowed: false);
+    }
+
+    [Fact]
+    public async Task КвикСозданиеПроектнойПерсоныРедактором_АвтоПодборНеПишетЛичныхЦелейВладельца()
+    {
+        var (projectId, _) = await ArrangeAsync(Editor);
+
+        AssertAutoBindResult(await QuickCreateWithAutoBindingsAsync(SecondClient(), projectId),
+            narrowed: true);
+        AssertAutoBindResult(await QuickCreateWithAutoBindingsAsync(OwnerClient(), projectId),
+            narrowed: false);
     }
 }

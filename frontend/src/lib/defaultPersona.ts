@@ -143,8 +143,15 @@ export function useMe(): MeState {
 // личная дефолт-персона (проект без командных механик ведёт личный ассистент); вне проекта —
 // сразу личная. null — дефолта нет вовсе (осиротевший юзер без ассистента; чинит серверный
 // провижн на рубеже 2.4).
-export function getContextDefaultPersonaId(project?: Pick<Project, 'defaultPersonaId'> | null): string | null {
-  return project?.defaultPersonaId ?? _me.defaultPersonaId;
+// Исключение (W3-F2a, дефект D1): в общем проекте, где вызывающий не владелец (ownerId
+// != me.userId), личная персона НЕ подставляется: личный ассистент увёл бы чат из проекта
+// (бэк создал бы его личным, вне проекта — «молча» для участника). null — запрос идёт без
+// personaId, бэк отвечает 400 no_project_persona, текст доходит до вызывающего как тост.
+// Владелец (ownerId == me.userId) и проект без ownerId (старые данные) — прежний фолбэк.
+export function getContextDefaultPersonaId(project?: Pick<Project, 'defaultPersonaId' | 'ownerId'> | null): string | null {
+  if (project?.defaultPersonaId) return project.defaultPersonaId;
+  if (project && project.ownerId && _me.userId && project.ownerId !== _me.userId) return null;
+  return _me.defaultPersonaId;
 }
 
 // Ошибка-сигнал «нужен онбординг»: хелпер не может создать чат без дефолт-персоны.
@@ -171,7 +178,7 @@ export class OnboardingRequiredError extends Error {
 // назначает только владелец), поэтому текст сервера уходит вызывающему как есть,
 // а не оборачивается в OnboardingRequiredError.
 export async function createChatWithContextPersona(
-  project?: Pick<Project, 'id' | 'defaultPersonaId'> | null,
+  project?: Pick<Project, 'id' | 'defaultPersonaId' | 'ownerId'> | null,
   opts?: { mode?: string; name?: string },
 ): Promise<Session> {
   const defaultId = getContextDefaultPersonaId(project);

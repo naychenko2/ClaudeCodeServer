@@ -41,6 +41,32 @@ describe('getContextDefaultPersonaId', () => {
     expect(getContextDefaultPersonaId(project)).toBe('personal-default');
   });
 
+  // W3-F2a (дефект D1): в общем проекте без руководителя личная персона не подставляется —
+  // иначе бэк молча создал бы участнику личный чат вне проекта. Признак «не владелец» —
+  // ownerId проекта != id текущего пользователя (me.userId == Project.ownerId бэка).
+  it('общий проект без руководителя, вызывающий — не владелец: личная персона НЕ подставляется', () => {
+    setMeFromServer(fakeMe('personal-default'));
+    const project = { defaultPersonaId: null, ownerId: 'owner-2' } as Pick<Project, 'defaultPersonaId' | 'ownerId'>;
+
+    expect(getContextDefaultPersonaId(project)).toBeNull();
+  });
+
+  it('тот же проект для владельца — фолбэк на личную персону, как раньше', () => {
+    setMeFromServer(fakeMe('personal-default'));
+    const project = { defaultPersonaId: null, ownerId: 'u1' } as Pick<Project, 'defaultPersonaId' | 'ownerId'>;
+
+    expect(getContextDefaultPersonaId(project)).toBe('personal-default');
+  });
+
+  // Руководитель важнее признака владельца: участнику общего проекта с руководителем —
+  // руководитель (ничего не меняется).
+  it('общий проект с руководителем, вызывающий — не владелец: дефолт проекта', () => {
+    setMeFromServer(fakeMe('personal-default'));
+    const project = { defaultPersonaId: 'project-lead', ownerId: 'owner-2' } as Pick<Project, 'defaultPersonaId' | 'ownerId'>;
+
+    expect(getContextDefaultPersonaId(project)).toBe('project-lead');
+  });
+
   it('вне проекта — сразу личный дефолт', () => {
     setMeFromServer(fakeMe('personal-default'));
 
@@ -163,6 +189,39 @@ describe('createChatWithContextPersona', () => {
 
     expect(error).toBeInstanceOf(OnboardingRequiredError);
     expect((error as InstanceType<typeof OnboardingRequiredError>).scope).toBe('project');
+  });
+
+  // W3-F2a (дефект D1): участник общего проекта без руководителя — даже с личной дефолт-
+  // персоной запрос идёт БЕЗ personaId (через sessions.create), а не через личную персону:
+  // бэк отвечает 400 no_project_persona, текст уходит вызывающему как есть (тост).
+  it('участник общего проекта без руководителя — запрос без personaId, не через личную персону', async () => {
+    setMeFromServer(fakeMe('personal-default'));
+    const project = { id: 'proj-1', defaultPersonaId: null, ownerId: 'owner-2' } as Pick<Project, 'id' | 'defaultPersonaId' | 'ownerId'>;
+    const serverText = 'В проекте нет руководителя — попросите владельца назначить';
+    vi.mocked(api.sessions.create).mockRejectedValue(
+      Object.assign(new Error(serverText), { status: 400, body: { code: 'no_project_persona', error: serverText } }),
+    );
+
+    const error = await createChatWithContextPersona(project, { mode: 'auto' }).catch(e => e);
+
+    expect(api.personas.createChat).not.toHaveBeenCalled();
+    expect(api.sessions.create).toHaveBeenCalledWith('proj-1', 'auto', undefined, undefined);
+    expect(error).not.toBeInstanceOf(OnboardingRequiredError);
+    expect((error as Error).message).toBe(serverText);
+  });
+
+  // Владелец проекта без руководителя — прежний путь: чат от лица личной персоны.
+  it('владелец проекта без руководителя — создаёт чат от лица личной персоны, как раньше', async () => {
+    setMeFromServer(fakeMe('personal-default'));
+    const project = { id: 'proj-1', defaultPersonaId: null, ownerId: 'u1' } as Pick<Project, 'id' | 'defaultPersonaId' | 'ownerId'>;
+    vi.mocked(api.personas.createChat).mockResolvedValue(fakeSession);
+
+    const result = await createChatWithContextPersona(project, { mode: 'auto' });
+
+    expect(result).toBe(fakeSession);
+    expect(api.personas.createChat).toHaveBeenCalledWith('personal-default',
+      { mode: 'auto', name: undefined, projectId: 'proj-1' });
+    expect(api.sessions.create).not.toHaveBeenCalled();
   });
 
   // Тело без error (деградантный ответ транспорта): текст не выдумываем, оставляем message.

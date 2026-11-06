@@ -14,9 +14,11 @@
 import { describe, it, expect } from 'vitest';
 import { SUBSYSTEMS } from '../subsystems';
 
-// сверено с `public string Key =>` в backend/ и матрицей S2a-1
-// Источник перечня: AddSubsystems(Program.cs) — статические подсистемы — плюс
-// секция DynamicModules в appsettings.json (динамические модули). Заглушка
+// Перечень сверен с кодом бэка: AddSubsystems(Program.cs) — статические подсистемы —
+// плюс секция DynamicModules в appsettings.json (динамические модули). Соответствие
+// держит бэковый кейс SubsystemDisableMatrixTests.Фронтовый_реестр_содержит_каждый_ключ_стора:
+// он читает этот файл и проверяет, что каждый ключ SubsystemStateStore есть в SUBSYSTEMS.
+// Заглушка
 // __stub не включена: это PoC-модуль, не подсистема пользователя. Ключи
 // контрибьюторов хода (prompt-sections, persona-layer, …) и провайдеров
 // (fal, glif, youtube, …) не включены: это не IAppSubsystem и в ActiveKeys

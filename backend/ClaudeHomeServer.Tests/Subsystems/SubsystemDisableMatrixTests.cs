@@ -53,6 +53,16 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 /// мерять «отказ выключенной» нечего. Повторить вакуумную зелёность не даёт сторож полноты
 /// <see cref="Сторож_полноты_у_каждого_отключаемого_ключа_есть_привязанная_ручка"/>.
 ///
+/// ═══ Фронтовый реестр (хвост R-S2b-2a) ═══
+///
+/// Не-ядровые ключи стора — ключи, которые фронтовый реестр <c>SUBSYSTEMS</c>
+/// (frontend/src/lib/subsystems.ts) умеет гейтить (исключения — в доке кейса). Фронтовый тест
+/// (frontend/src/lib/__tests__/subsystemsRegistry.test.ts) стережёт реестр только против своей
+/// фикстуры, а связь «фикстура ↔ бэк» держалась комментарием. Кейс
+/// <see cref="Фронтовый_реестр_содержит_каждый_ключ_стора"/> читает фронтовый файл и закрывает
+/// цепочку со стороны бэка: новый ключ стора без пары в реестре — красный здесь, а не тихое
+/// отставание на следующем шаге (меню/рельса/маршрут).
+///
 /// ═══ Строки ядра и CanDisable (S2b-1) ═══
 ///
 /// Ключ с `CanDisable=false` (вертикали, которых ядро требует обязательными параметрами) и строка
@@ -244,6 +254,86 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
         MatrixKeys.Should().BeEquivalentTo(live,
             "перечень матрицы обязан ровно совпадать с ключами SubsystemStateStore включённого "
             + "хоста: новая подсистема без строки в матрице — красный здесь, а не тихая дыра в гейте");
+    }
+
+    // ─── Фронтовый реестр: ключи стора → SUBSYSTEMS (хвост R-S2b-2a) ─────────────────
+
+    /// <summary>
+    /// Фронтовый реестр <c>SUBSYSTEMS</c> (frontend/src/lib/subsystems.ts) обязан содержать каждый
+    /// не-ядровой ключ <see cref="SubsystemStateStore"/> включённого хоста. Фронтовый тест
+    /// (frontend/src/lib/__tests__/subsystemsRegistry.test.ts) стережёт реестр только против своей
+    /// фикстуры <c>BACKEND_KEYS</c>, а связь «фикстура ↔ бэк» держалась комментарием: бэк добавляет
+    /// подсистему (новый класс <c>IAppSubsystem</c> + <c>AddSubsystems</c> в Program.cs или запись
+    /// <c>DynamicModules</c> в appsettings.json), фикстуру не тронули — фронтовый тест зелёный, а
+    /// реестр молча отстаёт, и следующий шаг (меню/рельса/маршрут) не может гейтить новый ключ.
+    /// Этот кейс закрывает цепочку со стороны бэка: новый ключ стора без пары в реестре — красный
+    /// здесь, а не молча.
+    ///
+    /// Два исключения, оба объявлены в коде: строки ядра (<see cref="SubsystemStateStore.IsCoreKey"/>;
+    /// <see cref="SubsystemStateStore.ActiveKeys"/> не отдаёт их фронту — ядро на фронте не гейтится,
+    /// IAppSubsystem.cs:157-158) и тестовые заглушки с префиксом <c>__</c> (<c>__stub</c> — PoC-модуль
+    /// appsettings.Testing.json для StubModuleEndpointTests, не подсистема пользователя). Новая строка
+    /// ядра или новый тестовый стаб — не повод трогать реестр; новая пользовательская вертикаль — повод.
+    /// </summary>
+    [Fact]
+    public async Task Фронтовый_реестр_содержит_каждый_ключ_стора()
+    {
+        var live = await LiveKeysAsync(Enabled);
+        var registry = FrontendRegistryKeys();
+
+        var missing = live
+            .Where(k => !SubsystemStateStore.IsCoreKey(k) && !IsTestStubKey(k))
+            .Where(k => !registry.Contains(k))
+            .ToList();
+
+        missing.Should().BeEmpty(
+            "ключи стора — ключи, которые фронтовый реестр умеет гейтить: ключ SubsystemStateStore "
+            + "без пары в SUBSYSTEMS (frontend/src/lib/subsystems.ts) значит, что реестр отстал от "
+            + "бэка — его собственный тест зелёный против своей фикстуры. Добавь пару в реестр; "
+            + "если ключ — ядро или тестовая заглушка, объяви это здесь (IsCoreKey/IsTestStubKey)");
+    }
+
+    // Тестовые заглушки с префиксом `__` (__stub — PoC-модуль appsettings.Testing.json): не
+    // пользовательские вертикали, фронтовый реестр их не гейтит и знать не обязан.
+    private static bool IsTestStubKey(string key) => key.StartsWith("__", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Значения фронтового реестра: блок <c>export const SUBSYSTEMS = { … } as const;</c> из
+    /// frontend/src/lib/subsystems.ts. Без блока — явная ошибка, а не «пустой реестр»: сторож
+    /// потерял источник, а не строку.
+    /// </summary>
+    private static HashSet<string> FrontendRegistryKeys()
+    {
+        var body = FrontendRegistryBlock.Match(File.ReadAllText(RepoFile("frontend", "src", "lib", "subsystems.ts")));
+        if (!body.Success)
+            throw new InvalidOperationException(
+                "блок `export const SUBSYSTEMS = { … } as const;` не найден в "
+                + "frontend/src/lib/subsystems.ts — фронтовый реестр нечем померить");
+        return new HashSet<string>(
+            RegistryValue.Matches(body.Groups["body"].Value).Select(m => m.Groups[1].Value),
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static readonly Regex FrontendRegistryBlock =
+        new(@"export const SUBSYSTEMS = \{(?<body>.*?)\} as const;", RegexOptions.Singleline | RegexOptions.Compiled);
+
+    private static readonly Regex RegistryValue = new(@"'([^']+)'", RegexOptions.Compiled);
+
+    // Файл репозитория по пути от корня: корень — подъём от bin-каталога тестов до .git
+    // (каталог в основном дереве, файл в worktree и в копии мутации) — паттерн
+    // MemoryToolsetParityTests.RepoFile.
+    private static string RepoFile(params string[] parts)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null
+               && !Directory.Exists(Path.Combine(dir.FullName, ".git"))
+               && !File.Exists(Path.Combine(dir.FullName, ".git")))
+            dir = dir.Parent;
+        var path = dir is null ? null : Path.Combine([dir.FullName, .. parts]);
+        if (path is null || !File.Exists(path))
+            throw new InvalidOperationException(
+                $"{Path.Combine(parts)} не найден — сторож фронтового реестра не может работать");
+        return path;
     }
 
     /// <summary>

@@ -48,15 +48,24 @@ public sealed class SubsystemUsageAttribution
         // Контроллеры ядра-сборки с явной привязкой: их ключи тоже наблюдаемы.
         // Методовые атрибуты смешанных ручек (S2b-1) — тот же набор наблюдаемых:
         // обращение к аватарной ручке персо — это обращение к вертикали images.
-        foreach (var type in typeof(SubsystemUsageAttribution).Assembly.GetTypes())
+        // Тот же обход по сборкам самих вертикалей: KeyOf/KeyOfAction видят атрибут в
+        // любой сборке, а без этого скана ключ, который вернула атрибуция, не попал бы
+        // в набор стора и его обращения молча потерялись (R-S2b-1).
+        // Main здесь уже не дублируется: CoreAssemblies исключены из _byAssembly выше.
+        var attributedAssemblies = new List<Assembly> { typeof(SubsystemUsageAttribution).Assembly };
+        attributedAssemblies.AddRange(_byAssembly.Keys);
+        foreach (var assembly in attributedAssemblies)
         {
-            if (type.GetCustomAttribute<SubsystemUsageAttribute>(inherit: false)?.Key is { } k
-                && _activeKeys.Contains(k))
-                _observable.Add(k);
-            foreach (var m in type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
-                if (m.GetCustomAttribute<SubsystemUsageAttribute>()?.Key is { } mk
-                    && _activeKeys.Contains(mk))
-                    _observable.Add(mk);
+            foreach (var type in assembly.GetTypes())
+            {
+                if (type.GetCustomAttribute<SubsystemUsageAttribute>(inherit: false)?.Key is { } k
+                    && _activeKeys.Contains(k))
+                    _observable.Add(k);
+                foreach (var m in type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                    if (m.GetCustomAttribute<SubsystemUsageAttribute>()?.Key is { } mk
+                        && _activeKeys.Contains(mk))
+                        _observable.Add(mk);
+            }
         }
 
         foreach (var t in toolsets)
@@ -92,10 +101,13 @@ public sealed class SubsystemUsageAttribution
     // Ключ по ЭНДПОИНТУ: методовой атрибут приоритетнее классового (смешанная ручка
     // относится к вертикали ровно своими вертикальными эндпоинтами), дальше — обычный
     // путь KeyOf (классовый атрибут или карта «сборка → ключ»).
+    // Методовой атрибут УТОЧНЯЕТ классовой, а не отменяет его: если его ключ не активен
+    // (вертикаль выключена), откат к KeyOf — классовая атрибуция сохраняется, иначе
+    // счётчик вертикали тихо теряется на выключенной смежной вертикали (R-S2b-1).
     public string? KeyOfAction(ControllerActionDescriptor action)
     {
         var methodKey = action.MethodInfo.GetCustomAttribute<SubsystemUsageAttribute>()?.Key;
-        if (methodKey is not null) return _activeKeys.Contains(methodKey) ? methodKey : null;
+        if (methodKey is not null && _activeKeys.Contains(methodKey)) return methodKey;
         return KeyOf(action.ControllerTypeInfo);
     }
 

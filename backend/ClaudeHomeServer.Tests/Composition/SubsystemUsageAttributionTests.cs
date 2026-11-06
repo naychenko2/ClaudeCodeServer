@@ -5,6 +5,7 @@ using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -201,6 +202,90 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
         attribution.KeyOfMcp("personas").Should().BeNull("тулсет без подсистемы — ядро");
         attribution.KeyOfMcp("wsp").Should().BeNull("тулсет без подсистемы — ядро");
         attribution.KeyOf(typeof(SubsystemUsageAttributionTests)).Should().BeNull("сборка тестов не подсистема");
+    }
+
+    // ─── Хвост R-S2b-1: откат к классовой атрибуции и наблюдаемость ключей из сборок вертикалей ───
+
+    // Контроллер смешанной ручки: классовой и методовый ключ названы одновременно.
+    // Таких контроллеров в проде пока нет — сценарий латентный, проверяется синтетически.
+    [SubsystemUsage("personas")]
+    private sealed class MixedKeyController
+    {
+        [SubsystemUsage("images")]
+        public Task VerticalEndpoint() => Task.CompletedTask;
+    }
+
+    // Тип в «сборке вертикали» теста: тест-сборка зарегистрирована домашней для «stub»,
+    // а ключ методового атрибута — строка ядра: активна, но не наблюдаема ни по своей
+    // сборке (CoreAssemblies пропущены), ни по Main. Без скана сборок вертикалей её
+    // обращения молча терялись бы в сторе.
+    private sealed class VerticalHomeController
+    {
+        [SubsystemUsage("core:stub")]
+        public Task CountedEndpoint() => Task.CompletedTask;
+    }
+
+    private sealed class PersonasStubSubsystem : IAppSubsystem
+    {
+        public string Key => "personas";
+        public string Title => "Заглушка";
+        public void Register(IServiceCollection services, IConfiguration config) { }
+    }
+
+    private sealed class ImagesStubSubsystem : IAppSubsystem
+    {
+        public string Key => "images";
+        public string Title => "Заглушка";
+        public void Register(IServiceCollection services, IConfiguration config) { }
+    }
+
+    private static ControllerActionDescriptor DescriptorOf(Type controller, string methodName) =>
+        new() { ControllerTypeInfo = (System.Reflection.TypeInfo)controller, MethodInfo = controller.GetMethod(methodName)! };
+
+    // П.1: неактивный ключ метода не отменяет классовый — атрибуция откатывается к классовой
+    [Fact]
+    public void МетодовыйКлючНеАктивен_АтрибутацияОткатываетсяККлассовой()
+    {
+        var state = new SubsystemStateStore();
+        state.RecordActive(new PersonasStubSubsystem()); // «personas» активна; «images» — нет
+        var attribution = new SubsystemUsageAttribution(state, []);
+
+        var descriptor = DescriptorOf(typeof(MixedKeyController), nameof(MixedKeyController.VerticalEndpoint));
+        attribution.KeyOfAction(descriptor).Should().Be("personas",
+            "методовой атрибут уточняет классовой, а не отменяет его");
+    }
+
+    // П.1, обратная сторона: когда оба ключа активны, методовой по-прежнему приоритнее
+    [Fact]
+    public void МетодовыйКлючАктивен_ОнПриоритнееКлассового()
+    {
+        var state = new SubsystemStateStore();
+        state.RecordActive(new PersonasStubSubsystem());
+        state.RecordActive(new ImagesStubSubsystem());
+        var attribution = new SubsystemUsageAttribution(state, []);
+
+        var descriptor = DescriptorOf(typeof(MixedKeyController), nameof(MixedKeyController.VerticalEndpoint));
+        attribution.KeyOfAction(descriptor).Should().Be("images", "оба ключа активны — методовой выигрывает");
+    }
+
+    // П.2: ключ, который вернула атрибуция, обязан быть наблюдаемым — счётчик растёт
+    [Fact]
+    public void МетодовыйАтрибутВСборкеВертикали_КлючНаблюдаем_СчётчикРастёт()
+    {
+        var state = new SubsystemStateStore();
+        state.RecordActive(new StubSubsystem()); // тест-сборка — домашняя сборка вертикали «stub»
+        state.RecordCore("core:stub", "Строка ядра", "");
+        var attribution = new SubsystemUsageAttribution(state, []);
+
+        var descriptor = DescriptorOf(typeof(VerticalHomeController), nameof(VerticalHomeController.CountedEndpoint));
+        attribution.KeyOfAction(descriptor).Should().Be("core:stub");
+        attribution.ObservableKeys.Should().Contain("core:stub",
+            "ключ, который вернула атрибуция, обязан быть в наборе стора");
+
+        var store = new SubsystemUsageStore(attribution.ObservableKeys);
+        var now = DateTimeOffset.UtcNow;
+        store.Hit("core:stub", now);
+        store.Snapshot(now).Single(e => e.Key == "core:stub").Last24h.Should().Be(1);
     }
 
     [Fact]

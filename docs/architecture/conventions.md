@@ -308,7 +308,7 @@ URL **не правим в отслеживаемых `appsettings*.json`** — 
 Порядок загрузки (последний переопределяет):
 
 ```
-appsettings.json → appsettings.{Environment}.json → appsettings.Local.json
+appsettings.json → appsettings.{Environment}.json → appsettings.Local.json → data/subsystems.json
 ```
 
 Подключается в [Program.cs](../../backend/ClaudeHomeServer/Program.cs) сразу
@@ -324,6 +324,22 @@ appsettings.json → appsettings.{Environment}.json → appsettings.Local.json
 Отдельный случай — рубильники, которые не должны включаться «по умолчанию у
 всех»: `PowerControl:Enabled` живёт только в машинном `appsettings.Local.json`
 вне git (см. раздел «Питание машины» в карте проекта).
+
+### Рубильники панелей пишет сервер: `data/subsystems.json`
+
+Тумблеры панели «Компоненты» (`Subsystems:{Key}:Enabled`) живут не в
+`appsettings.Local.json`, а в `data/subsystems.json` — файле, который пишет сам
+сервер (`PUT /api/admin/subsystems/{key}`). Он подключается источником конфигурации
+**после** `appsettings.Local.json`: значение, записанное панелью, перекрывает ручную
+настройку в Local.json (обратного нет — этот файл переписывает JSON-парсер, и
+комментарии Local.json не пережили бы такой перезаписи; файл панели пишет только
+сервер, поэтому потеря нечего). `data/` переживает выкатку и едет в бэкап целиком.
+
+Формат: `{ "Subsystems": { "<key>": { "Enabled": false } } }` — та же форма,
+которую читает `SubsystemGate`. Применяется после перезапуска процесса: гейт
+подсистемы читается один раз при регистрации (ADR-014), горячего применения нет;
+`GET /api/admin/subsystems` при этом показывает свежий `Enabled` и
+`restartRequired` — отличие от состояния запущенного процесса.
 
 ### Списки в конфигурации — объектом по ключу, а не массивом
 

@@ -71,6 +71,17 @@ var inspectionOverrides = ClaudeHomeServer.Services.Backup.BackupCli.InspectionO
 if (inspectionOverrides is not null) builder.Configuration.AddInMemoryCollection(inspectionOverrides);
 var inspectionMode = builder.Configuration.GetValue<bool>("InspectionMode");
 
+// Панель «Компоненты»: data/subsystems.json — машинный файл тумблеров, который пишет сам
+// сервер (PUT /api/admin/subsystems/{key}, S2c-1). Грузится ПОСЛЕ Local.json: значение,
+// записанное панелью, перекрывает ручную настройку в Local.json (обратного нет — этот файл
+// переписывает JSON-парсер, и комментарии Local.json не пережили бы его). optional: нет
+// файла — ничего не выключено, всё как раньше. reloadOnChange: чтобы GET /api/admin/subsystems
+// показывал свежий Enabled без рестарта процесса; сам гейт применения остаётся одноразовым
+// (ADR-014). Путь резолвится по финальному DataPath — уже после инспекционного оверрайда,
+// чтобы копия читала свой каталог, а не боевой.
+builder.Configuration.AddJsonFile(
+    SubsystemOverridesFile.PathFor(builder.Configuration), optional: true, reloadOnChange: true);
+
 // Таймстемп в консольном логе (I11): обёртка Console.Out/Error добавляет UTC-время в начало
 // каждой строки — и для ILogger, и для голых Console.WriteLine. Здесь, чтобы Local.json тоже
 // мог переопределить формат. Ключ Diagnostics:ConsoleTimestampFormat — НЕ под Logging:Console:

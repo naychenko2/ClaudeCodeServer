@@ -1,7 +1,7 @@
 // ПОТОЛОК РОСТА (frontend-api-split-2026-11.md): файл только худеет. Лимит строк — в
 // lib/__tests__/apiFileBudget.test.ts; он снижается после каждого выноса домена в
 // features/<домен>/api.ts, поднимать его нельзя. Новые методы — сразу в features/<домен>/.
-import type { Project, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, ApplyDefaultBindingsResult, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, PlanMap, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult } from '../types';
+import type { Project, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, ApplyDefaultBindingsResult, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, PlanMap, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult } from '../types';
 import { localModelApi } from '../features/localModel/api';
 import { providerAccountsApi } from '../features/providerAccounts/api';
 import { accountApi } from '../features/account/api';
@@ -16,6 +16,7 @@ import { videoApi } from '../features/video/api';
 import { devicesApi } from '../features/desktop/api';
 import { spheresApi } from '../features/spheres/api';
 import { specialtiesApi } from '../features/specialties/api';
+import { knowledgeApi } from '../features/knowledge/api';
 import { cachedToken, readStoredToken, request, writeStoredToken } from './offline';
 import type { FeatureRun } from '../types/featureRun';
 import type { FeaturesIndex, FeaturePage } from '../types/featureIndex';
@@ -129,13 +130,8 @@ const HANDOFF_TIMEOUT_MS = 6 * 60 * 1000;
 
 export type { WorkflowAgentInfo, WorkflowAgentBlock };
 
-export interface DifyDocument {
-  id: string;
-  name: string;
-  indexingStatus: string;
-  error?: string | null;   // текст ошибки индексации (только у indexingStatus === 'error')
-  tags?: string[];
-}
+// Типы «Знаний» (DifyDocument) живут в features/knowledge/types.ts
+export type * from '../features/knowledge/types';
 
 // Контекст worktree-чата для git-запросов: пока активен чат в отдельном git worktree,
 // ВСЕ git-вызовы его проекта несут ?sessionId= — бэкенд переводит операции в дерево чата.
@@ -2193,77 +2189,8 @@ export const api = {
       }),
   },
 
-  knowledge: {
-    getStatus: (projectId: string) =>
-      request<{ datasetId: string | null; documents: DifyDocument[]; total: number }>(`/projects/${projectId}/knowledge`),
-    indexFile: (projectId: string, relativePath: string) =>
-      request<{ datasetId: string; document: DifyDocument }>(
-        `/projects/${projectId}/knowledge/index`,
-        { method: 'POST', body: JSON.stringify({ relativePath }) }
-      ),
-    indexFolder: (projectId: string, relativePath: string) =>
-      request<{ indexed: number; skipped: number; documents: DifyDocument[] }>(
-        `/projects/${projectId}/knowledge/index-folder`,
-        { method: 'POST', body: JSON.stringify({ relativePath }) }
-      ),
-    deleteDocument: (projectId: string, documentId: string) =>
-      request<void>(`/projects/${projectId}/knowledge/documents/${documentId}`, { method: 'DELETE' }),
-    deleteDataset: (projectId: string) =>
-      request<void>(`/projects/${projectId}/knowledge`, { method: 'DELETE' }),
-    setDocumentTags: (projectId: string, documentName: string, documentId: string, tags: string[]) =>
-      request<void>(`/projects/${projectId}/knowledge/tags`, {
-        method: 'PUT',
-        body: JSON.stringify({ documentName, documentId, tags }),
-      }),
-  },
-
-  // Раздел «Знания»: менеджер баз знаний Dify (личные + публичные), не путать с
-  // проектным knowledge выше. Dify — источник истины; configured=false — не настроен.
-  knowledgeBases: {
-    list: () => request<KnowledgeListResponse>('/knowledge'),
-    get: (id: string) => request<KnowledgeBaseDetail>(`/knowledge/${encodeURIComponent(id)}`),
-    // Сгенерировать описание базы по составу документов (локальная модель / claude) и сохранить
-    describe: (id: string) =>
-      request<{ description: string }>(`/knowledge/${encodeURIComponent(id)}/ai/describe`, { method: 'POST' }),
-    create: (dto: CreateKnowledgeBaseDto) =>
-      request<{ id: string; title: string; visibility: string }>('/knowledge', {
-        method: 'POST', body: JSON.stringify(dto),
-      }),
-    remove: (id: string) => request<void>(`/knowledge/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-    // Добавить документ текстом
-    addDocumentText: (id: string, name: string, text: string) =>
-      request<{ id: string; name: string; indexingStatus: string }>(
-        `/knowledge/${encodeURIComponent(id)}/documents`,
-        { method: 'POST', body: JSON.stringify({ name, text }) },
-      ),
-    // Загрузить документ файлом (multipart — request() не ставит Content-Type для FormData)
-    addDocumentFile: async (id: string, file: File, name?: string): Promise<{ id: string; name: string; indexingStatus: string }> => {
-      const token = readStoredToken();
-      const form = new FormData();
-      form.append('file', file);
-      if (name) form.append('name', name);
-      const res = await fetch(`/api/knowledge/${encodeURIComponent(id)}/documents/file`,
-        { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form });
-      if (res.status === 401) {
-        if (token && typeof window !== 'undefined') window.dispatchEvent(new Event('cc-unauthorized'));
-        throw new Error('Нет доступа');
-      }
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.statusText }));
-        throw new Error(err.error ?? res.statusText);
-      }
-      return res.json();
-    },
-    removeDocument: (id: string, docId: string) =>
-      request<void>(`/knowledge/${encodeURIComponent(id)}/documents/${encodeURIComponent(docId)}`, { method: 'DELETE' }),
-    // Содержимое документа — сегменты (чанки) по порядку
-    getDocument: (id: string, docId: string) =>
-      request<KnowledgeDocumentContent>(`/knowledge/${encodeURIComponent(id)}/documents/${encodeURIComponent(docId)}`),
-    // method: semantic (по смыслу) | fulltext (точный полнотекстовый)
-    search: (id: string, q: string, method: 'semantic' | 'fulltext', topK = 8) =>
-      request<{ items: KnowledgeSearchHit[] }>(
-        `/knowledge/${encodeURIComponent(id)}/search?q=${encodeURIComponent(q)}&topK=${topK}&method=${method}`),
-  },
+  // «Знания»: проекльный индекс Dify и менеджер баз знаний — в features/knowledge/api.ts
+  ...knowledgeApi,
 
   skills: {
     list: (projectId: string) => projectRequest<SkillsData>(`/projects/${projectId}/skills`),

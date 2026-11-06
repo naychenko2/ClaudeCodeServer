@@ -361,7 +361,9 @@
   (его слепые места — разрез §5 п.2).
 - **Матрица прав** — разрез §2; держится существующим `ProjectRight` и матрицей ролей
   `ProjectAccess.RoleHasRight` ([ProjectAccess.cs](../../backend/ClaudeHomeServer.Core/Services/Access/ProjectAccess.cs):91-98):
-  видеть персону, её аватар, привязки, память, чаты — `Read` (все роли); новый чат с персоной,
+  видеть персону, её аватар, привязки, память, чаты — `Read` (все роли); новый чат с персоной —
+  `RunTurn` (владелец и редактор; `POST {id}/chats` гейтится этим правом,
+  [PersonasController.cs](../../backend/ClaudeHomeServer/Controllers/PersonasController.cs):435);
   правка карточки, память, привязки кроме MCP/плагинов — `WriteContent` (владелец и редактор);
   удаление, руководитель проекта, поля модели/зоны/доступа, автоматика, MCP- и плагин-привязки,
   `to-note`/`from-note` — `Configure` (только владелец). Новый чат читателю — 403: персону он видит,
@@ -376,8 +378,15 @@
 - **Рассылка.** `personas_changed` проектной персоны идёт группе проекта и её владельцу
   ([PersonasController.cs](../../backend/ClaudeHomeServer/Controllers/PersonasController.cs):101-108,
   [PersonasCrudService.cs](../../backend/ClaudeHomeServer/Services/PersonasCrudService.cs):63-71);
-  личной персоны — только владельцу, как прежде (И-8). Стор `lib/personas.ts` у всех участников
-  остаётся актуальным без перезагрузки страницы.
+  личной персоны — только владельцу, как прежде (И-8). Стор `lib/personas.ts` подписан только на
+  свою группу `user_{userId}` ([personas.ts](../../frontend/src/lib/personas.ts):26-29, :49),
+  поэтому событие владельцу доходит всегда; событие проектной персоны в группу проекта он слышит
+  только там, где страница вступила в группу проекта, — пока открыт проект
+  ([WorkspacePage.tsx](../../frontend/src/pages/WorkspacePage.tsx):1883), на стене чатов для
+  проектов, чьи чаты на ней есть ([wallStore.ts](../../frontend/src/features/wall/wallStore.ts):131),
+  пока жива секция состава ([MembersSection.tsx](../../frontend/src/features/projects/members/MembersSection.tsx):87);
+  там он перечитывает список без перезагрузки страницы. Вне этих страниц правка проектной персоны
+  другим участником не видна до следующего перечитывания списка.
 - **Рамка S2a-8.** Глобальная персона не бывает собеседником чата общего проекта:
   `SessionManager.EnsurePersonasVisibleInFrame`
   ([SessionManager.cs](../../backend/ClaudeHomeServer/Services/SessionManager.cs):5315-5324), отказ —

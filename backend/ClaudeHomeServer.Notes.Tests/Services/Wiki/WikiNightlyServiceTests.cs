@@ -1061,8 +1061,12 @@ public class WikiNightlyServiceTests : IDisposable
     [Fact]
     public async Task ЧастьОтказанаОдинРазобранный_ИтогCompleted_ОтказыПосчитаны()
     {
-        // Мутация «переводить при rejected > 0» (без rejected == analyzed): outcome стал бы error
-        // при живом разборе c3 — тест краснеет.
+        // Что ловит этот тест на самом деле (R-WN-2, находка 2): замену всего хвоста условия
+        // `rejected == analyzed && inputTokens == 0` на `rejected > 0` (перевод в error при любом
+        // отказе) — с живой c3 outcome стал бы error, тест красный. Одиночные правки guard'а
+        // (:603) здесь не ловятся: `rejected == analyzed → rejected > 0` блокирует ненулевой вход
+        // c3 (1000), снятие `inputTokens == 0` — то, что rejected (2) != analyzed (3). Границу
+        // «не все отказаны при нулевом входе» защищает ОтказаныНеВсеНулевойВход_…
         Configure();
         AddChat("c1", ageMinutes: 0);
         AddChat("c2", ageMinutes: 1);
@@ -1083,6 +1087,45 @@ public class WikiNightlyServiceTests : IDisposable
         last.Rejected.Should().Be(2);
         last.FirstRejectReason.Should().Be("отказ c1", "причина первого отказанного, а не первого вообще");
         last.InputTokens.Should().Be(1_000);
+    }
+
+    [Fact]
+    public async Task ОтказаныНеВсеНулевойВход_ИтогCompleted_НочьНеПовторяется()
+    {
+        // Граница инварианта «не все разборы отказаны» (R-WN-2, находка 1): конъюнкта
+        // `rejected == analyzed` в guard'е (WikiNightlyService.cs:603). 2 отказа с нулевым входом +
+        // 1 несостоявшийся отказом разбор с нулевым входом: rejected (2) < analyzed (3) — guard
+        // ложен, итог completed: частично отказанная ночь при нулевом входе — не error, дата
+        // закрыта, повторного прохода нет. Мутации: «rejected == analyzed → rejected > 0» →
+        // 2 > 0 и вход 0 — guard истинен, outcome=error, тест красный; «заменить весь хвост
+        // условия на rejected > 0» — тоже красный. Существующий ЧастьОтказанаОдинРазобранный
+        // первой мутации не ловит: его вход 1000 блокирует конъюнкту inputTokens == 0.
+        Configure();
+        AddChat("c1", ageMinutes: 0);
+        AddChat("c2", ageMinutes: 1);
+        AddChat("c3", ageMinutes: 2);
+        var sut = Sut((owner, chat, ct) =>
+        {
+            lock (_analyzed) _analyzed.Add(chat);
+            if (chat == "c3")
+                return Task.FromResult(new WikiChatIngestService.ChatResult(
+                    WikiChatIngestService.OutcomeNothingNew, null, [], InputTokens: 0));
+            return Task.FromResult(new WikiChatIngestService.ChatResult(
+                WikiChatIngestService.OutcomeRejected, "отказ " + chat, [], InputTokens: 0));
+        });
+
+        await Tick(sut);
+
+        var last = Last();
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted, "не все разборы отказаны — нулевой вход не делает ночь error");
+        last.Analyzed.Should().Be(3);
+        last.Rejected.Should().Be(2);
+        last.FirstRejectReason.Should().Be("отказ c1");
+        last.InputTokens.Should().Be(0);
+
+        // completed закрывает дату: следующий тик той же ночи не переразбирает чаты.
+        await Tick(sut);
+        _analyzed.Should().HaveCount(3, "completed закрывает дату — частично отказанная ночь не повторяется");
     }
 
     [Fact]

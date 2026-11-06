@@ -219,8 +219,11 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   projectGroups: 'left',
 };
 
-// Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
-export const WORKSPACE_KEYS: readonly PanelKey[] = [
+// Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys).
+// Только статические ключи реестра: семейство plugin:* разрешается маркером
+// 'pluginPanels' (keyAllowed), отдельные plugin:*-ключи в набор никогда не входят —
+// на этом держится и то, что фильтр workspaceKeysFor не проверяет плагин-синтаксис.
+export const WORKSPACE_KEYS: readonly StaticPanelKey[] = [
   'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'arch', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context', 'toc', 'video', 'characters', 'localModel', 'voices', 'chatContext', 'pluginPanels',
 ];
@@ -234,13 +237,10 @@ export const WORKSPACE_KEYS: readonly PanelKey[] = [
 // notes → панель заметок проекта (её контент уже гейтится useSubsystem(notes) —
 // здесь тот же ключ на уровне набора, чтобы и кнопка не появлялась),
 // tasks → TasksPanel (тело безусловное: только эта пара гейтит ключ в рельсе).
-// Вне таблицы — панели без подсистемного гейта: сессионные (plan/agents/context),
-// основные (chats/files/docs/team/terminal), центральная (toc), генерации
-// (chatContext), семейство плагинов (pluginPanels — свой гейт: флаг + возможности
-// проекта). Панели слота workspace-panel-def уже скрыты своими гейтами и здесь не
-// нужны: characters/voices — реестром (выключенная подсистема не отдаёт ни одного
-// вклада, registryCore.getSlotContributions), localModel — core-фича без бэкового
-// тумблера, гейтится своим isAvailable.
+// Вне таблицы — панели без подсистемного гейта: перечень с обоснованием каждой
+// живёт в ОДНОМ месте — allow-list сторожа полноты (__tests__/panelSubsystems.test.ts,
+// PANELS_WITHOUT_GATE); сторож проверяет обе стороны: каждый ключ карты/реестра
+// заявлен и каждая позиция allow-list — живой ключ (R-S2b-2c, п. 2).
 export const PANEL_SUBSYSTEM: Partial<Record<StaticPanelKey, string>> = {
   changes: SUBSYSTEMS.git,
   dossiers: SUBSYSTEMS.dossiers,
@@ -261,9 +261,12 @@ export const PANEL_SUBSYSTEM: Partial<Record<StaticPanelKey, string>> = {
 // состава активных подсистем. Предикат передаёт вызывающий (isSubsystemEnabled из
 // стора): каталог сам стор не читает и состава пользователя не знает. Ключи без
 // пары в PANEL_SUBSYSTEM остаются всегда — их видимость решает не подсистема.
+// Фильтр идёт по статическим ключам реестра: plugin:* до него не доходят — семейство
+// разрешается маркером 'pluginPanels' (keyAllowed), поэтому проверка плагин-синтаксиса
+// здесь была недостижимой веткой (R-S2b-2c, п. 3).
 export function workspaceKeysFor(isEnabled: (key: string) => boolean): PanelKey[] {
   return WORKSPACE_KEYS.filter(k => {
-    const sub = isPluginPanelKey(k) ? undefined : PANEL_SUBSYSTEM[k];
+    const sub = PANEL_SUBSYSTEM[k];
     return !sub || isEnabled(sub);
   });
 }

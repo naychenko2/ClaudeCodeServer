@@ -21,7 +21,7 @@ import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/sign
 import { loadWorkspaceState, saveWorkspaceState, loadFileFullscreenPref, saveFileFullscreenPref, isLeftTab, type LeftTab } from '../lib/workspaceState';
 import { api, type PluginInfo, type PluginPanelView } from '../lib/api';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
-import { SUBSYSTEMS, isSubsystemEnabled, useActiveSubsystemKeys, useSubsystem } from '../lib/subsystems';
+import { SUBSYSTEMS, useActiveSubsystemKeys, useSubsystem } from '../lib/subsystems';
 import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot, useSlotItem, type RevealPanelDetail } from '../lib/subsystems/registry';
 import { markGenPanelDismissed } from '../lib/genPanelDismissed';
 import { ContextPanelHost } from '../components/generation/ContextPanelHost';
@@ -576,14 +576,17 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
     const onReveal = (e: Event) => {
       const d = (e as CustomEvent<Partial<RevealPanelDetail>>).detail;
       const key = d?.key as PanelKey | undefined;
-      if (!key || !keyAllowed(key, workspaceKeysFor(isSubsystemEnabled))) return;
+      // Набор один — тот же мемоизированный, что у рельсы (wsAllowedKeys, выше):
+      // обработчик не строит своих копий набора на каждый событие и не может
+      // разойтись с тем, что рельса показывает в этот же момент (R-S2b-2c, п. 3).
+      if (!key || !keyAllowed(key, wsAllowedKeys)) return;
       const host = d?.follow ? followHost(wsOpenKeys.current, key) : null;
-      if (host && keyAllowed(host as PanelKey, workspaceKeysFor(isSubsystemEnabled))) replacePanelKey(key, host as PanelKey);
+      if (host && keyAllowed(host as PanelKey, wsAllowedKeys)) replacePanelKey(key, host as PanelKey);
       else revealPanelKey(key);
     };
     window.addEventListener(REVEAL_PANEL_EVENT, onReveal);
     return () => window.removeEventListener(REVEAL_PANEL_EVENT, onReveal);
-  }, [revealPanelKey, replacePanelKey]);
+  }, [revealPanelKey, replacePanelKey, wsAllowedKeys]);
   // Режим просмотра файла — из ГЛОБАЛЬНОГО предпочтения (одно на все проекты), а не
   // из per-project стора: тумблер в шапке файла пишет предпочтение, точки открытия
   // его читают. См. loadFileFullscreenPref в lib/workspaceState.

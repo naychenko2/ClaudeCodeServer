@@ -62,9 +62,14 @@ describe('workspaceKeysFor: набор рельсы без панелей вык
 });
 
 // Панели без подсистемного гейта: явный allow-list с обоснованием на строке.
-// Сторож полноты ниже (R-S2b-2c): каждый ключ WORKSPACE_KEYS обязан быть заявлен
-// здесь или в PANEL_SUBSYSTEM — новая панель обязана сказать, ведёт ли она в
-// вертикаль. Добавить ключ в WORKSPACE_KEYS без решения — сторож красный.
+// Здесь живёт ЕДИНЫЙ перечень панелей без гейта: комментарий PANEL_SUBSYSTEM в
+// panelCatalog только ссылается на него (R-S2b-2c, п. 2).
+// Сторож полноты ниже (R-S2b-2c) проверяет обе стороны: каждый ключ WORKSPACE_KEYS
+// обязан быть заявлен здесь или в PANEL_SUBSYSTEM — новая панель обязана сказать,
+// ведёт ли она в вертикаль (добавить ключ без решения — сторож красный); и каждая
+// позиция allow-list обязана быть ЖИВЫМ ключом WORKSPACE_KEYS — убрали панель из
+// реестра, её возврат должен получить свежее решение, а не унаследовать старый
+// пропуск (п. 1).
 const PANELS_WITHOUT_GATE: Record<string, string> = {
   // Основные панели воркспейса: показывают содержимое проекта, вертикали за ними нет.
   chats: 'основная панель: вертикали нет',
@@ -90,11 +95,19 @@ const PANELS_WITHOUT_GATE: Record<string, string> = {
   pluginPanels: 'маркер семейства плагинов: свой гейт',
 };
 
-describe('Сторож полноты: каждый ключ WORKSPACE_KEYS заявил своё место', () => {
+describe('Сторож полноты: реестр и allow-list сверены в обе стороны', () => {
   it('каждый ключ — в карте PANEL_SUBSYSTEM или в allow-list', () => {
     for (const k of WORKSPACE_KEYS) {
       const declared = k in PANEL_SUBSYSTEM || k in PANELS_WITHOUT_GATE;
       expect(declared, `ключ ${k}: ни в PANEL_SUBSYSTEM, ни в allow-list`).toBe(true);
+    }
+  });
+
+  it('каждая позиция allow-list — живой ключ WORKSPACE_KEYS', () => {
+    // Мёртвая позиция allow-list — пропуск без свежего решения: при возврате
+    // панели в реестр она получила бы автоматическую амнистию (R-S2b-2c, п. 1).
+    for (const k of Object.keys(PANELS_WITHOUT_GATE)) {
+      expect(WORKSPACE_KEYS, `ключ ${k}: в allow-list, но нет в реестре`).toContain(k);
     }
   });
 

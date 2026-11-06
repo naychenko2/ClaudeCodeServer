@@ -2,14 +2,19 @@
 // Среда vitest — node, DOM нет; рендер статический (renderToStaticMarkup,
 // образец — ToolbarOverflowMenu.test.ts).
 //
-// Мутация этого прогона (вывод — в отчёте задачи): переставить слова в шаблоне
-// заголовка («выключен администратором» → «администратором выключен») →
-// «с title — точный заголовок» краснеет: проверка держится на собранной строке,
-// а не на фрагментах.
+// Тесты 1–2 держат точные продуктовые заголовки: текст константы — контракт,
+// его смена краснит их и требует явного решения продукта.
+// Тест 3 держит ИСТОЧНИК текста: рендер с подменённой SUBSYSTEM_DISABLED_REASON
+// (vi.doMock + повторный импорт, образец — notes.test.ts) — заголовок обязан
+// следовать константе.
+//
+// Мутация этого прогона (вывод — в отчёте задачи): вернуть в SubsystemDisabledState.tsx
+// литерал текста в обход константы → тест 3 краснеет: проверка держится на
+// подмене источника, а не на наличии слов в выводе.
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { SubsystemDisabledState } from '../SubsystemDisabledState';
 
 describe('SubsystemDisabledState (S2b-3b)', () => {
@@ -26,5 +31,15 @@ describe('SubsystemDisabledState (S2b-3b)', () => {
     expect(html).toContain('role="status"');
     expect(html).toContain('data-subsystem-disabled="Заметки"');
     expect(html).toContain('Раздел «Заметки» выключен администратором');
+  });
+
+  it('заголовок собран из SUBSYSTEM_DISABLED_REASON: подмена константы видна в выводе', async () => {
+    // Литерал в компоненте в обход константы сделал бы этот кейс красным:
+    // вывод не последовал бы за подменённым источником.
+    vi.resetModules();
+    vi.doMock('../../lib/subsystems', () => ({ SUBSYSTEM_DISABLED_REASON: 'выключен тестом' }));
+    const { SubsystemDisabledState: InjectedState } = await import('../SubsystemDisabledState');
+    const html = renderToStaticMarkup(createElement(InjectedState, { title: 'Заметки' }));
+    expect(html).toContain('Раздел «Заметки» выключен тестом');
   });
 });

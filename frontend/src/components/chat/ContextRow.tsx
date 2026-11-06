@@ -18,6 +18,7 @@ import type { ChatContextPrimary, ChatContextRef, ContextAction } from '../../li
 import type { TurnTree } from '../../lib/turnWorktree';
 import { useActionMemoryVersion } from '../../lib/chatContext/actionMemory';
 import { revealContextPanel } from '../../lib/subsystems/registryCore';
+import { SUBSYSTEM_DISABLED_REASON } from '../../lib/subsystems';
 import { wsPanels } from '../../pages/workspace/panelStackState';
 import { PublishDialog } from '../PublishDialog';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
@@ -27,8 +28,9 @@ import { ContextSheet } from './ContextSheet';
 // Рамка и отступы строки: измеряем внешний блок, лестница считает от внутренней ширины
 const ROW_BORDER = 2;
 
-// Плашка прикреплённого объекта выключенной (или удалённой) вертикали: текст — и видимый, и title чипа
-const DISABLED_KIND_TEXT = 'Раздел выключен администратором';
+// Плашка прикреплённого объекта выключенной (или удалённой) вертикали: текст — и видимый, и title чипа;
+// причина — из SUBSYSTEM_DISABLED_REASON (единый источник с заглушкой раздела, п. 1a)
+const DISABLED_KIND_TEXT = `Раздел ${SUBSYSTEM_DISABLED_REASON}`;
 
 interface Props {
   session: Session;

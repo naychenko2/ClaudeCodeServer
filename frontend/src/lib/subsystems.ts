@@ -54,6 +54,12 @@ export const SUBSYSTEMS = {
 
 export type SubsystemKey = (typeof SUBSYSTEMS)[keyof typeof SUBSYSTEMS];
 
+// Продуктовая формулировка причины выключения — единый источник пользовательского
+// текста для заглушки раздела (components/SubsystemDisabledState) и строки контекста
+// (components/chat/ContextRow). Текст не менять: согласован с продуктом; точный
+// текст сторожит components/__tests__/SubsystemDisabledState.test.ts (хвост S2b-3b, п. 1a).
+export const SUBSYSTEM_DISABLED_REASON = 'выключен администратором';
+
 let _subsystems: Record<string, boolean> = {};
 // Отсортированный список активных ключей — снимат стабильной ссылки: он отдаётся
 // getSnapshot'ом useActiveSubsystemKeys (новый массив на каждый вызов заставил бы

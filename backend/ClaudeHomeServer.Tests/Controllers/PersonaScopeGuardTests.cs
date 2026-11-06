@@ -171,49 +171,17 @@ public class PersonaScopeGuardTests
 
     // Список долга: «файл + метод действия + шаг, который уберёт» — по таблицам §3.1–§3.2.
     // Ключ — файл+метод, не номер строки. Запись без вызова не краснит: снимает шаг-владелец или W3-B8.
+    // W3-B8 (закрытие сторожа волны): строки сняты шагами волны (W3-B1c/B1d/B2/B3a/B3b/B4b/B5a/
+    // B5b; история снятия каждой строки — в истории файла). Слепые участки паттерна §5 п.2
+    // остаются и решением этого шага не стали: вызовы через _crud.* (правка карточки,
+    // голос, выбор аватара, ValidateAsync/UpdateBindings, путь создания) паттерн не видит; смысл
+    // тех шагов держат строки матриц SharedProjectPersonaRightsTests/SharedProjectPersonaBindingsTests.
     private static readonly (string File, string Method, string Step)[] DebtList =
     [
-        // W3-B2 закрыт (списки и /match — под ключом арендатора, SharedProjectPersonaListTests):
-        // инлайновых вызовов с ключом-вызывающим в List/MatchPersona больше нет, строки сняты.
-        // W3-B1c закрыт (тела read-путей {id}-действий — через GetRequestScope и ключ арендатора,
-        // SharedProjectPersonaRightsTests): инлайновых вызовов с ключом-вызывающим в Get/Avatar*/
-        // AvatarOriginal/AvatarCandidate/Bindings/Automation/Memory*/GetFocus больше нет, строки сняты.
-        // W3-B1d закрыт (тела write-путей {id}-действий — та же ключевая замена,
-        // SharedProjectPersonaRightsTests): инлайновых вызовов с ключом-вызывающим в Add/Set/Update/
-        // Delete/Test/Suggest/Generate-автоматике, Remember/ClearFocus/UpdateMemory/Forget/
-        // ConfirmMemory/MemoryToNote/NoteToMemory больше нет, строки сняты.
-        // W3-B3b закрыт (аватар: загрузка и перекроп — под ключом арендатора, SharedProjectPersonaRightsTests):
-        // инлайновых вызовов с ключом-вызывающим в UploadAvatar/RecropAvatar больше нет, строки сняты.
-        // PUT/голос/generate/select в список долга не вводились: их вызовы идут через _crud.*, которых
-        // паттерн §5 п.2 не видит (тот же слепой участок, что у W3-B3a); смысл шага держат строки
-        // матрицы «правка карточки» и «голос»/«выбор аватара»: вернуть ключ вызывающего в Update,
-        // SetVoice или SelectAvatar — они красные.
-        // W3-B5a закрыт (привязки CRUD — под ключом арендатора и сужением целей NonOwnerBindingEditDenied,
-        // SharedProjectPersonaBindingsTests): инлайновых вызовов с ключом-вызывающим в AddBinding/
-        // UpdateBinding/DeleteBinding больше нет, строки сняты. Их ValidateAsync/UpdateBindings
-        // паттерн §5 п.2 не видит (_bindings./_personas.UpdateBindings вне CallRe) — смысл шага
-        // держат строки матрицы: вернуть ключ вызывающего в любой из трёх — они красные.
-        // W3-B5b закрыт (подбор привязок и каталог целей — под ключом арендатора, сужение
-        // кандидатов тем же NonOwnerBindingEditDenied, SharedProjectPersonaBindingsTests):
-        // инлайновых вызовов с ключом-вызывающим в BindingTargets/SuggestBindings/
-        // GenerateBindings/ApplyDefaultBindings больше нет, строки сняты. Сужение каталога
-        // и кандидатов идёт через _bindings.NonOwnerBindingEditDenied / ResolvePersona —
-        // вне CallRe; смысл шага держат строки «только цели этого проекта» и «подбор/
-        // генерация/типовые»: убрать фильтр в каталоге или сужение в PersonasCrudService —
-        // они красные.
-        // W3-B4b закрыт (руководитель по ключу арендатора, явная personaId через ResolvePersona,
-        // SharedProjectPersonaSessionTests): инлайновых вызовов с ключом-вызывающим в Create больше нет.
-        // W3-B3a закрыт (создание проектной персоны: право по проекту из тела, ключ и OwnerId новой
-        // — арендатор; SharedProjectPersonaRightsTests, строки «создать проектную», «quick-create
-        // проектной», «ai-команда проекта»): строк в список долга не вводилось — эти действия без {id},
-        // а их вызовы идут через _crud.*, которых паттерн §5 п.2 не видит (слепой участок — хвост
-        // ревью W3-B1d). Смысл шага держат строки матрицы: вернуть ключ вызывающего в Create или
-        // AiTeam — они красные. Расширять паттерн на _crud.* (затронуло бы W3-B3b и W3-B5a/b) —
-        // решение не этого шага: владелец сторожа или W3-B8.
-        // W3-B7 — задачи и модели: персона-исполнитель/постановщик (§3.1 «TasksController…», TaskPersonaValidator)
-        ("TasksController.cs", "ProjectTasksController.Create", "W3-B7"),
-        ("TasksController.cs", "TasksController.Update", "W3-B7"),
-        ("TasksController.cs", "TaskPersonaValidator.Error", "W3-B7"),
+        // W3-B8: без этой записи сторож красный — W3-B7 оставил инлайновый вызов с параметром,
+        // названным ключом вызывающего: TasksController.cs:1864 → W3-B7. Код здесь не правится;
+        // доработку заведёт Софья.
+        ("TasksController.cs", "TaskPersonaValidator.Error", "W3-B7 (остаток: TasksController.cs:1864)"),
     ];
 
     // Паттерн §5 п.2: _personas./personas.(Get|GetProjectTeam|GetForContext|GetForContextWithExtras|

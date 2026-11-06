@@ -15,7 +15,7 @@ import { AvatarMenu } from '../features/projects/AvatarMenu';
 import { gateAvatarMenu } from './avatarMenuGates';
 import { UserManagementModal } from './UserManagementModal';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
-import { SubsystemsPage } from '../pages/SubsystemsPage';
+import { ComponentsPage } from '../pages/ComponentsPage';
 import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { McpServersModal } from '../features/mcp/McpServersModal';
@@ -566,9 +566,9 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           // Устройства — агенты локальных проектов
           onShowDevices: devicesMenu ? () => setShowDevices(true) : undefined,
           onShowUserManagement: () => setShowUserMgmt(true),
-          // Админский список подсистем инстанса (Этап 5, волна 3): только
-          // чтение через GET /api/admin/subsystems, без тумблера — глобальный
-          // рубильник через API сознательно отложен (задача 7d261cde).
+          // Панель «Компоненты» (бывш. «Подсистемы»): состав инстанса с тумблером
+          // записи и использованием (шаг 2c «Внутренней оптимизации», S2c-3).
+          // Пункт только для админов; роль проверяется и на ручках.
           onShowSubsystems: isAdmin ? () => setShowSubsystems(true) : undefined,
           hideStatus: isMobile || isTablet,
           // «Знания», «Специальности», «Аналитика токенов» и «Что нового» живут здесь
@@ -598,7 +598,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       </div>
 
       {showUserMgmt && <UserManagementModal currentUserId={auth.id} onClose={() => setShowUserMgmt(false)} />}
-      {showSubsystems && <SubsystemsPage onClose={() => setShowSubsystems(false)} />}
+      {showSubsystems && <ComponentsPage onClose={() => setShowSubsystems(false)} />}
       {showChangePassword && <ChangePasswordDialog onClose={() => setShowChangePassword(false)} />}
       {showFeatureFlags && <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />}
       {showModelsSpend && <ModelsSpendModal onClose={() => setShowModelsSpend(false)} />}

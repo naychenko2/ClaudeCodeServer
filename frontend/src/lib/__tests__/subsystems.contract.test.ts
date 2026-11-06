@@ -6,7 +6,9 @@ import { fileURLToPath } from 'node:url';
 // Контракт формы ответа фронт/бэк для ОБОИХ мест, где фронт читает состав
 // подсистем:
 //   1) `/api/auth/me` → поле `subsystems` (гейт `useSubsystem`);
-//   2) `/api/admin/subsystems` → список для админского экрана «Подсистемы».
+//   2) `/api/admin/subsystems` → список для панели «Компоненты» (бывш. «Подсистемы»);
+//      с S2c-2 список читает хук features/components/useComponentsAdmin.ts —
+//      он и есть потребитель, на нём и держится контракт.
 //
 // Почему сторож на форму вообще существует. Дефект Д-1 отчёта QA пилота
 // «отключаемая подсистема Notes»: бэк отдавал `subsystems` массивом активных
@@ -34,7 +36,7 @@ const subsystemsControllerCs = resolve(backendRoot, 'ClaudeHomeServer/Controller
 const appSubsystemCs = resolve(backendRoot, 'ClaudeHomeServer.Core/Services/Composition/IAppSubsystem.cs');
 const meTypeTs = resolve(here, '../../types/index.ts');
 const subsystemsApiTs = resolve(here, '../../api/subsystems.ts');
-const subsystemsPageTsx = resolve(here, '../../pages/SubsystemsPage.tsx');
+const componentsAdminTs = resolve(here, '../../features/components/useComponentsAdmin.ts');
 
 function readFile(path: string): string {
   return readFileSync(path, 'utf-8');
@@ -176,7 +178,7 @@ function clientRequestTypeArg(src: string): string {
 function pageThenParam(src: string): string {
   const match = src.match(/subsystemsApi\s*\.\s*get\s*\(\s*\)\s*\.then\(\s*([^=]+?)\s*=>/);
   expect(match,
-    'SubsystemsPage.tsx: ожидался `subsystemsApi.get().then(<параметр> => ...)`'
+    'useComponentsAdmin.ts: ожидался `subsystemsApi.get().then(<параметр> => ...)`'
   ).not.toBeNull();
   const raw = (match?.[1] ?? '').trim();
   return raw.startsWith('(') && raw.endsWith(')')
@@ -217,12 +219,12 @@ describe('контракт subsystems фронт/бэк: /api/admin/subsystems',
     ).toMatch(/^(readonly\s+)?\w+\[\]$|^Array<\w+>$/);
   });
 
-  it('SubsystemsPage потребляет ответ как список, без деструктуризации обёртки', () => {
-    const param = pageThenParam(readFile(subsystemsPageTsx));
+  it('потребитель списка читает ответ как список, без деструктуризации обёртки', () => {
+    const param = pageThenParam(readFile(componentsAdminTs));
     expect(param.startsWith('{'),
-      `SubsystemsPage.tsx: .then(${param} => ...) деструктурирует объект-обёртку. ` +
+      `useComponentsAdmin.ts: .then(${param} => ...) деструктурирует объект-обёртку. ` +
       'Бэк отдаёт голый массив — деструктуризация даст undefined, и `.filter` уронит ' +
-      'экран в ErrorBoundary (именно так и был потерян экран «Подсистемы»).'
+      'панель в ErrorBoundary (именно так и был потерян экран «Подсистемы»).'
     ).toBe(false);
   });
 });

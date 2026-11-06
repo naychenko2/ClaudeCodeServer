@@ -498,21 +498,25 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     // ─── Тело 503: отказ называет причину (по образцу тестов плагинов) ──────────────
 
     /// <summary>
-    /// Ключи, починенные в S2a-2 отказом 503 с причиной (шапка <see cref="KnownViolations"/>):
-    /// их контроллеры держат сервисы вертикалей опциональными и на выключенном хосте отвечают 503,
-    /// тело которого называет рубильник, вызвавший отказ. Строки вне списка (ядро, KnownViolations)
+    /// Ключи, починенные отказом 503 с причиной (S2a-2: tts, yandex, video, backgrounds, deploy,
+    /// reader; S2b-1: images, changelog — шапка <see cref="KnownViolations"/>): их контроллеры
+    /// держат сервисы вертикалей опциональными и на выключенном хосте отвечают 503, тело которого
+    /// называет рубильник, вызвавший отказ. Строки вне списка (ядро, KnownViolations)
     /// здесь не меряются: их 503 — не «отказ починенной вертикали».
     /// </summary>
     internal static readonly string[] ReasonBearingKeys =
-        ["tts", "yandex", "video", "backgrounds", "deploy", "reader"];
+        ["tts", "yandex", "video", "backgrounds", "deploy", "reader", "images", "changelog"];
 
     /// <summary>
     /// Строка матрицы меряет код отказа (404/405/503); этот тест мерит его тело: 503 починенной
-    /// вертикали обязан нести «Subsystems:{key}:Enabled=false» — ту же форму, что проверяют тесты
-    /// плагинов (PluginsControllerTests.cs:226, PluginsToolsetTests.cs:162). Инвариант S2a-2
+    /// вертикали обязан нести «Subsystems:{key}:Enabled=false» — ту же форму тела, что у отказа
+    /// плагинов (PluginsController.cs:53); сами тесты плагинов при этом меряют только фразу
+    /// «Подсистема плагинов выключена» (PluginsControllerTests.cs:226, PluginsToolsetTests.cs:162),
+    /// а метку в теле держит этот тест. Инвариант S2a-2
     /// «отказ с настоящей причиной, а не голым кодом» держится сейчас только текстом контроллера
     /// (TtsController.cs:67, YandexController.cs:49, VideoController.cs:45,
-    /// ProjectBackgroundsController.cs:43, DeployController.cs:40, ReaderController.cs:39); здесь
+    /// ProjectBackgroundsController.cs:43, DeployController.cs:40, ReaderController.cs:39,
+    /// ImageGenerationController.cs:29, PersonasController.cs:257, HistoryController.cs:29); здесь
     /// он становится проверяемым. У tts поле reason остаётся not_configured по контракту фронта
     /// (TtsController.cs:15-18) — настоящая причина в error, и её мерит этот тест. Минимум один
     /// 503 на ключ обязателен: без него строка не видела бы отказа вовсе (тот же вакуум, что

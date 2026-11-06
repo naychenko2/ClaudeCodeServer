@@ -16,12 +16,17 @@ interface Props {
 // («Раздел «Заметки» выключен…»), без него — общий. Подсказка — где включить.
 // Действия под подсказкой здесь нет: маршрут в «Компоненты» для не-администратора
 // определяет встраивание (S2b-3c), не этот компонент.
+// Обёртка role="status" + data-subsystem-disabled — как у соседних гейтов
+// (CapabilityGate, DeviceAgentGate): скринридер объявляет смену состояния,
+// тестам встраивания есть за что цепляться.
 export function SubsystemDisabledState({ title }: Props) {
   return (
-    <EmptyState
-      icon={<PowerOff size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
-      title={title ? `Раздел «${title}» выключен администратором` : 'Раздел выключен администратором'}
-      subtitle="Включить его можно в «Компонентах» у администратора"
-    />
+    <div role="status" data-subsystem-disabled={title ?? ''} style={{ height: '100%' }}>
+      <EmptyState
+        icon={<PowerOff size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
+        title={title ? `Раздел «${title}» выключен администратором` : 'Раздел выключен администратором'}
+        subtitle="Включить его можно в «Компонентах» у администратора"
+      />
+    </div>
   );
 }

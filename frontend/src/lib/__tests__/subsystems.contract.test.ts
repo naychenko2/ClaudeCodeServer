@@ -226,3 +226,87 @@ describe('контракт subsystems фронт/бэк: /api/admin/subsystems',
     ).toBe(false);
   });
 });
+
+// ─────────── запись тумблера: PUT /api/admin/subsystems/{key} (S2c) ───────────
+
+// Тело интерфейса Subsystem на фронте.
+function subsystemInterfaceBody(src: string): string {
+  const match = src.match(/export interface Subsystem \{([\s\S]*?)\n\}/);
+  expect(match, 'api/subsystems.ts: ожидался `export interface Subsystem { … }`').not.toBeNull();
+  return match?.[1] ?? '';
+}
+
+// Тело метода put в объекте subsystemsApi — от `put:` до конца объекта.
+function putMemberBody(src: string): string {
+  const match = src.match(/\n\s*put:\s*([\s\S]*?)\n\} as const/);
+  expect(match, 'api/subsystems.ts: ожидался метод `put:` в subsystemsApi').not.toBeNull();
+  return match?.[1] ?? '';
+}
+
+describe('контракт subsystems фронт/бэк: поля использования и запись тумблера', () => {
+  // Панель «Компоненты» показывает использование (lastUsedAt / usedLast24h) и ставит
+  // тумблер только там, где можно отключать (canDisable). Все три поля приходят ВСЕГДА:
+  // record сериализуется целиком, «данных нет» — это null, а не отсутствие поля.
+  // Необязательное поле в типе = «мог не прийти»: строка гадала бы вместо того, чтобы
+  // показать «нет данных». Поэтому проверка требует именно обязательной формы —
+  // `lastUsedAt?: string | null` здесь покраснеет.
+  it('Subsystem на фронте держит canDisable / lastUsedAt / usedLast24h обязательными', () => {
+    const body = subsystemInterfaceBody(readFile(subsystemsApiTs));
+    const required: Array<[string, RegExp]> = [
+      ['canDisable: boolean', /^\s*canDisable:\s*boolean;/m],
+      ['lastUsedAt: string | null', /^\s*lastUsedAt:\s*string \| null;/m],
+      ['usedLast24h: number | null', /^\s*usedLast24h:\s*number \| null;/m],
+    ];
+    for (const [name, decl] of required) {
+      expect(body,
+        `api/subsystems.ts: ожидалось обязательное поле \`${name}\`. ` +
+        'Опциональный вариант (`x?:`) расходится с бэком: SubsystemInfo отдаёт record ' +
+        'целиком, и «данных нет» приходит как null.'
+      ).toMatch(decl);
+    }
+  });
+
+  // Вторая линия обороны — та же тройка на бэке: если поле уйдёт из DTO, фронт
+  // останется с типом, которого сервер больше не отдаёт.
+  it('SubsystemInfo на бэке несёт те же три поля', () => {
+    const src = readFile(appSubsystemCs);
+    expect(src,
+      'IAppSubsystem.cs: SubsystemInfo обязан несть CanDisable, LastUsedAt, UsedLast24h ' +
+      '(панель «Компоненты» читает все три). Смена состава DTO ломает строку панели.'
+    ).toMatch(/record SubsystemInfo\([\s\S]*?bool CanDisable,\s*DateTimeOffset\? LastUsedAt\s*=\s*null,\s*int\? UsedLast24h\s*=\s*null\)/);
+  });
+
+  // Форма записи: ключ — в пути и целиком как сегмент (escape держит ключ одним
+  // сегментом: ключ с `/` или `%` иначе разрезал бы маршрут), тело — одно поле enabled (бэковый SubsystemToggleRequest
+  // трактует отсутствие поля как ошибку клиента, а не как «выключить»), ответ —
+  // ЦЕЛАЯ строка (тип request<Subsystem>, не массив и не обёртка): источник правды
+  // строки — сервер, оптимистичного применения на фронте нет (макет, решение 10).
+  it('subsystemsApi.put: PUT по пути с ключом, тело {enabled}, ответ — целая Subsystem', () => {
+    const put = putMemberBody(readFile(subsystemsApiTs));
+    expect(put,
+      "api/subsystems.ts: ожидался `request<Subsystem>(`/admin/subsystems/${…}`)` — ответ " +
+      'один объект строки. Массив или обёртка (`{ ok: true }`) расходится с Put(): ' +
+      'он возвращает copy всей строки.'
+    ).toMatch(/request<Subsystem>\(\s*`\/admin\/subsystems\/\$\{/);
+    expect(put, 'api/subsystems.ts: ключ обязан быть экранирован (encodeURIComponent) — ключ с `/` или `%` иначе разрезал бы маршрут').toMatch(
+      /encodeURIComponent\(key\)/);
+    expect(put, "api/subsystems.ts: ожидался метод 'PUT'").toMatch(/method:\s*'PUT'/);
+    expect(put,
+      'api/subsystems.ts: ожидалось тело `JSON.stringify({ enabled })`. Другое имя поля ' +
+      'бэк прочтёт как отсутствие поля → 400 enabled_required.'
+    ).toMatch(/body:\s*JSON\.stringify\(\s*\{\s*enabled\s*\}\s*\)/);
+  });
+
+  it('Put() отвечает копией всей строки, а не «ok»-обёрткой, и читает поле Enabled', () => {
+    const src = readFile(subsystemsControllerCs);
+    expect(src,
+      'SubsystemsController.cs: ожидался ответ вида `Ok(current with { … })` — копия всей ' +
+      'строки с записанным Enabled и честным RestartRequired. Обёртка `{ ok = true }` ' +
+      'оставила бы строку панели на старом значении.'
+    ).toMatch(/return\s+Ok\(\s*\w+\s+with\s*\{/);
+    expect(src,
+      'SubsystemsController.cs: тело PUT — record SubsystemToggleRequest(bool? Enabled); ' +
+      'имя поля должно совпадать с телом клиента (см. тест выше).'
+    ).toMatch(/record SubsystemToggleRequest\(bool\? Enabled\)/);
+  });
+});

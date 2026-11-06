@@ -2574,64 +2574,7 @@ export interface UpdateNoteDto {
   content?: string;
 }
 
-// ===== Знания (базы знаний Dify — раздел «Знания») =====
-// База знаний = Dify-датасет. Список классифицируется бэкендом по имени/permission:
-// личные («{user}:…» — заметок/проектов/памяти персон/самостоятельные) и публичные
-// (all_team_members). deletable — можно ли удалить из раздела (самостоятельные/публичные).
-export type KnowledgeVisibility = 'personal' | 'public';
-
-export interface KnowledgeBaseSummary {
-  id: string;
-  title: string;
-  type: string;                 // Заметки | Проект | Память персоны | Самостоятельная | Публичная
-  visibility: KnowledgeVisibility;
-  documentCount: number;
-  createdAt: string | null;
-  deletable: boolean;
-  description?: string | null;
-}
-
-export interface KnowledgeDocument {
-  id: string;
-  name: string;
-  indexingStatus: string;       // completed | indexing | error и т.п. (строка Dify)
-  error?: string | null;        // текст ошибки индексации (только у статуса error)
-}
-
-export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
-  documents: KnowledgeDocument[];
-}
-
-export interface KnowledgeSearchHit {
-  score: number;
-  content: string;
-  documentName: string;
-}
-
-export interface CreateKnowledgeBaseDto {
-  title: string;
-  description?: string;
-  visibility: KnowledgeVisibility;
-}
-
-// Ответ GET /api/knowledge: configured=false — Dify не настроен (фронт показывает empty-state)
-export interface KnowledgeListResponse {
-  configured: boolean;
-  items: KnowledgeBaseSummary[];
-}
-
-// Сегмент (чанк) документа базы знаний — порция текста для просмотра/поиска
-export interface KnowledgeSegment {
-  position: number;
-  content: string;
-  wordCount: number;
-}
-
-// Содержимое документа (GET /api/knowledge/{id}/documents/{docId}) — сегменты по порядку
-export interface KnowledgeDocumentContent {
-  id: string;
-  segments: KnowledgeSegment[];
-}
+export type * from '../features/knowledge/types';
 
 // ===== Персоны (олицетворённые ИИ-собеседники) =====
 
@@ -3229,56 +3172,7 @@ export interface TeamMemberDraft {
   avatarPrompt?: string;
 }
 
-// ===== Уведомления (центр уведомлений) =====
-
-// alert — тревоги телеметрии (SigNoz). Отдельный вид, а не 'info': иначе срочное
-// тонет среди саммари и дайджестов, и отфильтровать его нечем.
-export type NotificationKind = 'reminder' | 'claude' | 'info' | 'success' | 'meeting' | 'alert';
-
-export interface NotificationItem {
-  id: string;
-  kind: NotificationKind;
-  type: string;
-  title: string;
-  body: string;
-  url?: string;
-  projectId?: string;
-  sessionId?: string;
-  taskId?: string;
-  source?: string;
-  tag?: string;
-  // Атрибуция персоны (аватар/лицо на уведомлении) + имя проекта
-  personaId?: string;
-  personaName?: string;
-  personaRole?: string;
-  personaColor?: string;
-  personaHasAvatar?: boolean;
-  projectName?: string;
-  // Закреплённое: тост всплывает при каждом входе и не гаснет сам, пока не прочитано
-  sticky?: boolean;
-  isRead: boolean;
-  createdAt: string;
-  readAt?: string;
-}
-
-export interface NotificationListResponse {
-  items: NotificationItem[];
-  totalCount: number;
-  unreadCount: number;
-}
-
-export interface CreateNotificationRequest {
-  kind: NotificationKind;
-  type: string;
-  title: string;
-  body: string;
-  url?: string;
-  projectId?: string;
-  sessionId?: string;
-  taskId?: string;
-  source?: string;
-  tag?: string;
-}
+export type * from '../features/notifications/types';
 
 // ===== Аналитика расхода токенов (Spend Analytics v2, /api/spend/*) =====
 

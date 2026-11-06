@@ -1,7 +1,7 @@
 // ПОТОЛОК РОСТА (frontend-api-split-2026-11.md): файл только худеет. Лимит строк — в
 // lib/__tests__/apiFileBudget.test.ts; он снижается после каждого выноса домена в
 // features/<домен>/api.ts, поднимать его нельзя. Новые методы — сразу в features/<домен>/.
-import type { Project, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, PermissionRule, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, ApplyDefaultBindingsResult, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, LocalHandsChatStatus, BackgroundResult, ChangedBySession, ExternalPreviewLink, ExternalLinkIssued, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult } from '../types';
+import type { Project, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, PermissionRule, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, ApplyDefaultBindingsResult, LocalHandsChatStatus, BackgroundResult, ChangedBySession, ExternalPreviewLink, ExternalLinkIssued, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult } from '../types';
 import { localModelApi } from '../features/localModel/api';
 import { providerAccountsApi } from '../features/providerAccounts/api';
 import { accountApi } from '../features/account/api';
@@ -21,6 +21,8 @@ import { dossiersApi } from '../features/dossiers/api';
 import { telemetryApi } from '../features/telemetry/api';
 import { skillsApi } from '../features/skills/api';
 import { plansApi } from '../features/plan/api';
+import { imageGenerationApi } from '../features/imageGeneration/api';
+import { mcpApi } from '../features/mcp/api';
 import { cachedToken, readStoredToken, request, writeStoredToken } from './offline';
 import type { FeatureRun } from '../types/featureRun';
 import type { FeaturesIndex, FeaturePage } from '../types/featureIndex';
@@ -432,85 +434,14 @@ export const api = {
 
   ...providerAccountsApi,
 
-  // Генератор картинок инстанса ПО МЕСТАМ (иконка проекта, аватар персоны): у каждого
-  // места свой режим auto|fal|glif и своя модель. Чтение открыто всем (диалоги
-  // подписывают, кто и чем рисует), запись — админам. Патч места: поле не прислали —
-  // оставить, "" — сброс к конфигу; место вне places не трогается.
-  imageGeneration: {
-    get: () => request<ImageGenerationSettings>('/image-generation'),
-    save: (patch: ImageGenerationPatch) =>
-      request<ImageGenerationSettings>('/image-generation', { method: 'PUT', body: JSON.stringify(patch) }),
-    savePlace: (place: string, patch: ImagePlacePatch) =>
-      request<ImageGenerationSettings>('/image-generation',
-        { method: 'PUT', body: JSON.stringify({ places: { [place]: patch } }) }),
-  },
+  // Генератор картинок по местам — в features/imageGeneration/api.ts
+  ...imageGenerationApi,
 
   // Модули, MF-remote подсистем и фича-флаги — в features/modules/api.ts
   ...modulesApi,
 
-  // Личный реестр MCP-серверов владельца (фича mcp-registry). Секретные значения наружу
-  // не выходят: в McpValue у секрета value = null, а в форме пустое значение секрета
-  // означает «оставить как было».
-  mcp: {
-    list: () => request<McpServer[]>('/mcp/servers'),
-    get: (id: string) => request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}`),
-    // Встроенные серверы продукта — только наблюдение статуса, записи в реестре нет
-    builtin: () => request<McpBuiltinServer[]>('/mcp/servers/builtin'),
-    create: (data: McpServerUpsert) =>
-      request<McpServer>('/mcp/servers', { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: string, data: McpServerUpsert) =>
-      request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
-    setEnabled: (id: string, enabled: boolean) =>
-      request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}/enable`, {
-        method: 'POST', body: JSON.stringify({ enabled }),
-      }),
-    delete: (id: string) => request<void>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-    // Разовая проверка «по кнопке»: рукопожатие + tools/list, результат едет и в стор статусов.
-    // Для записи из каталога + stdio + local-владелец передаём confirmed:true — иначе сервер
-    // отвечает отказом (план §6). Запрос без тела оставлен работающим: ручные записи идут без
-    // подтверждения, [FromBody] опциональный
-    probe: (id: string, body?: { confirmed?: boolean }) =>
-      request<McpProbeResult>(`/mcp/servers/${encodeURIComponent(id)}/probe`, {
-        method: 'POST', body: JSON.stringify(body ?? {}),
-      }),
-    // Импорт фрагмента {"mcpServers": {...}} — записи заводятся выключенными
-    import: (fragment: unknown) =>
-      request<{ created: McpServer[]; skipped: { key: string; reason: string }[] }>('/mcp/servers/import', {
-        method: 'POST', body: JSON.stringify(fragment),
-      }),
-    // Поиск по реестру MCP-серверов (волна 1, задача 9fa075ec). Ищет БЭКЕНД: реестр
-    // отдаёт результат страницами, и подходящей записи на первой странице может не
-    // быть вовсе (QA: «filesystem» — 14 записей, ни одной на первой). Поэтому q едет
-    // в запрос, а не фильтрует загруженный массив. cursor — следующая страница из
-    // nextCursor предыдущего ответа; пустой q = витрина каталога.
-    // Каталог не критичный: ошибка сети показывается плашкой, ручной путь «Добавить»
-    // остаётся рабочим
-    catalogSearch: (q: string, cursor?: string | null) => {
-      const params = new URLSearchParams({ q });
-      if (cursor) params.set('cursor', cursor);
-      return request<McpCatalogSearchResult>(`/mcp/catalog/search?${params.toString()}`);
-    },
-    // Батч-ревизия импортированных записей (волна 2): фронт шлёт имена каталожных серверов,
-    // бэк для каждого отдаёт статус в реестре и факт «есть версия новее». Запрос идёт
-    // ОТДЕЛЬНО от основного списка, после отрисовки раздела — реестр в статусе preview
-    // может лежать, а раздел обязан открываться. names: уникальные CatalogRef.name
-    catalogRevisions: (names: string[]) =>
-      request<McpCatalogRevisionResult>('/mcp/catalog/revision', {
-        method: 'POST', body: JSON.stringify({ names }),
-      }),
-    // Диагностика вызовов инструментов — только админ (данные всех владельцев)
-    calls: (failures = 50) => request<McpCallsResponse>(`/mcp/calls?failures=${failures}`),
-    // Вход по OAuth (волна 7): start отдаёт адрес окна провайдера, complete — запасной
-    // путь с кодом, вставленным вручную (сервер принимает только loopback-адрес возврата)
-    oauthStart: (id: string, clientId?: string) =>
-      request<McpOAuthStartResult>(`/mcp/servers/${encodeURIComponent(id)}/oauth/start`, {
-        method: 'POST', body: JSON.stringify(clientId ? { clientId } : {}),
-      }),
-    oauthComplete: (id: string, state: string, code: string) =>
-      request<McpOAuthCompleteResult>(`/mcp/servers/${encodeURIComponent(id)}/oauth/complete`, {
-        method: 'POST', body: JSON.stringify({ state, code }),
-      }),
-  },
+  // Личный реестр MCP-серверов — в features/mcp/api.ts
+  ...mcpApi,
 
   // Устройства владельца и сопряжение — в features/desktop/api.ts
   ...devicesApi,

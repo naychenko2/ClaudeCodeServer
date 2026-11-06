@@ -422,10 +422,37 @@ public class WikiSettingsControllerTests : IDisposable
     [Fact]
     public void POSTРучногоЗапускаБезСлужбыЭто503()
     {
-        // Состав без ночной службы: необязательный параметр ctor → 503 с кодом, а не 500 без тела.
+        // Состав без ночной службы: необязательный параметр ctor → 503 с телом, а не 500 без тела.
+        // Ответ — общей формой проекта { error = … } (TasksController.cs:760), своего кода не заводим.
         var res = Controller().NightlyRun();
 
-        AssertCode(res, 503, "wiki_nightly_service_off");
+        AssertError(res, 503, "Ночной разбор не зарегистрирован в этом составе");
+    }
+
+    // B2b: ручной проход запускает только человек — svc отвергается 403 до службы и до замка.
+    // Мутация (критерий c2): убрать проверку IsServiceToken в NightlyRun — этот тест красный:
+    // при включённой ночи и живом чате svc дошёл бы до TryStartManual и получил 202 с замком.
+    [Fact]
+    public void POST_СервисныйТокен_403_НиЗапускаНиЗамка()
+    {
+        EnableNightly();
+        AddNightlyChat();
+
+        var res = Controller(NightlyService(Immediate()), svc: true).NightlyRun();
+
+        AssertError(res, 403, "Сервисный JWT: ночной разбор запускает только пользовательский токен");
+        // Отказ до TryStartManual: фоновый проход не начат, замок свободного владельца не занят.
+        WikiNightlyService.IsRunning(Root()).Should().BeFalse("отказ до замка: проход не начат");
+    }
+
+    // Отказ по типу токена раньше любого состояния: даже при отсутствующей в составе службе
+    // ответ — 403 по токену, а не 503 (тот же смысл, что у PUT_СервисныйТокенПриВыключенномФлаге).
+    [Fact]
+    public void POST_СервисныйТокенБезСлужбы_403ПоТокену_АНе503()
+    {
+        var res = Controller(svc: true).NightlyRun();
+
+        AssertError(res, 403, "Сервисный JWT: ночной разбор запускает только пользовательский токен");
     }
 
     // ─── построение состояния ───────────────────────────────────────────────────
@@ -509,6 +536,17 @@ public class WikiSettingsControllerTests : IDisposable
         obj.StatusCode.Should().Be(status, because);
         JsonDocument.Parse(JsonSerializer.Serialize(obj.Value)).RootElement
             .GetProperty("code").GetString().Should().Be(code);
+    }
+
+    // Общая форма отказа проекта: { error = … } без своего кода (TasksController.cs:760) —
+    // вызывающий не различает подпричины по коду, только сам отказ.
+    private static void AssertError(IActionResult result, int status, string error, string because = "")
+    {
+        var obj = result.Should().BeAssignableTo<ObjectResult>($"{status} с телом отказа").Which;
+        obj.StatusCode.Should().Be(status, because);
+        var root = JsonDocument.Parse(JsonSerializer.Serialize(obj.Value)).RootElement;
+        root.GetProperty("error").GetString().Should().Be(error);
+        root.TryGetProperty("code", out _).Should().BeFalse("своего кода в этой форме нет");
     }
 
     private sealed class FlagGate : IFeatureFlagGate

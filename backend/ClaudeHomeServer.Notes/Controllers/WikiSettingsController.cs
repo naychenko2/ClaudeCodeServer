@@ -85,7 +85,7 @@ public class WikiSettingsController : ControllerBase
     private const string CodeNightlyDisabled = "wiki_nightly_disabled";
     private const string CodeNightlyRunning = "wiki_nightly_running";
     private const string CodeSettingsInvalid = "wiki_settings_invalid";
-    private const string CodeNightlyServiceOff = "wiki_nightly_service_off";
+    // 503 «службы нет» — без своего кода: общая форма проекта { error = … } (TasksController.cs:760).
 
     /// <summary>GET /api/wiki/settings — настройки своей вики с замером доли откатов по классам
     /// и источникам за 7 и 30 дней (мера 8). Побочный эффект — оценка здоровья: она же
@@ -232,15 +232,20 @@ public class WikiSettingsController : ControllerBase
     /// её состояние видно по nightlyRunning в GET). 409 — по причине отказа: функция выключена
     /// (wiki_llm_wiki_off), ночь выключена (wiki_nightly_disabled), этот владелец уже проходит
     /// (wiki_nightly_running — тот же замок, что у тика), настройки нечитаемы
-    /// (wiki_settings_invalid). 503 — службы нет в этом составе. Никакой записи настроек
-    /// действие не делает.</summary>
+    /// (wiki_settings_invalid). 403 — сервисный токен (B2b: проход запускает только пользовательский
+    /// токен, отказ раньше любого состояния). 503 — службы нет в этом составе: ответ общей формой
+    /// проекта { error = … }, своего кода не заводим. Никакой записи настроек действие не делает.</summary>
     [HttpPost("nightly/run")]
     public ActionResult NightlyRun()
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
+        // B2b: ручной запуск — действие человека, как PUT настроек: отказ по типу токена раньше
+        // любого состояния (службы, флага, тумблера) — по ответу нельзя узнать, что из них есть.
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Сервисный JWT: ночной разбор запускает только пользовательский токен" });
         if (_nightly is null)
-            return StatusCode(503, new { code = CodeNightlyServiceOff, message = "ночной разбор не зарегистрирован в этом составе" });
+            return StatusCode(503, new { error = "Ночной разбор не зарегистрирован в этом составе" });
         return _nightly.TryStartManual(userId) switch
         {
             WikiNightlyService.ManualStart.Started => Accepted(new { started = true }),

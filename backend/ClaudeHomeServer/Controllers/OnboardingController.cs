@@ -28,8 +28,12 @@ namespace ClaudeHomeServer.Controllers;
 public class OnboardingController(SessionManager sessions, UserStore users,
     ProjectManager projects, PersonaManager personas,
     PersonaDraftService drafts, ICheapTextRunner cheap, IConfiguration config,
-    Services.Images.ImageGenerationService imageGen, Services.Images.ImageBackfillService imageBackfill,
-    IHubContext<SessionHub> hub, ILogger<OnboardingController> log)
+    IHubContext<SessionHub> hub, ILogger<OnboardingController> log,
+    // `= null` — обязательность для DI (S2b-1, ADR-014): на выключенной вертикали images
+    // активация контроллера не должна падать. Автогенерация аватара онбординга — best-effort:
+    // без сервисов вертикали персона остаётся с инициалами (тот же путь, что PersonasCrudService)
+    Services.Images.ImageGenerationService? imageGen = null,
+    Services.Images.ImageBackfillService? imageBackfill = null)
     : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -338,6 +342,11 @@ public class OnboardingController(SessionManager sessions, UserStore users,
             ? BuildAvatarPrompt(persona)
             : $"Photorealistic portrait photo. {avatarPrompt.Trim()}";
 
+        // Вертикаль генерации выключена (её сервисов нет в контейнере): персона остаётся
+        // с инициалами, а догонять аватар нечем — очередь принадлежит той же вертикали
+        // (тот же ранний выход, что PersonasCrudService.TryAutoGenerateAvatarAsync)
+        if (imageGen is null || imageBackfill is null) return persona;
+
         if (!imageGen.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar)) return EnqueueAvatarBackfill(persona, prompt);
         try
         {
@@ -357,6 +366,8 @@ public class OnboardingController(SessionManager sessions, UserStore users,
 
     private Persona EnqueueAvatarBackfill(Persona persona, string prompt)
     {
+        // Очереди догона нет вместе с выключенной вертикалью images — просить догон нечего
+        if (imageBackfill is null) return persona;
         imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar,
             persona.Id, string.IsNullOrEmpty(persona.OwnerId) ? UserId : persona.OwnerId, prompt);
         return persona;

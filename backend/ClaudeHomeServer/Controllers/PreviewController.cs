@@ -12,10 +12,13 @@ namespace ClaudeHomeServer.Controllers;
 /// Раздел «Сервисы проекта» на сервере. Сами маршруты живут в вертикали
 /// (<see cref="ProjectServicesApi"/>): их же обслуживает агент устройства для локального
 /// проекта (ADR-016, задача 4.3). Здесь — вход: владелец проекта и отказ G1 атрибутом.
+/// Привязан к ключу вертикали (S2b-1): это её ручка, обращения к ней — использование
+/// project-services (учёт S1b; сама вертикаль — строка ядра матрицы, не отключается).
 /// </summary>
 [ProjectCapability(ProjectCapabilityArea.FileBound)]
 [ApiController]
 [Authorize]
+[SubsystemUsage("project-services")]
 public class PreviewController : ControllerBase
 {
     private readonly ProjectManager _projects;

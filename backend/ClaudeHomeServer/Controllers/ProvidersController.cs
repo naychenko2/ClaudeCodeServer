@@ -1,12 +1,15 @@
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Llm;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ClaudeHomeServer.Controllers;
 
+// Балансы CLI-провайдеров — часть вертикали LLM: привязана к ключу S2b-1 (учёт и матрица).
 [ApiController]
 [Authorize]
 [Route("api/providers")]
+[SubsystemUsage("llm")]
 public class ProvidersController(IProviderBalanceService balance) : ControllerBase
 {
     private bool IsAdmin => User.IsInRole("admin");

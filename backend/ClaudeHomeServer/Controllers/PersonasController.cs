@@ -36,7 +36,6 @@ public class PersonasController(
     PersonaBindingsService bindings,
     SkillsService skills,
     KnowledgeService knowledge,
-    Services.Images.ImageGenerationService images,
     Services.Llm.OneShotClaudeRunner oneShot,
     Services.Llm.ICheapTextRunner cheap,
     PersonaPromptBuilder promptBuilder,
@@ -48,6 +47,10 @@ public class PersonasController(
     IConfiguration config,
     ILogger<PersonasController> log,
     IHubContext<SessionHub> hub,
+    // `= null` — обязательность для DI (S2b-1, ADR-014): на выключенной вертикали images
+    // активация контроллера не должна падать — аватарные ручки отвечают гейтом (503/catch),
+    // остальные эндпоинты персон живут без неё
+    Services.Images.ImageGenerationService? images = null,
     INoteAccessor? notes = null) : ControllerBase
 {
     private readonly PersonaManager _personas = personas;
@@ -58,7 +61,7 @@ public class PersonasController(
     private readonly INoteAccessor? _notes = notes;
     private readonly SkillsService _skills = skills;
     private readonly KnowledgeService _knowledge = knowledge;
-    private readonly Services.Images.ImageGenerationService _images = images;
+    private readonly Services.Images.ImageGenerationService? _images = images;
     private readonly Services.Llm.OneShotClaudeRunner _oneShot = oneShot;
     private readonly Services.Llm.ICheapTextRunner _cheap = cheap;
     private readonly PersonaPromptBuilder _promptBuilder = promptBuilder;
@@ -243,9 +246,16 @@ public class PersonasController(
 
     // Доступна ли AI-генерация аватара и чем именно её сделают (провайдер + модель).
     // Поле generate НЕ переименовывать: на него завязаны формы персоны на фронте.
+    // Атрибут на методе (S2b-1): это эндпоинт вертикали images в смешанной ручке персон —
+    // на выключенной вертикали отвечает 503 (фронт читает его как «генерации нет», .catch).
     [HttpGet("avatar/caps")]
+    [SubsystemUsage("images")]
     public ActionResult Caps()
     {
+        if (_images is null) return StatusCode(503, new
+        {
+            error = "Подсистема генерации изображений выключена (Subsystems:images:Enabled=false)",
+        });
         var provider = _images.ActiveProviderFor(Services.Images.ImagePlaces.PersonaAvatar);
         return Ok(new
         {
@@ -261,7 +271,10 @@ public class PersonasController(
     // и модель выбирает роутер по настройке инстанса. Кандидаты сохраняются во временную
     // папку, аватар персоны НЕ меняется до выбора.
     // prompt пуст → строим фото-промпт из имени/описания персоны.
+    // Атрибут на методе (S2b-1): генерация аватара — обращение к вертикали images
+    // (отказ выключенной вертикали держит PersonasCrudService, закрыто в S2a-2).
     [HttpPost("{id}/avatar/generate")]
+    [SubsystemUsage("images")]
     public Task<ActionResult> GenerateAvatar(string id, [FromBody] GenerateAvatarRequest req) =>
         _crud.GenerateAvatarAsync(UserId, id, req);
 

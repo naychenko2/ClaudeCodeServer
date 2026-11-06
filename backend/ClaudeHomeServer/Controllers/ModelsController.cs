@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Tasks;
 using Microsoft.AspNetCore.Authorization;
@@ -9,9 +10,11 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace ClaudeHomeServer.Controllers;
 
+// Каталог моделей и их назначение — часть вертикали LLM: привязана к ключу S2b-1 (учёт и матрица).
 [ApiController]
 [Authorize]
 [Route("api/models")]
+[SubsystemUsage("llm")]
 public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry providers,
     ModelAssignmentResolver assignments, PersonaManager personas,
     SpecialtySettingsStore specialty, UserStore users,

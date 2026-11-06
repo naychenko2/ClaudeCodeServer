@@ -16,7 +16,12 @@ namespace ClaudeHomeServer.Services;
 // оригинал уже меньше ступени, отдаётся он (браузер сам растянет). При отказе
 // (Busy/Unsupported/TooLarge — напр. SVG-аватар, который Skia не декодирует) вызывающий
 // отдаёт оригинал: аватар не теряется, миниатюра попробуется повторным запросом.
-public sealed class PersonaAvatarThumbService(IImageRaster raster, ILogger<PersonaAvatarThumbService> log)
+public sealed class PersonaAvatarThumbService(
+    ILogger<PersonaAvatarThumbService> log,
+    // `= null` — растр-шов регистрирует вертикаль images (Images/Services/ImagesSubsystem.cs:42,
+    // SkiaImageRaster): на выключенной вертикали растра нет и сервис деградирует к «миниатюры
+    // нет» — вызывающий отдаёт оригинал (тот же контракт, что «растр не смог», ADR-014, S2b-1)
+    IImageRaster? raster = null)
 {
     // Путь к существующей или только что сгенерированной миниатюре; null — миниатюра не
     // нужна/не получилась (вызывающий отдаёт оригинал).
@@ -24,6 +29,8 @@ public sealed class PersonaAvatarThumbService(IImageRaster raster, ILogger<Perso
     {
         var name = ImageAssetHelper.AvatarThumbName(persona.Avatar.ImageFile, step);
         if (name is null) return null;
+        // Растра нет (вертикаль images выключена): миниатюры нет, оригинал остаётся
+        if (raster is null) return null;
         var dir = Path.GetDirectoryName(originalPath)!;
         var path = SafePath.Join(dir, name);
         if (File.Exists(path)) return path;

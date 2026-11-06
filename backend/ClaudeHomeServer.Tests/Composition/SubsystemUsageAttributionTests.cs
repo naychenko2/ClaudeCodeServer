@@ -146,6 +146,20 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
         HitsOf(StoreOf(_factory), "tasks").Should().Be(before + 1);
     }
 
+    // Ручки llm (Usage/Providers/Models) привязаны атрибутом в S2b-1: обращение к расходу —
+    // использование вертикали (тот же путь KeyOf, что у tasks выше)
+    [Fact]
+    public async Task РучкаLlmСПривязкой_СчитаетсяКлючуLlm()
+    {
+        using var client = _factory.CreateAuthenticatedClient();
+        var before = HitsOf(StoreOf(_factory), "llm");
+
+        var resp = await client.GetAsync("/api/usage");
+        resp.StatusCode.Should().NotBe(HttpStatusCode.Unauthorized);
+
+        HitsOf(StoreOf(_factory), "llm").Should().Be(before + 1);
+    }
+
     [Fact]
     public async Task McpТулсетMain_СПривязкой_СчитаетсяПодсистеме()
     {

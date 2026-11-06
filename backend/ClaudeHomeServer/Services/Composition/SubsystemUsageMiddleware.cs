@@ -7,7 +7,11 @@ namespace ClaudeHomeServer.Services.Composition;
 // Явная привязка обработчика (контроллера или тулсета) к ключу подсистемы (шаг S1b).
 // Вертикальные контроллеры и тулсеты живут в сборке Main, поэтому по сборке их не отнести;
 // обработчик без атрибута (и не из сборки вертикали) — ядро и не считается никогда.
-[AttributeUsage(AttributeTargets.Class)]
+// Атрибут на методе (S2b-1) — для смешанных ручек: часть эндпоинтов ядро, часть — вертикаль
+// (PersonasController: аватарные эндпоинты → images, остальное — ядро). Методовой атрибут
+// приоритетнее классового; на классе смешанной ручки его ставить нельзя — он приписал бы
+// вертикали все её эндпоинты.
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Method)]
 public sealed class SubsystemUsageAttribute(string key) : Attribute
 {
     public string Key { get; } = key;
@@ -41,11 +45,19 @@ public sealed class SubsystemUsageAttribution
             _observable.Add(key);
         }
 
-        // Контроллеры ядра-сборки с явной привязкой: их ключи тоже наблюдаемы
+        // Контроллеры ядра-сборки с явной привязкой: их ключи тоже наблюдаемы.
+        // Методовые атрибуты смешанных ручек (S2b-1) — тот же набор наблюдаемых:
+        // обращение к аватарной ручке персо — это обращение к вертикали images.
         foreach (var type in typeof(SubsystemUsageAttribution).Assembly.GetTypes())
+        {
             if (type.GetCustomAttribute<SubsystemUsageAttribute>(inherit: false)?.Key is { } k
                 && _activeKeys.Contains(k))
                 _observable.Add(k);
+            foreach (var m in type.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                if (m.GetCustomAttribute<SubsystemUsageAttribute>()?.Key is { } mk
+                    && _activeKeys.Contains(mk))
+                    _observable.Add(mk);
+        }
 
         foreach (var t in toolsets)
         {
@@ -75,6 +87,16 @@ public sealed class SubsystemUsageAttribution
             if (matches && prefix.Length > bestLen) { best = key; bestLen = prefix.Length; }
         }
         return best;
+    }
+
+    // Ключ по ЭНДПОИНТУ: методовой атрибут приоритетнее классового (смешанная ручка
+    // относится к вертикали ровно своими вертикальными эндпоинтами), дальше — обычный
+    // путь KeyOf (классовый атрибут или карта «сборка → ключ»).
+    public string? KeyOfAction(ControllerActionDescriptor action)
+    {
+        var methodKey = action.MethodInfo.GetCustomAttribute<SubsystemUsageAttribute>()?.Key;
+        if (methodKey is not null) return _activeKeys.Contains(methodKey) ? methodKey : null;
+        return KeyOf(action.ControllerTypeInfo);
     }
 
     public string? KeyOfMcp(string name) => _mcpKeys.GetValueOrDefault(name);
@@ -114,7 +136,7 @@ public sealed class SubsystemUsageMiddleware(
         }
 
         var action = ctx.GetEndpoint()?.Metadata.GetMetadata<ControllerActionDescriptor>();
-        return action is null ? null : attribution.KeyOf(action.ControllerTypeInfo);
+        return action is null ? null : attribution.KeyOfAction(action);
     }
 }
 

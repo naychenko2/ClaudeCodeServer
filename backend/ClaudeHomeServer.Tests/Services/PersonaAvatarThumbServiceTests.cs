@@ -55,8 +55,8 @@ public class PersonaAvatarThumbServiceTests
             persona.Avatar.Kind = PersonaAvatarKind.Image;
             persona.Avatar.ImageFile = originalName;
 
-            var service = new PersonaAvatarThumbService(new DelayingRaster(new SkiaImageRaster(), 200),
-                NullLogger<PersonaAvatarThumbService>.Instance);
+            var service = new PersonaAvatarThumbService(
+                NullLogger<PersonaAvatarThumbService>.Instance, new DelayingRaster(new SkiaImageRaster(), 200));
 
             // Два параллельных вызова одной ступени: задержка в Apply гарантирует, что оба
             // проходят File.Exists до создания файла и оба генерируют

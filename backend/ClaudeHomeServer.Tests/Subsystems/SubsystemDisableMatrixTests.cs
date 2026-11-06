@@ -40,18 +40,18 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 /// прогон S2a-2 дал ровно это на api/video/channels и api/video/feed).
 ///
 /// Граница, которую надо знать, читая красный/зелёный: обработчик без атрибута и не из сборки
-/// своей вертикали — ядро, и строка матрицы его не мерит. Из отключаемых ключей так сейчас
-/// стоят <c>project-icons</c> (его сервис вызывает неатрибутованный ProjectsController — нарушение
-/// видно только пунктом 4), <c>changelog</c> и <c>project-services</c> (их ручки не атрибутированы)
-/// и <c>llm</c> (его услуги вызывают неатрибутованные Main-контроллеры UsageController.cs:12
-/// (UsageService), ProvidersController.cs:10 (IProviderBalanceService), ModelsController.cs:15
-/// (LlmProviderRegistry) — все они резолвят сервисы гейтнутой сборки ClaudeHomeServer.Llm,
-/// LlmSubsystem.cs:93-95). Пустого состава её маршрутов после починки контроллеров нет: ядро
-/// сессий требует сервисы этой сборки обязательными (SessionManager.cs:739-743 —
-/// ILlmSessionAdapterFactory, UsageService, LlmProviderRegistry), поэтому строка <c>llm</c>
-/// переживает S2a-2 и решается не опционализацией ручек, а ядром/CanDisable в S2b-1 (там же —
-/// явная привязка <c>[SubsystemUsage("llm")]</c>).
-/// Это не «матрица молчит»: это finding S2a-1, и его закрывает S2b-1.
+/// своей вертикали — ядро, и строка матрицы его не мерит. Finding S2a-1 («строка вакуумно
+/// зелёная»: у отключаемого ключа нет ни одной меряемой ручки) закрыт S2b-1 (сдача 2):
+/// <c>llm</c> привязан своими Main-ручками ([SubsystemUsage("llm")]: UsageController,
+/// ProvidersController, ModelsController), <c>changelog</c> — своей ручкой HistoryController
+/// (с гейтом 503: при выключенном changelog эти эндпоинты раньше давали 500),
+/// <c>project-services</c> — своим входом PreviewController (сама вертикаль — строка ядра),
+/// <c>images</c> починена (опциональная зависимость + 503; аватарные ручки PersonasController
+/// привязаны атрибутом на МЕТОДЕ — на классе его ставить нельзя: остальные эндпоинты персон
+/// — ядро). <c>project-icons</c> остаётся без ручки: единственный её потребитель — ядро
+/// ProjectsController (ProjectsController.cs:25), и вертикаль объявлена ядром (CanDisable=false):
+/// мерять «отказ выключенной» нечего. Повторить вакуумную зелёность не даёт сторож полноты
+/// <see cref="Сторож_полноты_у_каждого_отключаемого_ключа_есть_привязанная_ручка"/>.
 ///
 /// ═══ Строки ядра и CanDisable (S2b-1) ═══
 ///
@@ -134,7 +134,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// обязательными параметрами (цепочки в самих строках); опционализация этих швов — отдельное
     /// решение, не этого шага. Строка <c>llm</c> намеренно БЕЗ метки: по решению постановщика
     /// вертикаль остаётся отключаемой, `CanDisable=false` — только по явному решению Александра/Андрея.
-    /// <c>images</c> чинится в сдаче 2 S2b-1 (привязка ручек + отказ 503) и снимается из перечня.
+    /// Строка <c>images</c> закрыта и снята из перечня в сдаче 2 S2b-1 (привязка ручек + отказ 503).
     /// </summary>
     internal static readonly Dictionary<string, string> KnownViolations = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -166,14 +166,6 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             + "(backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) требуют PersonaMemoryService "
             + "обязательным параметром. Первый запрос к хосту не отвечен. CanDisable или опционализацию "
             + "этого шва решает S2b-1.",
-        ["images"] = "маршруты вертикали дают 500: ImageGenerationController "
-            + "(backend/ClaudeHomeServer/Controllers/ImageGenerationController.cs:20) требует ImageGenerationService "
-            + "обязательным параметром → GET и PUT /api/image-generation. Тот же профиль у OnboardingController "
-            + "(backend/ClaudeHomeServer/Controllers/OnboardingController.cs:31) и PersonasController "
-            + "(backend/ClaudeHomeServer/Controllers/PersonasController.cs:39) — генерация аватара и очередь догона. "
-            + "Все три ручки не атрибутированы: их привязка и починка — S2b-1 (решение постановщика по "
-            + "S2a-2). Сервис-потребитель PersonasCrudService закрыт в S2a-2 (PersonasCrudService.cs:549, "
-            + ":640) — он хост не роняет.",
         ["project-icons"] = "ядро/сквозная: хост стартует и ключ виден выключенным, но соседняя ручка мертва: "
             + "ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) требует "
             + "ProjectIconGlyphService обязательным параметром → GET /api/projects 500. Единственная строка, "
@@ -343,6 +335,32 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
         }
     }
 
+    /// <summary>
+    /// Сторож полноты (S2b-1): у каждого ОТКЛЮЧАЕМОГО ключа (canDisable=true) строка обязана
+    /// мерять хотя бы одну привязанную ручку — маршрут (явный <c>[SubsystemUsage]</c>, на классе
+    /// или на методе, либо карта «сборка → ключ») или MCP-тулсет. Строка без меряемой ручки
+    /// «вакуумно зелёна»: тест строки проверяет старт, снапшот и соседей, но не саму
+    /// вертикаль — ровно так в S2a-1 нашли llm/changelog/project-services. Строки ядра
+    /// (canDisable=false) не проверяются: они пропускаются тестом строки намеренно.
+    /// </summary>
+    [Fact]
+    public async Task Сторож_полноты_у_каждого_отключаемого_ключа_есть_привязанная_ручка()
+    {
+        var rows = await SnapshotRowsAsync(Enabled);
+        var empty = new List<string>();
+
+        foreach (var key in MatrixKeys)
+        {
+            if (!RowOf(rows, key).GetProperty("canDisable").GetBoolean()) continue;
+            if (RoutesOf(key).Count == 0 && McpNamesOf(key).Count == 0) empty.Add(key);
+        }
+
+        empty.Should().BeEmpty(
+            "отключаемый ключ без единой привязанной ручки даёт вакуумно зелёную строку: "
+            + "её маршруты не меряются ничем. Привяжи ручку [SubsystemUsage] (классу или, "
+            + "для смешанной ручки, методу) или тулсет — или объявляй вертикаль ядром");
+    }
+
     // ─── Строка матрицы ────────────────────────────────────────────────────────────
 
     public static IEnumerable<object[]> MatrixRows => MatrixKeys.Select(k => new object[] { k });
@@ -454,8 +472,9 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
 
     /// <summary>
     /// Маршруты вертикали с ВКЛЮЧЁННОГО хоста: каждый эндпоинт с контрольным действием, чей
-    /// контроллер относится к этому ключу — по явной <c>[SubsystemUsage(key)]</c> или по карте
-    /// «сборка → ключ» для контроллеров в сборке самой вертикали. Параметры подставлены
+    /// контроллер относится к этому ключу — по явной <c>[SubsystemUsage(key)]</c> (на классе или,
+    /// для смешанных ручек, на методе — <see cref="SubsystemUsageAttribution.KeyOfAction"/>) или по
+    /// карте «сборка → ключ» для контроллеров в сборке самой вертикали. Параметры подставлены
     /// фиктивными значениями по inline-конверсии маршрута, чтобы отказ дал именно гейт, а не
     /// несовпадение шаблона (пустой/неподходящий параметр дал бы 404 «по неверной причине»).
     /// </summary>
@@ -475,7 +494,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             var action = route.Metadata.GetMetadata<ControllerActionDescriptor>();
             // Действия вне контроллеров (SignalR-хабы, раздача статики, SPA-фолбэк) неатрибутируемы.
             if (action is null) continue;
-            if (!string.Equals(attribution.KeyOf(action.ControllerTypeInfo), key, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!string.Equals(attribution.KeyOfAction(action), key, StringComparison.OrdinalIgnoreCase)) continue;
 
             var url = WithQueryParams(FillParams(rawText), action);
             var body = BodyFor(action);

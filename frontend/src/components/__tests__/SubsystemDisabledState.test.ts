@@ -5,8 +5,8 @@
 // Тесты 1–2 держат точные продуктовые заголовки: текст константы — контракт,
 // его смена краснит их и требует явного решения продукта.
 // Тест 3 держит ИСТОЧНИК текста: рендер с подменённой SUBSYSTEM_DISABLED_REASON
-// (vi.doMock + повторный импорт, образец — notes.test.ts) — заголовок обязан
-// следовать константе.
+// (vi.doMock + повторный импорт, образец — notes.test.ts) — обе формы заголовка,
+// с именем раздела и общая, обязаны следовать константе.
 //
 // Мутация этого прогона (вывод — в отчёте задачи): вернуть в SubsystemDisabledState.tsx
 // литерал текста в обход константы → тест 3 краснеет: проверка держится на
@@ -41,5 +41,9 @@ describe('SubsystemDisabledState (S2b-3b)', () => {
     const { SubsystemDisabledState: InjectedState } = await import('../SubsystemDisabledState');
     const html = renderToStaticMarkup(createElement(InjectedState, { title: 'Заметки' }));
     expect(html).toContain('Раздел «Заметки» выключен тестом');
+    // Общая форма (без title) — та же подмена: захардкожить её в обход константы
+    // краснит эту строку, кейсы 1–2 остаются зелёными (их тексты не тронуты).
+    const htmlCommon = renderToStaticMarkup(createElement(InjectedState));
+    expect(htmlCommon).toContain('Раздел выключен тестом');
   });
 });

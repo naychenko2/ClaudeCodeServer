@@ -28,8 +28,6 @@ public sealed class PersonasCrudService(
     PersonaMemoryService memory,
     PersonaBindingsService bindings,
     SkillsService skills,
-    Services.Images.ImageGenerationService images,
-    Services.Images.ImageBackfillService imageBackfill,
     Services.Llm.OneShotClaudeRunner oneShot,
     Services.Llm.ICheapTextRunner cheap,
     SpecialtyTemplatesService specialtyTemplates,
@@ -38,7 +36,13 @@ public sealed class PersonasCrudService(
     ILogger<PersonasCrudService> log,
     ISessionBroadcaster broadcaster,
     INoteAccessor? notes = null,
-    Services.Spheres.ISphereDirectory? spheres = null)
+    Services.Spheres.ISphereDirectory? spheres = null,
+    // `= null` — при Subsystems:images:Enabled=false генерация и её очередь догона в контейнер
+    // не попадают; без значения по умолчанию резолв сервиса падал, не поднимая весь хост (S2a-2,
+    // ADR-014). Явный вызов генерации отвечает отказом с причиной, автогенерация аватара —
+    // best-effort путь: персона остаётся с инициалами
+    Services.Images.ImageGenerationService? images = null,
+    Services.Images.ImageBackfillService? imageBackfill = null)
 {
     // Провайдеров генерации несколько (fal.ai, glif) — про конкретный ключ конфига не пишем
     private const string ImageGenerationOffError =
@@ -540,6 +544,15 @@ public sealed class PersonasCrudService(
         var canBackfill = persona.Avatar.Kind != PersonaAvatarKind.Image
             || string.IsNullOrEmpty(persona.Avatar.ImageFile);
 
+        // Вертикаль генерации выключена: ни генерировать, ни ставить в очередь нечем — их
+        // сервисов нет в контейнере. Отказ с настоящей причиной, а не «провайдер не подключён»
+        if (images is null || imageBackfill is null)
+            return BadRequest(new
+            {
+                error = "Подсистема генерации изображений выключена (Subsystems:images:Enabled=false)",
+                queued = false,
+            });
+
         // Провайдера нет — отвечаем отказом, но аватар не теряем: заявка догонит его,
         // как только генерацию настроят
         if (!images.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar))
@@ -620,7 +633,10 @@ public sealed class PersonasCrudService(
             ? BuildAvatarPrompt(persona)
             : $"Photorealistic portrait photo. {avatarPrompt.Trim()}";
 
-        if (!images.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar)) return EnqueueAvatarBackfill(userId, persona, prompt);
+        // Вертикаль генерации выключена (её сервисов нет) или провайдера нет: персона остаётся
+        // с инициалами, а догонять аватар нечем — очередь принадлежит той же вертикали
+        if (images is null || !images.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar))
+            return EnqueueAvatarBackfill(userId, persona, prompt);
         try
         {
             var generated = await images.GenerateManyAsync(Services.Images.ImagePlaces.PersonaAvatar, prompt, 1);
@@ -639,6 +655,9 @@ public sealed class PersonasCrudService(
 
     private Persona EnqueueAvatarBackfill(string userId, Persona persona, string prompt)
     {
+        // Очереди догона нет вместе с выключенной вертикалью images — просить догон нечего
+        if (imageBackfill is null) return persona;
+
         imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar,
             persona.Id, string.IsNullOrEmpty(persona.OwnerId) ? userId : persona.OwnerId, prompt);
         return persona;

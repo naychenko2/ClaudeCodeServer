@@ -26,17 +26,34 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/admin/deploy")]
 [Authorize(Roles = "admin")]
 [SubsystemUsage("deploy")]
-public class TrayDeployController(DeployLauncher deploy, ILogger<TrayDeployController> log) : ControllerBase
+public class TrayDeployController(
+    ILogger<TrayDeployController> log,
+    // `= null` — при Subsystems:deploy:Enabled=false раннера вертикали в контейнере нет, и без
+    // значения по умолчанию активация контроллера давала 500 (S2a-2, ADR-014)
+    DeployLauncher? deploy = null) : ControllerBase
 {
+    // Гейт выключенной ПОДСИСТЕМЫ — другое состояние, чем выключенная конфигом фича: раннера
+    // нет, отвечать нечем (ADR-014)
+    private IActionResult DeployDisabled() => StatusCode(503, new
+    {
+        reason = "deploy_disabled",
+        error = "Подсистема выкатки выключена (Subsystems:deploy:Enabled=false)",
+    });
+
     /// <summary>
-    /// Состояние выкатки. Отвечает 200 ВСЕГДА, даже когда фича выключена: этот эндпоинт зовёт
-    /// шапка при каждом монтировании, чтобы решить, рисовать ли пункт меню, и 404 в ответ
-    /// шумел бы ошибкой в консоли у каждого админа, у кого фича не включена.
+    /// Состояние выкатки. Отвечает 200, когда фича выключена конфигом (TrayDeployOptions): этот
+    /// эндпоинт зовёт шапка при каждом монтировании (HubHeader.tsx:215), чтобы решить, рисовать ли
+    /// пункт меню, и 404 шумел бы ошибкой в консоли у каждого админа, у кого фича не включена.
+    /// Выключенная ПОДСИСТЕМА — другое состояние: раннера вертикали нет в контейнере, и ответ —
+    /// 503 с причиной (S2a-2, ADR-014). Фронт от этого просто не рисует пункт (там же, .catch),
+    /// но сам опрос пока делает: сокрыть его по снапшоту подсистем — работа фронта, не эта строка.
     /// </summary>
     [HttpGet("status")]
     [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
     public IActionResult GetStatus()
     {
+        if (deploy is null) return DeployDisabled();
+
         // Запрет кэширования тут не формальность, а лечение конкретного дефекта. Ответ не нёс
         // никаких заголовков кэширования, и браузер по эвристике отдавал модалке один и тот же
         // ответ на серию частых опросов: StartedAt «не менялся», продукт «отвечал» (из кеша!) —
@@ -68,6 +85,8 @@ public class TrayDeployController(DeployLauncher deploy, ILogger<TrayDeployContr
     [HttpPost]
     public IActionResult Launch()
     {
+        if (deploy is null) return DeployDisabled();
+
         // Выключенная фича — именно 404: «здесь ничего нет» честнее, чем «вам сюда нельзя»,
         // когда дело не в правах.
         if (!deploy.Enabled) return NotFound();

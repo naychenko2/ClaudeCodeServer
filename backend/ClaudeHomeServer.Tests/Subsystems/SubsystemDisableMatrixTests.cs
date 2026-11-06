@@ -102,15 +102,24 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// формы — строка <c>plugins</c>: её контроллеры держат те же зависимости опциональными и
     /// отвечают 503 (ClaudeHomeServer.Plugins/Controllers/PluginsController.cs:22-38).
     ///
-    /// S2a-2 закрыл этим же приёмом четыре строки — <c>backgrounds</c>, <c>tts</c>, <c>video</c>,
-    /// <c>yandex</c>: их собственные контроллеры Main держат сервисы вертикали опциональными
-    /// (= null) и отвечают 503 с причиной (TtsController.cs:61, VideoController.cs:42,
-    /// YandexController.cs:45, ProjectBackgroundsController.cs:40). Оставшиеся строки делятся на
-    /// два вида: «ядро/сквозная» — потребитель является ядром сессий и проектов
+    /// S2a-2 закрыл пять ключей (tts, yandex, video, backgrounds, deploy): их контроллеры в Main
+    /// держат сервисы вертикалей опциональными (= null) и отвечают 503 с причиной
+    /// (TtsController.cs:61, VideoController.cs:42, YandexController.cs:45,
+    /// ProjectBackgroundsController.cs:40, DeployController.cs:37, TrayDeployController.cs:37).
+    /// Убраны и четыре обязательные зависимости вне ядра — без них хост не поднимался бы вовсе,
+    /// даже после починки контроллеров: отказ текстом там, где у вызова нет HTTP-кода
+    /// (WorkspaceToolset.cs:1757, WebSearchToolset.cs:120, PersonasCrudService.cs:549 и :640),
+    /// и GetService на пути остановки хоста (Program.cs:2338). Гейт <c>reader</c> починен тем же
+    /// приёмом (ReaderController.cs:36) — строка осталась из-за формы пробы, её причина в самой
+    /// строке.
+    ///
+    /// Одна починка на краю потребителя осталась — <c>images</c>: её три ручки перечислены в
+    /// строке. Прочие строки — «ядро/сквозная»: потребитель является ядром сессий и проектов
     /// (SessionManager.cs:739-743 для llm, ProjectsController.cs:25 для
-    /// git/tasks/knowledge/dossiers/memory/project-icons — или шов контекста хода
-    /// PromptSeamAdapters.cs:18, ADR-023); и «починка на краю потребителя» — тулсет или сервис
-    /// вне ядра. Первую группу решает S2b-1 (CanDisable), вторую — следующий прогон S2a-2.
+    /// git/tasks/knowledge/dossiers/memory/project-icons, SessionHub.cs:26 → FileWatcherService.cs:103
+    /// для code-graph, SessionManager.cs:745 → PersonaBindingsService.cs:139 для skills) или швом
+    /// контекста хода (PromptSeamAdapters.cs:18, ADR-023). Их решает S2b-1: CanDisable или
+    /// опционализация названного шва.
     /// </summary>
     internal static readonly Dictionary<string, string> KnownViolations = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -122,13 +131,9 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             + "требует DossierStore обязательным параметром; та же зависимость — у MemoryToolset "
             + "(backend/ClaudeHomeServer/Services/Mcp/Http/MemoryToolset.cs:45). Первый запрос к хосту не отвечен. "
             + "CanDisable или опционализацию этого шва решает S2b-1.",
-        ["deploy"] = "первый запрос к хосту не отвечен: WorkspaceToolset (backend/ClaudeHomeServer/Services/Mcp/Http/WorkspaceToolset.cs:71) "
-            + "требует DeployService выключенной вертикали обязательным параметром. S2a-2",
         ["git"] = "ядро/сквозная: ReviewTreePool (backend/ClaudeHomeServer/Services/ReviewTreePool.cs:49) "
             + "и ядро проектов (Controllers/ProjectsController.cs:25 — GitService, GitServerService) требуют "
             + "GitService обязательным параметром; первый запрос к хосту не отвечен. Решает S2b-1 (CanDisable).",
-        ["images"] = "первый запрос к хосту не отвечен: PersonasCrudService (backend/ClaudeHomeServer/Services/PersonasCrudService.cs:31) "
-            + "требует ImageGenerationService выключенной вертикали обязательным параметром. S2a-2",
         ["knowledge"] = "ядро/сквозная: ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) "
             + "требует WorkspaceKnowledgeStore и KnowledgeService; та же зависимость — у PersonaBindingsService "
             + "(backend/ClaudeHomeServer/Services/PersonaBindingsService.cs:138), который сам обязателен ядру "
@@ -146,15 +151,27 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             + "(backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) требуют PersonaMemoryService "
             + "обязательным параметром. Первый запрос к хосту не отвечен. CanDisable или опционализацию "
             + "этого шва решает S2b-1.",
+        ["images"] = "маршруты вертикали дают 500: ImageGenerationController "
+            + "(backend/ClaudeHomeServer/Controllers/ImageGenerationController.cs:20) требует ImageGenerationService "
+            + "обязательным параметром → GET и PUT /api/image-generation. Тот же профиль у OnboardingController "
+            + "(backend/ClaudeHomeServer/Controllers/OnboardingController.cs:31) и PersonasController "
+            + "(backend/ClaudeHomeServer/Controllers/PersonasController.cs:39) — генерация аватара и очередь догона. "
+            + "Починка на краю этих потребителей — следующий прогон; сервис-потребитель PersonasCrudService "
+            + "закрыт в S2a-2 (PersonasCrudService.cs:549, :640).",
         ["project-icons"] = "ядро/сквозная: хост стартует и ключ виден выключенным, но соседняя ручка мертва: "
             + "ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) требует "
             + "ProjectIconGlyphService обязательным параметром → GET /api/projects 500. Единственная строка, "
             + "где рвётся не старт, а сосед. Решает S2b-1 (CanDisable).",
-        ["project-services"] = "хост не собирается: Program.cs:2335 GetRequiredService<DevServerService> — соседние строки "
-            + "того же блока (Program.cs:2332 TurnTokenService, Program.cs:2340 TaskManager) уже читают отключаемые "
-            + "вертикали через GetService, эта — нет. S2a-2",
-        ["reader"] = "первый запрос к хосту не отвечен: WebSearchToolset (backend/ClaudeHomeServer/Services/Mcp/Http/WebSearchToolset.cs:43) "
-            + "требует ReaderService выключенной вертикали обязательным параметром. S2a-2",
+        ["project-services"] = "ядро/сквозная: ядро чата (backend/ClaudeHomeServer/Hubs/SessionHub.cs:27) требует "
+            + "DevServerService обязательным параметром — первый запрос к хосту не отвечен. Обязательный резолв "
+            + "на пути остановки хоста починен в S2a-2 (Program.cs:2338 — GetService, как соседние строки того "
+            + "же блока). Решает S2b-1 (CanDisable).",
+        ["reader"] = "Гейт вертикали починен в S2a-2 (ReaderController.cs:36): GET /api/reader/image отвечает 503. "
+            + "Мешает форма пробы: POST /api/reader/read и POST /api/reader/embed-check дают 400 модельной "
+            + "валидацией ДО экшена — тело пробы «{}» не проходит обязательный Url записи ReadRequest "
+            + "(backend/ClaudeHomeServer/Controllers/ReaderController.cs:113). Что выбирать — состав тела пробы "
+            + "по типу параметра экшена или nullable Url в DTO (сейчас пустой Url отвечает 200 invalid-url, "
+            + "отсутствующий — 400) — вне этой строки.",
         ["skills"] = "ядро/сквозная: PersonaBindingsService (backend/ClaudeHomeServer/Services/PersonaBindingsService.cs:139), "
             + "обязательный ядру сессий (backend/ClaudeHomeServer/Services/SessionManager.cs:745), требует SkillsService "
             + "обязательным параметром. Первый запрос к хосту не отвечен. CanDisable или опционализацию этого шва "

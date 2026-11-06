@@ -2332,7 +2332,10 @@ var shutdownSessions = app.Services.GetRequiredService<SessionManager>();
 if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.TurnTokenService>() is { } turnTokens)
     shutdownSessions.OnSessionDeleted += s => turnTokens.RevokeSession(s.Id);
 var shutdownTerminals = app.Services.GetRequiredService<TerminalService>();
-var shutdownDevServers = app.Services.GetRequiredService<DevServerService>();
+// GetService, а не GetRequiredService: подсистема project-services отключаемая
+// (Subsystems:project-services) — на выключенной вертикали гасить dev-серверы нечем,
+// и этот резолв не должен ронять сборку хоста (S2a-2, ADR-014).
+var shutdownDevServers = app.Services.GetService<DevServerService>();
 // Стор задач пишется с дебаунсом (TaskManager.ScheduleSave) — несохранённое досбрасываем
 // руками. Dispose контейнера сделал бы то же самое, но он случается ПОСЛЕ остановки хоста,
 // а терять правки при штатной остановке нельзя даже в окне между двумя фазами.
@@ -2351,7 +2354,7 @@ app.Lifetime.ApplicationStopping.Register(() =>
     if (shutdownTasks is not null) Safe(shutdownTasks.Flush, "стор задач");
     Safe(shutdownSessions.KillAllProcesses, "процессы claude");
     Safe(shutdownTerminals.Dispose, "терминалы");
-    Safe(shutdownDevServers.Dispose, "dev-серверы");
+    if (shutdownDevServers is not null) Safe(shutdownDevServers.Dispose, "dev-серверы");
     // Тот же pid-файл принадлежит боевому серверу — копия его не трогает; не владеющий
     // реестром хост (тестовый) тем более: KillAll бьёт по ВСЕМ процессам процесса ОС
     if (ownsProcessRegistry) Safe(ProcessRegistry.KillAll, "реестр процессов");

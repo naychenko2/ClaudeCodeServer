@@ -68,13 +68,16 @@ public sealed partial class WorkspaceToolset(
     CommitAttributionService commitAttribution,
     UserStore users,
     TeamMemoryService teamMemory,
-    DeployService deploy,
     SessionMessagingService messaging,
     TaskManager tasks,
     DefaultAssistantProvisioner provisioner,
     KnowledgeBaseCatalogService knowledgeCatalog,
     ISessionBroadcaster broadcaster,
     SessionContextResolver contextResolver,
+    // `= null` — при Subsystems:deploy:Enabled=false сервис вертикали в контейнер не попадает,
+    // и без значения по умолчанию резолв тулсета падал, не поднимая весь хост (S2a-2, ADR-014).
+    // Состав tools/list не меняется: три deploy-ручки остаются объявленными и отвечают отказом
+    DeployService? deploy = null,
     INoteAccessor? notes = null,
     ChatContinueService? continuation = null) : IMcpParameterizedToolset
 {
@@ -1748,6 +1751,13 @@ public sealed partial class WorkspaceToolset(
     private async Task<McpToolCallResult> DeployCall(string tool, JsonObject arguments,
         McpToolCallContext context, Session session, CancellationToken ct)
     {
+        // Вертикаль выкатки выключена — её сервиса нет, решать нечем. Отказ текстом, как прочие
+        // «не на этом сервере» (ADR-014): кодом 500 здесь нечем закрыть, а список инструментов
+        // от состояния соседней вертикали не зависит
+        if (deploy is null)
+            return Deny("Подсистема выкатки выключена (Subsystems:deploy:Enabled=false): "
+                + "deploy_start, deploy_status и deploy_rollback на этом сервере не работают");
+
         // Выкатка — admin-ручка: на делегированном ходу (ход процесса, chats_send) её нет, как и
         // у REST-ветки (AdminByStoreHandler, docs/architecture/mcp-toolsets.md, п. 10) — права админа у человека, а не у хода
         if (DelegatedDenied(context, session, "Выкатка прода", alsoWhenExecutorSuppressed: true) is { } gateDenied)

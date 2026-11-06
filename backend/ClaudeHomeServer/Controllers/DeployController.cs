@@ -25,9 +25,20 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/deploy")]
 [Authorize(Policy = AdminByStoreRequirement.PolicyName)]
 [SubsystemUsage("deploy")]
-public class DeployController(DeployService deploy, SessionManager sessions) : ControllerBase
+public class DeployController(
+    SessionManager sessions,
+    // `= null` — при Subsystems:deploy:Enabled=false сервиса вертикали в контейнере нет, и без
+    // значения по умолчанию активация контроллера давала 500 вместо честного 503 (S2a-2, ADR-014)
+    DeployService? deploy = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
+
+    // Гейт выключенной вертикали (ADR-014): отказ с причиной до любой работы
+    private IActionResult DeployDisabled() => StatusCode(503, new
+    {
+        reason = "deploy_disabled",
+        error = "Подсистема выкатки выключена (Subsystems:deploy:Enabled=false)",
+    });
 
     public record StartRequest(string? Ref, bool? SkipFrontend, bool? SkipSandbox, bool? AllowDirty);
 
@@ -50,6 +61,8 @@ public class DeployController(DeployService deploy, SessionManager sessions) : C
     [HttpPost("start")]
     public async Task<IActionResult> Start([FromBody] StartRequest? req, CancellationToken ct)
     {
+        if (deploy is null) return DeployDisabled();
+
         var result = await deploy.StartAsync(
             new DeployStartRequest(
                 req?.Ref,
@@ -64,6 +77,8 @@ public class DeployController(DeployService deploy, SessionManager sessions) : C
     [HttpPost("rollback")]
     public async Task<IActionResult> Rollback([FromBody] RollbackRequest? req, CancellationToken ct)
     {
+        if (deploy is null) return DeployDisabled();
+
         var result = await deploy.RollbackAsync(req?.ReleaseId, UserId, CallerSessionId, ct);
         return Respond(result);
     }
@@ -71,6 +86,8 @@ public class DeployController(DeployService deploy, SessionManager sessions) : C
     [HttpGet("status")]
     public IActionResult Status()
     {
+        if (deploy is null) return DeployDisabled();
+
         var options = deploy.Options;
         var state = deploy.Load();
         return Ok(new

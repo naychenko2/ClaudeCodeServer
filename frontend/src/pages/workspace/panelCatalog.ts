@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import type { BadgeTone } from '../../components/ui/CountBadge';
 import { GEN_PANEL_KEYS } from '../../lib/genPanelKeys';
+import { SUBSYSTEMS } from '../../lib/subsystems';
 
 // Сторона экрана. Зон ровно две, и обе равноправны: любая панель может лежать
 // в любой из них.
@@ -223,6 +224,45 @@ export const WORKSPACE_KEYS: readonly PanelKey[] = [
   'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'arch', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context', 'toc', 'video', 'characters', 'localModel', 'voices', 'chatContext', 'pluginPanels',
 ];
+
+// Панель → ключ подсистемы (lib/subsystems.ts, SUBSYSTEMS): рельса воркспейса не
+// обязана показывать панели выключенной подсистемы (S2b-2c). Каждая пара сверена с
+// телом панели в WorkspacePage: changes → GitChangesRail, knowledge → KnowledgePanel,
+// graph → CodeGraphPanel/CodeGraphDocument, arch → вклад слота 'workspace-panel'
+// с именем 'architecture', skills → SkillsPanel, preview → PreviewPanelContent
+// (сервисы проекта), video → VideoPanel, dossiers → DossierHistoryPanel,
+// notes → панель заметок проекта (её контент уже гейтится useSubsystem(notes) —
+// здесь тот же ключ на уровне набора, чтобы и кнопка не появлялась).
+// Вне таблицы — панели без подсистемного гейта: сессионные (plan/agents/context),
+// основные (chats/files/docs/tasks/team/terminal), центральная (toc), генерации
+// (chatContext), семейство плагинов (pluginPanels — свой гейт: флаг + возможности
+// проекта). Панели слота workspace-panel-def уже скрыты своими гейтами и здесь не
+// нужны: characters/voices — реестром (выключенная подсистема не отдаёт ни одного
+// вклада, registryCore.getSlotContributions), localModel — core-фича без бэкового
+// тумблера, гейтится своим isAvailable.
+export const PANEL_SUBSYSTEM: Partial<Record<StaticPanelKey, string>> = {
+  changes: SUBSYSTEMS.git,
+  dossiers: SUBSYSTEMS.dossiers,
+  knowledge: SUBSYSTEMS.knowledge,
+  notes: SUBSYSTEMS.notes,
+  graph: SUBSYSTEMS.codeGraph,
+  arch: SUBSYSTEMS.architecture,
+  skills: SUBSYSTEMS.skills,
+  preview: SUBSYSTEMS.projectServices,
+  video: SUBSYSTEMS.video,
+};
+
+// WORKSPACE_KEYS без панелей выключенных подсистем — набор рельсы для данного
+// состава активных подсистем. Предикат передаёт вызывающий (isSubsystemEnabled из
+// стора): каталог сам стор не читает и состава пользователя не знает. Ключи без
+// пары в PANEL_SUBSYSTEM остаются всегда — их видимость решает не подсистема.
+export function workspaceKeysFor(isEnabled: (key: string) => boolean): PanelKey[] {
+  return WORKSPACE_KEYS.filter(k => {
+    const sub = isPluginPanelKey(k) ? undefined : PANEL_SUBSYSTEM[k];
+    return !sub || isEnabled(sub);
+  });
+}
+
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)
 export const CHAT_KEYS: readonly PanelKey[] = ['chats', 'plan', 'agents', 'context', 'video'];
 export const NOTES_KEYS: readonly PanelKey[] = ['notesList', 'notesGraph'];

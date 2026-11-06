@@ -12,7 +12,7 @@ import { GitCommitView } from '../components/GitCommitView';
 import { GitChangesRail } from '../components/GitChangesRail';
 import { VideoPanel } from '../features/video/VideoPanel';
 import { useVideoPlaying, useVideoCenter } from '../lib/videoStage';
-import { keyAllowed, pluginPanelKey, WORKSPACE_KEYS, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
+import { keyAllowed, pluginPanelKey, workspaceKeysFor, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { ProjectIntroCard } from '../features/projects/ProjectIntroCard';
@@ -21,7 +21,7 @@ import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/sign
 import { loadWorkspaceState, saveWorkspaceState, loadFileFullscreenPref, saveFileFullscreenPref, isLeftTab, type LeftTab } from '../lib/workspaceState';
 import { api, type PluginInfo, type PluginPanelView } from '../lib/api';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
-import { SUBSYSTEMS, useSubsystem } from '../lib/subsystems';
+import { SUBSYSTEMS, isSubsystemEnabled, useActiveSubsystemKeys, useSubsystem } from '../lib/subsystems';
 import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot, useSlotItem, type RevealPanelDetail } from '../lib/subsystems/registry';
 import { markGenPanelDismissed } from '../lib/genPanelDismissed';
 import { ContextPanelHost } from '../components/generation/ContextPanelHost';
@@ -326,11 +326,13 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   useLocalModelWatcher(auth.role === 'admin');
   // Гейт подсистемы «Заметки»: при выключенной notes панель «notes» (notes/ репы)
   // не должна появляться в рельсе панелей и принимать клики. Рельсу собирает
-  // PanelZone из `allowedKeys` и `panels`: если ключ есть в WORKSPACE_KEYS, но
+  // PanelZone из `allowedKeys` и `panels`: если ключ есть в wsAllowedKeys, но
   // контента нет — keyAvailable возвращает false и кнопка скрыта. Так что
   // достаточно не передавать `notes` в panels (см. блок ниже). Здесь же
   // подписка на стор подсистем нужна — она же читается гейтом.
   const notesEnabled = useSubsystem(SUBSYSTEMS.notes)
+  const activeSubs = useActiveSubsystemKeys()
+  const wsAllowedKeys = useMemo(() => workspaceKeysFor(k => activeSubs.includes(k)), [activeSubs])
   // Панели плагинов (ADR-031, гейт V5): слот появляется, только когда у проекта есть
   // хотя бы один установленный плагин. M4: список грузим здесь (а не только в секции
   // настроек) — иначе стор пуст до первого открытия настроек, и слот «не виден сразу».
@@ -574,9 +576,9 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
     const onReveal = (e: Event) => {
       const d = (e as CustomEvent<Partial<RevealPanelDetail>>).detail;
       const key = d?.key as PanelKey | undefined;
-      if (!key || !keyAllowed(key, WORKSPACE_KEYS)) return;
+      if (!key || !keyAllowed(key, workspaceKeysFor(isSubsystemEnabled))) return;
       const host = d?.follow ? followHost(wsOpenKeys.current, key) : null;
-      if (host && keyAllowed(host as PanelKey, WORKSPACE_KEYS)) replacePanelKey(key, host as PanelKey);
+      if (host && keyAllowed(host as PanelKey, workspaceKeysFor(isSubsystemEnabled))) replacePanelKey(key, host as PanelKey);
       else revealPanelKey(key);
     };
     window.addEventListener(REVEAL_PANEL_EVENT, onReveal);
@@ -2613,6 +2615,7 @@ const windowWidth = useWindowWidth();
           projectForEdit={projectForEdit}
           onOpenWall={() => onSwitchHub('wall')}
           railBadges={localModelBadge ? { ...railBadges, localModel: localModelBadge } : railBadges}
+          allowedKeys={wsAllowedKeys}
           onOpenProjectSettings={() => setEditProjectOpen(true)}
           activeSession={activeSession}
           onSelectSession={handleSelectSession}
@@ -2723,7 +2726,7 @@ const windowWidth = useWindowWidth();
                 onClose={() => { markGenPanelDismissed(activeSessionId, 'chatContext'); closePanelKey('chatContext'); }} />,
             } : {}),
             ...Object.fromEntries(panelDefs.flatMap(d => (
-              d.name && keyAllowed(d.name as PanelKey, WORKSPACE_KEYS) && d.render && (d.action?.isAvailable?.(project.id) ?? true)
+              d.name && keyAllowed(d.name as PanelKey, wsAllowedKeys) && d.render && (d.action?.isAvailable?.(project.id) ?? true)
                 ? [[d.name, d.render({ projectId: project.id, sessionId: activeSessionId ?? null, isMobile: false, onClose: () => { markGenPanelDismissed(activeSessionId, d.name!); closePanelKey(d.name as PanelKey); } })]]
                 : []
             ))),

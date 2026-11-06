@@ -55,6 +55,10 @@ export const SUBSYSTEMS = {
 export type SubsystemKey = (typeof SUBSYSTEMS)[keyof typeof SUBSYSTEMS];
 
 let _subsystems: Record<string, boolean> = {};
+// Отсортированный список активных ключей — снимат стабильной ссылки: он отдаётся
+// getSnapshot'ом useActiveSubsystemKeys (новый массив на каждый вызов заставил бы
+// React перерисовывать по кругу). Обновляется только вместе с _subsystems.
+let _activeKeys: string[] = [];
 const _listeners = new Set<() => void>();
 
 function emit() {
@@ -78,6 +82,7 @@ export function setAllSubsystems(subsystems: SubsystemsFromServer) {
   // Пустой массив → пустой набор; null/undefined → не вызываем.
   _subsystems = {};
   for (const k of subsystems) _subsystems[k] = true;
+  _activeKeys = Object.keys(_subsystems).sort();
   emit();
 }
 
@@ -96,6 +101,7 @@ export function getAllSubsystems(): Record<string, boolean> {
 // до логаута, между ними не пустеет.
 export function __resetSubsystems() {
   _subsystems = {};
+  _activeKeys = [];
   emit();
 }
 
@@ -112,4 +118,12 @@ export function useSubsystem(key: SubsystemKey): boolean {
     () => isSubsystemEnabled(key),
     () => isSubsystemEnabled(key),
   );
+}
+
+// Подписка на состав активных ключей — для потребителей, которые считают набор по
+// ВСЕМУ стору, а не по одному ключу (рельса воркспейса по PANEL_SUBSYSTEM, S2b-2c).
+// Снимат — _activeKeys: стабильная ссылка между setAllSubsystems, поэтому
+// useSyncExternalStore не перерисовывает без изменения состава.
+export function useActiveSubsystemKeys(): string[] {
+  return useSyncExternalStore(subscribeSubsystems, () => _activeKeys, () => _activeKeys);
 }

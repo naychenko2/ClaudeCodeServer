@@ -139,6 +139,14 @@ export function useMe(): MeState {
   );
 }
 
+// Контекст проекта для резолвера дефолт-персоны и хелпера создания чата (W3-F2a, доработка 2):
+// ownerId — ОБЯЗАТЕЛЬНОЕ поле (значение null — проекта без владельца, старые данные).
+// Литерал без него не компилируется: tsc ловит любой будущий вызов, забывший его передать —
+// та была причина дефекта в WorkspacePage, где контекст собирают литералом.
+// Вызывающий с полным Project передаёт его как есть: хелпер сам нормализует Project в
+// контекст (у Project поле ownerId остаётся необязательным — старые данные).
+export type ProjectChatContext = Pick<Project, 'id' | 'defaultPersonaId'> & { ownerId: string | null };
+
 // Дефолт-персона контекста: в проекте — его руководитель, а если руководителя ещё нет —
 // личная дефолт-персона (проект без командных механик ведёт личный ассистент); вне проекта —
 // сразу личная. null — дефолта нет вовсе (осиротевший юзер без ассистента; чинит серверный
@@ -147,8 +155,10 @@ export function useMe(): MeState {
 // != me.userId), личная персона НЕ подставляется: личный ассистент увёл бы чат из проекта
 // (бэк создал бы его личным, вне проекта — «молча» для участника). null — запрос идёт без
 // personaId, бэк отвечает 400 no_project_persona, текст доходит до вызывающего как тост.
-// Владелец (ownerId == me.userId) и проект без ownerId (старые данные) — прежний фолбэк.
-export function getContextDefaultPersonaId(project?: Pick<Project, 'defaultPersonaId' | 'ownerId'> | null): string | null {
+// Владелец (ownerId == me.userId) и проект без ownerId (null — старые данные) — прежний фолбэк.
+export function getContextDefaultPersonaId(
+  project?: Pick<ProjectChatContext, 'defaultPersonaId' | 'ownerId'> | null,
+): string | null {
   if (project?.defaultPersonaId) return project.defaultPersonaId;
   if (project && project.ownerId && _me.userId && project.ownerId !== _me.userId) return null;
   return _me.defaultPersonaId;
@@ -178,10 +188,15 @@ export class OnboardingRequiredError extends Error {
 // назначает только владелец), поэтому текст сервера уходит вызывающему как есть,
 // а не оборачивается в OnboardingRequiredError.
 export async function createChatWithContextPersona(
-  project?: Pick<Project, 'id' | 'defaultPersonaId' | 'ownerId'> | null,
+  project?: ProjectChatContext | Project | null,
   opts?: { mode?: string; name?: string },
 ): Promise<Session> {
-  const defaultId = getContextDefaultPersonaId(project);
+  // Полный Project нормализуем в контекст: его ownerId всё ещё необязателен (старые
+  // данные) — отсутствующий становится null, резолвер читает это как «проект без владельца».
+  const ctx = project
+    ? { defaultPersonaId: project.defaultPersonaId ?? null, ownerId: project.ownerId ?? null }
+    : null;
+  const defaultId = getContextDefaultPersonaId(ctx);
   if (defaultId) {
     return api.personas.createChat(defaultId, {
       mode: opts?.mode,

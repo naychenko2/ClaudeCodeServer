@@ -1867,14 +1867,15 @@ public class PersonasController(
         // же стор персоны, который читает владелец; с ключом вызывающего персону не нашёл бы
         // ни гейт тела, ни валидация RememberAsync — запись стала бы 404. Отказ 403/404 — за фильтром (И-3).
         var scope = HttpContext.GetRequestScope();
-        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
+        // R-W3-B6 (доработка, И-8): событие памяти — по зоне персоны, как created/updated
+        if (_personas.Get(id, scope.TenantOwnerId) is not { } persona) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest("Пустой текст");
         if (!Enum.TryParse<PersonaMemoryType>(req.Type, true, out var type)) type = PersonaMemoryType.Semantic;
         // Семантический write-path: близкий факт усилит существующую запись, а не создаст дубль
         var entry = await _memory.RememberAsync(scope.TenantOwnerId, id, type, req.Text, req.Tags, req.SourceSessionId, req.Salience);
         if (entry is null) return NotFound();
         _memory.EnforceCap(scope.TenantOwnerId, id);   // потолок и для явного write-path
-        await Broadcast("memory", id);
+        await Broadcast(persona, "memory", id);
         return Ok(entry);
     }
 
@@ -1901,9 +1902,9 @@ public class PersonasController(
         // W3-B1d (разрез §3.1 строка «DELETE {id}/focus»; И-2): фокус лежит в сторе под ключом
         // арендатора (тот же ключ, что чтение GetFocus в B1c) — сброс идёт им же
         var scope = HttpContext.GetRequestScope();
-        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
+        if (_personas.Get(id, scope.TenantOwnerId) is not { } persona) return NotFound();
         _memory.ClearFocus(scope.TenantOwnerId, id);
-        await Broadcast("memory", id);
+        await Broadcast(persona, "memory", id);
         return NoContent();
     }
 
@@ -1914,11 +1915,11 @@ public class PersonasController(
     {
         // W3-B1d (разрез §3.1 строка «PUT {id}/memory/{entryId}»; И-2): ключ записи — арендатор
         var scope = HttpContext.GetRequestScope();
-        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
+        if (_personas.Get(id, scope.TenantOwnerId) is not { } persona) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest("Пустой текст");
         var entry = _memory.Update(scope.TenantOwnerId, id, entryId, req.Text);
         if (entry is null) return NotFound();
-        await Broadcast("memory", id);
+        await Broadcast(persona, "memory", id);
         return Ok(entry);
     }
 
@@ -1929,9 +1930,9 @@ public class PersonasController(
     {
         // W3-B1d (разрез §3.1 строка «DELETE {id}/memory/{entryId}»; И-2): ключ записи — арендатор
         var scope = HttpContext.GetRequestScope();
-        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
+        if (_personas.Get(id, scope.TenantOwnerId) is not { } persona) return NotFound();
         if (!_memory.Forget(scope.TenantOwnerId, id, entryId)) return NotFound();
-        await Broadcast("memory", id);
+        await Broadcast(persona, "memory", id);
         return NoContent();
     }
 
@@ -1942,9 +1943,9 @@ public class PersonasController(
     {
         // W3-B1d (разрез §3.1 строка «POST {id}/memory/{entryId}/confirm»; И-2): ключ записи — арендатор
         var scope = HttpContext.GetRequestScope();
-        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
+        if (_personas.Get(id, scope.TenantOwnerId) is not { } persona) return NotFound();
         if (!_memory.Confirm(scope.TenantOwnerId, id, entryId)) return NotFound();
-        await Broadcast("memory", id);
+        await Broadcast(persona, "memory", id);
         return NoContent();
     }
 
@@ -1975,9 +1976,9 @@ public class PersonasController(
         // W3-B1d (разрез §3.1 строка «POST {id}/memory/from-note»; И-2): ключ — арендатор:
         // заметка читается в vault владельца (GetDetail(ownerId) в сервисе), запись — в тот же стор
         var scope = HttpContext.GetRequestScope();
-        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
+        if (_personas.Get(id, scope.TenantOwnerId) is not { } persona) return NotFound();
         if (!await _memory.NoteToMemoryAsync(scope.TenantOwnerId, id, req.NoteId)) return NotFound("Заметка не найдена");
-        await Broadcast("memory", id);
+        await Broadcast(persona, "memory", id);
         return Ok();
     }
 

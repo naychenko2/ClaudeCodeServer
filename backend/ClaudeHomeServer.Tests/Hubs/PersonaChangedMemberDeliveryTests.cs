@@ -16,7 +16,7 @@ namespace ClaudeHomeServer.Tests.Hubs;
 /// (personas_changed) идёт группе проекта И её владельцу — участник после JoinProject получает
 /// создание и правку владельца, владелец — правку редактора, не состоя в группе проекта;
 /// событие личной (глобальной) персоны не получает ни один участник. Покрыты обе точки
-/// рассылки: сервис (создание и PUT) и контроллер (добавление привязки). Полезная нагрузка —
+/// рассылки: сервис (создание и PUT) и контроллер (добавление привязки, запись памяти). Полезная нагрузка —
 /// тот же PersonasChangedMessage: type, action, personaId, без новых полей. Отрицательные
 /// проверки без Task.Delay: проба в группу и адресная проба тому же соединению идут одним
 /// FIFO-каналом, ждём адресную через TCS.
@@ -232,6 +232,25 @@ public class PersonaChangedMemberDeliveryTests : IClassFixture<TestWebApplicatio
             new { type = "tool", target = "web" })).EnsureSuccessStatusCode();
 
         (await sink.Await("updated").WaitAsync(Wait)).GetProperty("personaId").GetString().Should().Be(id);
+    }
+
+    // Точка контроллера: POST {id}/memory вещает сам PersonasController, не сервис.
+    // Доработка возврата R-W3-B6: событие памяти проектной персоны — по той же зоне, что
+    // created/updated (ревью: шесть memory-рассылок остались owner-only).
+    [Fact]
+    public async Task Участник_ПолучаетСобыниеПамятиПроектнойПерсоны()
+    {
+        var projectId = await CreateProjectAsync("editor");
+        var id = await CreatePersonaAsync(Owner(), projectId, "Персона проекта");
+        var conn = await ConnectSecondAsync();
+        var sink = new Sink();
+        sink.Attach(conn);
+        await conn.InvokeAsync("JoinProject", projectId);
+
+        (await Owner().PostAsJsonAsync($"/api/personas/{id}/memory",
+            new { type = "semantic", text = "факт о проекте" })).EnsureSuccessStatusCode();
+
+        (await sink.Await("memory").WaitAsync(Wait)).GetProperty("personaId").GetString().Should().Be(id);
     }
 
     [Fact]

@@ -1,7 +1,7 @@
 // ПОТОЛОК РОСТА (frontend-api-split-2026-11.md): файл только худеет. Лимит строк — в
 // lib/__tests__/apiFileBudget.test.ts; он снижается после каждого выноса домена в
 // features/<домен>/api.ts, поднимать его нельзя. Новые методы — сразу в features/<домен>/.
-import type { Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, PlanMap, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
+import type { Project, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, ApplyDefaultBindingsResult, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, PlanMap, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult } from '../types';
 import { localModelApi } from '../features/localModel/api';
 import { providerAccountsApi } from '../features/providerAccounts/api';
 import { accountApi } from '../features/account/api';
@@ -14,6 +14,8 @@ import { homeApi } from '../features/home/api';
 import { chatAuxApi } from '../features/chat/api';
 import { videoApi } from '../features/video/api';
 import { devicesApi } from '../features/desktop/api';
+import { spheresApi } from '../features/spheres/api';
+import { specialtiesApi } from '../features/specialties/api';
 import { cachedToken, readStoredToken, request, writeStoredToken } from './offline';
 import type { FeatureRun } from '../types/featureRun';
 import type { FeaturesIndex, FeaturePage } from '../types/featureIndex';
@@ -637,57 +639,8 @@ export const api = {
     revokeAll: () => request<{ revoked: number }>('/preview/external-links', { method: 'DELETE' }),
   },
 
-  // Специальности персон и настройки к ним. Каталог отдаёт подписи и эффективные
-  // шаблоны прав; настройки — единственный (общий) слой, пишет только админ.
-  // ADR-012 снял owner/user-слои, поэтому здесь НЕ должно быть путей
-  // settings/owner, settings/user/{id}, reset/user и fallback/owner — на бэкенде
-  // их больше нет, и любой такой вызов вернул бы 404.
-  specialties: {
-    list: () => request<SpecialtyCatalogEntry[]>('/specialties'),
-    getSettings: () => request<SpecialtySettingsResponse>('/specialties/settings'),
-    saveGlobalLayer: (layer: SpecialtySettingsLayer) =>
-      request<{ global: SpecialtySettingsLayer }>('/specialties/settings/global', {
-        method: 'PUT', body: JSON.stringify(layer),
-      }),
-    // МЁРТВЫЙ МАРШРУТ. Эндпоинта settings/user/{id} на бэкенде нет с ADR-012; ни один
-    // экран его больше не зовёт (см. lib/presets — канал user-слоёв остался только под
-    // своими юнит-тестами и уезжает хвостовой чисткой вместе с ними). Новых вызовов
-    // не добавлять: ответ будет 404.
-    getUserLayer: (userId: string) =>
-      request<{ user: SpecialtySettingsLayer; userId: string }>(`/specialties/settings/user/${encodeURIComponent(userId)}`),
-    // Сброс исключений к наследованию (возврат = удаление записи слоя, а не обнуление
-    // ячеек): preview — числа/имена ДО подтверждения, reset — фактическая запись.
-    // key — точечный жест (одна специальность), без него — весь слой.
-    // Скоупы — только те, что остались на бэкенде: global (общий слой) и owner
-    // (сброс персон вызывающего).
-    resetPreview: (scope: 'owner' | 'global', key?: string) => {
-      const qs = new URLSearchParams();
-      if (key) qs.set('key', key);
-      const s = qs.toString();
-      return request<ResetResult>(`/specialties/settings/reset/${scope}/preview${s ? `?${s}` : ''}`);
-    },
-    reset: (scope: 'owner' | 'global', key?: string) => {
-      const body: { key?: string } = {};
-      if (key) body.key = key;
-      return request<ResetResult>(`/specialties/settings/reset/${scope}`, {
-        method: 'POST', body: JSON.stringify(body),
-      });
-    },
-    // Лимит подмен за ход (фолбэк): `null` = снять настройку слоя (наследование).
-    // Управляется через ту же дорогу, что сброс — отдельных типов в index.ts нет,
-    // описаны здесь, чтобы не разъезжаться с бэком. Слой один: только 'global'.
-    setMaxSubstitutions: (scope: 'global', value: number | null) => {
-      const body: { maxSubstitutions: number | null } = { maxSubstitutions: value };
-      return request<{ maxSubstitutions: number }>(`/specialties/settings/fallback/${scope}`, {
-        method: 'PUT', body: JSON.stringify(body),
-      });
-    },
-    // Каталог секций промптов и типовых профилей умений роли (фича specialty-prompt-sections):
-    // дефолты кода с лимитом 1024, метаданные секций, включённость и типовые тексты по
-    // каждой специальности, плюс дефолтные умения ролей для шага выбора цели.
-    promptSectionsCatalog: () =>
-      request<SpecialtyPromptSectionsCatalog>('/specialties/prompt-sections'),
-  },
+  // Специальности персон и настройки к ним — в features/specialties/api.ts
+  ...specialtiesApi,
 
   projects: {
     list: () => request<Project[]>('/projects').then(list => { noteProjects(list); return list; }),
@@ -989,33 +942,8 @@ export const api = {
       request<void>(`/board/agents/${sessionId}/permission/${requestId}/deny`, { method: 'POST' }),
   },
 
-  // Группы проектов
-  projectGroups: {
-    list: () => request<ProjectGroup[]>('/project-groups'),
-    // icon и charter необязательны — сфера создаётся сразу со значком и уставом
-    create: (name: string, color: string, extra?: { icon?: string; charter?: string }) =>
-      request<ProjectGroup>('/project-groups', { method: 'POST', body: JSON.stringify({ name, color, ...extra }) }),
-    // icon: '' снимает значок; charter — устав сферы (до 4000 символов)
-    update: (id: string, data: { name?: string; color?: string; icon?: string; charter?: string }) =>
-      request<ProjectGroup>(`/project-groups/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-    reorder: (orderedIds: string[]) =>
-      request<ProjectGroup[]>('/project-groups/reorder', { method: 'POST', body: JSON.stringify({ orderedIds }) }),
-    // 409 — в сфере есть персоны (err.body.personas — сколько); память удалению не мешает
-    delete: (id: string) => request<DeleteSphereResponse>(`/project-groups/${id}`, { method: 'DELETE' }),
-  },
-
-  // Сферы: сводка страницы сферы
-  spheres: {
-    overview: (id: string) => request<SphereOverview>(`/spheres/${encodeURIComponent(id)}/overview`),
-    memory: (id: string) => request<SphereMemoryResponse>(`/spheres/${encodeURIComponent(id)}/memory`),
-    addMemory: (id: string, text: string, type?: SphereMemoryType) =>
-      request<SphereMemoryEntry>(`/spheres/${encodeURIComponent(id)}/memory`, { method: 'POST', body: JSON.stringify({ text, type }) }),
-    removeMemory: (id: string, entryId: string) =>
-      request<void>(`/spheres/${encodeURIComponent(id)}/memory/${encodeURIComponent(entryId)}`, { method: 'DELETE' }),
-    // Перенос записи проекта на полку сферы; ответ — созданная запись сферы
-    adoptMemory: (id: string, projectId: string, entryId: string) =>
-      request<SphereMemoryEntry>(`/spheres/${encodeURIComponent(id)}/memory/adopt`, { method: 'POST', body: JSON.stringify({ projectId, entryId }) }),
-  },
+  // Группы проектов и сферы — в features/spheres/api.ts
+  ...spheresApi,
 
   tasks: {
     // Все задачи пользователя (для календаря)

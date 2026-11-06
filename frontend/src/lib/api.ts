@@ -1,7 +1,7 @@
 // ПОТОЛОК РОСТА (frontend-api-split-2026-11.md): файл только худеет. Лимит строк — в
 // lib/__tests__/apiFileBudget.test.ts; он снижается после каждого выноса домена в
 // features/<домен>/api.ts, поднимать его нельзя. Новые методы — сразу в features/<домен>/.
-import type { Project, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, ApplyDefaultBindingsResult, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, PlanMap, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult } from '../types';
+import type { Project, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, ApplyDefaultBindingsResult, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, LocalHandsChatStatus, BackgroundResult, ChangedBySession, ExternalPreviewLink, ExternalLinkIssued, PlanMap, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult } from '../types';
 import { localModelApi } from '../features/localModel/api';
 import { providerAccountsApi } from '../features/providerAccounts/api';
 import { accountApi } from '../features/account/api';
@@ -17,6 +17,8 @@ import { devicesApi } from '../features/desktop/api';
 import { spheresApi } from '../features/spheres/api';
 import { specialtiesApi } from '../features/specialties/api';
 import { knowledgeApi } from '../features/knowledge/api';
+import { dossiersApi } from '../features/dossiers/api';
+import { telemetryApi } from '../features/telemetry/api';
 import { cachedToken, readStoredToken, request, writeStoredToken } from './offline';
 import type { FeatureRun } from '../types/featureRun';
 import type { FeaturesIndex, FeaturePage } from '../types/featureIndex';
@@ -1869,84 +1871,9 @@ export const api = {
       }),
   },
 
-  // История решений (change-dossiers) — записи «зачем менялось, что решили,
-  // что отвергли, какие грабли», привязанные к коммитам. ADR-004 §4/§6/§8.
-  // Этап 1: просмотр. Этап 3: экспорт в ветку ccs/dossiers/v1 через git-плюминг.
-  dossiers: {
-    list: (projectId: string, filter?: { file?: string; symbol?: string; commit?: string }) => {
-      const qs = new URLSearchParams();
-      if (filter?.file) qs.set('file', filter.file);
-      if (filter?.symbol) qs.set('symbol', filter.symbol);
-      if (filter?.commit) qs.set('commit', filter.commit);
-      const s = qs.toString();
-      // Контракт GET /dossiers (ADR-004 §4, спринт «История решений» блок В):
-      // { entries, coverage }. coverage — метрика охвата за окно periodDays:
-      // знаменатель commits (с --follow при file), числитель dossiers. При сбое git
-      // числитель/знаменатель обнуляются (контракт бэка — листинг не роняется).
-      // coverage помечена опциональной: ранний ответ или альтернативная сборка бэка
-      // могут её не прислать — панель тогда просто не рисует строку охвата.
-      return request<{
-        entries: DossierEntry[];
-        coverage?: { periodDays: number; commits: number; dossiers: number } | null;
-      }>(`/projects/${projectId}/dossiers${s ? `?${s}` : ''}`);
-    },
-    // Готовность проекта к экспорту (ADR-004 §6): isGitRepo гейтит кнопку в UI,
-    // sharedFolder — предупреждение о втором владельце той же папки. hasDossierBranch —
-    // наличие локальной refs/heads/ccs/dossiers/v1: пока ветки нет, импорт из неё
-    // бессмыслен, кнопку «Загрузить» в UI гейтим этим признаком.
-    // autoExport — причина гейта АВТОвыгрузки: панель выбирает по ней текст подсказки
-    // (после сужения фона «ветка заведомо наша» общая фраза «выгружается само» врала
-    // бы при чужом tip / одной origin-ветке / общей папке). null у не-git проекта.
-    exportStatus: (projectId: string) =>
-      request<{
-        isGitRepo: boolean;
-        sharedFolder: boolean;
-        hasDossierBranch: boolean;
-        autoExport: 'active' | 'foreignTip' | 'originOnly' | 'sharedFolder' | null;
-      }>(
-        `/projects/${encodeURIComponent(projectId)}/dossiers/export/status`),
-    // Запуск экспорта. push=true — единственное место UI, откуда вызывается git push
-    // (ADR §6: «Push — только вручную»). Ответ — состояние финальной карточки:
-    // count подставляется в текст успеха, nothingToExport переключает на состояние «пусто».
-    // timeoutMs 120 с: plumbing-экспорт на большой истории (~38 с на 217 паспортов
-    // наблюдалось на проде) — дефолтные 30 с обрывали запрос, хотя сервер ещё работал.
-    exportRun: (projectId: string, push: boolean) =>
-      request<{ status: 'exported' | 'nothingToExport'; count: number }>(
-        `/projects/${encodeURIComponent(projectId)}/dossiers/export`,
-        { method: 'POST', body: JSON.stringify({ push }), timeoutMs: 120_000 }),
-    // Импорт «Историй решений» из ветки ccs/dossiers/v1 (этап 4): читает ветку
-    // plumbing-командами и кладёт записи в стор с origin='imported' и importedAuthor.
-    // added — реально добавленные, skipped — остальные записи index.json
-    // (уже были импортированными / нечитаемые / кривые sha). noBranch — ветки нет
-    // ни локально, ни в origin (нейтральный ответ, не ошибка).
-    importRun: (projectId: string) =>
-      request<{ status: 'imported' | 'nothingToImport' | 'noBranch'; added: number; skipped: number }>(
-        `/projects/${encodeURIComponent(projectId)}/dossiers/import`,
-        { method: 'POST' }),
-  },
-
-  // Раздел «Телеметрия»: статус проброса SigNoz — фронт решает, показать iframe или заглушку
-  telemetry: {
-    status: () =>
-      request<{ configured: boolean; reachable: boolean; proxyPath: string; discussProjectId?: string | null }>('/telemetry/status'),
-    // Вкладка «Инциденты»: список отдаёт статус телеметрии ОТДЕЛЬНО от элементов —
-    // пустой список при выключенном SigNoz нельзя показывать как «всё тихо»
-    incidents: () => request<IncidentListResponse>('/telemetry/incidents'),
-    incident: (fingerprint: string) =>
-      request<IncidentDossier>(`/telemetry/incidents/${encodeURIComponent(fingerprint)}`),
-    // Досье markdown'ом — описание задачи и черновик сообщения в чат
-    incidentText: (fingerprint: string) =>
-      request<{ text: string }>(`/telemetry/incidents/${encodeURIComponent(fingerprint)}/text`),
-    // Разбор моделью — единственное место фичи, где участвует LLM, и только по кнопке
-    incidentExplain: (fingerprint: string) =>
-      request<{ text: string }>(
-        `/telemetry/incidents/${encodeURIComponent(fingerprint)}/explain`, { method: 'POST' }),
-    // Заглушить/вернуть звук: инцидент остаётся в списке, но уходит из счётчика и из push
-    muteIncident: (fingerprint: string, muted: boolean) =>
-      request<void>(
-        `/telemetry/incidents/${encodeURIComponent(fingerprint)}/mute?muted=${muted}`,
-        { method: 'POST' }),
-  },
+  // «История решений» — в features/dossiers/api.ts; «Телеметрия» — в features/telemetry/api.ts
+  ...dossiersApi,
+  ...telemetryApi,
 
   files: {
     // URL файла проекта для браузерного <img>/<video>: токен через ?access_token=,

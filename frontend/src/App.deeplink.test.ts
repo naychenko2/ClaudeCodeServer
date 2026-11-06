@@ -423,6 +423,20 @@ describe('App: #/spend при выключенной подсистеме — Su
     expect(text, 'заглушка выключенного раздела не отрисована').toContain('Раздел выключен администратором');
   });
 
+  it('зарегистрированный таб + выключена → заглушка с именем раздела, таб не монтируется (мутация: убрать && isSubsystemEnabled → red)', async () => {
+    // Основной продуктовый вариант шага: админ выключил зарегистрированный «Расходы»,
+    // у пользователя прямая ссылка #/spend. Таб ЕСТЬ в реестре (ActiveSubsystemTab
+    // ненулевой) — и всё равно не должен монтироваться: только заглушка с именем
+    // раздела из манифеста. Прежний кейс моделировал «выключенную» как «нет таба»,
+    // поэтому выбивание isSubsystemEnabled из условия он не замечает (R-S2b-3c).
+    subsysMock.manifest = { key: 'spend', title: 'Расходы', order: 40 };
+    subsysMock.tab = () => createElement('div', null, 'SpendPageStubDisabled');
+    const container = await mountAtSpend();
+    const text = textNodes(container).join(' ');
+    expect(text, 'заглушка с именем раздела не отрисована').toContain('Раздел «Расходы» выключен администратором');
+    expect(text, 'таб выключенной подсистемы не должен монтироваться').not.toContain('SpendPageStubDisabled');
+  });
+
   it('включена + зарегистрирована → компонент раздела, заглушки нет', async () => {
     subsysMock.enabled = true;
     subsysMock.manifest = { key: 'spend', title: 'Расходы', order: 40 };

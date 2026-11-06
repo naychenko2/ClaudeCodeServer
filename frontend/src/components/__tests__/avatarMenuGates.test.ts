@@ -7,6 +7,7 @@ interface MenuProps {
   onOpenKnowledge?: () => void;
   onOpenSpend?: () => void;
   onShowHistory?: () => void;
+  onShowModelsSpend?: () => void;
   onShowDeploy?: () => void;
   // проп вне карты (за фич-флагом mcp-registry) — гейт его не трогает
   onShowMcpServers?: () => void;
@@ -19,16 +20,18 @@ const fullProps = (): MenuProps => ({
   onOpenKnowledge: cb,
   onOpenSpend: cb,
   onShowHistory: cb,
+  onShowModelsSpend: cb,
   onShowDeploy: cb,
   onShowMcpServers: cb,
 });
 
 describe('gateAvatarMenu: карта и поведение', () => {
-  it('карта — ровно четыре заявленных ключа (сторож против правки строки)', () => {
+  it('карта — ровно пять заявленных ключа (сторож против правки строки)', () => {
     expect({ ...AVATAR_MENU_SUBSYSTEM }).toEqual({
       onOpenKnowledge: 'knowledge',
       onOpenSpend: 'spend',
       onShowHistory: 'changelog',
+      onShowModelsSpend: 'llm',
       onShowDeploy: 'deploy',
     });
   });
@@ -46,6 +49,7 @@ describe('gateAvatarMenu: карта и поведение', () => {
     expect(gated.onOpenKnowledge).toBe(cb);
     expect(gated.onOpenSpend).toBe(cb);
     expect(gated.onShowHistory).toBe(cb);
+    expect(gated.onShowModelsSpend).toBe(cb);
     expect(gated.onShowDeploy).toBe(cb);
   });
 

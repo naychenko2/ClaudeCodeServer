@@ -3,8 +3,10 @@
 // (`{onOpenKnowledge && ...}`) — гейт лишь превращает колбэк в undefined там,
 // где подсистема выключена. Пропы собираются в HubHeader и проходят через gateAvatarMenu.
 //
-// Ключи с CanDisable=false по матрице S2a-1 (например, llm) в карту не внесены:
-// их нельзя выключить — гейтить нечего.
+// Путь «Модели и расход» в разрез (решение по вердикту R-S2b-2b): «llm» — подсистемная
+// вертикаль, её пункт гейтится как остальные. Так карта верна при любом будущем статусе
+// «llm»: останется отключаемой — пункт скрывается при выключенной вертикали; объявят
+// ядром — подсистема всегда активна, пункт виден.
 
 import { SUBSYSTEMS } from '../lib/subsystems';
 
@@ -17,6 +19,8 @@ export const AVATAR_MENU_SUBSYSTEM = {
   onOpenSpend: SUBSYSTEMS.spend,
   // «Что нового»
   onShowHistory: SUBSYSTEMS.changelog,
+  // «Модели и расход» — конфигурация вертикали llm
+  onShowModelsSpend: SUBSYSTEMS.llm,
   // «Выкатить на бой»
   onShowDeploy: SUBSYSTEMS.deploy,
 } as const;

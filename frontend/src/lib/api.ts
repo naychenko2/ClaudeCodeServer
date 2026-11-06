@@ -5,6 +5,7 @@ import type { Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectE
 import { localModelApi } from '../features/localModel/api';
 import { providerAccountsApi } from '../features/providerAccounts/api';
 import { accountApi } from '../features/account/api';
+import { deployApi } from '../features/deploy/api';
 import { hostControlApi } from '../features/hostControl/api';
 import { modelsApi } from '../features/models/api';
 import { spendApi } from '../features/spend/api';
@@ -41,6 +42,8 @@ export type * from '../features/account/types';
 export type * from '../features/modules/types';
 // Типы питания и пульта удалённых команд живут в features/hostControl/types.ts
 export type * from '../features/hostControl/types';
+// Типы выкатки (трей-раннер и журнал из чата) живут в features/deploy/types.ts
+export type * from '../features/deploy/types';
 
 // Итог «Собрать архитектуру» (POST /projects/{id}/architecture/generate).
 // graphBuiltAt — время снимка графа кода, которым помечена карта (ISO); added/matched —
@@ -98,44 +101,6 @@ export interface ArchitectureSaveResult {
 }
 
 
-// Итог выкатки, как его пишет трей-раннер в deploy-status.json. Формат чужой — читаем как есть.
-// result: running | ok | blocked | build-failed | rolled-back | failed | error.
-// Времена — локальные строки «yyyy-MM-dd HH:mm:ss» без смещения.
-export interface DeployStatusFile {
-  startedAt: string | null;
-  finishedAt: string | null;
-  mode: string | null;
-  branch: string | null;
-  dirtyFiles: number;
-  head: string | null;
-  deployExitCode: number | null;
-  result: string | null;
-  productUp: boolean | null;
-  note: string | null;
-}
-
-// Ответ GET /api/admin/deploy/status: доступность выкатки плюс последний известный итог
-export interface DeployState {
-  enabled: boolean;
-  canLaunch: boolean;
-  reason: string | null;
-  status: DeployStatusFile | null;
-  // Ход идущей выкатки (deploy-progress.json раннера): null — выкатка не идёт или раннер
-  // хода не пишет. Пока продукт жив (идёт сборка), окно рисует по нему полосу.
-  progress?: DeployProgressFile | null;
-}
-
-// Ход выкатки. stage: checking | building | publishing | restarting | done; percent — 0..100
-// по весам шагов скрипта деплоя, step — подпись текущего шага, line — последняя строка вывода
-export interface DeployProgressFile {
-  startedAt: string | null;
-  stage: string | null;
-  percent: number;
-  step: string | null;
-  line: string | null;
-  updatedAt: string | null;
-}
-
 // Потолок ожидания preview/start. DevServerService.StartAsync (у сервера и у агента один) ждёт
 // порт по часам: не дольше DevServerLaunchPolicy.DotnetRunReadyTimeout (300 с, `dotnet run`
 // со сборкой; прочим — 120 с), плюс одна последняя итерация (пауза 500 мс и проба до 400 мс
@@ -155,55 +120,6 @@ const CONTINUE_TIMEOUT_MS = 16 * 60 * 1000;
 // холодный — быстрый раннер по транскрипту. Берём 6 мин: обрыв по этому таймауту —
 // RequestTimeoutError, а не OfflineError (тот же приём, что у CONTINUE_TIMEOUT_MS).
 const HANDOFF_TIMEOUT_MS = 6 * 60 * 1000;
-
-// Журнал выкатки ИЗ ЧАТА (ADR-010) — другая механика, чем трей-раннер выше: заявку
-// исполняет внешний агент планировщика, а журнал deploy-state.json пишет он же.
-// Формат чужой и версионируется отдельно от сервера: незнакомые поля игнорируем,
-// отсутствующие переживаем (см. Services/Deploy/DeployState.cs).
-export interface DeployJournalStep {
-  name: string;
-  status?: string | null;   // ok | fail | running… — словарь агента, читаем как есть
-  ms: number;
-}
-
-export interface DeployJournalResult {
-  ok: boolean;
-  // succeeded | rolled_back | failed — дублирует финальную фазу
-  status: string;
-  message?: string | null;
-  releaseId?: string | null;
-  finishedAt?: string | null;
-}
-
-export interface DeployJournalRecord {
-  id: string;
-  kind?: string | null;     // deploy | rollback
-  // queued → building → switching → verifying → succeeded | rolled_back | failed
-  phase: string;
-  ref?: string | null;
-  sha?: string | null;
-  dirty?: boolean;
-  dirtyFiles?: string[];
-  initiatedBy?: { userId?: string | null; sessionId?: string | null } | null;
-  steps?: DeployJournalStep[];
-  result?: DeployJournalResult | null;
-  startedAt?: string | null;
-}
-
-export interface DeployJournalRelease {
-  id: string;
-  sha?: string | null;
-  path?: string | null;
-  createdAt?: string | null;
-}
-
-// Ответ GET /api/deploy/status
-export interface DeployJournal {
-  enabled: boolean;
-  current: DeployJournalRecord | null;
-  history: DeployJournalRecord[];
-  releases: DeployJournalRelease[];
-}
 
 export type { WorkflowAgentInfo, WorkflowAgentBlock };
 
@@ -505,6 +421,9 @@ export const api = {
   // Питание, пульт команд, бэкапы и файлы хоста — в features/hostControl/api.ts
   ...hostControlApi,
 
+  // Выкатка трей-раннером и журнал выкатки из чата — в features/deploy/api.ts
+  ...deployApi,
+
   ...providerAccountsApi,
 
   // Генератор картинок инстанса ПО МЕСТАМ (иконка проекта, аватар персоны): у каждого
@@ -714,9 +633,6 @@ export const api = {
     },
   },
 
-  // Выкатка боевого продукта трей-раннером (только админам и только при Deploy:Enabled).
-  // status отвечает всегда, в том числе при выключенной фиче (enabled: false) — по нему
-  // шапка решает, показывать ли пункт меню, и 404 здесь шумел бы в консоли у всех.
   // Раздел «Видео»: эфиры телеканалов и лента подписок YouTube.
   // live: true у списков — офлайн-кэш здесь ВРЕДЕН: у карточки канала есть поле
   // «сейчас в эфире», и подставленный из IndexedDB ответ показывал бы передачу,
@@ -746,18 +662,6 @@ export const api = {
     youtubeDisconnect: () => request<{ ok: boolean }>('/video/youtube/disconnect', { method: 'POST' }),
   },
 
-  deploy: {
-    // live: true — НЕ подставлять ответ из офлайн-кэша (IndexedDB), даже когда сервер не
-    // отвечает. Для этого запроса важно не только содержимое, но и сам факт ответа: продукт на
-    // время публикации гаснет, и подставленный прошлый ответ выдавал бы «сервер отвечает,
-    // ничего не происходит» — окно выкатки объявляло «трей команду не принял» поверх успешной
-    // публикации. cache: 'no-store' закрывает то же самое со стороны браузера.
-    status: () => request<DeployState>('/admin/deploy/status', { cache: 'no-store', live: true }),
-    // 202: команда ушла трею. previousStartedAt — начало ПРОШЛОЙ выкатки: только по смене
-    // этого времени видно, что трей команду принял и начал новую (см. DeployModal).
-    launch: () => request<{ previousStartedAt: string | null }>('/admin/deploy', { method: 'POST' }),
-  },
-
 // Ссылки внешнего доступа — СКВОЗНЫЕ по проектам владельца, поэтому не под /projects/{id}:
   // забытая открытой витрина в соседнем проекте иначе осталась бы невидимой.
   externalPreview: {
@@ -765,15 +669,6 @@ export const api = {
     revoke: (jti: string) =>
       request<{ revoked: number }>(`/preview/external-links/${encodeURIComponent(jti)}`, { method: 'DELETE' }),
     revokeAll: () => request<{ revoked: number }>('/preview/external-links', { method: 'DELETE' }),
-  },
-
-  // Журнал выкатки из чата (ADR-010) — за ним следит карточка хода выкатки в ленте.
-  // live: true + no-store по той же причине, что и у трей-выкатки выше, и она здесь
-  // ещё важнее: сервер во время переключения ГАСНЕТ намеренно, и подставленный из
-  // офлайн-кэша прошлый ответ означал бы «прод отвечает, шаги не двигаются» — карточка
-  // рапортовала бы о живом сервере ровно тогда, когда его нет.
-  deployJournal: {
-    status: () => request<DeployJournal>('/deploy/status', { cache: 'no-store', live: true }),
   },
 
   // Специальности персон и настройки к ним. Каталог отдаёт подписи и эффективные

@@ -109,7 +109,7 @@ public static class SubsystemOverridesFile
     private static Dictionary<string, bool> Extract(JsonElement root, string path)
     {
         var values = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
-        var section = FindProperty(root, "Subsystems");
+        var section = FindProperty(root, "Subsystems", "Корень документа", path);
         if (section is null)
             return values; // секции нет — ничего не переопределено
         if (section.Value.ValueKind != JsonValueKind.Object)
@@ -117,7 +117,7 @@ public static class SubsystemOverridesFile
 
         foreach (var entry in section.Value.EnumerateObject())
         {
-            var enabled = FindProperty(entry.Value, "Enabled");
+            var enabled = FindProperty(entry.Value, "Enabled", $"Запись \"{entry.Name}\"", path);
             if (enabled is null || enabled.Value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
                 throw new SubsystemOverridesFileException(
                     $"Запись \"{entry.Name}\" в {path} без поля Enabled (true|false).");
@@ -129,9 +129,17 @@ public static class SubsystemOverridesFile
 
     // Поиск свойства без учёта регистра: провайдер конфигурации регистронезависим, и чтение
     // обязано видеть то же, что видит гейт.
-    private static JsonElement? FindProperty(JsonElement obj, string name)
+    //
+    // Проверка ValueKind обязательна: EnumerateObject() на не-объекте (корень «[]» или «5»,
+    // значение записи «{"Subsystems":{"tts":5}}») бросает InvalidOperationException, который не
+    // ловит ни catch в Parse (там JsonException/IOException), ни catch в контроллере — это был
+    // бы 500 без причины. Инвариант ручки: на содержимое файла ответ всегда 503 с code.
+    private static JsonElement? FindProperty(JsonElement element, string name, string subject, string path)
     {
-        foreach (var property in obj.EnumerateObject())
+        if (element.ValueKind != JsonValueKind.Object)
+            throw new SubsystemOverridesFileException($"{subject} в {path} — не объект.");
+
+        foreach (var property in element.EnumerateObject())
             if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase))
                 return property.Value;
         return null;

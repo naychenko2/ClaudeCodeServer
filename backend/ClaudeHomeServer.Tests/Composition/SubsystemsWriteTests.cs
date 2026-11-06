@@ -207,6 +207,35 @@ public class SubsystemsWriteTests(SubsystemsWriteTests.Hosts hosts) : IClassFixt
             "чтение оборвалось до записи — файл остаётся ровно таким, каким был");
     }
 
+    // Валидный JSON не той схемы: JsonException здесь нет, парсер проходит, форма — нет.
+    // Без проверки ValueKind в FindProperty EnumerateObject() бросает
+    // InvalidOperationException, который не ловит ни Parse, ни контроллер → 500 без code.
+    [Theory]
+    [InlineData("{\"Subsystems\":{\"tts\":5}}")] // значение записи — не объект
+    [InlineData("{\"Subsystems\":5}")]           // секция — не объект
+    [InlineData("[]")]                          // корень — массив
+    [InlineData("5")]                           // корень — число
+    public async Task Put_ВалидныйJSONНеТойСхемы_503СПричиной_ФайлНеТронут(string content)
+    {
+        using var own = _hosts.Fresh();
+        var path = FilePathOf(own);
+        File.WriteAllText(path, content);
+        var before = File.ReadAllBytes(path);
+
+        var response = await own.CreateAuthenticatedClient()
+            .PutAsJsonAsync("/api/admin/subsystems/tts", new { enabled = false });
+
+        response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable,
+            "ручка никогда не отдаёт 500 на содержимое файла: неверная форма — 503 с причиной");
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("code").GetString().Should().Be("write_failed");
+        body.GetProperty("message").GetString().Should().NotBeNullOrWhiteSpace(
+            "в ней должно быть видно, какой именно фрагмент не объект");
+
+        File.ReadAllBytes(path).Should().Equal(before,
+            "ошибка формы — до записи, файл остаётся ровно таким, каким был");
+    }
+
     // ─── Гонка двух записей ───────────────────────────────────────────────────────
 
     [Fact]

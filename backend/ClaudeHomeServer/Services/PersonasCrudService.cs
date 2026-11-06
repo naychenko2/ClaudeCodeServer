@@ -132,6 +132,17 @@ public sealed class PersonasCrudService(
             {
                 var (binding, parseError) = ParseBinding(b);
                 if (binding is null) return BadRequest(new { error = parseError });
+                // W3-B5b доработка 2 (возврат дельта-ревью 7ace425a): явные привязки тела создания
+                // сужены не-владельцу тем же NonOwnerBindingEditDenied, что запись привязки
+                // (AddBinding/SetBindings): без него редактор создал бы проектную персону с
+                // привязкой к личным заметкам владельца, и через неё участник читал бы его личные
+                // данные. Отказ по праву — ДО ValidateAsync (тот же порядок, что у [ProjectScope]:
+                // mcp-цели может не быть в реестре — 403 всё равно 403) и до personas.Create.
+                // Роль по умолчанию — Owner: MCP-тулсет и создание владельцем действуют
+                // в пространстве владельца, сужения нет.
+                if (bindings.NonOwnerBindingEditDenied(callerRole, projectId, binding)
+                        is (int deniedStatus, string deniedError))
+                    return StatusCode(deniedStatus, new { error = deniedError });
                 var err = await bindings.ValidateAsync(userId, binding, bindingList, draftOwner);
                 if (err is not null) return BadRequest(new { error = err });
                 bindingList.Add(binding);

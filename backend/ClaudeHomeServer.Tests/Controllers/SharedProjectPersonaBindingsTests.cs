@@ -61,6 +61,12 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// созданная редактором персона не получает через авто-подбор личных целей владельца и mcp:*;
 /// владелец тем же вызовом — как раньше.
 ///
+/// W3-B5b доработка 2 (возврат дельта-ревью 7ace425a): явные привязки в теле того же создания
+/// (POST /api/personas с bindings) идут через NonOwnerBindingEditDenied ДО ValidateAsync — тот же
+/// порядок отказа, что у AddBinding: редактор не создаёт проектную персону с привязкой к личным
+/// заметкам владельца (400) и не создаёт её с mcp-целью (403, а не 400 «нет в реестре»);
+/// отказ — до personas.Create, полусозданной персоны нет. Владелец тем же телом — без сужения.
+///
 /// Мутации (проверяются на копиях дерева, scripts/mutation-copy.sh):
 /// - NonOwnerBindingEditDenied всегда возвращает null («сужение разрешает всё») — краснеют
 ///   «mcp-цель» (200/400 вместо 403), «личная цель» (200 вместо 400) и обе строки «личную
@@ -86,6 +92,11 @@ namespace ClaudeHomeServer.Tests.Controllers;
 ///   КвикСозданиеПроектнойПерсоныРедактором_АвтоПодборНеПишетЛичныхЦелейВладельца:
 ///   созданная редактором персона получает «notes|personal» (прочие чужие цели в тестовом
 ///   хосте отбивает и валидация — личная цель единственная проходит её под ключом владельца).
+/// - W3-B5b доработка 2 (возврат 7ace425a): снять проверку NonOwnerBindingEditDenied в цикле
+///   req.Bindings в CreateAsync — краснеют
+///   СозданиеПроектнойПерсоныРедактором_ЯвныеПривязкиЧужихЦелейОтказаныБезСоздания:
+///   «личная цель» — 200 вместо 400 (под ключом владельца ValidateAsync её пропускает),
+///   «mcp-цель» — 400 вместо 403.
 /// </summary>
 [Trait("Category", "Host")]
 public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicationFactory>
@@ -1082,5 +1093,61 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
             narrowed: true);
         AssertAutoBindResult(await QuickCreateWithAutoBindingsAsync(OwnerClient(), projectId),
             narrowed: false);
+    }
+
+    // ── W3-B5b доработка 2 (возврат дельта-ревью 7ace425a): явные привязки в теле создания ─────
+    //
+    // Доработка aaf13fce донесла роль вызывающего до ИИ-подбора при создании, но req.Bindings
+    // того же тела (POST /api/personas) проходили только ValidateAsync: редактор создал бы
+    // проектную персону с привязкой к личным заметкам владельца (200) — и через неё участник
+    // читал бы его личные данные. Теперь каждый элемент тела идёт тем же NonOwnerBindingEditDenied
+    // ДО валидации — тот же порядок отказа, что у AddBinding: 403 по праву не зависит от валидности
+    // цели (mcp-сервера в реестре тестового хоста нет — без сужения был бы 400 «не найден»).
+    // Отказ — до personas.Create: полусозданной персоны в команде проекта быть не должно.
+
+    private async Task<(int Status, string Body)> CreateWithBindingsAsync(HttpClient client,
+        string projectId, string name, object[] bindings)
+    {
+        var (status, _, body) = await SendAsync(client, HttpMethod.Post, "/api/personas",
+            new { name, scope = "project", projectId, bindings });
+        return (status, body);
+    }
+
+    private void AssertNoPersonaNamed(string projectId, string name) =>
+        Personas.GetProjectTeam(TenantId, projectId).Any(p => p.Name == name).Should().BeFalse(
+            "отказ по праву решается до personas.Create — полусозданной персоны быть не должно");
+
+    [Fact]
+    public async Task СозданиеПроектнойПерсоныРедактором_ЯвныеПривязкиЧужихЦелейОтказаныБезСоздания()
+    {
+        var (projectId, _) = await ArrangeAsync(Editor);
+
+        var personalName = "ЯвнаяЛичнаяРед" + RunId();
+        var (personalStatus, personalBody) = await CreateWithBindingsAsync(SecondClient(), projectId,
+            personalName, [NotesBody("personal")]);
+        personalStatus.Should().Be(400,
+            "личная цель владельца — чужая цель: та же грань и тот же текст, что POST {id}/bindings");
+        personalBody.Should().Contain("Участник может привязывать персону");
+        AssertNoPersonaNamed(projectId, personalName);
+
+        var mcpName = "ЯвнаяMcpРед" + RunId();
+        var (mcpStatus, mcpBody) = await CreateWithBindingsAsync(SecondClient(), projectId,
+            mcpName, [ToolBody("mcp:" + RunId())]);
+        mcpStatus.Should().Be(403,
+            "mcp/плагин-цели — право Configure, и отказ решён ДО ValidateAsync (не 400 «нет в реестре»)");
+        mcpBody.Should().Contain("MCP-серверы и навыки плагинов");
+        AssertNoPersonaNamed(projectId, mcpName);
+    }
+
+    [Fact]
+    public async Task СозданиеПроектнойПерсоныВладельцем_ЯвнаяЛичнаяПривязкаЗаписана()
+    {
+        var (projectId, _) = await ArrangeAsync(Editor);
+
+        var (status, body) = await CreateWithBindingsAsync(OwnerClient(), projectId,
+            "ЯвнаяЛичнаяВлац" + RunId(), [NotesBody("personal")]);
+        (status >= 200 && status < 300).Should().BeTrue("своего создания владельца сужение не касается");
+        HasBinding(Personas.Get(IdOf(body), TenantId)!, "notes", "personal").Should().BeTrue(
+            "личная привязка на месте: различие — только в сужении, цель валидна и раньше");
     }
 }

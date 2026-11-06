@@ -15,7 +15,7 @@
 | Строк в `SessionManager.cs` | **11 818** (`wc -l`) |
 | Параметров конструктора | **52** (в постановке 42 — устаревшая цифра) |
 | Мест `new SessionManager(` | **57 в 55 файлах**: `ClaudeHomeServer.Tests` — 44 файла, `Dossiers.Tests` — 3, `Mcp.Tests`, `Spend.Tests`, `Team.Tests` — по 2, `LocalStats.Tests` и `TestKit.Host` — по 1 |
-| Файлов вне тестов, упоминающих тип | 212 (115 из них в `backend/ClaudeHomeServer`); у Глеба 221/118 — другим счётом, на шаги не влияет |
+| Файлов вне тестов, упоминающих тип | 212 `.cs` (115 из них в `backend/ClaudeHomeServer`); метод счёта — ниже |
 
 В первой редакции было 11 819 строк, 44 места (число по ветке, не по master) и 202 файла;
 здесь цифры приведены к master. Ветка `refactor/opt-session-manager` обновлена с master
@@ -31,6 +31,11 @@ grep -nE '^\s{0,4}(public|private|internal|protected)[^=;]*\(' /tmp/SM.cs
 # параметры конструктора — разбор сигнатуры без комментариев (52)
 grep -rn 'new SessionManager(' --include=*.cs backend | wc -l   # 57 мест
 grep -rln 'new SessionManager(' --include=*.cs backend | wc -l  # 55 файлов
+# файлов вне тестовых проектов, упоминающих тип: .cs, исключая *.Tests* и TestKit* (212):
+git grep -l 'SessionManager' 03d78e1aa -- backend | sed 's/^[^:]*://' \
+  | grep '\.cs$' | grep -vE '\.Tests(\.|/)|TestKit' | wc -l
+# из них в главном проекте backend/ClaudeHomeServer/ (115): к той же цепочке добавить
+# | grep '^backend/ClaudeHomeServer/' | wc -l
 ```
 
 Размер метода — от его объявления до следующего, **включая комментарии** (в этом файле их
@@ -45,15 +50,16 @@ grep -rln 'new SessionManager(' --include=*.cs backend | wc -l  # 55 файло�
    **23 класса** в пяти семействах (стор, история, рабочая папка, жизненный цикл, ход).
    Средний класс — ~450 строк. Меньше классов можно получить только ослаблением лимита
    зависимостей; цена такого решения — классы на 13–15 зависимостей.
-2. **Всё, что выглядело циклами между ролями, кроме трёх рёбер, снимается переносом чистых
-   функций вниз** (`EffectiveRoot`, `TranscriptOnServer`, `HasTurnInFlight`, `Busy`,
-   `ClaimFirstMessage`, проверки зоны персоны). Остаются **три настоящие рекурсии**, и они
+2. **Всё, что выглядело циклами между ролями, снимается переносом чистых функций вниз**
+   (`EffectiveRoot`, `TranscriptOnServer`, `HasTurnInFlight`, `Busy`, `ClaimFirstMessage`,
+   проверки зоны персоны). Прямые рёбра между ролями остаются направленными вниз, кроме
+   четырёх рёбер внутри слоя 4 (§3). Остаются **три настоящие рекурсии**, и они
    свойство машины хода, а не дефект разметки: конец хода запускает следующий ход; процесс CLI
    отдаёт события приёмнику конца хода; ход дёргает штаб. Каждая получает один именованный
-   ленивый шов. К ним добавляются два именованных разрыва циклов через внешние сервисы
-   (`IFeatureChatLinks` у видимости, `ReviewTreePool` у удаления): всего **пять ленивых
-   швов**, и больше их не заводится. `IServiceProvider` остаётся у одной роли —
-   `BuiltinMcpContexts` (§6, правило 5).
+   ленивый шов вверх. К ним добавляются два именованных разрыва циклов через внешние сервисы
+   (`IFeatureChatLinks` у видимости, `ReviewTreePool` у удаления): **пять ленивых швов
+   вверх** — единственные рёбра, направленные вверх, и больше их не заводится. `IServiceProvider`
+   остаётся у одной роли — `BuiltinMcpContexts` (§6, правило 5).
 3. **Штаб отдаёт свои швы без правки вертикали.** `ITeamRunState` целиком реализуем
    стором (все методы читают и пишут `SessionEntry`), `ITeamHistoryStore` — историей,
    `ITeamTurnIntake` — приёмом хода. `ITeamSessionDirectory` остаётся на фасаде тонкой
@@ -120,7 +126,7 @@ grep -rln 'new SessionManager(' --include=*.cs backend | wc -l  # 55 файло�
 | `TurnLaunchContextFactory` | ~150 | сборка `LlmSessionContext`, которая сейчас дублируется в `StartNewSessionAsync` и `EnsureProcessCoreAsync`, плюс `BuildEnqueueBypass`, `BuildOrchestrationDone`, `EnqueueBypassTurn` |
 | `TurnProcessHost` | ~670 | `StartNewSessionAsync`, `EnsureAccumulatorAsync`, `EnsureProcessAsync`, `EnsureProcessCoreAsync`, `CompactAsync`, `Interrupt`, `InterruptCore`, `RecordUserInterrupt`, `RespondPermission`, `RemoveAutoAllowTool`, `IsStaleInteractionAnswer`, `ResumeAfterInteraction`, `AnswerQuestion`, `RespondPlan`, `KillAllProcesses`, `StopChatsOfRevokedMember`, ожидание устройства (`DeviceWaitGate`, `ParkForDeviceAsync`, `GetDeviceWaitingSessions`, `ReleaseDeviceWaitAsync`, `ExpireDeviceWaitAsync`) |
 | `TurnRecovery` | ~300 | `ReviveStuckSession(Async)`, `StopClosedExecutorProcess`, `RestartStuckTurnAsync`, `TurnTranscriptDamagedException`, `StuckTurnRestartResult`, `IsTailIntactForResume`, `SendRestartResumeTurnAsync`, `ResumeAfterRestartAsync`, `ResolveTurnCwd`, `TakeRestartResumeCandidates`, `DrainRestoredPendingAsync` |
-| `TurnCompletion` | ~900 | `OnMessageAsync`, `OnMessageQueuedAsync` (одним методом, как есть), `PipelineForTest`, `DrainPipelineAsync`, `GetPipeline`, `EnqueueWorkAsync`, `ProcessPipelineItemAsync`, `ApplyStatusQueuedAsync`, `LastAssistantText`, `FireAndForget`; реализует `ITurnMessageSink` |
+| `TurnCompletion` | ~900 | `OnMessageAsync`, `OnMessageQueuedAsync` (одним методом, как есть), `PipelineForTest`, `DrainPipelineAsync`, `GetPipeline`, `EnqueueWorkAsync`, `ProcessPipelineItemAsync`, `ApplyStatusQueuedAsync`, `LastAssistantText`; реализует `ITurnMessageSink` |
 | `LocalVoiceTurn` | ~180 | `BuildVoiceContextBlock`, `ShouldRunLocalVoice`, `BuildVoiceMessages`, `TrimVoiceMessage`, `RunLocalVoiceTurnAsync` |
 | `TurnIntake` | ~1 540 | `RouteGroupSpeakerAsync`, `SendMessageAsync`, `RefuseTurnAsync`, `SendDirectAsync`, `ChatPreview`, `BuildCliTurnText`, `SendMessageAndWaitAsync`, `SendOrEnqueueAsync`, `ReportUpAsync`, `ReportBlockerAsync`, `PreemptTurnForQueue`, `PreemptForPending`, `CancelPendingAsync`, `FreezePendingAsync`, `DrainNextPendingAsync`, `AwaitPreviousTurnExitAsync`, `DeliverPendingAsync`, `PrivateChatAuthorRevoked`, `SetMode`; цикл «до готово» (`SetWorkLoopAsync`, `ContinueWorkLoopAsync`, `StopIfWorkLoopLimitReachedAsync`, маркеры `<promise>`/`<blocked>`/`<waiting>`, `TickWaitingLoopsAsync`, `AddWorkLoopStoppedNoticeAsync`, `AppendServerRestartCardAsync`, `BroadcastWorkLoopAsync`, `LoopLimitOrDefault`); `NudgeTruncatedSubagentAsync`; реализует `ITurnStarter` и `ITeamTurnIntake` |
 
@@ -247,7 +253,7 @@ grep -rln 'new SessionManager(' --include=*.cs backend | wc -l  # 55 файло�
 `PersonaLayerBuilder`, `TurnLaunchContextFactory`, `TurnIntake`). В первой редакции было
 семь, а не восемь, как там написано: седьмым был `TurnCompletion` с фиктивной зависимостью
 `processHost`. Тело конца хода (`OnMessageQueuedAsync`, `ProcessPipelineItemAsync`,
-`ApplyStatusQueuedAsync`, `FireAndForget`, `SessionManager.cs:10662-11652`) не зовёт ни
+`ApplyStatusQueuedAsync`, `SessionManager.cs:10662-11652`) не зовёт ни
 одного метода `TurnProcessHost`, а `entry.Process` (`:10719`, `:11305`) — поле записи,
 то есть стор. Проверка: `grep` имён всех методов `TurnProcessHost` из §1 по этому
 диапазону даёт ноль вхождений. **Новая зависимость любого из них — сигнал резать
@@ -258,8 +264,8 @@ grep -rln 'new SessionManager(' --include=*.cs backend | wc -l  # 55 файло�
 ## 3. Швы и направление вызовов
 
 Слои снизу вверх; стрелка «A → B» означает «A зовёт B». Фасад `SessionManager` делегирует
-всем классам, в том числе соседям по слою 5. Внутри слоя 4 три ребра: `Voice → Done`, `Intake → Done`, `Recovery → Host`; циклов
-среди них нет. Ребра `Done → Host` из первой редакции нет: зависимость была фиктивной (§2).
+всем классам, в том числе соседям по слою 5. Внутри слоя 4 четыре ребра: `Voice → Done`,
+`Intake → Done`, `Intake → Voice`, `Recovery → Host`; циклов среди них нет. Ребра `Done → Host` из первой редакции нет: зависимость была фиктивной (§2).
 
 ```mermaid
 flowchart BT
@@ -394,7 +400,28 @@ internal interface ITurnMessageSink
 worktree и миграции); `HasTurnInFlight`, `Busy`, `WithTeamState`, `ClaimFirstMessage`,
 `NoteRunDelegation` (стор ниже всех); `ShouldNudgeSubagent`/`StartsNudgeSeries` (статика);
 проверки зоны персоны (настройки ниже создания и приёма); `FindResumeTranscript`,
-`CleanupOrphanBranchTranscript` (маршрут ниже конца хода).
+`CleanupOrphanBranchTranscript` (маршрут ниже конца хода); `FireAndForget` (статика, см. ниже).
+
+`FireAndForget` (`SessionManager.cs:11646`, `private static void FireAndForget(Task, string)`) —
+та же природа, что `ShouldNudgeSubagent`: статик без отношения к концу хода, но его зовут
+классы более ранних шагов — `Snapshot` (`:9523`, тело `ITeamSessionDirectory`, S3-1),
+`TryPoolFailover` (`:3288`, маршрут, S3-2), `ResumeAfterInteraction` (`:7781`),
+`RespondPermission` (`:7791`), `RecordUserInterrupt` (`:7950`), `AnswerQuestion` (`:10376`),
+`RespondPlan` (`:10406`) (процесс, S3-5), `ReviveStuckSession` (`:7962`),
+`StopClosedExecutorProcess` (`:7985`), `RestartStuckTurnAsync` (`:8041`) (восстановление,
+S3-5), — а также конструктор (`:1054`, тикер ожидания) и штаб (`ApplyPlanDecisionAsync`
+`:8548`, `RecordToolStages` `:8681`, `RecordToolStarted` `:8707`, `ResolveEscalationAsync`
+`:8752`, `ResetTeamIterationOnUserInput` `:9046`), которые остаются в `SessionManager`.
+Формального нарушения модели конструктора нет (статик не даёт параметра, сторож формы ядра
+его не краснит), но оставлять его в `TurnCompletion` нельзя: исполнители S3-2/S3-5
+получили бы дублирование хелпера в каждом классе или вызов фасада — а это прямо нарушает
+«никогда от `SessionManager`». Решение: с S3-1 (его первый носитель — тела
+`ITeamSessionDirectory`) опускать вниз как общий статический хелпер `Services/Sessions`
+по образцу `SubagentNudgePolicy` (static, без состояния и конструктора); S3-2/S3-5 просто
+зовут его. Хелпер не зависимость конструктора: таблица §2 не меняется, сторож его не
+считает (правило 2 считает параметры конструктора). `LastAssistantText` (`:11641`) — тоже
+статик, но зовётся только из тел `TurnCompletion` (`:11035`, `:11046`): остаётся с концом
+хода, дефекта не даёт.
 
 ## 4. Инварианты по ролям
 

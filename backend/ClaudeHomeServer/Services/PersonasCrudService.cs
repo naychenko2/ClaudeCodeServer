@@ -530,6 +530,18 @@ public sealed class PersonasCrudService(
     // prompt пуст → строим фото-промпт из имени/описания персоны.
     public async Task<ActionResult> GenerateAvatarAsync(string userId, string id, GenerateAvatarRequest req)
     {
+        // Вертикаль генерации выключена: ни генерировать, ни ставить в очередь нечем — их
+        // сервисов нет в контейнере. Отказ с настоящей причиной, а не «провайдер не подключён»
+        // (ADR-014 форма 3 — 503 с причиной, а не 400; R-S2b-1 п.4). Гейт ДО разбора персоны:
+        // на выключенном хосте причина отказа — вертикаль, а не отсутствие пробы; иначе
+        // 404 «персоны нет» мерял бы эту половину матрицы вместо отказа вертикали.
+        if (images is null || imageBackfill is null)
+            return StatusCode(503, new
+            {
+                error = "Подсистема генерации изображений выключена (Subsystems:images:Enabled=false)",
+                queued = false,
+            });
+
         var persona = personas.Get(id, userId);
         if (persona is null) return NotFound();
 
@@ -543,15 +555,6 @@ public sealed class PersonasCrudService(
         // сам» здесь нельзя, отказ остаётся отказом.
         var canBackfill = persona.Avatar.Kind != PersonaAvatarKind.Image
             || string.IsNullOrEmpty(persona.Avatar.ImageFile);
-
-        // Вертикаль генерации выключена: ни генерировать, ни ставить в очередь нечем — их
-        // сервисов нет в контейнере. Отказ с настоящей причиной, а не «провайдер не подключён»
-        if (images is null || imageBackfill is null)
-            return BadRequest(new
-            {
-                error = "Подсистема генерации изображений выключена (Subsystems:images:Enabled=false)",
-                queued = false,
-            });
 
         // Провайдера нет — отвечаем отказом, но аватар не теряем: заявка догонит его,
         // как только генерацию настроят

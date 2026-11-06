@@ -1,7 +1,7 @@
 // ПОТОЛОК РОСТА (frontend-api-split-2026-11.md): файл только худеет. Лимит строк — в
 // lib/__tests__/apiFileBudget.test.ts; он снижается после каждого выноса домена в
 // features/<домен>/api.ts, поднимать его нельзя. Новые методы — сразу в features/<домен>/.
-import type { Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
+import type { Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, PlanMap, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
 import { localModelApi } from '../features/localModel/api';
 import { providerAccountsApi } from '../features/providerAccounts/api';
 import { accountApi } from '../features/account/api';
@@ -12,6 +12,8 @@ import { spendApi } from '../features/spend/api';
 import { modulesApi } from '../features/modules/api';
 import { homeApi } from '../features/home/api';
 import { chatAuxApi } from '../features/chat/api';
+import { videoApi } from '../features/video/api';
+import { devicesApi } from '../features/desktop/api';
 import { cachedToken, readStoredToken, request, writeStoredToken } from './offline';
 import type { FeatureRun } from '../types/featureRun';
 import type { FeaturesIndex, FeaturePage } from '../types/featureIndex';
@@ -508,20 +510,8 @@ export const api = {
       }),
   },
 
-  // Устройства владельца и сопряжение (канал устройства ADR-016).
-  devices: {
-    list: () => request<DesktopDevice[]>('/devices'),
-    // Код сопряжения: 8 символов, живёт 5 минут, принадлежит ЭТОЙ веб-сессии
-    startPairing: () => request<DesktopPairingCode>('/devices/pairing', { method: 'POST' }),
-    pairingStatus: () => request<DesktopPairingCode>('/devices/pairing'),
-    cancelPairing: () => request<void>('/devices/pairing', { method: 'DELETE' }),
-    rename: (id: string, name: string) =>
-      request<DesktopDevice>(`/devices/${encodeURIComponent(id)}`, {
-        method: 'PATCH', body: JSON.stringify({ name }),
-      }),
-    // Отзыв: запись остаётся надгробием, токен устройства умирает немедленно
-    revoke: (id: string) => request<void>(`/devices/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-  },
+  // Устройства владельца и сопряжение — в features/desktop/api.ts
+  ...devicesApi,
 
   // Плагины владельца (ADR-031 §2.3, §4). Гейты бэка: подсистема выключена → 503,
   // флаг plugins-mvp off → 403; install/grant/uninstall/тумблер — только пользовательский
@@ -635,34 +625,8 @@ export const api = {
     },
   },
 
-  // Раздел «Видео»: эфиры телеканалов и лента подписок YouTube.
-  // live: true у списков — офлайн-кэш здесь ВРЕДЕН: у карточки канала есть поле
-  // «сейчас в эфире», и подставленный из IndexedDB ответ показывал бы передачу,
-  // которая шла полчаса назад, как текущую (тот же класс вранья, что у статуса выкатки).
-  video: {
-    providers: () => request<VideoProviderInfo[]>('/video/providers', { live: true }),
-    // refresh: true — кнопка «Обновить». Без него провайдер отдаёт из кеша (минута у
-    // программы передач, полчаса у ленты), и нажатие визуально не делало бы ничего.
-    channels: (provider: string, refresh = false) =>
-      request<VideoChannelsResponse>(
-        `/video/channels?provider=${encodeURIComponent(provider)}${refresh ? '&refresh=true' : ''}`,
-        { live: true }),
-    feed: (provider: string, channelId?: string, refresh = false) =>
-      request<VideoFeedResponse>(
-        `/video/feed?provider=${encodeURIComponent(provider)}`
-        + (channelId ? `&channelId=${encodeURIComponent(channelId)}` : '')
-        + (refresh ? '&refresh=true' : ''),
-        { live: true }),
-    // Избранные каналы полосы. live: true — как и у каналов: подставленный из офлайн-кэша
-    // набор увёл бы полосу на чужой состав и первое же нажатие звёздочки сохранило бы его.
-    favorites: () => request<VideoFavoritesResponse>('/video/favorites', { live: true }),
-    setFavorites: (keys: string[]) =>
-      request<VideoFavoritesResponse>('/video/favorites', {
-        method: 'PUT', body: JSON.stringify({ keys }), live: true,
-      }),
-    youtubeAuthUrl: () => request<{ url: string }>('/video/youtube/auth-url'),
-    youtubeDisconnect: () => request<{ ok: boolean }>('/video/youtube/disconnect', { method: 'POST' }),
-  },
+  // Раздел «Видео» — в features/video/api.ts
+  ...videoApi,
 
 // Ссылки внешнего доступа — СКВОЗНЫЕ по проектам владельца, поэтому не под /projects/{id}:
   // забытая открытой витрина в соседнем проекте иначе осталась бы невидимой.

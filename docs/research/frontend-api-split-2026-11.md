@@ -60,7 +60,8 @@
 | `tasks` | 1443–1554 | 112 | `features/tasks/api.ts` | 36 |
 | `notes` | 1555–1664 | 110 | `features/notes/api.ts` | 22 |
 | `personas` | 1665–1976 | 312 | `features/personas/api.ts` | 36 |
-| `briefing` | 1977–1987 | 11 | не назначено | 1 |
+| `briefing` | 1977–1982 | 6 | не назначено | 1 |
+| `search` | 1983–1984 | 2 | не назначено | 1 |
 | `onboarding` | 1988–1997 | 10 | не назначено | 1 |
 | `sessions` | 1998–2086 | 89 | `features/sessions/api.ts` | 26 |
 | `wall` | 2087–2098 | 12 | `features/chat/api.ts` | 5 |

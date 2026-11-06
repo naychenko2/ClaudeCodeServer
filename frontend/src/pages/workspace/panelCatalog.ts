@@ -232,9 +232,10 @@ export const WORKSPACE_KEYS: readonly PanelKey[] = [
 // с именем 'architecture', skills → SkillsPanel, preview → PreviewPanelContent
 // (сервисы проекта), video → VideoPanel, dossiers → DossierHistoryPanel,
 // notes → панель заметок проекта (её контент уже гейтится useSubsystem(notes) —
-// здесь тот же ключ на уровне набора, чтобы и кнопка не появлялась).
+// здесь тот же ключ на уровне набора, чтобы и кнопка не появлялась),
+// tasks → TasksPanel (тело безусловное: только эта пара гейтит ключ в рельсе).
 // Вне таблицы — панели без подсистемного гейта: сессионные (plan/agents/context),
-// основные (chats/files/docs/tasks/team/terminal), центральная (toc), генерации
+// основные (chats/files/docs/team/terminal), центральная (toc), генерации
 // (chatContext), семейство плагинов (pluginPanels — свой гейт: флаг + возможности
 // проекта). Панели слота workspace-panel-def уже скрыты своими гейтами и здесь не
 // нужны: characters/voices — реестром (выключенная подсистема не отдаёт ни одного
@@ -250,6 +251,10 @@ export const PANEL_SUBSYSTEM: Partial<Record<StaticPanelKey, string>> = {
   skills: SUBSYSTEMS.skills,
   preview: SUBSYSTEMS.projectServices,
   video: SUBSYSTEMS.video,
+  // «Задачи» (R-S2b-2c): вертикаль реальная и отключаемая (SUBSYSTEMS.tasks),
+  // тело панели в WorkspacePage безусловное — без этой пары кнопка оставалась
+  // в рельсе при выключенной подсистеме, а панель давала пустой список/ошибки
+  tasks: SUBSYSTEMS.tasks,
 };
 
 // WORKSPACE_KEYS без панелей выключенных подсистем — набор рельсы для данного

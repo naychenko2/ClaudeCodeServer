@@ -1,7 +1,7 @@
 // ПОТОЛОК РОСТА (frontend-api-split-2026-11.md): файл только худеет. Лимит строк — в
 // lib/__tests__/apiFileBudget.test.ts; он снижается после каждого выноса домена в
 // features/<домен>/api.ts, поднимать его нельзя. Новые методы — сразу в features/<домен>/.
-import type { Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
+import type { Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
 import { localModelApi } from '../features/localModel/api';
 import { providerAccountsApi } from '../features/providerAccounts/api';
 import { accountApi } from '../features/account/api';
@@ -10,6 +10,8 @@ import { hostControlApi } from '../features/hostControl/api';
 import { modelsApi } from '../features/models/api';
 import { spendApi } from '../features/spend/api';
 import { modulesApi } from '../features/modules/api';
+import { homeApi } from '../features/home/api';
+import { chatAuxApi } from '../features/chat/api';
 import { cachedToken, readStoredToken, request, writeStoredToken } from './offline';
 import type { FeatureRun } from '../types/featureRun';
 import type { FeaturesIndex, FeaturePage } from '../types/featureIndex';
@@ -1005,10 +1007,9 @@ export const api = {
   },
 
   // Доска агентов (диспетчерская)
-  // Сводка дашборда «Домой»: активные + недавние сессии по всем проектам и чатам
-  home: {
-    summary: (recent = 10) => request<HomeSummaryResponse>(`/home/summary?recent=${recent}`),
-  },
+  // Мелкие домены «Дома» (сводка, бриф, поиск, онбординг, «стена», быстрые фразы,
+  // продуктовая история) — в features/home/api.ts
+  ...homeApi,
   board: {
     // live: true — ответ крупный (замер часа работы: ~0,86 МБ), а доска читается
     // на каждый чих статуса. В офлайн-кэш IndexedDB такая частота писала 258 МБ за
@@ -1585,27 +1586,6 @@ export const api = {
       }),
   },
 
-  // Утренний бриф (флаг daily-briefing): собрать план дня в дневник
-  briefing: {
-    today: (date?: string) =>
-      request<NoteDetail>('/briefing/today', { method: 'POST', body: JSON.stringify({ date: date ?? null }) }),
-  },
-
-  // Единый поиск (флаг unified-search): заметки + задачи в одной выдаче
-  search: (q: string, topK = 8) =>
-    request<SearchHit[]>(`/search?q=${encodeURIComponent(q)}&topK=${topK}`),
-
-  // Онбординги: старт/резюм чат-интервью знакомства.
-  // Идемпотентны: живая сессия онбординга возвращается как есть, удалённая — заменяется новой
-  onboarding: {
-    startUser: () => request<Session>('/onboarding/user/start', { method: 'POST' }),
-    startProject: (projectId: string) =>
-      request<Session>(`/onboarding/project/${encodeURIComponent(projectId)}/start`, { method: 'POST' }),
-    // Страховка «применить итоги разговора»: LLM-прогон + генерация аватара до ~90 с,
-    // таймаут 150 с — запас на fal и холодный старт модели
-    applyTranscript: () =>
-      request<Persona>('/onboarding/user/apply-transcript', { method: 'POST', timeoutMs: 150_000 }),
-  },
 
   sessions: {
     list: (projectId: string) => request<Session[]>(`/projects/${projectId}/sessions`),
@@ -1694,26 +1674,6 @@ export const api = {
         { method: 'POST', body: JSON.stringify({ includeText }), timeoutMs: 180_000 }),
   },
 
-  // «Стена»: per-user набор чатов колонками. Ресурс бэка — /api/me/wall
-  // (MyWallController, конвенция per-user настроек), короткое имя здесь — для читаемости вызовов.
-  wall: {
-    // Состав стены — полные Session в порядке набора (мёртвые уже отфильтрованы сервером)
-    get: () => request<{ chats: Session[] }>('/me/wall'),
-    // Полная замена состава; ответ — итог после серверной чистки (дедуп/чужие/потолок)
-    put: (chatIds: string[]) =>
-      request<{ chats: Session[] }>('/me/wall', { method: 'PUT', body: JSON.stringify({ chatIds }) }),
-    // Кандидаты для пикера: все чаты владельца, свежие сверху
-    candidates: () => request<Session[]>('/me/wall/candidates'),
-  },
-
-  // Быстрые фразы композера: готовые сообщения, уходящие одним нажатием.
-  // Ресурс бэка — /api/me/quick-phrases (MyQuickPhrasesController)
-  quickPhrases: {
-    get: () => request<{ phrases: QuickPhrase[] }>('/me/quick-phrases'),
-    // Полная замена набора; ответ — итог после серверной чистки (пустые/дубли/потолок)
-    put: (phrases: QuickPhrase[]) =>
-      request<{ phrases: QuickPhrase[] }>('/me/quick-phrases', { method: 'PUT', body: JSON.stringify({ phrases }) }),
-  },
 
   // Чаты вне проекта (project-less)
   chats: {
@@ -1922,28 +1882,8 @@ export const api = {
     },
   },
 
-  // Сторожа чатов: чаты и проекты владельца с АКТИВНЫМИ сторожами. Снимок нужен потому,
-  // что событие watchdogs_changed приходит только на смене состава — открывший список
-  // позже постановки иначе о них не узнает
-  watchdogs: {
-    snapshot: () => request<{ sessions: string[]; projects: string[] }>('/watchdogs'),
-  },
-
-  // Продуктовая история (AI-сводка по всем проектам): дни, сводка дня, счетчик новых
-  history: {
-    days: (sinceDays = 0) =>
-      request<DaySummaryStub[]>(`/history/days${sinceDays > 0 ? `?sinceDays=${sinceDays}` : ''}`),
-    day: (date: string) =>
-      request<ChangelogDay>(`/history/day/${date}`),
-    newCount: (sinceIso: string) =>
-      request<{ count: number }>(`/history/new-count?since=${encodeURIComponent(sinceIso)}`),
-    status: () => request<ChangelogStatus>('/history/status'),
-    // Сбросить кеш одного дня (перегенерация) / всей истории (очистка)
-    invalidateDay: (date: string) =>
-      request<void>(`/history/day/${date}`, { method: 'DELETE' }),
-    clear: () =>
-      request<void>('/history', { method: 'DELETE' }),
-  },
+  // Сторожа чатов, workflow-агенты и голоса TTS — в features/chat/api.ts
+  ...chatAuxApi,
 
   // Документация проекта (README.md + docs/**) для панели «Документы»: корпус со связями,
   // а не файлы — отсюда отдельная секция рядом с files
@@ -2483,17 +2423,6 @@ export const api = {
       }),
   },
 
-  workflow: {
-    getAgents: (transcriptDir: string) =>
-      request<{ agents: WorkflowAgentInfo[] }>(
-        `/workflow-agents?transcriptDir=${encodeURIComponent(transcriptDir)}`
-      ),
-    // Полный поток одного агента (текст/thinking/инструменты) — лениво при раскрытии карточки
-    getTimeline: (transcriptDir: string, agentId: string) =>
-      request<{ blocks: WorkflowAgentBlock[] }>(
-        `/workflow-agents/timeline?transcriptDir=${encodeURIComponent(transcriptDir)}&agentId=${encodeURIComponent(agentId)}`
-      ),
-  },
 
   sync: {
     list: (projectId: string) => request<SyncMark[]>(`/projects/${projectId}/sync`),
@@ -2506,12 +2435,6 @@ export const api = {
       request<void>(`/projects/${projectId}/sync?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
   },
 
-  tts: {
-    // Каталог голосов для формы выбора: канонические имена, подписи, пол и амплуа.
-    // live — мимо офлайн-кеша: сразу после того, как ключ SpeechKit пропишут в конфиг,
-    // из IndexedDB прилетал бы устаревший configured: false и форма врала бы про синтез
-    voices: () => request<TtsVoicesResponse>('/tts/voices', { live: true }),
-  },
 
   // Карта плана (часть B фичи «Визуальный разворот плана», docs/plans/visual-plan.md):
   // структурный слепок markdown-плана для разворота схемой. Сборка платная — one-shot

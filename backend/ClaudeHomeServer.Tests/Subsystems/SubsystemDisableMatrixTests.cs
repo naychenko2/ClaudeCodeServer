@@ -124,7 +124,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// ReaderController.cs:36). Убраны и четыре обязательные зависимости вне ядра — без них хост
     /// не поднимался бы вовсе, даже после починки контроллеров: отказ текстом там, где у вызова нет
     /// HTTP-кода (WorkspaceToolset.cs:1757, WebSearchToolset.cs:120, PersonasCrudService.cs:549
-    /// и :640), и GetService на пути остановки хоста (Program.cs:2338).
+    /// и :638), и GetService на пути остановки хоста (Program.cs:2338).
     ///
     /// Метка «ядро/сквозная» — объявление ядра: строка с ней требует `CanDisable=false` в классе
     /// подсистемы, и согласованность метки с кодом держит сторож
@@ -159,8 +159,8 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
         ["llm"] = "ядро сессий (CanDisable не объявлен — вертикаль отключаемая): ядро сессий "
             + "(backend/ClaudeHomeServer/Services/SessionManager.cs:739-743) требует "
             + "ILlmSessionAdapterFactory, UsageService и LlmProviderRegistry гейтнутой сборки ClaudeHomeServer.Llm "
-            + "(backend/ClaudeHomeServer.Llm/LlmSubsystem.cs:93-95) обязательными параметрами — "
-            + "первый запрос к хосту не отвечен.",
+            + "(backend/ClaudeHomeServer.Llm/LlmSubsystem.cs:327 — фабрика адаптеров, :356 — UsageService, "
+            + ":296 — LlmProviderRegistry) обязательными параметрами — первый запрос к хосту не отвечен.",
         ["memory"] = "ядро/сквозная: шов контекста хода PersonaRecallSourceAdapter "
             + "(backend/ClaudeHomeServer/Services/Composition/PromptSeamAdapters.cs:18, ADR-023) и ядро проектов "
             + "(backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) требуют PersonaMemoryService "
@@ -439,6 +439,13 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// хост не умеет ответить этот запрос, и он записывается как «500» с причиной.
     /// </summary>
     private static async Task<string> StatusOfAsync(HttpClient client, string method, string url,
+        string body = EmptyBody) => (await ProbeAsync(client, method, url, body)).Status;
+
+    /// <summary>
+    /// Тот же запрос, что мерит строка матрицы, но вместе с телом ответа: тест тела 503 читает
+    /// текст отказа, а не только его код.
+    /// </summary>
+    private static async Task<(string Status, string Body)> ProbeAsync(HttpClient client, string method, string url,
         string body = EmptyBody)
     {
         try
@@ -449,9 +456,9 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
                 // вертикали, а не поймать 400 модельной валидацией (BodyFor ниже).
                 request.Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
             using var response = await client.SendAsync(request);
-            return ((int)response.StatusCode).ToString();
+            return (((int)response.StatusCode).ToString(), await response.Content.ReadAsStringAsync());
         }
-        catch (Exception ex) { return $"500 ({FirstLine(ex)})"; }
+        catch (Exception ex) { return ($"500 ({FirstLine(ex)})", ""); }
     }
 
     private static async Task<string> SnapshotActiveAsync(HttpClient client, string key)
@@ -467,6 +474,53 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     }
 
     private static string FirstLine(Exception ex) => (ex.Message ?? "").Split('\n')[0].Trim();
+
+    // ─── Тело 503: отказ называет причину (по образцу тестов плагинов) ──────────────
+
+    /// <summary>
+    /// Ключи, починенные в S2a-2 отказом 503 с причиной (шапка <see cref="KnownViolations"/>):
+    /// их контроллеры держат сервисы вертикалей опциональными и на выключенном хосте отвечают 503,
+    /// тело которого называет рубильник, вызвавший отказ. Строки вне списка (ядро, KnownViolations)
+    /// здесь не меряются: их 503 — не «отказ починенной вертикали».
+    /// </summary>
+    internal static readonly string[] ReasonBearingKeys =
+        ["tts", "yandex", "video", "backgrounds", "deploy", "reader"];
+
+    /// <summary>
+    /// Строка матрицы меряет код отказа (404/405/503); этот тест мерит его тело: 503 починенной
+    /// вертикали обязан нести «Subsystems:{key}:Enabled=false» — ту же форму, что проверяют тесты
+    /// плагинов (PluginsControllerTests.cs:226, PluginsToolsetTests.cs:162). Инвариант S2a-2
+    /// «отказ с настоящей причиной, а не голым кодом» держится сейчас только текстом контроллера
+    /// (TtsController.cs:67, YandexController.cs:49, VideoController.cs:45,
+    /// ProjectBackgroundsController.cs:43, DeployController.cs:40, ReaderController.cs:39); здесь
+    /// он становится проверяемым. У tts поле reason остаётся not_configured по контракту фронта
+    /// (TtsController.cs:15-18) — настоящая причина в error, и её мерит этот тест. Минимум один
+    /// 503 на ключ обязателен: без него строка не видела бы отказа вовсе (тот же вакуум, что
+    /// закрывал сторож полноты).
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(ReasonBearingRows))]
+    public async Task Тело_503_несёт_причину_выключенной_вертикали(string key)
+    {
+        var client = _hosts.DisabledFor(key).CreateAuthenticatedClient();
+
+        var refusals = new List<string>();
+        foreach (var (method, url, body) in RoutesOf(key))
+        {
+            var (status, text) = await ProbeAsync(client, method, url, body);
+            if (status == "503") refusals.Add($"{method} {url} → {text}");
+        }
+
+        var marker = $"Subsystems:{key}:Enabled=false";
+        refusals.Should().NotBeEmpty(
+            $"вертикаль «{key}» починена 503-гейтом: ни один её привязанный маршрут не ответил 503 "
+            + "на своём выключенном хосте — гейт здесь не проверен");
+        refusals.Where(r => !r.Contains(marker, StringComparison.Ordinal))
+            .Should().BeEmpty($"503 вертикали «{key}» обязан называть причину — «{marker}» в теле отказа");
+    }
+
+    public static IEnumerable<object[]> ReasonBearingRows =>
+        ReasonBearingKeys.Select(k => new object[] { k });
 
     // ─── Состав строки: маршруты и тулсеты вертикали, снятые с включённого хоста ───
 

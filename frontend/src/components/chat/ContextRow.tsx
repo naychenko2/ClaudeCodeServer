@@ -7,13 +7,14 @@ import { useContainerWidth } from '../../hooks/useContainerWidth';
 import { useGitChip } from '../../hooks/useGitChip';
 import { registerGitActions } from '../../lib/chatContext/gitActions';
 import { execMenuTitle, selectRowAction } from '../../lib/chatContext/rowExec';
-import { getKindApi } from '../../lib/chatContext/registry';
+import { getKindApi, getKindRegistry } from '../../lib/chatContext/registry';
+import { isKindDisabled } from '../../lib/chatContext/disabledKind';
 import { getRunVersion, subscribeRun } from '../../lib/chatContext/actionRun';
 import { withThumb } from '../../lib/chatContext/thumbs';
 import {
   clearContext, detachRef, ensureChatContext, releasePrimary, undoReleasePrimary, useChatContext, useReleaseOffer,
 } from '../../lib/chatContext/store';
-import type { ContextAction } from '../../lib/chatContext/types';
+import type { ChatContextPrimary, ChatContextRef, ContextAction } from '../../lib/chatContext/types';
 import type { TurnTree } from '../../lib/turnWorktree';
 import { useActionMemoryVersion } from '../../lib/chatContext/actionMemory';
 import { revealContextPanel } from '../../lib/subsystems/registryCore';
@@ -25,6 +26,9 @@ import { ContextSheet } from './ContextSheet';
 
 // Рамка и отступы строки: измеряем внешний блок, лестница считает от внутренней ширины
 const ROW_BORDER = 2;
+
+// Плашка прикреплённого объекта выключенной (или удалённой) вертикали: текст — и видимый, и title чипа
+const DISABLED_KIND_TEXT = 'Раздел выключен администратором';
 
 interface Props {
   session: Session;
@@ -114,9 +118,17 @@ function RowCore({ session, project, isMobile, notice, onOpenPrimary: onOpenPrim
   useEffect(() => { void ensureChatContext(sessionId); }, [sessionId]);
 
   const kindCtx = { projectId: project?.id ?? null, sessionId, isMobile };
+  // Прикреплённый объект выключенной (или удалённой) вертикали: её вида нет в реестре слота —
+  // ни иконки, ни действий, ни «Формата». Чтобы строка не выглядела файлом, ставим неактивную
+  // плашку с текстом-пояснением: вью гасит чип по missing и строит по label и текст, и title
+  // (ContextRowView.tsx:203, 258); версию гасим: на плашке с текстом-пояснением она только шум.
+  // Вид файла («project-file») — не выключенный: кита у него нет by design (disabledKind.ts)
+  const kindRegistry = getKindRegistry();
+  const dimmedItem = <T extends ChatContextPrimary | ChatContextRef>(item: T): T =>
+    isKindDisabled(item.kind, kindRegistry) ? { ...item, label: DISABLED_KIND_TEXT, version: null, missing: true } : item;
   // Миниатюры сервер не присылает: адрес собираем здесь (вид объекта или путь файла проекта)
-  const primary = ctx.primary ? withThumb(kindCtx, ctx.primary) : null;
-  const refs = ctx.refs.map(r => withThumb(kindCtx, r));
+  const primary = ctx.primary ? dimmedItem(withThumb(kindCtx, ctx.primary)) : null;
+  const refs = ctx.refs.map(r => dimmedItem(withThumb(kindCtx, r)));
 
   // Выбранное действие объекта: предвыбор → память → умолчание (Р1). «Чем» есть только у run-действия
   // executors() вида зовётся на каждый рендер намеренно: выбранный исполнитель живёт в сторе вертикали,

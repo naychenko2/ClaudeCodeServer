@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.Routing;
+using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Subsystems;
@@ -102,19 +103,17 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// формы — строка <c>plugins</c>: её контроллеры держат те же зависимости опциональными и
     /// отвечают 503 (ClaudeHomeServer.Plugins/Controllers/PluginsController.cs:22-38).
     ///
-    /// S2a-2 закрыл пять ключей (tts, yandex, video, backgrounds, deploy): их контроллеры в Main
+    /// S2a-2 закрыл шесть ключей (tts, yandex, video, backgrounds, deploy, reader): их контроллеры в Main
     /// держат сервисы вертикалей опциональными (= null) и отвечают 503 с причиной
     /// (TtsController.cs:61, VideoController.cs:42, YandexController.cs:45,
-    /// ProjectBackgroundsController.cs:40, DeployController.cs:37, TrayDeployController.cs:37).
-    /// Убраны и четыре обязательные зависимости вне ядра — без них хост не поднимался бы вовсе,
-    /// даже после починки контроллеров: отказ текстом там, где у вызова нет HTTP-кода
-    /// (WorkspaceToolset.cs:1757, WebSearchToolset.cs:120, PersonasCrudService.cs:549 и :640),
-    /// и GetService на пути остановки хоста (Program.cs:2338). Гейт <c>reader</c> починен тем же
-    /// приёмом (ReaderController.cs:36) — строка осталась из-за формы пробы, её причина в самой
-    /// строке.
+    /// ProjectBackgroundsController.cs:40, DeployController.cs:37, TrayDeployController.cs:37,
+    /// ReaderController.cs:36). Убраны и четыре обязательные зависимости вне ядра — без них хост
+    /// не поднимался бы вовсе, даже после починки контроллеров: отказ текстом там, где у вызова нет
+    /// HTTP-кода (WorkspaceToolset.cs:1757, WebSearchToolset.cs:120, PersonasCrudService.cs:549
+    /// и :640), и GetService на пути остановки хоста (Program.cs:2338).
     ///
-    /// Одна починка на краю потребителя осталась — <c>images</c>: её три ручки перечислены в
-    /// строке. Прочие строки — «ядро/сквозная»: потребитель является ядром сессий и проектов
+    /// <c>images</c> в этом шаге не чинится: три её ручки не атрибутированы (перечень в строке),
+    /// привязка — S2b-1. Прочие строки — «ядро/сквозная»: потребитель является ядром сессий и проектов
     /// (SessionManager.cs:739-743 для llm, ProjectsController.cs:25 для
     /// git/tasks/knowledge/dossiers/memory/project-icons, SessionHub.cs:26 → FileWatcherService.cs:103
     /// для code-graph, SessionManager.cs:745 → PersonaBindingsService.cs:139 для skills) или швом
@@ -156,8 +155,9 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             + "обязательным параметром → GET и PUT /api/image-generation. Тот же профиль у OnboardingController "
             + "(backend/ClaudeHomeServer/Controllers/OnboardingController.cs:31) и PersonasController "
             + "(backend/ClaudeHomeServer/Controllers/PersonasController.cs:39) — генерация аватара и очередь догона. "
-            + "Починка на краю этих потребителей — следующий прогон; сервис-потребитель PersonasCrudService "
-            + "закрыт в S2a-2 (PersonasCrudService.cs:549, :640).",
+            + "Все три ручки не атрибутированы: их привязка и починка — S2b-1 (решение постановщика по "
+            + "S2a-2). Сервис-потребитель PersonasCrudService закрыт в S2a-2 (PersonasCrudService.cs:549, "
+            + ":640) — он хост не роняет.",
         ["project-icons"] = "ядро/сквозная: хост стартует и ключ виден выключенным, но соседняя ручка мертва: "
             + "ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) требует "
             + "ProjectIconGlyphService обязательным параметром → GET /api/projects 500. Единственная строка, "
@@ -166,12 +166,6 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             + "DevServerService обязательным параметром — первый запрос к хосту не отвечен. Обязательный резолв "
             + "на пути остановки хоста починен в S2a-2 (Program.cs:2338 — GetService, как соседние строки того "
             + "же блока). Решает S2b-1 (CanDisable).",
-        ["reader"] = "Гейт вертикали починен в S2a-2 (ReaderController.cs:36): GET /api/reader/image отвечает 503. "
-            + "Мешает форма пробы: POST /api/reader/read и POST /api/reader/embed-check дают 400 модельной "
-            + "валидацией ДО экшена — тело пробы «{}» не проходит обязательный Url записи ReadRequest "
-            + "(backend/ClaudeHomeServer/Controllers/ReaderController.cs:113). Что выбирать — состав тела пробы "
-            + "по типу параметра экшена или nullable Url в DTO (сейчас пустой Url отвечает 200 invalid-url, "
-            + "отсутствующий — 400) — вне этой строки.",
         ["skills"] = "ядро/сквозная: PersonaBindingsService (backend/ClaudeHomeServer/Services/PersonaBindingsService.cs:139), "
             + "обязательный ядру сессий (backend/ClaudeHomeServer/Services/SessionManager.cs:745), требует SkillsService "
             + "обязательным параметром. Первый запрос к хосту не отвечен. CanDisable или опционализацию этого шва "
@@ -301,9 +295,9 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
         if (active != "false") problems.Add($"2. снапшот: /api/admin/subsystems отдал active={active}");
 
         // 3. Маршруты сборки вертикали и её MCP-тулсет: отказ — 404/405/503, не 500.
-        foreach (var (method, url) in RoutesOf(key))
+        foreach (var (method, url, body) in RoutesOf(key))
         {
-            var status = await StatusOfAsync(client, method, url);
+            var status = await StatusOfAsync(client, method, url, body);
             if (status is "404" or "405" or "503") continue;
             problems.Add($"3. маршрут: {method} {url} → {status}");
         }
@@ -334,14 +328,16 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// как исключение запроса: для матрицы это ровно тот же дефект, что ProblemDetails 500 —
     /// хост не умеет ответить этот запрос, и он записывается как «500» с причиной.
     /// </summary>
-    private static async Task<string> StatusOfAsync(HttpClient client, string method, string url)
+    private static async Task<string> StatusOfAsync(HttpClient client, string method, string url,
+        string body = EmptyBody)
     {
         try
         {
             using var request = new HttpRequestMessage(new HttpMethod(method), url);
             if (method is "POST" or "PUT" or "PATCH")
-                // Тело валидное по форме: цель — дойти до роутинга/активации, а не поймать 400.
-                request.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+                // Тело валидное по форме: цель — дойти до роутинга, активации и гейта
+                // вертикали, а не поймать 400 модельной валидацией (BodyFor ниже).
+                request.Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
             using var response = await client.SendAsync(request);
             return ((int)response.StatusCode).ToString();
         }
@@ -371,13 +367,15 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// фиктивными значениями по inline-конверсии маршрута, чтобы отказ дал именно гейт, а не
     /// несовпадение шаблона (пустой/неподходящий параметр дал бы 404 «по неверной причине»).
     /// </summary>
-    private List<(string Method, string Url)> RoutesOf(string key)
+    private List<(string Method, string Url, string Body)> RoutesOf(string key)
     {
         var endpoints = Enabled.Services.GetRequiredService<EndpointDataSource>();
         var attribution = Enabled.Services.GetRequiredService<SubsystemUsageAttribution>();
 
-        var routes = new SortedSet<(string, string)>(Comparer<(string, string)>.Create(
-            (a, b) => string.Compare($"{a.Item1} {a.Item2}", $"{b.Item1} {b.Item2}", StringComparison.Ordinal)));
+        // Порядок и дедупликация — по (метод, маршрут): тело у одного эндпоинта одно
+        var routes = new SortedSet<(string Method, string Url, string Body)>(
+            Comparer<(string Method, string Url, string Body)>.Create(
+                (a, b) => string.Compare($"{a.Method} {a.Url}", $"{b.Method} {b.Url}", StringComparison.Ordinal)));
 
         foreach (var endpoint in endpoints.Endpoints)
         {
@@ -388,7 +386,8 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             if (!string.Equals(attribution.KeyOf(action.ControllerTypeInfo), key, StringComparison.OrdinalIgnoreCase)) continue;
 
             var url = WithQueryParams(FillParams(rawText), action);
-            foreach (var method in HttpMethodsOf(route)) routes.Add((method, url));
+            var body = BodyFor(action);
+            foreach (var method in HttpMethodsOf(route)) routes.Add((method, url, body));
         }
 
         return [.. routes];
@@ -423,6 +422,65 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
         if (t == typeof(bool)) return "true";
         return "x";
     }
+
+    private const string EmptyBody = "{}";
+
+    /// <summary>
+    /// Тело пробы строится по типу [FromBody]-параметра экшена: «{}» для эндпоинта с
+    /// обязательными полями — это 400 модельной валидацией ДО экшена, и строка меряла бы форму
+    /// запроса, а не отказ выключенной вертикали (первый прогон S2a-2: api/reader/read и
+    /// api/reader/embed-check дали ровно это).
+    /// </summary>
+    private static string BodyFor(ControllerActionDescriptor action)
+    {
+        var param = Array.Find(action.MethodInfo.GetParameters(),
+            p => p.GetCustomAttributes(typeof(FromBodyAttribute), inherit: false).Length > 0);
+        return param is null ? EmptyBody : JsonOfType(param.ParameterType, 0);
+    }
+
+    /// <summary>
+    /// Фиктивный JSON по типу: только поля, которые валидация MVC считает обязательными
+    /// (не-nullable ссылка или значение), со значениями по их типу. Необязательные поля не
+    /// трогаются, коллекции — пустые: цель — пройти валидацию и дойти до экшена, а не насытить
+    /// запрос. Вложенность глубже двух уровней не раскрывается (там остаётся пустой объект) —
+    /// такой эндпоинт дал бы 400 и был бы виден красной строкой, а не молча пропущен.
+    /// </summary>
+    private static string JsonOfType(Type type, int depth)
+    {
+        var t = Nullable.GetUnderlyingType(type) ?? type;
+
+        if (t == typeof(string)) return "\"x\"";
+        if (t == typeof(bool)) return "true";
+        if (t == typeof(int) || t == typeof(long) || t == typeof(short)) return "1";
+        if (t == typeof(double) || t == typeof(float) || t == typeof(decimal)) return "1";
+        if (t == typeof(DateTime) || t == typeof(DateTimeOffset) || t == typeof(DateOnly)) return "\"2026-01-01\"";
+        if (t == typeof(JsonElement) || t == typeof(System.Text.Json.Nodes.JsonObject)) return EmptyBody;
+        // Enum как число — так его читает связывание модели по умолчанию
+        if (t.IsEnum) return Convert.ToString(Convert.ToInt32(Enum.GetValues(t).GetValue(0)))!;
+
+        if (typeof(System.Collections.IEnumerable).IsAssignableFrom(t))
+            return t.IsGenericType && t.GetGenericArguments().Length == 2 ? "{}" : "[]";
+
+        if (depth >= 2) return EmptyBody;
+
+        var fields = new List<string>();
+        foreach (var p in t.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (!p.CanWrite || p.GetIndexParameters().Length > 0) continue;
+            if (IsOptionalField(p)) continue;
+            // Имена — camelCase, как их ждёт связывание модели
+            fields.Add($"\"{char.ToLowerInvariant(p.Name[0])}{p.Name[1..]}\":{JsonOfType(p.PropertyType, depth + 1)}");
+        }
+
+        return "{" + string.Join(",", fields) + "}";
+    }
+
+    private static readonly NullabilityInfoContext Nullability = new();
+
+    // Обязательное для валидации поле: Nullable<T> или nullable-ссылка — необязательное
+    private static bool IsOptionalField(System.Reflection.PropertyInfo p) =>
+        p.PropertyType.IsGenericType && p.PropertyType.GetGenericTypeDefinition() == typeof(Nullable<>)
+        || !p.PropertyType.IsValueType && Nullability.Create(p).WriteState == NullabilityState.Nullable;
 
     private static IEnumerable<string> HttpMethodsOf(RouteEndpoint route)
     {

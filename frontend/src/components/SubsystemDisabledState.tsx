@@ -1,5 +1,9 @@
 import { PowerOff } from 'lucide-react';
-import { EmptyState } from './ui';
+// Прямой файл, не './ui' (индекс): индекс тянет весь кит — PanelShell → lib/pointer
+// с window.addEventListener на уровне модуля, и импорт через индекс в App ломает
+// загрузку App.deeplink.test.ts (там window — plain-объект без addEventListener)
+// и излишне утяжеляет бандл каркаса.
+import { EmptyState } from './ui/EmptyState';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 interface Props {

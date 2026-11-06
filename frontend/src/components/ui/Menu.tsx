@@ -183,7 +183,7 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
       }}>
         {!hasHeader ? children : (
           <>
-            <div style={{ flexShrink: 0 }}>{header}</div>
+            <div className="cc-menu-header" style={{ flexShrink: 0 }}>{header}</div>
             <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>{children}</div>
           </>
         )}

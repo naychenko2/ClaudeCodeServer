@@ -24,8 +24,8 @@ vi.stubGlobal('document', {
 
 const { Modal } = await import('./Modal');
 
-// Обёртка шапки тела на десктопе — единственный блок с таким отступом
-const HEADER_WRAPPER = 'padding:26px 28px 0';
+// Обёртка шапки тела — маркер по классу: отступ шапки меняется без смены поведения
+const HEADER_WRAPPER = 'cc-modal-header';
 
 const render = (header: unknown) =>
   renderToStaticMarkup(createElement(Modal, {

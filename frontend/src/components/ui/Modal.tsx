@@ -212,7 +212,7 @@ export function Modal({
           {/* С шапкой тела заголовок уходит к ней, вне скролла: иначе он уезжал бы, а
               поиск под ним оставался — шапка оказалась бы над заголовком */}
           {hasHeader && (
-            <div style={{ padding: '8px 18px 0', display: 'flex', flexDirection: 'column', gap: 16, flexShrink: 0 }}>
+            <div className="cc-modal-header" style={{ padding: '8px 18px 0', display: 'flex', flexDirection: 'column', gap: 16, flexShrink: 0 }}>
               {headerRow}
               {header}
             </div>
@@ -260,7 +260,7 @@ export function Modal({
         }}
       >
         {hasHeader && (
-          <div style={{ padding: '26px 28px 0', display: 'flex', flexDirection: 'column', gap: 18, flexShrink: 0 }}>
+          <div className="cc-modal-header" style={{ padding: '26px 28px 0', display: 'flex', flexDirection: 'column', gap: 18, flexShrink: 0 }}>
             {headerRow}
             {header}
           </div>

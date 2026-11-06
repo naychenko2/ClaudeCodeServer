@@ -344,6 +344,49 @@
 
 - **Режим прав нового чата с персоной** — по умолчанию `acceptEdits`, а не `auto`: единственная точка — `ClaudeModeExtensions.ForNewChat` (Core), её зовут REST создания чата/группы/чата персоны и MCP `chats_create`; явно переданный режим уважается, фронт режим не шлёт. Причина: «Авто» отправляет каждый вызов инструмента на серверный классификатор CLI (10–120 с), а встроенные MCP наш обработчик разрешений и так пропускает (замер 20–22.10: `tasks_create` 35 с против 0 с). Такие чаты работают автономно: `DecidePermissionAsync` авто-разрешает инструменты без карточек согласия, кроме deny-правил проекта, `ExtraDisallowedTools` и ограничений персоны (`Persona.Tools`, `Access`); карточка остаётся у чатов без персоны и у `Default`/`Plan`. Существующие чаты не мигрируют — режим выбирает человек переключателем у поля ввода.
 
+## Персоны в общем проекте (волна 3, 2026-11)
+
+Разрез — [shared-projects-personas-cut-2026-11.md](../research/shared-projects-personas-cut-2026-11.md)
+(матрица §2, инварианты И-1…И-8). Проектные персоны едины: видны всем участникам, права решает
+право на проект, а не владение. Личные (глобальные, сферные) персоны — только владельца,
+участнику не видны нигде, 404 как несуществующие.
+
+- **Одна точка «персона → область».** `IProjectAccess.ResolvePersona(caller, personaId, right)`
+  ([IProjectAccess.cs](../../backend/ClaudeHomeServer.Core/Services/Access/IProjectAccess.cs):29, реализация
+  [ProjectAccessService.cs](../../backend/ClaudeHomeServer/Services/ProjectAccessService.cs):49): проектная
+  персона — через доступ к её проекту, личная — только по владению (fail-closed). REST-действия
+  с `{id}` размечены `[ProjectScope(From = Persona, Right = …)]`
+  ([ProjectScopeAttribute.cs](../../backend/ClaudeHomeServer.Core/Services/Access/ProjectScopeAttribute.cs):23, :92);
+  инлайновый `Get(id, UserId)` в контроллерах запрещён сторожем `PersonaScopeGuardTests`
+  (его слепые места — разрез §5 п.2).
+- **Матрица прав** — разрез §2; держится существующим `ProjectRight` и матрицей ролей
+  `ProjectAccess.RoleHasRight` ([ProjectAccess.cs](../../backend/ClaudeHomeServer.Core/Services/Access/ProjectAccess.cs):91-98):
+  видеть персону, её аватар, привязки, память, чаты — `Read` (все роли); новый чат с персоной,
+  правка карточки, память, привязки кроме MCP/плагинов — `WriteContent` (владелец и редактор);
+  удаление, руководитель проекта, поля модели/зоны/доступа, автоматика, MCP- и плагин-привязки,
+  `to-note`/`from-note` — `Configure` (только владелец). Новый чат читателю — 403: персону он видит,
+  права хода нет.
+- **Ключ — арендатор, автор — вызывающий.** После резолва все вызовы хранилищ (`PersonaManager`,
+  память, привязки, `SessionManager`) идут с `scope.TenantOwnerId`, `CallerUserId` — только
+  в автора: `POST {id}/chats` → `CreatePersonaChatAsync(T, …, createdByUserId: caller)`
+  ([PersonasController.cs](../../backend/ClaudeHomeServer/Controllers/PersonasController.cs):454-455);
+  допуск персоны задаче — `TaskPersonaGate`
+  ([TasksController.cs](../../backend/ClaudeHomeServer/Controllers/TasksController.cs):1847-1859).
+  Персона, созданная редактором, получает `OwnerId = арендатор`; `Scope/ProjectId` правка не меняет (И-7).
+- **Рассылка.** `personas_changed` проектной персоны идёт группе проекта и её владельцу
+  ([PersonasController.cs](../../backend/ClaudeHomeServer/Controllers/PersonasController.cs):101-108,
+  [PersonasCrudService.cs](../../backend/ClaudeHomeServer/Services/PersonasCrudService.cs):63-71);
+  личной персоны — только владельцу, как прежде (И-8). Стор `lib/personas.ts` у всех участников
+  остаётся актуальным без перезагрузки страницы.
+- **Рамка S2a-8.** Глобальная персона не бывает собеседником чата общего проекта:
+  `SessionManager.EnsurePersonasVisibleInFrame`
+  ([SessionManager.cs](../../backend/ClaudeHomeServer/Services/SessionManager.cs):5315-5324), отказ —
+  400 `global_persona_in_shared` (:5296-5299). Точки входа: создание чата с персоной, групповой чат,
+  смена собеседника, продолжение чата, MCP `chats_create`. Участнику без руководителя проекта —
+  400 `no_project_persona` ([SessionsController.cs](../../backend/ClaudeHomeServer/Controllers/SessionsController.cs):208),
+  провижн личного ассистента не запускается. Хвост: исполнитель задачи и онбординг проекта
+  рамку обходят (разрез §3.2, строка «хвост»).
+
 ## Облегчённый контекст (`Persona.LightContext`)
 
 Опция персоны (вкл/выкл, `null` = решение не принято, читается как выкл): краткая карта вместо полного CLAUDE.md, урезанные инструменты и набор MCP, хвостовой recall. У чата с персоной режим решает она — в том числе на локальной модели, выбранной человеком (модель чата, персоны, слот). Исключение одно: ход на локальную модель (`IsLocal`) со своим профилем увела подмена фолбэка (`Session.FallbackSubstitution`) — тогда её профиль включается принудительно; опция работает как добавка общего профиля для моделей без своего (Opus/Sonnet). Профиль резолвится единой точкой `LlmProviderRegistry.LightProfileFor` — подробности и инварианты в [llm-providers.md](llm-providers.md#bareмode-короткая-карта-вместо-полной-claudemd). Новый чат человека всегда с персоной, поэтому провайдерный профиль (`local-qwen`) без персоны работает лишь у исполнителей задач без персоны. Смена опции меняет сигнатуру запуска CLI — открытые чаты персоны перезапускаются.

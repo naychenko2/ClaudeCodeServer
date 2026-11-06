@@ -1,8 +1,9 @@
 // Персоны (олицетворённые ИИ-собеседники): глобальный стор списка + realtime.
 // Паттерн — как lib/notes.ts, но проще (без офлайна): модульное состояние,
 // подписки, useSyncExternalStore.
-// Realtime: бэк шлёт personas_changed в группу user_{userId} (персона создана/
-// изменена/удалена другим устройством или Claude) — стор перечитывает список.
+// Realtime: бэк шлёт personas_changed в группу user_{userId}; проектная персона —
+// ещё и в группу проекта (персона создана/изменена/удалена другим устройством или
+// Claude) — стор перечитывает список.
 
 import { useSyncExternalStore } from 'react';
 import type { Persona } from '../types';

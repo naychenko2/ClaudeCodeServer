@@ -12,24 +12,45 @@ namespace ClaudeHomeServer.Controllers;
 /// Раздел «Видео»: эфиры телеканалов и лента подписок YouTube.
 /// Источники подключаются через <see cref="VideoProviderRegistry"/> — здесь про них
 /// не знают ничего, кроме ключа.
+///
+/// Подсистема video отключаемая (ADR-014, S2a-2): при Subsystems:video:Enabled=false её
+/// сервисы в контейнер не попадают, поэтому зависимости опциональные (= null), а весь поле
+/// <c>/api/video</c> отвечает честный 503 с причиной вместо 500 активации.
 /// </summary>
 [ApiController]
 [Authorize]
 [Route("api/video")]
 [SubsystemUsage("video")]
 public class VideoController(
-    VideoProviderRegistry registry,
-    YouTubeOAuthService youtubeOauth,
-    VideoOptions options,
     UserStore users,
-    ILogger<VideoController> log) : ControllerBase
+    ILogger<VideoController> log,
+    // `= null` — обязательность для DI: без значения по умолчанию активация контроллера на
+    // выключенной вертикали падала (500), а не отвечала гейтом (та же форма, что PluginsController)
+    VideoProviderRegistry? registry = null,
+    YouTubeOAuthService? youtubeOauth = null,
+    VideoOptions? options = null) : ControllerBase
 {
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+
+    /// <summary>
+    /// Гейт выключенной вертикали (ADR-014, S2a-2): null-зависимость = подсистема выключена
+    /// (её сервисы регистрируются только при открытом гейте). Отказываем всем маршрутам поля,
+    /// включая избранное: ключи каналов знает каталог вертикали, без неё их хранить не для чего.
+    /// Проверку оставляют в вызывающем (<c>if (registry is null || …) return VideoDisabled();</c>)
+    /// — дальше по коду компилятор знает, что сервисы живые.
+    /// </summary>
+    private ActionResult VideoDisabled() => StatusCode(503, new
+    {
+        reason = "video_disabled",
+        error = "Подсистема видео выключена (Subsystems:video:Enabled=false)",
+    });
 
     /// <summary>Какие источники доступны и какой из них просит подключить аккаунт.</summary>
     [HttpGet("providers")]
     public async Task<IActionResult> Providers(CancellationToken ct)
     {
+        if (registry is null || youtubeOauth is null || options is null) return VideoDisabled();
+
         var userId = UserId;
         if (userId is null) return Unauthorized();
 
@@ -49,6 +70,8 @@ public class VideoController(
     public async Task<IActionResult> Channels(
         [FromQuery] string provider, [FromQuery] bool refresh, CancellationToken ct)
     {
+        if (registry is null || youtubeOauth is null || options is null) return VideoDisabled();
+
         var userId = UserId;
         if (userId is null) return Unauthorized();
 
@@ -69,6 +92,8 @@ public class VideoController(
         [FromQuery] string provider, [FromQuery] string? channelId, [FromQuery] bool refresh,
         CancellationToken ct)
     {
+        if (registry is null || youtubeOauth is null || options is null) return VideoDisabled();
+
         var userId = UserId;
         if (userId is null) return Unauthorized();
 
@@ -106,6 +131,8 @@ public class VideoController(
     [HttpGet("favorites")]
     public IActionResult Favorites()
     {
+        if (registry is null || youtubeOauth is null || options is null) return VideoDisabled();
+
         var userId = UserId;
         if (userId is null) return Unauthorized();
 
@@ -125,6 +152,8 @@ public class VideoController(
     [HttpPut("favorites")]
     public IActionResult PutFavorites([FromBody] PutFavoritesRequest req)
     {
+        if (registry is null || youtubeOauth is null || options is null) return VideoDisabled();
+
         var userId = UserId;
         if (userId is null) return Unauthorized();
         if (req?.Keys is null) return BadRequest(new { error = "keys обязателен" });
@@ -139,11 +168,13 @@ public class VideoController(
     [HttpGet("youtube/auth-url")]
     public IActionResult YouTubeAuthUrl()
     {
+        if (registry is null || youtubeOauth is null || options is null) return VideoDisabled();
+
         var userId = UserId;
         if (userId is null) return Unauthorized();
         if (!options.YouTube.IsConfigured) return BadRequest(new { error = "not-configured" });
 
-        var url = youtubeOauth.BuildAuthUrl(userId, RedirectUri(), options.YouTube);
+        var url = youtubeOauth.BuildAuthUrl(userId, RedirectUri(options), options.YouTube);
         return Ok(new { url });
     }
 
@@ -157,6 +188,8 @@ public class VideoController(
     public async Task<IActionResult> YouTubeCallback(
         [FromQuery] string? code, [FromQuery] string? state, [FromQuery] string? error, CancellationToken ct)
     {
+        if (registry is null || youtubeOauth is null || options is null) return VideoDisabled();
+
         if (!string.IsNullOrEmpty(error) || string.IsNullOrEmpty(code) || string.IsNullOrEmpty(state))
             return Redirect("/#/chats?connect=failed");
 
@@ -173,6 +206,8 @@ public class VideoController(
     [HttpPost("youtube/disconnect")]
     public async Task<IActionResult> YouTubeDisconnect(CancellationToken ct)
     {
+        if (registry is null || youtubeOauth is null || options is null) return VideoDisabled();
+
         var userId = UserId;
         if (userId is null) return Unauthorized();
         await youtubeOauth.DisconnectAsync(userId, ct);
@@ -184,10 +219,12 @@ public class VideoController(
     /// второй вариант может разойтись с зарегистрированным в Google, поэтому на бою
     /// значение задают явно.
     /// </summary>
-    private string RedirectUri()
+    // options приходит параметром: вызывающий уже прошёл гейт вертикали и знает, что он жив;
+    // читать поле из nullable-поля класса компилятор права не имеет (CS8602)
+    private string RedirectUri(VideoOptions opts)
     {
-        if (!string.IsNullOrWhiteSpace(options.YouTube.RedirectUri))
-            return options.YouTube.RedirectUri;
+        if (!string.IsNullOrWhiteSpace(opts.YouTube.RedirectUri))
+            return opts.YouTube.RedirectUri;
 
         // Host приходит из заголовка запроса: за реверс-прокси он легко расходится с тем,
         // что зарегистрировано в консоли Google, и человек получает redirect_uri_mismatch

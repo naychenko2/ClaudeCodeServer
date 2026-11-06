@@ -12,6 +12,10 @@ namespace ClaudeHomeServer.Controllers;
 /// <summary>
 /// Фон рабочего пространства проекта (ADR-008 §7): генерация, возврат к стандартному
 /// и отдача собранного сервером тайла. Генерация и сброс — только владельцу проекта.
+///
+/// Подсистема backgrounds отключаемая (ADR-014, S2a-2): при Subsystems:backgrounds:Enabled=false
+/// её сервис в контейнер не попадает, поэтому зависимость опциональная (= null), а все три
+/// маршрута отвечают честный 503 с причиной вместо 500 активации.
 /// </summary>
 [ProjectCapability(ProjectCapabilityArea.Platform, ProjectKey = "id")]
 [ApiController]
@@ -19,10 +23,25 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/projects/{id}/background")]
 [SubsystemUsage("backgrounds")]
 public class ProjectBackgroundsController(
-    ProjectManager projects, ProjectBackgroundService backgrounds)
+    ProjectManager projects,
+    // `= null` — обязательность для DI: без значения по умолчанию активация контроллера на
+    // выключенной вертикали падала (500), а не отвечала гейтом (та же форма, что PluginsController)
+    ProjectBackgroundService? backgrounds = null)
     : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
+
+    /// <summary>
+    /// Гейт выключенной вертикали (ADR-014, S2a-2): null-зависимость = подсистема выключена
+    /// (её сервис регистрируется только при открытом гейте). Тайл (GET tile.svg) отказывается
+    /// наравне с генерацией: файл на диске мог остаться от прежней генерации, но показывать
+    /// его как живой фон проекта на выключенной вертикали — ложь; 404 сказал бы «файла нет».
+    /// </summary>
+    private ActionResult BackgroundsDisabled() => StatusCode(503, new
+    {
+        reason = "backgrounds_disabled",
+        error = "Подсистема фонов проекта выключена (Subsystems:backgrounds:Enabled=false)",
+    });
 
     // Чужой проект — 404, а не 403: подтверждать его существование незачем
     private Project? Owned(string id)
@@ -43,6 +62,7 @@ public class ProjectBackgroundsController(
     [HttpPost("generate")]
     public async Task<ActionResult> Generate(string id, CancellationToken ct)
     {
+        if (backgrounds is null) return BackgroundsDisabled();
         if (Owned(id) is not { } project) return NotFound();
 
         return Ok(Payload(await backgrounds.GenerateAsync(project, ct)));
@@ -51,6 +71,7 @@ public class ProjectBackgroundsController(
     [HttpPost("reset")]
     public ActionResult Reset(string id)
     {
+        if (backgrounds is null) return BackgroundsDisabled();
         if (Owned(id) is null) return NotFound();
 
         return Ok(Payload(backgrounds.Reset(id)));
@@ -62,6 +83,7 @@ public class ProjectBackgroundsController(
     [HttpGet("tile.svg")]
     public IActionResult Tile(string id)
     {
+        if (backgrounds is null) return BackgroundsDisabled();
         if (Owned(id) is not { Background: { Kind: ProjectBackgroundKind.Generated, TileFile: { } file } })
             return NotFound();
 

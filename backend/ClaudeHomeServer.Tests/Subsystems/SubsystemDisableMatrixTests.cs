@@ -7,6 +7,7 @@ using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
@@ -32,7 +33,10 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 /// самой вертикали — карта «сборка → ключ». Параметр маршрута подставляется фиктивным значением
 /// по его inline-конверсии (в решении встречается только <c>:int</c> — GitController.cs:221,
 /// ImageEditorController.cs:77; таблица ниже покрывает и остальные стандартные конверсии, чтобы
-/// не разъехаться с первым <c>:guid</c>).
+/// не разъехаться с первым <c>:guid</c>), и тем же способом подставляются обязательные
+/// <c>[FromQuery]</c>-параметры метода: без них запрос падает в 400 привязкой модели ДО любого
+/// гейта вертикали, и строка меряла бы форму запроса, а не отказ выключенной вертикали (первый
+/// прогон S2a-2 дал ровно это на api/video/channels и api/video/feed).
 ///
 /// Граница, которую надо знать, читая красный/зелёный: обработчик без атрибута и не из сборки
 /// своей вертикали — ядро, и строка матрицы его не мерит. Из отключаемых ключей так сейчас
@@ -41,9 +45,11 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 /// и <c>llm</c> (его услуги вызывают неатрибутованные Main-контроллеры UsageController.cs:12
 /// (UsageService), ProvidersController.cs:10 (IProviderBalanceService), ModelsController.cs:15
 /// (LlmProviderRegistry) — все они резолвят сервисы гейтнутой сборки ClaudeHomeServer.Llm,
-/// LlmSubsystem.cs:93-95). После S2a-2 строка <c>llm</c> измерит пустой состав её маршрутов и
-/// будет зелёной при мёртвых /api/usage, /api/providers, /api/models; явную привязку этих ручек
-/// делает S2b-1 атрибутом <c>[SubsystemUsage("llm")]</c>).
+/// LlmSubsystem.cs:93-95). Пустого состава её маршрутов после починки контроллеров нет: ядро
+/// сессий требует сервисы этой сборки обязательными (SessionManager.cs:739-743 —
+/// ILlmSessionAdapterFactory, UsageService, LlmProviderRegistry), поэтому строка <c>llm</c>
+/// переживает S2a-2 и решается не опционализацией ручек, а ядром/CanDisable в S2b-1 (там же —
+/// явная привязка <c>[SubsystemUsage("llm")]</c>).
 /// Это не «матрица молчит»: это finding S2a-1, и его закрывает S2b-1.
 ///
 /// ═══ Почему именно старт с выключенным ключом, а не горячее выключение ═══
@@ -87,61 +93,76 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     ];
 
     /// <summary>
-    /// Известные нарушения матрицы (первый прогон S2a-1, 05.11): ключ → что падает (файл:строка).
-    /// Строка выносится из прогона пропущенным тестом с этим текстом; чинится не здесь (S2a-2).
+    /// Известные нарушения матрицы: ключ → что падает (файл:строка). Строка выносится из прогона
+    /// пропущенным тестом с этим текстом.
     ///
-    /// Общая форма всех семнадцати: НЕ выключенная вертикаль, а её потребитель вне вертикали —
+    /// Общая форма всех строк: НЕ выключенная вертикаль, а её потребитель вне вертикали —
     /// обязательная зависимость от сервиса выключенной вертикали в конструкторе Main-сервиса,
     /// Main-контроллера или в явном <c>GetRequiredService</c> на пути старта. Образец обратной
     /// формы — строка <c>plugins</c>: её контроллеры держат те же зависимости опциональными и
     /// отвечают 503 (ClaudeHomeServer.Plugins/Controllers/PluginsController.cs:22-38).
+    ///
+    /// S2a-2 закрыл этим же приёмом четыре строки — <c>backgrounds</c>, <c>tts</c>, <c>video</c>,
+    /// <c>yandex</c>: их собственные контроллеры Main держат сервисы вертикали опциональными
+    /// (= null) и отвечают 503 с причиной (TtsController.cs:61, VideoController.cs:42,
+    /// YandexController.cs:45, ProjectBackgroundsController.cs:40). Оставшиеся строки делятся на
+    /// два вида: «ядро/сквозная» — потребитель является ядром сессий и проектов
+    /// (SessionManager.cs:739-743 для llm, ProjectsController.cs:25 для
+    /// git/tasks/knowledge/dossiers/memory/project-icons — или шов контекста хода
+    /// PromptSeamAdapters.cs:18, ADR-023); и «починка на краю потребителя» — тулсет или сервис
+    /// вне ядра. Первую группу решает S2b-1 (CanDisable), вторую — следующий прогон S2a-2.
     /// </summary>
     internal static readonly Dictionary<string, string> KnownViolations = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["backgrounds"] = "маршруты вертикали дают 500: ProjectBackgroundsController "
-            + "(backend/ClaudeHomeServer/Controllers/ProjectBackgroundsController.cs:22) требует ProjectBackgroundService "
-            + "обязательным параметром → GET /api/projects/{id}/background/tile.svg, POST …/generate, POST …/reset. S2a-2",
-        ["code-graph"] = "первый запрос к хосту не отвечен: FileWatcherService (backend/ClaudeHomeServer/Services/FileWatcherService.cs:103) "
-            + "требует CodeGraphService выключенной вертикали обязательным параметром. S2a-2",
-        ["dossiers"] = "первый запрос к хосту не отвечен: MemoryToolset (backend/ClaudeHomeServer/Services/Mcp/Http/MemoryToolset.cs:45) "
-            + "требует DossierStore выключенной вертикали обязательным параметром. S2a-2",
+        ["code-graph"] = "ядро/сквозная: ядро чата держит цепочку обязательных зависимостей — "
+            + "SessionHub (backend/ClaudeHomeServer/Hubs/SessionHub.cs:26) требует FileWatcherService, "
+            + "а он (backend/ClaudeHomeServer/Services/FileWatcherService.cs:103) — CodeGraphService. "
+            + "Первый запрос к хосту не отвечен. CanDisable или опционализацию этого шва решает S2b-1.",
+        ["dossiers"] = "ядро/сквозная: ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) "
+            + "требует DossierStore обязательным параметром; та же зависимость — у MemoryToolset "
+            + "(backend/ClaudeHomeServer/Services/Mcp/Http/MemoryToolset.cs:45). Первый запрос к хосту не отвечен. "
+            + "CanDisable или опционализацию этого шва решает S2b-1.",
         ["deploy"] = "первый запрос к хосту не отвечен: WorkspaceToolset (backend/ClaudeHomeServer/Services/Mcp/Http/WorkspaceToolset.cs:71) "
             + "требует DeployService выключенной вертикали обязательным параметром. S2a-2",
-        ["git"] = "первый запрос к хосту не отвечен: ReviewTreePool (backend/ClaudeHomeServer/Services/ReviewTreePool.cs:47) "
-            + "требует GitService выключенной вертикали обязательным параметром. S2a-2",
+        ["git"] = "ядро/сквозная: ReviewTreePool (backend/ClaudeHomeServer/Services/ReviewTreePool.cs:49) "
+            + "и ядро проектов (Controllers/ProjectsController.cs:25 — GitService, GitServerService) требуют "
+            + "GitService обязательным параметром; первый запрос к хосту не отвечен. Решает S2b-1 (CanDisable).",
         ["images"] = "первый запрос к хосту не отвечен: PersonasCrudService (backend/ClaudeHomeServer/Services/PersonasCrudService.cs:31) "
             + "требует ImageGenerationService выключенной вертикали обязательным параметром. S2a-2",
-        ["knowledge"] = "первый запрос к хосту не отвечен: PersonaBindingsService (backend/ClaudeHomeServer/Services/PersonaBindingsService.cs:138) "
-            + "требует WorkspaceKnowledgeStore выключенной вертикали обязательным параметром. S2a-2",
-        ["llm"] = "первый запрос к хосту не отвечен: SessionManager (backend/ClaudeHomeServer/Services/SessionManager.cs:740) "
-            + "требует UsageService выключенной вертикали обязательным параметром. Соседняя дыра той же "
+        ["knowledge"] = "ядро/сквозная: ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) "
+            + "требует WorkspaceKnowledgeStore и KnowledgeService; та же зависимость — у PersonaBindingsService "
+            + "(backend/ClaudeHomeServer/Services/PersonaBindingsService.cs:138), который сам обязателен ядру "
+            + "сессий (backend/ClaudeHomeServer/Services/SessionManager.cs:745). Первый запрос к хосту не отвечен. "
+            + "CanDisable или опционализацию этого шва решает S2b-1.",
+        ["llm"] = "ядро/сквозная: ядро сессий (backend/ClaudeHomeServer/Services/SessionManager.cs:739-743) требует "
+            + "ILlmSessionAdapterFactory, UsageService и LlmProviderRegistry гейтнутой сборки ClaudeHomeServer.Llm "
+            + "(backend/ClaudeHomeServer.Llm/LlmSubsystem.cs:93-95) обязательными параметрами. Соседняя дыра той же "
             + "строки: ручки вертикали неатрибутованы — UsageController (backend/ClaudeHomeServer/Controllers/UsageController.cs:12), "
             + "ProvidersController (backend/ClaudeHomeServer/Controllers/ProvidersController.cs:10), ModelsController "
-            + "(backend/ClaudeHomeServer/Controllers/ModelsController.cs:15) резолвят услуги гейтнутой сборки "
-            + "ClaudeHomeServer.Llm (LlmSubsystem.cs:93-95), и после S2a-2 строка мерит их пустым составом; "
-            + "привязка — S2b-1. S2a-2",
-        ["memory"] = "первый запрос к хосту не отвечен: PersonaRecallSourceAdapter (backend/ClaudeHomeServer/Services/Composition/PromptSeamAdapters.cs:18) "
-            + "требует PersonaMemoryService выключенной вертикали обязательным параметром. S2a-2",
-        ["project-icons"] = "хост стартует и ключ виден выключенным, но соседняя ручка мертва: ProjectsController "
-            + "(backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) требует ProjectIconGlyphService обязательным "
-            + "параметром → GET /api/projects 500. Единственная строка, где рвётся не старт, а сосед. S2a-2",
+            + "(backend/ClaudeHomeServer/Controllers/ModelsController.cs:15). Первый запрос к хосту не отвечен. "
+            + "Решает S2b-1: CanDisable и привязка [SubsystemUsage(\"llm\")].",
+        ["memory"] = "ядро/сквозная: шов контекста хода PersonaRecallSourceAdapter "
+            + "(backend/ClaudeHomeServer/Services/Composition/PromptSeamAdapters.cs:18, ADR-023) и ядро проектов "
+            + "(backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) требуют PersonaMemoryService "
+            + "обязательным параметром. Первый запрос к хосту не отвечен. CanDisable или опционализацию "
+            + "этого шва решает S2b-1.",
+        ["project-icons"] = "ядро/сквозная: хост стартует и ключ виден выключенным, но соседняя ручка мертва: "
+            + "ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) требует "
+            + "ProjectIconGlyphService обязательным параметром → GET /api/projects 500. Единственная строка, "
+            + "где рвётся не старт, а сосед. Решает S2b-1 (CanDisable).",
         ["project-services"] = "хост не собирается: Program.cs:2335 GetRequiredService<DevServerService> — соседние строки "
             + "того же блока (Program.cs:2332 TurnTokenService, Program.cs:2340 TaskManager) уже читают отключаемые "
             + "вертикали через GetService, эта — нет. S2a-2",
         ["reader"] = "первый запрос к хосту не отвечен: WebSearchToolset (backend/ClaudeHomeServer/Services/Mcp/Http/WebSearchToolset.cs:43) "
             + "требует ReaderService выключенной вертикали обязательным параметром. S2a-2",
-        ["skills"] = "первый запрос к хосту не отвечен: PersonaBindingsService (backend/ClaudeHomeServer/Services/PersonaBindingsService.cs:139) "
-            + "требует SkillsService выключенной вертикали обязательным параметром. S2a-2",
-        ["tasks"] = "первый запрос к хосту не отвечен: TeamWaveService (backend/ClaudeHomeServer/Services/Team/TeamWaveService.cs:89) "
-            + "требует TaskManager выключенной вертикали обязательным параметром. S2a-2",
-        ["tts"] = "маршруты вертикали дают 500: TtsController (backend/ClaudeHomeServer/Controllers/TtsController.cs:26) "
-            + "требует YandexTtsService и VoiceResolver обязательными параметрами → GET /api/tts/voices, POST /api/tts. S2a-2",
-        ["video"] = "маршруты вертикали дают 500: VideoController (backend/ClaudeHomeServer/Controllers/VideoController.cs:21) "
-            + "требует VideoProviderRegistry/YouTubeOAuthService/VideoOptions обязательными параметрами → "
-            + "GET /api/video/{providers,channels,feed,favorites}, GET /api/video/youtube/{auth-url,callback}, "
-            + "POST /api/video/youtube/disconnect, PUT /api/video/favorites. S2a-2",
-        ["yandex"] = "маршруты вертикали дают 500: YandexController (backend/ClaudeHomeServer/Controllers/YandexController.cs:26) "
-            + "требует YandexAccountService обязательным параметром → GET /api/yandex/account. S2a-2",
+        ["skills"] = "ядро/сквозная: PersonaBindingsService (backend/ClaudeHomeServer/Services/PersonaBindingsService.cs:139), "
+            + "обязательный ядру сессий (backend/ClaudeHomeServer/Services/SessionManager.cs:745), требует SkillsService "
+            + "обязательным параметром. Первый запрос к хосту не отвечен. CanDisable или опционализацию этого шва "
+            + "решает S2b-1.",
+        ["tasks"] = "ядро/сквозная: ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) "
+            + "требует TaskManager обязательным параметром; та же зависимость — у TeamWaveService "
+            + "(backend/ClaudeHomeServer/Services/Team/TeamWaveService.cs:89). Первый запрос к хосту не отвечен. "
+            + "Решает S2b-1 (CanDisable).",
     };
 
     // Соседи, которые обязаны остаться живыми при любом выключенном ключе (пункт 4).
@@ -349,11 +370,41 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             if (action is null) continue;
             if (!string.Equals(attribution.KeyOf(action.ControllerTypeInfo), key, StringComparison.OrdinalIgnoreCase)) continue;
 
-            var url = FillParams(rawText);
+            var url = WithQueryParams(FillParams(rawText), action);
             foreach (var method in HttpMethodsOf(route)) routes.Add((method, url));
         }
 
         return [.. routes];
+    }
+
+    /// <summary>
+    /// Обязательные query-параметры экшена подставляются теми же фиктивными значениями, что и
+    /// параметры маршрута. Без них запрос падает в 400 модельной привязкой ДО любого гейта
+    /// вертикали, и строка меряла бы форму запроса, а не отказ выключенной вертикали (первый
+    /// прогон S2a-2: на выключенном хосте api/video/channels и api/video/feed дали 400).
+    /// </summary>
+    private static string WithQueryParams(string url, ControllerActionDescriptor action)
+    {
+        var query = new List<string>();
+        // Только явные [FromQuery] без значения по умолчанию (метод экшена читают так же,
+        // как ProjectCapabilityGuard): дескриптор параметров MVC здесь не даёт ни источника
+        // привязки, ни опциональности — а нужны ровно эти два факта
+        foreach (var p in action.MethodInfo.GetParameters())
+        {
+            if (p.GetCustomAttributes(typeof(FromQueryAttribute), inherit: false).Length == 0) continue;
+            if (p.IsOptional) continue;
+            query.Add(p.Name + "=" + DummyOfType(p.ParameterType));
+        }
+
+        return query.Count == 0 ? url : url + (url.Contains('?') ? "&" : "?") + string.Join("&", query);
+    }
+
+    private static string DummyOfType(Type type)
+    {
+        var t = Nullable.GetUnderlyingType(type) ?? type;
+        if (t == typeof(int) || t == typeof(long)) return "1";
+        if (t == typeof(bool)) return "true";
+        return "x";
     }
 
     private static IEnumerable<string> HttpMethodsOf(RouteEndpoint route)

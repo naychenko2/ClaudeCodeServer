@@ -12,19 +12,30 @@ namespace ClaudeHomeServer.Controllers;
 
 // Синтез речи для голосового режима чата: фронт шлёт кусок текста, получает mp3.
 // Коды ответа — контракт для фолбэка фронта (lib/tts.ts), менять осознанно:
-//   503 { reason: "not_configured" } — ключ/folderId не заданы (ПОСТОЯННОЕ состояние:
-//       фронт запоминает и уходит на speechSynthesis до конца сессии);
+//   503 { reason: "not_configured" } — ключ/folderId не заданы ИЛИ подсистема выключена
+//       (сервисов вертикали в контейнере нет). Для фронта это одно и то же состояние:
+//       «синтеза на этом сервере нет», ПОСТОЯННОЕ — он запоминает и уходит на speechSynthesis
+//       до конца сессии; настоящая причина — в error;
 //   502 { reason: "upstream" } — Яндекс ответил ошибкой (403 без роли, 5xx) или не ответил
 //       (таймаут). ВРЕМЕННОЕ состояние: фронт не запоминает, фолбэк только на этот раз;
 //   400 — пустой текст, длиннее лимита ИЛИ явно переданный голос/амплуа не из белого
 //       списка (прослушивание в форме: там ошибку надо показать, а не подменить дефолтом).
 // Рейт-лимита нет осознанно (Р9 плана): эндпоинт под [Authorize], ограничитель — длина текста.
+//
+// Подсистема tts отключаемая (ADR-014, S2a-2): при Subsystems:tts:Enabled=false сервисы
+// вертикали в контейнер не попадают, поэтому они опциональные (= null) и контроллер отвечает
+// честный 503 с причиной вместо 500 активации.
 [ApiController]
 [Authorize]
 [Route("api/tts")]
 [SubsystemUsage("tts")]
-public class TtsController(YandexTtsService tts, VoiceResolver voices,
-    SessionManager sessions, ILogger<TtsController> logger,
+public class TtsController(
+    SessionManager sessions,
+    ILogger<TtsController> logger,
+    // `= null` — обязательность для DI: без значения по умолчанию активация контроллера на
+    // выключенной вертикали падала (500), а не отвечала гейтом (та же форма, что PluginsController)
+    YandexTtsService? tts = null,
+    VoiceResolver? voices = null,
     ISpendCollector? spend = null) : ControllerBase
 {
     // Подпись модели LiveTTS в учёте трат: у general поле Model исторически хранит голос
@@ -41,21 +52,43 @@ public class TtsController(YandexTtsService tts, VoiceResolver voices,
 
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
+    // Гейт выключенной вертикали (ADR-014, S2a-2): null-зависимость = подсистема выключена
+    // (её сервисы регистрируются только при открытом гейте). Проверку оставляют в вызывающем
+    // (`if (tts is null || voices is null) return TtsDisabled();`) — дальше по коду компилятор
+    // знает, что сервисы живые. Отказ — ДО любой работы и до проверки тела запроса: на
+    // выключенной вертикали запрос не может получиться ни при каком тексте, и 400 про
+    // опечатку здесь увёл бы диагностику не туда.
+    private ActionResult TtsDisabled() => StatusCode(503, new
+    {
+        // reason остаётся not_configured: контракт фронта (lib/tts.ts) читает этот код как
+        // «синтеза на этом сервере нет» — постоянное состояние, голос браузера на остаток
+        // сессии. Для выключенной подсистемы это ровно то же поведение; настоящая причина — в error.
+        reason = "not_configured",
+        error = "Подсистема TTS выключена (Subsystems:tts:Enabled=false)",
+    });
+
     // Голоса для формы выбора: канонические имена (алиасы наружу не выходят — один голос
     // не должен давать в списке две строки), подпись, пол и доступные амплуа.
     // configured=false — синтеза на сервере нет: форме нечего предлагать слушать, и
     // честная плашка лучше живых кнопок, которые молча не работают.
     // model и speedSupported фронт не выводит сам: голоса LiveTTS помечены и без темпа
     [HttpGet("voices")]
-    public ActionResult<TtsVoicesResponse> Voices() => Ok(new TtsVoicesResponse(
-        tts.IsConfigured,
-        TtsVoiceCatalog.All.Select(v => new TtsVoiceDto(
-            v.Voice, v.Label, v.Gender.ToString().ToLowerInvariant(), v.Roles,
-            v.Model, TtsVoiceCatalog.SupportsSpeed(v.Voice))).ToList()));
+    public ActionResult<TtsVoicesResponse> Voices()
+    {
+        if (tts is null || voices is null) return TtsDisabled();
+
+        return Ok(new TtsVoicesResponse(
+            tts.IsConfigured,
+            TtsVoiceCatalog.All.Select(v => new TtsVoiceDto(
+                v.Voice, v.Label, v.Gender.ToString().ToLowerInvariant(), v.Roles,
+                v.Model, TtsVoiceCatalog.SupportsSpeed(v.Voice))).ToList()));
+    }
 
     [HttpPost]
     public async Task<IActionResult> Synthesize([FromBody] TtsRequest req, CancellationToken ct)
     {
+        if (tts is null || voices is null) return TtsDisabled();
+
         if (string.IsNullOrWhiteSpace(req.Text))
             return BadRequest(new { error = "Текст для синтеза пуст" });
         if (req.Text.Length > MaxTextLength)

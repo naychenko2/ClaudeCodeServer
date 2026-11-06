@@ -1,7 +1,7 @@
 // ПОТОЛОК РОСТА (frontend-api-split-2026-11.md): файл только худеет. Лимит строк — в
 // lib/__tests__/apiFileBudget.test.ts; он снижается после каждого выноса домена в
 // features/<домен>/api.ts, поднимать его нельзя. Новые методы — сразу в features/<домен>/.
-import type { Project, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, ApplyDefaultBindingsResult, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, LocalHandsChatStatus, BackgroundResult, ChangedBySession, ExternalPreviewLink, ExternalLinkIssued, PlanMap, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult } from '../types';
+import type { Project, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, PermissionRule, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, ApplyDefaultBindingsResult, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, LocalHandsChatStatus, BackgroundResult, ChangedBySession, ExternalPreviewLink, ExternalLinkIssued, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult } from '../types';
 import { localModelApi } from '../features/localModel/api';
 import { providerAccountsApi } from '../features/providerAccounts/api';
 import { accountApi } from '../features/account/api';
@@ -19,6 +19,8 @@ import { specialtiesApi } from '../features/specialties/api';
 import { knowledgeApi } from '../features/knowledge/api';
 import { dossiersApi } from '../features/dossiers/api';
 import { telemetryApi } from '../features/telemetry/api';
+import { skillsApi } from '../features/skills/api';
+import { plansApi } from '../features/plan/api';
 import { cachedToken, readStoredToken, request, writeStoredToken } from './offline';
 import type { FeatureRun } from '../types/featureRun';
 import type { FeaturesIndex, FeaturePage } from '../types/featureIndex';
@@ -2119,56 +2121,8 @@ export const api = {
   // «Знания»: проекльный индекс Dify и менеджер баз знаний — в features/knowledge/api.ts
   ...knowledgeApi,
 
-  skills: {
-    list: (projectId: string) => projectRequest<SkillsData>(`/projects/${projectId}/skills`),
-    // Глобальные скиллы без привязки к проекту (для чатов вне проекта)
-    listGlobal: () => request<SkillInfo[]>('/skills'),
-    getSkill: (skillName: string) => request<{ content: string }>(`/skills/${skillName}`),
-    saveSkill: (skillName: string, content: string) =>
-      request<void>(`/skills/${skillName}`, { method: 'PUT', body: JSON.stringify({ content }) }),
-    createSkill: (name: string, content: string) =>
-      request<{ name: string }>('/skills', { method: 'POST', body: JSON.stringify({ name, content }) }),
-    getAgent: (projectId: string, agentName: string) =>
-      projectRequest<{ content: string }>(`/projects/${projectId}/agents/${agentName}`),
-    saveAgent: (projectId: string, agentName: string, content: string) =>
-      projectRequest<void>(`/projects/${projectId}/agents/${agentName}`, { method: 'PUT', body: JSON.stringify({ content }) }),
-    createAgent: (projectId: string, name: string, content: string) =>
-      projectRequest<{ name: string }>(`/projects/${projectId}/agents`, { method: 'POST', body: JSON.stringify({ name, content }) }),
-
-    // --- Реестр skills.sh (обёртка npx skills) ---
-    // Поиск навыков по реестру; owner — опциональное сужение по GitHub-владельцу.
-    // Русский запрос переводится на английский (реестр англоязычный) — translatedQuery
-    // показывает, что реально искали (null, если перевод не понадобился).
-    // Все операции с реестром долгие (перевод LLM, клонирование репозиториев, подбор) —
-    // задаём щедрый timeoutMs, иначе дефолтные 30с обрывают запрос и офлайн-слой
-    // ложно решает, что мы офлайн («Действие недоступно офлайн»).
-    find: (q: string, owner?: string) =>
-      request<{ query: string; translatedQuery: string | null; results: RegistrySkill[] }>(
-        `/skills/find?q=${encodeURIComponent(q)}${owner ? `&owner=${encodeURIComponent(owner)}` : ''}`,
-        { timeoutMs: 90_000 }),
-    // Установка навыка: scope 'project' требует projectId, 'global' — нет
-    install: (source: string, skill: string, scope: 'project' | 'global', projectId?: string) =>
-      request<{ installed: string; scope: string }>('/skills/install', {
-        method: 'POST', body: JSON.stringify({ source, skill, scope, projectId }), timeoutMs: 180_000,
-      }),
-    uninstall: (skill: string, scope: 'project' | 'global', projectId?: string) =>
-      request<void>(`/skills/installed?skill=${encodeURIComponent(skill)}&scope=${scope}${projectId ? `&projectId=${projectId}` : ''}`,
-        { method: 'DELETE', timeoutMs: 90_000 }),
-    // LLM-подбор: ровно один из personaId / projectId / query
-    suggest: (ctx: { personaId?: string; projectId?: string; query?: string }) =>
-      request<{ candidates: SkillSuggestion[] }>('/skills/suggest',
-        { method: 'POST', body: JSON.stringify(ctx), timeoutMs: 200_000 }),
-    // LLM-генерация нового навыка (SKILL.md) по свободному промпту: кандидат для превью, не сохраняется
-    generate: (prompt: string) =>
-      request<GeneratedSkill>('/skills/generate',
-        { method: 'POST', body: JSON.stringify({ prompt }), timeoutMs: 200_000 }),
-    // Установить навык персоне: глобальная установка + привязка (Skill)
-    installForPersona: (personaId: string, source: string, skill: string) =>
-      request<{ installed: string; bound: boolean; warning?: string }>(`/personas/${personaId}/skills`, {
-        method: 'POST', body: JSON.stringify({ source, skill }), timeoutMs: 180_000,
-      }),
-  },
-
+  // «Навыки» и реестр skills.sh — в features/skills/api.ts
+  ...skillsApi,
 
   sync: {
     list: (projectId: string) => request<SyncMark[]>(`/projects/${projectId}/sync`),
@@ -2182,41 +2136,8 @@ export const api = {
   },
 
 
-  // Карта плана (часть B фичи «Визуальный разворот плана», docs/plans/visual-plan.md):
-  // структурный слепок markdown-плана для разворота схемой. Сборка платная — one-shot
-  // модель (место plan-map), поэтому закрыта от делегированных ходов на бэке.
-  // Контракт ответа:
-  //   200 → PlanMap
-  //   204 → карту собрать не удалось (любой сбой — фронт остаётся на тексте с работающими замечаниями)
-  //   409 → сборка уже идёт для этого владельца; компонент сам не вызывает сборку, только показывает «уже собирается»
-  //   400 → текст пуст или больше потолка (256 КБ)
-  plans: {
-    buildMap: async (plan: string): Promise<PlanMap | null> => {
-      const token = readStoredToken();
-      const res = await fetch('/api/plans/map', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ plan }),
-      });
-      if (res.status === 204) return null;
-      if (res.status === 409) {
-        const err = await res.json().catch(() => ({ error: 'Сборка уже идёт' }));
-        const e = new Error(err.error ?? 'Сборка уже идёт') as Error & { status?: number };
-        e.status = 409;
-        throw e;
-      }
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.statusText }));
-        const e = new Error(err.error ?? res.statusText) as Error & { status?: number };
-        e.status = res.status;
-        throw e;
-      }
-      return await res.json();
-    },
-  },
+  // Карта плана — в features/plan/api.ts
+  ...plansApi,
 
   reader: {
     // Контракт ADR-005 (docs/adr/ADR-005-link-reader-server.md): успех — { title, siteName?,

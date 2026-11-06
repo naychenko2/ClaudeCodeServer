@@ -19,8 +19,9 @@ namespace ClaudeHomeServer.Services;
 public sealed class PersonaAvatarThumbService(
     ILogger<PersonaAvatarThumbService> log,
     // `= null` — растр-шов регистрирует вертикаль images (Images/Services/ImagesSubsystem.cs:42,
-    // SkiaImageRaster): на выключенной вертикали растра нет и сервис деградирует к «миниатюры
-    // нет» — вызывающий отдаёт оригинал (тот же контракт, что «растр не смог», ADR-014, S2b-1)
+    // SkiaImageRaster): на выключенной вертикали растра нет и НОВОЙ миниатюры не будет —
+    // вызывающий отдаёт оригинал (тот же контракт, что «растр не смог», ADR-014, S2b-1).
+    // Уже записанная миниатюра при этом отдаётся: файл на диске валиден без растра (R-S2b-1 п.5)
     IImageRaster? raster = null)
 {
     // Путь к существующей или только что сгенерированной миниатюре; null — миниатюра не
@@ -29,11 +30,13 @@ public sealed class PersonaAvatarThumbService(
     {
         var name = ImageAssetHelper.AvatarThumbName(persona.Avatar.ImageFile, step);
         if (name is null) return null;
-        // Растра нет (вертикаль images выключена): миниатюры нет, оригинал остаётся
-        if (raster is null) return null;
         var dir = Path.GetDirectoryName(originalPath)!;
         var path = SafePath.Join(dir, name);
+        // Сначала существующий файл: кэшированная миниатюра не требует растра и отдаётся
+        // даже на выключенной вертикали images (R-S2b-1 п.5)
         if (File.Exists(path)) return path;
+        // Растра нет и файла нет: чем сгенерировать нечего — миниатюры нет, оригинал остаётся
+        if (raster is null) return null;
 
         var original = await File.ReadAllBytesAsync(originalPath);
         // Заголовок без декодирования: формат/размер известны до пикселей

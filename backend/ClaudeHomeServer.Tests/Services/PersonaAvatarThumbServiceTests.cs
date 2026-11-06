@@ -83,4 +83,76 @@ public class PersonaAvatarThumbServiceTests
             try { Directory.Delete(dir, true); } catch { /* не критично */ }
         }
     }
+
+    // Хвост R-S2b-1 п.5: ранний выход «растра нет» стоял ДО проверки файла на диске, и
+    // кэшированная миниатюра на выключенной вертикали images не отдавалась (вызывающий
+    // отдавал оригинал). Файл миниатюры валиден без растра: он уже был создан, когда
+    // вертикаль была включена — повторной генерации не требует.
+    [Fact]
+    public async Task GetOrGenerate_РастраНетМиниатюраНаДиске_ОтдаётКэшированныйФайл()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "avatar-cached-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            const string originalName = "avatar-cached.png";
+            var originalPath = Path.Combine(dir, originalName);
+            File.WriteAllBytes(originalPath, RealPng());
+
+            // Миниатюра 64 записана на диске «из прошлого» — пока вертикаль была включена
+            var thumbPath = Path.Combine(dir, "avatar-cached-64.png");
+            var shrunk = new SkiaImageRaster().Apply(File.ReadAllBytes(originalPath), [new ResizeOp(Width: 64)], null);
+            shrunk.Ok.Should().BeTrue();
+            File.WriteAllBytes(thumbPath, shrunk.Image!.Bytes);
+
+            var persona = new Persona();
+            persona.Avatar.Kind = PersonaAvatarKind.Image;
+            persona.Avatar.ImageFile = originalName;
+
+            // Растра нет — так сервис стоит на выключенной вертикали images (параметр null)
+            var service = new PersonaAvatarThumbService(
+                NullLogger<PersonaAvatarThumbService>.Instance, raster: null);
+
+            var result = await service.GetOrGenerateAsync(persona, originalPath, 64);
+
+            // Это путь к миниатюре на диске, а не null и не оригинал
+            result.Should().Be(thumbPath);
+            var bytes = File.ReadAllBytes(result!);
+            PngSize(bytes).Should().Be((64, 64));
+            bytes.Should().NotBeEquivalentTo(RealPng());
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* не критично */ }
+        }
+    }
+
+    // Обратная сторона той же починки: файла нет и растра нет — «миниатюры нет», вызывающий
+    // отдаёт оригинал (тот же контракт, что «растр не смог»). Ранний выход остаётся,
+    // но только когда файла действительно нет.
+    [Fact]
+    public async Task GetOrGenerate_РастраНетФайлаМиниатюрыНет_ВозвращаетNull()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "avatar-noraster-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            const string originalName = "avatar-noraster.png";
+            var originalPath = Path.Combine(dir, originalName);
+            File.WriteAllBytes(originalPath, RealPng());
+
+            var persona = new Persona();
+            persona.Avatar.Kind = PersonaAvatarKind.Image;
+            persona.Avatar.ImageFile = originalName;
+
+            var service = new PersonaAvatarThumbService(
+                NullLogger<PersonaAvatarThumbService>.Instance, raster: null);
+
+            (await service.GetOrGenerateAsync(persona, originalPath, 64)).Should().BeNull();
+        }
+        finally
+        {
+            try { Directory.Delete(dir, true); } catch { /* не критично */ }
+        }
+    }
 }

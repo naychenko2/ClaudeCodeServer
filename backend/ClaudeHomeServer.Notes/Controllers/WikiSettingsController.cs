@@ -277,6 +277,8 @@ public class WikiSettingsController : ControllerBase
                 ToInbox = lastNight.ToInbox,
                 EstTokens = lastNight.EstTokens,
                 Outcome = lastNight.Outcome,
+                Rejected = lastNight.Rejected,
+                FirstRejectReason = lastNight.FirstRejectReason,
             },
         };
     }
@@ -308,6 +310,10 @@ public sealed class WikiLastNightDto
     public int ToInbox { get; set; }
     public long EstTokens { get; set; }
     public string Outcome { get; set; } = "";
+    // WN-2: отказанные разборы и причина первого из них — поле в точности нового файла
+    // nightly-last.json; старый файл читается нулём/null (аддитивность, как у inputTokens).
+    public int Rejected { get; set; }
+    public string? FirstRejectReason { get; set; }
 }
 
 /// <summary>Блок «Ночной разбор» (макет Ф2): тумблер, окно [WindowStartHour, WindowEndHour),

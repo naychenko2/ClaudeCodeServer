@@ -80,8 +80,9 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //   (ключ wiki-nightly) и WikiChatStage2 зовут модель через RunLocalOrChosenDetailedAsync (та же
 //   цепочка, что RunLocalOrChosenAsync), без финального claude-шага. Падение или недоступность
 //   локали — отказ вызова: окно разбора уходит в Rejected и курсор не двигается, ступень 2
-//   оставляет чат серым. Фактический вход этих вызовов (usage того же ответа движка) суммируется
-//   в NightResult.InputTokens — меры нагрузки, не денег.
+//   оставляет чат серым; целая ночь таких отказов (каждый разобранный чат отказан и вход нулевой)
+//   — итог error, не completed (WN-2, конец RunPassAsync). Фактический вход этих вызовов (usage
+//   того же ответа движка) суммируется в NightResult.InputTokens — меры нагрузки, не денег.
 //   Кнопка «Разобрать» и агент wiki_ingest не затронуты — облако там допустимо.
 public sealed class WikiNightlyService : BackgroundService
 {
@@ -109,11 +110,15 @@ public sealed class WikiNightlyService : BackgroundService
     /// деньги из этого поля не считать, стоимость облачного пути — OneShotUsage.CostUsd. Сумма —
     /// независимо от исхода (отказанный план и отказ ступени 2 понесённого расхода не отменяют);
     /// чат, упавший исключением, в сумму не входит. 0 до WC-4c означало «не измерено», а не
-    /// «ничего не потрачено». В файле итога поля аддитивны: старый итог (без поля) читается
+    /// «ничего не потрачено». Rejected (WN-2) — число отказанных разборов (OutcomeRejected) среди
+    /// analyzed; FirstRejectReason — текст причины первого отказа (ChatResult.Reason), чтобы
+    /// «completed при нулевом входе» имел, чем объясниться. Сбой разбора исключением в Rejected
+    /// не идёт. В файле итога поля аддитивны: старый итог (без поля) читается
     /// нулями.</summary>
     public sealed record NightResult(
         string Date, int Selected, int Analyzed, int Applied, int ToInbox, long EstTokens, string Outcome,
-        int OverrodeHuman = 0, int DisputedPages = 0, long InputTokens = 0);
+        int OverrodeHuman = 0, int DisputedPages = 0, long InputTokens = 0,
+        int Rejected = 0, string? FirstRejectReason = null);
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -366,7 +371,8 @@ public sealed class WikiNightlyService : BackgroundService
 
     private async Task<NightResult> RunPassAsync(string ownerId, string root, DateOnly date, CancellationToken ct)
     {
-        int selected = 0, analyzed = 0, applied = 0, toInbox = 0, packagesNight = 0, overrodeHuman = 0;
+        int selected = 0, analyzed = 0, applied = 0, toInbox = 0, packagesNight = 0, overrodeHuman = 0, rejected = 0;
+        string? firstRejectReason = null;
         var disputedPages = new HashSet<string>(StringComparer.Ordinal);
         long est = 0, inputTokens = 0;
         var outcome = OutcomeCompleted;
@@ -460,6 +466,14 @@ public sealed class WikiNightlyService : BackgroundService
                 // отказанный план понесённый расход не отменяет (тот же смысл, что у ChatResult).
                 // Чат, упавший исключением выше, до analyzed++ не доходит: его токенов нет.
                 inputTokens += r.InputTokens;
+                // Отказанные разборы (WN-2): считаются и называются в журнале — без них ночь из
+                // 100 отказов выглядела completed и не оставила ни строки (отчёт 79e98305, Ш2).
+                if (r.Outcome == WikiChatIngestService.OutcomeRejected)
+                {
+                    rejected++;
+                    firstRejectReason ??= r.Reason;
+                    LogInfoSafe("Ночной разбор {Owner}: чат {Chat} отказан: {Reason}", ownerId, c.Session.Id, r.Reason);
+                }
                 var made = r.Outcome switch
                 {
                     // Частичный исход (Partial, WC-3) — тоже applied: его применённые пакеты
@@ -492,10 +506,22 @@ public sealed class WikiNightlyService : BackgroundService
             LogSafe(ex, "Ночной разбор {Owner}: проход прерван", ownerId);
             outcome = OutcomeError;
         }
+        // Инвариант «нулевой вход при всех отказах ≠ completed» (WN-2): когда каждый состоявшийся
+        // разбор отказан и ни один токен не дошёл до модели, ночь не «завершена» — она не удалась:
+        // error дату не закрывает, следующий тик окна пробует снова (повтор и уведомление — выше,
+        // их не меняем). Ветки budget/open_limit/window_closed/disabled_midway сюда не доходят:
+        // их итог назван своей причиной. Сбой разбора исключением в rejected не идёт (catch выше
+        // analyzed++) и инварианту не мешает: без отказа он не был бы и разобранным.
+        if (outcome == OutcomeCompleted && analyzed > 0 && rejected == analyzed && inputTokens == 0)
+        {
+            LogInfoSafe("Ночной разбор {Owner}: локальная модель не ответила — отказаны все {Analyzed} чатов с нулевым входом",
+                ownerId, analyzed);
+            outcome = OutcomeError;
+        }
         return Result(outcome);
 
         NightResult Result(string o) => new(FormatDate(date), selected, analyzed, applied, toInbox, est, o,
-            overrodeHuman, disputedPages.Count, inputTokens);
+            overrodeHuman, disputedPages.Count, inputTokens, rejected, firstRejectReason);
     }
 
     // Что мешает продолжать ПЕРЕД чатом: тумблер/флаг сняли (disabled_midway), окно закрылось

@@ -694,7 +694,13 @@ public class WikiNightlyServiceTests : IDisposable
         after.Cursor.Should().Be(before.Cursor);
         after.CursorHash.Should().Be(before.CursorHash);
         WikiChatTriageStore.Get(Root()).Entries.Single(e => e.SessionId == "c2").Cursor.Should().Be(0);
-        Last().Outcome.Should().Be(WikiNightlyService.OutcomeCompleted);
+        // С 2.11 (WN-2) итог этой ночи — error, не completed: единственный состоявшийся разбор
+        // отказан с нулевым входом — весь выход ночи нулевой (инвариант «нулевой вход при всех
+        // отказах ≠ completed»). Смысл теста не изменился: исключение не роняет ночь (она дошла до
+        // c2), курсоры не тронуты; изменилась только честная отметка итога.
+        Last().Outcome.Should().Be(WikiNightlyService.OutcomeError);
+        Last().Rejected.Should().Be(1, "сбой исключением в rejected не идёт, отказ c2 — идёт");
+        Last().FirstRejectReason.Should().Be("сбой окна");
     }
 
     [Fact]
@@ -1015,6 +1021,70 @@ public class WikiNightlyServiceTests : IDisposable
         Last().InputTokens.Should().Be(300, "вызов модели состоялся — его вход в итоге");
     }
 
+    // ─── WN-2: отказы считаются, нулевой вход — не completed ─────────────────
+    // Ночь 06.11 (отчёт 79e98305, Ш2): 100 чатов отказаны без вызова модели, а итог — completed,
+    // повтора нет, в журнале ни строки. Теперь отказы считаются, называются в журнале и при
+    // нулевом входе дают error — дату он не закрывает, следующий тик пробует снова.
+
+    [Fact]
+    public async Task ВсеРазборыОтказаныНулевойВход_ИтогError_ИПовторВТотуНочь()
+    {
+        // Мутации: «не считать rejected» → rejected=0 (красный); «не переводить в OutcomeError» →
+        // outcome=completed (красный); «error тоже закрывает дату» → второй тик не зовёт _analyze,
+        // счётчик остался бы 3 (красный).
+        Configure();
+        AddChat("c1", ageMinutes: 0);
+        AddChat("c2", ageMinutes: 1);
+        AddChat("c3", ageMinutes: 2);
+        var sut = Sut((owner, chat, ct) =>
+        {
+            lock (_analyzed) _analyzed.Add(chat);
+            return Task.FromResult(new WikiChatIngestService.ChatResult(
+                WikiChatIngestService.OutcomeRejected, "модель недоступна: " + chat, [], InputTokens: 0));
+        });
+
+        await Tick(sut);
+
+        var last = Last();
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeError, "нулевой вход при всех отказах — не completed");
+        last.Analyzed.Should().Be(3);
+        last.Rejected.Should().Be(3);
+        last.FirstRejectReason.Should().Be("модель недоступна: c1", "причина первого отказанного чата");
+        last.InputTokens.Should().Be(0);
+        File.ReadAllText(LastFile()).Should().Contain("\"rejected\"").And.Contain("\"firstRejectReason\"");
+
+        // error дату не закрывает: второй тик той же ночи проходит её заново.
+        await Tick(sut);
+        _analyzed.Should().HaveCount(6, "error не закрывает дату — следующий тик той же ночи пробует снова");
+    }
+
+    [Fact]
+    public async Task ЧастьОтказанаОдинРазобранный_ИтогCompleted_ОтказыПосчитаны()
+    {
+        // Мутация «переводить при rejected > 0» (без rejected == analyzed): outcome стал бы error
+        // при живом разборе c3 — тест краснеет.
+        Configure();
+        AddChat("c1", ageMinutes: 0);
+        AddChat("c2", ageMinutes: 1);
+        AddChat("c3", ageMinutes: 2);
+        await Tick(Sut((owner, chat, ct) =>
+        {
+            lock (_analyzed) _analyzed.Add(chat);
+            if (chat == "c3")
+                return Task.FromResult(new WikiChatIngestService.ChatResult(
+                    WikiChatIngestService.OutcomeNothingNew, null, [], InputTokens: 1_000));
+            return Task.FromResult(new WikiChatIngestService.ChatResult(
+                WikiChatIngestService.OutcomeRejected, "отказ " + chat, [], InputTokens: 0));
+        }));
+
+        var last = Last();
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted, "есть несостоявшийся отказом разбор с ненулевым входом");
+        last.Analyzed.Should().Be(3);
+        last.Rejected.Should().Be(2);
+        last.FirstRejectReason.Should().Be("отказ c1", "причина первого отказанного, а не первого вообще");
+        last.InputTokens.Should().Be(1_000);
+    }
+
     [Fact]
     public async Task СтарыйИтогБезПоля_ЧитаетсяНулём()
     {
@@ -1028,6 +1098,9 @@ public class WikiNightlyServiceTests : IDisposable
         var last = Last();
         last.InputTokens.Should().Be(0);
         last.EstTokens.Should().Be(120);
+        // Тот же файл не содержит и полей WN-2 — читаются нулём без исключения.
+        last.Rejected.Should().Be(0);
+        last.FirstRejectReason.Should().BeNull();
     }
 
     // ─── c4: изоляция владельцев и один проход ─────────────────────────────

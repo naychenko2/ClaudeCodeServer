@@ -110,6 +110,10 @@ export type NotFoundContext = 'chat' | 'note';
 export const SECTION_OFF_TEXT = 'Вики локальных проектов — отдельной фичей';
 export const SPHERE_RESERVED_TEXT = 'Раздел сферы — следующая фича';
 
+// «Вики выключена в настройках» — один текст на два отказа: чтения настроек (эта таблица) и
+// ручного запуска ночи (nightlyRunRefusalText): второй копии строки в фиче нет
+const WIKI_OFF_TEXT = 'Вики выключена в настройках';
+
 // Отказы контракта (WikiErrorCode, S2f) — понятным русским текстом; 401/404 приходят без
 // тела и без кода, их отличаем по статусу. Формулировки — черновые (тексты фичи ведёт Софья).
 export function wikiErrorText(e: WikiError, ctx?: NotFoundContext): string {
@@ -144,7 +148,7 @@ export function wikiErrorText(e: WikiError, ctx?: NotFoundContext): string {
     case 'wiki_note_id': return 'Нужен id заметки';
     // Здоровье (S3-3) и класс операции (хвост R-S7c-2): общие тексты по коду. У «Здоровья»
     // свой текст прогона (healthErrorText) — он точнее для кнопки линта и остаётся там.
-    case 'wiki_llm_wiki_off': return 'Вики выключена в настройках';
+    case 'wiki_llm_wiki_off': return WIKI_OFF_TEXT;
     case 'wiki_class_key': return 'Неизвестный класс';
     // Список чатов разбора (GET /wiki/chats): файл разбора чатов не читается (R-W4-1)
     case 'wiki_triage_invalid': return 'Файл разбора чатов не читается';
@@ -242,6 +246,38 @@ export function nightOutcomeNotice(
       return null;
   }
 }
+
+// ─── «Запустить сейчас» (WN-6b) ───
+
+// Формулировки — из карточки плана 0ab580a7 (Софья): текст диалога называет пакеты за проход
+// (решение 1 плана: лимита чатов за ночь в настройках нет — в subtitle то, что есть,
+// maxPackagesPerNight). Состояния и рендер — у WikiNightlyBlock.
+export const NIGHTLY_RUN_BUTTON = 'Запустить сейчас';
+export const NIGHTLY_RUN_BUSY = 'Идёт разбор…';
+export const NIGHTLY_RUN_OFF_HINT = 'Ночной разбор выключен';
+export const NIGHTLY_RUN_ASK_TITLE = 'Запустить ночной разбор сейчас?';
+export const NIGHTLY_RUN_CONFIRM = 'Запустить';
+
+export function nightlyRunAskText(maxPackagesPerNight: number): string {
+  return `Хранитель разберёт новые чаты — не больше ${maxPackagesPerNight} пакетов за проход — и при включённом автоприменении сразу запишет найденное в вики. Откатить можно из „Журнала“.`;
+}
+
+// Отказ ручного запуска (WN-6b): стор возвращает код, а не WikiError (WikiRunNightlyResult, WN-6a).
+// 'wiki_nightly_running' сюда не доходит: «уже идёт» стор считает началом прохода (там же).
+// Прочие кода — отказы ручки run (WikiSettingsController.cs:237-251) и сетевой сбой (null).
+// Неизвестный код — общий текст: смысла не выдумываем.
+export function nightlyRunRefusalText(code: WikiError['code']): string {
+  switch (code) {
+    case 'wiki_llm_wiki_off': return WIKI_OFF_TEXT;
+    case 'wiki_nightly_disabled': return 'Ночной разбор выключен — запустить его нельзя';
+    case 'wiki_settings_invalid': return 'Настройки ночи не читаются — обновите страницу';
+    default: return 'Не удалось запустить разбор';
+  }
+}
+
+// «отказано N» в строке чисел итога ночи: число отказанных разборов среди analyzed
+// (WikiNightlyService.cs:117-119). 0 или отсутствующее поле (старый итог) — строки нет.
+export const nightlyRejectedLine = (n: number): string => `отказано ${n}`;
 
 // Префикс раздела — один форматтер на всю фичу (тот же вид, что у бэка в выдаче notes_*):
 // «Проекты / AI Home», «Сферы / Банк», «Общее», «Личное»

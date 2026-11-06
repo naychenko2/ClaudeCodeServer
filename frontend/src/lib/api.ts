@@ -1,10 +1,11 @@
 // ПОТОЛОК РОСТА (frontend-api-split-2026-11.md): файл только худеет. Лимит строк — в
 // lib/__tests__/apiFileBudget.test.ts; он снижается после каждого выноса домена в
 // features/<домен>/api.ts, поднимать его нельзя. Новые методы — сразу в features/<домен>/.
-import type { Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
+import type { Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
 import { localModelApi } from '../features/localModel/api';
 import { providerAccountsApi } from '../features/providerAccounts/api';
 import { accountApi } from '../features/account/api';
+import { modulesApi } from '../features/modules/api';
 import { cachedToken, readStoredToken, request, writeStoredToken } from './offline';
 import type { FeatureRun } from '../types/featureRun';
 import type { FeaturesIndex, FeaturePage } from '../types/featureIndex';
@@ -33,6 +34,8 @@ export type * from '../features/localModel/types';
 export type * from '../features/providerAccounts/types';
 // Типы «Аккаунта» (слоты моделей) живут в features/account/types.ts
 export type * from '../features/account/types';
+// Тип внешнего модуля (ModuleInfo) живёт в features/modules/types.ts
+export type * from '../features/modules/types';
 
 // Итог «Собрать архитектуру» (POST /projects/{id}/architecture/generate).
 // graphBuiltAt — время снимка графа кода, которым помечена карта (ISO); added/matched —
@@ -260,19 +263,6 @@ export interface DeployJournal {
 }
 
 export type { WorkflowAgentInfo, WorkflowAgentBlock };
-
-// Метаданные внешнего модуля из GET /api/modules (контракт §2/§7)
-export interface ModuleInfo {
-  id: string;
-  displayName: string;
-  description?: string | null;
-  version: string;
-  schemaVersion: string;
-  apiBase: string;                 // "/api/modules/{id}"
-  tab?: { label: string; icon?: string | null; order: number } | null;
-  remoteEntry?: string | null;     // с ?v={version}
-  exposedModule?: string | null;   // "./Tab"
-}
 
 export interface DifyDocument {
   id: string;
@@ -634,17 +624,8 @@ export const api = {
         { method: 'PUT', body: JSON.stringify({ places: { [place]: patch } }) }),
   },
 
-  // Внешние модули (платформа): список включённых у юзера модулей для оболочки (R6).
-  // Данные к самим модулям идут мимо этого API — через gateway /api/modules/{id}/** (YARP).
-  modules: {
-    list: () => request<{ items: ModuleInfo[] }>('/modules'),
-  },
-
-  // MF-remote подсистем (пилот Module Federation): список remotes, которые хост
-  // загружает в рантайме и регистрирует в реестре слотов.
-  subsystemModules: {
-    list: () => request<{ items: { id: string; remoteUrl: string; exposedModule: string }[] }>('/subsystem-modules'),
-  },
+  // Модули, MF-remote подсистем и фича-флаги — в features/modules/api.ts
+  ...modulesApi,
 
   // Личный реестр MCP-серверов владельца (фича mcp-registry). Секретные значения наружу
   // не выходят: в McpValue у секрета value = null, а в форме пустое значение секрета
@@ -981,15 +962,6 @@ export const api = {
   // рапортовала бы о живом сервере ровно тогда, когда его нет.
   deployJournal: {
     status: () => request<DeployJournal>('/deploy/status', { cache: 'no-store', live: true }),
-  },
-
-  featureFlags: {
-    get: () => request<{ definitions: FeatureFlagDefinition[]; values: Record<string, boolean> }>('/feature-flags'),
-    set: (key: string, enabled: boolean) =>
-      request<{ values: Record<string, boolean> }>(`/feature-flags/${key}`, {
-        method: 'PUT',
-        body: JSON.stringify({ enabled }),
-      }),
   },
 
   // Специальности персон и настройки к ним. Каталог отдаёт подписи и эффективные

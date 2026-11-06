@@ -2,13 +2,16 @@
 
 Вход для шагов S5-1…S5-N. Образец уже сделан в S5-0: домен «Локальные модели».
 
-Диапазоны в обоих разделах пересчитаны по ФАКТУ на 05.11 (после S5-1): строки в `lib/api.ts` и в `frontend/src/types/index.ts` — как в репозитории, а не как в снимке на момент S5-0. Числа импортёров — скриптом по разбору `import … from` (путь резолвится до `types/index.ts`; сам `types/index.ts` не считается). Граф кода тут не годится: `codegraph_neighbors` по TS-файлам межфайловых связей не строит («узел не найден»).
+Диапазоны в обоих разделах пересчитаны по ФАКТУ на 05.11 (после S5-1): строки в `lib/api.ts` и в `frontend/src/types/index.ts` — как в репозитории, а не как в снимке на момент S5-0. Снимок `lib/api.ts` для раздела 1 — ревизия `35ba276f5` (файл 3 013 строк, побайтово тот же, что на 05.11 после S5-1 — `bcb6e562d`); все строки таблицы раздела 1 и числа импортёров относятся к ней.
+
+Числа импортёров — скриптом по разбору `import … from` (путь резолвится до `types/index.ts`); **из счёта исключён весь каталог `types/`**, а не только сам `types/index.ts` — в том числе `types/featureRun.ts`, который импортирует `./index` (в 509 он не входит). Граф кода тут не годится: `codegraph_neighbors` по TS-файлам межфайловых связей не строит («узел не найден»).
 
 ## Образец (S5-0)
 
 - Типы: `lib/api.ts` (бывшие строки 32–441) → `features/localModel/types.ts`; `lib/api.ts` делает `export type * from '../features/localModel/types'`, все импорты снаружи прежние.
 - Методы: блок `localModel: {…}` → `features/localModel/api.ts` (`localModelApi`, использует `request` из `lib/offline`, а не `api`, — иначе цикл); в `api` подмешивается `...localModelApi`, адрес `api.localModel.*` не меняется.
 - Домен «Аккаунты провайдеров» (S5-1): ключи `fal`, `glif`, `yandex`, `higgsfield` и типы `HiggsfieldStatus`/`HiggsfieldAdminStatus` → `features/providerAccounts/`; в `lib/api.ts` — spread `...providerAccountsApi` (строка 689) и `export type *`. Адреса `api.fal.*`, `api.glif.*`, `api.yandex.*`, `api.higgsfield.*` прежние.
+- Домен «Аккаунт» (S5-2, `a7a2b7b7b`): ключи `auth`, `push`, `users`, `settings`, `meModelTiers`, `adminUserModelTiers` и тип `ModelTiers` → `features/account/`; в `lib/api.ts` — spread `...accountApi` и `export type *`. Адреса `api.auth.*` и прочие прежние; `Me`/`UserProfile`/`AppSettings` остаются в `types/index.ts`.
 
 ## Правила для следующих шагов
 
@@ -22,72 +25,78 @@
 
 ## 1. Домены `api` (объект `api`, `lib/api.ts` на 05.11)
 
-Диапазоны — от строки ключа до строки перед следующим ключом верхнего уровня объекта `api`; импортёры — число файлов (кроме `api.ts`), где встречается `api.<домен>`. Файлы-импортёры тестами тоже считаются. Ключи `fal`, `glif`, `yandex`, `higgsfield` уже вынесены в `features/providerAccounts/` (S5-1) — в объекте их нет, вместо них spread `...providerAccountsApi` (строка 689); в таблице они не перечислены.
+Снимок раздела — ревизия `35ba276f5`: `lib/api.ts` 3 013 строк, объект `api` — строки 564–2961.
+
+**Граница диапазона (одна на весь раздел):** диапазон домена начинается с первой строки его шапки — блока комментариев `//`, примыкающих сверху к строке ключа (если шапки нет — со строки ключа) — и заканчивается строкой перед шапой следующего домена. Иными словами: в диапазон домена входят его собственные комментарии-шапка и тело ключа, а комментарии следующего домена — не входят. Следствие: `api.ts:1982` (`// Единый поиск (флаг unified-search)…`) — это шапка домена `search`, а не `briefing`; диапазоны смежны, перекрытий и разрывов нет, сумма колонки «Строк» равна числу строк внутри объекта `api` (2 396).
+
+Импортёры — число файлов (кроме `api.ts`), где встречается `api.<домен>`. Файлы-импортёры тестами тоже считаются. Ключи `fal`, `glif`, `yandex`, `higgsfield` уже вынесены в `features/providerAccounts/` (S5-1) — в объекте их нет, вместо них spread `...providerAccountsApi` (строка 689); в таблице они не перечислены.
+
+Ключи `auth`, `push`, `users`, `settings`, `meModelTiers`, `adminUserModelTiers` вынесены в `features/account/` (S5-2, `a7a2b7b7b`) — в снимке `35ba276f5` они ещё были в объекте, поэтому строки диапазонов остаются (иначе сумма «Строк» разойдётся с числом строк объекта), но в столбце «Целевой файл» помечены как вынесенные: нарезке не подлежат, в текущем `lib/api.ts` их уже нет, вместо них spread `...accountApi`.
 
 | Домен (ключ `api`) | Строки в api.ts | Строк | Целевой файл | Файлов-импортёров `api.<домен>` |
 |---|---|---|---|---|
-| `auth` | 565–591 | 27 | `features/account/api.ts` | 8 |
-| `push` | 592–599 | 8 | `features/account/api.ts` | 1 |
-| `users` | 600–610 | 11 | `features/account/api.ts` | 2 |
-| `settings` | 611–618 | 8 | `features/account/api.ts` | 6 |
-| `meModelTiers` | 619–624 | 6 | `features/account/api.ts` | 3 |
-| `adminUserModelTiers` | 625–629 | 5 | `features/account/api.ts` | 2 |
-| `usage` | 630–646 | 17 | `features/spend/api.ts` | 7 |
-| `spend` | 647–662 | 16 | `features/spend/api.ts` | 6 |
-| `localActions` | 663–682 | 20 | `features/models/api.ts` | 1 |
-| `backup` | 683–694 | 12 | `features/hostControl/api.ts` | 1 |
-| `imageGeneration` | 695–705 | 11 | `features/imageGeneration/api.ts` | 2 |
-| `modules` | 706–711 | 6 | `features/modules/api.ts` | 1 |
-| `subsystemModules` | 712–718 | 7 | `features/modules/api.ts` | 1 |
-| `mcp` | 719–780 | 62 | `features/mcp/api.ts` | 4 |
-| `devices` | 781–797 | 17 | `features/desktop/api.ts` | 4 |
-| `plugins` | 798–906 | 109 | `features/plugins/api.ts` | 23 |
+| `auth` | 565–591 | 27 | `features/account/api.ts` — **вынесено (S5-2)** | 8 |
+| `push` | 592–599 | 8 | `features/account/api.ts` — **вынесено (S5-2)** | 1 |
+| `users` | 600–610 | 11 | `features/account/api.ts` — **вынесено (S5-2)** | 2 |
+| `settings` | 611–616 | 6 | `features/account/api.ts` — **вынесено (S5-2)** | 6 |
+| `meModelTiers` | 617–623 | 7 | `features/account/api.ts` — **вынесено (S5-2)** | 3 |
+| `adminUserModelTiers` | 624–629 | 6 | `features/account/api.ts` — **вынесено (S5-2)** | 2 |
+| `usage` | 630–644 | 15 | `features/spend/api.ts` | 7 |
+| `spend` | 645–659 | 15 | `features/spend/api.ts` | 6 |
+| `localActions` | 660–679 | 20 | `features/models/api.ts` | 1 |
+| `backup` | 680–690 | 11 | `features/hostControl/api.ts` | 1 |
+| `imageGeneration` | 691–703 | 13 | `features/imageGeneration/api.ts` | 2 |
+| `modules` | 704–709 | 6 | `features/modules/api.ts` | 1 |
+| `subsystemModules` | 710–715 | 6 | `features/modules/api.ts` | 1 |
+| `mcp` | 716–779 | 64 | `features/mcp/api.ts` | 4 |
+| `devices` | 780–794 | 15 | `features/desktop/api.ts` | 4 |
+| `plugins` | 795–906 | 112 | `features/plugins/api.ts` | 23 |
 | `providers` | 907–915 | 9 | `features/models/api.ts` | 4 |
-| `models` | 916–963 | 48 | `features/models/api.ts` | 8 |
-| `video` | 964–988 | 25 | `features/video/api.ts` | 2 |
+| `models` | 916–956 | 41 | `features/models/api.ts` | 8 |
+| `video` | 957–988 | 32 | `features/video/api.ts` | 2 |
 | `power` | 989–999 | 11 | `features/hostControl/api.ts` | 2 |
 | `remoteCommands` | 1000–1022 | 23 | `features/hostControl/api.ts` | 2 |
-| `deploy` | 1023–1036 | 14 | `features/deploy/api.ts` | 3 |
-| `externalPreview` | 1037–1048 | 12 | `features/projects/api.ts` | 1 |
-| `deployJournal` | 1049–1052 | 4 | `features/deploy/api.ts` | 1 |
-| `featureFlags` | 1053–1066 | 14 | `features/modules/api.ts` | 1 |
-| `specialties` | 1067–1113 | 47 | `features/specialties/api.ts` | 5 |
-| `projects` | 1114–1396 | 283 | `features/projects/api.ts` | 53 |
-| `home` | 1397–1399 | 3 | `features/home/api.ts` | 4 |
-| `board` | 1400–1415 | 16 | `features/tasks/api.ts` | 3 |
-| `projectGroups` | 1416–1430 | 15 | `features/spheres/api.ts` | 8 |
-| `spheres` | 1431–1442 | 12 | `features/spheres/api.ts` | 5 |
-| `tasks` | 1443–1554 | 112 | `features/tasks/api.ts` | 36 |
-| `notes` | 1555–1664 | 110 | `features/notes/api.ts` | 22 |
-| `personas` | 1665–1976 | 312 | `features/personas/api.ts` | 36 |
-| `briefing` | 1977–1982 | 6 | не назначено | 1 |
-| `search` | 1983–1984 | 2 | не назначено | 1 |
-| `onboarding` | 1988–1997 | 10 | не назначено | 1 |
-| `sessions` | 1998–2086 | 89 | `features/sessions/api.ts` | 26 |
-| `wall` | 2087–2098 | 12 | `features/chat/api.ts` | 5 |
-| `quickPhrases` | 2099–2106 | 8 | `features/chat/api.ts` | 1 |
-| `chats` | 2107–2315 | 209 | `features/chat/api.ts` | 30 |
-| `watchdogs` | 2316–2320 | 5 | `features/chat/api.ts` | 2 |
-| `history` | 2321–2337 | 17 | `features/chat/api.ts` | 4 |
-| `docs` | 2338–2434 | 97 | `features/docs/api.ts` | 8 |
-| `dossiers` | 2435–2488 | 54 | `features/dossiers/api.ts` | 3 |
-| `telemetry` | 2489–2510 | 22 | `features/telemetry/api.ts` | 3 |
-| `files` | 2511–2626 | 116 | `features/files/api.ts` | 22 |
-| `hostFiles` | 2627–2632 | 6 | `features/hostControl/api.ts` | 1 |
-| `git` | 2633–2759 | 127 | `features/git/api.ts` | 12 |
-| `knowledge` | 2760–2785 | 26 | `features/knowledge/api.ts` | 2 |
-| `knowledgeBases` | 2786–2831 | 46 | `features/knowledge/api.ts` | 7 |
+| `deploy` | 1023–1034 | 12 | `features/deploy/api.ts` | 3 |
+| `externalPreview` | 1035–1043 | 9 | `features/projects/api.ts` | 1 |
+| `deployJournal` | 1044–1052 | 9 | `features/deploy/api.ts` | 1 |
+| `featureFlags` | 1053–1061 | 9 | `features/modules/api.ts` | 1 |
+| `specialties` | 1062–1113 | 52 | `features/specialties/api.ts` | 5 |
+| `projects` | 1114–1394 | 281 | `features/projects/api.ts` | 53 |
+| `home` | 1395–1399 | 5 | `features/home/api.ts` | 4 |
+| `board` | 1400–1414 | 15 | `features/tasks/api.ts` | 3 |
+| `projectGroups` | 1415–1429 | 15 | `features/spheres/api.ts` | 8 |
+| `spheres` | 1430–1442 | 13 | `features/spheres/api.ts` | 5 |
+| `tasks` | 1443–1553 | 111 | `features/tasks/api.ts` | 36 |
+| `notes` | 1554–1663 | 110 | `features/notes/api.ts` | 22 |
+| `personas` | 1664–1975 | 312 | `features/personas/api.ts` | 36 |
+| `briefing` | 1976–1981 | 6 | не назначено | 1 |
+| `search` | 1982–1985 | 4 | не назначено | 1 |
+| `onboarding` | 1986–1997 | 12 | не назначено | 1 |
+| `sessions` | 1998–2084 | 87 | `features/sessions/api.ts` | 26 |
+| `wall` | 2085–2096 | 12 | `features/chat/api.ts` | 5 |
+| `quickPhrases` | 2097–2105 | 9 | `features/chat/api.ts` | 1 |
+| `chats` | 2106–2312 | 207 | `features/chat/api.ts` | 30 |
+| `watchdogs` | 2313–2319 | 7 | `features/chat/api.ts` | 2 |
+| `history` | 2320–2335 | 16 | `features/chat/api.ts` | 4 |
+| `docs` | 2336–2431 | 96 | `features/docs/api.ts` | 8 |
+| `dossiers` | 2432–2487 | 56 | `features/dossiers/api.ts` | 3 |
+| `telemetry` | 2488–2510 | 23 | `features/telemetry/api.ts` | 3 |
+| `files` | 2511–2623 | 113 | `features/files/api.ts` | 22 |
+| `hostFiles` | 2624–2631 | 8 | `features/hostControl/api.ts` | 1 |
+| `git` | 2632–2759 | 128 | `features/git/api.ts` | 12 |
+| `knowledge` | 2760–2783 | 24 | `features/knowledge/api.ts` | 2 |
+| `knowledgeBases` | 2784–2831 | 48 | `features/knowledge/api.ts` | 7 |
 | `skills` | 2832–2881 | 50 | `features/skills/api.ts` | 7 |
 | `workflow` | 2882–2893 | 12 | `features/team/api.ts` | 1 |
 | `sync` | 2894–2904 | 11 | `features/files/api.ts` | 2 |
-| `tts` | 2905–2919 | 15 | `features/chat/api.ts` | 2 |
-| `plans` | 2920–2947 | 28 | `features/plan/api.ts` | 2 |
+| `tts` | 2905–2911 | 7 | `features/chat/api.ts` | 2 |
+| `plans` | 2912–2947 | 36 | `features/plan/api.ts` | 2 |
 | `reader` | 2948–2960 | 13 | `features/reader/api.ts` | 1 |
 
 | _вне объекта: импорты, DTO Architecture/Deploy/Power/RemoteCommands/Plugin*/Module/Dify, хелперы `setGitSessionContext`/`getGitSessionContext`/`panelEntryPath` и plugin-хелперы_ | 1–563 | 563 | по доменам при выносе (типы едут вместе с методами) | — |
 | _хвост: пять хелперов Ридера (`checkReaderEmbeddable`, `normalizeReaderError`, `READER_ERROR_CODES`, тип `ReaderReadResult`, `readReaderPage`); закрытие объекта `};` — на строке 2961, в хвост НЕ входит_ | 2962–3013 | 52 | `features/reader` | — |
 
-Сумма: 563 (вне объекта) + 2 398 (объект `api`, строки 564–2961) + 52 (хвост) = 3 013 = длина файла. Ширины блоков в таблице (строки между ключами) в сумму не входят — это комментарии и пустые строки между доменами; нарезку вести по ключам, а не по сумме.
+Сумма: 563 (вне объекта) + 2 398 (объект `api`, строки 564–2961, из них 2 396 — строки доменов из таблицы) + 52 (хвост) = 3 013 = длина файла. По принятой границе комментарии-шапки и пустые строки между доменами ВХОДЯТ в диапазон своего домена, поэтому сумма колонки «Строк» (2 396) равна числу строк внутри объекта `api`; нарезку вести по ключам, а не по сумме.
 
 Крупнейшие: `projects`, `personas`, `chats`, `git`, `files`, `tasks`, `notes`, `docs`, `sessions` — резать по поддоменам, ≤ 4 файлов на шаг.
 
@@ -97,7 +106,7 @@
 
 `ServerMessage` (1234–1462) — отдельный домен: его импортируют 27 файлов фронта прямо из `types/index.ts` (ещё 5 файлов упоминают имя, но импортируют из другого места). Уезжать вместе с 9 Git-типами ему нельзя.
 
-Импортёров `types/index.ts` — **509 файлов** (271 вне `features/`, 238 в `features/`), а не «мало»: почти все берут через `from '../types'`, а не через прямой `types/index`. Проверено grep'ом по разбору импортов; граф кода по TS-файлам межфайловых связей не строит («узел не найден»). Числа в таблице — по доменам; один файл может импортировать типы из нескольких доменов, поэтому сумма по доменам больше 509.
+Импортёров `types/index.ts` — **509 файлов** (271 вне `features/`, 238 в `features/`), а не «мало»: почти все берут через `from '../types'`, а не через прямой `types/index`. Проверено скриптом по разбору импортов на ревизии снимка `35ba276f5`; граф кода по TS-файлам межфайловых связей не строит («узел не найден»). Из счёта исключён весь каталог `types/` (включая сам `types/index.ts` и `types/featureRun.ts`, импортирующий `./index`) — они импортируют друг друга, а не типы извне. Числа в таблице — по доменам; один файл может импортировать типы из нескольких доменов, поэтому сумма по доменам больше 509.
 
 | Домен | Строки в types/index.ts | Экспортов | Целевой файл | Файлов-импортёров |
 |---|---|---|---|---|

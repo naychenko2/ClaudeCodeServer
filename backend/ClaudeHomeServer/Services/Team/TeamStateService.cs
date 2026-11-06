@@ -42,11 +42,6 @@ internal sealed class TeamStateService
     private readonly IProjectManager _projects;
     private readonly IConfiguration? _config;
     private readonly LlmProviderRegistry _llmProviders;
-    // Лок-словарь штаба по sessionId: единственный держатель блокировки для мутаций
-    // SessionTeamImplement. Инициализируется по требованию, GC подберёт объект, когда
-    // режим выключат и ссылок не останется.
-    private readonly ConcurrentDictionary<string, object> _teamLocks = new();
-
     internal TeamStateService(SessionManager sessions, TeamPlanningService? teamPlanning,
         IProjectManager projects, IConfiguration? config, LlmProviderRegistry llmProviders)
     {
@@ -65,18 +60,10 @@ internal sealed class TeamStateService
     // завершения задачи, перевыдача из колбэка провала хода, квота из HTTP-фильтра), а
     // `int++` не атомарен — частичный лок означал бы потерянные инкременты и нечестный счёт
     // ровно там, ради чего Э4 и делался. Внутри — только синхронная работа с моделью.
-    public T? WithTeamState<T>(string sessionId, Func<SessionTeamImplement, T> mutate)
-    {
-        var info = _dir.Get(sessionId);
-        if (info is null) return default;
-        var lockObj = _teamLocks.GetOrAdd(sessionId, _ => new object());
-        lock (lockObj)
-        {
-            var session = _sessions.GetById(sessionId);
-            if (session?.TeamImplement is not { } team) return default;
-            return mutate(team);
-        }
-    }
+    // Лок-словарь и тело транзакции переехали в SessionStore (S3-1): стор реализует
+    // ITeamRunState, и второго держателя блокировок над тем же SessionTeamImplement быть не может.
+    public T? WithTeamState<T>(string sessionId, Func<SessionTeamImplement, T> mutate) =>
+        _run.WithTeamState(sessionId, mutate);
 
     // Рассылка TeamImplementMessage по группе чата: стадия, номер волны, состав команды,
     // бюджет и флаги. Тело взято один в один из прежней

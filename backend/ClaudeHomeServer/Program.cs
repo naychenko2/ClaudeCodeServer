@@ -787,6 +787,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Media.IMediaEvents, Clau
 // `AddSubsystems` не зовёт `NotesSubsystem.Register`, и контрибьютор не регистрируется вовсе —
 // ни предикат на регистрации, ни пост-хок удаление дескрипторов здесь больше не нужны.
 builder.Services.AddPromptSectionContributors();
+builder.Services.AddSessionCore();
 builder.Services.AddSingleton<SessionManager>();
 // Актор и рамка хода (S2a-1): читает только шов, пишет ядро сессий в двух точках подачи
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Access.ITurnActorRegistry>(sp => sp.GetRequiredService<SessionManager>());

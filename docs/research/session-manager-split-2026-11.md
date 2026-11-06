@@ -404,8 +404,9 @@ worktree и миграции); `HasTurnInFlight`, `Busy`, `WithTeamState`, `Clai
 
 `FireAndForget` (`SessionManager.cs:11646`, `private static void FireAndForget(Task, string)`) —
 та же природа, что `ShouldNudgeSubagent`: статик без отношения к концу хода, но его зовут
-классы более ранних шагов — `Snapshot` (`:9523`, тело `ITeamSessionDirectory`, S3-1),
-`TryPoolFailover` (`:3288`, маршрут, S3-2), `ResumeAfterInteraction` (`:7781`),
+классы более ранних шагов — первый вызывающий `SavePlanCardAsync` (`:9537`, явная
+реализация `ITeamHistoryStore` → `SessionHistory`, S3-2), вызов `:9552`; второй вызывающий
+S3-2 — `TryPoolFailover` (`:3288`, `CliRoute`, S3-2), `ResumeAfterInteraction` (`:7781`),
 `RespondPermission` (`:7791`), `RecordUserInterrupt` (`:7950`), `AnswerQuestion` (`:10376`),
 `RespondPlan` (`:10406`) (процесс, S3-5), `ReviveStuckSession` (`:7962`),
 `StopClosedExecutorProcess` (`:7985`), `RestartStuckTurnAsync` (`:8041`) (восстановление,
@@ -415,8 +416,8 @@ S3-5), — а также конструктор (`:1054`, тикер ожида�
 Формального нарушения модели конструктора нет (статик не даёт параметра, сторож формы ядра
 его не краснит), но оставлять его в `TurnCompletion` нельзя: исполнители S3-2/S3-5
 получили бы дублирование хелпера в каждом классе или вызов фасада — а это прямо нарушает
-«никогда от `SessionManager`». Решение: с S3-1 (его первый носитель — тела
-`ITeamSessionDirectory`) опускать вниз как общий статический хелпер `Services/Sessions`
+«никогда от `SessionManager`». Решение: с S3-2 (первые носители — `SessionHistory` и
+`CliRoute`) опускать вниз как общий статический хелпер `Services/Sessions`
 по образцу `SubagentNudgePolicy` (static, без состояния и конструктора); S3-2/S3-5 просто
 зовут его. Хелпер не зависимость конструктора: таблица §2 не меняется, сторож его не
 считает (правило 2 считает параметры конструктора). `LastAssistantText` (`:11641`) — тоже

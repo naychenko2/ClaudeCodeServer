@@ -30,6 +30,16 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// при отказе запись не создаётся и не меняется. Личная задача — прежний путь: её арендатор
 /// сам вызывающий, своя глобальная персона открыта, проектная — отказ.
 ///
+/// Дверь MCP (tasks_create/tasks_update) — тот же TaskPersonaGate, что REST (блокер финала
+/// a6f43197): допуск НАЗНАЧАЕМОЙ персоны мерится АКТОРОМ идущего хода (TurnActorId), а не
+/// прямым валидатором по ключу арендатора — иначе агент редактора ставил задачу глобальной
+/// персоне владельца и запускал её исполнителя, чего человек-редактор через REST уже не мог.
+/// Для владельца, который сам ведёт ход, и для проектной персоны проекта задачи — без изменений.
+/// Персона-постановщик агентского пути (selfPersonaId) — собеседник самого чата, а не выбор
+/// актора: её допуск остался по ключу чата. Перевод её на актора отказал бы агенту редактора
+/// любой чат общего проекта без руководителя (его ведёт личный ассистент владельца) — это
+/// отдельное решение, в шаге не принято.
+///
 /// Превью модели (GET /api/models/preview?personaId): допуск — ResolvePersona по праву Read,
 /// ключ резолва — арендатор персоны: для проектной персоны общего проекта модель считается по
 /// слотам и деньгам владельца проекта, а не участника. Чужая и несуществующая personaId — 404:
@@ -446,6 +456,110 @@ public class SharedProjectPersonaTaskTests : IClassFixture<TestWebApplicationFac
         {
             DeletePersona(memberDevops);
         }
+    }
+
+    // ── MCP tasks_create / tasks_update: допуск по актору хода (блокер финала a6f43197) ────
+
+    /// <summary>Общий проект с чатом в нём; ход в чате начинает asEditor ? редактор : владелец —
+    /// актор идущего хода пишется в реестр SessionManager, его же читает TaskPersonaGate через
+    /// TurnActorId. Вызов тулсета — токеном арендатора: так ход участника и вызывает платформенный
+    /// MCP (паттерн SharedProjectTaskWriteRightsTests). Без названного актора вызов имел бы права
+    /// арендатора и мерил бы не то. Ходом владельца поверх живого хода участника актор не
+    /// расширяется: сужение держит более узкий актор (SessionManager.NarrowerActor, :4105),
+    /// поэтому для хода владельца нужен отдельный чат.</summary>
+    private async Task<(string ProjectId, string ProjectPersonaId, string ChatId)> SharedChatWithTurnAsync(
+        bool asEditor = true)
+    {
+        var (projectId, projectPersona) = await SharedAsync();
+        var chat = await Owner().PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" });
+        chat.EnsureSuccessStatusCode();
+        var chatId = IdOf(await chat.Content.ReadAsStringAsync());
+
+        var speaker = asEditor ? Member() : Owner();
+        (await speaker.PostAsJsonAsync($"/api/sessions/{chatId}/messages",
+            new { text = asEditor ? "ход редактора" : "ход владельца", wait = "none" })).EnsureSuccessStatusCode();
+        _factory.Services.GetRequiredService<SessionManager>().GetTurnActor(chatId, OwnerId)
+            .Should().Be(asEditor ? MemberId : OwnerId,
+                "актор идущего хода назван: его права и мерит допуск персоны");
+
+        return (projectId, projectPersona, chatId);
+    }
+
+    private static async Task<(string Text, bool IsError)> McpCallAsync(
+        HttpClient client, string chatId, string tool, object args)
+    {
+        var resp = await client.AsCaller(chatId).PostAsJsonAsync($"/mcp/tasks/{chatId}", new
+        {
+            jsonrpc = "2.0", id = 1, method = "tools/call",
+            @params = new { name = tool, arguments = args },
+        });
+        resp.EnsureSuccessStatusCode();
+        var result = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync())
+            .GetProperty("result");
+        var isError = result.TryGetProperty("isError", out var e) && e.GetBoolean();
+        return (result.GetProperty("content")[0].GetProperty("text").GetString()!, isError);
+    }
+
+    [Fact]
+    public async Task АгентРедактора_tasks_createГлобальнойПерсонеВладельца_Отказ_ЗадачиНет()
+    {
+        var (projectId, _, chatId) = await SharedChatWithTurnAsync();
+        var ownerGlobal = await GlobalPersonaAsync(Owner());
+        var before = Tasks.GetByProject(projectId).Count;
+
+        var (text, isError) = await McpCallAsync(Owner(), chatId, "tasks_create",
+            new { title = "Задача агенту редактора личной персоне владельца", assignee = "claude", personaId = ownerGlobal });
+
+        isError.Should().BeTrue(text, "дверь MCP не может принимать то, что отказывает REST");
+        text.Should().Contain("не найдена или недоступна",
+            "тот же текст отказа, что у TaskPersonaGate в REST: «нет» и «чужое» не различаем");
+        Tasks.GetByProject(projectId).Count.Should().Be(before, "отказ до записи: задача не создана");
+    }
+
+    [Fact]
+    public async Task АгентРедактора_tasks_updateГлобальнойПерсонеВладельца_Отказ_ИсполнительЦел()
+    {
+        var (projectId, projectPersona, chatId) = await SharedChatWithTurnAsync();
+        var ownerGlobal = await GlobalPersonaAsync(Owner());
+        // Задача уже с проектной персоной: отказ на правке не должен её снимать
+        var taskId = await PostAsync(Owner(), $"/api/projects/{projectId}/tasks",
+            new { title = "Задача проекта с проектной персоной", assignee = "claude", personaId = projectPersona });
+
+        var (text, isError) = await McpCallAsync(Owner(), chatId, "tasks_update",
+            new { id = taskId, personaId = ownerGlobal });
+
+        isError.Should().BeTrue(text);
+        text.Should().Contain("не найдена или недоступна");
+        Tasks.GetById(taskId)!.PersonaId.Should().Be(projectPersona,
+            "отказ до первой мутации: исполнитель остался");
+    }
+
+    [Fact]
+    public async Task АгентРедактора_tasks_createПроектнойПерсонеСвоегоПроекта_КакПрежде()
+    {
+        var (_, projectPersona, chatId) = await SharedChatWithTurnAsync();
+
+        var (text, isError) = await McpCallAsync(Owner(), chatId, "tasks_create",
+            new { title = "Задача агенту редактора проектной персоне", assignee = "claude", personaId = projectPersona });
+
+        isError.Should().BeFalse(text, "допуск проектной персоны проекта задачи — не тронут резолвом актора");
+        var createdId = JsonSerializer.Deserialize<JsonElement>(text).GetProperty("id").GetString()!;
+        Tasks.GetById(createdId)!.PersonaId.Should().Be(projectPersona);
+    }
+
+    [Fact]
+    public async Task ВладелецЧерезMCP_tasks_createСвоейГлобальнойПерсоне_КакПрежде()
+    {
+        var (projectId, _, chatId) = await SharedChatWithTurnAsync(asEditor: false);
+        var ownGlobal = await GlobalPersonaAsync(Owner());
+
+        var (text, isError) = await McpCallAsync(Owner(), chatId, "tasks_create",
+            new { title = "Задача своей глобальной персоне", assignee = "claude", personaId = ownGlobal });
+
+        isError.Should().BeFalse(text, "для владельца его глобальная персона — своя: прежний путь");
+        var createdId = JsonSerializer.Deserialize<JsonElement>(text).GetProperty("id").GetString()!;
+        Tasks.GetById(createdId)!.PersonaId.Should().Be(ownGlobal);
+        _ = projectId;
     }
 
     [Fact]

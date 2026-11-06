@@ -446,9 +446,25 @@ public class LocalActionRoutingTests
     [InlineData(LocalActionCatalog.CharacterSceneParse)]
     public async Task ЛокальЗанятаХодом_БезОблака(string actionKey)
     {
-        // Движок занят ходом исполнителя (LocalBlockedByTurn) → шаг локали пропускается,
-        // и на маршруте local облачного шага всё равно нет.
+        // Вариант А (06.11): движок занят ходом (LocalBlockedByTurn), но на локальном маршруте
+        // в режиме «без облака» облачного шага нет — пропуск шага локали был потерей вызова.
+        // Вызов идёт в движок: ответ локали, облака нет.
         var (result, claude) = await RunLocalOrChosenNoCloud(actionKey, localAnswer: "ответ", busy: true);
+
+        Assert.Equal("ответ", result);
+        Assert.Empty(claude.Calls);
+    }
+
+    [Theory]
+    [InlineData(LocalActionCatalog.ActionRank)]
+    [InlineData(LocalActionCatalog.CharacterSceneParse)]
+    public async Task ЛокальПустоПриЗанятомДвижке_БезОблака(string actionKey)
+    {
+        // Занятость не пропускает вызов (вариант А), но движок вернул null — в бою это полный
+        // счётчик слотов: TrackedLocalLlmClient берёт слот через TryEnter без ожидания и при
+        // полном отдаёт null. Цепочка отдаёт null без исключения, облачного шага нет —
+        // этот отказ ловит повтор ночи (WN-2), а не цепочка.
+        var (result, claude) = await RunLocalOrChosenNoCloud(actionKey, localAnswer: null, busy: true);
 
         Assert.Null(result);
         Assert.Empty(claude.Calls);
@@ -461,18 +477,27 @@ public class LocalActionRoutingTests
     // Фейк движка с метриками того же ответа — как реальные LlamaServerClient/OllamaClient.
     // throws — «движок бросает» (реальные клиенты своё исключение глушат; здесь проверяется,
     // что цепочка по нему в облако не уходит). usage = null — «метрик не было»: вызов успешен.
+    // busy — движок занят чужим ходом: слот в собственном трекере (тот же протягивается
+    // роутеру → LocalBlockedByTurn=true). Calls — сколько detailed-вызовов прошло через движок.
     private sealed class DetailedLocalEngine : ILocalLlmClient
     {
         private readonly string? _answer;
         private readonly Protocol.UsageInfo? _usage;
         private readonly bool _throws;
+        private readonly LocalEngineBusyTracker _tracker = new();
+        private readonly IDisposable? _slot;
 
-        public DetailedLocalEngine(string? answer, Protocol.UsageInfo? usage, bool throws = false)
+        public DetailedLocalEngine(string? answer, Protocol.UsageInfo? usage, bool throws = false,
+            bool busy = false)
         {
             _answer = answer;
             _usage = usage;
             _throws = throws;
+            _slot = busy ? _tracker.Enter() : null;
         }
+
+        public LocalEngineBusyTracker Tracker => _tracker;
+        public int Calls;
 
         public bool Enabled => true;
         public string BaseUrl => "http://localhost:11434";
@@ -491,11 +516,14 @@ public class LocalActionRoutingTests
             CancellationToken ct = default) => Task.FromResult(new ChatTurnResult(_answer, _usage));
         public Task WarmUpAsync(string? model, CancellationToken ct = default) => Task.CompletedTask;
 
-        private Task<(string? Text, Protocol.UsageInfo? Usage)> Result() =>
-            _throws
+        private Task<(string? Text, Protocol.UsageInfo? Usage)> Result()
+        {
+            Calls++;
+            return _throws
                 ? Task.FromException<(string?, Protocol.UsageInfo?)>(
                     new InvalidOperationException("движок недоступен"))
                 : Task.FromResult((_answer, _usage));
+        }
 
         public Task<(string? Text, Protocol.UsageInfo? Usage)> ChatJsonDetailedAsync(
             string systemPrompt, string userPrompt, object jsonFormat, CancellationToken ct = default,
@@ -507,21 +535,24 @@ public class LocalActionRoutingTests
             string? ownerId = null, string? label = null, CancellationToken ct = default) => Result();
     }
 
-    private static (CheapTextRunner Runner, FakeOneShot Claude) DetailedNoCloudRunner(
-        string? answer, Protocol.UsageInfo? usage, bool throws = false)
+    // busy — занятость движка ходом: его собственный трекер протягивается роутеру, как в DI
+    // (признак LocalBlockedByTurn). Движок возвращаем: тестам нужен счётчик его вызовов.
+    private static (CheapTextRunner Runner, FakeOneShot Claude, DetailedLocalEngine Engine) DetailedNoCloudRunner(
+        string? answer, Protocol.UsageInfo? usage, bool throws = false, bool busy = false)
     {
-        var engine = new DetailedLocalEngine(answer, usage, throws);
+        var engine = new DetailedLocalEngine(answer, usage, throws, busy);
         var config = ConfigWithTempData(new() { ["Ollama:Model"] = "qwen-test" });
-        var router = new LocalActionRouter(engine, Store(config), config, NullLogger<LocalActionRouter>.Instance);
+        var router = new LocalActionRouter(engine, Store(config), config, NullLogger<LocalActionRouter>.Instance,
+            busy: engine.Tracker);
         var claude = new FakeOneShot();
         return (new CheapTextRunner(router, engine, Cloud(config), claude, NullLogger<CheapTextRunner>.Instance),
-            claude);
+            claude, engine);
     }
 
     private static async Task<(OneShotResult? Result, FakeOneShot Claude)> RunLocalOrChosenDetailedNoCloud(
         string actionKey, string? answer, Protocol.UsageInfo? usage)
     {
-        var (runner, claude) = DetailedNoCloudRunner(answer, usage);
+        var (runner, claude, _) = DetailedNoCloudRunner(answer, usage);
         return (await runner.RunLocalOrChosenDetailedAsync(actionKey, "prompt-text", jsonFormat: "json"), claude);
     }
 
@@ -568,6 +599,28 @@ public class LocalActionRoutingTests
         Assert.Empty(claude.Calls);
     }
 
+    [Fact]
+    public async Task ЛокальЗанятаХодом_БезОблака_Detailed()
+    {
+        // Вариант А (06.11) на detailed-цепочке ночного разбора вики: движок занят ходом
+        // (LocalBlockedByTurn=true), вызов всё равно идёт в движок — пропуск шага был потерей
+        // работы ночи. Ответ и usage того же ответа локали доходят до вызывающего, облака нет.
+        var (runner, claude, engine) = DetailedNoCloudRunner(
+            "ответ-ночи", new Protocol.UsageInfo(2_000, 120, 0, 0), busy: true);
+
+        var result = await runner.RunLocalOrChosenDetailedAsync(
+            LocalActionCatalog.WikiNightly, "prompt-text", jsonFormat: "json");
+
+        engine.Calls.Should().Be(1, "занятость больше не пропускает вызов");
+        result.Should().NotBeNull();
+        result!.Text.Should().Be("ответ-ночи");
+        result.Usage.Should().NotBeNull("usage того же ответа — смысл detailed-цепочки");
+        result.Usage!.InputTokens.Should().Be(2_000);
+        result.Usage.OutputTokens.Should().Be(120);
+        result.Usage.CostUsd.Should().Be(0, "локальный вызов бесплатный");
+        Assert.Empty(claude.Calls);
+    }
+
     [Theory]
     [InlineData(LocalActionCatalog.ActionRank)]
     [InlineData(LocalActionCatalog.CharacterSceneParse)]
@@ -575,7 +628,7 @@ public class LocalActionRoutingTests
     {
         // Тот же контракт, что у строкового RunLocalOrChosenAsync: исключение движка
         // пробрасывается наружу (его ловит вызывающий своим отказом), облачного шага нет.
-        var (runner, claude) = DetailedNoCloudRunner(
+        var (runner, claude, _) = DetailedNoCloudRunner(
             answer: "не важно", usage: new Protocol.UsageInfo(1, 1, 0, 0), throws: true);
 
         var act = async () => await runner.RunLocalOrChosenDetailedAsync(

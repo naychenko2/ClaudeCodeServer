@@ -55,8 +55,20 @@ public sealed class PersonasCrudService(
     private static OkObjectResult Ok(object value) => new(value);
     private static NoContentResult NoContent() => new();
 
-    private Task Broadcast(string userId, string action, string? personaId = null) =>
-        broadcaster.ToOwner(userId, new PersonasChangedMessage(action, personaId));
+    // И-8 (W3-B6, разрез docs/research/shared-projects-personas-cut-2026-11.md §3.1): событие
+    // проектной персоны идёт группе проекта И её владельцу — доходит до всех участников;
+    // ToOwner отдельный: вкладки владельца вне проекта (раздел «Персоны») подписаны только на
+    // свою группу. Событие личной (глобальной/сферной) — только владельцу, как раньше. Сообщение
+    // то же PersonasChangedMessage, без новых полей.
+    private Task Broadcast(string userId, Persona persona, string action, string? personaId = null)
+    {
+        var message = new PersonasChangedMessage(action, personaId);
+        if (PersonaZone.IsProjectPersona(persona) && !string.IsNullOrEmpty(persona.ProjectId))
+            return Task.WhenAll(
+                broadcaster.ToProject(persona.ProjectId, message),
+                broadcaster.ToOwner(userId, message));
+        return broadcaster.ToOwner(userId, message);
+    }
 
     // --- Создание / правка / удаление / дефолт (тела POST/PUT/DELETE/make-default) ---
 
@@ -194,7 +206,7 @@ public sealed class PersonasCrudService(
             if (caller?.OnboardingKind is not null)
                 sessions.SetOnboardingCreatedPersona(csid, userId, persona.Id);
         }
-        await Broadcast(userId, "created", persona.Id);
+        await Broadcast(userId, persona, "created", persona.Id);
         return Ok(persona);
     }
 
@@ -278,13 +290,15 @@ public sealed class PersonasCrudService(
         // перезаписывающее его правки. Посторонние поля (цвет, модель, аватар, привязки) не снимают.
         if (isAssistantDraft && IsCharacterRelevantChange(beforeName, beforeRole, beforeGreeting, beforeContract, persona))
             users.SetAssistantPersona(userId, null);
-        if (broadcast) await Broadcast(userId, "updated", id);
+        if (broadcast) await Broadcast(userId, persona, "updated", id);
         return Ok(persona);
     }
 
     public async Task<IActionResult> DeleteAsync(string userId, string id, string? successorId)
     {
-        if (personas.Get(id, userId) is null) return NotFound();
+        // Снимок персоны до удаления нужен и для адресата событий (И-8): по его зоне решает,
+        // кому ушло «deleted» и сопутствующее «default»
+        if (personas.Get(id, userId) is not { } persona) return NotFound();
 
         var me = users.GetById(userId);
         var isAssistantDraft = me?.AssistantPersonaId == id;
@@ -301,7 +315,7 @@ public sealed class PersonasCrudService(
             if (me?.DefaultPersonaId == id)
             {
                 users.SetDefaultPersona(userId, null);
-                await Broadcast(userId, "default", null);
+                await Broadcast(userId, persona, "default");
             }
         }
         else
@@ -327,14 +341,14 @@ public sealed class PersonasCrudService(
                 if (isUserDefault) users.SetDefaultPersona(userId, successor.Id);
                 foreach (var project in defaultOfProjects)
                     projects.SetDefaultPersona(project.Id, successor.Id);
-                await Broadcast(userId, "default", successor.Id);
+                await Broadcast(userId, persona, "default", successor.Id);
             }
         }
 
         if (!personas.Delete(id, userId)) return NotFound();
         // Чистим долгую память персоны: Dify-датасет + data/persona-memory.json (иначе осиротят)
         await memory.DeletePersonaAsync(id);
-        await Broadcast(userId, "deleted", id);
+        await Broadcast(userId, persona, "deleted", id);
         return NoContent();
     }
 
@@ -391,7 +405,7 @@ public sealed class PersonasCrudService(
 
         // Событие и для инвалидации кэша auth.me / DTO проекта на фронте:
         // смена дефолта видна резолверу аватаров без перезагрузки
-        await Broadcast(userId, "default", id);
+        await Broadcast(userId, persona, "default", id);
         return Ok(persona);
     }
 
@@ -609,7 +623,7 @@ public sealed class PersonasCrudService(
         try { Directory.Delete(Path.Combine(dir, "candidates"), recursive: true); } catch { }
 
         var updated = personas.SetAvatarImage(id, userId, fileName);
-        await Broadcast(userId, "updated", id);
+        await Broadcast(userId, persona, "updated", id);
         return Ok(updated);
     }
 
@@ -718,7 +732,7 @@ public sealed class PersonasCrudService(
             list.Add(b);
         }
         var updated = personas.UpdateBindings(id, userId, list);
-        await Broadcast(userId, "updated", id);
+        await Broadcast(userId, persona, "updated", id);
         return Ok(updated.Bindings ?? []);
     }
 
@@ -1071,7 +1085,7 @@ public sealed class PersonasCrudService(
         if (dup is not null) return Ok(dup);
         var list = new List<PersonaAutomationRule>(persona.AutomationRules ?? []) { rule };
         personas.UpdateRules(id, userId, list);
-        await Broadcast(userId, "updated", id);
+        await Broadcast(userId, persona, "updated", id);
         return Ok(rule);
     }
 
@@ -1091,7 +1105,7 @@ public sealed class PersonasCrudService(
         var merged = ParseRule(req, current);
         var list = (persona.AutomationRules ?? []).Select(r => r.Id == ruleId ? merged : r).ToList();
         personas.UpdateRules(id, userId, list);
-        await Broadcast(userId, "updated", id);
+        await Broadcast(userId, persona, "updated", id);
         return Ok(merged);
     }
 
@@ -1103,7 +1117,7 @@ public sealed class PersonasCrudService(
         if (list is null || list.Count == (persona.AutomationRules?.Count ?? 0))
             return NotFound(new { error = "Правило не найдено" });
         personas.UpdateRules(id, userId, list);
-        await Broadcast(userId, "updated", id);
+        await Broadcast(userId, persona, "updated", id);
         return NoContent();
     }
 
@@ -1224,7 +1238,7 @@ public sealed class PersonasCrudService(
         var persona = personas.SetVoice(id, userId, voice);
         // Как и все соседние мутации: смена голоса должна долетать до других вкладок и
         // списка персон, иначе там останется прежний голос до перезагрузки
-        await Broadcast(userId, "updated", id);
+        await Broadcast(userId, persona, "updated", id);
         return Ok(persona);
     }
 

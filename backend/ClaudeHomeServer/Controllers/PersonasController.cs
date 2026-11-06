@@ -89,9 +89,24 @@ public class PersonasController(
         callerSessionId is null || _sessions.GetOwnedVisible(callerSessionId, UserId) is not { } caller
         || caller.PrivateToUserId is not null;
 
+    // И-8 (W3-B6, разрез docs/research/shared-projects-personas-cut-2026-11.md §3.1): событие
+    // проектной персоны идёт группе проекта И её владельцу — доходит до всех участников проекта;
+    // событие личной (глобальной/сферной) — только вызывающему владельцу, как раньше. Сообщение
+    // то же PersonasChangedMessage, без новых полей. Имена групп — через публичные хелперы
+    // SessionHubBroadcaster: единый источник префиксов (тот же приём, что у FileWatcherService).
     private Task Broadcast(string action, string? personaId = null) =>
-        _hub.Clients.Group("user_" + UserId)
+        _hub.Clients.Group(SessionHubBroadcaster.OwnerGroup(UserId))
             .SendAsync("message", new PersonasChangedMessage(action, personaId));
+
+    private Task Broadcast(Persona persona, string action, string? personaId = null)
+    {
+        if (!PersonaZone.IsProjectPersona(persona) || string.IsNullOrEmpty(persona.ProjectId))
+            return Broadcast(action, personaId);
+        var message = new PersonasChangedMessage(action, personaId);
+        return Task.WhenAll(
+            _hub.Clients.Group(SessionHubBroadcaster.ProjectGroup(persona.ProjectId)).SendAsync("message", message),
+            _hub.Clients.Group(SessionHubBroadcaster.OwnerGroup(persona.OwnerId)).SendAsync("message", message));
+    }
 
     // Список персон. scope: "context" — глобальные + этого проекта (+ extraProjectIds/
     // extraPersonaIds — кросс-проектные привязки ProjectPersonas текущей персоны-вызывающего);
@@ -601,7 +616,7 @@ public class PersonasController(
         await ImageAssetHelper.SaveFormFileAsync(cropped, SafePath.Join(dir, imageName));
 
         var updated = _personas.SetAvatarUploaded(id, scope.TenantOwnerId, imageName, originalName, cropState);
-        await Broadcast("updated", id);
+        await Broadcast(updated, "updated", id);
         return Ok(updated);
     }
 
@@ -629,7 +644,7 @@ public class PersonasController(
         await ImageAssetHelper.SaveFormFileAsync(cropped, SafePath.Join(dir, imageName));
 
         var updated = _personas.SetAvatarRecropped(id, scope.TenantOwnerId, imageName, ImageAssetHelper.ParseCrop(crop));
-        await Broadcast("updated", id);
+        await Broadcast(updated, "updated", id);
         return Ok(updated);
     }
 
@@ -807,7 +822,7 @@ public class PersonasController(
             persona = await _crud.TryAutoBindAsync(tenant, persona,
                 callerRole: callerRole, projectId: boundProjectId, ct: HttpContext.RequestAborted);
 
-        await Broadcast("created", persona.Id);
+        await Broadcast(persona, "created", persona.Id);
         return Ok(persona);
     }
 
@@ -866,7 +881,7 @@ public class PersonasController(
         // _saveLock из текущего значения — одновременные записи владельца и редактора
         // не перечёркивают друг друга (тест гонки).
         _personas.AppendBinding(id, scope.TenantOwnerId, binding);
-        await Broadcast("updated", id);
+        await Broadcast(persona, "updated", id);
         return Ok(binding);
     }
 
@@ -951,7 +966,7 @@ public class PersonasController(
             b.Mode = candidate.Mode;
         });
         if (updated is null) return NotFound(new { error = "Привязка не найдена" });
-        await Broadcast("updated", id);
+        await Broadcast(persona, "updated", id);
         return Ok(updated);
     }
 
@@ -973,7 +988,7 @@ public class PersonasController(
         // текущего значения, а не из снимка — одновременный POST не затирается.
         if (!_personas.RemoveBinding(id, scope.TenantOwnerId, bindingId))
             return NotFound(new { error = "Привязка не найдена" });
-        await Broadcast("updated", id);
+        await Broadcast(persona, "updated", id);
         return NoContent();
     }
 
@@ -1014,7 +1029,7 @@ public class PersonasController(
         if (dup is not null) return Ok(dup);
         var list = new List<PersonaAutomationRule>(persona.AutomationRules ?? []) { rule };
         _personas.UpdateRules(id, scope.TenantOwnerId, list);
-        await Broadcast("updated", id);
+        await Broadcast(persona, "updated", id);
         return Ok(rule);
     }
 
@@ -1066,7 +1081,7 @@ public class PersonasController(
         if (persona is null) return NotFound();
         var list = (req.Rules ?? []).Select(r => ParseRule(r)).ToList();
         var updated = _personas.UpdateRules(id, scope.TenantOwnerId, list);
-        await Broadcast("updated", id);
+        await Broadcast(updated, "updated", id);
         return Ok(updated.AutomationRules ?? []);
     }
 
@@ -1090,7 +1105,7 @@ public class PersonasController(
         var merged = ParseRule(req, current);
         var list = (persona.AutomationRules ?? []).Select(r => r.Id == ruleId ? merged : r).ToList();
         _personas.UpdateRules(id, scope.TenantOwnerId, list);
-        await Broadcast("updated", id);
+        await Broadcast(persona, "updated", id);
         return Ok(merged);
     }
 
@@ -1106,7 +1121,7 @@ public class PersonasController(
         if (list is null || list.Count == (persona.AutomationRules?.Count ?? 0))
             return NotFound(new { error = "Правило не найдено" });
         _personas.UpdateRules(id, scope.TenantOwnerId, list);
-        await Broadcast("updated", id);
+        await Broadcast(persona, "updated", id);
         return NoContent();
     }
 

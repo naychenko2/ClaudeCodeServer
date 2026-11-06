@@ -514,8 +514,9 @@ public record GitStatusChangedMessage(string ProjectId)
 public record GitTurnCommitMessage(string ProjectId, string Sha, string Subject)
     : ServerMessage("git_turn_commit");
 
-// Изменение персон — created/updated/deleted — в группу user_{userId},
-// чтобы все устройства обновили раздел «Персоны».
+// Изменение персон — created/updated/deleted: личной персоны — в группу user_{userId},
+// проектной — в группу её проекта И группу её владельца (И-8, W3-B6), чтобы все устройства
+// обновили раздел «Персоны».
 public record PersonasChangedMessage(string Action, string? PersonaId = null)
     : ServerMessage("personas_changed");
 

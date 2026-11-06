@@ -187,7 +187,12 @@ backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 # новый оставленный вызов с id вызывающего: резолв, не ключ хранилищ) и Suggest/Generate/
 # ApplyDefault (резолв персоны + вызовы _crud.* с TenantOwnerId). Сужение кандидатов —
 # NonOwnerBindingEditDenied в сервисе, id вызывающего там не появляется.
-backend/ClaudeHomeServer/Controllers/PersonasController.cs|28
+# W3-B6 (рассылка personas_changed, разрез §3.1, И-8): PersonasController 28→29 — личная ветка
+# Broadcast адресует свою группу через SessionHubBroadcaster.OwnerGroup(UserId): id вызывающего
+# входит только в адрес собственной SignalR-группы (user_{id}, тот же класс мест, что S1-4 выше),
+# ключом хранилищ не служит. Проектная ветка адресует группу проекта и группу владельца по
+# persona.ProjectId/persona.OwnerId — id вызывающего там не появляется.
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|29
 backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6

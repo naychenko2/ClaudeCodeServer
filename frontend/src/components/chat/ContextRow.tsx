@@ -8,7 +8,7 @@ import { useGitChip } from '../../hooks/useGitChip';
 import { registerGitActions } from '../../lib/chatContext/gitActions';
 import { execMenuTitle, selectRowAction } from '../../lib/chatContext/rowExec';
 import { getKindApi, getKindRegistry } from '../../lib/chatContext/registry';
-import { isKindDisabled } from '../../lib/chatContext/disabledKind';
+import { disabledKindReason, disabledKindText } from '../../lib/chatContext/disabledKind';
 import { getRunVersion, subscribeRun } from '../../lib/chatContext/actionRun';
 import { withThumb } from '../../lib/chatContext/thumbs';
 import {
@@ -18,7 +18,6 @@ import type { ChatContextPrimary, ChatContextRef, ContextAction } from '../../li
 import type { TurnTree } from '../../lib/turnWorktree';
 import { useActionMemoryVersion } from '../../lib/chatContext/actionMemory';
 import { revealContextPanel } from '../../lib/subsystems/registryCore';
-import { SUBSYSTEM_DISABLED_REASON } from '../../lib/subsystems';
 import { wsPanels } from '../../pages/workspace/panelStackState';
 import { PublishDialog } from '../PublishDialog';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
@@ -27,10 +26,6 @@ import { ContextSheet } from './ContextSheet';
 
 // Рамка и отступы строки: измеряем внешний блок, лестница считает от внутренней ширины
 const ROW_BORDER = 2;
-
-// Плашка прикреплённого объекта выключенной (или удалённой) вертикали: текст — и видимый, и title чипа;
-// причина — из SUBSYSTEM_DISABLED_REASON (единый источник с заглушкой раздела, п. 1a)
-const DISABLED_KIND_TEXT = `Раздел ${SUBSYSTEM_DISABLED_REASON}`;
 
 interface Props {
   session: Session;
@@ -120,14 +115,19 @@ function RowCore({ session, project, isMobile, notice, onOpenPrimary: onOpenPrim
   useEffect(() => { void ensureChatContext(sessionId); }, [sessionId]);
 
   const kindCtx = { projectId: project?.id ?? null, sessionId, isMobile };
-  // Прикреплённый объект выключенной (или удалённой) вертикали: её вида нет в реестре слота —
-  // ни иконки, ни действий, ни «Формата». Чтобы строка не выглядела файлом, ставим неактивную
-  // плашку с текстом-пояснением: вью гасит чип по missing и строит по label и текст, и title
+  // Прикреплённый объект неактивной вертикали: её вида нет в реестре слота — ни иконки, ни
+  // действий, ни «Формата». Чтобы строка не выглядела файлом, ставим неактивную плашку с
+  // текстом-пояснением: вью гасит чип по missing и строит по label и текст, и title
   // (ContextRowView.tsx:203, 258); версию гасим: на плашке с текстом-пояснением она только шум.
+  // Текст выбирает причина неактивности (disabledKind.ts): «выключен администратором» — ключ
+  // выключен; «не загрузился» — ключ включён, но фронтовый MF-remote вертикали не доехал.
+  // Признак причины — поле missing самого объекта, его читаем ДО подстановки плашки.
   // Вид файла («project-file») — не выключенный: кита у него нет by design (disabledKind.ts)
   const kindRegistry = getKindRegistry();
-  const dimmedItem = <T extends ChatContextPrimary | ChatContextRef>(item: T): T =>
-    isKindDisabled(item.kind, kindRegistry) ? { ...item, label: DISABLED_KIND_TEXT, version: null, missing: true } : item;
+  const dimmedItem = <T extends ChatContextPrimary | ChatContextRef>(item: T): T => {
+    const reason = disabledKindReason(item.kind, kindRegistry, item.missing);
+    return reason ? { ...item, label: disabledKindText(reason), version: null, missing: true } : item;
+  };
   // Миниатюры сервер не присылает: адрес собираем здесь (вид объекта или путь файла проекта)
   const primary = ctx.primary ? dimmedItem(withThumb(kindCtx, ctx.primary)) : null;
   const refs = ctx.refs.map(r => dimmedItem(withThumb(kindCtx, r)));

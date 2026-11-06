@@ -1103,6 +1103,131 @@ public class WikiNightlyServiceTests : IDisposable
         last.FirstRejectReason.Should().BeNull();
     }
 
+    // ─── WN-5: ручной запуск ───────────────────────────────────────────────
+
+    [Fact]
+    public async Task ГонкаДвухРучныхЗапусков_ОдинСтартуетДругойAlreadyRunning()
+    {
+        // Мутация (c1): убрать проверку `if (!Running.TryAdd(root, 0))` в StartManual — оба
+        // вызова возвращают Started, тест красный на AlreadyRunning.
+        Configure();
+        AddChat("c1");
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<WikiChatIngestService.ChatResult> Analyze(string o, string c, CancellationToken ct)
+        {
+            lock (_analyzed) _analyzed.Add(c);
+            entered.TrySetResult();
+            await gate.Task;
+            return new WikiChatIngestService.ChatResult(WikiChatIngestService.OutcomeNothingNew, null, []);
+        }
+
+        // Замок берётся синхронно, до возврата: оба вызова успевают столкнуться с ним, пока
+        // первый проход держит его на гейте.
+        Task pass1 = null!, pass2 = null!;
+        var first = Task.Run(() => Sut(Analyze).TryStartManual(User, out pass1));
+        var second = Task.Run(() => Sut(Analyze).TryStartManual(User, out pass2));
+        var results = await Task.WhenAll(first, second);
+
+        results.Count(r => r == WikiNightlyService.ManualStart.Started).Should().Be(1);
+        results.Count(r => r == WikiNightlyService.ManualStart.AlreadyRunning).Should().Be(1,
+            "замок общий на процесс: второй вызов отвергнут, не дожидаясь первого");
+
+        // Таймаут вместо зависания: дошёл ли начатый проход до разбора.
+        var reached = await Task.WhenAny(entered.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+        reached.Should().BeSameAs(entered.Task, "начатый проход обязан дойти до подменённого разбора");
+        gate.SetResult();
+        await (results[0] == WikiNightlyService.ManualStart.Started ? pass1 : pass2);
+        _analyzed.Should().ContainSingle("проход был один");
+        WikiNightlyService.IsRunning(Root()).Should().BeFalse("после прохода замок снят");
+    }
+
+    [Fact]
+    public async Task РучнойПроходДержитЗамок_ТикВОкнеНеЗовет_ПослеЗавершенияСноваМожно()
+    {
+        Configure();
+        AddChat("c1");
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<WikiChatIngestService.ChatResult> Analyze(string o, string c, CancellationToken ct)
+        {
+            lock (_analyzed) _analyzed.Add(c);
+            entered.TrySetResult();
+            await gate.Task;
+            return new WikiChatIngestService.ChatResult(WikiChatIngestService.OutcomeNothingNew, null, []);
+        }
+        var sut = Sut(Analyze);
+
+        var start = sut.TryStartManual(User, out var pass);
+        start.Should().Be(WikiNightlyService.ManualStart.Started);
+        var reached = await Task.WhenAny(entered.Task, Task.Delay(TimeSpan.FromSeconds(5)));
+        reached.Should().BeSameAs(entered.Task, "проход обязан дойти до подменённого разбора");
+        _analyzed.Should().ContainSingle();
+
+        // Тик в окне, пока владелец занят замком: новых вызовов разбора нет.
+        await Tick(sut);
+        _analyzed.Should().ContainSingle("тик пропустил занятого владельца");
+
+        gate.SetResult();
+        await pass;
+        WikiNightlyService.IsRunning(Root()).Should().BeFalse("после прохода замок снят");
+
+        // И отметка «за дату уже пройдено», и то, что она ручная, — новому ручному не преграда.
+        var again = Sut(Analyze).TryStartManual(User, out var pass2);
+        again.Should().Be(WikiNightlyService.ManualStart.Started);
+        await pass2;
+        _analyzed.Should().HaveCount(2, "второй ручной проход состоялся");
+    }
+
+    [Fact]
+    public async Task РучнойПроходВнеОкняЗоветРазборИПишетManual_ТикТойЖеДатыПроходитСнова()
+    {
+        // Мутации: «CheckStop проверяет окно и при manual» → ручной проход встаёт window_closed,
+        // нулевых вызовов — тест красный; «убрать !last.Manual из условия пропуска тика» →
+        // тик той же даты молчит, второго вызова нет — тест красный.
+        Configure(); // окно 3–6
+        AddChat("c1");
+        _now = At(1); // вне окна: тик бы не начал
+        var start = Sut().TryStartManual(User, out var pass);
+        start.Should().Be(WikiNightlyService.ManualStart.Started);
+        await pass;
+
+        _analyzed.Should().Equal(new[] { "c1" }, "окно при ручном не проверяется");
+        var last = Last();
+        last.Manual.Should().BeTrue();
+        last.Date.Should().Be("2026-11-02", "дата ручного прохода — сегодняшняя");
+        File.ReadAllText(LastFile()).Should().Contain("\"manual\"");
+
+        // Тик в 04:00 той же даты: ручной проход дату НЕ закрыл — ночь проходит заново.
+        _now = At(4);
+        await Tick(Sut());
+        _analyzed.Should().Equal("c1", "c1");
+
+        // Старый файл без поля читается Manual=false (аддитивность, как у Rejected).
+        File.WriteAllText(LastFile(), """
+            {"date":"2026-11-02","selected":1,"analyzed":1,"applied":0,"toInbox":0,
+             "estTokens":120,"outcome":"completed"}
+            """);
+        Last().Manual.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task РучнойПроходСИсключениемРазбора_ЗавершаетсяБезИсключения_ЗамокСнят_СноваМожно()
+    {
+        Configure();
+        AddChat("c1");
+        var sut = Sut((o, c, ct) => throw new InvalidOperationException("разбор упал"));
+
+        var start = sut.TryStartManual(User, out var pass);
+        start.Should().Be(WikiNightlyService.ManualStart.Started);
+        await pass; // наружу — без исключения
+        WikiNightlyService.IsRunning(Root()).Should().BeFalse("finally снимает замок");
+
+        var again = sut.TryStartManual(User, out var pass2);
+        again.Should().Be(WikiNightlyService.ManualStart.Started, "неудачный ручной ничего не закрывает");
+        await pass2;
+    }
+
     // ─── c4: изоляция владельцев и один проход ─────────────────────────────
 
     [Fact]

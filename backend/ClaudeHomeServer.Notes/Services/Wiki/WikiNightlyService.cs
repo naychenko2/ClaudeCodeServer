@@ -47,6 +47,10 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // - один проход на владельца: флаг «идёт» с ключом по корню вики владельца (не по экземпляру), второй
 //   тик пропускает; кнопка и ночь по одному чату — один разбор (single-flight AnalyzeAsync, движок
 //   того, кто пришёл первым);
+// - ручной запуск (WN-5, «Разобрать ночь сейчас»): тот же проход под тем же замком — параллельно
+//   с тиком или другим ручным он не идёт; окно при ручном не проверяется, отметка «за дату уже
+//   пройдено» не мешает (человек нажал кнопку — проход состоится); сам ручной проход дату не
+//   закрывает: ночной тик той же даты проходит ночь заново (Manual в итоге — признак ручного);
 // - PUT enabled=false посреди ночи: тумблер перечитывается перед КАЖДЫМ чатом, остановка до
 //   следующего — outcome=disabled_midway;
 // - дата прохода живёт в keeper/nightly-last.json, пишется атомарно (temp+Move) и ПОСЛЕ прохода:
@@ -113,12 +117,13 @@ public sealed class WikiNightlyService : BackgroundService
     /// «ничего не потрачено». Rejected (WN-2) — число отказанных разборов (OutcomeRejected) среди
     /// analyzed; FirstRejectReason — текст причины первого отказа (ChatResult.Reason), чтобы
     /// «completed при нулевом входе» имел, чем объясниться. Сбой разбора исключением в Rejected
-    /// не идёт. В файле итога поля аддитивны: старый итог (без поля) читается
-    /// нулями.</summary>
+    /// не идёт. Manual (WN-5) — проход запущен кнопкой вручную: он не закрывает дату, ночной тик
+    /// той же даты проходит ночь заново. В файле итога поля аддитивны: старый итог (без поля)
+    /// читается нулями, старый Manual — false.</summary>
     public sealed record NightResult(
         string Date, int Selected, int Analyzed, int Applied, int ToInbox, long EstTokens, string Outcome,
         int OverrodeHuman = 0, int DisputedPages = 0, long InputTokens = 0,
-        int Rejected = 0, string? FirstRejectReason = null);
+        int Rejected = 0, string? FirstRejectReason = null, bool Manual = false);
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -272,6 +277,80 @@ public sealed class WikiNightlyService : BackgroundService
         catch { /* см. LogSafe */ }
     }
 
+    // ─── Ручной запуск (WN-5) ────────────────────────────────────────────────
+
+    /// <summary>Исход запроса ручного прохода (WN-5): Started — проход начат; LlmWikiOff — функция
+    /// выключена; Disabled — тумблер ночи выключен; Invalid — настройки нечитаемы; AlreadyRunning —
+    /// этот владелец уже проходит (тот же замок, что у ночного тика).</summary>
+    public enum ManualStart { Started, LlmWikiOff, Disabled, Invalid, AlreadyRunning }
+
+    // CTS ручных проходов: они живут вне ExecuteAsync — StopAsync службы гасит их; проход сам ловит
+    // своё отключение и снимает замок в finally.
+    private readonly ConcurrentDictionary<CancellationTokenSource, byte> _manualStops = new();
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        foreach (var cts in _manualStops.Keys)
+        {
+            try { cts.Cancel(); } catch (ObjectDisposedException) { /* проход уже закончился */ }
+        }
+        await base.StopAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Идёт ли проход этой вики — флаг, общий на процесс (тот же ключ, что у замка
+    /// службы): настройки читают его, чтобы показать состояние кнопки «Разобрать сейчас».</summary>
+    public static bool IsRunning(string root) => Running.ContainsKey(root);
+
+    /// <summary>Ручной запуск ночного разбора (кнопка «Разобрать сейчас», WN-5): тот же
+    /// RunOwnerPassAsync, что и у ночного тика, но окно не проверяется и отметка «за дату уже
+    /// пройдено» не мешает. Флаг и тумблер проверяются до замка: причина отказа называется, не
+    /// трогая его; замок берётся синхронно, до возврата: по ответу вызывающий знает наверняка,
+    /// начал он проход или владелец уже занят. Дата ручного прохода — сегодняшняя (окна нет,
+    /// дата которого была бы началом прохода). Проход — Task.Run со своим CTS (гасится StopAsync),
+    /// всё под catch: наружу вызывающему исключение не выходит; finally снимает замок.</summary>
+    public ManualStart TryStartManual(string ownerId) => StartManual(ownerId, out _);
+
+    // Перегрузка для теста: отдаёт Task прохода — тест ждёт его завершения и проверяет снятие
+    // замка без настоящей модели.
+    internal ManualStart TryStartManual(string ownerId, out Task pass) => StartManual(ownerId, out pass);
+
+    private ManualStart StartManual(string ownerId, out Task pass)
+    {
+        pass = Task.CompletedTask;
+        // Порядок отказов — как у тика: сначала флаг, потом тумблер, потом нечитаемые настройки —
+        // и всё до замка: отказ не должен выглядеть как «уже занято».
+        if (_flags?.IsEnabled(ownerId, FeatureFlagKeys.LlmWiki) != true) return ManualStart.LlmWikiOff;
+        var root = WikiPaths.Root(_dataDir, ownerId);
+        var (settings, invalid) = WikiSettingsStore.Read(root);
+        if (invalid) return ManualStart.Invalid;
+        if (!settings.NightlyOrDefaults().Enabled) return ManualStart.Disabled;
+        if (!Running.TryAdd(root, 0)) return ManualStart.AlreadyRunning; // этот владелец уже проходит
+
+        var date = DateOnly.FromDateTime(_clock().Date);
+        var initialized = WikiPaths.IsInitialized(_dataDir, ownerId);
+        var cts = new CancellationTokenSource();
+        _manualStops[cts] = 0;
+        pass = Task.Run(async () =>
+        {
+            try
+            {
+                await RunOwnerPassAsync(ownerId, root, date, initialized, manual: true, cts.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Ручной проход — не исключение вызывающему: 202 уже дан, исход и сбой — в журнале.
+                LogSafe(ex, "Ручной ночной разбор вики {Owner}", ownerId);
+            }
+            finally
+            {
+                Running.TryRemove(root, out _);
+                _manualStops.TryRemove(cts, out _);
+                cts.Dispose();
+            }
+        });
+        return ManualStart.Started;
+    }
+
     // ─── Проход владельца ─────────────────────────────────────────────────────
 
     private async Task RunOwnerAsync(string ownerId, DateTimeOffset now, CancellationToken ct)
@@ -304,36 +383,45 @@ public sealed class WikiNightlyService : BackgroundService
         if (!Running.TryAdd(key, 0)) return; // этого владельца уже проходит другой тик
         try
         {
-            var last = ReadLast(root);
-            if (last is not null && last.Date == FormatDate(date) && last.Outcome != OutcomeError)
-                return; // эта ночь уже пройдена (в том числе до рестарта)
-
-            // Прочитанный до прохода итог этого же дня — error: о неудаче ночи владельцу уже
-            // сказано. Проход повторяется (error дату не закрывает), но то же предупреждение
-            // второй раз за дату не отправляется.
-            var errorAlreadyNotified = last is not null && last.Date == FormatDate(date) && last.Outcome == OutcomeError;
-
-            NightResult result;
-            if (!initialized && !await TryEnsureInitializedAsync(ownerId))
-                result = new NightResult(FormatDate(date), 0, 0, 0, 0, 0, OutcomeError);
-            else
-                result = await RunPassAsync(ownerId, root, date, ct);
-            // Дата прохода — ПОСЛЕ прохода. Сбой записи итога не отменяет проход (его разборы
-            // уже в сторах): следующий тик найдёт курсоры на концах и не разберёт ничего лишнего.
-            try { WriteLast(root, result); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                LogSafe(ex, "Итог ночного разбора {Owner} не записан", ownerId);
-            }
-            // Уведомление — ПОСЛЕ записи итога: даже если доставка откажет, итог уже на диске
-            // и в следующем тике читается настройками. Сбой отправителя остаёт в TryNotifyAsync.
-            // Молчим только о повторном error той же даты; успех после error и любой иной исход — сообщаем.
-            if (!(errorAlreadyNotified && result.Outcome == OutcomeError)) await TryNotifyAsync(ownerId, result);
+            await RunOwnerPassAsync(ownerId, root, date, initialized, manual: false, ct);
         }
         finally
         {
             Running.TryRemove(key, out _);
         }
+    }
+
+    // Тело прохода под замком владельца (WN-5): общее у ночного тика и ручного запуска.
+    // Ручной не встречает отметку «за дату уже пройдено» — человек нажал кнопку, проход состоится.
+    // Тик пропускается, если итог той же даты не error и не ручной: ручной проход дату НЕ закрывает,
+    // ночной тик той же даты проходит ночь заново.
+    private async Task RunOwnerPassAsync(string ownerId, string root, DateOnly date, bool initialized, bool manual, CancellationToken ct)
+    {
+        var last = ReadLast(root);
+        if (!manual && last is not null && last.Date == FormatDate(date) && last.Outcome != OutcomeError && !last.Manual)
+            return; // эта ночь уже пройдена (в том числе до рестарта)
+
+        // Прочитанный до прохода итог этого же дня — error: о неудаче ночи владельцу уже
+        // сказано. Проход повторяется (error дату не закрывает), но то же предупреждение
+        // второй раз за дату не отправляется.
+        var errorAlreadyNotified = last is not null && last.Date == FormatDate(date) && last.Outcome == OutcomeError;
+
+        NightResult result;
+        if (!initialized && !await TryEnsureInitializedAsync(ownerId))
+            result = new NightResult(FormatDate(date), 0, 0, 0, 0, 0, OutcomeError, Manual: manual);
+        else
+            result = await RunPassAsync(ownerId, root, date, manual, ct);
+        // Дата прохода — ПОСЛЕ прохода. Сбой записи итога не отменяет проход (его разборы
+        // уже в сторах): следующий тик найдёт курсоры на концах и не разберёт ничего лишнего.
+        try { WriteLast(root, result); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            LogSafe(ex, "Итог ночного разбора {Owner} не записан", ownerId);
+        }
+        // Уведомление — ПОСЛЕ записи итога: даже если доставка откажет, итог уже на диске
+        // и в следующем тике читается настройками. Сбой отправителя остаёт в TryNotifyAsync.
+        // Молчим только о повторном error той же даты; успех после error и любой иной исход — сообщаем.
+        if (!(errorAlreadyNotified && result.Outcome == OutcomeError)) await TryNotifyAsync(ownerId, result);
     }
 
     // Единственная точка, где ночь пишет в незаведённую вики: идемпотентный EnsureInitializedAsync
@@ -369,7 +457,7 @@ public sealed class WikiNightlyService : BackgroundService
 
     private sealed record Candidate(Session Session, WikiChatTriageEntry? Entry, bool Important, string Home);
 
-    private async Task<NightResult> RunPassAsync(string ownerId, string root, DateOnly date, CancellationToken ct)
+    private async Task<NightResult> RunPassAsync(string ownerId, string root, DateOnly date, bool manual, CancellationToken ct)
     {
         int selected = 0, analyzed = 0, applied = 0, toInbox = 0, packagesNight = 0, overrodeHuman = 0, rejected = 0;
         string? firstRejectReason = null;
@@ -398,7 +486,7 @@ public sealed class WikiNightlyService : BackgroundService
             {
                 ct.ThrowIfCancellationRequested();
                 // Лимит пакетов за ночь: при остатке 0 чат не начинается.
-                var (stop, cfgNow) = CheckStop(ownerId, root, date);
+                var (stop, cfgNow) = CheckStop(ownerId, root, date, manual);
                 if (stop is not null) { outcome = stop; break; }
                 if (packagesNight >= cfgNow!.MaxPackagesPerNight) { outcome = OutcomeBudget; break; }
 
@@ -521,21 +609,25 @@ public sealed class WikiNightlyService : BackgroundService
         return Result(outcome);
 
         NightResult Result(string o) => new(FormatDate(date), selected, analyzed, applied, toInbox, est, o,
-            overrodeHuman, disputedPages.Count, inputTokens, rejected, firstRejectReason);
+            overrodeHuman, disputedPages.Count, inputTokens, rejected, firstRejectReason, manual);
     }
 
     // Что мешает продолжать ПЕРЕД чатом: тумблер/флаг сняли (disabled_midway), окно закрылось
     // (window_closed), модель недоступна (error — облако молча не подставляется), упор в лимит
     // открытых пакетов (open_limit). Настройки перечитываются каждый раз: PUT посреди ночи виден
-    // следующему чату.
-    private (string? Stop, WikiSettingsStore.NightlyConfig? Cfg) CheckStop(string ownerId, string root, DateOnly date)
+    // следующему чату. При ручном проходе (WN-5) окно не проверяется вовсе: человек запустил
+    // разбор вне окна — оно ему не преграда; флаг, тумблер, маршрут и open_limit — как у тика.
+    private (string? Stop, WikiSettingsStore.NightlyConfig? Cfg) CheckStop(string ownerId, string root, DateOnly date, bool manual)
     {
         if (_flags?.IsEnabled(ownerId, FeatureFlagKeys.LlmWiki) != true) return (OutcomeDisabledMidway, null);
         var cfg = WikiSettingsStore.Read(root).Settings.NightlyOrDefaults();
         if (!cfg.Enabled) return (OutcomeDisabledMidway, null);
-        var now = _clock();
-        if (!InWindow(now.Hour, cfg.WindowStartHour, cfg.WindowEndHour)
-            || WindowDate(now, cfg.WindowStartHour, cfg.WindowEndHour) != date) return (OutcomeWindowClosed, null);
+        if (!manual)
+        {
+            var now = _clock();
+            if (!InWindow(now.Hour, cfg.WindowStartHour, cfg.WindowEndHour)
+                || WindowDate(now, cfg.WindowStartHour, cfg.WindowEndHour) != date) return (OutcomeWindowClosed, null);
+        }
         if (!_llm.HasRoute(LocalActionCatalog.WikiNightly)) return (OutcomeError, null);
         if (WikiPackageStore.CountOpen(root) >= WikiPackage.MaxOpenPackages) return (OutcomeOpenLimit, null);
         return (null, cfg);

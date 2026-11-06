@@ -3709,81 +3709,7 @@ export interface McpCallsResponse {
   recentFailures: McpCallFailure[];
 }
 
-// === Инциденты телеметрии (вкладка «Инциденты» раздела «Телеметрия», только админ) ===
-
-// Состояние сбора: ok — данные собраны; notConfigured — телеметрия выключена
-// (это НЕ «всё тихо»); unavailable — SigNoz не ответил.
-export type IncidentStatus = 'ok' | 'notConfigured' | 'unavailable';
-
-export interface IncidentSummary {
-  fingerprint: string;
-  title: string;
-  description?: string | null;
-  severity?: string | null;
-  environment?: string | null;
-  startedAt?: string | null;
-  resolvedAt?: string | null;
-  isFiring: boolean;
-  // Заглушён человеком: виден в списке, но не идёт в счётчик и не будит push
-  isMuted?: boolean;
-}
-
-export interface IncidentBreakdownRow {
-  label: string;
-  count: number;
-}
-
-export interface IncidentTurn {
-  traceId: string;
-  chatId?: string | null;
-  at?: string | null;
-  model?: string | null;
-  provider?: string | null;
-  errorType?: string | null;
-  durationMs: number;
-}
-
-export interface IncidentLogLine {
-  at?: string | null;
-  severity: string;
-  message: string;
-}
-
-export interface IncidentChat {
-  chatId: string;
-  projectId?: string | null;
-  title?: string | null;
-  failures: number;
-  totalTokens: number;
-  mcpFailures: string[];
-  // Чат назвал сам алерт (правила с разрезом по chat_id): попадает в список даже
-  // без упавших ходов — они там успешные, просто долгие.
-  fromAlert?: boolean;
-}
-
-export interface IncidentDossier {
-  incident: IncidentSummary;
-  status: IncidentStatus;
-  from: string;
-  to: string;
-  // Алерт другого контура: локальных чатов по нему нет и быть не может
-  isForeignEnvironment: boolean;
-  breakdownTag: string;
-  breakdown: IncidentBreakdownRow[];
-  turns: IncidentTurn[];
-  turnsTotal: number;
-  logs: IncidentLogLine[];
-  logsTotal: number;
-  chats: IncidentChat[];
-  // Путь правила ВНУТРИ SigNoz (/alerts/overview?ruleId=…). Относительный:
-  // базой служит проброс /telemetry-proxy, а не localhost бэкенда.
-  rulePath?: string | null;
-}
-
-export interface IncidentListResponse {
-  status: IncidentStatus;
-  items: IncidentSummary[];
-}
+export type * from '../features/telemetry/types';
 
 // Быстрая фраза композера: готовое сообщение и необязательная группа (второй
 // уровень попапа). Пустая/отсутствующая group — фраза лежит в корне списка.
@@ -3918,55 +3844,7 @@ export interface LocalHandsChatStatus {
   deviceName: string | null;
 }
 
-// === Карта плана (часть B фичи «Визуальный разворот плана») ===
-// Структурный слепок markdown-плана для разворота схемой. Зеркало Models/PlanMap.cs
-// на бэке — контракт общий. Строится по кнопке «Собрать схему» через POST /api/plans/map.
-// Раздел текста и блок схемы — одна сущность: Anchor + AnchorIndex клеят блок к
-// заголовку раздела через useHeadings (пара текст+occurrence), и замечание на блоке
-// в схеме и замечание на заголовке в тексте — одно и то же.
-
-// Жанр плана: один из белого списка. Неизвестное значение с бэка → "feature".
-export type PlanMapGenre = 'feature' | 'fix' | 'choice' | 'audit' | 'framework' | 'operation';
-
-// Тип блока: семантика роли блока в схеме.
-export type PlanMapBlockType = 'step' | 'decision' | 'fork' | 'risk' | 'criterion' | 'boundary';
-
-// Флаг внимания: блок несёт причину вернуться к нему. На «Сути» показываются только блоки
-// с непустыми флагами. Потолок числа флагов — на СЕРВЕРЕ (см. PlanMapService.MaxFlaggedBlocks):
-// фронт НЕ повторяет правило (две копии правила = дефект, тот же довод, по которому признак
-// архива чата считает сервер и отдаёт готовым). Неизвестный флаг с бэка отбрасывается молча.
-export type PlanMapBlockFlag =
-  | 'blocking'
-  | 'needs-decision'
-  | 'expands-scope'
-  | 'has-cost'
-  | 'review-fix';
-
-export interface PlanMapNumber {
-  value: string;       // «3», «5 КБ», «2 недели»
-  label: string;       // «шага», «файлов затрагивается»
-}
-
-export interface PlanMapBlock {
-  id: string;          // стабильный id, на него ссылаются dependsOn
-  title: string;       // заголовок блока одной строкой (не путать с якорем)
-  type: PlanMapBlockType;
-  flags: PlanMapBlockFlag[];
-  // ТОЧНЫЙ текст заголовка раздела плана. Блок с якорем, которого нет среди заголовков
-  // плана, отбрасывается на бэке — фронт повторно фильтрует (см. PlanScheme.resolveAnchor)
-  anchor: string;
-  // 0-based номер вхождения заголовка среди одноимённых. КЛЕИТ блок к РАЗДЕЛУ, не к
-  // первому совпадению по тексту: при двух «Дизайн» в плане идём во второе, а не в первое.
-  anchorIndex: number;
-  dependsOn: string[]; // id блоков, которые должны закрыться раньше
-}
-
-export interface PlanMap {
-  genre: PlanMapGenre;
-  oneLine: string;     // суть плана одной фразой
-  numbers: PlanMapNumber[];
-  blocks: PlanMapBlock[];
-}
+export type * from '../features/plan/types';
 
 // ===== Уборка карты проекта (CLAUDE.md) =====
 // Контракт ответа сканера (docs/research/project-map-hygiene-plan-2026-09.md, Р8):

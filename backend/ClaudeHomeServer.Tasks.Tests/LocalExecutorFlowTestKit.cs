@@ -40,15 +40,17 @@ internal sealed class LocalExecutorFlowKit : IDisposable
         return epic;
     }
 
-    // Шаг фичи персоны: running — исполнитель ведёт ход в своём чате; иначе незапущенный todo
+    // Шаг фичи персоны: running — исполнитель ведёт ход в своём чате; иначе незапущенный todo.
+    // modelTier — переопределение тира карточки (для проверки локальности эффективной модели).
     public TaskItem NewStep(TaskItem epic, string personaId, string stepRef, bool running = false,
-        string role = TaskRoles.Step)
+        string role = TaskRoles.Step, ModelTier? modelTier = null)
     {
         var t = Tasks.Create(null, Owner, new CreateTaskRequest("Шаг " + stepRef));
         t.FeatureId = epic.Id;
         t.Role = role;
         t.StepRef = stepRef;
         t.PersonaId = personaId;
+        if (modelTier is { } tier) t.ModelTier = tier;
         if (running)
         {
             var chat = $"exec-{stepRef}";
@@ -72,10 +74,30 @@ internal sealed class LocalExecutorFlowKit : IDisposable
         public bool SetWikiMark(string sessionId, string? mark) => false;
     }
 
+    // Подставной ростер. Локальность модели — подставная модель реального резолвера
+    // (ModelAssignmentResolver в тесте нет): тир «weak» — локальный, без явного тира —
+    // модель персоны из Locals; всё остальное — не локальное. LocalNonExecutors — локальные
+    // персоны НЕ-исполнители (ревьюер на слабой модели): в For() не входят, их ход локальный.
     public sealed class FakeRoster : ILocalExecutorRoster
     {
         public List<LocalExecutor> Locals { get; } = [];
+        public List<LocalExecutor> LocalNonExecutors { get; } = [];
         public IReadOnlyList<LocalExecutor> For(string ownerId, string? projectId) => Locals.ToList();
+
+        public LocalTaskTurn? LocalTurnOf(TaskItem task, string ownerId)
+        {
+            if (task.ModelTier is { } tier)
+                return tier == ModelTier.Weak
+                    ? new LocalTaskTurn(NameOf(task.PersonaId))
+                    : null;
+            var local = task.PersonaId is { } pid ? Locals.FirstOrDefault(l => l.PersonaId == pid) : null;
+            return local is null ? null : new LocalTaskTurn(local.Name);
+        }
+
+        private string? NameOf(string? personaId) =>
+            personaId is not { } pid
+                ? null
+                : Locals.Concat(LocalNonExecutors).FirstOrDefault(p => p.PersonaId == pid)?.Name;
     }
 
     public sealed class FakeSender : IKeyChatCardSender

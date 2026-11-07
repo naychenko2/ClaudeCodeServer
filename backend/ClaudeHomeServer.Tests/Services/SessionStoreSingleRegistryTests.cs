@@ -33,6 +33,22 @@ public class SessionStoreSingleRegistryTests : IClassFixture<TestWebApplicationF
             "поле реестра на фасаде — ссылка на словарь стора, а не его копия");
     }
 
+    // «Реестр один» для ядра приёма (S3-7): ядро, собранное контейнером, — тот же экземпляр,
+    // что держит фасад и что получает штабной шов. Второй экземпляр = второй реестр очереди
+    // и слота: два drain'а закрепили бы разное за одним pending.
+    [Fact]
+    public void ЯдроПриёма_ИзКонтейнера_Одно_ИОноЖеНаФасадеИВШве()
+    {
+        var sp = _factory.Services;
+        var intake = sp.GetRequiredService<TurnIntake>();
+        var manager = sp.GetRequiredService<SessionManager>();
+
+        Field(manager, "_intake").Should().BeSameAs(intake,
+            "ядро приёма — один экземпляр: фасад и контейнер держат его же");
+        Field(manager, "_teamIntake").Should().BeSameAs(intake,
+            "путь «штаб → ядро» ведёт к тому же экземпляру");
+    }
+
     [Fact]
     public async Task ЧатСозданныйЧерезФасад_ВиденВСторе_ТемЖеОбъектом()
     {

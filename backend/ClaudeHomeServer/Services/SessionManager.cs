@@ -23,7 +23,10 @@ namespace ClaudeHomeServer.Services;
 // Фасад сессий (S3-7, аддендум Александра §1): ход в сессии запускает только ядро приёма
 // TurnIntake — здесь остаются переадресации прежних публичных сигнатур, цикл «до готово»
 // (его тело до шага 2 выноса TurnContinuation) и штабные обвязки. Шов ITurnStarter фасад
-// уже не реализует: он резолвит ядро.
+// уже не реализует: он резолвит ядро. ITeamTurnIntake реализует ядро (карта §3); фасад
+// держит его однострочной переадресацией только потому, что конструктор TeamWaveService
+// принимает конкретный SessionManager и upcast'ит его сам (TeamWaveService.cs:104), а код
+// Services/Team этот шаг не меняет.
 public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     ITeamSessionDirectory, ITeamHistoryStore, ITeamRunState, ITeamTurnIntake,
     Access.ITurnActorRegistry, Access.ITurnFrameSource,
@@ -211,8 +214,9 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // Ядро приёма хода (S3-7): ход в сессии запускает только оно. Фасад переадресует прежние
     // публичные сигнатуры; цикл «до готово» просит у него ход через TrySubmitContinuationAsync
     // (решающая проверка остановки — в ядре); штабной ITeamTurnIntake реализует ядро, фасад
-    // держит однострочную переадресацию. Пустая очередь при активном цикле — переходный хук
-    // OnLoopContinueRequested: его ставит этот конструктор (тело цикла здесь до шага 2).
+    // держит его однострочной переадресацией (upcast TeamWaveService, п.5 признаков).
+    // Пустая очередь при активном цикле — переходный хук OnLoopContinueRequested: его
+    // ставит этот конструктор (тело цикла здесь до шага 2).
     private readonly Sessions.TurnIntake _intake;
 
     // Общий лок внеходовых записей истории (_falPersistLock) переехал в SessionHistory вместе
@@ -785,8 +789,11 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // Рантайм-поля записи и транзакция над состоянием режима — в сторе (S3-1); вертикаль
         // по-прежнему получает `this` и ходит через явные реализации, которые переадресуют сюда.
         _teamRunState = _store;
-        // С S3-7 приём хода реализует штабной шов сам (ядро); фасадский ITeamTurnIntake —
-        // однострочная переадресация на него.
+        // С S3-7 приём хода реализует штабной шов сам (ядро, карта §3): поле держит ядро —
+        // собственные обращения фасада к шву идут прямо к нему. Вертикальные сервисы
+        // создаются до ядра (своей очередью конструктора) и получают `this`; их путь к ядру —
+        // однострочная переадресация фасада. Прямая передача ядра в их конструкторы —
+        // перестройка порядка всего конструктора, не этот шаг.
         _teamIntake = _intake;
         // Найденную стоимость fal.ai публикует TurnCostLedger: он ставит
         // FalCostService.OnCostResolved на свою PublishFalCostAsync в своём конструкторе
@@ -3053,7 +3060,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         _teamRunState.ShouldSuppressAsyncAgentStallGuard(sessionId);
 
     // Шов штаба (S3-7, аддендум §1): реализует ядро приёма; здесь — однострочная
-    // переадресация на него (тест кастует фасад к ITeamTurnIntake, код Services/Team не меняется).
+    // переадресация на него (нужна upcast'у TeamWaveService, код Services/Team не меняется).
     Task<bool> ITeamTurnIntake.SendOrEnqueueAsync(string sessionId, string text,
         string? senderPersonaId, bool silent, bool suppressTasksExecute, string? staffNote, string? senderUserId)
         => _intake.SendOrEnqueueAsync(sessionId, text, senderPersonaId,

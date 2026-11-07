@@ -139,10 +139,15 @@ public class SessionManagerQueueTests : SessionManagerTestBase
     [Fact]
     public async Task InterruptTurn_Штабом_ОтметкуНеПишет()
     {
-        // Штаб снимает исполнителя той же механикой, но это не «Стоп» человека
+        // Штаб снимает исполнителя той же механикой, но это не «Стоп» человека.
+        // С S3-7 штабной шов держит ядро приёма (карта §3): тест зовёт его через поле
+        // фасада — тот же экземляр, что получают вертикальные сервисы.
         var (session, adapter) = await MkRunningTurnAsync("staff-stop");
 
-        ((ITeamTurnIntake)_sut).InterruptTurn(session.Id);
+        var intake = (ITeamTurnIntake)typeof(SessionManager)
+            .GetField("_intake", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(_sut)!;
+        intake.InterruptTurn(session.Id);
 
         adapter.Verify(a => a.Interrupt(), Times.Once());
         (await _sut.GetHistoryAsync(session.Id)).OfType<StoredInterruptedMessage>().Should().BeEmpty();

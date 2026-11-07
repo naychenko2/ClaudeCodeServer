@@ -1,12 +1,16 @@
+using System.Reflection;
 using Xunit.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
 /// <summary>
 /// Сторож границы <c>ILocalLlmClient</c>: тип локального движка не должен упоминаться
-/// ни одним типом вне сборки <c>ClaudeHomeServer.Llm</c>, кроме единственного легитимного
-/// прямого потребителя — <c>SessionManager</c> (голосовой ход идёт мимо
-/// CheapTextRunner и держит клиента напрямую). Цель — закрыть три обхода
+/// ни одним типом вне сборки <c>ClaudeHomeServer.Llm</c>, кроме голосового хода —
+/// <c>LocalVoiceTurn</c> (собственный путь мимо <c>CheapTextRunner</c>, держит клиента
+/// напрямую; фасад только переадресует ему) — и DI-проводки голосовой роли в
+/// <c>SessionCoreRegistration</c>: она разрешена не целиком по типу, а только методу
+/// регистрации, конструирующему <c>LocalVoiceTurn</c> (блок «Суженное разрешение» ниже).
+/// Цель — закрыть три обхода
 /// маршрутизации, через которые локальную модель могли звать кто угодно: <c>OllamaActionRankService</c>
 /// (раньше прямой вызов), <c>UsageController</c> (снимок настроек через клиента)
 /// и фоновый прогрев из Program.cs (теперь IHostedService в подсистеме).
@@ -42,10 +46,12 @@ public class LocalLlmClientBoundaryTests
     // Голосовой ход (RunLocalVoiceTurnAsync) с S3-6 живёт в LocalVoiceTurn: это
     // собственный путь мимо CheapTextRunner, у него собственный стриминг и своя
     // логика прерывания; фасад держит ссылку на него же (параметр конструктора
-    // LocalVoiceTurn — тот же голосовой ход). С S3-7 к allow-list добавлен
-    // SessionCoreRegistration: он регистрирует ту же голосовую роль (общий
-    // синглтон фасада и ядра приёма) и обязан назвать тип в DI-проводке —
-    // это переезд той же проводки из конструктора фасада, вызова движка здесь нет.
+    // LocalVoiceTurn — тот же голосовой ход). SessionCoreRegistration в общий
+    // allow-list НЕ входит: он не потребитель движка, а DI-проводка ролей, и
+    // сплошное разрешение целого типа позволило бы любой правке регистрации
+    // назвать клиента молча (замечание ревью S3-7, правка 40fe9bed). Регистрация
+    // разрешена узко и проверяется отдельно: только проводка голосовой роли —
+    // см. блок «Суженное разрешение» ниже.
     // Никаких других легитимных потребителей быть не должно: все текстовые места
     // идут через ICheapTextRunner, прогрев — через IHostedService в подсистеме Llm,
     // настройки читает LocalActionRouter.
@@ -53,8 +59,13 @@ public class LocalLlmClientBoundaryTests
     [
         "ClaudeHomeServer.Services.SessionManager",
         "ClaudeHomeServer.Services.Sessions.LocalVoiceTurn",
-        "ClaudeHomeServer.Services.Composition.SessionCoreRegistration",
     ];
+
+    // Регистрация ядра (DI-проводка) и голосовая роль — единственное легитимное
+    // место локального типа внутри регистрации (её проводка из конструктора фасада,
+    // вызова движка в регистрации нет).
+    private const string RegistrationOwner = "ClaudeHomeServer.Services.Composition.SessionCoreRegistration";
+    private const string VoiceRole = "ClaudeHomeServer.Services.Sessions.LocalVoiceTurn";
 
     [Fact]
     [Trait("Category", "Slow")]
@@ -112,6 +123,12 @@ public class LocalLlmClientBoundaryTests
                 // Тип внутри Llm — пропускаем: внутренние ссылки разрешены.
                 if (t.Assembly == llmAssembly) continue;
 
+                var ownerFull = t.FullName ?? t.Name;
+                // Регистрация пропускает общий обход: она проверяется ниже и узко, по
+                // методам; её nested-замыкания покрыты AllMethodsWithNested по регистрации.
+                if (ownerFull == RegistrationOwner || ownerFull.StartsWith(RegistrationOwner + "+", StringComparison.Ordinal))
+                    continue;
+
                 var needlesMentioned = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var referenced in BoundaryIlScanner.CollectAllReferencedTypes(t))
                 {
@@ -135,7 +152,6 @@ public class LocalLlmClientBoundaryTests
                 // прямого потребителя (голосовой ход) как нарушение — та же грабля,
                 // что IlBoundaryRegressionTests описывает как «3 из 7 известных
                 // швов в nested-типах, без обхода сторож остаётся рабочим на вид».
-                var ownerFull = t.FullName ?? t.Name;
                 var allowed = AllowedOwners.Any(a =>
                     ownerFull == a || ownerFull.StartsWith(a + "+", StringComparison.Ordinal));
                 if (allowed) continue;
@@ -143,6 +159,58 @@ public class LocalLlmClientBoundaryTests
                 foreach (var needle in needlesMentioned)
                 {
                     violations.Add($"{t.FullName} → {needle}");
+                }
+            }
+        }
+
+        // Суженное разрешение регистрации (S3-7b, решение по замечанию ревью):
+        // SessionCoreRegistration может назвать локальный движок только там, где он
+        // ставит голосовую роль. Проверка по каждому методу (включая замыкания):
+        // если тело метода ссылается на иглу — то же тело обязано конструировать
+        // LocalVoiceTurn (это и есть проводка голосовой роли). Иное место регистрации —
+        // её сигнатура (поля, параметры методов): голосовая роль там не строится,
+        // игла только там — нарушение.
+        var registration = asms
+            .Select(a => a.GetType(RegistrationOwner, false))
+            .FirstOrDefault(x => x is not null);
+        Assert.True(registration is not null,
+            $"сторож не смог разрешить тип {RegistrationOwner} — суженное разрешение "
+            + "регистрации не проверялась");
+        var bodyMentions = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var method in BoundaryIlScanner.AllMethodsWithNested(registration!))
+        {
+            var mentioned = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var referenced in BoundaryIlScanner.TypesFromBody(method))
+            {
+                foreach (var needle in needleTypes)
+                {
+                    if (referenced.FullName == needle.FullName
+                        || (referenced.FullName?.StartsWith(needle.FullName + "+", StringComparison.Ordinal) ?? false))
+                    {
+                        mentioned.Add(needle.FullName!);
+                    }
+                }
+            }
+            if (mentioned.Count == 0) continue;
+            foreach (var n in mentioned) bodyMentions.Add(n);
+            // Легитимное место локального типа — сборка голосовой роли: вызов конструктора
+            // LocalVoiceTurn в том же теле. Просто назвать роль (GetRequiredService<LocalVoiceTurn>
+            // в чужой проводке) недостаточно: клиент принадлежит там, где роль собирается.
+            var constructsVoiceRole = BoundaryIlScanner.CalledMethods(method)
+                .Any(c => c is ConstructorInfo && c.DeclaringType?.FullName == VoiceRole);
+            if (constructsVoiceRole) continue;
+            foreach (var n in mentioned)
+                violations.Add($"{method.DeclaringType?.FullName ?? method.Name}::{method.Name} → {n}");
+        }
+        foreach (var referenced in BoundaryIlScanner.TypesFromSignatures(registration!))
+        {
+            foreach (var needle in needleTypes)
+            {
+                if (referenced.FullName == needle.FullName
+                    || (referenced.FullName?.StartsWith(needle.FullName + "+", StringComparison.Ordinal) ?? false))
+                {
+                    if (bodyMentions.Add(needle.FullName!))
+                        violations.Add($"{registration.FullName} (сигнатура) → {needle.FullName}");
                 }
             }
         }
@@ -156,8 +224,9 @@ public class LocalLlmClientBoundaryTests
 
         Assert.True(violations.Count == 0,
             "ILocalLlmClient/OllamaClient/LlamaServerClient упомянуты типами вне "
-            + "ClaudeHomeServer.Llm и вне allow-list. Легитимный прямой потребитель — "
-            + "только SessionManager (голосовой ход). Все прочие места идут через "
+            + "ClaudeHomeServer.Llm и вне allow-list. Легитимные прямые потребители — "
+            + "LocalVoiceTurn (голосовой ход) и фасад (его переадресация); регистрация — "
+            + "только проводка голосовой роли. Все прочие места идут через "
             + "ICheapTextRunner или LocalActionRouter. Нарушения:\n"
             + string.Join("\n", violations));
         if (violations.Count > 0)

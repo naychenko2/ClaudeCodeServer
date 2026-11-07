@@ -14,9 +14,11 @@ namespace ClaudeHomeServer.Services.Sessions;
 
 // Ядро приёма хода (S3-7, docs/research/session-manager-split-2026-11.md, аддендум Александра
 // к §1/§2/§3): ход в сессии запускает только этот класс. Цикл «до готово» и добивание сабагента
-// ход не стартуют сами — просят его у ядра через TrySubmitContinuationAsync; решающая проверка
-// остановки живёт здесь, а не у просящего (иначе TOCTOU: Stop между ранней отсечкой цикла
-// и сабмитом уронил бы директиву в умирающий адаптер).
+// ход не стартуют сами — просят его у ядра через TrySubmitContinuationAsync; последняя проверка
+// остановки перед сабмитом живёт здесь, а не у просящего: ранняя отсечка просящего слишком
+// рання (Stop между ней и сабмитом уронил бы директиву в умирающий адаптер). Проверка сделана
+// без блокировки: окно между ней и сабмитом не закрыто; практический риск ничтожен — писатель
+// флага один (BeginShutdown, зовётся один раз при остановке приложения).
 //
 // Очередь pending, захват слота «сессия занята», пин разбора и флаг Stopping — одна атомарная
 // операция этого класса: dequeue и пин под тем же замком entry.PendingLock; второй точки правды
@@ -113,8 +115,9 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
     internal async Task<bool> TrySubmitContinuationAsync(string sessionId, string text,
         DeliveryCause cause = DeliveryCause.Unknown)
     {
-        // Решающая проверка под флагом ядра: ранняя отсечка вызывающего была вне ядра,
-        // Stop мог прийти между ней и этим местом.
+        // Последняя проверка перед отправкой: ранняя отсечка вызывающего была вне ядра,
+        // Stop мог прийти между ней и этим местом. Проверка без блокировки: окно между ней
+        // и SendDirectAsync остаётся — риск ничтожен: писатель флага один (BeginShutdown).
         if (Stopping) return false;
         if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
         await SendDirectAsync(sessionId, entry, text, [], mode: null, systemDirective: true, auto: false,
@@ -1080,7 +1083,6 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         }
     }
 
-    // F2-O3 доработка 2: автор приватного чата больше не участник проекта (или проекта нет).
     // F2-O3 доработка 2: автор приватного чата больше не участник проекта (или проекта нет).
     // Приватный чат виден только автору (SessionAccess.CanSee): после его отзыва сообщения и
     // ходы в этом чате некому ни показать, ни начать. Только для приватных чатов

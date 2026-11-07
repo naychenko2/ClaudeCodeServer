@@ -1610,12 +1610,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         => _intake.SendMessageAsync(sessionId, text, attachedPaths, mode, systemDirective, auto,
             senderPersonaId, suppressTasksExecute, senderOrigin, senderConnectionId, staffNote, cause, agentDepth, senderUserId);
 
-
-
-
-
-
-
     // Превью чата и сигнал после «Стоп» (S3-7): владелец — ядро приёма; фасад держит имена
     // для потребителей (карточка списка и тесты зовут их по типу фасада).
     internal static string ChatPreview(string text) => Sessions.TurnIntake.ChatPreview(text);
@@ -1668,7 +1662,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // заморозка-проверки. Здесь обёртки с прежними сигнатурами: вызывающие места
     // (приём хода, «Стоп», байпас фолбэка, DeviceWait) живут в фасаде до S3-4/S3-7.
     // Рекурсия «постановка → разбор» (dispatchNow → DrainNextPendingAsync) разорвана
-    // швом Lazy<ITurnStarter>: его реализация в переходном режиме — сам фасад.
+    // швом Lazy<ITurnStarter>: с S3-7 его реализация — ядро приёма TurnIntake
+    // (SessionCoreRegistration.cs:33), не фасад.
 
     private async Task<SendAndWaitResult> EnqueuePendingAsync(string sessionId, SessionEntry entry,
         string text, string? senderPersonaId, string? senderOrigin, int agentDepth,
@@ -3343,7 +3338,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 // (S3-7) Директиву в ход просит ядро приёма (решающая проверка остановки — там).
                 // Отказ ядра — хода нет; снятый здесь маркер не оставит цикл на мёртвой итерации.
                 if (!await _intake.TrySubmitContinuationAsync(sessionId, OmoPrompts.WorkLoopVerification))
-                    entry.LoopTurnInFlight = false;
+                    lock (entry.PendingLock) entry.LoopTurnInFlight = false;
                 return;
             }
 
@@ -3404,7 +3399,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // ранней отсечкой и этим местом) — хода нет, маркер итерации снимаем здесь же.
             if (!await _intake.TrySubmitContinuationAsync(sessionId,
                 OmoPrompts.WorkLoopContinuation(loop.Promise, loop.Iteration, loop.MaxIterations)))
-                entry.LoopTurnInFlight = false;
+                lock (entry.PendingLock) entry.LoopTurnInFlight = false;
         }
         catch
         {

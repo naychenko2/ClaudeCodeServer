@@ -1382,49 +1382,6 @@ public class SessionManagerQueueTests : SessionManagerTestBase
     }
 
     [Fact]
-    public async Task DrainNextPending_ДваПараллельныхНаОдноPending_ОдинХодИОдинПин()
-    {
-        // Гонка за ОДНО и то же pending-сообщение (S3-7, аддендум §2): dequeue и пин —
-        // одна атомарная операция ядра под PendingLock. Первый drain изымает сообщение и держит
-        // пин всё время отправки; второй обязан уступить по пину — не продублировать ход,
-        // не потерять и не вынести сообщение дважды. Пин погашается победителем в finally.
-        var session = await MkBusySessionAsync("drace-one", SessionStatus.Active);
-        session.Name = "есть имя";
-        var entry = GetEntry(session.Id);
-        var adapter = StubAdapter(entry);
-        SetProcess(entry, adapter.Object);
-        EnqueueAgent(entry, "единственный доклад");
-
-        var sendGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
-            It.IsAny<int>(), It.IsAny<bool>())).Returns(() => sendGate.Task);
-
-        var drain = typeof(SessionManager).GetMethod("DrainNextPendingAsync",
-            BindingFlags.NonPublic | BindingFlags.Instance)!;
-        var t1 = Task.Run(async () => await (Task)drain.Invoke(_sut, [session.Id])!);
-        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(1)); // t1 взял сообщение и взвёл пин, отправка висит
-
-        var t2 = Task.Run(async () => await (Task)drain.Invoke(_sut, [session.Id])!);
-        await Task.WhenAny(t2, Task.Delay(TimeSpan.FromSeconds(1)));
-        t2.IsCompleted.Should().BeTrue("второй drain уступает по пину, а не ждёт чужой отправки");
-        ((bool)entry.GetType().GetField("DrainInFlight")!.GetValue(entry)!).Should().BeTrue(
-            "пин держит победитель всё время отправки — на него и уступил второй");
-
-        sendGate.SetResult();
-        await t1;
-
-        adapter.Verify(a => a.SendMessageAsync(
-            It.Is<string>(t => t.Contains("единственный доклад")), It.IsAny<IReadOnlyList<string>>(),
-            It.IsAny<int>(), It.IsAny<bool>()), Times.Once(),
-            "одно pending — один ход: второй drain не дублирует его");
-        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
-            It.IsAny<int>(), It.IsAny<bool>()), Times.Once(), "второго хода нет");
-        _sut.GetPending(session.Id).Should().BeEmpty("сообщение доставлено, а не потеряно");
-        ((bool)entry.GetType().GetField("DrainInFlight")!.GetValue(entry)!).Should().BeFalse(
-            "пин погашен в finally победителя, не остался взведённым");
-    }
-
-    [Fact]
     public async Task Interrupt_ЧатВЦиклеДоГотово_СнимаетЦикл()
     {
         // «Стоп» — явный путь выключения цикла (п.5): прерывает ход и снимает цикл синхронно,

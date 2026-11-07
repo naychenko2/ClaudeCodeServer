@@ -202,6 +202,15 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private readonly ChatVisibility _visibility;
     // Настройки и жизненный цикл чата (S3-3): архив, срок, темы, собеседник, правка имени/модели.
     private readonly ChatSettings _settings;
+    // Контекст запуска (S3-4): адрес и токен MCP, встроенные продуктовые серверы, слой персоны,
+    // внешние серверы и модули, паспорта хода. Тот же порядок, что в S3-2/S3-3: DI-экземпляр
+    // или запасная сборка в конструкторе (юниты); один экземпляр на фасад.
+    private readonly McpEndpoint _endpoint;
+    private readonly BuiltinMcpContexts _builtin;
+    private readonly PersonaLayerBuilder _persona;
+    private readonly ExternalMcpContexts _external;
+    private readonly ModulesMcpContexts _moduleContexts;
+    private readonly TurnPassports _passports;
 
     // Общий лок внеходовых записей истории (_falPersistLock) переехал в SessionHistory вместе
     // с механикой истории; здесь только делегирующая обёртка: оживление аккумулятора и
@@ -241,9 +250,6 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // Копии транскриптов заархивированных чатов (data/archived-transcripts) — шаг 0 плана
     // «Архив чатов»: создаётся в конструкторе напрямую, см. там же
     private readonly ArchivedTranscriptStore _archivedTranscripts;
-    // Сервисный токен MCP-серверов — ОДИН на владельца (задачи/заметки/память/персоны/…
-    // используют один и тот же owner-scoped JWT), с перевыпуском до истечения. См. GetServiceToken.
-    private readonly ConcurrentDictionary<string, (string Token, DateTime IssuedAt)> _serviceTokens = new();
 
     // Зрители сессии и живой прогон CLI — в сторе (S3-1)
     public void AddViewer(string sessionId, string connectionId) => _store.AddViewer(sessionId, connectionId);
@@ -473,6 +479,16 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         Sessions.ChatNaming? naming = null,
         Sessions.ChatVisibility? visibility = null,
         Sessions.ChatSettings? settings = null,
+        // Опционально (S3-4, AddSessionCore): контекст запуска — адрес и токен MCP, встроенные
+        // продуктовые серверы, слой персоны, внешние серверы и модули, паспорта хода. Без DI
+        // (юниты, new SessionManager) собираются здесь же из тех же зависимостей; переходный
+        // режим S3-0 §4, запасная сборка снимается в S3-8c.
+        Sessions.McpEndpoint? mcpEndpoint = null,
+        Sessions.BuiltinMcpContexts? builtinContexts = null,
+        Sessions.PersonaLayerBuilder? personaLayer = null,
+        Sessions.ExternalMcpContexts? externalContexts = null,
+        Sessions.ModulesMcpContexts? moduleContexts = null,
+        Sessions.TurnPassports? turnPassports = null,
         // Опционально: учёт лимитов подписок и стор копий транскриптов архивных чатов — теперь
         // ОБЩИЕ экземпляры с ролями (TurnCostLedger / CliRoute), не отдельный счётчик здесь.
         SubscriptionLimitRecorder? limitRecorder = null,
@@ -657,6 +673,31 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             loggerFactory?.CreateLogger<Sessions.ChatSettings>()
                 ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.ChatSettings>.Instance);
 
+        // Контекст запуска (S3-4): адрес и токен MCP, встроенные продуктовые серверы, слой
+        // персоны, внешние серверы и модули, паспорта хода. В DI приходят готовыми
+        // (AddSessionCore); без DI (юниты, new SessionManager) собираются здесь из тех же
+        // зависимостей — переходный режим S3-0 §4, запасная сборка снимается в S3-8c.
+        // Порядок: endpoint первым (его читают остальные), паспорта — после стора и шва
+        // ITurnStarter: добивание оборванного сабагента просит ход через этот шов.
+        _endpoint = mcpEndpoint ?? new Sessions.McpEndpoint(config, server, jwt, launchers,
+            loggerFactory?.CreateLogger<Sessions.McpEndpoint>()
+                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.McpEndpoint>.Instance);
+        _builtin = builtinContexts ?? new Sessions.BuiltinMcpContexts(
+            _endpoint, flags, bindings, services, subsystemStates, projects, higgsfieldOAuth, config);
+        _persona = personaLayer ?? new Sessions.PersonaLayerBuilder(
+            _store, _endpoint, personas, bindings, agentSync, projects, spheres,
+            loggerFactory?.CreateLogger<Sessions.PersonaLayerBuilder>()
+                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.PersonaLayerBuilder>.Instance);
+        _external = externalContexts ?? new Sessions.ExternalMcpContexts(
+            _store, _endpoint, bindings, projects, mcpRegistry, mcpSecrets, mcpOAuth, flags, users, config,
+            loggerFactory?.CreateLogger<Sessions.ExternalMcpContexts>()
+                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.ExternalMcpContexts>.Instance);
+        _moduleContexts = moduleContexts ?? new Sessions.ModulesMcpContexts(
+            _endpoint, users, flags, modules, moduleTokens);
+        _passports = turnPassports ?? new Sessions.TurnPassports(
+            TurnEvents, promptSnapshots, mcpStatus, subagentRuns, turnRuns, _store,
+            new Lazy<Sessions.ITurnStarter>(() => this), promptSectionContributors);
+
         // Швы данных «штаб → ядро» (ITeamHistoryStore/ITeamRunState/ITeamTurnIntake)
         // назначаем ДО создания TeamPlanService/TeamDecisionService: они передают `this`
         // в конструкторы вертикальных сервисов, и без присваивания поля upcast'ятся в null.
@@ -688,32 +729,18 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             ?? Path.Combine(AppContext.BaseDirectory, "data");
         _dataDir = dataDir;
 
-        // Подписки на шину событий хода (ADR-013, этап 1): снимок промпта → PromptSnapshotStore,
-        // паспорт сабагента → SubagentRunLog + side-effects, паспорт хода → TurnRunLog.
-        // Шина регистрируется через DI как singleton; в тестах без DI лениво создаётся
-        // свой экземпляр на SessionManager (TurnEvents), чтобы подписчики могли работать.
-        {
-            var bus = TurnEvents;
-            bus.OnNotification<PromptAssembled>(HandlePromptAssembled,
-                "SessionManager.PromptSnapshotStore");
-            bus.OnNotification<SubagentRunCompleted>(HandleSubagentRunCompleted,
-                "SessionManager.SubagentRunLog");
-            bus.OnNotification<TurnCompleted>(HandleTurnCompleted,
-                "SessionManager.TurnRunLog");
-            // Этап 4 / шаг 1б: теневой подписчик turn/completed для штаба. ИНЕРТЕН — боевую
-            // логику HandleTeamTurnEndAsync НЕ зовёт, только сверяет факт вызова старого пути с
-            // тем, что диктует Outcome. Старый путь работает как единственный. Переключение
-            // (под-шаг 3) снимет прямой вызов из OnMessageAsync и дедуп SkipNextTeamTurnEnd.
-            bus.OnNotification<TurnCompleted>(HandleTeamTurnCompletedShim,
-                "SessionManager.TeamShadowSubscriber");
-            // Этап 2: реестр IPromptSectionContributor (7 контрибьюторов)
-            // подключается к шине Filter-событием prompt/assembling. В тестах без DI бак
-            // пуст — сборка секций остаётся на инлайне (он закрыт гейтами IsEnabled).
-            if (promptSectionContributors is not null)
-            {
-                Turn.PromptSectionContributorsRegistration.RegisterAll(bus, promptSectionContributors);
-            }
-        }
+        // Подписка на шину событий хода (ADR-013): здесь остаётся только тень разбора хода
+        // штаба (HandleTeamTurnCompletedShim) — она относится к вертикали штаба, а не к
+        // паспортам. Подписчики паспортов (PromptAssembled/SubagentRunCompleted/TurnCompleted)
+        // и реестр контрибьюторов секций промпта ставит TurnPassports в своём конструкторе
+        // (S3-4) на ТОМ ЖЕ экземпляре шины: синглтон DI, а в тестах без DI — тот, что лениво
+        // создан здесь (TurnEvents) и передан в запасную сборку роли.
+        // Этап 4 / шаг 1б: теневой подписчик turn/completed для штаба. ИНЕРТЕН — боевую
+        // логику HandleTeamTurnEndAsync НЕ зовёт, только сверяет факт вызова старого пути с
+        // тем, что диктует Outcome. Старый путь работает как единственный. Переключение
+        // (под-шаг 3) снимет прямой вызов из OnMessageAsync и дедуп SkipNextTeamTurnEnd.
+        TurnEvents.OnNotification<TurnCompleted>(HandleTeamTurnCompletedShim,
+            "SessionManager.TeamShadowSubscriber");
 
         LoadSessions();
 
@@ -742,309 +769,54 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private static int ParsePositiveInt(string? raw, int defaultValue) =>
         int.TryParse(raw, out var v) && v > 0 ? v : defaultValue;
 
-    // --- MCP tasks-server ---
+    // --- Тонкие обёртки ролей контекста запуска (S3-4) ---
+    // Тела ушли в Services/Sessions (McpEndpoint, BuiltinMcpContexts); сигнатуры фасада
+    // прежние: на них сидят точки сборки контекста здесь и внешние потребители
+    // (McpBackendAccess, TasksToolset, PersonasToolset, WorkspaceToolset).
+    internal string ResolveTasksApiUrl(string? ownerId = null) => _endpoint.ResolveTasksApiUrl(ownerId);
+    internal static string LoopbackApiUrl(string address) => Sessions.McpEndpoint.LoopbackApiUrl(address);
+    internal string GetServiceToken(string ownerId) => _endpoint.GetServiceToken(ownerId);
+    private bool HttpEndpointUsable(string apiUrl) => _endpoint.HttpEndpointUsable(apiUrl);
 
-    // Базовый URL API для MCP-сервера: среда владельца (из песочницы Kestrel виден
-    // как host.docker.internal) → конфиг → адрес Kestrel → дефолт.
-    // 0.0.0.0/[::] заменяем на localhost — MCP-сервер ходит с той же машины.
-    // Среди адресов Kestrel предпочитаем http: MCP-серверы на node ходят обычным
-    // fetch, а боевой серт выписан на внешний домен — по https://localhost они
-    // упираются в ERR_TLS_CERT_ALTNAME_INVALID (localhost/127.0.0.1 нет в SAN).
-    // Если http-адреса нет вообще, поднимите локальный http-эндпоинт и пропишите
-    // McpTasksApiUrl явно — иначе все MCP-прокси (tasks/notes/memory/wsp) отвалятся.
-    internal string ResolveTasksApiUrl(string? ownerId = null)
-    {
-        if (ownerId is not null && _launchers.ForOwner(ownerId).McpApiUrlOverride is { } sandboxUrl)
-            return sandboxUrl.TrimEnd('/');
-
-        var fromConfig = _config["McpTasksApiUrl"];
-        if (!string.IsNullOrWhiteSpace(fromConfig)) return fromConfig.TrimEnd('/');
-
-        var addresses = _server.Features
-            .Get<Microsoft.AspNetCore.Hosting.Server.Features.IServerAddressesFeature>()?
-            .Addresses;
-        var addr = addresses?.FirstOrDefault(a => a.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
-                   ?? addresses?.FirstOrDefault();
-        if (string.IsNullOrEmpty(addr)) return "http://localhost:5000";
-        return LoopbackApiUrl(addr);
-    }
-
-    // Wildcard-хост адреса прослушивания → localhost. Kestrel и хост отдают в
-    // IServerAddressesFeature и сырые формы конфига: ASPNETCORE_HTTP_PORTS/URLS дают
-    // http://*:порт или http://+:порт, а такой адрес не разбирается в Uri (UriFormatException
-    // у шлюза MCP и у всех MCP-конфигов хода).
-    private static readonly Regex WildcardHost =
-        new(@"^(?<scheme>[a-z][a-z0-9+.-]*://)(?:\*|\+|0\.0\.0\.0|\[::\])(?=[:/]|$)",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
-    internal static string LoopbackApiUrl(string address) =>
-        WildcardHost.Replace(address, "${scheme}localhost").TrimEnd('/');
-
-    // tasks-MCP доступен, когда разрешён персоной (Persona.Tools/привязки), ЛИБО сессия
-    // является исполнителем задачи — тогда tasks-MCP форсируется: исполнитель обязан
-    // управлять задачей через mcp__tasks__* (иначе ограниченная персона не сможет её
-    // ни прочитать, ни завершить и свалится в нерабочий встроенный Task-тул).
-    // internal — ту же формулу резолвит TasksToolset по живой сессии-вызывателю (http,
-    // ADR-012 волна 2): право на сервер проверяется на каждый tools/list и tools/call
     internal bool TasksMcpEnabled(string? ownerId, Session session, Persona? persona) =>
-        session.TaskExecution || _bindings.EffectiveToolEnabled(ownerId, persona, "tasks");
+        _builtin.TasksMcpEnabled(ownerId, session, persona);
+    private TasksMcpContext? BuildTasksContext(string? ownerId, string? projectId, Persona? persona = null) =>
+        _builtin.BuildTasksContext(ownerId, projectId, persona);
+    private NotesMcpContext? BuildNotesContext(string? ownerId, string? projectId, Persona? persona) =>
+        _builtin.BuildNotesContext(ownerId, projectId, persona);
+    private WidgetsMcpContext? BuildWidgetsContext(string? ownerId, Persona? persona) =>
+        _builtin.BuildWidgetsContext(ownerId, persona);
+    private WatchMcpContext? BuildWatchContext(string? ownerId) => _builtin.BuildWatchContext(ownerId);
+    private WebSearchMcpContext? BuildWebSearchContext(string? ownerId, Persona? persona) =>
+        _builtin.BuildWebSearchContext(ownerId, persona);
+    private ArchitectureMcpContext? BuildArchitectureContext(string? ownerId, string? projectId, Persona? persona) =>
+        _builtin.BuildArchitectureContext(ownerId, projectId, persona);
+    internal HiggsfieldMcpContext? BuildHiggsfieldContext(string? ownerId, Persona? persona) =>
+        _builtin.BuildHiggsfieldContext(ownerId, persona);
+    internal ImageEditorMcpContext? BuildImageEditorContext(string? ownerId, Session session) =>
+        _builtin.BuildImageEditorContext(ownerId, session);
+    internal AudioEditorMcpContext? BuildAudioEditorContext(string? ownerId, Session session) =>
+        _builtin.BuildAudioEditorContext(ownerId, session);
+    internal VideoEditorMcpContext? BuildVideoEditorContext(string? ownerId, Session session) =>
+        _builtin.BuildVideoEditorContext(ownerId, session);
+    internal PluginsMcpContext? BuildPluginsContext(string? ownerId, Session session) =>
+        _builtin.BuildPluginsContext(ownerId, session);
+    internal TurnContextMcpContext? BuildTurnContextContext(string? ownerId, Session session) =>
+        _builtin.BuildTurnContextContext(ownerId, session);
+    internal LocalMediaMcpContext? BuildLocalMediaContext(string? ownerId, string? projectId, Persona? persona) =>
+        _builtin.BuildLocalMediaContext(ownerId, projectId, persona);
+    internal TestsMcpContext? BuildTestsContext(string? ownerId, string? projectId, Persona? persona) =>
+        _builtin.BuildTestsContext(ownerId, projectId, persona);
+    private DifyMcpContext? BuildDifyContext(string? ownerId) => _builtin.BuildDifyContext(ownerId);
+    private CodeGraphMcpContext? BuildCodeGraphContext(string? ownerId, string? projectId, string sessionId,
+        string? rootPath, Persona? persona) =>
+        _builtin.BuildCodeGraphContext(ownerId, projectId, sessionId, rootPath, persona);
+    private MemoryMcpContext BuildMemoryContext(string ownerId, string personaId, string? projectId) =>
+        _builtin.BuildMemoryContext(ownerId, personaId, projectId);
+    private MemoryMcpContext? BuildTeamMemoryContext(string? ownerId, string? projectId) =>
+        _builtin.BuildTeamMemoryContext(ownerId, projectId);
 
-    // Единый сервисный токен владельца для MCP-серверов (tasks/notes/memory/personas/…):
-    // per-owner JWT с перевыпуском за сутки до истечения (сервер может жить дольше срока токена).
-    internal string GetServiceToken(string ownerId) =>
-        _serviceTokens.AddOrUpdate(ownerId,
-            id => (_jwt.IssueServiceToken(id), DateTime.UtcNow),
-            (id, old) => DateTime.UtcNow - old.IssuedAt > JwtService.ServiceTokenLifetime - TimeSpan.FromDays(1)
-                ? (_jwt.IssueServiceToken(id), DateTime.UtcNow)
-                : old).Token;
-
-    // Контекст MCP-сервера задач для сессии; null — только для чата без владельца.
-    // persona — для кросс-проектных ProjectTasks-привязок (доступ к задачам ДРУГИХ проектов).
-    // Токен — фабрикой (ADR-012 волна 2, как widgets/memory): захваченный строкой JWT у
-    // долгоживущего чата истекал, и задачи пропадали у модели молча.
-    private TasksMcpContext? BuildTasksContext(string? ownerId, string? projectId, Persona? persona = null)
-    {
-        if (ownerId is null) return null;
-        var extraScopes = _bindings.BuildExternalTaskScopes(ownerId, persona);
-        var extraIds = extraScopes.Select(s => s.ProjectId).Distinct().ToList();
-        var extraReadOnly = extraScopes.Where(s => s.ReadOnly).Select(s => s.ProjectId).Distinct().ToList();
-        var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new TasksMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId,
-            extraIds.Count > 0 ? extraIds : null, extraReadOnly.Count > 0 ? extraReadOnly : null,
-            UseHttp: HttpEndpointUsable(apiUrl));
-    }
-
-    // Контекст MCP-сервера заметок; null — только для чата без владельца.
-    // Модуль комментариев к документам и редких операций — за ключом notes-annotations
-    // (дефолт выключен, решение ПО ПЕРСОНЕ: PersonaBindingsService.SectionEnabled).
-    private NotesMcpContext? BuildNotesContext(string? ownerId, string? projectId, Persona? persona)
-    {
-        if (ownerId is null) return null;
-        var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new NotesMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId,
-            AnnotationsEnabled: _bindings.SectionEnabled(ownerId, persona, "notes-annotations"),
-            UseHttp: HttpEndpointUsable(apiUrl));
-    }
-
-    // Контекст MCP-сервера виджетов чата: адрес API и сервисный токен владельца — сервер
-    // переехал в Kestrel (ADR-012), ход зовёт его по http, а не поднимает процесс node.
-    // Адрес даёт та же ResolveTasksApiUrl, что и остальным серверам: второго правила про
-    // песочницу здесь нет — оно уже внутри резолвера.
-    // Фича штатная (без фич-флага), как personas/notifications; персона может выключить
-    // сервер Off-привязкой tool:widgets (PersonaBindingsService.ServerToolEnabled).
-    private WidgetsMcpContext? BuildWidgetsContext(string? ownerId, Persona? persona)
-    {
-        if (ownerId is null || !_bindings.ServerToolEnabled(ownerId, persona, "widgets")) return null;
-        var apiUrl = ResolveTasksApiUrl(ownerId);
-        // Токен — фабрикой, как у памяти: контекст живёт столько же, сколько адаптер, а
-        // захваченный строкой JWT у долгоживущего чата истекал (ADR-012, урок фазы 1)
-        return new WidgetsMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
-    }
-
-    // Контекст MCP-сервера сторожей чатов: null — только для чата без владельца.
-    // Сессия-вызыватель едет хвостом URL — как у tasks/notes волны 2.
-    private WatchMcpContext? BuildWatchContext(string? ownerId)
-    {
-        if (ownerId is null) return null;
-        var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new WatchMcpContext(apiUrl, () => GetServiceToken(ownerId!), HttpEndpointUsable(apiUrl));
-    }
-
-    // Контекст MCP-сервера веб-поиска: null — чат без владельца ИЛИ пустой Perplexity:ApiKey
-    // (единственный рубильник фичи, как у Dify). Ключ читается ЖИВЬЁМ, но остаётся свойством
-    // ИНСТАНСА, а не хода: инвариант стабильности состава (ADR-012) не задет — правка ключа
-    // штатно меняет сигнатуру запуска и перезапускает CLI, как любое изменение shapes.
-    // Сам ключ в контекст не кладётся: наружу он не уезжает, тулсет берёт его из конфига.
-    //
-    // Третье условие — возможность персоны «web» (EffectiveToolEnabled, та же, что гасит
-    // встроенные WebSearch/WebFetch у CLI): персона с выключенным веб-поиском не должна
-    // получать обходной путь в интернет через MCP. Гейт стоит на объявлении сервера, а не
-    // только в запретах: так у такой персоны схемы ещё и не занимают окно. Персона — свойство
-    // сессии, инвариант стабильности состава не задет (как у widgets).
-    private WebSearchMcpContext? BuildWebSearchContext(string? ownerId, Persona? persona)
-    {
-        if (ownerId is null) return null;
-        if (string.IsNullOrWhiteSpace(_config["Perplexity:ApiKey"])) return null;
-        if (!_bindings.EffectiveToolEnabled(ownerId, persona, "web")) return null;
-        var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new WebSearchMcpContext(apiUrl, () => GetServiceToken(ownerId!), HttpEndpointUsable(apiUrl));
-    }
-
-    // Контекст MCP-сервера архитектуры (arch_*: C4-модель проекта). Все оси — свойства
-    // владельца/сессии/процесса, не хода (инвариант стабильности состава ADR-012): чат
-    // проекта, модуль Architecture реально загружен (динамическая сборка, Viaduct 10.2: без
-    // dll тулсета нет в реестре, и ход объявил бы CLI мёртвый сервер — урок форвардера
-    // Knowledge у Notes) и не выключен вторым замком Subsystems:architecture:Enabled, плюс
-    // Off-привязка персоны tool:architecture. Фич-флага у раздела нет (решение 2026-09-26):
-    // включение — только конфигом модуля. Тулсет перепроверяет то же на каждом вызове.
-    private ArchitectureMcpContext? BuildArchitectureContext(string? ownerId, string? projectId, Persona? persona)
-    {
-        if (ownerId is null || string.IsNullOrEmpty(projectId)) return null;
-        // Локальный проект (ADR-016): модели и графа кода на сервере нет — тулсету не с чем работать
-        if (_projects.GetById(projectId) is not { } project || !ProjectCapabilities.FilesOnServer(project)) return null;
-        if (_subsystemStates?.ActiveKeys().Contains(McpEndpoints.ArchitectureName, StringComparer.OrdinalIgnoreCase) != true) return null;
-        if (!Composition.SubsystemGate.IsEnabled(_config, McpEndpoints.ArchitectureName)) return null;
-        if (!_bindings.ServerToolEnabled(ownerId, persona, "architecture")) return null;
-        var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new ArchitectureMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
-    }
-
-    // MCP-сервер Higgsfield: инстансное OAuth-подключение (единый вход админа, шарится
-    // всеми владельцами). Узел присутствует в конфиге хода только когда:
-    //   1) инстанс подключён (EnsureFresh() ≠ null) — иначе прокси некому ретранслировать
-    //   2) персона НЕ ReadOnly — RO-гейт (аналог «инстанс не подключён → узла нет»)
-    // URL — тот же Kestrel, что и websearch: /mcp/higgsfield/{sessionId}.
-    // Токен — сервисный JWT владельца (Bearer), как у websearch/dify/wsp.
-    internal HiggsfieldMcpContext? BuildHiggsfieldContext(string? ownerId, Persona? persona)
-    {
-        if (ownerId is null) return null;
-        if (_higgsfieldOAuth is null) return null;
-        // RO-гейт: ReadOnly-персона не получает higgsfield (аналог «инстанс не подключён»)
-        if (persona is { Access: PersonaAccess.ReadOnly }) return null;
-        // Инстанс подключён: EnsureFresh() ≠ null
-        if (_higgsfieldOAuth.EnsureFresh() is null) return null;
-        var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new HiggsfieldMcpContext(apiUrl, () => GetServiceToken(ownerId!), HttpEndpointUsable(apiUrl));
-    }
-
-    // MCP-сервер редактора картинок (ADR-019 §4): в любом чате владельца — проектном и личном,
-    // при загруженном модуле. Контекст собирается во ВСЕХ трёх точках
-    // (StartNewSessionAsync и обе ветки EnsureProcessCoreAsync) — иначе состав прыгает между
-    // первым ходом и перезапуском процесса (сторож в McpToolsetStabilityTests). Последнее — наличие тулсета в реестре: модуль выключен, а
-    // контекст собран — CLI получил бы сервер, отвечающий 404, и «fetch failed» у всех
-    // инструментов хода. Все условия — свойства сессии, владельца и процесса; от хода, фокуса и
-    // нитей картинок состав не зависит (McpToolsetStabilityTests).
-    internal ImageEditorMcpContext? BuildImageEditorContext(string? ownerId, Session session)
-    {
-        if (ownerId is null) return null;
-        _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
-        if (_mcpToolsets?.Find(McpEndpoints.ImageEditorName) is null) return null;
-        var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new ImageEditorMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl),
-            ImageEditor.ImageEditorAgentTools.AutoAllowTools);
-    }
-
-    // MCP-сервер модуля «Звук» (ADR-021 §5) — по тем же правилам, что image-editor: любой чат владельца,
-    // тулсет в реестре (модуль загружен), все три точки сборки контекста. От хода,
-    // фокуса, режима и нитей звука состав не зависит (McpToolsetStabilityTests).
-    internal AudioEditorMcpContext? BuildAudioEditorContext(string? ownerId, Session session)
-    {
-        if (ownerId is null) return null;
-        _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
-        if (_mcpToolsets?.Find(McpEndpoints.AudioEditorName) is null) return null;
-        var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new AudioEditorMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl),
-            AudioEditor.AudioEditorAgentTools.AutoAllowTools);
-    }
-
-    // MCP-сервер модуля «Видео» (ADR-022 §5) — те же правила, что у «Звука»: любой чат владельца,
-    // тулсет в реестре (модуль загружен), все три точки сборки контекста. От хода, фокуса и
-    // поставщика состав не зависит (McpToolsetStabilityTests).
-    internal VideoEditorMcpContext? BuildVideoEditorContext(string? ownerId, Session session)
-    {
-        if (ownerId is null) return null;
-        _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
-        if (_mcpToolsets?.Find(McpEndpoints.VideoEditorName) is null) return null;
-        var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new VideoEditorMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl),
-            VideoEditor.VideoEditorAgentTools.AutoAllowTools);
-    }
-
-    // MCP-сервер plugins (ADR-031, шаг 4.1): любой чат владельца, тулсет в реестре (подсистема
-    // plugins загружена). Ограничения (флаг plugins-build-yourself, локальный проект) — на
-    // вызове, не в составе. От хода, фокуса и черновиков состав не зависит (McpToolsetStabilityTests).
-    internal PluginsMcpContext? BuildPluginsContext(string? ownerId, Session session)
-    {
-        if (ownerId is null) return null;
-        _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
-        if (_mcpToolsets?.Find(McpEndpoints.PluginsName) is null) return null;
-        var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new PluginsMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
-    }
-
-    // MCP-сервер «Контекст чата» (ADR-023 §3.2) — любой чат владельца, тулсет в реестре, все три точки
-    // сборки контекста. От хода и
-    // содержимого контекста состав не зависит (McpToolsetStabilityTests).
-    internal TurnContextMcpContext? BuildTurnContextContext(string? ownerId, Session session)
-    {
-        if (ownerId is null) return null;
-        _mcpToolsets ??= _services?.GetService<Services.Mcp.Http.McpToolsetRegistry>();
-        if (_mcpToolsets?.Find(McpEndpoints.TurnContextName) is null) return null;
-        var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new TurnContextMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl),
-            Services.ChatContext.TurnContextAgentTools.AutoAllowTools);
-    }
-
-    // MCP-сервер локальной генерации (ComfyUI на своей GPU). Узел есть в конфиге хода, только когда:
-    //   1) включён машинный тумблер LocalMedia:Enabled и подсистема images (там живёт движок);
-    //   2) чат проекта, чьи файлы на сервере: результат пишется в папку проекта
-    //      (локальный проект ADR-016 — отказ через ProjectCapabilities);
-    //   3) персона НЕ ReadOnly — сервер пишет файлы (тот же RO-гейт, что у higgsfield).
-    // Всё это — свойства инстанса, сессии и персоны; тумблер читается живьём, но его поворот
-    // штатно меняет сигнатуру запуска, как правка ключа у websearch. Гейты тулсета на вызове
-    // повторяют проверки (defense-in-depth).
-    internal LocalMediaMcpContext? BuildLocalMediaContext(string? ownerId, string? projectId, Persona? persona)
-    {
-        if (ownerId is null || projectId is null) return null;
-        if (!Images.LocalMedia.LocalMediaOptions.IsEnabled(_config)) return null;
-        if (!Composition.SubsystemGate.IsEnabled(_config, "images")) return null;
-        if (persona is { Access: PersonaAccess.ReadOnly }) return null;
-        if (_projects.GetById(projectId) is not { } project || !ProjectCapabilities.FilesOnServer(project)) return null;
-        var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new LocalMediaMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
-    }
-
-    // MCP-сервер прогона тестов (run_tests). Узел есть в конфиге хода, только когда:
-    //   1) включена подсистема test-runs (там живёт движок прогона);
-    //   2) чат проекта, чьи файлы на сервере (локальный проект ADR-016 в v1 не поддерживаем:
-    //      TRX и лог лежали бы на устройстве — тесты там агент гоняет Bash'ем);
-    //   3) персоне не запрещён Bash (ReadOnly или Custom без Bash): прогон исполняет код
-    //      проекта и пишет bin/obj и .cc-attachments — это тот же запуск кода, что и Bash.
-    // Всё это — свойства сессии, персоны и процесса, не хода. Тулсет на вызове повторяет проверки.
-    internal TestsMcpContext? BuildTestsContext(string? ownerId, string? projectId, Persona? persona)
-    {
-        if (ownerId is null || projectId is null) return null;
-        if (!Composition.SubsystemGate.IsEnabled(_config, TestRuns.TestRunsSubsystem.SubsystemKey)) return null;
-        if (!PersonaAccessPolicy.AllowsBash(persona)) return null;
-        if (_projects.GetById(projectId) is not { } project || !ProjectCapabilities.FilesOnServer(project)) return null;
-        var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new TestsMcpContext(apiUrl, () => GetServiceToken(ownerId), HttpEndpointUsable(apiUrl));
-    }
-
-    // Допускает ли АДРЕС бэкенда http-транспорт (ADR-012) — СХЕМА и форма строки, без
-    // рубильника. Не http — значит https: боевой серт выписан на внешний домен, CLI упрётся
-    // в ERR_TLS_CERT_ALTNAME_INVALID и спрячет инструмент от модели МОЛЧА, а *.naychenko.me
-    // ещё и редиректится на https в пайплайне. В этом случае ход объявляет прежний
-    // stdio-сервер, а причина уходит в лог: тихо терять инструмент нельзя. Схема — свойство
-    // адреса контекста и в жизни адаптера не меняется; рубильник Mcp:HttpTransport сюда НЕ
-    // входит — он живой, читается провайдером на каждый ход (HttpMcpEnabledProvider).
-    private string? _httpMcpWarnedFor;
-    private bool HttpEndpointUsable(string apiUrl)
-    {
-        var http = Services.Mcp.Http.McpHttpTransport.Usable(apiUrl, enabled: true);
-        // Предупреждаем один раз на адрес: состояние постоянное, ход идёт каждую минуту.
-        // Узнаёт и хозяин выключенного рубильника: включённый транспорт этот адрес всё равно
-        // не поднимет — инстанс останется на stdio.
-        if (!http && Interlocked.Exchange(ref _httpMcpWarnedFor, apiUrl) != apiUrl)
-            _log.LogWarning("MCP-over-HTTP невозможен: адрес бэкенда «{Url}» не http — "
-                + "продуктовые серверы объявляются ходу по-старому, через stdio", apiUrl);
-        return http;
-    }
-
-    // Живое значение рубильника Mcp:HttpTransport для провайдера контекста: IConfiguration
-    // перечитывается (appsettings.Local.json подключён с reloadOnChange), поэтому поворот
-    // ключа доезжает до уже поднятых чатов следующим ходом — без рестарта бэкенда.
-    private bool HttpMcpEnabled() =>
-        _config.GetValue(Services.Mcp.Http.McpHttpTransport.EnabledKey, true);
-
-    // Сводный признак «у сессии есть продуктовые MCP-серверы, чей адрес допускает http»
-    // (ADR-012): от него (вместе с живым рубильником) зависит NO_PROXY хода — обход прокси
-    // нужен ЛЮБОМУ http-серверу, а не только виджетам. Решение стоит на едином гейте
-    // HttpEndpointUsable (каждый Build*Context уже прогнал через него свой UseHttp) —
-    // отдельного условия «виджеты на http» больше нет; во волне 2 к widgets/memory
-    // добавились tasks/notes/personas, в волне 3 — wsp/notifications/codegraph, в волне 4 —
-    // dify. pmem-консультанты приезжают списком на каждый ход и уточняют признак на стороне
-    // ClaudeSession.
+    private bool HttpMcpEnabled() => _builtin.HttpMcpEnabled();
     private static bool HttpMcpActive(WidgetsMcpContext? widgets, MemoryMcpContext? memory,
         TasksMcpContext? tasks = null, NotesMcpContext? notes = null, PersonasMcpContext? personas = null,
         WorkspaceMcpContext? workspace = null, NotificationsMcpContext? notifications = null,
@@ -1055,122 +827,23 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         AudioEditorMcpContext? audioEditor = null, VideoEditorMcpContext? videoEditor = null,
         TurnContextMcpContext? turnContext = null, TestsMcpContext? tests = null,
         PluginsMcpContext? plugins = null) =>
-        architecture is { UseHttp: true } || tests is { UseHttp: true }
-        || widgets is { UseHttp: true } || memory is { UseHttp: true }
-        || tasks is { UseHttp: true } || notes is { UseHttp: true } || personas is { UseHttp: true }
-        || workspace is { UseHttp: true } || notifications is { UseHttp: true }
-        || codeGraph is { UseHttp: true } || dify is { UseHttp: true }
-        || watch is { UseHttp: true } || webSearch is { UseHttp: true }
-        || higgsfield is { UseHttp: true } || imageEditor is { UseHttp: true }
-        || localMedia is { UseHttp: true } || audioEditor is { UseHttp: true }
-        || videoEditor is { UseHttp: true } || plugins is { UseHttp: true }
-        || turnContext is { UseHttp: true };
+        Sessions.BuiltinMcpContexts.HttpMcpActive(widgets, memory, tasks, notes, personas, workspace,
+            notifications, codeGraph, dify, watch, webSearch, higgsfield, imageEditor, localMedia,
+            architecture, audioEditor, videoEditor, turnContext, tests, plugins);
 
-    // Браузер (плагин playwright): нужен по роли тестировщику, остальным персонам — нет.
-    // Ключ-надстройка «browser» с дефолтом по пресету (SectionEnabled → SpecialtySections),
-    // как git/kb; чат без персоны получает браузер как раньше — ручную проверку страницы
-    // человек делает из своего чата. Решение зависит только от персоны, поэтому постоянно
-    // в рамках сессии (оно входит в сигнатуру прогона — см. ClaudeRuntimeSettings).
+    private bool BrowserEnabled(string? ownerId, Persona? persona) => _builtin.BrowserEnabled(ownerId, persona);
+    private bool HandsFor(string? projectId) => _builtin.HandsFor(projectId);
+    private bool ServerContentFor(string? projectId) => _builtin.ServerContentFor(projectId);
+    private string? LlmGatewayApiUrlFor(Session info, string? ownerId) => _builtin.LlmGatewayApiUrlFor(info, ownerId);
+
     // Единственное место чтения Llm:SystemPromptViaFile (нет ключа = файл включён)
     private bool SystemPromptViaFile =>
         !bool.TryParse(_config["Llm:SystemPromptViaFile"], out var viaFile) || viaFile;
 
-    private bool BrowserEnabled(string? ownerId, Persona? persona) =>
-        persona is null || _bindings.SectionEnabled(ownerId, persona, "browser");
-
-
-    // Контекст MCP-сервера баз знаний Dify (ADR-012, волна 4 — последний продуктовый
-    // сервер фазы 2). Подключается при настроенной секции Dify (ApiUrl/ApiKey — источник
-    // правды ключа с волны 4: внешний dify-узел базового конфига им перекрывается).
-    // Проект/дефолтный датасет в контекст не входят: тулсет резолвит их живьём из
-    // сессии-вызывателя (датасет появляется у проекта в середине жизни чата).
-    // DifyUrl/DifyKey — только stdio-ветке отката (env узла mcp-dify/dist).
-    private DifyMcpContext? BuildDifyContext(string? ownerId)
-    {
-        if (ownerId is null) return null;
-        if (string.IsNullOrEmpty(_dify.ApiUrl) || string.IsNullOrEmpty(_dify.ApiKey)) return null;
-        var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new DifyMcpContext(apiUrl, _dify.ApiUrl.TrimEnd('/'), _dify.ApiKey,
-            () => GetServiceToken(ownerId), UseHttp: HttpEndpointUsable(apiUrl));
-    }
-
-    // Руки локального проекта (ADR-016 §7) — свойство чата, а не хода: матрица
-    // ProjectCapabilities.HandsRefusal (локальный проект, hands у устройства,
-    // тумблер проекта). Провайдер хода не сужает ни руки, ни фолбэк (решение владельца
-    // 2026-09-27): снимки окон отсекает зрение провайдера в ClaudeSession.
-    // Канал устройства резолвится лениво: прямая зависимость замкнула бы граф синглтонов.
-    private bool HandsFor(string? projectId)
-    {
-        if (projectId is null || _projects.GetById(projectId) is not { OwnerId: { } ownerId } project) return false;
-        var device = ProjectCapabilities.IsDeviceBound(project)
-            ? _services?.GetService<Execution.IDeviceExecChannel>()?.GetStatus(ownerId, project.DeviceId!)
-            : null;
-        var refusal = ProjectCapabilities.HandsRefusal(project, device, project.HandsEnabled);
-        return refusal is null;
-    }
-
-    // Работает ли у проекта чата группа «нужен контент на сервере» (ADR-016 §4). Чат вне
-    // проекта — да: его папка серверная
-    private bool ServerContentFor(string? projectId) =>
-        projectId is null || _projects.GetById(projectId) is not { } p || ProjectCapabilities.ServerContentEnabled(p);
 
     // Лежит ли транскрипт CLI чата на диске сервера (ADR-016). Тело переехало в CliRoute
     // (S3-2): оно нужно поиску, копированию и удалению транскрипта — это маршрут.
     private bool TranscriptOnServer(Session info) => _route.TranscriptOnServer(info);
-
-    // Адрес шлюза LLM для серверного процесса CLI (ADR-016 §2, серверный ход провайдера с
-    // NormalizeToolInputArrays) — тот же, что у MCP-серверов хода, у песочницы это мост хоста.
-    // У чата проекта, привязанного к устройству, — null: CLI там живёт на устройстве, и шлюз
-    // ходу ставит раннер устройства.
-    private string? LlmGatewayApiUrlFor(Session info, string? ownerId) =>
-        info.ProjectId is not null && _projects.GetById(info.ProjectId) is { } p && ProjectCapabilities.IsDeviceBound(p)
-            ? null
-            : ResolveTasksApiUrl(ownerId);
-
-    // Контекст MCP-сервера графа кода: инструменты codegraph_* доступны только в чате проекта —
-    // граф ключуется проектом (в чате вне проекта искать нечего). Тот же сервисный токен
-    // владельца, что у tasks/notes; владение проектом дополнительно проверяет CodeGraphController.
-    // rootPath — рабочее дерево сессии (EffectiveRoot): у чата с отдельным worktree свой граф,
-    // иначе инструменты смотрели бы в основное дерево, а правки шли в другое (ADR-003).
-    // Персона может выключить граф Off-привязкой tool:codegraph — тогда нет ни сервера,
-    // ни slice в промпте (CodeGraphContributor).
-    private CodeGraphMcpContext? BuildCodeGraphContext(string? ownerId, string? projectId, string sessionId,
-        string? rootPath, Persona? persona)
-    {
-        if (ownerId is null || string.IsNullOrEmpty(projectId)) return null;
-        // CodeGraph — группа «контент на сервере»: у локального проекта инструмента нет
-        if (!ServerContentFor(projectId)) return null;
-        if (!_bindings.ServerToolEnabled(ownerId, persona, "codegraph")) return null;
-        var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new CodeGraphMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId, sessionId, rootPath,
-            UseHttp: HttpEndpointUsable(apiUrl));
-    }
-
-    // Контекст MCP-сервера памяти персоны (та же фабрика сервисного токена, что у tasks/notes).
-    // projectId — проект ТЕКУЩЕГО чата (③-3.4: даёт доступ к team_memory_* команды), не scope
-    // персоны — см. BuildPersonaLayer: любая персона в проектном чате получает эти инструменты,
-    // пишет ли она в команду реально — решает бэкенд-гейт (TeamMemoryService.WriteDeniedFor).
-    // DossierToolsEnabled — секция dossier_lookup/dossier_get (этап 2, ADR-004 §5): включена
-    // всегда (флаг change-dossiers-recall снят). Входит в отпечаток состава сервера (shapes
-    // memory) — от СВОЙСТВ ХОДА состав tools/list не зависит (инвариант McpToolsetStabilityTests).
-    // UseHttp — сервер памяти переехал в Kestrel (ADR-012, фаза 2): ход зовёт его по http
-    // (personaId/projectId едут хвостом URL), процесса node нет; false — откат на stdio.
-    private MemoryMcpContext BuildMemoryContext(string ownerId, string personaId, string? projectId)
-    {
-        var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new MemoryMcpContext(apiUrl, () => GetServiceToken(ownerId), personaId, projectId,
-            DossierToolsEnabled: true,
-            UseHttp: HttpEndpointUsable(apiUrl),
-            SphereToolsEnabled: _flags.IsEnabled(ownerId, FeatureFlagKeys.Spheres));
-    }
-
-    // Контекст memory-server для проектной сессии БЕЗ персоны: только team_memory_* (③-3.4) —
-    // память проекта доступна из ЛЮБОГО чата проекта, не только персонного (personaId пуст →
-    // personal-инструменты memory_* не регистрируются, см. mcp/memory-server/index.js).
-    private MemoryMcpContext? BuildTeamMemoryContext(string? ownerId, string? projectId) =>
-        ownerId is not null && !string.IsNullOrEmpty(projectId)
-            ? BuildMemoryContext(ownerId, "", projectId)
-            : null;
 
     // --- Персистентность сессий ---
 
@@ -1523,154 +1196,6 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
 
     // Рабочая папка ГЛАЗАМИ CLI (для container-пользователя — контейнерный путь).
     internal string CwdForOwner(string? ownerId, string hostCwd) => _route.CwdForOwner(ownerId, hostCwd);
-
-    // Подписчики шины событий хода (ADR-013, этап 1): вместо прямых полей sinks в
-// LlmSessionContext каждый наблюдатель подписан на событие своего типа. Контракт тот же
-// (запись в стор + side-effects на сессии), но заводится ОДИН раз на инстанс SessionManager
-// — без привязки к конкретной сессии, потому что id сессии едет В СОБЫТИИ (TurnContext).
-//
-// Состав:
-//
-//   PromptAssembled     → PromptSnapshotStore (запись черновика / дозапись tools/mcp)
-//                         + McpStatusStore (статусы MCP из system/init, попутно с AttachCliLayer).
-//   SubagentRunCompleted → SubagentRunLog (запись паспорта) + side-effects на сессии
-//                         (TruncatedSubagent/TruncatedBgNote, сброс счётчика добиваний).
-//
-//   TurnCompleted       → TurnRunLog (запись паспорта хода; в finally фолбэк-цикла больше
-//                         НЕТ прямого вызова Record — это и есть тот самый «ровно один
-//                         источник», который задача фиксирует как инвариант).
-
-// Приёмник паспортов сабагента через шину: сюда стекается тестовый код через рефлексию
-// (раньше этим путём ходил настоящий sink для ватчера сабагентов; сейчас ватчер публикует
-// subagent/completed сам, а этот метод — синхронный мост через шину для unit-тестов,
-// которые проверяют side-effects на сессии непосредственно после emit). Синхронный мост
-// здесь ОК: подписчик шины пишет в стор и взводит флаги, оба эти действия идемпотентны
-// и не могут зациклиться. null — шины нет (тесты без SessionManager), ватчер сам бы
-// отказался публиковать.
-internal Action<Llm.SubagentRunPassport>? SubagentRunSinkFor(string sessionId)
-{
-    return passport =>
-    {
-        // Синхронный мост: тесты берут делегат через рефлексию и зовут его из тестового
-        // метода, который потом немедленно проверяет side-effects на entry. В проде никто
-        // этим методом не пользуется — ватчер публикует subagent/completed в свой ITurnEventBus.
-        TurnEvents.PublishAsync(new SubagentRunCompleted(
-            Turn: new TurnContext(SessionId: sessionId, OwnerId: null, TurnSeq: 0,
-                AgentDepth: 0, ProjectId: null),
-            Passport: passport)).GetAwaiter().GetResult();
-    };
-}
-
-// Ошибочные ветки возвращают Task.CompletedTask: подписчик Notification не должен
-//   TurnCompleted       → TurnRunLog (запись паспорта хода; в finally фолбэк-цикла больше
-//                         НЕТ прямого вызова Record — это и есть тот самый «ровно один
-//                         источник», который задача фиксирует как инвариант).
-
-private Task HandlePromptAssembled(PromptAssembled e)
-{
-    var snap = e.Snapshot;
-    if (snap is null) return Task.CompletedTask; // событие не наш — большинство подписчиков его не носят
-    switch (snap.Phase)
-    {
-        case PromptSnapshotPhase.Draft:
-            if (_promptSnapshots is null || snap.Draft is null) return Task.CompletedTask;
-            // ЧЕРНОВИК идёт в стор с id, который ClaudeSession уже сгенерировал и положил
-            // в payload — тот же id едет в UI-кнопку «какой промпт ушёл» через _onMessage.
-            // Счётчик общий с PromptSnapshotStore.NewPublicId, и без записи в стор id
-            // всё равно бесполезен.
-            SafePromptSnapshotDraft(e.Turn.SessionId, snap.SnapshotId, snap.Draft);
-            break;
-        case PromptSnapshotPhase.Tools:
-            if ((_promptSnapshots is null && _mcpStatus is null) || snap.SnapshotId is null) return Task.CompletedTask;
-            SafePromptSnapshotAttach(e.Turn.SessionId, snap.SnapshotId,
-                snap.ToolNames ?? [], snap.McpServers ?? []);
-            break;
-    }
-    return Task.CompletedTask;
-}
-
-// Все ошибочные ветки возвращают Task.CompletedTask: подписчик Notification не должен
-// бросать наружу — шина гасит исключения, но мы и сами не плодим трейс ради диагностики.
-private void SafePromptSnapshotDraft(string sessionId, string? snapshotId, PromptSnapshotDraft draft)
-{
-    if (snapshotId is null) { _promptSnapshots?.Save(sessionId, draft); return; }
-    try { _promptSnapshots?.Save(sessionId, snapshotId, draft); }
-    catch (Exception ex) { Console.Error.WriteLine($"[SessionManager] Снимок промпта не записан: {ex.Message}"); }
-}
-
-private void SafePromptSnapshotAttach(string sessionId, string snapshotId,
-    IReadOnlyList<string> tools, IReadOnlyList<McpServerInfo> servers)
-{
-    try
-    {
-        _promptSnapshots?.AttachCliLayer(sessionId, snapshotId, tools, servers);
-        if (_mcpStatus is null || servers.Count == 0) return;
-        if (_sessions.TryGetValue(sessionId, out var entry)
-            && ResolveOwnerId(entry.Info) is { } ownerId)
-            _mcpStatus.RecordFromInit(ownerId, sessionId, servers);
-    }
-    catch (Exception ex)
-    {
-        Console.Error.WriteLine($"[SessionManager] Дозапись снимка промпта не удалась: {ex.Message}");
-    }
-}
-
-private Task HandleSubagentRunCompleted(SubagentRunCompleted e)
-{
-    var sessionId = e.Turn.SessionId;
-    var passport = e.Passport;
-    if (_subagentRuns is not null) _subagentRuns.Record(passport);
-    if (!_sessions.TryGetValue(sessionId, out var entry)) return Task.CompletedTask;
-    if (passport.Truncated && passport.FinishedBy != "interrupted")
-    {
-        entry.TruncatedSubagent = passport;
-        // Фоновый агент: продукт ТОЛЬКО ЧТО объявил его результат готовым посреди хода
-        // координатора (bg_agent_done), и координатор принял обрывок последней реплики
-        // за итог. Ждать result здесь нельзя: ход координатора не заканчивается, а сам
-        // фоновый агент часто дозавершается уже ПОСЛЕ конца хода — тогда отметку не
-        // разбирает никто и чат стоит до сообщения человека (ровно то, что видно в логе:
-        // у исполнителей задач добивание срабатывало, в обычном чате — ни разу).
-        if (passport.FinishedInBackground) NoteTruncatedBgAgent(sessionId, entry, passport);
-    }
-    else
-    {
-        // Опровержение обрыва: сигнал bg_agent_done обгоняет дозапись финального отчёта
-        // в транскрипт, и пометка могла взвеститься по хвосту tool_use агента, который
-        // на деле дописал end_turn. Штатный отчёт гасит ТОЛЬКО СВОЮ пометку — иначе
-        // в чат уходит ложная директива добивания давно завершившегося агента, а чужая
-        // пометка (другой AgentId) ждёт отчёта своего агента.
-        if (RefutesTruncation(entry.TruncatedSubagent?.AgentId, passport.AgentId))
-            entry.TruncatedSubagent = null;
-        if (RefutesTruncation(entry.TruncatedBgNote?.AgentId, passport.AgentId))
-            entry.TruncatedBgNote = null;
-        // Агент, доложившийся штатно, снимает счётчик добиваний: потолок в две попытки —
-        // на серию подряд, а не на всю жизнь чата. Но снимает ТОЛЬКО СВОЙ счётчик: в ходе
-        // работают несколько агентов, и штатный отчёт соседа не значит, что оборвавшегося
-        // добили — иначе потолок не достигается никогда (добивание уходит с attempt=1 по кругу).
-        if (ResetsNudgeSeries(entry.NudgeAgentId, passport.AgentId))
-        {
-            entry.SubagentNudges = 0;
-            entry.NudgeAgentId = null;
-        }
-    }
-    return Task.CompletedTask;
-}
-
-private Task HandleTurnCompleted(TurnCompleted e)
-{
-    // Запись TurnRunLog — РОВНО ОДИН источник (CLAUDE.md, раздел LLM-провайдеры). До
-    // переезда на шину источником был finally-блок FallbackLlmSessionAdapter; теперь
-    // подписчик здесь, а finally публикует событие. Подписчик шины не должен бросать,
-    // но try всё равно — запись НЕ бросает даже при сбое файла (см. TurnRunLog), try тут
-    // для понятного журнала, если в сторе что-то поломается.
-    if (e.Passport is null) return Task.CompletedTask;
-    try { _turnRuns?.Record(e.Passport); }
-    catch (Exception ex)
-    {
-        Console.Error.WriteLine($"[SessionManager] Паспорт хода не записан ({e.Turn.SessionId}): {ex.Message}");
-    }
-    return Task.CompletedTask;
-}
 
 // Этап 4 / шаг 1в (боевой с 1в, идейно с 1б): подписчик turn/completed для штаба.
 // Замещает прямой вызов HandleTeamTurnEndAsync из OnMessageAsync: изымает план
@@ -2549,9 +2074,40 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Живая персона чата для цепочки фолбэка (ClaudeSession.EffectiveTurnChain →
     // ResolveChain с матрицами персоны): перечитывается на каждый ход — правка матриц
     // персоны/специальности применяется со следующего хода без пересоздания адаптера.
-    // null — у чата нет персоны (или владельца).
+    // --- Тонкие обёртки слоя персоны (S3-4) ---
+    // Тела ушли в Services/Sessions/PersonaLayerBuilder.cs; сигнатуры фасада прежние:
+    // на них сидят точки сборки контекста здесь и внешние потребители (PersonasToolset,
+    // ProjectsController). BuildPersonaLayer остаётся здесь: это точка сборки слоя
+    // в контексте хода, а не правило персоны.
     private Func<Persona?> BuildPersonaProvider(Session session, string? ownerId) =>
-        () => session.PersonaId is { } pid && ownerId is not null ? _personas.Get(pid, ownerId) : null;
+        _persona.BuildPersonaProvider(session, ownerId);
+    private Func<string, Task<string?>>? BuildBindingsProvider(string? ownerId, string? personaId,
+        IReadOnlyList<string>? mountedSections) =>
+        _persona.BuildBindingsProvider(ownerId, personaId, mountedSections);
+    public void InvalidateHandsSessions(string ownerId, string? projectId) =>
+        _persona.InvalidateHandsSessions(ownerId, projectId);
+    private void InvalidatePersonaSessions(string personaId) => _persona.InvalidatePersonaSessions(personaId);
+    private List<Persona> ResolveOtherPersonas(string ownerId, string? projectId, Session session, Persona? persona = null) =>
+        _persona.ResolveOtherPersonas(ownerId, projectId, session, persona);
+    private (List<Persona> Subagents, List<Persona> ViaAsk) SplitConsultants(
+        string ownerId, Session session, List<Persona> personas) =>
+        _persona.SplitConsultants(ownerId, session, personas);
+    internal bool ConsultantsEnabled(string? ownerId, Session session, Persona? persona) =>
+        _persona.ConsultantsEnabled(ownerId, session, persona);
+    internal bool PersonasEnabled(string? ownerId, Session session, Persona? persona) =>
+        _persona.PersonasEnabled(ownerId, session, persona);
+    internal bool MentionsToolsEnabled(string? ownerId, Session session, Persona? persona) =>
+        _persona.MentionsToolsEnabled(ownerId, session, persona);
+    private Func<PersonaAgentsContext?>? BuildPersonaAgentsProvider(string? ownerId, Session session, Persona? persona) =>
+        _persona.BuildPersonaAgentsProvider(ownerId, session, persona);
+    internal string? BuildMentionsHint(string ownerId, Session session, List<Persona> others) =>
+        _persona.BuildMentionsHint(ownerId, session, others);
+    private void AppendPersonaLines(System.Text.StringBuilder sb, List<Persona> personas, string? currentProjectId) =>
+        _persona.AppendPersonaLines(sb, personas, currentProjectId);
+    private PersonasMcpContext? BuildPersonasContext(string? ownerId, string? projectId, Session session, Persona? persona = null) =>
+        _persona.BuildPersonasContext(ownerId, projectId, session, persona);
+    private IReadOnlyList<string>? BuildExtraDisallowed(string? ownerId, Persona? persona, Session session) =>
+        _persona.BuildExtraDisallowed(ownerId, persona, session);
 
     // Персона-слой сессии: контекст памяти (для долгой памяти персоны/команды) + сама персона
     // для гейтов возможностей. Промпт характера + групповая надстройка + онбординг-оверлей —
@@ -2574,631 +2130,34 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return (BuildMemoryContext(ownerId, persona.Id, session.ProjectId), persona);
     }
 
-    // Провайдер блока «Привязанные знания и правила» персоны (флаг persona-bindings):
-    // на каждый ход перечитывает персону (привязки могли измениться) и собирает
-    // индекс + always-выжимки. mountedSections — секции workspace, реально смонтированные
-    // этой сессии (типы без своей секции в индекс не попадают). Ошибки → null (ход без блока).
-    private Func<string, Task<string?>>? BuildBindingsProvider(string? ownerId, string? personaId,
-        IReadOnlyList<string>? mountedSections)
-    {
-        if (ownerId is null || personaId is null) return null;
-        var sections = mountedSections ?? [];
-        return async text =>
-        {
-            try { return await _bindings.BuildTurnBlockAsync(ownerId, personaId, text, sections); }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "Блок привязок персоны {Persona}", personaId);
-                return null;
-            }
-        };
-    }
-
-    // Руки — свойство чата (LlmSessionContext.HandsEnabled): тумблер проекта или список
-    // провайдеров владельца поменялся — адаптеры его живых чатов пересоздаются при следующем
-    // сообщении. Уборка ленивая, как у персоны: активный ход и доживающих агентов не рвём.
-    // projectId null — все проектные чаты владельца (правка списка провайдеров).
-    public void InvalidateHandsSessions(string ownerId, string? projectId)
-    {
-        foreach (var entry in _sessions.Values.Where(e => e.Info.ProjectId is not null
-                     && (projectId is null ? ResolveOwnerId(e.Info) == ownerId : e.Info.ProjectId == projectId)))
-            if (entry.Process is not null) entry.AdapterStale = true;
-    }
-
-    // Сброс адаптеров живых сессий персоны (изменился профиль/возможности/привязки):
-    // процесс пересоздаётся при следующем сообщении с актуальным контекстом,
-    // транскрипт продолжается через --resume (паттерн SetPersona)
-    private void InvalidatePersonaSessions(string personaId)
-    {
-        foreach (var entry in _sessions.Values.Where(e => e.Info.PersonaId == personaId))
-            // Ленивая уборка (см. SwitchSpeaker): не рвём активный ход и доживающих агентов
-            if (entry.Process is not null) entry.AdapterStale = true;
-    }
-
-    // Кандидаты на консультацию: участники группового чата либо доступные в контексте
-    // персоны (глобальные + текущего проекта) + кросс-проектные ProjectPersonas-привязки
-    // персоны САМОГО ЧАТА (persona) — команда/точечные персоны другого проекта; без персоны
-    // самого чата. В групповом чате extra-персоны тоже примешиваются: остаются
-    // консультантами через persona_ask (в MentionsHint, не участники/спикеры).
-    private List<Persona> ResolveOtherPersonas(string ownerId, string? projectId, Session session, Persona? persona = null)
-    {
-        var isGroup = session.Participants is { Count: > 1 };
-        var result = (isGroup
-                ? session.Participants!.Select(id => _personas.Get(id, ownerId)).OfType<Persona>()
-                : _personas.GetForContext(ownerId, projectId))
-            .Where(p => p.Id != session.PersonaId)
-            .ToList();
-
-        if (persona is not null)
-        {
-            var seen = result.Select(p => p.Id).ToHashSet(StringComparer.Ordinal);
-            foreach (var (extProjectId, extPersonaId) in _bindings.BuildExternalPersonaScopes(ownerId, persona))
-            {
-                IEnumerable<Persona> toAdd;
-                if (extPersonaId is not null)
-                    toAdd = _personas.Get(extPersonaId, ownerId) is { } single
-                        ? new[] { single } : Array.Empty<Persona>();
-                else
-                    toAdd = _personas.GetByOwner(ownerId).Where(p =>
-                        PersonaZone.IsProjectTeam(p, extProjectId));
-                foreach (var p in toAdd)
-                {
-                    if (p.Id == session.PersonaId || !seen.Add(p.Id)) continue;
-                    result.Add(p);
-                }
-            }
-        }
-        return result;
-    }
-
-    // Разделение персон по способу консультации: с файлом сабагента — через встроенный
-    // Task; остальные (зарезервированный handle, за капом файлов) — через persona_ask.
-    // Провайдер модели персоны роли НЕ играет: файлы сабагентов пинят максимум алиас-тир
-    // Claude (opus/sonnet/haiku, см. PersonaAgentFileSync.ModelAliasFor) — он резолвится
-    // у любого провайдера, кросс-провайдерная персона остаётся запускаемой.
-    private (List<Persona> Subagents, List<Persona> ViaAsk) SplitConsultants(
-        string ownerId, Session session, List<Persona> personas)
-    {
-        if (_agentSync is null)
-            return ([], personas);
-        var eligible = _agentSync.EligiblePersonas(ownerId).Select(p => p.Id)
-            .ToHashSet(StringComparer.Ordinal);
-        var subagents = new List<Persona>();
-        var viaAsk = new List<Persona>();
-        foreach (var p in personas)
-        {
-            // Файл сабагента персоны физически лежит в ЭТОМ проекте (Project-персона своего
-            // проекта) либо во всех проектах (Global) — см. PersonaAgentFileSync. Персона
-            // чужого проекта (видна здесь только через ProjectPersonas-привязку) файла тут не
-            // имеет — Task(agentType=handle) её не найдёт, консультация только через persona_ask.
-            var reachable = p.Scope == PersonaScope.Global || p.ProjectId == session.ProjectId;
-            if (reachable && eligible.Contains(p.Id) && !PersonaAgentFileSync.IsReserved(p.Handle))
-                subagents.Add(p);
-            else
-                viaAsk.Add(p);
-        }
-        return (subagents, viaAsk);
-    }
-
-    // Решение «даём ли персоне консультантов» (сабагенты .md + их pmem-серверы + подсказка
-    // с persona_ask): ключ tool:consultants. В ГРУППОВОМ чате ключ ИГНОРИРУЕТСЯ — спикер
-    // обязан уметь спросить коллег по чату (BuildGroupChatHint прямо отсылает к этому блоку),
-    // иначе групповой чат ломается по замыслу. Решение зависит только от персоны и состава
-    // чата — детерминировано на сессию, состав tools/list от хода не зависит.
-    // internal: ту же формулу резолвит PersonasToolset по живой сессии-вызывателю (http,
-    // ADR-012 волна 2) — право на сервер проверяется на каждый tools/list и tools/call,
-    // а не только при построении контекста адаптера
-    internal bool ConsultantsEnabled(string? ownerId, Session session, Persona? persona) =>
-        session.Participants is { Count: > 1 }
-        || _bindings.ServerToolEnabled(ownerId, persona, "consultants");
-
-    // Решение «даём ли персоне сервер персон» (CRUD + persona_ask): ключ tool:personas.
-    // В ГРУППОВОМ чате ключ ИГНОРИРУЕТСЯ по той же причине, что и tool:consultants —
-    // BuildGroupChatHint безусловно отсылает к блоку о консультациях (MentionsHint из
-    // этого же сервера), Off-привязка сняла бы сервер и подсказка стала бы враньём.
-    // internal — по той же причине, что ConsultantsEnabled: PersonasToolset проверяет
-    // право на сервер персон по живой сессии на каждый вызов (http, ADR-012 волна 2)
-    internal bool PersonasEnabled(string? ownerId, Session session, Persona? persona) =>
-        session.Participants is { Count: > 1 }
-        || _bindings.ServerToolEnabled(ownerId, persona, "personas");
-
-    // Решение «в составе ли mentions-группа (persona_ask)» — ЕДИНАЯ формула для tools/list
-    // тулсета (живой резолв по сессии-вызывателю) и отпечатка сигнатуры запуска CLI (shape
-    // через PersonasMcpContext.MentionsToolsEnabled). Две формулы расходились при единственной
-    // персоне владельца: MentionsHint обнулялся (спрашивать некого), а инструмент оставался —
-    // shape говорил m0, tools/list отдавал persona_ask, и любой из переходов бил по запуску
-    // (блокер приёмки волны 2.1). НЕ «MentionsHint != null»: подсказка — про текст промпта,
-    // инструмент — про состав, у них разные условия.
-    internal bool MentionsToolsEnabled(string? ownerId, Session session, Persona? persona) =>
-        PersonasEnabled(ownerId, session, persona) && ConsultantsEnabled(ownerId, session, persona);
-
-    // План файловых сабагентов-персон на ход: папки для --add-dir + pmem-серверы памяти
-    // видимых персон. Замыкание вычисляется на каждый ход (актуальные персоны и модель
-    // сессии); внутри — троттлёный reconcile файлов. Ошибки → null (ход идёт без
-    // консультантов, persona_ask остаётся).
-    private Func<PersonaAgentsContext?>? BuildPersonaAgentsProvider(string? ownerId, Session session, Persona? persona)
-    {
-        if (ownerId is null || _agentSync is null) return null;
-        // Off-привязка tool:consultants убирает и pmem-серверы, и --add-dir с .md-агентами
-        // (подсказка про Workflow отпадает следом — она условна от AgentHandles)
-        if (!ConsultantsEnabled(ownerId, session, persona)) return null;
-        return () =>
-        {
-            try
-            {
-                var projectId = session.ProjectId;
-                var addDirs = _agentSync.GetAddDirs(ownerId, session.Model, projectId);
-                // pmem — для ВСЕХ видимых персон с памятью (включая персону самого чата):
-                // файлы в add-dir видны все, а Task(agentType=handle) может позвать любую.
-                // С stdio объявление стоило процессом node на каждого консультанта (CLI
-                // поднимает все stdio-серверы конфига на старте, alwaysLoad на это не
-                // влияет — см. docs/architecture/mcp-servers.md); на http-транспорте
-                // (ADR-012, фаза 2) все pmem_* живут в Kestrel одним тулсетом — процессов
-                // нет, сколько бы персон ни было смонтировано. Сузишь список — сузишь и
-                // круг персон, которых можно позвать сабагентом.
-                var (subagents, _) = SplitConsultants(ownerId, session,
-                    _personas.GetForContext(ownerId, projectId).ToList());
-                var apiUrl = ResolveTasksApiUrl(ownerId);
-                var tokenFactory = () => GetServiceToken(ownerId);
-                var useHttp = HttpEndpointUsable(apiUrl);
-                // ProjectId консультанта — проект ТЕКУЩЕГО чата (как у BuildPersonaLayer выше), не
-                // scope самого консультанта: приглашённая в проектный workflow глобальная персона
-                // тоже должна видеть team_memory_list/search этого проекта (read-only — пишет только
-                // персона САМОГО проекта, гейт в TeamMemoryService.WriteDeniedFor).
-                var servers = subagents
-                    .Where(p => p.MemoryEnabled)
-                    .Select(p => new ConsultantMemoryServer(
-                        PersonaConsultantToolset.PmemServerKey(p.Handle),
-                        apiUrl, tokenFactory, p.Id, projectId, useHttp))
-                    .ToList();
-                var handles = subagents.Select(p => p.Handle).Where(h => !string.IsNullOrWhiteSpace(h)).ToList()!;
-                // Определения для per-run --agents JSON: omitClaudeMd ClaudeSession дополнит
-                // по факту BareMode (свойство прогона, известное только там)
-                var agents = _agentSync.GetAgentsDefs(subagents, omitClaudeMd: false);
-                return new PersonaAgentsContext(addDirs, servers, handles, agents);
-            }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "План сабагентов-персон не собрался — ход без файловых консультантов");
-                return null;
-            }
-        };
-    }
-
-    // Блок-подсказка о консультациях: две группы — сабагенты (Task) и persona_ask
-    internal string? BuildMentionsHint(string ownerId, Session session, List<Persona> others)
-    {
-        if (others.Count == 0) return null;
-        var (subagents, viaAsk) = SplitConsultants(ownerId, session, others);
-        var sb = new System.Text.StringBuilder();
-        if (subagents.Count > 0)
-        {
-            sb.AppendLine("Персоны-консультанты доступны как сабагенты: вызывай встроенный инструмент " +
-                "Task с subagent_type=\"<handle>\" и самодостаточным вопросом в prompt — персона не видит " +
-                "этот разговор; она сама прочитает нужные файлы, заметки и свою память и ответит от " +
-                "своего лица. Не вызывай сабагента со своим собственным handle — отвечай сам. " +
-                "Инструменты mcp__pmem_* НЕ вызывай напрямую — это личная память персон-консультантов, " +
-                "она доступна только им самим; чтобы узнать, что персона помнит, спроси её через Task. " +
-                "Когда пользователь упоминает персону через @handle — обязательно обратись к ней " +
-                "и учти её ответ. В мультиагентных обсуждениях (workflow /panel-of-experts) по умолчанию " +
-                "распределяй роли панели между этими персонами: передавай их handle в args.participants " +
-                "(роли по порядку: Генератор, Критик, Адвокат, Модератор), подбирая персону под роль " +
-                "по её характеру. Доступные консультанты:");
-            AppendPersonaLines(sb, subagents, session.ProjectId);
-        }
-        if (viaAsk.Count > 0)
-        {
-            if (subagents.Count > 0)
-                sb.AppendLine("Эти персоны доступны только инструментом persona_ask (параметры: handle, " +
-                    "question, context?) — ответ придёт от их лица, с их характером и памятью:");
-            else
-                sb.AppendLine("Любую персону можно спросить инструментом persona_ask (параметры: handle, " +
-                    "question, context?) — она ответит от своего лица, со своим характером и памятью. " +
-                    "Когда пользователь упоминает персону через @handle — обязательно обратись к ней " +
-                    "через persona_ask и учти её ответ. Вопрос формулируй самодостаточно: персона не " +
-                    "видит этот разговор. Если вызов вернул «No such tool available» — сервер персон ещё " +
-                    "подключается: подожди мгновение и повтори тот же вызов. Доступные собеседники:");
-            AppendPersonaLines(sb, viaAsk, session.ProjectId);
-        }
-        return sb.ToString().TrimEnd();
-    }
-
-    // currentProjectId — ProjectId сессии: персона Project-скоупа ДРУГОГО проекта (видна здесь
-    // только через кросс-проектную ProjectPersonas-привязку) помечается «[проект «Имя»]», чтобы
-    // не путать тёзок из разных команд.
-    private void AppendPersonaLines(System.Text.StringBuilder sb, List<Persona> personas, string? currentProjectId)
-    {
-        // Персоны сферы — отдельной группой «Команда сферы»: в одном списке с проектными и
-        // глобальными их не отличить
-        var ordered = personas.Where(p => !PersonaZone.IsSpherePersona(p))
-            .Concat(personas.Where(PersonaZone.IsSpherePersona)).ToList();
-        var sphereHeaderDone = false;
-        foreach (var p in ordered)
-        {
-            if (PersonaZone.IsSpherePersona(p) && !sphereHeaderDone)
-            {
-                sphereHeaderDone = true;
-                var sphereName = p.OwnerId is not null && p.SphereId is not null
-                    ? SphereDir.SphereName(p.OwnerId, p.SphereId) : null;
-                sb.AppendLine(sphereName is null ? "Команда сферы:" : $"Команда сферы «{sphereName}»:");
-            }
-            var title = string.IsNullOrWhiteSpace(p.Role) ? p.Name : $"{p.Role} ({p.Name})";
-            sb.Append($"- @{p.Handle} — {title}");
-            if (PersonaZone.IsProjectPersona(p) && p.ProjectId != currentProjectId
-                && _projects.GetById(p.ProjectId!) is { } foreignProject)
-                sb.Append($" [проект «{foreignProject.Name}»]");
-            if (!string.IsNullOrWhiteSpace(p.Description)) sb.Append($": {p.Description.Trim()}");
-            sb.AppendLine();
-        }
-    }
-
-    // Контекст MCP-сервера персон: CRUD персон из любого чата (за флагом personas);
-    // при включённом persona-mentions и наличии других персон в контексте — плюс
-    // @упоминания: MentionsHint (блок «@handle — Роль (Имя)» для промпта) и persona_ask.
-    // В групповом чате mentions-режим (persona_ask + подсказка по УЧАСТНИКАМ) включён
-    // всегда, независимо от флага persona-mentions — иначе спикер не сможет спросить коллег.
-    // persona — для кросс-проектных ProjectPersonas-привязок (доступ к команде ДРУГОГО проекта).
-    private PersonasMcpContext? BuildPersonasContext(string? ownerId, string? projectId, Session session, Persona? persona = null)
-    {
-        if (ownerId is null) return null;
-        // Off-привязка tool:personas снимает сервер персон целиком (вместе с CRUD и persona_ask);
-        // в групповом чате исключение — см. PersonasEnabled
-        if (!PersonasEnabled(ownerId, session, persona)) return null;
-
-        var selfPersonaId = session.PersonaId;
-        // @упоминания (persona_ask + подсказка) включены всегда, кроме Off-привязки
-        // tool:consultants: без консультаций и подсказки не нужно, и persona_ask
-        // выключается вместе с ней (PERSONAS_MENTIONS собирается из MentionsHint).
-        var mentionsHint = ConsultantsEnabled(ownerId, session, persona)
-            ? BuildMentionsHint(ownerId, session, ResolveOtherPersonas(ownerId, projectId, session, persona))
-            : null;
-
-        var externalPersonaScopes = _bindings.BuildExternalPersonaScopes(ownerId, persona);
-        var extraProjectIds = externalPersonaScopes.Where(s => s.PersonaId is null)
-            .Select(s => s.ProjectId).Distinct().ToList();
-        var extraPersonaIds = externalPersonaScopes.Where(s => s.PersonaId is not null)
-            .Select(s => s.PersonaId!).Distinct().ToList();
-
-        // Модули сервера персон: manage (CRUD персон) и automation (правила проактивности) —
-        // за своими tool-ключами с дефолтом по роли (SectionEnabled → SpecialtySections).
-        // Ядро (personas_list/get, привязки, persona_ask) остаётся у всех, у кого сервер включён.
-        // Проектный онбординг (знакомство v2, п.5) форсирует manage: шаг команды зовёт
-        // personas_ai_team/personas_create, а ведёт сессию скромная личная дефолт-персона,
-        // у которой по роли этих инструментов нет. Решение — по СВОЙСТВУ сессии
-        // (OnboardingKind пишется при создании и не мутирует), не по ходу: состав tools/list
-        // стабилен. Форс не сужается состоянием PresetKey по той же причине. Работает только
-        // при включённом сервере персон: Off-привязка tool:personas снимает его целиком,
-        // и шаг команды честно проговаривается оверлеем как ограничение.
-        var manage = session.OnboardingKind == OnboardingKinds.Project
-            || _bindings.SectionEnabled(ownerId, persona, "personas-manage");
-        var automation = _bindings.SectionEnabled(ownerId, persona, "personas-automation");
-
-        var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new PersonasMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId, selfPersonaId,
-            mentionsHint, BindingsEnabled: true,
-            extraProjectIds.Count > 0 ? extraProjectIds : null,
-            extraPersonaIds.Count > 0 ? extraPersonaIds : null,
-            ManageEnabled: manage, AutomationEnabled: automation,
-            UseHttp: HttpEndpointUsable(apiUrl),
-            MentionsToolsEnabled: MentionsToolsEnabled(ownerId, session, persona));
-    }
-
-    // Контекст MCP-сервера рабочего пространства: доступ ко всем проектам владельца
-    // (за флагом workspace-tools). Секции сужаются возможностями персоны (единая точка
-    // истины — PersonaBindingsService.EffectiveToolEnabled: Tool-привязка приоритетнее
-    // Persona.Tools); search остаётся при любом непустом наборе. Секция chats — за
-    // отдельным флагом workspace-chat-send, секция destructive (безвозвратное удаление) —
-    // за флагом workspace-destructive. Все возможности выключены → сервер не подключаем.
-    // Project/ProjectPath-привязки персоны сужают зону (AllowedProjectIds) до привязанных
-    // проектов + проекта текущей сессии; БЕЗ таких привязок поведение как у Claude —
-    // все проекты владельца (null).
-    private WorkspaceMcpContext? BuildWorkspaceContext(string? ownerId, string? projectId,
-        string? selfSessionId, Persona? persona)
-    {
-        if (ownerId is null) return null;
-        var plan = BuildWorkspacePlan(ownerId, projectId, persona);
-        if (plan is null) return null;
-        var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new WorkspaceMcpContext(apiUrl, () => GetServiceToken(ownerId), projectId,
-            plan.Sections, plan.AllowedProjectIds, selfSessionId,
-            UseHttp: HttpEndpointUsable(apiUrl));
-    }
-
-    /// <summary>
-    /// План сервера рабочего пространства: секции инструментов и зона проектов.
-    /// ЕДИНАЯ формула состава (ADR-012, волна 3): её зовёт и BuildWorkspaceContext (конфиг
-    /// хода и отпечаток shapes), и WorkspaceToolset (живой tools/list по сессии из хвоста
-    /// маршрута). Состав и его отпечаток, посчитанные двумя формулами, расходятся — блокер
-    /// приёмки волны 2 у personas. null — сервер не подключается (все секции выключены).
-    /// </summary>
+    // План сервера рабочего пространства — часть контракта фасада: его читает WorkspaceToolset
+    // по живой сессии (живой tools/list) и тесты. Сам план считает ExternalMcpContexts (S3-4).
     internal sealed record WorkspaceMcpPlan(IReadOnlyList<string> Sections,
         IReadOnlyList<string>? AllowedProjectIds);
 
-    // Id-заглушка пустой зоны: ни один проект владельца под ним не живёт
-    internal const string NoProjectsZone = "__no-projects__";
+    // Id-заглушка пустой зоны: ни один проект владельца под ним не живёт. Определение —
+    // в роли (единственная точка, где зона строится), здесь — тот же идентификатор контракта.
+    internal const string NoProjectsZone = Sessions.ExternalMcpContexts.NoProjectsZone;
 
-    internal WorkspaceMcpPlan? BuildWorkspacePlan(string ownerId, string? projectId, Persona? persona)
-    {
-        var sections = new List<string>();
-        foreach (var key in new[] { "projects", "files", "knowledge" })
-            if (_bindings.EffectiveToolEnabled(ownerId, persona, key)) sections.Add(key);
-        // chats — явный Tool-ключ ИЛИ неявный opt-in через ProjectPersonas-привязки:
-        // персона, допущенная к чужому проекту, может писать в его чаты (решение —
-        // PersonaBindingsService.ChatsSectionEnabled, там же семантика).
-        var chatScopes = _bindings.BuildChatScopes(ownerId, persona);
-        var chatsEnabled = _bindings.ChatsSectionEnabled(ownerId, persona);
-        if (chatsEnabled) sections.Add("chats");
-        // Диагностика решения по chats: набор chats-инструментов обязан быть одинаковым на всех
-        // ходах персоны — по этой строке видно, из чего решение сложилось в конкретной сессии
-        if (persona is not null)
-            _log.LogDebug("Секция chats для персоны {Persona}: {Decision} (tools={Tools}, " +
-                "toolBinding={Binding}, chatScopes={Scopes})",
-                persona.Handle ?? persona.Id, chatsEnabled ? "on" : "off",
-                persona.Tools is null ? "null" : string.Join("|", persona.Tools),
-                persona.Bindings?.LastOrDefault(b => b.Type == PersonaBindingType.Tool
-                    && string.Equals(b.Target, "chats", StringComparison.OrdinalIgnoreCase))?.Mode
-                    .ToString() ?? "нет",
-                chatScopes is null ? "null" : string.Join("|", chatScopes));
-        if (sections.Count == 0) return null;
-        // Git-инструменты (read: status/diff/log; write: stage/commit — секция git_write)
-        // и базы знаний Dify владельца (kb_list/search/add_document) —
-        // надстройки над базовыми секциями files/knowledge: без базовой секции не монтируются,
-        // а внутри неё решает свой tool-ключ (git/kb) с дефолтом по роли персоны
-        // (PersonaBindingsService.SectionEnabled — пресет SpecialtySections). Раньше обе ехали
-        // с базовой секцией безусловно и стоили контекста персонам, которым не нужны.
-        // Секция git приходит двумя ступенями: пресет по роли даёт ЧТЕНИЕ истории
-        // (git_status/diff/log), запись (git_stage/git_commit) добавляет только явно
-        // включённый ключ git — исполнители коммитят через Bash, а ролям ReadOnly запись
-        // не нужна по определению (SectionOrigin, там же данные использования).
-        var gitOrigin = _bindings.SectionOrigin(ownerId, persona, "git");
-        if (sections.Contains("files") && gitOrigin != SectionSource.Off)
-        {
-            sections.Add("git");
-            if (gitOrigin == SectionSource.Explicit) sections.Add("git_write");
-        }
-        if (sections.Contains("knowledge") && _bindings.SectionEnabled(ownerId, persona, "kb"))
-            sections.Add("knowledge_bases");
-        // Разрушающие операции (files_delete/chats_delete) — за отдельным флагом
-        // workspace-destructive; персоне дополнительно нужен tool-ключ destructive
-        // (Tool-привязка или Persona.Tools). Одна destructive без базовых секций не монтируется.
-        // Профиль «Только чтение» строже любых привязок — секцию не монтируем вовсе.
-        if (_flags.IsEnabled(ownerId, FeatureFlagKeys.WorkspaceDestructive)
-            && persona?.Access != PersonaAccess.ReadOnly
-            && _bindings.EffectiveToolEnabled(ownerId, persona, "destructive"))
-            sections.Add("destructive");
-        // Выкатка прода из чата (ADR-010): секция монтируется только там, где контур реально
-        // настроен, и только владельцу-админу — REST всё равно admin-only, а держать три схемы
-        // в контексте у всех незачем. Профиль «Только чтение» её не получает: выкатка меняет
-        // прод. Все три условия постоянны в рамках сессии (конфиг машины, роль пользователя,
-        // профиль персоны), поэтому состав tools/list между ходами не мерцает.
-        if (Deploy.DeployOptions.From(_config).Enabled
-            && persona?.Access != PersonaAccess.ReadOnly
-            && string.Equals(_users.GetById(ownerId)?.Role, "admin", StringComparison.OrdinalIgnoreCase))
-            sections.Add("deploy");
-        sections.Add("search");
-
-        IReadOnlyList<string>? allowedIds = null;
-        var fileScopes = _bindings.BuildFileScopes(ownerId, persona);
-        // Персона сферы: зона — проекты сферы ∪ проекты привязок, никогда не null (иначе все проекты
-        // владельца). Проект сессии вне сферы не добавляем — чат уже отказан по OutOfZoneRefusal.
-        if (_bindings.BuildZoneScopes(persona) is { } zone)
-        {
-            var set = new HashSet<string>(zone);
-            foreach (var id in fileScopes ?? []) set.Add(id);
-            foreach (var id in chatScopes ?? []) set.Add(id);
-            // Потребители читают пустой список как «без сужения» — пустую зону гасим заглушкой
-            allowedIds = set.Count > 0 ? set.ToList() : [NoProjectsZone];
-        }
-        else if (fileScopes is { Count: > 0 } || chatScopes is { Count: > 0 })
-        {
-            // Привязки есть — зона ужимается; проект самой сессии всегда доступен
-            var set = new HashSet<string>(fileScopes ?? []);
-            if (chatScopes is { Count: > 0 })
-                foreach (var id in chatScopes) set.Add(id);
-            if (projectId is not null) set.Add(projectId);
-            allowedIds = set.ToList();
-        }
-
-        return new WorkspaceMcpPlan(sections, allowedIds);
-    }
-
-    // Контекст MCP-серверов внешних модулей (контракт §6, ТЗ R7): по каждому модулю
-    // с mcp[] в манифесте и включённым у владельца флагом module-{id} (R8) — записи
-    // серверов с адресом ЧЕРЕЗ gateway ядра и фабрикой свежего токена chan=mcp (TTL 60 мин;
-    // ход длиннее часа получит 401 на инструментах модуля — по контракту это корректно).
-    // args манифеста резолвятся от каталога модуля. null — модулей нет/все скрыты.
-    private ModulesMcpContext? BuildModulesContext(string? ownerId)
-    {
-        if (ownerId is null || _modules is null || _moduleTokens is null) return null;
-        var user = _users.GetById(ownerId);
-        if (user is null) return null;
-        var apiBase = ResolveTasksApiUrl(ownerId);
-        var servers = new List<ModuleMcpServer>();
-        foreach (var module in _modules.All)
-        {
-            if (module.Manifest.Mcp is not { Count: > 0 } mcpList) continue;
-            if (!_flags.IsEnabled(ownerId, module.FeatureFlagKey)) continue;
-            var moduleRef = module;
-            foreach (var mcp in mcpList)
-            {
-                var args = (mcp.Args ?? [])
-                    .Select(a => Path.IsPathRooted(a) ? a : Path.GetFullPath(Path.Combine(module.ModuleDir, a)))
-                    .ToList();
-                servers.Add(new ModuleMcpServer(
-                    mcp.Key, mcp.Command, args, module.Id,
-                    $"{apiBase}{module.Manifest.Backend!.RoutePrefix}",
-                    () => _moduleTokens.Issue(moduleRef, user.Id, user.DisplayName ?? user.Username, "mcp")));
-            }
-        }
-        return servers.Count > 0 ? new ModulesMcpContext(servers) : null;
-    }
-
-    // Живой состав контекста чата для подсказки хода (фича chat-context): читаем сессию из
-    // реестра на КАЖДЫЙ вызов — материал, добавленный кнопкой в идущем разговоре, обязан
-    // попасть в промпт следующего хода без пересоздания адаптера. Снимок здесь был бы
-    // тихой ложью: вкладки у человека есть, а модель о них не знает.
-    // На СОСТАВ инструментов не влияет — только на текст подсказки (гейт самого инструмента
-    // живёт в BuildWorkspaceContext и решается флагом владельца).
+    // --- Тонкие обёртки внешних серверов и модулей (S3-4) ---
+    // Тела ушли в Services/Sessions/ExternalMcpContexts.cs и ModulesMcpContexts.cs;
+    // сигнатуры фасада прежние: на них сидят точки сборки контекста хода.
+    private WorkspaceMcpContext? BuildWorkspaceContext(string? ownerId, string? projectId,
+        string? selfSessionId, Persona? persona) =>
+        _external.BuildWorkspaceContext(ownerId, projectId, selfSessionId, persona);
+    internal WorkspaceMcpPlan? BuildWorkspacePlan(string ownerId, string? projectId, Persona? persona) =>
+        _external.BuildWorkspacePlan(ownerId, projectId, persona);
+    private ModulesMcpContext? BuildModulesContext(string? ownerId) => _moduleContexts.BuildModulesContext(ownerId);
     public Func<IReadOnlyList<SessionContextEntry>> BuildChatContextProvider(string sessionId) =>
-        () => _sessions.TryGetValue(sessionId, out var entry)
-            ? entry.Info.Context
-            : [];
-
-    // Серверы личного реестра владельца в ход. Решение принимается ТОЛЬКО по
-    // owner/project/persona и вердикту рамки хода (свойство сессии/проекта, S2a-7) —
-    // состав tools/list не смеет зависеть от свойств хода
-    // (иначе сигнатура запуска мерцает и процесс CLI перезапускается со всеми MCP).
-    // Провайдер, а не готовое значение: правка реестра применяется со следующего хода
-    // без пересоздания адаптера. Секреты разворачиваются здесь и живут только во
-    // временном конфиге хода.
-    private Func<ExternalMcpContext?>? BuildExternalMcpProvider(string? ownerId, string? projectId, Persona? persona, string? sessionId)
-    {
-        if (ownerId is null || _mcpRegistry is null || _mcpSecrets is null) return null;
-        // Профиль «Только чтение»: имён инструментов чужого сервера мы не знаем, а гасить их
-        // deny-правилами нельзя — список живёт на стороне сервера и меняется, а неизвестное имя
-        // в правиле роняет запуск CLI (см. историю MultiEdit в PersonaAccessPolicy). Поэтому
-        // решение принимается ЦЕЛИКОМ по серверу: такая персона получает только записи с явным
-        // разрешением AllowReadOnlyPersonas. Свойство персоны, не хода — состав не мерцает.
-        var readOnly = persona?.Access == PersonaAccess.ReadOnly;
-        var registry = _mcpRegistry;
-        var secretStore = _mcpSecrets;
-        return () =>
-        {
-            try
-            {
-                var servers = new List<ExternalMcpServer>();
-                // Настройки проекта читаем на каждый ход — правка настроек проекта
-                // применяется со следующего хода, без пересоздания адаптера.
-                // Чат вне проекта каскад проекта пропускает.
-                var project = projectId is null ? null : _projects.GetById(projectId);
-                var onInProject = project?.McpServersOn;     // allow-модель доступа
-                var isProjectChat = projectId is not null;
-                // Рамка хода (S2a-7): тот же вердикт GetTurnFrame/ITurnFrameSource, что входит
-                // в сигнатуру запуска (ClaudeSession). Его читаем по живому состоянию
-                // сессии/проекта, а не по ходу: общий проект — Narrow любому актору включая
-                // владельца (решение 29.10), личный и внепроектный — Wide. Добавление или
-                // снятие участников меняет рамку вместе с сигнатурой — следующий ход стартует
-                // новым процессом с новым составом реестра, состав доживающего процесса
-                // при этом неизменен.
-                var frame = GetTurnFrame(sessionId, ownerId);
-                foreach (var record in registry.GetByOwner(ownerId))
-                {
-                    if (!record.Enabled) continue;
-                    // Встроенные интеграции (IntegrationKeys: dify/fal-ai/glif/higgsfield)
-                    // доставляются собственной веткой (TryAddHiggsfieldBuiltin) по рубильнику
-                    // записи и RO-гейту. Реестровый путь для них НЕ применяется: иначе у
-                    // доставки две точки истины — higgsfield, лежащий в реестре и включённый
-                    // в проекте (или выданный персоне), доедет мимо продуктовой формулы, да
-                    // ещё дублем. Сейчас записи dify/fal-ai/glif в реестре не заводятся
-                    // (живут как HTTP-узлы Kestrel), условие держим общим — защита от случайного
-                    // возврата в реестр.
-                    if (Mcp.McpRegistry.IntegrationKeys.Contains(record.Key, StringComparer.OrdinalIgnoreCase)) continue;
-                    // allow-модель: сервер едет, если включён «здесь» (проект этого чата
-                    // по McpServersOn либо, вне проектов, AllowOutsideProjects записи) ИЛИ
-                    // выдан персоне (McpServerGranted). В узкой рамке обе личные оси
-                    // не смотрятся вовсе — единственный путь реестрового сервера в общий
-                    // проект это явная пометка SharedWithMembers (S2a-7, решение 29.10).
-                    // Чистое условие — McpDelivery.ShouldDeliver,
-                    // его OR-матрицу гоняем юнитами без SessionManager. Все входы — свойства
-                    // owner/project/persona/записи и вердикт рамки, ни один не смотрит на ход.
-                    var granted = _bindings.McpServerGranted(persona, "mcp:" + record.Key);
-                    if (!Mcp.McpDelivery.ShouldDeliver(record, onInProject, isProjectChat, granted, readOnly, frame))
-                        continue;
-                    var stdio = record.Transport == McpTransport.Stdio;
-                    // OAuth: токен, доживающий последние секунды, обновляем ДО сборки конфига —
-                    // заголовок запекается на старте CLI и живому процессу уже не доедет.
-                    // null — вход протух и не восстановился: сервер снимается с хода, а статус
-                    // «нужен вход» уже записан (молча ронять инструменты в 401 нельзя)
-                    var fresh = record.Auth.Kind == McpAuthKind.OAuth2 && _mcpOAuth is not null
-                        ? _mcpOAuth.EnsureFresh(ownerId, record)
-                        : record;
-                    if (fresh is null)
-                    {
-                        _log.LogWarning("MCP-сервер «{Key}» снят с хода: нужен вход (OAuth)", record.Key);
-                        continue;
-                    }
-                    var env = ResolveSecretValues(ownerId, fresh.Env);
-                    var headers = ResolveSecretValues(ownerId, fresh.Headers);
-                    if (!stdio && !TryApplyAuthHeaders(ownerId, fresh, headers)) continue;
-                    servers.Add(new ExternalMcpServer(
-                        fresh.Key,
-                        fresh.Transport.ToString().ToLowerInvariant(),
-                        stdio ? fresh.Command : null,
-                        fresh.Args ?? [],
-                        env,
-                        stdio ? null : fresh.Url,
-                        headers,
-                        fresh.AlwaysLoad,
-                        fresh.AuthVersion));
-                }
-
-                return servers.Count > 0 ? new ExternalMcpContext(servers) : null;
-            }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "Реестр MCP-серверов не собрался — ход без своих серверов");
-                return null;
-            }
-        };
-    }
-
-    // Локальные обёртки вокруг Mcp.McpAuthHeaders / секрет-стора — нужны в лямбде
-    // BuildExternalMcpProvider, поэтому живут на классе. Поведение и сообщения
-    // логов совпадают с теми, что были внутри лямбды.
-    private Dictionary<string, string> ResolveSecretValues(string ownerId, Dictionary<string, string>? map)
-    {
-        if (_mcpSecrets is null) return new Dictionary<string, string>(StringComparer.Ordinal);
-        var result = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (name, value) in map ?? [])
-            result[name] = _mcpSecrets.Resolve(ownerId, value) ?? "";
-        return result;
-    }
-
-    private bool TryApplyAuthHeaders(string ownerId, McpServerRecord record, Dictionary<string, string> headers)
-    {
-        if (Mcp.McpAuthHeaders.TryApply(record, headers, r => _mcpSecrets?.Resolve(ownerId, r))) return true;
-        // Заголовок авторизации http/sse-сервера (общая точка с пробой — Mcp.McpAuthHeaders).
-        // Потерянный секрет (запись ссылается в пустоту) — не повод отдавать серверу заведомо
-        // анонимный запрос: пропускаем сервер с предупреждением, иначе инструменты молча
-        // отвечали бы 401.
-        _log.LogWarning("MCP-сервер «{Key}» снят с хода: не найдено значение авторизации", record.Key);
-        return false;
-    }
-
-    // Контекст MCP-сервера уведомлений: обычному чату — всегда, персоне — по роли
-    // (модуль автоматизации) либо по явной привязке tool:notifications; Off-привязка
-    // выключает в любом случае. Единая точка решения — PersonaBindingsService.NotificationsEnabled
-    // (по ПЕРСОНЕ, не по ходу). Тот же сервисный токен, что у tasks/notes/workspace.
-    private NotificationsMcpContext? BuildNotificationsContext(string? ownerId, string? personaId, Persona? persona)
-    {
-        if (ownerId is null) return null;
-        if (!_bindings.NotificationsEnabled(ownerId, persona)) return null;
-        var apiUrl = ResolveTasksApiUrl(ownerId);
-        return new NotificationsMcpContext(apiUrl, () => GetServiceToken(ownerId), personaId,
-            UseHttp: HttpEndpointUsable(apiUrl));
-    }
-
-    // Дополнительные запреты сессии персоны: профиль доступа (PersonaAccessPolicy — «пол»
-    // запретов: ReadOnly/Custom) + capability-решение «web» через привязки
-    // (EffectiveToolEnabled: Tool-привязка приоритетнее Persona.Tools). Web-решение передаём
-    // в policy параметром, чтобы не дублировать логику; запреты складываются — побеждает
-    // более строгий (ReadOnly режет мутации, даже если binding разрешил инструмент).
-    // Сессия нужна для правила «координатор не пишет код сам» (режим «Командная реализация»):
-    // у чата-штаба поверх прав персоны запрещены инструменты правки файлов — работа идёт
-    // задачами на исполнителей, а не руками координатора.
-    private IReadOnlyList<string>? BuildExtraDisallowed(string? ownerId, Persona? persona, Session session)
-    {
-        var byPersona = PersonaAccessPolicy.BuildExtraDisallowed(persona,
-            webAllowed: _bindings.EffectiveToolEnabled(ownerId, persona, "web"));
-        if (session.TeamImplement is not { } team) return byPersona;
-        // Режим включён — ExitPlanMode запрещён всегда (Э8): на стадиях интервью и планирования
-        // штаб сидит в план-режиме, и штатная карточка plan_review дала бы второе согласование
-        // поверх командной карточки плана. Правки файлов режет отдельная настройка.
-        var extra = new List<string>(byPersona ?? []);
-        extra.AddRange(TeamImplementPrompts.ModeDisallowed);
-        if (team.CoordinatorNoCode) extra.AddRange(TeamImplementPrompts.CoordinatorDisallowed);
-        return extra;
-    }
+        _external.BuildChatContextProvider(sessionId);
+    private Func<ExternalMcpContext?>? BuildExternalMcpProvider(string? ownerId, string? projectId, Persona? persona, string? sessionId) =>
+        _external.BuildExternalMcpProvider(ownerId, projectId, persona, sessionId);
+    private Dictionary<string, string> ResolveSecretValues(string ownerId, Dictionary<string, string>? map) =>
+        _external.ResolveSecretValues(ownerId, map);
+    private bool TryApplyAuthHeaders(string ownerId, McpServerRecord record, Dictionary<string, string> headers) =>
+        _external.TryApplyAuthHeaders(ownerId, record, headers);
+    private NotificationsMcpContext? BuildNotificationsContext(string? ownerId, string? personaId, Persona? persona) =>
+        _external.BuildNotificationsContext(ownerId, personaId, persona);
 
 
     // Глобальная персона не бывает собеседником чата общего проекта (S2a-8): рамка хода в
@@ -4468,9 +3427,29 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         entry.CurrentTurnSnapshot = null;
     }
 
-    // Шов ITurnStarter (S3-2): очередь просит разбор при переходе 0→1. В переходном режиме его
-    // реализует ядро; шов снимается на шаге S3-4/S3-7, когда приём хода уходит в свою роль.
+    // Шов ITurnStarter (S3-2, целиком — S3-4): очередь просит разбор при переходе 0→1,
+    // добивание сабагента и продолжение цикла поднимают ход тем же путём. В переходном режиме
+    // его реализует ядро; шов снимается на шаге S3-7, когда приём хода уходит в свою роль.
+    // Явные реализации нужны для тех методов, что приватные; публичные (SendMessageAsync,
+    // SendOrEnqueueAsync) реализуют шов неявно — сигнатуры совпадают.
     async Task Sessions.ITurnStarter.DrainNextPendingAsync(string sessionId) => await DrainNextPendingAsync(sessionId);
+    Task Sessions.ITurnStarter.ContinueWorkLoopAsync(string sessionId) => ContinueWorkLoopAsync(sessionId);
+    Task Sessions.ITurnStarter.NudgeTruncatedSubagentAsync(string sessionId,
+        Llm.SubagentRunPassport run, int attempt) => NudgeTruncatedSubagentAsync(sessionId, run, attempt);
+
+    // Две точки шва берут sessionId, а не SessionEntry (тип записи internal, шов публичный):
+    // запись достается из того же реестра, чем её зовёт сам фасад.
+    async Task Sessions.ITurnStarter.AddWorkLoopStoppedNoticeAsync(string sessionId, string reason, string text)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        await AddWorkLoopStoppedNoticeAsync(sessionId, entry, reason, text);
+    }
+
+    async Task Sessions.ITurnStarter.AppendServerRestartCardAsync(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        await AppendServerRestartCardAsync(sessionId, entry);
+    }
 
     // Достать следующее сообщение и отправить его обычным ходом. Вызывается по концу хода
     // (OnMessageAsync). Замороженная «Стоп» очередь не разбирается автоматически — только
@@ -6828,103 +5807,27 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public Task<bool> AttachWorktreeAsync(string sessionId, string worktreePath, string? branch = null)
         => _worktree.AttachWorktreeAsync(sessionId, worktreePath, branch);
 
-    // Потолок добиваний подряд. Две попытки — сознательный предел: бесконечный цикл добивания
-    // хуже честного отказа, после него судьбу работы решает человек.
-    internal const int MaxSubagentNudges = 2;
-
-    /// <summary>
-    /// Слать ли добивание оборванного сабагента. Чистая функция — вся политика в одном месте
-    /// (под тестом). Уступаем всем, у кого свой протокол продолжения: цикл «до готово» и штаб
-    /// продолжат ход сами, непустая очередь продолжит его сообщением, а параллельный ход цикла
-    /// (LoopTurnInFlight) уже в пути — второй systemDirective ушёл бы в тот же процесс.
-    ///
-    /// <paramref name="isInterruptedRun"/> — признак обрыва класса «убит прерыванием хода»
-    /// (паспорт FinishedBy == "interrupted"): такие обрывы счётчик MaxSubagentNudges не
-    /// расходуют (причина в нашем коде и не свидетельствует о неисправном агенте), а
-    /// автоматически слать сообщение «продолжи» означало бы действовать за человека — он
-    /// сам нажал «Стоп», решение о продолжении принадлежит ему.
-    /// </summary>
+    // --- Политика добивания и паспорта (S3-4) ---
+    // Чистые функции ушли в Services/Sessions/SubagentNudgePolicy.cs, подписчики шины —
+    // в Services/Sessions/TurnPassports.cs. Обёртки сохранены: на них сидят TaskExecutionService,
+    // цикл «до готово» здесь и существующие тесты (SubagentNudgeTests, SessionManagerTestBase).
+    internal const int MaxSubagentNudges = Sessions.SubagentNudgePolicy.MaxSubagentNudges;
     internal static bool ShouldNudgeSubagent(int nudgesSent, bool workLoopActive, bool teamActive,
         bool hasPending, bool loopTurnInFlight, bool isInterruptedRun = false) =>
-        !isInterruptedRun && nudgesSent < MaxSubagentNudges
-        && !workLoopActive && !teamActive && !hasPending && !loopTurnInFlight;
-
-    /// <summary>
-    /// Ход координатора в полёте: сообщение ему уже отдано в процесс и result ещё не пришёл.
-    /// Пока это так, второй systemDirective-ход слать нельзя (он уйдёт в тот же процесс) —
-    /// добивание ждёт конца хода, координатору достаётся только пометка.
-    /// </summary>
-    internal static bool TurnInFlight(SessionStatus status) =>
-        status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting;
-
-    /// <summary>
-    /// Обрыв ФОНОВОГО агента: пометка координатору обязательна всегда, добивание — только
-    /// если ход координатора не идёт (иначе ждём result, как раньше).
-    /// </summary>
-    private void NoteTruncatedBgAgent(string sessionId, SessionEntry entry,
-        Llm.SubagentRunPassport run)
-    {
-        // Пометка уедет префиксом ближайшего хода — чем бы он ни был поднят (человеком,
-        // очередью, добиванием): координатор обязан узнать, что обрывок не итог, даже когда
-        // добивать мы не стали.
-        entry.TruncatedBgNote = run;
-
-        if (entry.Process is null || TurnInFlight(entry.Info.Status)) return;
-        // Оборвался другой агент — у него своя серия попыток (счётчик per-agentId)
-        if (StartsNudgeSeries(entry.NudgeAgentId, run.AgentId)) entry.SubagentNudges = 0;
-        if (!ShouldNudgeSubagent(entry.SubagentNudges, entry.Info.WorkLoop is not null,
-                entry.Info.TeamImplement is not null, HasPending(entry), entry.LoopTurnInFlight,
-                isInterruptedRun: run.FinishedBy == "interrupted")) return;
-
-        // Разбираем отметку здесь — иначе по ближайшему result добивание ушло бы вторым разом
-        entry.TruncatedSubagent = null;
-        entry.NudgeAgentId = run.AgentId;
-        var attempt = ++entry.SubagentNudges;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                // Ход мог стартовать, пока планировалась отправка (очередь, автоматизация,
-                // цикл): откатываем попытку и возвращаем отметку — добивание уедет по его
-                // result, штатным путём. Второй ход в живой процесс не отправляем никогда.
-                if (TurnInFlight(entry.Info.Status))
-                {
-                    entry.SubagentNudges = Math.Max(0, entry.SubagentNudges - 1);
-                    entry.TruncatedSubagent = run;
-                    return;
-                }
-                await NudgeTruncatedSubagentAsync(sessionId, run, attempt);
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[SessionManager] Добивание фонового сабагента ({sessionId}): {ex.Message}");
-            }
-        });
-    }
-
-    /// <summary>
-    /// Снимает ли штатный отчёт агента серию добиваний. Счётчик общий на сессию, а агентов
-    /// в ходе несколько — поэтому серию закрывает ТОТ ЖЕ агент, которого добивали (либо любой,
-    /// пока серии нет). Чужой отчёт счётчик не трогает: иначе потолок MaxSubagentNudges
-    /// не достигается вовсе и чат крутит системные директивы автономно.
-    /// </summary>
+        Sessions.SubagentNudgePolicy.ShouldNudgeSubagent(nudgesSent, workLoopActive, teamActive,
+            hasPending, loopTurnInFlight, isInterruptedRun);
+    internal static bool TurnInFlight(SessionStatus status) => Sessions.SubagentNudgePolicy.TurnInFlight(status);
     internal static bool ResetsNudgeSeries(string? nudgeAgentId, string reportedAgentId) =>
-        nudgeAgentId is null || nudgeAgentId == reportedAgentId;
-
-    /// <summary>
-    /// Начинает ли оборвавшийся агент новую серию: попытки считаются per-agentId, поэтому
-    /// другой агент получает свои две, а не остаток чужих.
-    /// </summary>
+        Sessions.SubagentNudgePolicy.ResetsNudgeSeries(nudgeAgentId, reportedAgentId);
     internal static bool StartsNudgeSeries(string? nudgeAgentId, string truncatedAgentId) =>
-        nudgeAgentId != truncatedAgentId;
-
-    /// <summary>
-    /// Гасит ли штатный отчёт агента пометку обрыва. Пометка бывает ложной: bg_agent_done
-    /// обгоняет дозапись финала в транскрипт, и по хвосту tool_use агент числится оборванным,
-    /// хотя дописал end_turn. Опровергает пометку только отчёт ТОГО ЖЕ агента.
-    /// </summary>
+        Sessions.SubagentNudgePolicy.StartsNudgeSeries(nudgeAgentId, truncatedAgentId);
     internal static bool RefutesTruncation(string? markedAgentId, string reportedAgentId) =>
-        markedAgentId == reportedAgentId;
+        Sessions.SubagentNudgePolicy.RefutesTruncation(markedAgentId, reportedAgentId);
+
+    // Синхронный мост тестов на шину (его берут через рефлексию): реализует TurnPassports,
+    // здесь — та же сигнатура.
+    internal Action<Llm.SubagentRunPassport>? SubagentRunSinkFor(string sessionId) =>
+        _passports.SubagentRunSinkFor(sessionId);
 
     // Добивание: директива координатору дослать оборванному сабагенту продолжение. Тем же
     // способом, что и цикл «до готово» (systemDirective-ход после result), и с тем же

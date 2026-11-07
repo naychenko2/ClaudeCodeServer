@@ -58,7 +58,8 @@ public class McpToolsetStabilityTests
         return null;
     }
 
-    // Тело метода SessionManager по его сигнатуре (до начала следующего объявления).
+    // Тело метода по его сигнатуре (до начала следующего объявления): фасад это или роль из
+    // Services/Sessions — не важно, сигнатуры читаем в тех файлах, где живёт решение.
     // internal с волны 2 http входит в допустимые «следующие» — PersonasEnabled/
     // ConsultantsEnabled открыты тулсетам, и за ними могут идти internal-соседи
     private static string MethodBody(string source, string signature)
@@ -73,7 +74,10 @@ public class McpToolsetStabilityTests
         var end = source.IndexOf("\n    private ", start + signature.Length, StringComparison.Ordinal);
         if (end < 0) end = source.IndexOf("\n    public ", start + signature.Length, StringComparison.Ordinal);
         if (end < 0) end = source.IndexOf("\n    internal ", start + signature.Length, StringComparison.Ordinal);
-        end.Should().BeGreaterThan(start, "за методом обязано идти следующее объявление");
+        // Роль из Services/Sessions компактна, и проверяемый метод может быть последним в
+        // классе: тогда его конец — закрывающая скобка класса (она одна идёт в нулевой колонке).
+        if (end < 0) end = source.IndexOf("\n}", start + signature.Length, StringComparison.Ordinal);
+        end.Should().BeGreaterThan(start, "за методом обязано идти следующее объявление или конец класса");
         return string.Join('\n', source[start..end].Split('\n')
             .Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal)));
     }
@@ -116,23 +120,24 @@ public class McpToolsetStabilityTests
 
     /// <summary>
     /// Per-persona рубильники серверов (ключи personas/consultants/codegraph/notifications/
-    /// widgets): гейт обязан жить в SessionManager и решаться ТОЛЬКО по персоне — иначе состав
-    /// tools/list начнёт зависеть от хода со всеми последствиями выше.
+    /// widgets): гейт обязан жить в одной точке роли контекста запуска (S3-4) и решаться
+    /// ТОЛЬКО по персоне — иначе состав tools/list начнёт зависеть от хода со всеми
+    /// последствиями выше. Обёртки на фасаде не проверяются: они ничего не решают.
     /// </summary>
     [SkippableTheory]
-    [InlineData("private WidgetsMcpContext? BuildWidgetsContext", "widgets")]
-    [InlineData("private CodeGraphMcpContext? BuildCodeGraphContext", "codegraph")]
-    [InlineData("private ArchitectureMcpContext? BuildArchitectureContext", "architecture")]
+    [InlineData("BuiltinMcpContexts.cs", "internal WidgetsMcpContext? BuildWidgetsContext", "widgets")]
+    [InlineData("BuiltinMcpContexts.cs", "internal CodeGraphMcpContext? BuildCodeGraphContext", "codegraph")]
+    [InlineData("BuiltinMcpContexts.cs", "internal ArchitectureMcpContext? BuildArchitectureContext", "architecture")]
     // internal с волны 2 http: те же формулы резолвят тулсеты по живой сессии-вызывателю
-    [InlineData("internal bool PersonasEnabled", "personas")]
-    [InlineData("internal bool ConsultantsEnabled", "consultants")]
+    [InlineData("PersonaLayerBuilder.cs", "internal bool PersonasEnabled", "personas")]
+    [InlineData("PersonaLayerBuilder.cs", "internal bool ConsultantsEnabled", "consultants")]
     // Серверы личного реестра владельца: ключ каталога — «mcp:<ключ сервера>»,
     // выключает только Off-привязка персоны. Состав от хода не зависит.
-    [InlineData("private Func<ExternalMcpContext?>? BuildExternalMcpProvider", "mcp:")]
-    public void РубильникиСерверов_ГейтятсяТолькоПоПерсоне(string signature, string key)
+    [InlineData("ExternalMcpContexts.cs", "internal Func<ExternalMcpContext?>? BuildExternalMcpProvider", "mcp:")]
+    public void РубильникиСерверов_ГейтятсяТолькоПоПерсоне(string file, string signature, string key)
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", file);
+        Skip.If(path is null, $"{file} не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!), signature);
 
@@ -157,11 +162,11 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void КаскадРеестра_AllowОсиНаМесте()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "ExternalMcpContexts.cs");
+        Skip.If(path is null, "ExternalMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
-            "private Func<ExternalMcpContext?>? BuildExternalMcpProvider");
+            "internal Func<ExternalMcpContext?>? BuildExternalMcpProvider");
 
         // Общая ось 0 — рубильник самой записи реестра
         body.Should().Contain("record.Enabled", "первая ось каскада — рубильник самой записи реестра");
@@ -219,11 +224,11 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void СтатусСерверов_ПишетсяИзПриёмникаSystemInit()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "TurnPassports.cs");
+        Skip.If(path is null, "TurnPassports.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
-            "private void SafePromptSnapshotAttach(string sessionId, string snapshotId,\r\n    IReadOnlyList<string> tools, IReadOnlyList<McpServerInfo> servers)");
+            "private void SafePromptSnapshotAttach(string sessionId, string snapshotId,\r\n        IReadOnlyList<string> tools, IReadOnlyList<McpServerInfo> servers)");
 
         body.Should().Contain("RecordFromInit(",
             "наблюдение из system/init обязано попадать в McpStatusStore");
@@ -241,11 +246,11 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void ПрофильReadOnly_РежетСерверЦеликом_АНеЕгоИнструменты()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "ExternalMcpContexts.cs");
+        Skip.If(path is null, "ExternalMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
-            "private Func<ExternalMcpContext?>? BuildExternalMcpProvider");
+            "internal Func<ExternalMcpContext?>? BuildExternalMcpProvider");
 
         body.Should().Contain("PersonaAccess.ReadOnly",
             "профиль персоны доезжает до резолвера доставки (McpDelivery режет RO-персону)");
@@ -267,11 +272,11 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void Хиггсфилд_РеестровыйЦикл_ИсключаетВстроенныеИнтеграции()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "ExternalMcpContexts.cs");
+        Skip.If(path is null, "ExternalMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
-            "private Func<ExternalMcpContext?>? BuildExternalMcpProvider");
+            "internal Func<ExternalMcpContext?>? BuildExternalMcpProvider");
 
         // Тело реестрового цикла обязано знать, что ключи из IntegrationKeys пропускаются —
         // иначе путь «включено в проекте/персоне» доставляет higgsfield мимо продуктовой формулы.
@@ -304,12 +309,12 @@ public class McpToolsetStabilityTests
     // Волна 3 (ADR-012): формула секций вынесена в BuildWorkspacePlan — ЕДИНУЮ точку
     // состава для конфига хода и живого tools/list тулсета wsp. Сторож смотрит на неё,
     // а не на обёртку BuildWorkspaceContext: иначе он бы молча проверял пустое место
-    [InlineData("internal WorkspaceMcpPlan? BuildWorkspacePlan", "git", "kb")]
-    [InlineData("private PersonasMcpContext? BuildPersonasContext", "personas-manage", "personas-automation")]
-    public void СекцииПоРоли_ГейтятсяТолькоПоПерсоне(string signature, string first, string second)
+    [InlineData("ExternalMcpContexts.cs", "internal WorkspaceMcpPlan? BuildWorkspacePlan", "git", "kb")]
+    [InlineData("PersonaLayerBuilder.cs", "internal PersonasMcpContext? BuildPersonasContext", "personas-manage", "personas-automation")]
+    public void СекцииПоРоли_ГейтятсяТолькоПоПерсоне(string file, string signature, string first, string second)
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", file);
+        Skip.If(path is null, $"{file} не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!), signature);
 
@@ -331,11 +336,11 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void СерверУведомлений_РешаетсяЕдинойТочкойПоПерсоне()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "ExternalMcpContexts.cs");
+        Skip.If(path is null, "ExternalMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
-            "private NotificationsMcpContext? BuildNotificationsContext");
+            "internal NotificationsMcpContext? BuildNotificationsContext");
 
         body.Should().Contain("NotificationsEnabled(",
             "решение принимает PersonaBindingsService.NotificationsEnabled "
@@ -352,11 +357,11 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void МодульЗаметок_ГейтитсяТолькоПоПерсоне()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "BuiltinMcpContexts.cs");
+        Skip.If(path is null, "BuiltinMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
-            "private NotesMcpContext? BuildNotesContext");
+            "internal NotesMcpContext? BuildNotesContext");
 
         body.Should().Contain("\"notes-annotations\"",
             "модуль обязан гейтиться Tool-ключом notes-annotations");
@@ -375,8 +380,8 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void СерверРедактораКартинок_ГейтитсяПоСессииФлагуИРеестру()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "BuiltinMcpContexts.cs");
+        Skip.If(path is null, "BuiltinMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
             "internal ImageEditorMcpContext? BuildImageEditorContext");
@@ -435,8 +440,8 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void СерверЗвука_ГейтитсяПоФлагуИРеестру()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "BuiltinMcpContexts.cs");
+        Skip.If(path is null, "BuiltinMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
             "internal AudioEditorMcpContext? BuildAudioEditorContext");
@@ -492,8 +497,8 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void СерверВидео_ГейтитсяПоФлагуИРеестру()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "BuiltinMcpContexts.cs");
+        Skip.If(path is null, "BuiltinMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
             "internal VideoEditorMcpContext? BuildVideoEditorContext");
@@ -549,8 +554,8 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void СерверКонтекстаЧата_ГейтитсяПоРеестру()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "BuiltinMcpContexts.cs");
+        Skip.If(path is null, "BuiltinMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
             "internal TurnContextMcpContext? BuildTurnContextContext");
@@ -648,11 +653,11 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void ПровайдерКонсультантов_ГейтитсяЧерезConsultantsEnabled()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "PersonaLayerBuilder.cs");
+        Skip.If(path is null, "PersonaLayerBuilder.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
-            "private Func<PersonaAgentsContext?>? BuildPersonaAgentsProvider");
+            "internal Func<PersonaAgentsContext?>? BuildPersonaAgentsProvider");
 
         body.Should().Contain("ConsultantsEnabled(");
     }
@@ -1158,11 +1163,11 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void ContextList_СоставНеЗависитОтХода()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "ExternalMcpContexts.cs");
+        Skip.If(path is null, "ExternalMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
-            "private WorkspaceMcpContext? BuildWorkspaceContext");
+            "internal WorkspaceMcpContext? BuildWorkspaceContext");
 
         body.Should().NotContain("ChatContext",
             "гейта фич-флага chat-context больше нет — инструмент в составе всегда");
@@ -1180,10 +1185,10 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void MemoryDossierГейт_ВсегдаВключенаАНеХодом()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "BuiltinMcpContexts.cs");
+        Skip.If(path is null, "BuiltinMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
-        var body = MethodBody(File.ReadAllText(path!), "private MemoryMcpContext BuildMemoryContext");
+        var body = MethodBody(File.ReadAllText(path!), "internal MemoryMcpContext BuildMemoryContext");
 
         body.Should().Contain("DossierToolsEnabled: true",
             "секция dossier_* включена всегда (флаг change-dossiers-recall снят) и не зависит от хода");

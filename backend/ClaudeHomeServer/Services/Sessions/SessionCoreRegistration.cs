@@ -146,6 +146,73 @@ public static class SessionCoreRegistration
             sp.GetRequiredService<PersonaManager>(),
             sp.GetService<Spheres.ISphereDirectory>(),
             sp.GetRequiredService<ILogger<ChatSettings>>()));
+        // --- Контекст запуска (S3-4) ---
+        // Адрес и токен MCP: их читают все сборщики контекстов, поэтому они первыми.
+        services.AddSingleton(sp => new McpEndpoint(
+            sp.GetRequiredService<IConfiguration>(),
+            sp.GetRequiredService<Microsoft.AspNetCore.Hosting.Server.IServer>(),
+            sp.GetRequiredService<JwtService>(),
+            sp.GetRequiredService<ClaudeHomeServer.Services.Execution.ILauncherFactory>(),
+            sp.GetRequiredService<ILogger<McpEndpoint>>()));
+        // Встроенные продуктовые MCP-серверы хода. IServiceProvider — единственный в ядре
+        // (allow-list правила 5 сторожа формы): ленивый резолв McpToolsetRegistry и
+        // IDeviceExecChannel, прямая зависимость замкнула бы граф синглтонов. Опциональные
+        // — GetService: та же семантика, что у параметров SessionManager (подсистема или
+        // OAuth-сервис могут не быть в DI).
+        services.AddSingleton(sp => new BuiltinMcpContexts(
+            sp.GetRequiredService<McpEndpoint>(),
+            sp.GetRequiredService<FeatureFlagService>(),
+            sp.GetRequiredService<PersonaBindingsService>(),
+            sp,
+            sp.GetService<ClaudeHomeServer.Services.Composition.SubsystemStateStore>(),
+            sp.GetRequiredService<ProjectManager>(),
+            sp.GetService<ClaudeHomeServer.Services.Mcp.HiggsfieldOAuthService>(),
+            sp.GetRequiredService<IConfiguration>()));
+        // Слой персоны. ISphereDirectory — GetService: без подсистемы сфер зона персоны
+        // работает через NoSphereDirectory, как и раньше.
+        services.AddSingleton(sp => new PersonaLayerBuilder(
+            sp.GetRequiredService<SessionStore>(),
+            sp.GetRequiredService<McpEndpoint>(),
+            sp.GetRequiredService<PersonaManager>(),
+            sp.GetRequiredService<PersonaBindingsService>(),
+            sp.GetService<PersonaAgentFileSync>(),
+            sp.GetRequiredService<ProjectManager>(),
+            sp.GetService<Spheres.ISphereDirectory>(),
+            sp.GetRequiredService<ILogger<PersonaLayerBuilder>>()));
+        // Внешние серверы владельца и рабочий пространство. Реестр/секреты/OAuth — GetService:
+        // без них реестровых серверов в ход нет (та же опциональность, что у параметров фасада).
+        services.AddSingleton(sp => new ExternalMcpContexts(
+            sp.GetRequiredService<SessionStore>(),
+            sp.GetRequiredService<McpEndpoint>(),
+            sp.GetRequiredService<PersonaBindingsService>(),
+            sp.GetRequiredService<ProjectManager>(),
+            sp.GetService<ClaudeHomeServer.Services.Mcp.McpRegistry>(),
+            sp.GetService<ClaudeHomeServer.Services.Mcp.McpSecretStore>(),
+            sp.GetService<ClaudeHomeServer.Services.Mcp.McpOAuthService>(),
+            sp.GetRequiredService<FeatureFlagService>(),
+            sp.GetRequiredService<UserStore>(),
+            sp.GetRequiredService<IConfiguration>(),
+            sp.GetRequiredService<ILogger<ExternalMcpContexts>>()));
+        // Модули — отдельная роль: с ними у ExternalMcpContexts было бы двенадцать
+        // зависимостей (правило 2 сторожа — резать класс, не поднимать лимит).
+        services.AddSingleton(sp => new ModulesMcpContexts(
+            sp.GetRequiredService<McpEndpoint>(),
+            sp.GetRequiredService<UserStore>(),
+            sp.GetRequiredService<FeatureFlagService>(),
+            sp.GetService<ClaudeHomeServer.Services.Modules.ModuleRegistry>(),
+            sp.GetService<ClaudeHomeServer.Services.Modules.ModuleTokenService>()));
+        // Паспорта хода и сабагентов: подписки на шину ставит сам TurnPassports. Шина — тот же
+        // синглтон, что читает фасад (регистрация в Program.cs); шов ITurnStarter — ленивый,
+        // иначе цикл «паспорта → приём хода → паспорта».
+        services.AddSingleton(sp => new TurnPassports(
+            sp.GetRequiredService<ClaudeHomeServer.Services.Turn.ITurnEventBus>(),
+            sp.GetService<PromptSnapshotStore>(),
+            sp.GetService<ClaudeHomeServer.Services.Mcp.McpStatusStore>(),
+            sp.GetService<ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog>(),
+            sp.GetService<ClaudeHomeServer.Services.Llm.TurnRunLog>(),
+            sp.GetRequiredService<SessionStore>(),
+            sp.GetRequiredService<Lazy<ITurnStarter>>(),
+            sp.GetServices<ClaudeHomeServer.Services.Turn.IPromptSectionContributor>()));
         return services;
     }
 }

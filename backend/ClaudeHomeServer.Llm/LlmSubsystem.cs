@@ -175,7 +175,13 @@ public sealed class LlmSubsystem : IAppSubsystem
                         TrackedLocalLlmClient.WarnIfEngineKeyUnknown(config, registry, logger);
                     return registry?.GetByKey(key)?.MaxConcurrentTurns ?? TrackedLocalLlmClient.DefaultLimit;
                 },
-                logger);
+                logger,
+                // Потолок ожидания слота для цепочек без облачной страховки (ночной разбор,
+                // ступень 2): ТЕ ЖЕ очередь и то же время, что у допуска ходов CLI этого же
+                // провайдера — отдельного «своего» потолка для ночи не заводим (WN-4).
+                () => sp.GetService<LlmProviderRegistry>()?.GetByKey(key) is { } provider
+                    ? new LocalSlotWaitPolicy(provider.MaxQueuedTurns, provider.TurnQueueTimeout)
+                    : LocalSlotWaitPolicy.Default);
         });
         // Тихие HTTP-логгеры на оба имени: каждая реализация пишет в свою категорию,
         // и одна мёртвая зависимость не глушит жалобы другой. Без них каждый вызов

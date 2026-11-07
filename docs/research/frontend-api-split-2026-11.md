@@ -105,7 +105,8 @@
 | Промпты и CLI-слои | 1306–1363 | 4 | хребет, не домен: остаётся в `types/index.ts` (решение 07.11) | 2 |
 | Usage (счётчики токенов) | 1364–1370 | 1 | хребет, не домен: остаётся в `types/index.ts` (решение 07.11) | 1 |
 | Проекты: сервисы, превью, запуск | 1371–1426 | 4 | `features/projects/types.ts` — P14a | 8 |
-| Лимиты и квоты провайдеров | 1427–1464 | 4 | `features/spend/types.ts` — P11, выполнено (`2824b3efe`) | 9 |
+| Лимиты и квоты провайдеров (`ProviderFallbackOption`, `ProviderQuotaWindowUnit`, `ProviderQuotaWindow`) | 1427–1464 | 3 | `features/spend/types.ts` — P11, выполнено (`2824b3efe`) | 9 |
+| RateLimitInfo (окно лимита подписки из `rate_limit_event`, близнец варианта `ServerMessage` `rate_limit`; читают `chatReducer`/`useSession`/`lib/rateLimit`) | 1441 (был в диапазоне «Лимиты и квоты», 1427–1464; по состоянию на 07.11 — 1412) | 1 | хребет, не домен: остаётся в `types/index.ts` (решение 07.11); P11 его сознательно не перенёс — это окно лимита подписки из события CLI, а не тип расхода провайдера, `features/spend/` его не использует | 5 |
 | Баланс провайдера (ProviderBalanceInfo) | 1465–1498 | 1 | `features/spend/types.ts` — P11 (его возвращает `features/models/api.ts`, но граф у него — с типами расхода, см. «Решение 07.11» под таблицей), выполнено (`2824b3efe`) | 4 |
 | Расходы, подписки, снимки использования | 1499–1640 | 8 | `features/spend/types.ts` — P11, выполнено (`2824b3efe`) | 12 |
 | Аккаунты и расход fal/glif/yandex (`HiggsfieldStatus`/`HiggsfieldAdminStatus` уже вынесены) | 1641–1688 | 7 | `features/providerAccounts/types.ts` — P10, выполнено (`fca7c9f88`) | 0 |

@@ -36,14 +36,13 @@ public static class SessionCoreRegistration
         // там шов снимается (продолжение зовёт ядро через TrySubmitContinuation).
         services.AddSingleton(sp => new Lazy<IWorkLoopContinuation>(() => sp.GetRequiredService<SessionManager>()));
 
-        // Стор копий транскриптов архивных чатов и учёт лимитов подписок — общие экземпляры
-        // с ролями: без них TurnCostLedger и CliRoute собрали бы СВОИ, и счётчик лимитов
-        // (он же у шлюза LLM) стал бы вторым.
+        // Стор копий транскриптов архивных чатов — общий экземляр с ролями: без него
+        // CliRoute собрал бы свой. Рекордер лимитов подписок здесь НЕ регистрируем:
+        // единственная его регистрация — в слое Llm (LlmSubsystem), её же резолвят шлюз
+        // LLM и фасад; вторая (фабрика) поставила бы дескриптор рядом с первым — и это
+        // тот случай, которого не видит DuplicateSingletonRegistrationTests: у фабрики
+        // нет ImplementationType.
         services.AddSingleton(sp => new ArchivedTranscriptStore(sp.GetRequiredService<IConfiguration>()));
-        services.AddSingleton(sp => new SubscriptionLimitRecorder(
-            sp.GetRequiredService<UsageService>(),
-            sp.GetRequiredService<ClaudeSubscriptionPool>(),
-            sp.GetService<SubscriptionActivityTracker>()));
 
         services.AddSingleton(sp => new SessionHistory(
             sp.GetRequiredService<ChatHistoryService>(),

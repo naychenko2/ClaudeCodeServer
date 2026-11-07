@@ -4,8 +4,7 @@
 import { readStoredToken, request } from '../../lib/offline';
 import { forgetChatContextSession } from '../../lib/chatContext/forget';
 import { projectRouteOf, uploadAgentAttachment } from '../../lib/deviceAgent';
-// eslint-disable-next-line module/no-cross-feature-import -- курсор докачки истории один для
-// проектных сессий и чатов: две вертикали, одна строка формата (features/sessions/api.ts)
+// eslint-disable-next-line module/no-cross-feature-import -- курсор докачки истории один для проектных сессий и чатов: две вертикали, одна строка формата (features/sessions/api.ts)
 import { historyCursorParams } from '../sessions/api';
 import type { HistoryCursorQuery, HistoryReply } from '../../lib/historyTail';
 import type { Session, TtsVoicesResponse, WorkflowAgentBlock, WorkflowAgentInfo } from '../../types';

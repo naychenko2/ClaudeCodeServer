@@ -19,11 +19,14 @@ import noCrossFeatureImport from './eslint-rules/no-cross-feature-import.js'
 // точка возврата, если у будущей фичи появятся стартовые нарушения.
 export const CROSS_FEATURE_IMPORT_ALLOWED = []
 
-// Фичи, у которых уже есть публичный `index.ts` и для которых линт-сторож
-// уже действует. Подключение новой фичи = добавить её в этот список и
-// завести allow-list стартовых нарушений (если они есть). Пока в проекте
-// только «notes» (пилот волны выноса подсистем).
-export const CROSS_FEATURE_IMPORT_ENABLED = ['notes']
+// Фичи, которые выносятся в подсистемы и за которыми уже следит линт-сторож.
+// Подключение новой фичи = добавить её в этот список и покрыть стартовые
+// нарушения: построчным `eslint-disable` с причиной (единичные) или allow-list'ом
+// файлов (массовые). Публичный `index.ts` может ещё не существовать — тогда в
+// причине директивы прямо это и указывается («баррел заведётся отдельно»).
+// Сейчас: «notes» (пилот) и «sessions» (перенесена в S5-P6; её стартовые нарушения —
+// сборка api в lib/api и общий курсор истории в features/chat, покрыты директивами).
+export const CROSS_FEATURE_IMPORT_ENABLED = ['notes', 'sessions']
 
 export default defineConfig([
   globalIgnores(['dist', 'dev-dist']),   // dev-dist — сгенерированный workbox PWA

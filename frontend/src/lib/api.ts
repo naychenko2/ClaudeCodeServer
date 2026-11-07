@@ -33,7 +33,7 @@ import { personasApi } from '../features/personas/api';
 import { gitApi } from '../features/git/api';
 import { filesApi } from '../features/files/api';
 import { projectsApi } from '../features/projects/api';
-import { sessionsApi } from '../features/sessions/api';
+import { sessionsApi } from '../features/sessions/api'; // eslint-disable-line module/no-cross-feature-import -- lib/api собирает объект api из api-модулей фич spread'ом; публичного index.ts у sessions нет (баррел заведётся отдельно)
 import { writeStoredToken } from './offline';
 
 // Типы «Проектов» (кандидат значка, «Архитектура») живут в features/projects/types.ts

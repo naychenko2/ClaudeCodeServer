@@ -10,6 +10,7 @@ import type {
 } from '../../types';
 import type {
   ArchitectureGenerateResult, ArchitectureModelDto, ArchitectureSaveResult, GlyphCandidate,
+  ProjectMemberRole, ProjectMembersView,
 } from './types';
 
 // Потолок ожидания preview/start. DevServerService.StartAsync (у сервера и у агента один) ждёт
@@ -114,6 +115,49 @@ export const projectsApi = {
       runState: (id: string) => request<SubjectRunState>(`/projects/${encodeURIComponent(id)}/subjects/run`, { live: true }),
     },
     delete: (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' }),
+
+    // --- Участники общего проекта (shared-projects, план §5 S1-F2) ---
+    //
+    // Эндпоинты — ProjectMembersController: GET /members, POST /members, PUT /members/{userId},
+    // DELETE /members/{userId}, DELETE /members/me. И чтение, и каждая мутация отвечают одним
+    // телом — ProjectMembersView (участники, владелец, моя роль): после правки список берут
+    // из ответа, отдельный запрос не нужен. У отказа — { error, code }: текст готовый для
+    // человека, машинный код — из MEMBER_REFUSAL (lib/offline прикрепляет тело ошибки целиком
+    // к err.body, читают его как в ImageGenNote.isImageGenQueued).
+    // Права: приглашает/меняет роль/убирает только владелец (403 not_owner); участник
+    // может только покинуть сам. Снаружи проекта — 404 от [ProjectScope] (код
+    // project_scope), существование не раскрываем.
+    members: {
+      // Живой запрос: список участников из офлайн-кэша показал бы уже убранного человека
+      list: (id: string) =>
+        request<ProjectMembersView>(`/projects/${encodeURIComponent(id)}/members`, { live: true }),
+      // Пригласить по ТОЧНОМУ username (регистр не важен, как при входе). Поиска по части
+      // имени на бэке нет: нет пользователя → 404 user_not_found; уже участвует → 409
+      // already_member; сам себе → 400 self; флаг выключен у кого-то из них → 409
+      // flag_disabled; проект на устройстве → 409 local_project.
+      add: (id: string, username: string, role: ProjectMemberRole) =>
+        request<ProjectMembersView>(`/projects/${encodeURIComponent(id)}/members`, {
+          method: 'POST', body: JSON.stringify({ username, role }),
+        }),
+      // Сменить роль участника (только владелец). Не участника → 404 not_member.
+      changeRole: (id: string, userId: string, role: ProjectMemberRole) =>
+        request<ProjectMembersView>(
+          `/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`,
+          { method: 'PUT', body: JSON.stringify({ role }) },
+        ),
+      // Убрать участника (только владелец). Его нет в списке → 404 not_member.
+      remove: (id: string, userId: string) =>
+        request<ProjectMembersView>(
+          `/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`,
+          { method: 'DELETE' },
+        ),
+      // Покинуть проект: та же операция удаления, но её делает сам участник — id берёт
+      // сервер из токена, «me» в пути — маркер, не id. Владелец → 400 owner_cannot_leave.
+      leave: (id: string) =>
+        request<ProjectMembersView>(
+          `/projects/${encodeURIComponent(id)}/members/me`, { method: 'DELETE' },
+        ),
+    },
 
     // --- Значок проекта (ADR-009: SVG, белый список lucide, модельный подбор) ---
     // Кандидаты двух видов: name (из белого списка) или paths (нарисованные моделью).

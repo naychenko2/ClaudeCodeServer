@@ -22,7 +22,8 @@ namespace ClaudeHomeServer.Services;
 
 public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     ITeamSessionDirectory, ITeamHistoryStore, ITeamRunState, ITeamTurnIntake,
-    Access.ITurnActorRegistry, Access.ITurnFrameSource, Sessions.ITurnStarter
+    Access.ITurnActorRegistry, Access.ITurnFrameSource, Sessions.ITurnStarter,
+    Sessions.IWorkLoopContinuation
 {
 
     // Дальше какой глубины цепочка автоотчётов не идёт. 3 — как у делегирования задач:
@@ -662,7 +663,9 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // S3-0 §4, запасная сборка снимается в S3-8c.
         _completion = completion ?? new Sessions.TurnCompletion(
             _store, history, _route, _worktree, _providerMigration, _costs,
-            new Lazy<Sessions.ITurnStarter>(() => this), new Lazy<Team.ITeamNotifier>(() => this),
+            new Lazy<Sessions.ITurnStarter>(() => this),
+            new Lazy<Sessions.IWorkLoopContinuation>(() => this),
+            new Lazy<Team.ITeamNotifier>(() => this),
             loggerFactory?.CreateLogger<Sessions.TurnCompletion>()
                 ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.TurnCompletion>.Instance);
         // Локальный голосовой ход (S3-6): читает маршрутизатор/клиент локальной модели (те же
@@ -676,7 +679,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // (AddSessionCore); без DI (юниты, new SessionManager) собираются здесь из тех же
         // зависимостей — переходный режим S3-0 §4, запасная сборка снимается в S3-8c.
         // Порядок: endpoint первым (его читают остальные), паспорта — после стора и шва
-        // ITurnStarter: добивание оборванного сабагента просит ход через этот шов.
+        // IWorkLoopContinuation: добивание оборванного сабагента просит продолжение цикла
+        // через этот шов (S3-7: с ITurnStarter оно снято — добивание ход не стартует само).
         _endpoint = mcpEndpoint ?? new Sessions.McpEndpoint(config, server, jwt, launchers,
             loggerFactory?.CreateLogger<Sessions.McpEndpoint>()
                 ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.McpEndpoint>.Instance);
@@ -694,7 +698,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             _endpoint, users, flags, modules, moduleTokens);
         _passports = turnPassports ?? new Sessions.TurnPassports(
             TurnEvents, promptSnapshots, mcpStatus, subagentRuns, turnRuns, _store,
-            new Lazy<Sessions.ITurnStarter>(() => this), promptSectionContributors);
+            new Lazy<Sessions.IWorkLoopContinuation>(() => this), promptSectionContributors);
 
         // Процесс CLI и жизненный цикл чата (S3-5): сборка контекста запуска, хост процесса,
         // возобновление оборванного хода, создание и удаление чата. В DI приходят готовыми
@@ -2379,8 +2383,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // S3-7: точки карточек из шва убраны — их пишет SessionHistory, вызывающий (TurnRecovery,
     // TurnProcessHost) идёт к ней напрямую; карточка хода не стартует и на шве не нужна.
     async Task Sessions.ITurnStarter.DrainNextPendingAsync(string sessionId) => await DrainNextPendingAsync(sessionId);
-    Task Sessions.ITurnStarter.ContinueWorkLoopAsync(string sessionId) => ContinueWorkLoopAsync(sessionId);
-    Task Sessions.ITurnStarter.NudgeTruncatedSubagentAsync(string sessionId,
+
+    // Переходный шов цикла «до готово» (S3-7): продолжение и добивание не стартуют ход сами —
+    // они просят фасад, чьё тело цикла остаётся здесь до шага 2 (TurnContinuation).
+    Task Sessions.IWorkLoopContinuation.ContinueWorkLoopAsync(string sessionId) => ContinueWorkLoopAsync(sessionId);
+    Task Sessions.IWorkLoopContinuation.NudgeTruncatedSubagentAsync(string sessionId,
         Llm.SubagentRunPassport run, int attempt) => NudgeTruncatedSubagentAsync(sessionId, run, attempt);
 
     // Достать следующее сообщение и отправить его обычным ходом. Вызывается по концу хода

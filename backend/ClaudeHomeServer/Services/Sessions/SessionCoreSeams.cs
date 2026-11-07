@@ -8,19 +8,21 @@ namespace ClaudeHomeServer.Services.Sessions;
 // Lazy<T> держит SessionCoreShapeGuardTests (правило 3); здесь — объявления швов.
 // Реализация связывается в AddSessionCore как Lazy<T> от синглтона; до шага, где вынесен
 // настоящий владелец, интерфейс реализует SessionManager (переходный режим).
+// S3-7 добавляет шестой аргумент — переходный IWorkLoopContinuation (помечен в AllowedLazy
+// сторожа): он живёт ровно до шага 2, когда цикл «до готово» уходит в свою роль.
 
 // «Начать ход»: роль очереди при постановке сообщения может форсировать разбор очереди
-// (переход 0→1 при свободном чате) — это рекурсия «очередь → приём хода»; добивание
-// оборванного сабагента (TurnPassports) поднимает ход тем же путём. С3-4 объявляет шов
-// целиком, по всем точкам, которыми сейчас пользуется SessionManager; владелец станет
-// отдельной ролью приёма хода в S3-7.
+// (переход 0→1 при свободном чате) — это рекурсия «очередь → приём хода». С3-4 объявляет
+// шов целиком, по всем точкам, которыми сейчас пользуется SessionManager; с S3-7 шов
+// сокращён до приёма (старт + разбор очереди) и его реализует ядро приёма TurnIntake:
+// ход в сессии запускает только приём хода. Точки, которые ход не стартуют, с шва сняты:
+// карточки пишет роль истории (SessionHistory), а её вызывающий (TurnRecovery,
+// TurnProcessHost) идёт к роли напрямую; продолжение цикла и добивание сабагента просят
+// фасад через переходный IWorkLoopContinuation ниже — их тело в SessionManager до шага 2.
 //
 // Оговорка к «сигнатурам как у SessionManager»: параметры без значений по умолчанию — их
 // не принимает интерфейс; делегирующая реализация на фасаде подставляет те же значения,
 // что были у вызовов.
-// S3-7: точки карточек (AddWorkLoopStoppedNoticeAsync, AppendServerRestartCardAsync) из
-// шва убраны — карточку пишет роль истории (SessionHistory), а её вызывающий (TurnRecovery,
-// TurnProcessHost) идёт к роли напрямую: шов про старт хода, карточка хода не стартует.
 // public ТОЛЬКО потому, что Lazy<ITurnStarter> — параметр публичного конструктора
 // PendingQueueService (CS0051: менее доступный тип в параметре доступного конструктора);
 // публичной поверхности у шва нет.
@@ -37,7 +39,18 @@ public interface ITurnStarter
         SessionManager.PendingKind kind, string? senderUserId);
 
     Task DrainNextPendingAsync(string sessionId);
+}
 
+// «Продолжить цикл „до готово“»: конец хода (TurnCompletion) по result просит следующую
+// итерацию цикла, паспорт оборванного сабагента (TurnPassports) просит добивание — ни то,
+// ни другое не стартует ход само и не должно видеть весь шов приёма. Тело цикла живёт на
+// фасаде до шага 2 (вынос TurnContinuation), поэтому шов реализует SessionManager.
+// Это НЕ шестой постоянный шов плана §3: переходный — снимается вместе с переносом цикла
+// в TurnContinuation (там продолжение зовёт ядро через TrySubmitContinuation, шов не нужен).
+// internal: его держат только роли ядра; конструкторы потребителей с ним — internal
+// (TurnCompletion) или с internal-параметром (TurnPassports, CS0051).
+internal interface IWorkLoopContinuation
+{
     Task ContinueWorkLoopAsync(string sessionId);
 
     Task NudgeTruncatedSubagentAsync(string sessionId, SubagentRunPassport run, int attempt);

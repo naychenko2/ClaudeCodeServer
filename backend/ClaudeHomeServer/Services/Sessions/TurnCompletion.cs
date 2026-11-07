@@ -17,14 +17,16 @@ namespace ClaudeHomeServer.Services.Sessions;
 // в AddSessionCore и одной строки запасной сборки в конструкторе SessionManager (S3-5).
 // Фолбэк хода — маппинг ErrorMessage без следующего result к SessionStatus.Error — переехал
 // вместе с телом; на нём характеризационный тест SessionManagerTurnErrorStatusTests.
-// Зависимости девять (план §2, редакция 2247620de): store, history (снимки аккумулятора пишет через
-// ChatHistoryService), route, worktree, providerMigration, ledger (цены fal/glif, учёт лимитов,
-// расход хода — RecordTurnSpend переехал в журнал цен вместе с этим вызовом), ленивые швы
-// ITurnStarter (разбор очереди, цикл «до готово», добивание) и ITeamNotifier (штаб: bg-agent,
-// ASK-карточка, возврат сторожа волн). processHost здесь нет: тело конца хода не зовёт ни одного
-// метода хоста процесса, entry.Process — поле записи, то есть стор. Экземпляра
-// PendingQueueService тоже нет: тело пользуется только его статикой HasPending/
-// HasContinuingPending.
+// Зависимости десять (план §2, редакция 2247620de; S3-7 — редакция аддендума): store, history
+// (снимки аккумулятора пишет через ChatHistoryService), route, worktree, providerMigration,
+// ledger (цены fal/glif, учёт лимитов, расход хода — RecordTurnSpend переехал в журнал цен
+// вместе с этим вызовом), ленивые швы ITurnStarter (разбор очереди — старт хода принадлежит
+// приёму), IWorkLoopContinuation (продолжение цикла «до готово» и добивание — S3-7: они не
+// стартуют ход сами и не должны видеть весь шов приёма; тело цикла на фасаде до шага 2) и
+// ITeamNotifier (штаб: bg-agent, ASK-карточка, возврат сторожа волн). processHost здесь нет:
+// тело конца хода не зовёт ни одного метода хоста процесса, entry.Process — поле записи,
+// то есть стор. Экземпляра PendingQueueService тоже нет: тело пользуется только его
+// статикой HasPending/HasContinuingPending.
 // Флаг «штатная остановка» (Stopping) — здесь: его смысл в разборе хода (ADR-033: обрывы
 // умирающего процесса статус не меняют), поднимает его SessionManager.KillAllProcesses.
 // Событие OnSessionMessage (подписка наблюдателей ленты) — здесь: его единственный потребитель —
@@ -41,13 +43,15 @@ public sealed class TurnCompletion : ITurnMessageSink
     private readonly ProviderMigration _providerMigration;
     private readonly TurnCostLedger _costs;
     private readonly Lazy<ITurnStarter> _turnStarter;
+    private readonly Lazy<IWorkLoopContinuation> _workLoop;
     private readonly Lazy<ITeamNotifier> _teamNotifier;
     private readonly ILogger<TurnCompletion> _log;
 
     // ADR-033: «штатная остановка» — ставится SessionManager.KillAllProcesses ДО гашения
     // адаптеров; error/exited умирающего процесса статус не меняют (см. употребление Stopping
     // в OnMessageQueuedAsync и в плане штабу). Read-поля живого разбора цикла/добивания
-    // остались в фасаде до S3-7 и читают этот флаг через это свойство.
+    // остались в фасаде до шага 2 (вынос TurnContinuation) и читают этот флаг через это
+    // свойство; S3-7 перенаправил их вызовы на переходный шов IWorkLoopContinuation.
     internal volatile bool Stopping;
 
     // Наблюдатели сообщения сессии (автоматизация персон, git-автокоммит, журнал событий):
@@ -56,8 +60,8 @@ public sealed class TurnCompletion : ITurnMessageSink
 
     internal TurnCompletion(SessionStore store, ChatHistoryService history, CliRoute route,
         ChatWorktree worktree, ProviderMigration providerMigration, TurnCostLedger costs,
-        Lazy<ITurnStarter> turnStarter, Lazy<ITeamNotifier> teamNotifier,
-        ILogger<TurnCompletion> log)
+        Lazy<ITurnStarter> turnStarter, Lazy<IWorkLoopContinuation> workLoop,
+        Lazy<ITeamNotifier> teamNotifier, ILogger<TurnCompletion> log)
     {
         _store = store;
         _history = history;
@@ -66,6 +70,7 @@ public sealed class TurnCompletion : ITurnMessageSink
         _providerMigration = providerMigration;
         _costs = costs;
         _turnStarter = turnStarter;
+        _workLoop = workLoop;
         _teamNotifier = teamNotifier;
         _log = log;
     }
@@ -637,7 +642,7 @@ public sealed class TurnCompletion : ITurnMessageSink
                     var attempt = ++entry.SubagentNudges;
                     _ = Task.Run(async () =>
                     {
-                        try { await _turnStarter.Value.NudgeTruncatedSubagentAsync(sessionId, cutAgent, attempt); }
+                        try { await _workLoop.Value.NudgeTruncatedSubagentAsync(sessionId, cutAgent, attempt); }
                         catch (Exception ex)
                         {
                             Console.Error.WriteLine($"[SessionManager] Добивание сабагента ({sessionId}): {ex.Message}");
@@ -664,7 +669,7 @@ public sealed class TurnCompletion : ITurnMessageSink
                 if (entry.Info.WorkLoop is not null)
                     _ = Task.Run(async () =>
                     {
-                        try { await _turnStarter.Value.ContinueWorkLoopAsync(sessionId); }
+                        try { await _workLoop.Value.ContinueWorkLoopAsync(sessionId); }
                         catch (Exception ex)
                         {
                             Console.Error.WriteLine($"[SessionManager] Цикл «до готово» ({sessionId}): {ex.Message}");

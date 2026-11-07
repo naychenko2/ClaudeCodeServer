@@ -29,12 +29,15 @@ namespace ClaudeHomeServer.Services.Sessions;
 // относится к разбору хода штаба, а не к паспортам (S3-5/S3-6).
 //
 // Зависимостей восемь: bus, promptSnapshots, mcpStatus, subagentRuns, turnRuns, store,
-// Lazy<ITurnStarter> (шов «паспорт → приём хода»: добивание сабагента поднимает ход, а
-// прямая зависимость замкнула бы цикл «паспорт → приём → паспорт»), реестр контрибьюторов
-// секций промпта.
-// Класс public ТОЛЬКО потому, что он параметр публичного конструктора SessionManager (CS0051) и DI нужен
-// публичный конструктор; обход фасада закрывает сторож формы ядра (правило 4: на типы Services.Sessions
-// ссылаются лишь SessionManager, сами Services.Sessions и тесты).
+// Lazy<IWorkLoopContinuation> (шов «паспорт → продолжение цикла»: добивание сабагента просит
+// продолжение через фасад, а прямая зависимость замкнула бы цикл «паспорт → приём → паспорт»;
+// S3-7: с общего шва ITurnStarter точка снята — добивание ход не стартует само), реестр
+// контрибьюторов секций промпта.
+// Класс public ТОЛЬКО потому, что он параметр публичного конструктора SessionManager (CS0051);
+// конструктор internal (как у TurnCompletion): параметр держит internal-шов IWorkLoopContinuation
+// (CS0051), DI — factory-лямбда в AddSessionCore, вне сборки этот конструктор не зовёт никто;
+// обход фасада закрывает сторож формы ядра (правило 4: на типы Services.Sessions ссылаются лишь
+// SessionManager, сами Services.Sessions и тесты).
 public sealed class TurnPassports
 {
     private readonly PromptSnapshotStore? _promptSnapshots;
@@ -42,12 +45,12 @@ public sealed class TurnPassports
     private readonly Llm.Claude.SubagentRunLog? _subagentRuns;
     private readonly Llm.TurnRunLog? _turnRuns;
     private readonly SessionStore _store;
-    private readonly Lazy<ITurnStarter> _turnStarter;
+    private readonly Lazy<IWorkLoopContinuation> _workLoop;
     private readonly ITurnEventBus _bus;
 
-    public TurnPassports(ITurnEventBus bus, PromptSnapshotStore? promptSnapshots,
+    internal TurnPassports(ITurnEventBus bus, PromptSnapshotStore? promptSnapshots,
         Mcp.McpStatusStore? mcpStatus, Llm.Claude.SubagentRunLog? subagentRuns, Llm.TurnRunLog? turnRuns,
-        SessionStore store, Lazy<ITurnStarter> turnStarter,
+        SessionStore store, Lazy<IWorkLoopContinuation> workLoop,
         IEnumerable<IPromptSectionContributor>? promptSectionContributors)
     {
         _promptSnapshots = promptSnapshots;
@@ -55,7 +58,7 @@ public sealed class TurnPassports
         _subagentRuns = subagentRuns;
         _turnRuns = turnRuns;
         _store = store;
-        _turnStarter = turnStarter;
+        _workLoop = workLoop;
         _bus = bus;
 
         // Подписки на шину событий хода (ADR-013, этап 1): снимок промпта → PromptSnapshotStore,
@@ -240,7 +243,7 @@ public sealed class TurnPassports
                     entry.TruncatedSubagent = run;
                     return;
                 }
-                await _turnStarter.Value.NudgeTruncatedSubagentAsync(sessionId, run, attempt);
+                await _workLoop.Value.NudgeTruncatedSubagentAsync(sessionId, run, attempt);
             }
             catch (Exception ex)
             {

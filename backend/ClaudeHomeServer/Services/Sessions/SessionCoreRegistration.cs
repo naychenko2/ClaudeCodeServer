@@ -30,6 +30,10 @@ public static class SessionCoreRegistration
         // дала бы цикл PendingQueueService → SessionManager → PendingQueueService; на резолве ленивого
         // шва SessionManager ещё не строится, цикл разрывается отложенным вызовом (S3-0 §3).
         services.AddSingleton(sp => new Lazy<ITurnStarter>(() => sp.GetRequiredService<SessionManager>()));
+        // Переходный шов цикла «до готово» (S3-7): продолжение и добивание не стартуют ход сами
+        // и не видят шов приёма; реализует его SessionManager — тело цикла на фасаде до шага 2,
+        // там шов снимается (продолжение зовёт ядро через TrySubmitContinuation).
+        services.AddSingleton(sp => new Lazy<IWorkLoopContinuation>(() => sp.GetRequiredService<SessionManager>()));
 
         // Стор копий транскриптов архивных чатов и учёт лимитов подписок — общие экземпляры
         // с ролями: без них TurnCostLedger и CliRoute собрали бы СВОИ, и счётчик лимитов
@@ -204,8 +208,9 @@ public static class SessionCoreRegistration
             sp.GetService<ClaudeHomeServer.Services.Modules.ModuleRegistry>(),
             sp.GetService<ClaudeHomeServer.Services.Modules.ModuleTokenService>()));
         // Паспорта хода и сабагентов: подписки на шину ставит сам TurnPassports. Шина — тот же
-        // синглтон, что читает фасад (регистрация в Program.cs); шов ITurnStarter — ленивый,
-        // иначе цикл «паспорта → приём хода → паспорта».
+        // синглтон, что читает фасад (регистрация в Program.cs); шов IWorkLoopContinuation —
+        // ленивый, иначе цикл «паспорта → приём хода → паспорта»; S3-7: добивание просит
+        // продолжение цикла, а не старт хода — с общего шва приёма оно снято.
         services.AddSingleton(sp => new TurnPassports(
             sp.GetRequiredService<ClaudeHomeServer.Services.Turn.ITurnEventBus>(),
             sp.GetService<PromptSnapshotStore>(),
@@ -213,7 +218,7 @@ public static class SessionCoreRegistration
             sp.GetService<ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog>(),
             sp.GetService<ClaudeHomeServer.Services.Llm.TurnRunLog>(),
             sp.GetRequiredService<SessionStore>(),
-            sp.GetRequiredService<Lazy<ITurnStarter>>(),
+            sp.GetRequiredService<Lazy<IWorkLoopContinuation>>(),
             sp.GetServices<ClaudeHomeServer.Services.Turn.IPromptSectionContributor>()));
 
         // --- Конец хода (S3-6) ---
@@ -229,6 +234,7 @@ public static class SessionCoreRegistration
             sp.GetRequiredService<ProviderMigration>(),
             sp.GetRequiredService<TurnCostLedger>(),
             sp.GetRequiredService<Lazy<ITurnStarter>>(),
+            sp.GetRequiredService<Lazy<IWorkLoopContinuation>>(),
             sp.GetRequiredService<Lazy<ITeamNotifier>>(),
             sp.GetRequiredService<ILogger<TurnCompletion>>()));
         // Шов «сообщения процесса → разбор ленты»: ленивый на TurnCompletion — с S3-6 его

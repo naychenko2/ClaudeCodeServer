@@ -28,10 +28,14 @@ public class SessionCoreShapeGuardTests
     private const string CoreNamespace = "ClaudeHomeServer.Services.Sessions";
     private const int MaxCtorParams = 10;
 
-    // Единственные допустимые аргументы Lazy<T> (пять именованных разрывов циклов)
+    // Единственные допустимые аргументы Lazy<T> (пять именованных разрывов циклов) плюс
+    // один переходный: IWorkLoopContinuation (S3-7) — шов живёт ровно до шага 2 выноса
+    // цикла «до готово» (TurnContinuation), когда продолжение зовёт ядро через
+    // TrySubmitContinuation; после этого список возвращается к пяти.
     private static readonly HashSet<string> AllowedLazy =
     [
         "ITurnStarter", "ITurnMessageSink", "ITeamNotifier", "IFeatureChatLinks", "ReviewTreePool",
+        "IWorkLoopContinuation",
     ];
 
     // Поимённый allow-list правила 5 (у каждой строки — причина). SessionStore, ChatVisibility и

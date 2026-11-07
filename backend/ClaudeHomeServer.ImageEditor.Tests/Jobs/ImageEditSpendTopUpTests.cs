@@ -15,6 +15,9 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Jobs;
 // из тела ответа очереди уже доходит до задачи (ImageEditResult.RemoteId). Сумму догоняет отдельная
 // запись по Core-шову IFalRequestCost. Опрос — только fal, только доллары, только пока своей суммы
 // нет; «цены нет» и отказ опроса — штатный исход: первая запись остаётся, хоста ничего не роняет.
+// Упавшая задача тарифицирована фалом так же: отказ на скачивании — Fail(charged=true, id)
+// (FalImageEditor.cs:298-305), а суммы в отказном ответе нет нисколько. Догон и здесь тот же
+// guard и тот же путь (шаг S-SPEND-7b); не тарифицировано или id нет — опроса нет.
 public class ImageEditSpendTopUpTests : IDisposable
 {
     private const string Project = "p1";
@@ -244,11 +247,108 @@ public class ImageEditSpendTopUpTests : IDisposable
         spend.Records.Should().HaveCount(2, "RecordSpend решает по RecordedAmount: та же сумма повторно не пишется");
     }
 
+    // ── Упавшая задача: fal берёт деньги и за отказ (шаг S-SPEND-7b) ─────────────
+
+    [Fact]
+    public async Task Фал_УпавшаяЗадачаТарифицирована_ЦенуДогоняютОтдельнойЗаписью()
+    {
+        // Отказ на скачивании у fal: charged=true с request_id (FalImageEditor.cs:298-305)
+        var editor = new ScriptedEditor("fal", ImageEditPriceUnits.Usd, price: null, remoteId: "req-1",
+            failWith: "сбой скачивания");
+        var spend = new CapturingSpend();
+        var cost = new FakeCost(0.04);
+        var service = Service(spend, cost, NullLogger<ImageEditJobService>.Instance, editor);
+
+        var jobId = await StartAsync(service, Owner, "fal", count: 2);
+        var job = await WaitDone(service, Owner, jobId);
+
+        job.Status.Should().Be(ImageEditJobStatus.Failed);
+        await spend.WaitForSecond(Settle);
+
+        spend.Records.Should().HaveCount(2);
+        var first = spend.Records.First();
+        first.OwnerId.Should().Be(Owner);
+        first.Provider.Should().Be(SpendSources.Fal);
+        first.Generations.Should().Be(2, "число вариантов — с первой записи");
+        first.CostUsd.Should().BeNull("ни котировки, ни суммы в отказном ответе нет");
+        first.Label.Should().Be(ImageEditJobService.SpendLabelPendingAmount);
+
+        var topUp = spend.Records.Last();
+        topUp.OwnerId.Should().Be(Owner);
+        topUp.Provider.Should().Be(SpendSources.Fal);
+        topUp.Generations.Should().Be(0, "догоняющая запись не повторяет генерации");
+        topUp.CostUsd.Should().Be(0.04);
+        topUp.Label.Should().Be(ImageEditJobService.SpendLabel);
+
+        cost.Calls.Should().Be(1);
+        cost.RequestIds.Should().ContainSingle().Which.Should().Be("req-1",
+            "цена спрашивается по request_id отказа: деньги по нему списаны");
+    }
+
+    [Fact]
+    public async Task Фал_УпавшаяЗадачаБезRequestId_ОпросаНет()
+    {
+        var editor = new ScriptedEditor("fal", ImageEditPriceUnits.Usd, price: null, remoteId: null,
+            failWith: "сбой скачивания");
+        var spend = new CapturingSpend();
+        var cost = new FakeCost(0.04);
+        var service = Service(spend, cost, NullLogger<ImageEditJobService>.Instance, editor);
+
+        var jobId = await StartAsync(service, Owner, "fal", count: 1);
+        await WaitDone(service, Owner, jobId);
+
+        await spend.WaitForSecond(NoTopUp);
+        spend.Records.Should().ContainSingle().Which.CostUsd.Should().BeNull();
+        cost.Calls.Should().Be(0, "спрашивать не по чему: отказа с id не было");
+    }
+
+    [Fact]
+    public async Task Фал_УпавшаяЗадачаНеТарифицирована_ОпросаНет()
+    {
+        // Поставщик честно сказал «не списано» — опроса фактической цены нет даже с id в ответе
+        var editor = new ScriptedEditor("fal", ImageEditPriceUnits.Usd, price: null, remoteId: "req-1",
+            failWith: "отказано", charged: false);
+        var spend = new CapturingSpend();
+        var cost = new FakeCost(0.04);
+        var service = Service(spend, cost, NullLogger<ImageEditJobService>.Instance, editor);
+
+        var jobId = await StartAsync(service, Owner, "fal", count: 1);
+        var job = await WaitDone(service, Owner, jobId);
+
+        job.Status.Should().Be(ImageEditJobStatus.Failed);
+        await spend.WaitForSecond(NoTopUp);
+        spend.Records.Should().BeEmpty("не списано и не принято — записывать нечего");
+        cost.Calls.Should().Be(0, "не тарифицировано — о фактической цене не спрашивают");
+    }
+
+    [Fact]
+    public async Task Фал_УпавшаяЗадача_ОпросЦеныНеУдался_ЗадачаFailed_ОднаЗаписьИОшибкаВЛог()
+    {
+        var editor = new ScriptedEditor("fal", ImageEditPriceUnits.Usd, price: null, remoteId: "req-1",
+            failWith: "сбой скачивания");
+        var spend = new CapturingSpend();
+        var cost = new FakeCost(null, throws: true);
+        var log = new RecordingLog();
+        var service = Service(spend, cost, log, editor);
+
+        var jobId = await StartAsync(service, Owner, "fal", count: 2);
+        var job = await WaitDone(service, Owner, jobId);
+
+        job.Status.Should().Be(ImageEditJobStatus.Failed, "отказ опроса не меняет исход задачи");
+        cost.Calls.Should().Be(1);
+        log.Errors.Should().Contain(m => m.Contains("req-1"),
+            "отказ — ошибка в лог внутри фонового метода, не необработанное исключение");
+        await spend.WaitForSecond(NoTopUp);
+        spend.Records.Should().ContainSingle().Which.CostUsd.Should().BeNull();
+    }
+
     // ── Фейки ────────────────────────────────────────────────────────────────────
 
     // Драйвер асинхронного пути: прайса модели нет (price: null — как у fal-модели вне каталога),
-    // ActualCost — никогда (FalImageEditor.cs:307), request_id — есть (тот же путь ParseTicket)
-    private sealed class ScriptedEditor(string key, string unit, double? price, string? remoteId) : IImageEditor
+    // ActualCost — никогда (FalImageEditor.cs:307), request_id — есть (тот же путь ParseTicket).
+    // failWith — тот же путь отказа: Fail(charged, id) без суммы (FalImageEditor.cs:298-305)
+    private sealed class ScriptedEditor(string key, string unit, double? price, string? remoteId,
+        string? failWith = null, bool charged = true) : IImageEditor
     {
         private readonly ImageEditModelInfo _model = new("m-topup", "Topup",
             new ImageEditCaps([ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.AsReference, 3, 4, true),
@@ -267,6 +367,8 @@ public class ImageEditSpendTopUpTests : IDisposable
         public Task<ImageEditResult> RunAsync(ImageEditRequest req, IProgress<EditProgress> progress, CancellationToken ct)
         {
             Interlocked.Increment(ref _runs);
+            if (failWith is not null)
+                return Task.FromResult(new ImageEditResult(EditOutcome.Failed, [], null, charged, remoteId, failWith));
             return Task.FromResult(new ImageEditResult(EditOutcome.Ok,
                 [new EditedImage(TestImages.Png(2, 2), "image/png"), new EditedImage(TestImages.Png(2, 2), "image/png")],
                 null, true, remoteId, null));

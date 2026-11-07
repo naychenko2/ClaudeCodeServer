@@ -29,6 +29,9 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 //   из ответа поставщика (ActualCost) догоняет её отдельной записью; у асинхронного ответа
 //   fal (queue.fal.run) цены нет — сумму догоняет опрос по request_id через Core-шов
 //   IFalRequestCost: только fal, только доллары, только пока своей суммы нет (шаг S-SPEND-7);
+//   тот же догон — и у упавшей задачи, за которую поставщик взял деньги (шаг S-SPEND-7b):
+//   fal тарифицирует и отказ на скачивании (FalImageEditor.cs:298-305), а в отказном ответе
+//   суммы нет нисколько, как в успешном;
 // - потолки одновременных задач не распространяются на Higgsfield: работа идёт у
 //   поставщика, а не на нашем железе;
 // - чужая задача и чужая котировка неотличимы от несуществующих.
@@ -607,16 +610,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             job.SizeNote = sizeNote ?? job.SizeNote;
             job.Status = ImageEditJobStatus.Completed;
             sizeNote = job.SizeNote;
-            // Фактическую цену догоняет только fal в долларах и только когда своей суммы нет:
-            // кредиты опросом fal не спрашиваются, а сумму, которую поставщик назвал сам
-            // (ActualCost или котировка), фактом не заменяем. request_id — из тела ответа
-            // очереди (FalImageEditor.ParseTicket → ImageEditResult.RemoteId, шаг S-SPEND-7)
-            if (_falCost is not null
-                && string.Equals(job.Quote.Provider, SpendSources.Fal, StringComparison.OrdinalIgnoreCase)
-                && job.Quote.Estimate.Unit == ImageEditPriceUnits.Usd
-                && job.RecordedAmount is null
-                && !string.IsNullOrWhiteSpace(result.RemoteId))
-                askPriceFor = result.RemoteId;
+            if (FalPricePending(job, result.RemoteId)) askPriceFor = result.RemoteId;
         }
         if (askPriceFor is not null) _ = TopUpAmountAsync(job, askPriceFor);
         await NotifyFinishedAsync(job);
@@ -624,12 +618,25 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             job.ChatSessionId, job.Initiator, sizeNote, job.ThreadId));
     }
 
+    // Общий guard догона для обоих финалов (CompleteAsync и FailAsync, шаг S-SPEND-7b).
+    // Фактическую цену догоняет только fal в долларах и только когда своей суммы нет:
+    // кредиты опросом fal не спрашиваются, а сумму, которую поставщик назвал сам
+    // (ActualCost или котировка), фактом не заменяем. request_id — из тела ответа
+    // очереди (FalImageEditor.ParseTicket → ImageEditResult.RemoteId, шаг S-SPEND-7).
+    // Читать job.RecordedAmount можно только под job.Gate — вызывается из-под lock.
+    private bool FalPricePending(Job job, string? remoteId) =>
+        _falCost is not null
+        && string.Equals(job.Quote.Provider, SpendSources.Fal, StringComparison.OrdinalIgnoreCase)
+        && job.Quote.Estimate.Unit == ImageEditPriceUnits.Usd
+        && job.RecordedAmount is null
+        && !string.IsNullOrWhiteSpace(remoteId);
+
     // Фактическая цена по request_id ответа очереди — через Core-шов IFalRequestCost (тот же
     // экземпляр FalCostService, что и у чата; образец — ImageGenerationService.TopUpAmountAsync).
     // Свой токен: job.Cts гасится отменой задачи (CancelAsync) и к опросу цены завершённой
-    // задачи не относится; окно опроса ограничивает сам FalCostService. Цены нет — штатный
-    // исход: первая запись остаётся без суммы. Исключение внутрь фона ловится здесь:
-    // необработанный фон хост не роняет.
+    // (Completed или Failed) задачи не относится; окно опроса ограничивает сам FalCostService.
+    // Цены нет — штатный исход: первая запись остаётся без суммы. Исключение внутрь фона
+    // ловится здесь: необработанный фон хост не роняет.
     // Пишем только в свой job: RecordSpend под job.Gate сам решает, писать ли, по RecordedAmount
     // — повторный ответ с той же суммой записей не добавляет, чужой задаче сумма не уходит.
     private async Task TopUpAmountAsync(Job job, string requestId)
@@ -669,6 +676,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             RecordSpend(job, (result.ActualCost ?? EstimateCost(job.Quote))?.Amount);
 
         var retry = result.Outcome is EditOutcome.Cancelled or EditOutcome.Rejected ? null : RetryQuote(job, editor);
+        string? askPriceFor = null;
         lock (job.Gate)
         {
             job.Status = result.Outcome == EditOutcome.Cancelled ? ImageEditJobStatus.Cancelled : ImageEditJobStatus.Failed;
@@ -677,7 +685,14 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             job.Error = result.Error;
             if (charged != false && job.RecordedAmount is { } amount)
                 job.Cost = new EditCost(amount, editor.PriceUnit);
+            // Отказ на скачивании fal тарифицирует (FalImageEditor.cs:298-305: charged=true с
+            // request_id), а суммы в отказном ответе нет — как и в успешном. Догон фактической
+            // цены — тот же guard и тот же путь, что у завершённой задачи (шаг S-SPEND-7b):
+            // без этого запись навсегда остаётся «сумма уточняется», хотя деньги списаны.
+            // Не тарифицировано (charged != true) или не по чему спрашивать — опроса нет.
+            if (charged == true && FalPricePending(job, result.RemoteId)) askPriceFor = result.RemoteId;
         }
+        if (askPriceFor is not null) _ = TopUpAmountAsync(job, askPriceFor);
         await NotifyFinishedAsync(job);
         await Broadcast(job.OwnerId, ImageEditScope.ProjectIdOf(job.ProjectId), job.ChatSessionId,
             new ImageEditFailedMessage(job.Id, job.ProjectId, result.Outcome, charged, result.Error, retry,

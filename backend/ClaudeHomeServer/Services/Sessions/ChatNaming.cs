@@ -2,7 +2,6 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
-using ClaudeHomeServer.Services.Composition;
 using Microsoft.Extensions.Logging;
 
 // Тип результата пакетного прогона значков — часть контракта фасада (его читает контроллер
@@ -20,12 +19,14 @@ namespace ClaudeHomeServer.Services.Sessions;
 // живут в фасаде).
 // Класс public ТОЛЬКО потому, что он параметр публичного конструктора SessionManager (CS0051);
 // обход фасада закрывает сторож формы ядра (правило 4).
-// Зависимости (7): store, history, costs, cheap, config, projects, broadcaster. В таблице
+// Зависимости (6): store, history, costs, cheap, config, projects. В таблице
 // S3-0 их четыре (store, history, cheap, config): Retitle/SetChatIcon строят транскрипт по
 // той же склейке чтения ленты, что фасад GetHistoryAsync (история + досчёт цен — без costs
 // поведение изменилось бы: досчёт не случался бы при явном переименовании), пакетный прогон
-// значков фильтрует чаты по видимости через projects, а рассылка переименования идёт прямо
-// в broadcaster (у стора нет равносоставного «rename»-рассыла).
+// значков фильтрует чаты по видимости через projects. Рассылка переименования идёт через
+// store.BroadcastSessionMessageAsync: та же склейка, что у ChatSettings (session-группа +
+// ToChatAudience по записи) — равносоставный «rename»-рассыл у стора есть, собственная
+// связь роли с вещателем была лишней (R-S3-3, замечание 1).
 public sealed class ChatNaming
 {
     private readonly SessionStore _store;
@@ -34,7 +35,6 @@ public sealed class ChatNaming
     private readonly Llm.ICheapTextRunner? _cheap;
     private readonly IConfiguration _config;
     private readonly ProjectManager _projects;
-    private readonly Composition.ISessionBroadcaster _broadcaster;
     private readonly ILogger<ChatNaming> _log;
 
     public ChatNaming(
@@ -44,7 +44,6 @@ public sealed class ChatNaming
         Llm.ICheapTextRunner? cheap,
         IConfiguration config,
         ProjectManager projects,
-        Composition.ISessionBroadcaster broadcaster,
         ILogger<ChatNaming> log)
     {
         _store = store;
@@ -53,7 +52,6 @@ public sealed class ChatNaming
         _cheap = cheap;
         _config = config;
         _projects = projects;
-        _broadcaster = broadcaster;
         _log = log;
     }
 
@@ -298,12 +296,9 @@ public sealed class ChatNaming
         return new IconBatchResult(processed, skipped);
     }
 
-    // Уведомить клиентов об авто-переименовании чата (адресация как у BroadcastChatDeletedAsync)
+    // Уведомить клиентов о переименовании чата (адресация как у BroadcastChatDeletedAsync):
+    // через публичный рассыл стора — та же склейка (session-группа + ToChatAudience по записи),
+    // что делала напрямую через вещателя; отдельной связи роли с вещателем не нужно (R-S3-3, зам. 1).
     private async Task BroadcastChatRenamedAsync(string sessionId, Session info, string name)
-    {
-        var msg = new ChatRenamedMessage(name, info.Topic) with { SessionId = sessionId };
-        var tasks = new List<Task> { _broadcaster.ToSession(sessionId, msg) };
-        tasks.Add(_broadcaster.ToChatAudience(info, msg));
-        await Task.WhenAll(tasks);
-    }
+        => await _store.BroadcastSessionMessageAsync(sessionId, new ChatRenamedMessage(name, info.Topic));
 }

@@ -116,7 +116,6 @@ public static class SessionCoreRegistration
             sp.GetService<ICheapTextRunner>(),
             sp.GetRequiredService<IConfiguration>(),
             sp.GetRequiredService<ProjectManager>(),
-            sp.GetRequiredService<ISessionBroadcaster>(),
             sp.GetRequiredService<ILogger<ChatNaming>>()));
 
         // --- Видимость чата (S3-3) ---

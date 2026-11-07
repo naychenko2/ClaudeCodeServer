@@ -634,7 +634,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // Именование чата (S3-3): читает ленту через ту же склейку, что фасад GetHistoryAsync
         // (history + досчёт цен), поэтому собирается после журнала цен.
         _naming = naming ?? new Sessions.ChatNaming(
-            _store, _sessionHistory, _costs, cheap, config, projects, broadcaster,
+            _store, _sessionHistory, _costs, cheap, config, projects,
             loggerFactory?.CreateLogger<Sessions.ChatNaming>()
                 ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.ChatNaming>.Instance);
         // Видимость чата (S3-3): шов к привязке чатам фичи — ленивый и опциональный (цикл

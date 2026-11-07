@@ -26,8 +26,9 @@ const sstore = new Map<string, string>([['cc_token', 't'], ['cc_user_id', ME]]);
 } as Storage;
 
 // api: подменён только setChatVisibility (класс ChatVisibilityError — настоящий,
-// тексты отказов живут в api и проверяются как есть). Тип мока — реальная сигнатура
-// api (api.ts:2784): ответ ChatVisibilityResponse = Session + attachmentMoves
+// тексты отказов живут в features/chat/api и проверяются как есть). Тип мока —
+// реальная сигнатура setChatVisibility (features/chat/api.ts:145): ответ
+// ChatVisibilityResponse = Session + attachmentMoves
 const apiMock = vi.hoisted(() => ({ setChatVisibility: vi.fn<(id: string, p: boolean) => Promise<ChatVisibilityResponse>>() }));
 const toastMock = vi.hoisted(() => vi.fn());
 // remap ленты по карте переноса (S2d-6b-4F2): сам стор в этом файле не нужен —
@@ -40,7 +41,7 @@ vi.mock('../../../lib/api', async (importOriginal) => {
 vi.mock('../../../lib/toast', () => ({ showToast: toastMock }));
 vi.mock('../../../hooks/useSession', () => ({ remapSessionAttachedPaths: remapMock }));
 
-import { ChatVisibilityError, type ChatVisibilityResponse } from '../../../lib/api';
+import { ChatVisibilityError, type ChatVisibilityResponse } from '../../../features/chat/api';
 import { PrivateChatToggle } from '../PrivateChatToggle';
 
 const sharedProject = { id: 'p1', name: 'Проект', myRole: 'editor' } as unknown as Project;

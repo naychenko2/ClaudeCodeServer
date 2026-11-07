@@ -4,7 +4,8 @@ import type { Project, Session } from '../../types';
 import { C, FONT, R, TB } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Menu, Toggle } from '../ui';
-import { api, ChatVisibilityError } from '../../lib/api';
+import { api } from '../../lib/api';
+import { ChatVisibilityError } from '../../features/chat/api';
 import { readStoredUserId } from '../../lib/offline';
 import { isSharedProject } from '../../features/projects/members/messageAuthor';
 import { remapSessionAttachedPaths } from '../../hooks/useSession';
@@ -86,7 +87,7 @@ export function PrivateChatToggle({ session, project, hasMessages, online, isMob
         onAttachmentMoves?.(attachmentMoves);
       }
     } catch (e) {
-      // 409/403 разобраны в api (ChatVisibilityError) — человек читает текст, не код
+      // 409/403 разобраны в features/chat/api (ChatVisibilityError) — человек читает текст, не код
       showToast('Приватный чат',
         e instanceof ChatVisibilityError ? e.message : 'Не удалось изменить видимость чата', 'info');
     } finally {

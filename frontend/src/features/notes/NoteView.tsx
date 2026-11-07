@@ -16,7 +16,7 @@ import {
 import type { NoteSource } from '../../types';
 // Конфликт сохранения (S2c-F3, п.28): типизированный 409 заметки и тот же диалог с тем же
 // диффом, что у файлов (S2c-F2b) — своих текстов и своей формы здесь нет
-import { NoteConflictError } from '../../lib/api';
+import { NoteConflictError } from './api';
 import { conflictCopyName } from '../../lib/conflictCopyName';
 import { lineDiff } from '../../lib/lineDiff';
 import { SaveConflictDialog } from '../../components/SaveConflictDialog';

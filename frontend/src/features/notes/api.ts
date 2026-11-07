@@ -2,12 +2,12 @@
 // и notes/ проектов. lib/api.ts подмешивает их в объект api spread'ом (адрес
 // api.notes.* остаётся прежним для потребителей); типы — в features/notes/types.ts,
 // доступны через ../../types.
-import { request } from '../../lib/offline';
+import { conflictBodyOf, request } from '../../lib/offline';
+import type { ConflictBody, EtagRef, FileConflictAuthor, FileConflictSource } from '../../lib/offline';
 import type {
   CreateNoteDto,
   DocAnnotation,
   NoteBacklink,
-  NoteDetail,
   NoteFolder,
   NoteGraph,
   NoteReply,
@@ -19,6 +19,41 @@ import type {
   Task,
   UpdateNoteDto,
 } from '../../types';
+import type { NoteDetail } from './types';
+
+// Конфликт сохранения заметки (S2c-F3, К8): 409 с телом {code:'note_changed', …} на
+// PUT /notes/{id} с If-Match. Поля — тело 409 как есть, тот же контракт К8, что у файла:
+// актуальное состояние заметки на момент отказа. author и source бэк заполняет с S3-3,
+// сейчас всегда null. Бросается ТОЛЬКО при ifMatch в notes.update: без If-Match сервер 409
+// по конфликту не отдаёт вовсе, поэтому существующие вызывающие (без ifMatch) её не видят.
+// Тип тела и интерфейсы author/source — в lib/offline: тот же контракт К8 служит
+// конфликту файла (FileConflictError).
+export class NoteConflictError extends Error {
+  readonly status = 409;
+  readonly code = 'note_changed';
+  // Тег актуальной версии (без кавычек, как в теле 409) — по нему повторяют сохранение
+  readonly sha256: string | null;
+  // Актуальный текст чужой версии (заметка — всегда текст)
+  readonly content: string | null;
+  readonly author: FileConflictAuthor | null;
+  readonly changedAt: string | null;
+  readonly source: FileConflictSource | null;
+  constructor(body: ConflictBody) {
+    // Текст тот же, что заголовок диалога конфликта (SaveConflictDialog) — отдельной копии нет
+    super('Заметку изменили, пока вы правили');
+    this.name = 'NoteConflictError';
+    this.sha256 = body.sha256 ?? null;
+    this.content = body.content ?? null;
+    this.author = body.author ?? null;
+    this.changedAt = body.changedAt ?? null;
+    this.source = body.source ?? null;
+  }
+}
+
+// Заметка + тег прочитанной версии (S2c-F3): etag есть только у сетевых get/update;
+// офлайн-доставка из кэша и локальный черновик тега не имеют — версии, по которой можно
+// сохранить по If-Match, без сервера нет. Вызывающие без etag работают как раньше.
+export type NoteWithEtag = NoteDetail & { etag?: string };
 
 export const notesApi = {
   // Заметки (Obsidian-совместимая база знаний): .md файлы в личном vault + notes/ проектов
@@ -106,12 +141,37 @@ export const notesApi = {
       request<NoteDetail>(`/notes/${encodeURIComponent(id)}/toc`, { method: 'POST' }),
     translate: (id: string) =>
       request<NoteDetail>(`/notes/${encodeURIComponent(id)}/translate`, { method: 'POST' }),
-    get: (id: string) => request<NoteDetail>(`/notes/${encodeURIComponent(id)}`),
+    // etag (S2c-F3, К8): тег прочитанной версии — заголовок ETag ответа (quoted sha256,
+    // NotesController.Get). По нему следующее сохранение идёт по If-Match. Офлайн-доставка
+    // из кэша тега не имеет: офлайн-правка идёт своим путём (notesOffline), не по If-Match.
+    get: async (id: string): Promise<NoteWithEtag> => {
+      const etagRef: EtagRef = {};
+      const d = await request<NoteDetail>(`/notes/${encodeURIComponent(id)}`, { etagRef });
+      return { ...d, etag: etagRef.etag };
+    },
     backlinks: (id: string) => request<NoteBacklink[]>(`/notes/${encodeURIComponent(id)}/backlinks`),
     create: (dto: CreateNoteDto) =>
       request<NoteDetail>('/notes', { method: 'POST', body: JSON.stringify(dto) }),
-    update: (id: string, dto: UpdateNoteDto) =>
-      request<NoteDetail>(`/notes/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(dto) }),
+    // ifMatch (К8): тег версии, которую видел вызывающий — etag из get или sha256 из
+    // NoteConflictError (повторная отправка по актуальному состоянию). С If-Match сервер либо
+    // пишет (200 + новый ETag), либо отказывает 409 note_changed, не трогая заметку, — он
+    // становится NoteConflictError с полями тела. Без ifMatch — ровно как раньше: заголовка
+    // нет, 409 по конфликту сервер не отдаёт, существующие вызывающие ничего не заметили.
+    // etagOut: новый ETag ответа 200 — по нему идёт следующее сохранение (NotesController.Update).
+    update: async (id: string, dto: UpdateNoteDto, ifMatch?: string, etagOut?: EtagRef): Promise<NoteWithEtag> => {
+      const sink: EtagRef = etagOut ?? {};
+      try {
+        const d = await request<NoteDetail>(`/notes/${encodeURIComponent(id)}`, {
+          method: 'PUT',
+          body: JSON.stringify(dto),
+          ...(ifMatch ? { headers: { 'If-Match': ifMatch } } : {}),
+          etagRef: sink,
+        });
+        return { ...d, etag: sink.etag };
+      } catch (e) {
+        const b = conflictBodyOf(e, 'note_changed'); if (b) throw new NoteConflictError(b); throw e;
+      }
+    },
     delete: (id: string) =>
       request<void>(`/notes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     // Задачи из заметок (флаг notes-task-sync): чекбоксы .md ↔ задачи

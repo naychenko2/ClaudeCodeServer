@@ -7,7 +7,9 @@
 // мутаций) + meta:notes:localKey-index (serverId → localKey). Конфликт правки —
 // копией «{Title} (conflict …)» (стиль Obsidian Sync), данные не теряются.
 
-import { api, NoteConflictError, type NoteWithEtag } from './api';
+import { api } from './api';
+// eslint-disable-next-line module/no-cross-feature-import -- контракт конфликта заметки живёт в домене
+import { NoteConflictError, type NoteWithEtag } from '../features/notes/api';
 import { isOnline, OfflineError } from './offline';
 import {
   idbGet, idbSet,

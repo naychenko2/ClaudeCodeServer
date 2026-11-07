@@ -700,11 +700,11 @@ public sealed class TurnProcessHost
     // → убийство процессов.
     internal void KillProcesses()
     {
-        // Дебаунс-таймер MarkRead фасад сбрасывает синхронно (FlushPendingSave) ДО убийства:
-        // отложенная запись не теряется, а SaveSessions() завершается на этом же потоке,
-        // без гонки с диспозом.
-        _store.FlushPendingSave();
-
+        // Дебаунс-таймер MarkRead здесь НЕ сбрасывается: фасад делает это синхронно
+        // (FlushPendingSave) ДО этого вызова — порядок в комментарии выше. Отложенная
+        // запись не теряется, SaveSessions() завершается на том же потоке, без гонки с
+        // диспозом. Роль зовётся только из SessionManager.KillAllProcesses (R-S3-5: дубль
+        // сброса в роли убран — комментарий приписывал действие фасада, а код повторял его сам).
         var tasks = _sessions.Values
             .Select(e => e.Process)
             .OfType<Llm.ILlmSessionAdapter>()

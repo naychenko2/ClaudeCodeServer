@@ -1129,6 +1129,30 @@ public class WikiNightlyServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ДвижокЗанятСлотНеДождались_ИтогНазываетЗанятостьANePustoyOtvet()
+    {
+        // c2 + требование 5 (WN-4): отказ по занятости доезжает до ночи причиной про занятость
+        // движка, а не «модель дала пустой ответ» (так ночь 06.11 прятала 108 отказов без
+        // единого вызова модели). Ночь считает такие чаты rejected, пишет первую причину и при
+        // нулевом входе даёт error — guard WN-2 с ожиданием слота не превращается в
+        // бесконечный повтор: отказ назван и в журнале, и в итоге.
+        Configure();
+        AddChat("c1", ageMinutes: 0);
+        _llm.Throw = actionKey => actionKey == LocalActionCatalog.WikiNightly
+            ? new LocalEngineSlotRefusalException("local-qwen", LocalTurnRefusal.Timeout, 4, 4)
+            : null;
+
+        await Tick(RealSut());
+
+        var last = Last();
+        last.Analyzed.Should().Be(1);
+        last.Rejected.Should().Be(1, "отказ по занятости — отказ разбора, он считается");
+        last.FirstRejectReason.Should().Contain("занят").And.NotContain("пустой ответ");
+        last.InputTokens.Should().Be(0, "модель не звалась — понесённого расхода нет");
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeError);
+    }
+
+    [Fact]
     public async Task СтарыйИтогБезПоля_ЧитаетсяНулём()
     {
         // Аддитивность поля: файл итога, записанный до WC-4b, читается как раньше, нового поля в нём
@@ -1403,6 +1427,9 @@ public class WikiNightlyServiceTests : IDisposable
         public long LocalInputTokens;
         // Модель вызвана и встала на гейте — событие вместо таймерного ожидания в тестах.
         public readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        // «Движок не принял вызов» по actionKey (WN-4): возврат исключением вместо ответа —
+        // так же, как ждущий слот путь TrackedLocalLlmClient (LocalEngineSlotRefusalException).
+        public Func<string, Exception?>? Throw;
 
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => true;
@@ -1436,6 +1463,8 @@ public class WikiNightlyServiceTests : IDisposable
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
         {
             var text = Answer(actionKey, prompt);
+            if (Throw?.Invoke(actionKey) is { } ex)
+                return Task.FromException<OneShotResult?>(ex);
             return Task.FromResult<OneShotResult?>(new OneShotResult(
                 text,
                 LocalInputTokens == 0

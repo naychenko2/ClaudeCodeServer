@@ -600,6 +600,21 @@ public sealed class WikiIngestService
                 used = result.Usage;
             }
         }
+        catch (LocalEngineSlotRefusalException e)
+        {
+            // Движок занят, слота не дождались: модель не звалась ни разу. Это НЕ «модель дала
+            // пустой ответ» — та формулировка прятала сбой занятости за обычным исходом модели
+            // (ночь 06.11: 108 отказов, ни одного вызова). Причина доезжает до журнала ночи
+            // дословно — в rejected и firstRejectReason (WN-4).
+            return new ModelAnswer(null, $"{passName}: {e.Message}");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Ожидание слота прервано остановкой ночи / закрытием окна / остановкой службы:
+            // это не отказ одного чата, это конец прохода — он уходит наружу отменой, как и
+            // остальные точки прохода (тот же приём, что у цикла WikiNightlyService).
+            throw;
+        }
         catch (Exception e)
         {
             return new ModelAnswer(null, $"{passName}: модель не ответила: {e.Message}");

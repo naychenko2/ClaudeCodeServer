@@ -638,6 +638,135 @@ public class LocalActionRoutingTests
         claude.Calls.Should().BeEmpty("сбой локали не переводит вызов в облако");
     }
 
+    // ─── WN-4: ночной вызов ждёт свободный слот общего счётчика, а не отказывается ───
+    // Тот же путь, что DetailedNoCloudRunner, но клиент обёрнут в TrackedLocalLlmClient и
+    // делит счётчик с чужим «ходом» (держателем слота): без обёртки очередь не проверяется,
+    // с ней проверяется и гонка с ходом, и порядок в очереди, и отмена.
+
+    private const string SlotKey = "test";
+
+    // Держатель единственного слота ключа: тесту уверенный слот нужен по смыслу (иначе
+    // «полный счётчик» в тесте не собран).
+    private static IDisposable TakeSlot(LocalEngineBusyTracker tracker, int limit = 1) =>
+        tracker.TryEnter(SlotKey, limit) ?? throw new InvalidOperationException("слот не выдан");
+
+    private static (CheapTextRunner Runner, DetailedLocalEngine Inner, LocalEngineBusyTracker Tracker)
+        TrackedNoCloudRunner(string answer, int limit = 1, TimeSpan? waitTimeout = null)
+    {
+        var inner = new DetailedLocalEngine(answer, new Protocol.UsageInfo(1_000, 50, 0, 0));
+        var tracker = new LocalEngineBusyTracker();
+        var local = new TrackedLocalLlmClient(inner, tracker, SlotKey, () => limit,
+            NullLogger<TrackedLocalLlmClient>.Instance,
+            // Та же форма политики ожидания, что у провайдера в бою, только короче потолок:
+            // тест про отказ по времени не должен ждать минуты.
+            waitTimeout is { } t ? () => new LocalSlotWaitPolicy(limit * 4, t) : null);
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "qwen-test" });
+        var router = new LocalActionRouter(local, Store(config), config,
+            NullLogger<LocalActionRouter>.Instance, busy: tracker);
+        return (new CheapTextRunner(router, local, Cloud(config), new FakeOneShot(),
+            NullLogger<CheapTextRunner>.Instance), inner, tracker);
+    }
+
+    [Fact]
+    public async Task НочнойВызовЖдётСлот_ИОтвечаетПослеОсвобождения()
+    {
+        // c1 (WN-4): при полном счётчике ночной вызов не отказывается — он стоит в очереди
+        // общего счётчика и даёт ответ, как только слот освободится. Мутация c5 (заменить
+        // ожидание на TryEnter без ожидания): вызов вернулся бы сразу с null, assertion
+        // «не завершился отказом» и inner.Calls — красные.
+        var (runner, inner, tracker) = TrackedNoCloudRunner("ответ-ночи");
+        var turn = TakeSlot(tracker); // ход держит единственный слот движка
+
+        var run = runner.RunLocalOrChosenDetailedAsync(LocalActionCatalog.WikiNightly, "prompt-text",
+            jsonFormat: "json");
+
+        var finished = await Task.WhenAny(run, Task.Delay(TimeSpan.FromMilliseconds(300)));
+        finished.Should().NotBeSameAs(run, "слот занят: ночной вызов ждёт, а не вернулся с отказом");
+        tracker.QueuedFor(SlotKey).Should().Be(1, "заявка стоит в очереди общего счётчика");
+        inner.Calls.Should().Be(0, "пока слота нет, модель не звалась");
+
+        turn.Dispose();
+
+        var result = await run.WaitAsync(TimeSpan.FromSeconds(10));
+        result.Should().NotBeNull("освободившийся слот достался очереди");
+        result!.Text.Should().Be("ответ-ночи");
+        result.Usage.Should().NotBeNull("usage того же ответа — смысл detailed-цепочки");
+        inner.Calls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task НочьНеОбгоняетОчередь_СлотСначалаРаньшеВставшему()
+    {
+        // c3 (WN-4): очередь одна на движок, и обгон запрещён и для ночи. Мутация: отдельный
+        // допуск для ночи (второй семафор или обход очереди) — ночь взяла бы слот первой,
+        // IsCompleted после первого освобождения стал бы true, тест красный.
+        var (runner, inner, tracker) = TrackedNoCloudRunner("ответ-ночи");
+        var turn = TakeSlot(tracker);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(1));
+        // «Ход CLI» встал в очередь раньше ночи — тот же AcquireAsync, что у FallbackLlmSessionAdapter.
+        var cli = tracker.AcquireAsync(SlotKey, 1, 8, TimeSpan.FromMinutes(1), cts.Token);
+        var run = runner.RunLocalOrChosenDetailedAsync(LocalActionCatalog.WikiNightly, "prompt-text",
+            jsonFormat: "json");
+        tracker.QueuedFor(SlotKey).Should().Be(2, "ночь встала в конец очереди, за уже ждущим ходом");
+
+        turn.Dispose(); // освободился единственный слот
+
+        var admission = await cli.WaitAsync(TimeSpan.FromSeconds(10));
+        admission.Slot.Should().NotBeNull("слот достался голове очереди");
+        run.IsCompleted.Should().BeFalse("ночь ждёт своей очереди, обгона нет");
+
+        admission.Slot!.Dispose();
+        var result = await run.WaitAsync(TimeSpan.FromSeconds(10));
+        result.Should().NotBeNull();
+        result!.Text.Should().Be("ответ-ночи");
+        inner.Calls.Should().Be(1, "модель звалась ровно один раз");
+    }
+
+    [Fact]
+    public async Task ОтменаПрерываетОжиданиеСлота_НеКакОтказЗанято()
+    {
+        // c4 (WN-4): остановка ночи/закрытие окна/остановка службы гасят и ожидание слота.
+        // Отмена — не отказ «движок занят»: она уходит наружу отменой (и снимает заявку с
+        // очереди), иначе остановленная ночь отказала бы каждый оставшийся чат по занятости.
+        // Мутация: обернуть AcquireAsync в LocalEngineSlotRefusalException — тест красный.
+        var (runner, inner, tracker) = TrackedNoCloudRunner("не важно");
+        var turn = TakeSlot(tracker);
+        using var cts = new CancellationTokenSource();
+        var run = runner.RunLocalOrChosenDetailedAsync(LocalActionCatalog.WikiNightly, "prompt-text",
+            jsonFormat: "json", ct: cts.Token);
+        tracker.QueuedFor(SlotKey).Should().Be(1);
+
+        cts.Cancel();
+
+        // ThrowsAnyAsync: WaitAsync отдаёт TaskCanceledException (наследник OCE) — важна не
+        // точная форма, а то, что это отмена, а не отказ по занятости.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+        inner.Calls.Should().Be(0, "модель не звалась");
+        tracker.QueuedFor(SlotKey).Should().Be(0, "отменённая заявка снята с очереди");
+        turn.Dispose();
+    }
+
+    [Fact]
+    public async Task НочьНеДождаласьСлота_ОтказНазываетЗанятостьADNePustoyOtvet()
+    {
+        // Требования 3 и 4 (WN-4): истечение потолка ожидания — отказ с причиной, а не
+        // молчаливый null: «модель дала пустой ответ» прятало бы сбой занятости за обычным
+        // исходом модели (прод 06.11: 108 таких отказов, ни одного вызова модели).
+        // Мутация: вернуть (null, null) вместо исключения — тест красный.
+        var (runner, inner, tracker) = TrackedNoCloudRunner("не важно",
+            waitTimeout: TimeSpan.FromMilliseconds(200));
+        var turn = TakeSlot(tracker);
+
+        var ex = await Assert.ThrowsAsync<LocalEngineSlotRefusalException>(
+            () => runner.RunLocalOrChosenDetailedAsync(LocalActionCatalog.WikiNightly, "prompt-text",
+                jsonFormat: "json"));
+
+        ex.Why.Should().Be(LocalTurnRefusal.Timeout);
+        ex.Message.Should().Contain("занят").And.Contain("вышло время ожидания");
+        inner.Calls.Should().Be(0, "модель не звалась ни разу");
+        turn.Dispose();
+    }
+
     // Подменённый шов БЕЗ переопределения detailed-метода: работает реализация по умолчанию
     // интерфейса — текст тот же, что у строкового метода, usage = null, исключений нет. Так
     // существующие потребители и тестовые фейки шва от нового метода не меняются.

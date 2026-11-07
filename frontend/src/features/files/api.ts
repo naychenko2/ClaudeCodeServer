@@ -3,9 +3,39 @@
 //
 // Маршрут «сервер или агент» решает lib/deviceAgent — та же его копия, что у lib/api.ts:
 // память о проекте одна на приложение.
-import { readStoredToken, request } from '../../lib/offline';
+import { conflictBodyOf, readStoredToken, request } from '../../lib/offline';
+import type { ConflictBody, EtagRef, FileConflictAuthor, FileConflictSource } from '../../lib/offline';
 import { assertServerRoute, projectRequest, projectRouteOf } from '../../lib/deviceAgent';
 import type { ChangedBySession, FileEntry, SyncMark } from '../../types';
+
+// Конфликт сохранения файла (S2c-F2a, К8): 409 с телом {code:'file_changed', …} на
+// PUT files/content с If-Match. Поля — тело 409 как есть: актуальное состояние файла на
+// момент отказа. author и source бэк заполняет с S3-3/S2d-4, сейчас всегда null.
+// Бросается ТОЛЬКО при ifMatch в saveContent: без If-Match сервер 409 по конфликту не отдаёт
+// вовсе, поэтому существующие вызывающие (без ifMatch) этой ошибки не видят.
+// Тип тела и интерфейсы author/source — в lib/offline: тот же контракт К8 служит
+// конфликту заметки (NoteConflictError).
+export class FileConflictError extends Error {
+  readonly status = 409;
+  readonly code = 'file_changed';
+  // Тег актуальной версии (без кавычек, как в теле 409) — по нему повторяют сохранение
+  readonly sha256: string | null;
+  // Актуальный текст чужой версии; null для не-текста (видео/аудио/документ/сверх потолка)
+  readonly content: string | null;
+  readonly author: FileConflictAuthor | null;
+  readonly changedAt: string | null;
+  readonly source: FileConflictSource | null;
+  constructor(body: ConflictBody) {
+    // Текст тот же, что заголовок диалога конфликта (SaveConflictDialog) — отдельной копии нет
+    super('Файл изменили, пока вы правили');
+    this.name = 'FileConflictError';
+    this.sha256 = body.sha256 ?? null;
+    this.content = body.content ?? null;
+    this.author = body.author ?? null;
+    this.changedAt = body.changedAt ?? null;
+    this.source = body.source ?? null;
+  }
+}
 
 // Методы домена; lib/api.ts подмешивает их в объект api spread'ом.
 export const filesApi = {
@@ -47,13 +77,38 @@ export const filesApi = {
     // featureId (W4-5B2): читать из проверенного дерева эпика; без него — корень проекта.
     // sessionId (F1a): резолвить путь в дереве чата; ответ несёт branch (в каком дереве
     // нашли) и isAnchor (true — файл найден в заявленном дереве-анкере, false — в другом).
-    getContent: (projectId: string, path: string, featureId?: string, opts?: { sessionId?: string }) =>
-      projectRequest<{ content: string | null; isBinary: boolean; isImage: boolean; isDocument?: boolean; docKind?: string; mimeType?: string; base64?: string; fileSize?: number; branch?: string | null; isAnchor?: boolean }>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}${featureId ? `&featureId=${encodeURIComponent(featureId)}` : ''}${opts?.sessionId ? `&sessionId=${encodeURIComponent(opts.sessionId)}` : ''}`),
-    saveContent: (projectId: string, path: string, content: string) =>
-      projectRequest<void>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}`, {
-        method: 'PUT',
-        body: JSON.stringify({ content }),
-      }),
+    // etag (S2c-F2a, К8): тег прочитанной версии для сохранения по If-Match. Сервер даёт его
+    // только редактируемому тексту до 10 МиБ (FilesController.IsEtaggableText); видео/аудио/
+    // документы и сверх потолка — без тега, как и их правка без If-Match. Агент и ретранслятор
+    // ETag не отдают вовсе (LocalApi.MapFiles, ProjectRelayController) — там etag undefined.
+    // Офлайн-доставка из кэша тега не имеет: сохранять офлайн нельзя в любом случае.
+    getContent: async (projectId: string, path: string, featureId?: string, opts?: { sessionId?: string }) => {
+      const etagRef: EtagRef = {};
+      const data = await projectRequest<{ content: string | null; isBinary: boolean; isImage: boolean; isDocument?: boolean; docKind?: string; mimeType?: string; base64?: string; fileSize?: number; branch?: string | null; isAnchor?: boolean }>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}${featureId ? `&featureId=${encodeURIComponent(featureId)}` : ''}${opts?.sessionId ? `&sessionId=${encodeURIComponent(opts.sessionId)}` : ''}`, { etagRef });
+      return { ...data, etag: etagRef.etag };
+    },
+    // ifMatch (К8): тег версии, которую видел вызывающий, — etag из getContent или sha256 из
+    // FileConflictError (повторная отправка по актуальному состоянию). С If-Match сервер либо
+    // пишет (200), либо отказывает 409 file_changed, не трогая файл, — он становится
+    // FileConflictError с полями тела. Без ifMatch — ровно как раньше: заголовка нет,
+    // 409 по конфликту сервер не отдаёт, существующие вызывающие ничего не заметили.
+    // Офлайн-сохранение — OfflineError, как любая прочая мутация: очереди файлов нет,
+    // запись с If-Match офлайн не ставится в очередь молча (offline.ts: мутации офлайн запрещены).
+    // etagOut: новый ETag ответа 200, если сервер его прислал (у файлов пока не присылает —
+    // см. дефект; у заметок присылает). На агентской ветке If-Match до агента не доходит и
+    // не проверяется: там конфликта нет по построению бэка.
+    saveContent: async (projectId: string, path: string, content: string, ifMatch?: string, etagOut?: EtagRef): Promise<void> => {
+      try {
+        await projectRequest<void>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}`, {
+          method: 'PUT',
+          body: JSON.stringify({ content }),
+          ...(ifMatch ? { headers: { 'If-Match': ifMatch } } : {}),
+          etagRef: etagOut,
+        });
+      } catch (e) {
+        const b = conflictBodyOf(e, 'file_changed'); if (b) throw new FileConflictError(b); throw e;
+      }
+    },
     // Документы (pdf/docx/xlsx/pptx): конвертация в MD + ИИ-помощь (локальная модель / claude)
     documentConvert: (projectId: string, path: string) =>
       projectRequest<{ markdown: string }>(`/projects/${projectId}/files/document/convert?path=${encodeURIComponent(path)}`, { method: 'POST' }),

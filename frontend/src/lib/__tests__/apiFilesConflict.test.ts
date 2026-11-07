@@ -8,9 +8,15 @@ const { request, readStoredToken } = vi.hoisted(() => ({
   request: vi.fn(),
   readStoredToken: vi.fn(() => 'tok'),
 }));
-vi.mock('../offline', () => ({ request, readStoredToken }));
+// request() и readStoredToken() мокаем: тест задаёт поведение сервера. Остальное — настоящее:
+// catch saveContent зовёт настоящий conflictBodyOf, цепочка 409 → FileConflictError проверяется по нему.
+vi.mock('../offline', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../offline')>();
+  return { ...orig, request, readStoredToken };
+});
 
-import { api, FileConflictError } from '../api';
+import { api } from '../api';
+import { FileConflictError } from '../../features/files/api';
 
 type ReqOpts = { method?: string; body?: string; headers?: Record<string, string>; etagRef?: { etag?: string } };
 

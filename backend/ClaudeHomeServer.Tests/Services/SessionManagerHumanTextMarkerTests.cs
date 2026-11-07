@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Reflection;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -88,13 +89,33 @@ public class SessionManagerHumanTextMarkerTests : IDisposable
             new ClaudeHomeServer.Services.Llm.UserModelTierResolver(userStore, appSettings));
         var teamPlanning = new TeamPlanningService(personas);
 
-        _sut = new SessionManager(_projectManager, _historyService, config, adapters, falCost, usage, appSettings,
-            userStore, jwt, server.Object, llmProviders, flags, personas, bindings, subPool,
-            NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
-            git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance),
-            assignments: assignments, teamPlanning: teamPlanning, activity: activity,
-            subagentRuns: new ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog(),
-            broadcaster: _broadcaster);
+        _sut = SessionCoreTestHost.Build(_tempDir, s =>
+        {
+            s.AddSingleton<global::ClaudeHomeServer.Services.ProjectManager>(_projectManager);
+            s.AddSingleton<global::ClaudeHomeServer.Services.ChatHistoryService>(_historyService);
+            s.AddSingleton<global::Microsoft.Extensions.Configuration.IConfiguration>(config);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(adapters);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FalCostService>(falCost);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.UsageService>(usage);
+            s.AddSingleton<global::ClaudeHomeServer.Services.AppSettingsService>(appSettings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.UserStore>(userStore);
+            s.AddSingleton<global::ClaudeHomeServer.Services.JwtService>(jwt);
+            s.AddSingleton<global::Microsoft.AspNetCore.Hosting.Server.IServer>(server.Object);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.LlmProviderRegistry>(llmProviders);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FeatureFlagService>(flags);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaManager>(personas);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaBindingsService>(bindings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(subPool);
+            s.AddSingleton<global::Microsoft.Extensions.Logging.ILogger<ClaudeHomeServer.Services.SessionManager>>(NullLogger<SessionManager>.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.ILauncherFactory>(TestLauncherFactory.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.SandboxManager>(sandbox);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Git.GitService>(new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance));
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ModelAssignmentResolver>(assignments);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Team.TeamPlanningService>(teamPlanning);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.SubscriptionActivityTracker>(activity);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog>(new ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog());
+            s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(_broadcaster);
+        }).Manager;
     }
 
     public void Dispose() => Helpers.TestFs.DeleteDirectoryResilient(_tempDir);

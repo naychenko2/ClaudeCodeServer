@@ -84,9 +84,13 @@ public class FalCostResolveTests
             lock (Starts) Starts.Add(DateTimeOffset.UtcNow);
             await Task.Delay(30, ct); // держим «в полёте», чтобы параллельность была видна
             Interlocked.Decrement(ref _inFlight);
+            // Цена в ответе нужна, чтобы Track-путь дошёл до публикации (OnCostResolved) —
+            // тест бэкфилла ждёт оба завершенных опроса.
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("""{"billing_events":[]}"""),
+                Content = new StringContent("""
+                    {"billing_events":[{"request_id":"x","cost_estimate_nano_usd":123000000}]}
+                    """),
             };
         }
     }
@@ -179,8 +183,10 @@ public class FalCostResolveTests
     // —— Окно времени в запросе (дефект S-SPEND-4, доработка R-S-SPEND-4): без start
     // billing-events отдаёт только последние 24 ч (доки fal: start по умолчанию = −24ч) —
     // генерации старше суток бэкфилл не находил никогда. start = время генерации − 1ч запас;
-    // end — явный, min(сейчас, start + 89д): без него дефолт API «сейчас» делает диапазон
-    // шире лимита fal (90 дней на запрос) для старых генераций — те отвергались валидацией. ——
+    // end — явный и строится из времени генерации (start + 24ч): без него дефолт API «сейчас»
+    // делает диапазон шире лимита fal (90 дней на запрос) для старых генераций — те отвергались
+    // валидацией; а end из «нашего сейчас» при отставании наших часов оставляет свежую
+    // генерацию за верхней границей и может инвертировать окно (дельта-ревью R-S-SPEND-4b, п.5). ——
 
     // Конструктор UUIDv7 по времени: первые 48 бит — Unix ms (RFC 9562), версия — '7' в
     // начале третьей группы. Для тестов границ разбора: id с заданным временем, v4-id.
@@ -277,8 +283,9 @@ public class FalCostResolveTests
     {
         // Генерация старше 90 дней (вердикт ревью R-S-SPEND-4): без явного end дефолт API —
         // «сейчас», диапазон [ген − 1ч, сейчас) > 90 дней — fal отвергает запрос валидацией,
-        // каждая попытка цикла повторяет его, цена не находится никогда. end = min(сейчас,
-        // start + 89д): окно остаётся 89 дней и содержит событие (его timestamp — момент запроса).
+        // каждая попытка цикла повторяет его, цена не находится никогда. end строится из времени
+        // генерации (start + 24ч, дельта-ревью R-S-SPEND-4b): окно много короче лимита и
+        // содержит событие (его timestamp — момент запроса, начало окна).
         long genMs = new DateTimeOffset(2025, 6, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds();
         var id = UuidV7WithTime(genMs);
         var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
@@ -298,9 +305,37 @@ public class FalCostResolveTests
         endMatch.Success.Should().BeTrue("end передаётся явно — иначе окно старых генераций отвергается fal");
         var start = DateTimeOffset.Parse("2025-05-31T23:00:00Z", CultureInfo.InvariantCulture);
         var end = DateTimeOffset.Parse(endMatch.Groups[1].Value, CultureInfo.InvariantCulture);
-        (end - start).TotalDays.Should().BeLessThanOrEqualTo(90.0, "диапазон не превышает лимит fal (90 дней на запрос)");
+        (end - start).TotalHours.Should().BeLessThanOrEqualTo(24.0,
+            "окно строится из времени генерации (start + 24ч), а не из «сейчас» (R-S-SPEND-4b, п.5)");
         end.Should().BeAfter(DateTimeOffset.FromUnixTimeMilliseconds(genMs),
             "окно содержит время запроса: событие биллинга (timestamp запроса) внутри окна");
+    }
+
+    [Fact]
+    public async Task TrackСОтстающимиЧасами_ОкноСтроитсяОтГенерацииАНеОтСейчас()
+    {
+        // Наши часы отстают от реальных на 2 ч (эквивалент: FinishedAt вызывающего опережает
+        // «наше сейчас»). end из «нашего сейчас» оказался бы РАНЬШЕ start — инвертированное
+        // окно, цена свежей генерации не находится никогда (дельта-ревью R-S-SPEND-4b, п.5).
+        // Окно строится из времени генерации: end > start, событие внутри.
+        var tcs = new TaskCompletionSource();
+        var handler = OkPriceHandler();
+        var svc = MakeService(handler);
+        svc.OnCostResolved = (sessionId, cost) => { tcs.TrySetResult(); return Task.CompletedTask; };
+        long genMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 2 * 3_600_000;
+
+        svc.Track("s-1", "req-lag", genMs);
+        (await Task.WhenAny(tcs.Task, Task.Delay(5000))).Should().Be(tcs.Task, "публикация стоимости ожидаема");
+
+        var query = Uri.UnescapeDataString(handler.LastRequest!.RequestUri!.Query);
+        var startMatch = Regex.Match(query, @"start=(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)");
+        var endMatch = Regex.Match(query, @"end=(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)");
+        startMatch.Success.Should().BeTrue();
+        endMatch.Success.Should().BeTrue();
+        var start = DateTimeOffset.Parse(startMatch.Groups[1].Value, CultureInfo.InvariantCulture);
+        var end = DateTimeOffset.Parse(endMatch.Groups[1].Value, CultureInfo.InvariantCulture);
+        end.Should().BeAfter(start, "окно не инвертируется нашими часами: end из времени генерации");
+        end.Should().BeAfter(DateTimeOffset.FromUnixTimeMilliseconds(genMs), "окно содержит время генерации");
     }
 
     // —— Границы разбора UUIDv7 (вердикт ревью R-S-SPEND-4): время из id используется как
@@ -346,14 +381,16 @@ public class FalCostResolveTests
     [Fact]
     public async Task TrackСV7БудущимВременем_ОкноСтроитсяОтВремениВызывающего()
     {
-        // v7-id с временем «через год» (за запасом «завтра»): правдоподобным не считается —
-        // окно от времени вызывающего.
+        // v7-id с временем «через два дня» (за запасом «завтра»): правдоподобным не считается —
+        // окно от времени вызывающего. Время — относительно «сейчас», а не фиксированная дата:
+        // hardcoded 2027-11-01 после 31.10.2027 попал бы в разрешённый диапазон и тест краснел
+        // бы сам, без всякой правки кода (дельта-ревью R-S-SPEND-4b, п.7).
         var tcs = new TaskCompletionSource();
         var handler = OkPriceHandler();
         var svc = MakeService(handler);
         svc.OnCostResolved = (sessionId, cost) => { tcs.TrySetResult(); return Task.CompletedTask; };
         long genMs = new DateTimeOffset(2026, 11, 1, 12, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds();
-        var futureId = UuidV7WithTime(new DateTimeOffset(2027, 11, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds());
+        var futureId = UuidV7WithTime(DateTimeOffset.UtcNow.AddDays(2).ToUnixTimeMilliseconds());
 
         svc.Track("s-1", futureId, genMs);
         (await Task.WhenAny(tcs.Task, Task.Delay(5000))).Should().Be(tcs.Task, "публикация стоимости ожидаема");
@@ -365,14 +402,17 @@ public class FalCostResolveTests
     [Fact]
     public async Task TrackСV4Id_ОкноСтроитсяОтВремениВызывающего()
     {
-        // UUIDv4 (версия «4»): времени в id нет — даже с правдоподобными битами окна,
-        // окно строится от времени вызывающего.
+        // UUIDv4 (версия «4»): времени в id нет — даже с правдоподобными битами времени,
+        // окно строится от времени вызывающего. id собран из ДРУГОГО времени (2015), а не из
+        // ожидаемого genMs: иначе проверка версии в разборе не держалась бы тестом — снятие её
+        // прочитало бы время из тех же бит, и start совпал бы (дельта-ревью R-S-SPEND-4b, п.6).
         var tcs = new TaskCompletionSource();
         var handler = OkPriceHandler();
         var svc = MakeService(handler);
         svc.OnCostResolved = (sessionId, cost) => { tcs.TrySetResult(); return Task.CompletedTask; };
         long genMs = new DateTimeOffset(2026, 11, 1, 12, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds();
-        var hex = genMs.ToString("x12", CultureInfo.InvariantCulture);
+        var hex = new DateTimeOffset(2015, 1, 1, 0, 0, 0, TimeSpan.Zero)
+            .ToUnixTimeMilliseconds().ToString("x12", CultureInfo.InvariantCulture);
         var v4Id = $"{hex[..8]}-{hex[8..12]}-4000-8000-000000000000";
 
         svc.Track("s-1", v4Id, genMs);
@@ -380,6 +420,50 @@ public class FalCostResolveTests
 
         Uri.UnescapeDataString(handler.LastRequest!.RequestUri!.Query)
             .Should().Contain("start=2026-11-01T11:00:00Z", "v4-id не несёт времени — окно от вызывающего");
+    }
+
+    [Fact]
+    public async Task TrackСUuidБезРазделителя_ОкноСтроитсяОтВремениВызывающего()
+    {
+        // id 36 символов, с правдоподобной версией («7») и hex-битами времени, но с сломанным
+        // разделителем: это не UUID, время из него не читается. «not-a-uuid» структурную проверку
+        // не держит — его hex-парсинг падает и без неё (дельта-ревью R-S-SPEND-4b, п.6). Здесь
+        // без структурной проверки время прочиталось бы (01a19694…7252 — валидные биты) и окно
+        // строилось бы от id (09:07), а не от вызывающего (11:00) — тест краснел бы на её снятии.
+        var tcs = new TaskCompletionSource();
+        var handler = OkPriceHandler();
+        var svc = MakeService(handler);
+        svc.OnCostResolved = (sessionId, cost) => { tcs.TrySetResult(); return Task.CompletedTask; };
+        long genMs = new DateTimeOffset(2026, 11, 1, 12, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds();
+        var brokenId = "01a19694-7252-73d0ac862-2fc2bfe3f09d";
+
+        svc.Track("s-1", brokenId, genMs);
+        (await Task.WhenAny(tcs.Task, Task.Delay(5000))).Should().Be(tcs.Task, "публикация стоимости ожидаема");
+
+        Uri.UnescapeDataString(handler.LastRequest!.RequestUri!.Query)
+            .Should().Contain("start=2026-11-01T11:00:00Z", "разбитый формат id — не источник времени");
+    }
+
+    [Fact]
+    public async Task TrackССтарымUuidv7ИзПрошлого_ОкноСтроитсяОтВремениИдентификатора()
+    {
+        // Нижняя граница «здравого смысла» (2010) тестом не закреплена ни одним id (дельта-ревью
+        // R-S-SPEND-4b, п.8): подъём её до 2020 не краснил ничего. Любая реальная генерация fal
+        // много позже 2010 — этот тест держит границу на 2011: окно строится из id, а не от
+        // времени вызывающего.
+        var tcs = new TaskCompletionSource();
+        var handler = OkPriceHandler();
+        var svc = MakeService(handler);
+        svc.OnCostResolved = (sessionId, cost) => { tcs.TrySetResult(); return Task.CompletedTask; };
+        long genMs = new DateTimeOffset(2011, 1, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds();
+        var oldId = UuidV7WithTime(genMs);
+        long callerMs = new DateTimeOffset(2026, 11, 1, 12, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds();
+
+        svc.Track("s-1", oldId, callerMs);
+        (await Task.WhenAny(tcs.Task, Task.Delay(5000))).Should().Be(tcs.Task, "публикация стоимости ожидаема");
+
+        Uri.UnescapeDataString(handler.LastRequest!.RequestUri!.Query)
+            .Should().Contain("start=2010-12-31T23:00:00Z", "окно из времени id (2011), а не от вызывающего");
     }
 
     // Заглушка «медленного» биллинга: каждый ответ — через delayMs (держит слот гейта в
@@ -402,23 +486,99 @@ public class FalCostResolveTests
     }
 
     [Fact]
-    public async Task ОпросыБиллинга_ИдутЧерезГейтСИнтервалом_АНеВолной()
+    public async Task БэкфиллОпросыИдутЧерезГейтСИнтервалом_АНеВолной()
     {
-        // Два параллельных запроса (как всплеск бэкфилла при открытии старого чата):
+        // Два параллельных Track (как всплеск бэкфилла при открытии старого чата):
         // гейт выпускает их по одному, с интервалом между стартами — иначе волной в 429.
+        // Путь проверяется через Track: с разделением полос (хвосты R-S-SPEND-4, п.3)
+        // интервал — контракт бэкфилла; живая полоса — в тесте ниже.
         var handler = new TimedHandler();
         var svc = MakeService(handler);
         svc.MinRequestIntervalMs = 200;
+        var done = new TaskCompletionSource();
+        var published = 0;
+        svc.OnCostResolved = (sessionId, cost) =>
+        {
+            if (Interlocked.Increment(ref published) == 2) done.TrySetResult();
+            return Task.CompletedTask;
+        };
 
-        var a = svc.ResolveUsdAsync("req-a", CancellationToken.None);
-        var b = svc.ResolveUsdAsync("req-b", CancellationToken.None);
-        await Task.WhenAll(a, b);
+        svc.Track("s-1", "req-a", null);
+        svc.Track("s-1", "req-b", null);
+        (await Task.WhenAny(done.Task, Task.Delay(5000))).Should().Be(done.Task, "обе публикации состоялись");
 
         handler.Starts.Should().HaveCount(2);
         handler.MaxConcurrent.Should().Be(1, "запросы сериализованы однослотовым гейтом");
         var gap = (handler.Starts[1] - handler.Starts[0]).TotalMilliseconds;
         gap.Should().BeGreaterThanOrEqualTo(150, "интервал между стартами — заданный 200 мс минус допуск таймера");
     }
+
+    // Заглушка «смешанного» биллинга: запросы с id «req-bf…» — медленные (держат слот гейта в
+    // транспорте), прочие — немедленные. BfStarted/BfFinished — сигналы, что бэкфилл в полёте /
+    // вышел из него: для теста живой полосы.
+    private sealed class MixedHandler(int slowMs) : HttpMessageHandler
+    {
+        public TaskCompletionSource BfStarted { get; } = new();
+        public TaskCompletionSource BfFinished { get; } = new();
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var slow = request.RequestUri!.Query.Contains("req-bf");
+            if (slow) BfStarted.TrySetResult();
+            if (slow) await Task.Delay(slowMs, ct);
+            if (slow) BfFinished.TrySetResult();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""
+                    {"billing_events":[{"request_id":"x","cost_estimate_nano_usd":123000000}]}
+                    """),
+            };
+        }
+    }
+
+    [Fact]
+    public async Task ЖивойОпросНеЖдётЗаОчередьюБэкфилла_ИдётСвоейПолосой()
+    {
+        // Бэкфилл занят: первый запрос держит слот гейта в транспорте (1,5 с), второй стоит за ним
+        // с интервалом. Живой запрос (шов ResolveUsdAsync — Images ждёт число для записи траты)
+        // идёт своей полосой: завершается, пока бэкфилл ещё в полёте (хвосты ревью R-S-SPEND-4, п.3).
+        var handler = new MixedHandler(slowMs: 1500);
+        var svc = MakeService(handler);
+        svc.MinRequestIntervalMs = 1000;
+
+        svc.Track("s-1", "req-bf1", null);
+        (await Task.WhenAny(handler.BfStarted.Task, Task.Delay(5000))).Should().Be(handler.BfStarted.Task,
+            "бэкфилл вошёл в транспорт и держит слот гейта");
+        svc.Track("s-1", "req-bf2", null); // встаёт в очередь за занятым слотом + интервалом
+
+        var live = svc.ResolveUsdAsync("req-live", CancellationToken.None);
+        (await Task.WhenAny(live, Task.Delay(800))).Should().Be(live,
+            "живой запрос не ждёт слота и интервала бэкфилла");
+        (await live).Should().Be(0.123);
+        handler.BfFinished.Task.IsCompleted.Should().BeFalse(
+            "бэкфилл ещё в транспорте — живой опрос его не ждал");
+    }
+
+    [Fact]
+    public async Task СкачокЧасовНазад_БэкфиллЖдётНеБольшеПаузыИНеТратитПопытку()
+    {
+        // Предыдущий запрос записан «будущими» часами (скачок часов назад больше 24,8 суток):
+        // minStart − now не влезает в int, каст (int) даёт отрицательное число, Task.Delay бросает
+        // ArgumentOutOfRangeException, общий catch съедает его — и при сжатом бэкофлле [0] опрос
+        // заканчивается без цены (хвосты ревью R-S-SPEND-4, п.1). Ждать положено ровно паузу
+        // между стартами: попытка живёт, публикация приходит.
+        var tcs = new TaskCompletionSource();
+        var handler = OkPriceHandler();
+        var svc = MakeService(handler);
+        svc.MinRequestIntervalMs = 200;
+        svc.OnCostResolved = (sessionId, cost) => { tcs.TrySetResult(); return Task.CompletedTask; };
+        svc._lastRequestAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 31L * 86_400_000;
+
+        svc.Track("s-1", "req-jump", null);
+        (await Task.WhenAny(tcs.Task, Task.Delay(5000))).Should().Be(tcs.Task,
+            "скачок часов не съедает попытку: ожидание ограничено паузой, опрос продолжается");
+    }
+
 
     [Fact]
     public async Task ОтменаВОчередиГейта_НеОставляетЗанятыйСлотИНеЛомаетНачатыйОпрос()
@@ -427,6 +587,7 @@ public class FalCostResolveTests
         // не доходит. Здесь — новый путь: слот занят чужим запросом (в транспорте), вызывающий
         // стоит в очереди WaitAsync и отменяется в ней. Инвариант: отмена в очереди не оставляет
         // занятый слот и не съедает интервал — следующий опрос проходит сразу после Release.
+        // Путь — через живую полосу (она тоже однослотовая): инвариант держит обе полосы.
         var handler = new SlowPricedHandler(200);
         var svc = MakeService(handler);
         using var cts = new CancellationTokenSource();

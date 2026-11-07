@@ -29,13 +29,23 @@ public class FalCostService : IFalRequestCost
 
     // Троттлинг опроса (дефект S-SPEND-4): всплески бэкфилла при открытии старых чатов
     // упираются в лимит fal (207 строк «billing-events 429» в журнале проде за 28.10/04–07.11).
-    // Все запросы идут через однослотовый гейт с минимальным интервалом между стартами.
-    // Механизм временной, а не по-id: он работает и в свежем процессе (в отличие от in-process
-    // дедупа _seen) — новый всплеск после рестарта так же растягивается по интервалу.
+    // Бэкфилл (Track/PollAsync) идёт через однослотовый гейт с минимальным интервалом между
+    // стартами. Механизм временной, а не по-id: он работает и в свежем процессе (в отличие от
+    // in-process дедупа _seen) — новый всплеск после рестарта так же растягивается по интервалу.
+    // Живой путь (шов ResolveUsdAsync) — отдельной полосой без интервала: см. _liveGate ниже.
     // internal для тестов (тот же приём, что BackoffSeconds): тесты сжимают интервал до 0.
     internal int MinRequestIntervalMs = 1000;
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private long _lastRequestAtMs; // Unix ms; 0 — запросов в этом процессе ещё не было
+    // internal для тестов: моделирует скачок часов назад — предыдущий запрос записан «в будущем».
+    internal long _lastRequestAtMs; // Unix ms; 0 — запросов в этом процессе ещё не было
+
+    // Живая полоса (хвосты ревью R-S-SPEND-4, п.3): у ResolveUsdAsync есть потребитель, который ЖДЁТ
+    // число (Images записывает трату генерации). Живой запрос не должен стоять в общей очереди за
+    // всплеском бэкфилла (задержка до N×(1с+RTT)). Отдельный однослотовый гейт: живые запросы не
+    // параллельны между собой, но не ждут интервала бэкфилла и не встают за ним. Механизм интервала
+    // (_gate + _lastRequestAtMs) остаётся защитой бэкфилла от 429-всплесков; живой поток по природе
+    // мал (один запрос на генерацию) и своей сериализацией защищён от собственной волны.
+    private readonly SemaphoreSlim _liveGate = new(1, 1);
 
     // Публикация найденной стоимости (broadcast в SignalR + запись в историю). Ставит SessionManager.
     public Func<string, FalCostMessage, Task>? OnCostResolved { get; set; }
@@ -68,14 +78,16 @@ public class FalCostService : IFalRequestCost
     public async Task<double?> ResolveUsdAsync(string requestId, CancellationToken ct)
     {
         if (!Enabled || string.IsNullOrWhiteSpace(requestId)) return null;
-        var cost = await PollForCostAsync(requestId, null, ct);
+        var cost = await PollForCostAsync(requestId, null, ct, live: true);
         return cost?.CostUsd;
     }
 
     // Единый цикл опроса billing-events (бэкофф → FetchCostAsync по request_id). Зовут его
     // и ResolveUsdAsync (шов), и PollAsync (путь чата с публикацией) — цикл один.
     // Сбои опроса глотаются, как прежде: «цены нет» → null после исчерпанного окна.
-    private async Task<FalCostMessage?> PollForCostAsync(string requestId, long? finishedAtMs, CancellationToken ct)
+    // live — живая полоса (по ней идёт только шов ResolveUsdAsync, у которого есть ждущий
+    // потребитель); бэкфилл (Track/PollAsync) — обычная очередь с интервалом. См. _liveGate.
+    private async Task<FalCostMessage?> PollForCostAsync(string requestId, long? finishedAtMs, CancellationToken ct, bool live)
     {
         // Окно времени запроса: без start API отдаёт только последние 24 ч (доки fal: start по
         // умолчанию = −24ч) — генерации старше суток не находились никогда (дефект S-SPEND-4).
@@ -86,7 +98,7 @@ public class FalCostService : IFalRequestCost
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(BackoffSeconds[attempt]), ct);
-                cost = await FetchCostAsync(requestId, startParam, endParam, ct);
+                cost = await FetchCostAsync(requestId, startParam, endParam, ct, live);
             }
             // Отмена вызывающего и таймаут транспорта — разные исходы (тот же приём, что в
             // McpProbeService/McpOAuthService): таймаут HttpClient бросает TaskCanceledException
@@ -107,7 +119,7 @@ public class FalCostService : IFalRequestCost
 
     private async Task PollAsync(string sessionId, string requestId, long? finishedAtMs)
     {
-        var cost = await PollForCostAsync(requestId, finishedAtMs, CancellationToken.None);
+        var cost = await PollForCostAsync(requestId, finishedAtMs, CancellationToken.None, live: false);
         if (cost is null)
         {
             Console.Error.WriteLine($"[FalCost] Стоимость не появилась за отведённое время: {requestId}");
@@ -152,42 +164,66 @@ public class FalCostService : IFalRequestCost
         return ms >= minMs && ms <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 86_400_000 ? ms : null;
     }
 
-    // Верх границы окна: 89 дней — под лимитом fal (90 дней на запрос) с запасом на ход часов.
-    private const long MaxWindowMs = 89L * 86_400_000;
+    // Ширина окна: 24 ч от start (86 400 000 мс = сутки). Значительно под лимитом fal (90 дней
+    // на запрос, доки) и достаточно, чтобы покрыть любое правдоподобное отставание наших часов
+    // (см. BuildWindowParams).
+    private const long WindowSpanMs = 86_400_000;
 
     // Окно запроса: start = время генерации − запас; end — ЯВНЫЙ (вердикт ревью R-S-SPEND-4):
     // без end дефолт API — его «сейчас», и для генерации старше ~90 дней диапазон
     // [ген − 1ч, сейчас) превышает лимит fal: запрос отвергается валидацией, каждая попытка
     // цикла повторяет тот же отвергнутый запрос — цена старых генераций не находится никогда.
-    // end = min(сейчас, start + 89 дней): для свежей генерации окно то же, что был дефолт;
-    // для старой — срезается до 89 дней и всё равно содержит событие (его timestamp —
-    // момент запроса, начало окна). Инвариант: для генерации старше 24 ч запрос к fal
-    // содержит событие биллинга этой генерации. Нет времени генерации — окна нет (прежнее
-    // поведение: дефолт API −24ч достаточен для свежей генерации).
+    // end строится ИЗ ВРЕМЕНИ ГЕНЕРАЦИИ, а не из «наших сейчас» (дельта-ревью R-S-SPEND-4b, п.5):
+    // timestamp события в billing-events — время запроса на стороне fal (доки: «Request timestamp»,
+    // end исключительный). end = min(наше сейчас, …) при отставании наших часов от реальных
+    // больше интервала «запрос → начало опроса» оставляет свежую генерацию ЗА верхней границей
+    // (её цена не находится никогда), а при отставании > 1ч окно инвертируется (end < start —
+    // вывод пробы M2). end = start + 24 ч: окно вообще не зависит от наших часов и содержит
+    // событие при любом их отставании < 23 ч и опережении ≤ 1 ч (start-маргинал): timestamp
+    // события — время запроса, оно не позже генерации и не раньше её на длительность генерации.
+    // Инвариант: для любой генерации с известным временем запрос к fal содержит
+    // событие биллинга этой генерации, а диапазон ≤ 24ч ≪ лимита. Нет времени генерации — окна
+    // нет (прежнее поведение: дефолт API −24ч достаточен для свежей генерации).
     private static (string? Start, string? End) BuildWindowParams(long? generationMs)
     {
         if (generationMs is null) return (null, null);
         var startMs = generationMs.Value - StartMarginMs;
-        var endMs = Math.Min(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), startMs + MaxWindowMs);
-        return (FormatUtc(startMs), FormatUtc(endMs));
+        return (FormatUtc(startMs), FormatUtc(startMs + WindowSpanMs));
     }
 
     private static string FormatUtc(long unixMs) => Uri.EscapeDataString(
         DateTimeOffset.FromUnixTimeMilliseconds(unixMs).ToString("yyyy-MM-ddTHH:mm:ss'Z'", CultureInfo.InvariantCulture));
 
-    private async Task<FalCostMessage?> FetchCostAsync(string requestId, string? startParam, string? endParam, CancellationToken ct)
+    private async Task<FalCostMessage?> FetchCostAsync(string requestId, string? startParam, string? endParam, CancellationToken ct, bool live)
     {
         // Троттлинг (MinRequestIntervalMs): однослотовый гейт + минимальный интервал между
         // стартами запросов. Очередь живёт под ct: отмена вызывающего в очереди — штатный выход.
-        await _gate.WaitAsync(ct);
+        // Живые запросы (шов ResolveUsdAsync) — своей полосой: не ждут интервала бэкфилла и не
+        // встают за его очередью (сериализованы только между собой). См. _liveGate.
+        var gate = live ? _liveGate : _gate;
+        await gate.WaitAsync(ct);
         try
         {
-            var minStart = _lastRequestAtMs + MinRequestIntervalMs;
-            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-            if (now < minStart) await Task.Delay((int)(minStart - now), ct);
-            _lastRequestAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (!live)
+            {
+                var minStart = _lastRequestAtMs + MinRequestIntervalMs;
+                var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                // Ждём ровно паузу между стартами, а не разницу часов (хвосты ревью R-S-SPEND-4, п.1):
+                // при скачке часов назад minStart − now больше int (>24,8 сут) — каст (int) даёт
+                // отрицательное число, Task.Delay бросает ArgumentOutOfRangeException, общий catch
+                // съедает его и попытка цикла потеряна. Верхняя граница — сам интервал: смысл
+                // механизма — разнесение стартов, а не выжидание скачка часов.
+                var waitMs = Math.Min(minStart - now, (long)MinRequestIntervalMs);
+                if (waitMs > 0) await Task.Delay(TimeSpan.FromMilliseconds(waitMs), ct);
+                _lastRequestAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            }
 
             var client = _httpFactory.CreateClient("fal");
+            // Клиент "fal" имеет свой таймаут регистрации (15 с, Program.cs; хвосты ревью R-S-SPEND-4,
+            // п.2): без него дефолт HttpClient 100 с держал бы слот гейта на всё время зависшего
+            // запроса. На экземпляре здесь ничего не ставим: HttpClient.Timeout нельзя задать после
+            // первого запроса на инстансе (а инстанс может быть переиспользован), и короткий
+            // опрос биллинга уже закрыт регистрационным таймаутом.
             var url = $"{_billingEventsUrl}?request_id={Uri.EscapeDataString(requestId)}"
                 + (startParam is null ? "" : $"&start={startParam}")
                 + (endParam is null ? "" : $"&end={endParam}");
@@ -208,7 +244,7 @@ public class FalCostService : IFalRequestCost
         }
         finally
         {
-            _gate.Release();
+            gate.Release();
         }
     }
 

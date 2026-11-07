@@ -718,6 +718,37 @@ public class SessionManagerQueueTests : SessionManagerTestBase
     }
 
     [Fact]
+    public async Task SendOrEnqueue_ДваОдновременныхОднойСессии_ОдинХодИВторойВОчереди()
+    {
+        // Конкурентность приёма хода (S3-7): второй вызов в чат, где первый уже начал ход,
+        // обязан встать в очередь, а не запустить второй ход в тот же процесс. Порядок здесь
+        // не гонка: в тестовой сборке весь путь первого вызова до смены статуса идёт без
+        // реальных await (подставной процесс, тестовый broadcaster), поэтому Working стоит
+        // до старта второго вызова — и второй видит занятый чат.
+        var session = await MkBusySessionAsync("conc-two", SessionStatus.Active);
+        session.Name = "есть имя";
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        var first = _sut.SendOrEnqueueAsync(session.Id, "первый ход");
+        var second = _sut.SendOrEnqueueAsync(session.Id, "второй ход");
+        var results = await Task.WhenAll(first, second);
+
+        results[0].Should().BeFalse("свободный чат — первый ход идёт напрямую");
+        results[1].Should().BeTrue("чат занят — второй вызов встаёт в очередь, а не начинает ход");
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("первый ход")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("второй ход")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never()); // «второй ход» в процесс не идёт
+        var queued = _sut.GetPending(session.Id).Should().ContainSingle().Subject;
+        queued.Text.Should().Be("второй ход");
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Working);
+    }
+
+    [Fact]
     public async Task GetVisiblePending_ОбычноеСообщение_Видно()
     {
         var session = await MkBusySessionAsync("visible");

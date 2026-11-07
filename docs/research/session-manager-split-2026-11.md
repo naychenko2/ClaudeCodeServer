@@ -113,7 +113,7 @@ git grep -l 'SessionManager' 03d78e1aa -- backend | sed 's/^[^:]*://' \
 | `ProviderMigration` | ~235 | `MigrateProviderAsync`, `OfferProviderFallbackAsync`, `SameDir`, `ProviderUnchangedException` |
 | `ChatNaming` | ~245 | `MakeChatTitle`, `ExtractTeamMechanicTopic`, `RefineChatTitleAsync`, `RetitleAsync`, `SetChatIconAsync`, `SetChatIconsAsync`, `BroadcastChatRenamedAsync` |
 | `ChatCreation` | ~690 | `CreateAsync`, `CreateChatAsync`, `CreatePersonaChatAsync`, `CreateGroupChatAsync`, `GetPersonaChats`, `BranchAsync`, `EnsureSuccessorAllowed`, `CreateSuccessorChatAsync`, `EnsureHandoffAllowed`, `WarmHandoffBlocker`, `CreateHandoffChatAsync`, `ContinuationName`, `CreateContinuationAsync` |
-| `ChatDeletion` | ~130 | `DeleteAsync`, `BroadcastChatDeletedAsync` |
+| `ChatDeletion` | ~130 | `DeleteAsync`, `BroadcastChatDeletedAsync`; об удалении объявляет шине хода (`SessionDeleted`, снос состояния подсистемами — ADR-019 §2) через `ITurnEventBus` |
 
 ### Семейство «ход»
 
@@ -124,8 +124,8 @@ git grep -l 'SessionManager' 03d78e1aa -- backend | sed 's/^[^:]*://' \
 | `ExternalMcpContexts` | ~295 | `BuildWorkspaceContext`, `WorkspaceMcpPlan`, `BuildWorkspacePlan`, `BuildModulesContext`, `BuildChatContextProvider`, `BuildExternalMcpProvider`, `ResolveSecretValues`, `TryApplyAuthHeaders`, `BuildNotificationsContext` |
 | `TurnPassports` | ~250 | подписчики шины `HandlePromptAssembled`, `SafePromptSnapshot*`, `HandleSubagentRunCompleted`, `HandleTurnCompleted`, `SubagentRunSinkFor`; `NoteTruncatedBgAgent`, `RefutesTruncation`; регистрация `IPromptSectionContributor` на шине. Решения о добивании (`ShouldNudgeSubagent`, `ResetsNudgeSeries`, `StartsNudgeSeries`) — статикой `SubagentNudgePolicy` |
 | `TurnLaunchContextFactory` | ~150 | сборка `LlmSessionContext`, которая сейчас дублируется в `StartNewSessionAsync` и `EnsureProcessCoreAsync`, плюс `BuildEnqueueBypass`, `BuildOrchestrationDone`, `EnqueueBypassTurn` |
-| `TurnProcessHost` | ~670 | `StartNewSessionAsync`, `EnsureAccumulatorAsync`, `EnsureProcessAsync`, `EnsureProcessCoreAsync`, `CompactAsync`, `Interrupt`, `InterruptCore`, `RecordUserInterrupt`, `RespondPermission`, `RemoveAutoAllowTool`, `IsStaleInteractionAnswer`, `ResumeAfterInteraction`, `AnswerQuestion`, `RespondPlan`, `KillAllProcesses`, `StopChatsOfRevokedMember`, ожидание устройства (`DeviceWaitGate`, `ParkForDeviceAsync`, `GetDeviceWaitingSessions`, `ReleaseDeviceWaitAsync`, `ExpireDeviceWaitAsync`) |
-| `TurnRecovery` | ~300 | `ReviveStuckSession(Async)`, `StopClosedExecutorProcess`, `RestartStuckTurnAsync`, `TurnTranscriptDamagedException`, `StuckTurnRestartResult`, `IsTailIntactForResume`, `SendRestartResumeTurnAsync`, `ResumeAfterRestartAsync`, `ResolveTurnCwd`, `TakeRestartResumeCandidates`, `DrainRestoredPendingAsync` |
+| `TurnProcessHost` | ~670 | `StartNewSessionAsync`, `EnsureAccumulatorAsync`, `EnsureProcessAsync`, `EnsureProcessCoreAsync`, `CompactAsync`, `Interrupt`, `InterruptCore`, `RecordUserInterrupt`, `RespondPermission`, `RemoveAutoAllowTool`, `IsStaleInteractionAnswer`, `ResumeAfterInteraction`, `AnswerQuestion`, `RespondPlan`, `KillAllProcesses`, `StopChatsOfRevokedMember`, `ReviveStuckSession(Async)`, `StopClosedExecutorProcess`, ожидание устройства (`DeviceWaitGate`, `ParkForDeviceAsync`, `GetDeviceWaitingSessions`, `ReleaseDeviceWaitAsync`, `ExpireDeviceWaitAsync`) |
+| `TurnRecovery` | ~300 | `RestartStuckTurnAsync`, `TurnTranscriptDamagedException`, `StuckTurnRestartResult`, `IsTailIntactForResume`, `SendRestartResumeTurnAsync`, `ResumeAfterRestartAsync`, `ResolveTurnCwd`, `TakeRestartResumeCandidates`, `DrainRestoredPendingAsync` |
 | `TurnCompletion` | ~900 | `OnMessageAsync`, `OnMessageQueuedAsync` (одним методом, как есть), `PipelineForTest`, `DrainPipelineAsync`, `GetPipeline`, `EnqueueWorkAsync`, `ProcessPipelineItemAsync`, `ApplyStatusQueuedAsync`, `LastAssistantText`; реализует `ITurnMessageSink` |
 | `LocalVoiceTurn` | ~180 | `BuildVoiceContextBlock`, `ShouldRunLocalVoice`, `BuildVoiceMessages`, `TrimVoiceMessage`, `RunLocalVoiceTurnAsync` |
 | `TurnIntake` | ~1 540 | `RouteGroupSpeakerAsync`, `SendMessageAsync`, `RefuseTurnAsync`, `SendDirectAsync`, `ChatPreview`, `BuildCliTurnText`, `SendMessageAndWaitAsync`, `SendOrEnqueueAsync`, `ReportUpAsync`, `ReportBlockerAsync`, `PreemptTurnForQueue`, `PreemptForPending`, `CancelPendingAsync`, `FreezePendingAsync`, `DrainNextPendingAsync`, `AwaitPreviousTurnExitAsync`, `DeliverPendingAsync`, `PrivateChatAuthorRevoked`, `SetMode`; цикл «до готово» (`SetWorkLoopAsync`, `ContinueWorkLoopAsync`, `StopIfWorkLoopLimitReachedAsync`, маркеры `<promise>`/`<blocked>`/`<waiting>`, `TickWaitingLoopsAsync`, `AddWorkLoopStoppedNoticeAsync`, `AppendServerRestartCardAsync`, `BroadcastWorkLoopAsync`, `LoopLimitOrDefault`); `NudgeTruncatedSubagentAsync`; реализует `ITurnStarter` и `ITeamTurnIntake` |
@@ -168,7 +168,7 @@ git grep -l 'SessionManager' 03d78e1aa -- backend | sed 's/^[^:]*://' \
 |---:|---|---|
 | 1 | `ProjectManager` | стор, маршрут, worktree, настройки, видимость, создание, удаление, контексты MCP (×3), процесс; остаётся у SM (штаб) |
 | 2 | `ChatHistoryService` | `SessionHistory`, `PendingQueue` |
-| 3 | `IConfiguration` | стор (путь, автосейв, grace sweep), контексты MCP, именование, процесс (`DataPath`), восстановление (`QuietMinutes`), приём (`Loop:*`); SM (штаб) |
+| 3 | `IConfiguration` | стор (путь, автосейв, grace sweep), контексты MCP, именование, контекст запуска (`DataPath`), восстановление (`QuietMinutes`), приём (`Loop:*`); SM (штаб) |
 | 4 | `ILlmSessionAdapterFactory` | `TurnProcessHost` |
 | 5 | `FalCostService` | `TurnCostLedger` (вместе с `OnCostResolved = PublishFalCostAsync`) |
 | 6 | `UsageService` | только `SubscriptionLimitRecorder` → регистрируется в DI |
@@ -177,7 +177,7 @@ git grep -l 'SessionManager' 03d78e1aa -- backend | sed 's/^[^:]*://' \
 | 9 | `JwtService` | `McpEndpoint` |
 | 10 | `IServer` | `McpEndpoint` |
 | 11 | `LlmProviderRegistry` | маршрут, настройки, `ProviderMigration`; SM (`TeamStateService`) |
-| 12 | `FeatureFlagService` | встроенные MCP, слой персоны |
+| 12 | `FeatureFlagService` | встроенные MCP, слой персоны, внешние и модульные контексты |
 | 13 | `PersonaManager` | слой персоны, настройки; SM (штаб, `OnPersonaChanged`) |
 | 14 | `PersonaBindingsService` | встроенные MCP, слой персоны, внешние MCP |
 | 15 | `ClaudeSubscriptionPool` | маршрут, настройки, `ProviderMigration`, `SubscriptionLimitRecorder` |
@@ -188,7 +188,7 @@ git grep -l 'SessionManager' 03d78e1aa -- backend | sed 's/^[^:]*://' \
 | 20 | `PersonaAgentFileSync` | слой персоны |
 | 21 | `UserHomeResolver` | маршрут |
 | 22 | `ICheapTextRunner` | `ChatNaming` |
-| 23–24 | `ModuleRegistry`, `ModuleTokenService` | внешние MCP |
+| 23–24 | `ModuleRegistry`, `ModuleTokenService` | модульные контексты |
 | 25 | `GitService` | `ChatWorktree` |
 | 26 | `ISpendCollector` | `TurnCostLedger` |
 | 27 | `ModelAssignmentResolver` | маршрут, настройки, создание |
@@ -204,7 +204,7 @@ git grep -l 'SessionManager' 03d78e1aa -- backend | sed 's/^[^:]*://' \
 | 40 | `TurnRunLog` | `TurnPassports` |
 | 41–42 | `LocalActionRouter`, `ILocalLlmClient` | `LocalVoiceTurn` |
 | 43 | `IEnumerable<IPromptSectionContributor>` | `TurnPassports` (регистрация на шине) |
-| 44 | `ITurnEventBus` | `TurnPassports`, `TurnProcessHost` |
+| 44 | `ITurnEventBus` | `TurnPassports`, `TurnProcessHost`, `ChatDeletion` |
 | 45 | `TaskManager` | `ITaskLookup` (адаптер `TaskLookupAdapter` → DI) → стор; SM (`TeamTurnCompletionService`) |
 | 46 | `ILoggerFactory` | SM (логгеры сервисов штаба) |
 | 47 | `IProjectDeviceGate` | `TurnProcessHost` |
@@ -238,21 +238,23 @@ git grep -l 'SessionManager' 03d78e1aa -- backend | sed 's/^[^:]*://' \
 | `McpEndpoint` | config, server, jwt | 3 |
 | `BuiltinMcpContexts` | endpoint, flags, bindings, services (`IServiceProvider`: только `McpToolsetRegistry` и `IDeviceExecChannel`), subsystemStates, launchers, projects, higgsfieldOAuth, users, config | **10** |
 | `PersonaLayerBuilder` | personas, bindings, agentSync, spheres, flags, projects, users, store, endpoint, config | **10** |
-| `ExternalMcpContexts` | mcpRegistry, mcpSecrets, mcpOAuth, modules, moduleTokens, endpoint, bindings, projects, store | 9 |
+| `ExternalMcpContexts` | store, endpoint, bindings, projects, mcpRegistry, mcpSecrets, mcpOAuth, flags, users, config | **10** |
+| `ModulesMcpContexts` | endpoint, users, flags, modules, moduleTokens | 5 |
 | `TurnPassports` | bus, promptSnapshots, mcpStatus, subagentRuns, turnRuns, contributors, store, queue, `Lazy<ITurnStarter>` | 9 |
-| `TurnLaunchContextFactory` | builtin, personaLayer, external, launchers, projects, pluginDir, route, `Lazy<ITurnStarter>`, `Lazy<ITurnMessageSink>`, config | **10** |
-| `TurnProcessHost` | adapters, factory, store, history, route, queue, bus, deviceGate, config | 9 |
-| `TurnRecovery` | store, history, processHost, queue, settings, `Lazy<ITurnStarter>`, config | 7 |
+| `TurnLaunchContextFactory` | builtin, personaLayer, external, moduleContexts, launchers, pluginDir, store, `Lazy<ITurnStarter>`, `Lazy<ITurnMessageSink>`, config | **10** |
+| `TurnProcessHost` | adapters, factory, store, history, route, queue, deviceGate, projects, `Lazy<ITurnStarter>`, bus | **10** |
+| `TurnRecovery` | store, queue, route, `ChatHistoryService`, `Lazy<ITurnStarter>`, config | 6 |
 | `TurnCompletion` | store, history, queue, route, worktree, `ProviderMigration`, ledger, `Lazy<ITurnStarter>`, `Lazy<ITeamNotifier>` | 9 |
 | `LocalVoiceTurn` | router, ollama, store, history, completion | 5 |
 | `TurnIntake` | store, history, queue, processHost, completion, settings, naming, voice, `Lazy<ITeamNotifier>`, config | **10** |
 | `ChatCreation` | store, history, route, settings, processHost, projects, assignments, pluginDir | 8 |
-| `ChatDeletion` | store, history, route, worktree, processHost, promptSnapshots, `Lazy<ReviewTreePool?>`, projects | 8 |
+| `ChatDeletion` | store, `ChatHistoryService`, route, worktree, promptSnapshots, `Lazy<ReviewTreePool?>`, bus | 7 |
 
-Шесть классов стоят ровно на потолке (`CliRoute`, `ChatSettings`, `BuiltinMcpContexts`,
-`PersonaLayerBuilder`, `TurnLaunchContextFactory`, `TurnIntake`). В первой редакции было
-семь, а не восемь, как там написано: седьмым был `TurnCompletion` с фиктивной зависимостью
-`processHost`. Тело конца хода (`OnMessageQueuedAsync`, `ProcessPipelineItemAsync`,
+Восемь классов стоят ровно на потолке (`CliRoute`, `ChatSettings`, `BuiltinMcpContexts`,
+`PersonaLayerBuilder`, `ExternalMcpContexts`, `TurnLaunchContextFactory`, `TurnProcessHost`,
+`TurnIntake`). В первой таблице их было семь, а не восемь, как написано в тексте той
+редакции: седьмым был `TurnCompletion` с фиктивной зависимостью `processHost`; после
+правки по факту S3-4/S3-5 их восемь. Тело конца хода (`OnMessageQueuedAsync`, `ProcessPipelineItemAsync`,
 `ApplyStatusQueuedAsync`, `SessionManager.cs:10662-11652`) не зовёт ни
 одного метода `TurnProcessHost`, а `entry.Process` (`:10719`, `:11305`) — поле записи,
 то есть стор. Проверка: `grep` имён всех методов `TurnProcessHost` из §1 по этому
@@ -264,8 +266,8 @@ git grep -l 'SessionManager' 03d78e1aa -- backend | sed 's/^[^:]*://' \
 ## 3. Швы и направление вызовов
 
 Слои снизу вверх; стрелка «A → B» означает «A зовёт B». Фасад `SessionManager` делегирует
-всем классам, в том числе соседям по слою 5. Внутри слоя 4 четыре ребра: `Voice → Done`,
-`Intake → Done`, `Intake → Voice`, `Recovery → Host`; циклов среди них нет. Ребра `Done → Host` из первой редакции нет: зависимость была фиктивной (§2).
+всем классам, в том числе соседям по слою 5. Внутри слоя 4 три ребра: `Voice → Done`,
+`Intake → Done`, `Intake → Voice`; циклов среди них нет. Ребра `Done → Host` из первой редакции нет: зависимость была фиктивной (§2). Ребра `Recovery → Host` нет совсем: `ReviveStuckSession`/`StopClosedExecutorProcess` — в хосте, хост восстановление не зовёт (§1, вердикт S3-5).
 
 ```mermaid
 flowchart BT
@@ -308,7 +310,6 @@ flowchart BT
   L3 --> L2
   Host --> Factory
   Voice --> Done
-  Recovery --> Host
   Intake --> Done
   Intake --> Voice
   L4 --> L3
@@ -408,9 +409,9 @@ worktree и миграции); `HasTurnInFlight`, `Busy`, `WithTeamState`, `Clai
 реализация `ITeamHistoryStore` → `SessionHistory`, S3-2), вызов `:9552`; второй вызывающий
 S3-2 — `TryPoolFailover` (`:3288`, `CliRoute`, S3-2), `ResumeAfterInteraction` (`:7781`),
 `RespondPermission` (`:7791`), `RecordUserInterrupt` (`:7950`), `AnswerQuestion` (`:10376`),
-`RespondPlan` (`:10406`) (процесс, S3-5), `ReviveStuckSession` (`:7962`),
-`StopClosedExecutorProcess` (`:7985`), `RestartStuckTurnAsync` (`:8041`) (восстановление,
-S3-5), — а также конструктор (`:1054`, тикер ожидания) и штаб (`ApplyPlanDecisionAsync`
+`RespondPlan` (`:10406`), `ReviveStuckSession` (`:7962`), `StopClosedExecutorProcess`
+(`:7985`) (процесс, S3-5), `RestartStuckTurnAsync` (`:8041`) (восстановление, S3-5),
+— а также конструктор (`:1054`, тикер ожидания) и штаб (`ApplyPlanDecisionAsync`
 `:8548`, `RecordToolStages` `:8681`, `RecordToolStarted` `:8707`, `ResolveEscalationAsync`
 `:8752`, `ResetTeamIterationOnUserInput` `:9046`), которые остаются в `SessionManager`.
 Формального нарушения модели конструктора нет (статик не даёт параметра, сторож формы ядра
@@ -735,7 +736,7 @@ grep -E  '^    (public|internal)\b[^=;]*\(' $F \
 | 7832 | public | `RemoveAutoAllowTool` | TurnProcessHost |
 | 7842 | public | `Interrupt` | TurnProcessHost |
 | 7927 | public | `StopChatsOfRevokedMember` | TurnProcessHost |
-| 7985 | internal | `StopClosedExecutorProcess` | TurnRecovery |
+| 7985 | internal | `StopClosedExecutorProcess` | TurnProcessHost |
 | 8041 | public | `RestartStuckTurnAsync` | TurnRecovery |
 | 8203 | public | `ResumeAfterRestartAsync` | TurnRecovery |
 | 8257 | internal | `LoopLimitOrDefault` | TurnProcessHost |

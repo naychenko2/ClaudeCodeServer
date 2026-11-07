@@ -20,9 +20,13 @@ using ClaudeHomeServer.Services.Turn;
 
 namespace ClaudeHomeServer.Services;
 
+// Фасад сессий (S3-7, аддендум Александра §1): ход в сессии запускает только ядро приёма
+// TurnIntake — здесь остаются переадресации прежних публичных сигнатур, цикл «до готово»
+// (его тело до шага 2 выноса TurnContinuation) и штабные обвязки. Шов ITurnStarter фасад
+// уже не реализует: он резолвит ядро.
 public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     ITeamSessionDirectory, ITeamHistoryStore, ITeamRunState, ITeamTurnIntake,
-    Access.ITurnActorRegistry, Access.ITurnFrameSource, Sessions.ITurnStarter,
+    Access.ITurnActorRegistry, Access.ITurnFrameSource,
     Sessions.IWorkLoopContinuation
 {
 
@@ -148,10 +152,10 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // Лок сохранения sessions.json — один на процесс, живёт в сторе; пометки «зафиксировано в git»
     // (MarkFilesCommitted/UnmarkFileCommitted) делают read-modify-write под тем же замком.
     private Lock _saveLock => _store.SaveLock;
-    // Признак штатной остановки переехал в TurnCompletion.Stopping (S3-6): его смысл —
-    // разбор хода (ADR-033: умирающий процесс не перетирает статус), а это тело там.
-    // KillAllProcesses поднимает флаг через _completion; читающие его тела приёма хода,
-    // цикла и добивания (остаются здесь до S3-7) обращаются к тому же флагу.
+    // Признак штатной остановки — в ядре приёма TurnIntake.Stopping (S3-7, аддендум §2):
+    // писатель один — BeginShutdown, его зовёт KillAllProcesses ДО гашения адаптеров;
+    // разбор хода читает его через IsStopping шва (TurnCompletion), тела цикла и добивания
+    // (остаются здесь до шага 2) — как раннюю отсечку через _intake.Stopping.
     // Тик ожидания по маркеру `<waiting>` (фаза waiting И WaitingReason != null). Тикает
     // ТОЛЬКО ожидание модели — ожидание по живой делегированной задаче НЕ трогаем
     // (доклад придёт сам, смерть исполнителя ловит алерт молчания). Отдельный таймер
@@ -204,6 +208,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private readonly TurnRecovery _recovery;
     private readonly ChatCreation _creation;
     private readonly ChatDeletion _deletion;
+    // Ядро приёма хода (S3-7): ход в сессии запускает только оно. Фасад переадресует прежние
+    // публичные сигнатуры; цикл «до готово» просит у него ход через TrySubmitContinuationAsync
+    // (решающая проверка остановки — в ядре); штабной ITeamTurnIntake реализует ядро, фасад
+    // держит однострочную переадресацию. Пустая очередь при активном цикле — переходный хук
+    // OnLoopContinueRequested: его ставит этот конструктор (тело цикла здесь до шага 2).
+    private readonly Sessions.TurnIntake _intake;
 
     // Общий лок внеходовых записей истории (_falPersistLock) переехал в SessionHistory вместе
     // с механикой истории; здесь только делегирующая обёртка: правка карточки плана в
@@ -263,9 +273,14 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     }
 
     // Текст пользовательского сообщения (ввод в чат) — для push-источников автоматизаций
-    // (детекция @упоминаний персон). Вызывается из SendMessageAsync после записи в Accumulator;
-    // fire-and-forget, ошибки наблюдателя не роняют ход. (session, text, senderPersonaId)
-    public event Func<Session, string, string?, Task>? OnUserMessage;
+    // (детекция @упоминаний персон). С S3-7 событие живёт в ядре приёма (его единственный
+    // вызывающий — SendDirectAsync там же); здесь аксессоры подписки — внешняя сигнатура
+    // прежняя, подписчик PersonaAutomationService не менялся. (session, text, senderPersonaId)
+    public event Func<Session, string, string?, Task>? OnUserMessage
+    {
+        add => _intake.OnUserMessage += value;
+        remove => _intake.OnUserMessage -= value;
+    }
 
     // Удаление сессии (чат/проектная сессия) — для авто-движков: сбросить ссылки на чат правила.
     public event Action<Session>? OnSessionDeleted;
@@ -490,9 +505,14 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // Опционально (S3-6, AddSessionCore): конец хода — разбор сообщений адаптера и очередь
         // рассылки. Без DI (юниты, new SessionManager) собирается здесь же из тех же
         // зависимостей; переходный режим S3-0 §4, запасная сборка снимается в S3-8c.
-        // Локальный голосовой ход параметром не становится: internal-тип (CS0051), его
-        // единственный потребитель — этот фасад, и он собирается в запасной сборке ниже.
-        Sessions.TurnCompletion? completion = null)
+        // Локальный голосовой ход параметром не становится: internal-тип (CS0051); с S3-7 он
+        // общий синглтон с ядром приёма (AddSessionCore), без DI — одна запасная сборка здесь,
+        // отдаётся ядру.
+        Sessions.TurnCompletion? completion = null,
+        // Опционально (S3-7, AddSessionCore): ядро приёма хода — единственный стартующий ход.
+        // Без DI (юниты, new SessionManager) собирается здесь же из тех же зависимостей;
+        // переходный режим S3-0 §4, запасная сборка снимается в S3-8c.
+        Sessions.TurnIntake? intake = null)
     {
         // Стор — первым: на него опираются поле реестра, швы штаба и всё, что ниже читает сессии
         _store = store ?? new SessionStore(config, projects, broadcaster,
@@ -607,7 +627,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // Шов «очередь → приём хода» (S3-0 §3): ленивый, на этот же экземляр — при переходе
         // очереди 0→1 очередь просит разбор, а разбор живёт в ядре до S3-4/S3-7.
         _pending = pending ?? new Sessions.PendingQueueService(
-            _store, history, _sessionHistory, new Lazy<Sessions.ITurnStarter>(() => this),
+            _store, history, _sessionHistory, new Lazy<Sessions.ITurnStarter>(() => _intake!),
             loggerFactory?.CreateLogger<Sessions.PendingQueueService>()
                 ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.PendingQueueService>.Instance);
         _route = route ?? new Sessions.CliRoute(
@@ -656,14 +676,14 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
 
         // Конец хода (S3-6): разбор сообщений адаптера и очередь рассылки. Собирается после
         // маршрута, worktree, смены провайдера и журнала цен — на них она опирается; швы
-        // ITurnStarter/ITeamNotifier — ленивые на этот же экземляр (прямая зависимость дала бы
-        // цикл «конец хода → приём хода → конец хода»). Флаг штатной остановки живёт здесь
-        // (TurnCompletion.Stopping): его смысл — разбор хода, KillAllProcesses поднимает его
-        // через это поле. В DI приходит готовым (AddSessionCore); без DI — переходный режим
-        // S3-0 §4, запасная сборка снимается в S3-8c.
+        // ITurnStarter/ITeamNotifier — ленивые: с S3-7 ITurnStarter резолвит ядро приёма
+        // (прямая зависимость дала бы цикл «конец хода → приём хода → конец хода»), ITeamNotifier
+        // остаётся на этом экземляре. Флаг штатной остановки с S3-7 в ядре приёма
+        // (TurnIntake.Stopping): здесь его читают через IsStopping шва. В DI приходит готовым
+        // (AddSessionCore); без DI — переходный режим S3-0 §4, запасная сборка снимается в S3-8c.
         _completion = completion ?? new Sessions.TurnCompletion(
             _store, history, _route, _worktree, _providerMigration, _costs,
-            new Lazy<Sessions.ITurnStarter>(() => this),
+            new Lazy<Sessions.ITurnStarter>(() => _intake!),
             new Lazy<Sessions.IWorkLoopContinuation>(() => this),
             new Lazy<Team.ITeamNotifier>(() => this),
             loggerFactory?.CreateLogger<Sessions.TurnCompletion>()
@@ -671,8 +691,11 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // Локальный голосовой ход (S3-6): читает маршрутизатор/клиент локальной модели (те же
         // опциональные параметры, что были у фасада), резолв владельца — через стор, синтез
         // ответа — через конец хода. Без router/ollama ShouldRunLocalVoice даёт false —
-        // разговор идёт через CLI, как раньше.
-        _voice = new Sessions.LocalVoiceTurn(_router, _ollama, _personas, _store, _completion);
+        // разговор идёт через CLI, как раньше. С S3-7 экземляр общий с ядром приёма: в DI —
+        // тот же синглтон AddSessionCore, без DI — одна сборка здесь, отдаётся ядру; два
+        // экземпляра дали бы два состояния голосовой ветки.
+        _voice = services?.GetRequiredService<Sessions.LocalVoiceTurn>()
+            ?? new Sessions.LocalVoiceTurn(_router, _ollama, _personas, _store, _completion);
 
         // Контекст запуска (S3-4): адрес и токен MCP, встроенные продуктовые серверы, слой
         // персоны, внешние серверы и модули, паспорта хода. В DI приходят готовыми
@@ -716,14 +739,14 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             adapters,
             new Sessions.TurnLaunchContextFactory(
                 _builtin, _persona, _external, _moduleContexts, launchers, pluginDirSource, config, _store,
-                new Lazy<Sessions.ITurnMessageSink>(() => _completion), new Lazy<Sessions.ITurnStarter>(() => this)),
+                new Lazy<Sessions.ITurnMessageSink>(() => _completion), new Lazy<Sessions.ITurnStarter>(() => _intake!)),
             _store, _sessionHistory, _route, _pending, deviceGate, projects,
-            new Lazy<Sessions.ITurnStarter>(() => this), TurnEvents,
+            new Lazy<Sessions.ITurnStarter>(() => _intake!), TurnEvents,
             loggerFactory?.CreateLogger<Sessions.TurnProcessHost>()
                 ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.TurnProcessHost>.Instance);
         _recovery = recovery ?? new Sessions.TurnRecovery(
             _store, _pending, _route, history, _sessionHistory,
-            new Lazy<Sessions.ITurnStarter>(() => this), config);
+            new Lazy<Sessions.ITurnStarter>(() => _intake!), config);
         _creation = chatCreation ?? new Sessions.ChatCreation(
             _store, history, _route, _process, projects, _persona, _assignments, _settings, TurnEvents);
         // Lazy<ReviewTreePool?> вместо IServiceProvider (решение Александра 05.11, 1dda7103):
@@ -735,6 +758,22 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             loggerFactory?.CreateLogger<Sessions.ChatDeletion>()
                 ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.ChatDeletion>.Instance);
 
+        // Ядро приёма хода (S3-7, аддендум §1): собирается после всех ролей, которых просит
+        // (конец хода, хост процесса, очередь, настройки, именование, голос, слой персоны), и
+        // ДО LoadSessions: роль восстановления при загрузке может попросить разбор очереди
+        // через шов ITurnStarter. Шов штаба — ленивый на этот же экземляр (прямая зависимость
+        // дала бы цикл «приём хода → штаб → приём хода»); без DI — переходный режим S3-0 §4,
+        // запасная сборка снимается в S3-8c.
+        _intake = intake ?? new Sessions.TurnIntake(
+            _store, _persona, _pending, _process, _completion, _settings, _naming, _voice,
+            new Lazy<Team.ITeamNotifier>(() => this), config,
+            loggerFactory?.CreateLogger<Sessions.TurnIntake>()
+                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.TurnIntake>.Instance);
+        // Переходный хук «пустая очередь при активном цикле — цикл продолжит директивой»:
+        // ядро регистрирует факт, тело цикла живёт здесь до шага 2 (вынос TurnContinuation),
+        // там хук перейдёт новому владельцу.
+        _intake.OnLoopContinueRequested = ContinueWorkLoopAsync;
+
         // Швы данных «штаб → ядро» (ITeamHistoryStore/ITeamRunState/ITeamTurnIntake)
         // назначаем ДО создания TeamPlanService/TeamDecisionService: они передают `this`
         // в конструкторы вертикальных сервисов, и без присваивания поля upcast'ятся в null.
@@ -744,7 +783,9 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // Рантайм-поля записи и транзакция над состоянием режима — в сторе (S3-1); вертикаль
         // по-прежнему получает `this` и ходит через явные реализации, которые переадресуют сюда.
         _teamRunState = _store;
-        _teamIntake = this;
+        // С S3-7 приём хода реализует штабной шов сам (ядро); фасадский ITeamTurnIntake —
+        // однострочная переадресация на него.
+        _teamIntake = _intake;
         // Найденную стоимость fal.ai публикует TurnCostLedger: он ставит
         // FalCostService.OnCostResolved на свою PublishFalCostAsync в своём конструкторе
         // (S3-2). Здесь колбэк не ставим — иначе последний присвоенный затёр бы запись роли.
@@ -1230,12 +1271,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // нужен и при ветвлении (поиск самой длинной копии), и при архивации/удалении.
     private IEnumerable<string> TranscriptSearchRoots(Session info) => _route.TranscriptSearchRoots(info);
 
-    // Авто-фейловер пула подписок: аккаунт чата исчерпан, а в пуле есть здоровая
-    // альтернатива — тихо перевозим транскрипт в её профиль и меняем Session.Provider.
-    // Тело — в CliRoute (S3-2); делегирует хост процесса (подготовка к S3-7): приём хода
-    // дойдёт до него через хост, а не через маршрут напрямую.
-    private void TryPoolFailover(string sessionId, SessionEntry entry) => _process.TryPoolFailover(sessionId, entry);
-
     // Карточка «Продолжить на …»: чат родного Claude упёрся в лимит, внутри пула
     // автофейловер (TryPoolFailover) не переключил. Предлагаем варианты: здоровые
     // аккаунты ТОГО ЖЕ пула (пользователь выбирает сам — TryPoolFailover либо уже
@@ -1558,501 +1593,31 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // ChatSettings (S3-3; роутинг опущен туда же в S3-7 — политика спикера принадлежит
     // настройкам, приём хода остаётся только точкой вызова).
 
-    // Приём сообщения от пользователя (Hub SendMessage) и серверных отправок (авто-ходы).
-    // Пользовательское сообщение в занятом чате встаёт в видимую серверную очередь
-    // (pending_messages) и ЖДЁТ штатного конца хода — доставку разбирает drain по result.
-    // Идущий ход при этом НЕ убивается (поведение claude CLI: отправка ≠ остановка): kill
-    // посреди хода выбрасывал сделанную работу и оплаченные токены, оставлял tool_use без
-    // tool_result в транскрипте и рваные правки в проекте, а пользователь в 9 случаях из 10
-    // дописывает уточнение, а не просит остановиться. Для «перебить сейчас» есть явные
-    // действия: кнопка «Стоп» и PreemptForPending (кнопка на карточке очереди).
-    // Возвращаемый исход (Started/Queued) говорит клиенту, рисовать ли оптимистичный баллон.
-    public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? senderConnectionId = null, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown, int agentDepth = 0, string? senderUserId = null)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry))
-            throw new InvalidOperationException("Сессия не найдена");
+    // Приём сообщения (S3-7, аддендум §1): ход в сессии запускает только ядро TurnIntake —
+    // очередь, слот «занят» и пин там же одной атомарной операцией. Фасад держит прежнюю
+    // публичную сигнатуру и переадресует; поведение (очередь/прерывание/снимок статуса) —
+    // в комментарии ядра приёма.
+    public Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? senderConnectionId = null, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown, int agentDepth = 0, string? senderUserId = null)
+        => _intake.SendMessageAsync(sessionId, text, attachedPaths, mode, systemDirective, auto,
+            senderPersonaId, suppressTasksExecute, senderOrigin, senderConnectionId, staffNote, cause, agentDepth, senderUserId);
 
-        ClaimFirstMessage(entry);
 
-        if (!auto && !systemDirective)
-        {
-            // Идёт awaited-ход агента (REST SendMessageAndWaitAsync выставил TurnWaiter): не
-            // запускаем параллельный пользовательский ход — иначе его result ошибочно разрезолвил
-            // бы чужой ожидатель (agentDepth). Авто-ходы (work-loop/automation) не в счёт: они
-            // не выставляют TurnWaiter и идут строго после result предыдущего.
-            //
-            // Осознанное исключение из «честной очереди»: здесь пользователь получает отказ, а
-            // не enqueue + interrupt. Прерывание такого хода отдало бы ждущему агенту огрызок
-            // (exited резолвит ожидателя тем, что успело написаться) — а сообщение пользователя
-            // всё равно легло бы в очередь. Окно узкое: awaited-ход живёт до таймаута chats_send,
-            // после которого ожидатель снимается и следующая попытка идёт обычным путём.
-            if (entry.TurnWaiter is not null)
-                throw new InvalidOperationException("Сессия занята другим ходом");
 
-            // Человек написал в чат — цепочка автоотчётов оборвана: дальше это уже новый разговор,
-            // и накопленная глубина не должна запрещать отчёты по нему
-            entry.ReportChainDepth = 0;
-            // Отметка «человек писал сюда» — по ней сортируется список проектов. Сохраняем
-            // сразу: сообщение может встать в очередь, и ход с его SaveSessions будет нескоро
-            entry.Info.LastUserMessageAt = DateTime.UtcNow;
-            SaveSessions();
 
-            // Режим «Командная реализация» (Э5): вводная человека начинает новую итерацию —
-            // бюджет с нуля. Делаем это на приёме сообщения, ДО очереди: иначе вводная,
-            // постоявшая в очереди, доехала бы до координатора уже с исчерпанным потолком.
-            _teamNotifier.OnHumanInput(sessionId);
-            // Э4/M3: ответ на карточку остановки обычным сообщением — равноправная замена
-            // её кнопок (спека: «написал, что делать, координатор учёл и пошёл дальше с того
-            // же места»). Стадию возвращаем ДО очереди, по тем же правилам, что решение по
-            // карточке, — иначе текст человека упирался бы в гейты стадии «ждёт решения».
-            await _teamNotifier.OnHumanInputAsync(sessionId);
 
-            // Занятый чат (ход в полёте) ИЛИ активный цикл «до готово»: сообщение встаёт в
-            // видимую очередь (pending_messages) и ждёт конца хода — разбор по result
-            // (см. drain в OnMessageAsync). Цикл при этом НЕ снимается (решение владельца
-            // 2026-08-08): пользовательское сообщение само продолжит цикл как следующую
-            // итерацию (между итерациями — форсирует dispatchNow, при живом ходе — по
-            // прерыванию, см. ниже).
-            var loopActive = entry.Info.WorkLoop is not null;
-            // Снимок статуса: ниже он решает, ждать ход или прерывать, а перечитывание дало бы
-            // уже статус собственной доставки (см. про Dispatched)
-            var statusSnapshot = entry.Info.Status;
-            var turnInFlight = statusSnapshot is SessionStatus.Working or SessionStatus.Waiting;
-            if (loopActive || turnInFlight)
-            {
-                // Потолок очереди проверяем ДО побочных эффектов: разморозка очереди на отказе
-                // QueueFull не откатывается, и пользователь получил бы исключение при уже
-                // нарушенном состоянии. Проверка предварительная — точная (под PendingLock)
-                // остаётся в EnqueuePendingAsync, конкурентная постановка между ними лишь
-                // вернёт тот же отказ на шаг позже.
-                lock (entry.PendingLock)
-                {
-                    if (entry.Pending.Count >= PendingQueueService.MaxPendingPerSession)
-                        throw new InvalidOperationException(
-                            $"В очереди чата уже {PendingQueueService.MaxPendingPerSession} сообщений — дождитесь, пока она разберётся");
-                }
 
-                // Пользователь возобновил разговор — заморозка «Стоп» снимается ДО постановки,
-                // иначе форсаж dispatchNow и разбор по концу хода упёрлись бы в QueueFrozen
-                if (entry.QueueFrozen) { entry.QueueFrozen = false; PersistPending(entry); }
-                var enqueued = await EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin,
-                    agentDepth: 0, kind: PendingKind.User, attachedPaths: attachedPaths, mode: mode,
-                    senderUserId: senderUserId);
-                if (enqueued is SendAndWaitResult.QueueFull f)
-                    throw new InvalidOperationException(
-                        $"В очереди чата уже {f.Limit} сообщений — дождитесь, пока она разберётся");
-                // Ход прерываем ТОЛЬКО там, где ожидание его конца бессмысленно:
-                //  • Waiting — ход стоит на запросе разрешения/вопросе к человеку и сам не
-                //    закончится никогда; текст вместо ответа на диалог означает, что отвечать
-                //    на него не будут, и без прерывания сообщение висело бы в очереди вечно;
-                //  • активный цикл «до готово» — сообщение человека становится следующей
-                //    итерацией (решение владельца 2026-08-08), ждать конца цикла ему незачем.
-                // Обычный Working не трогаем: ход доживает сам, очередь разберёт его result.
-                // Занятость и статус — по снимку ДО постановки: свободный между итерациями
-                // цикла чат прерывать нечего (доставку форсирует dispatchNow), а перечитывание
-                // статуса ЗДЕСЬ увидело бы Working уже своего только что доставленного
-                // dispatchNow'ом хода и убило бы его. Тот же ход мог быть доставлен и форсажем
-                // самой постановки (Dispatched): сообщение уже в работе — прерывать нечего,
-                // иначе убьём собственный ход.
-                // Снимок статуса устарел, пока шла постановка: ход, стоявший на карточке
-                // разрешения, мог получить ответ из другой вкладки, дойти до result, и штатный
-                // drain уже унёс НАШЕ же сообщение в новый ход. Убивать его — потерять
-                // доставленное (метка разбора отработает по пустой очереди). Поэтому перед
-                // kill сверяемся с текущим состоянием: ждущий ход всё ещё ждёт, а очередь
-                // ещё не разобрана. Для цикла «до готово» такой сверки нет — там прерывание
-                // не привязано к Waiting и ход в любом случае продолжится нашей итерацией.
-                var stillPreemptable = loopActive
-                    || (entry.Info.Status is SessionStatus.Waiting && HasPending(entry));
-                if (turnInFlight
-                    && (loopActive || statusSnapshot is SessionStatus.Waiting)
-                    && stillPreemptable
-                    && enqueued is not SendAndWaitResult.Queued { Dispatched: true })
-                {
-                    PreemptTurnForQueue(sessionId, entry, "user-message (preempt хода пользователя)",
-                        byUser: cause == DeliveryCause.User);
-                    return SendUserOutcome.QueuedPreempted;
-                }
-                return SendUserOutcome.Queued;
-            }
 
-            // Чат свободен, но очередь непуста (заморожена «Стоп» либо процесс умер аварийно):
-            // новое сообщение — в КОНЕЦ очереди, в работу берётся голова (FIFO: очередь
-            // приоритетнее свежего сообщения), заморозка снимается — это и есть возобновление
-            QueuedMessage? head = null;
-            lock (entry.PendingLock)
-            {
-                if (entry.Pending.Count > 0)
-                {
-                    if (entry.QueueFrozen) { entry.QueueFrozen = false; PersistPending(entry); }
-                    head = entry.Pending[0];
-                    entry.Pending.RemoveAt(0);
-                    // Потолок не пробивается: голова изъята до добавления
-                    entry.Pending.Add(new QueuedMessage(Guid.NewGuid().ToString("N"), text, senderPersonaId,
-                        senderOrigin, AgentDepth: 0, DateTime.UtcNow, Kind: PendingKind.User,
-                        AttachedPaths: attachedPaths, Mode: mode, SenderUserId: senderUserId));
-                }
-            }
-            if (head is not null)
-            {
-                await BroadcastPendingAsync(sessionId, entry);
-                await DeliverPendingAsync(sessionId, entry, head);
-                return SendUserOutcome.Queued;
-            }
-        }
+    // Превью чата и сигнал после «Стоп» (S3-7): владелец — ядро приёма; фасад держит имена
+    // для потребителей (карточка списка и тесты зовут их по типу фасада).
+    internal static string ChatPreview(string text) => Sessions.TurnIntake.ChatPreview(text);
 
-        await SendDirectAsync(sessionId, entry, text, attachedPaths, mode, systemDirective, auto,
-            senderPersonaId, suppressTasksExecute, senderOrigin, senderConnectionId: senderConnectionId, staffNote: staffNote, cause: cause, agentDepth: agentDepth,
-            senderUserId: senderUserId);
-        return SendUserOutcome.Started;
-    }
+    internal const string UserStopNoteText = Sessions.TurnIntake.UserStopNoteText;
 
-    // Ход, не начатый по причине отказа: сообщение об ошибке в ленту, статус Error, процесс не трогаем
-    private async Task RefuseTurnAsync(string sessionId, SessionEntry entry, string reason)
-    {
-        _log.LogWarning("Ход чата {Session} отклонён: {Reason}", sessionId, reason);
-        var runId = TurnProcessHost.NextRunId(); // сквозной счётчик прогонов живёт в хосте (S3-5)
-        entry.RunId = runId;
-        var acc = entry.Accumulator!;
-        await OnMessageQueuedAsync(sessionId, acc, new ErrorMessage(reason, ExpectResultFollows: true, Action: PersonaZone.ChangeCompanionAction), runId);
-        await OnMessageQueuedAsync(sessionId, acc, new ResultMessage(
-            Subtype: "error", DurationMs: 0, NumTurns: 0, Usage: null, TotalCostUsd: null), runId);
-        await OnMessageQueuedAsync(sessionId, acc, new ExitedMessage(), runId);
-    }
-
-    // Непосредственный запуск хода в процесс (гейты очереди уже пройдены либо не требуются).
-    // fromQueue — доставка пользовательского сообщения из очереди: клиент рисовал его
-    // призраком, поэтому live-баллон бродкастим так же, как для сервер-инициированных отправок.
-    private async Task SendDirectAsync(string sessionId, SessionEntry entry, string text,
-        IReadOnlyList<string> attachedPaths, string? mode, bool systemDirective, bool auto,
-        string? senderPersonaId, bool suppressTasksExecute, string? senderOrigin, string? senderConnectionId = null,
-        bool fromQueue = false, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown,
-        int agentDepth = 0, string? senderUserId = null)
-    {
-        // Общая точка доставки хода: сюда идут и три входа с отметкой, и разбор очереди отложенных
-        // после рестарта (DrainRestoredPendingAsync → DeliverPendingAsync), которая отметки не ставила
-        ClaimFirstMessage(entry);
-        // Проект вышел из сферы персоны чата: ход не стартует, персону молча не подменяем
-        // (S3-7: проверка опущена к владельцу зоны — ChatSettings.ZoneRefusalForTurn).
-        if (_settings.ZoneRefusalForTurn(entry) is { } refusal)
-        {
-            await RefuseTurnAsync(sessionId, entry, refusal);
-            return;
-        }
-
-        // ДИАГНОСТИКА повторных доставок (инцидент 2026-08-10): каждая доставка хода в
-        // процесс проходит через эту точку. src различает источник — hub (пользователь
-        // через SignalR), auto (серверный ход: цикл/автоматизация/доклад исполнителя),
-        // fromQueue (доставка пользовательского сообщения из серверной очереди pending).
-        // cause — атрибуция callsite внутри auto/fromQueue (drain/WorkLoop/обход байпаса/…):
-        // pinpoint'ит источник повторных доставок, прежде неразличимых при пустом origin.
-        // Дубли видны как повторные строки с одинаковым/похожим text — pinpoint'ят источник.
-        // Фоновая или отложенная доставка в чат локального проекта с офлайн-устройством: хода
-        // не будет (канал отказал бы до старта) — сообщение ждёт устройство на самой сессии.
-        // Прямой ввод человека и системные директивы цикла сюда не попадают: человек у экрана
-        // и получает честный отказ хода, директива без своего цикла смысла не имеет.
-        if (!systemDirective && (auto || fromQueue) && DeviceWaitGate(entry) is { } deviceGate)
-        {
-            await ParkForDeviceAsync(sessionId, entry, deviceGate, new DeviceWaitMessage(
-                Guid.NewGuid().ToString("N"), text,
-                fromQueue && !auto ? DeviceWaitMessage.RouteUser : DeviceWaitMessage.RouteAuto,
-                DateTime.UtcNow, senderPersonaId, senderOrigin, agentDepth,
-                SuppressTasksExecute: suppressTasksExecute, StaffNote: staffNote,
-                AttachedPaths: attachedPaths.Count > 0 ? attachedPaths : null, Mode: mode,
-                SenderUserId: senderUserId));
-            return;
-        }
-
-        var deliverySrc = fromQueue ? "fromQueue" : auto ? "auto" : "hub";
-        var effectiveCause = cause != DeliveryCause.Unknown ? cause : !auto ? DeliveryCause.User : DeliveryCause.Unknown;
-        _log.LogInformation("Доставка хода {Session}: src={Src} cause={Cause} origin={Origin} mode={Mode} text=\"{Text}\"",
-            sessionId, deliverySrc, effectiveCause, senderOrigin ?? "-", mode ?? "-",
-            (text.Length > 60 ? text[..60] : text).Replace('\n', ' '));
-
-        // Ход РЕАЛЬНО стартует по сообщению человека (hub или из очереди) — обнуляем счётчик
-        // auto-resume: один раз продолженный и снова оборванный чат иначе навсегда терял бы
-        // авто-продолжение, даже если следующий ход запустил человек (инцидент 20.10, чат df485156).
-        // Точка — после гейтов отказа/парковки (выше), т.е. ход действительно пошёл, а не встал
-        // в очередь. Авто-причины (ServerRestartResume/WorkLoop/Direct/подталкивания/Unknown)
-        // счётчик не трогают: защита от crash-loop цела, человекское сообщение не повторяется
-        // автоматически, поэтому зациклиться обнуление не может.
-        if (effectiveCause is DeliveryCause.User or DeliveryCause.QueueUser)
-            entry.Info.RestartResumeAttempts = 0;
-
-        if (TurnStarting is { } onTurnStarting)
-        {
-            try { await onTurnStarting(sessionId); }
-            catch (Exception ex) { _log.LogWarning(ex, "Хук старта хода {Session} упал", sessionId); }
-        }
-
-        // Режим, выбранный в Composer, применяется со следующего хода: процесс claude
-        // пересоздаётся в RunTurnAsync и читает --permission-mode из Info.Mode.
-        // Режим «План» у провайдера без поддержки тихо игнорируем (защита от рассинхрона UI).
-        if (mode is not null && Enum.TryParse<ClaudeMode>(mode, true, out var parsedMode)
-            && (parsedMode != ClaudeMode.Plan || _settings.SupportsPlanMode(entry.Info.Model)))
-        {
-            // M1: сообщение с mode — та же точка смены режима, что и селектор (SetMode).
-            // На стадиях интервью/планирования чат держится в план-режиме (SavedMode), и
-            // сообщение его не сбрасывает — молча, отказ здесь стоил бы самого сообщения.
-            if (entry.Info.TeamImplement is { SavedMode: not null })
-                parsedMode = ClaudeMode.Plan;
-            // …а режим, в котором CLI не спрашивает разрешений (acceptEdits/bypass), штабу
-            // запрещён в любой точке смены — иначе CoordinatorWriteGuard молчит.
-            if (entry.Info.TeamImplement is { } teamForGuard)
-                parsedMode = PermissionModeGuard.GuardCompatibleMode(parsedMode, teamForGuard.CoordinatorNoCode);
-            if (entry.Info.Mode != parsedMode)
-            {
-                entry.Info.Mode = parsedMode;
-                SaveSessions();
-            }
-        }
-
-        // M7: помечаем инициатора хода для добавочного авто-подтверждения — ход человека
-        // (не авто и не директива) является контрольной точкой, агентский — нет.
-        entry.TeamTurnFromHuman = !auto && !systemDirective;
-
-        // Человек вмешался в чат — счётчик добиваний сабагента начинается заново
-        // (потолок в две попытки считается на серию подряд, а не на всю жизнь чата)
-        if (!auto && !systemDirective)
-        {
-            entry.SubagentNudges = 0;
-            entry.NudgeAgentId = null;
-        }
-
-        // Групповой чат: @упоминание участника в тексте переключает активного спикера
-        // ДО пересоздания процесса — новый персона-слой применяется уже к этому ходу
-        await _settings.RouteGroupSpeakerAsync(sessionId, entry, text);
-
-        // Аккаунт чата могли исчерпать другие чаты, пока этот простаивал: перед ходом
-        // тихо перевозим его на здоровую подписку пула (та же модель и эндпоинт)
-        TryPoolFailover(sessionId, entry);
-
-        // Live-баллон пользовательского сообщения — в session-группу, до тяжёлого старта
-        // CLI-процесса. Адресация зависит от того, кто рисовал реплику оптимистично:
-        //  • авто-отправка (командный ход, автоматизация, задача) и доставка из очереди
-        //    (fromQueue — клиент рисовал призрак, а не баллон): клиент не добавлял её в
-        //    ленту сам — рассылаем всем;
-        //  • ручной ввод из хаба (senderConnectionId): отправитель уже нарисовал баллон
-        //    по исходу 'started' (useSession.send), его соединение исключаем — а остальным
-        //    устройствам того же чата реплику отдаём live. Раньше они не получали её вовсе
-        //    и видели только ответ «в пустоту» до перезагрузки страницы;
-        //  • ручной ввод без соединения (REST/сервисные вызовы): оптимистичного баллона
-        //    нет ни у кого — рассылаем всем.
-        // ТОЛЬКО в session-группу: клиент открытого чата состоит и в user_/project_-группе,
-        // широкая рассылка дублировала сообщение в ленте (см. комментарий у внутриходовых событий).
-        if (!systemDirective)
-        {
-            var userMsg = new UserMessageMessage(text, attachedPaths.Count > 0 ? attachedPaths : null,
-                senderPersonaId, auto, senderOrigin, StaffNote: staffNote,
-                SenderUserId: HumanAuthorOf(senderUserId, agentDepth, senderPersonaId));
-            if (!auto && !fromQueue && senderConnectionId is not null)
-                await BroadcastExceptAsync(sessionId, senderConnectionId, userMsg);
-            else
-                await BroadcastAsync(sessionId, userMsg);
-        }
-
-        // Локальный голосовой ход (место chat-voice на «Локальная»): CLI-процесс не нужен,
-        // достаточно аккумулятора истории — ответ принесёт RunLocalVoiceTurnAsync. Гейт
-        // обязан быть детерминирован на протяжении всего SendDirectAsync (второй вызов
-        // ниже, перед диспетчеризацией): все его входы — константы вызова плюс ручной
-        // тумблер VoiceMode, между вызовами они не меняются.
-        var localVoice = ShouldRunLocalVoice(entry, auto, systemDirective, attachedPaths);
-        if (localVoice)
-            await EnsureAccumulatorAsync(entry);
-        else
-            await EnsureProcessAsync(sessionId, entry);
-
-        // Авторство реплик хода: text-сообщения истории получают персону на момент хода
-        // (после смены собеседника старые реплики сохраняют прежний аватар)
-        entry.Accumulator?.SetPersona(entry.Info.PersonaId);
-
-        // Авто-имя сессии по первому сообщению (Claude в --print не отдаёт title/summary).
-        // Только у по-настоящему нового чата: имя ещё пустое, не залочено явным заданием
-        // (вручную/MCP/ретайтл) и ход ещё НЕ запускался (ClaudeSessionId == null). Иначе после
-        // рестарта сообщение-продолжение («продолжи») перетирало бы уже сложившееся название.
-        // Работает и для чатов вне проекта, и для проектных сессий.
-        if (string.IsNullOrWhiteSpace(entry.Info.Name) && !entry.Info.NameLocked && entry.Info.ClaudeSessionId is null)
-        {
-            var title = MakeChatTitle(text);
-            if (!string.IsNullOrEmpty(title))
-            {
-                entry.Info.Name = title;
-                SaveSessions();
-                // Фоново уточняем заголовок локальной моделью (best-effort, не блокирует ход)
-                _ = _naming.RefineChatTitleAsync(sessionId, text, title, ResolveOwnerId(entry.Info));
-            }
-        }
-
-        await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
-
-        entry.Accumulator?.OnUserMessage(text, attachedPaths, viaAgent: agentDepth >= 1, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin, staffNote: staffNote,
-            senderUserId: HumanAuthorOf(senderUserId, agentDepth, senderPersonaId));
-        // Сообщение пользователя = начало нового хода в основном дереве (зеркало
-        // сброса skippingWorktreeTurn в SessionChangedPaths.Extract)
-        entry.TurnInWorktree = false;
-
-        // Push-источники автоматизаций: @упоминание персоны в тексте пользователя.
-        // Fire-and-forget — обработчик не должен тормозить ход (он лишь детектит и ставит в очередь).
-        if (OnUserMessage is { } userMsgObservers)
-        {
-            _ = Task.Run(async () =>
-            {
-                try { await userMsgObservers(entry.Info, text, senderPersonaId); }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine($"[SessionManager] Ошибка OnUserMessage ({sessionId}): {ex.Message}");
-                }
-            });
-        }
-        // Обвязки хода (OmO) дописываются только к тексту для CLI —
-        // история и UI хранят исходное сообщение пользователя.
-        // Снимок хода человека — для возврата в композер по «Стоп», если очередь пуста;
-        // авто/агентские/директивные ходы не восстанавливаются (null)
-        entry.CurrentTurnSnapshot = !auto && !systemDirective
-            ? new UserTurnSnapshot(text, attachedPaths, mode)
-            : null;
-        // Превью чата — исходным сообщением, без обвязок BuildCliTurnText (адаптер превью
-        // не выставляет: ему текст приходит уже обвязанным и повторяется на каждой попытке
-        // фолбэка). Служебные директивы (цикл «до готово», добивание сабагента) превью НЕ
-        // трогают вовсе: их сырой текст («[СИСТЕМНАЯ ДИРЕКТИВА — …]») человеку в списке чатов
-        // не адресован (MINOR B-п.5) — в карточке остаётся то, что он видел последним.
-        if (!systemDirective)
-            entry.Info.LastMessage = ChatPreview(text);
-        NoteRunDelegation(entry, agentDepth, suppressTasksExecute, fromHuman: !auto && !systemDirective);
-        NoteTurnActor(entry, senderUserId, fromHuman: !auto && !systemDirective && agentDepth == 0 && !suppressTasksExecute);
-        // Диспетчеризация: локальный голосовой ход идёт мимо CLI (fire-and-forget — как
-        // CLI-ветка, где SendMessageAsync лишь ставит ход в процесс; ответ приходит
-        // событиями через OnMessageAsync). Реплика уже в аккумуляторе (OnUserMessage выше).
-        if (localVoice)
-        {
-            // Отметка активности: у CLI-ветки её ставит адаптер (SendMessageAsync), а
-            // локальный ход идёт мимо него — без явной записи архивный чат остался бы в
-            // архиве (ApplyStatusAsync его больше не двигает)
-            entry.Info.UpdatedAt = DateTime.UtcNow;
-            _ = Task.Run(async () =>
-            {
-                try { await RunLocalVoiceTurnAsync(sessionId, entry); }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine($"[SessionManager] Локальный голосовой ход ({sessionId}): {ex.Message}");
-                }
-            });
-        }
-        else
-        {
-            // Голосовой ход (не-локальная ветка): модель места chat-voice по ЯВНОМУ выбору
-            // админа (слот → UserModelTierResolver.ModelFor, конкретная модель → как есть).
-            // «Локальная» (ветка выше), «по умолчанию» и отсутствие выбора → null: ход идёт
-            // на модели чата, как раньше. Неголосовой ход override не получает (место
-            // chat-voice к нему не относится), поэтому обычная модель чата не подменяется.
-            var voiceModel = entry.Info.VoiceMode
-                ? _voice.VoiceModelFor(ResolveOwnerId(entry.Info))
-                : null;
-            // Блокер: override на модели ДРУГОГО провайдера ломает транскрипт — CLI стартует
-            // в чужом профиле (CLAUDE_CONFIG_DIR) с --resume на транскрипт, которого там нет
-            // («No conversation found» / ход без контекста). Штатный переезд провайдера идёт
-            // только через MigrateProviderAsync с guard'ом, а override его обходит. Поэтому
-            // override применяем, только если провайдер модели override совпадает с провайдером
-            // модели чата (сравнение — через ProviderKey настроек, тот же свод, что у
-            // guard'а и SetPersona; профиль локального CLI-провайдера тоже считается
-            // другим). Миграцию на каждый ход НЕ
-            // делаем: ход идёт на модели чата, как раньше.
-            if (voiceModel is not null
-                && !string.Equals(_settings.ProviderKey(voiceModel), _settings.ProviderKey(entry.Info.Model),
-                    StringComparison.OrdinalIgnoreCase))
-            {
-                _log.LogWarning(
-                    "Голосовой ход чата {SessionId}: модель места chat-voice «{VoiceModel}» (провайдер {VoiceKey}) " +
-                    "не совпадает с провайдером модели чата {ChatKey} — ход идёт на модели чата, транскрипт не мигрируем",
-                    sessionId, voiceModel, _settings.ProviderKey(voiceModel), _settings.ProviderKey(entry.Info.Model));
-                voiceModel = null;
-            }
-            await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text, auto, systemDirective, senderPersonaId), attachedPaths,
-                agentDepth, suppressTasksExecute: suppressTasksExecute, turnModelOverride: voiceModel);
-        }
-    }
-
-    // Превью чата для карточки списка: первые 100 символов сообщения
-    internal static string ChatPreview(string text) => text.Length > 100 ? text[..100] + "…" : text;
-
-    // Сигнал модели после «Стоп» человека — общий для кнопки в чате и в трее рук
-    internal const string UserStopNoteText =
-        "[Ход остановлен человеком (кнопка «Стоп»). Прерванное молча не доделывай: продолжай его, " +
-        "только если об этом просят ниже.]";
-
-    // Текст хода для CLI: исходное сообщение + обвязки.
-    // Протокол цикла «до готово» — пока Session.WorkLoop активен. Своей вставки ultrawork
-    // больше нет: слова ultrawork/ulw ловит keyword-detector плагина oh-my-claudecode.
+    // Текст хода для CLI (S3-7): тело — в ядре приёма (обвязки — часть состава хода).
+    // Обёртка держит имя и сигнатуру: VoiceLocalTurnTests зовёт BuildCliTurnText
+    // reflection-ом по типу фасада.
     private string BuildCliTurnText(SessionEntry entry, string text, bool auto, bool systemDirective, string? senderPersonaId)
-    {
-        // Маркер реплики человека (шаг 1 сжатия): только на прозу человека (ShouldMarkHumanText) —
-        // не на слэш-команды/скиллы (разворот скилла важнее) и не на не-человеческие ходы (auto,
-        // systemDirective, реплики персон). Непосредственно перед СЫРЫМ текстом, до любой обвязки
-        // ниже и до вложений (AttachmentInliner в ClaudeSession.SendMessageAsync) — N и sha
-        // относятся только к тому, что человек ввёл. Магслова ниже ищем по сырому text.
-        // Только в текст для CLI: история, лента и превью берут text без маркера (SendDirectAsync).
-        var result = ClaudeHomeServer.Services.Llm.Claude.ClaudeSession.ShouldMarkHumanText(text, auto, systemDirective, senderPersonaId)
-            ? ClaudeHomeServer.Services.Llm.Claude.ClaudeSession.WithHumanTextMarker(text)
-            : text;
-
-        // Обрыв фонового агента (см. NoteTruncatedBgAgent): CLI объявил его прогон
-        // завершённым и отдал координатору последнюю реплику как результат. Пометка едет
-        // префиксом ближайшего хода — своего хода на неё не тратим, а координатор обязан
-        // знать, что итог по обрывку подводить нельзя. Одноразовая: уехала — снята.
-        if (entry.TruncatedBgNote is { } cutBgAgent)
-        {
-            entry.TruncatedBgNote = null;
-            result = SubagentPrompts.TruncatedBgAgent(cutBgAgent) + "\n\n" + result;
-        }
-
-        if (entry.UserStopNote)
-        {
-            entry.UserStopNote = false;
-            result = UserStopNoteText + "\n\n" + result;
-        }
-
-        if (entry.Info.WorkLoop is { } loop)
-        {
-            // Буфер LoopTurnText здесь НЕ чистим: ход ставится в очередь, а стримящийся
-            // сейчас ход ещё копит текст — очистка на постановке стирала бы его маркер.
-            // Буфер потребляет и чистит ContinueWorkLoopAsync по result хода.
-            entry.LoopTurnInFlight = true;
-            // Верификационный ход идёт со своей директивой — рабочий протокол не дописываем
-            if (loop.Phase != "verifying")
-                result += "\n\n" + OmoPrompts.WorkLoopTurn(loop.Promise);
-        }
-
-        // Режим «Командная реализация»: штаб на каждом ходу получает правило «любая работа —
-        // через задачу» и свою стадию. Без напоминания координатор срезает углы и делает
-        // работу сам — гард на инструменты правки его только останавливает, но не направляет.
-        if (entry.Info.TeamImplement is { } team)
-            result += "\n\n" + TeamImplementPrompts.CoordinatorTurn(team);
-
-        // Магслова oh-my-claudecode (ultrawork, ralph, autopilot…): хук keyword-detector
-        // плагина отключён вместе со всеми хуками (disableAllHooks — иначе окна консоли
-        // на хосте), поэтому активируем скилл сами — дописываем инструкцию его запуска.
-        if (OmcKeywordRouting.BuildKeywordHint(text) is { } keywordHint)
-            result += "\n\n" + keywordHint;
-
-        // Процессы oh-my-claudecode: советнические роли плагина замещаются
-        // персонами-сабагентами с подходящей специальностью (таблица соответствий).
-        // Тело — в PersonaLayerBuilder (подготовка к S3-7): это его ResolveOtherPersonas/
-        // SplitConsultants, вызов через слой персоны.
-        if (_persona.BuildOmcRoleHint(text, entry.Info) is { } routingHint)
-            result += "\n\n" + routingHint;
-
-        // Возврат на CLI после локальных голосовых ходов: транскрипт CLI реплик разговора
-        // не знает, без сводки модель отвечала бы так, будто разговора не было. Берём
-        // хвост истории (лента едина) тем же лимитом, что и разговорный контекст.
-        if (entry.LocalTurnsSinceCli > 0 && entry.Accumulator is { } voiceAcc)
-        {
-            var summary = BuildVoiceContextBlock(voiceAcc);
-            if (!string.IsNullOrEmpty(summary))
-                result = summary + "\n\n" + result;
-            entry.LocalTurnsSinceCli = 0;
-        }
-
-        return result;
-    }
+        => _intake.BuildCliTurnText(entry, text, auto, systemDirective, senderPersonaId);
 
     // Локальный голосовой ход (S3-6): тела BuildVoiceContextBlock, ShouldRunLocalVoice,
     // BuildVoiceMessages, TrimVoiceMessage, RunLocalVoiceTurnAsync переехали в LocalVoiceTurn.
@@ -2080,104 +1645,14 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // конца ВСЕГО цикла (гейт разбора очереди по WorkLoop), в штабе — штатного конца хода
     // координатора. Таймаут НЕ отменяет ход: вызывающий получает Running и позже читает
     // результат через историю (chats_history).
-    public async Task<SendAndWaitResult> SendMessageAndWaitAsync(string sessionId, string text,
+    public Task<SendAndWaitResult> SendMessageAndWaitAsync(string sessionId, string text,
         TimeSpan timeout, int agentDepth = 0, string? senderPersonaId = null,
         string? senderOrigin = null, string? senderChatName = null, bool preempt = true,
         bool systemDirective = false, string? senderUserId = null)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry))
-            throw new InvalidOperationException("Сессия не найдена");
+        => _intake.SendMessageAndWaitAsync(sessionId, text, timeout, agentDepth, senderPersonaId,
+            senderOrigin, senderChatName, preempt, systemDirective, senderUserId);
 
-        ClaimFirstMessage(entry);
 
-        // Занята только при реально идущем ходе (Working) или ожидании человека (Waiting).
-        // Starting у живой сессии означает лишь «создан, ход ещё не запускался»: после первого
-        // хода статус идёт Working→Active/Finished и назад в Starting не возвращается (обратно
-        // Starting ставит только рестарт → Orphaned). Поэтому свежесозданный чат (у него Process
-        // уже присвоен в StartNewSessionAsync, но ходов не было) НЕ занят — принимаем сообщение
-        // и стартуем первый ход. Гонку двух одновременных ходов ловит TurnWaiter ниже.
-        var status = entry.Info.Status;
-        if (status is SessionStatus.Working or SessionStatus.Waiting)
-        {
-            var queued = await EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin, agentDepth,
-                senderChatName: senderChatName, senderUserId: senderUserId);
-            // Агентское сообщение по умолчанию (preempt=true) прерывает текущий ход
-            // (доставится сразу по его концу), но НЕ рушит цикл «до готово» и штаб
-            // «Командной реализации» — там доклад ждёт штатного конца хода, как раньше.
-            // preempt=false рабочего хода (Working) не прерывает: сообщение ждёт штатного
-            // result, и живой процесс получает его same-process — Kill ради доставки убивал
-            // бы фоновых сабагентов, работающих внутри чужого хода (диагностика обрывов
-            // агентов 28.08, чат ea9a0f18). Waiting прерывается и при preempt=false: ход на
-            // карточке разрешения сам не закончится, «не прерывать» там — висеть вечно
-            // (та же логика, что у пользовательского пути в SendMessageAsync).
-            // Дубликат и переполнение ничего не прерывают;
-            // замороженную «Стоп» очередь агент не возобновляет — прерывать ход тоже не ему.
-            // Dispatched — ход успел кончиться между снимком занятости и постановкой, и
-            // доставку уже форсировал сам enqueue: прерывать теперь означало бы убить
-            // собственный только что запущенный ход.
-            if (queued is SendAndWaitResult.Queued { Duplicate: false, Dispatched: false }
-                && entry.Info.WorkLoop is null && entry.Info.TeamImplement is null
-                && !entry.QueueFrozen
-                && (preempt || status is SessionStatus.Waiting))
-            {
-                entry.DrainOnExitedRun = entry.RunId;
-                _log.LogInformation("Interrupt адаптера {Session}: callsite=agent-message (preempt хода агента, chats_send)", sessionId);
-                entry.Process?.Interrupt();
-            }
-            return queued;
-        }
-
-        // Чат локального проекта, устройство офлайн: агентское сообщение (chats_send,
-        // будильник сторожа) ждёт устройство на сессии — принято, но хода пока не будет
-        if (DeviceWaitGate(entry) is { } deviceGate)
-            return await ParkForDeviceAsync(sessionId, entry, deviceGate, new DeviceWaitMessage(
-                Guid.NewGuid().ToString("N"), text, DeviceWaitMessage.RouteAgent, DateTime.UtcNow,
-                senderPersonaId, senderOrigin, agentDepth, SenderChatName: senderChatName,
-                SenderUserId: senderUserId));
-
-        await EnsureProcessAsync(sessionId, entry);
-        entry.Accumulator?.SetPersona(entry.Info.PersonaId);
-
-        // Авто-имя по первому сообщению — как при отправке человеком
-        if (string.IsNullOrWhiteSpace(entry.Info.Name) && !entry.Info.NameLocked && entry.Info.ClaudeSessionId is null)
-        {
-            var title = MakeChatTitle(text);
-            if (!string.IsNullOrEmpty(title))
-            {
-                entry.Info.Name = title;
-                SaveSessions();
-                // Фоново уточняем заголовок локальной моделью (best-effort, не блокирует ход)
-                _ = _naming.RefineChatTitleAsync(sessionId, text, title, ResolveOwnerId(entry.Info));
-            }
-        }
-
-        // Один ожидатель на ход: параллельная отправка проиграла гонку — в очередь БЕЗ
-        // прерывания (чужой ход только стартует, рубить его чужим сообщением нельзя)
-        var tcs = new TaskCompletionSource<TurnResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (Interlocked.CompareExchange(ref entry.TurnWaiter, tcs, null) is not null)
-            return await EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin, agentDepth,
-                senderChatName: senderChatName, senderUserId: senderUserId);
-        entry.TurnWaiterBaseline = entry.Accumulator?.GetAll().Count ?? 0;
-
-        await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
-        entry.Accumulator?.OnUserMessage(text, [], viaAgent: agentDepth >= 1, senderPersonaId: senderPersonaId,
-            systemDirective: systemDirective, senderOrigin: senderOrigin,
-            senderUserId: HumanAuthorOf(senderUserId, agentDepth, senderPersonaId));
-        entry.TurnInWorktree = false; // сообщение = новый ход в основном дереве (зеркало Extract)
-        entry.CurrentTurnSnapshot = null; // ход агента — по «Стоп» в композер не возвращается
-        entry.TeamTurnFromHuman = false; // ход поднят агентом (chats_send), не человеком (M7)
-        // Превью чата — сообщением агента: адаптер его больше не выставляет (см. ChatPreview)
-        entry.Info.LastMessage = ChatPreview(text);
-        NoteRunDelegation(entry, agentDepth, suppressTasksExecute: false, fromHuman: false);
-        NoteTurnActor(entry, senderUserId, fromHuman: false);
-        await entry.Process!.SendMessageAsync(text, null, agentDepth);
-
-        if (timeout <= TimeSpan.Zero) return new SendAndWaitResult.Running();
-        var completed = await Task.WhenAny(tcs.Task, Task.Delay(timeout));
-        return completed == tcs.Task
-            ? new SendAndWaitResult.Completed(await tcs.Task)
-            : new SendAndWaitResult.Running(); // ход продолжается, ожидатель очистит OnMessageAsync
-    }
 
     // === Очередь сообщений занятой сессии ===
     // Тела переехали в PendingQueueService (S3-2): постановка с дедупом, снимки, отмена,
@@ -2204,27 +1679,14 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // прежнему ждут конца ВСЕГО цикла. Report — доклад исполнителя (TaskExecutionService.
     // ReportToDelegatorAsync): должен будить ждущий цикл, иначе координатор и исполнитель
     // зависают во взаимном ожидании. User отсюда не шлётся.
-    public async Task<bool> SendOrEnqueueAsync(string sessionId, string text,
+    // Отправить либо поставить в очередь (S3-7): тело — в ядре приёма; фасад — точка
+    // переадресации серверных отправок (доклады, будильники) с прежней сигнатурой.
+    public Task<bool> SendOrEnqueueAsync(string sessionId, string text,
         string? senderPersonaId = null, string? senderOrigin = null,
         bool silent = false, bool suppressTasksExecute = false, string? staffNote = null,
         PendingKind kind = PendingKind.Agent, string? senderUserId = null)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry))
-            throw new InvalidOperationException("Сессия не найдена");
-
-        if (entry.Info.Status is SessionStatus.Working or SessionStatus.Waiting)
-        {
-            await EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin,
-                agentDepth: 0, silent, suppressTasksExecute, senderChatName: null, kind: kind,
-                staffNote: staffNote, senderUserId: senderUserId);
-            return true;
-        }
-
-        await SendMessageAsync(sessionId, text, [], auto: true, senderPersonaId: senderPersonaId,
-            suppressTasksExecute: suppressTasksExecute, senderOrigin: senderOrigin, staffNote: staffNote,
-            cause: DeliveryCause.Direct, senderUserId: senderUserId);
-        return false;
-    }
+        => _intake.SendOrEnqueueAsync(sessionId, text, senderPersonaId, senderOrigin, silent,
+            suppressTasksExecute, staffNote, kind, senderUserId);
 
     // === Отчёт «наверх»: в родительский чат ===
 
@@ -2291,101 +1753,22 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Снимок очереди для клиента и REST (тело — в PendingQueueService, S3-2)
     public IReadOnlyList<QueuedMessage> GetPending(string sessionId) => _pending.GetPending(sessionId);
 
-    // Прервать идущий ход РАДИ очереди: убитый процесс result не пришлёт, поэтому доставку
-    // разберёт exited того же прогона (DrainOnExitedRun). В отличие от «Стоп» очередь НЕ
-    // морозится — прерывание здесь и есть требование доставить ждущее сообщение сейчас.
-    // byUser — перебой затеял человек (кнопка на карточке очереди, его сообщение в ход, ждавший
-    // его ответа): живая лента ставит на нём отметку «Ход остановлен пользователем», история
-    // обязана её повторить, иначе после F5 разъедется с ней (и со сверкой длин на фронте).
-    private void PreemptTurnForQueue(string sessionId, SessionEntry entry, string callsite, bool byUser)
-    {
-        if (byUser) _process.RecordUserInterrupt(sessionId, entry);
-        // Ход убит — result по нему не придёт, а с ним не придёт и потребление буфера маркеров
-        // (конец хода в OnMessageAsync, у штаба ещё и HandleTeamTurnEndAsync). Чистим синхронно:
-        // иначе маркер мёртвого хода склеился бы с текстом следующего и применился задним
-        // числом — фантомная эскалация и сдвиг стадии (класс «волны-призрака»).
-        // Буфер копится в любом чате, поэтому и чистим без оглядки на режим штаба.
-        lock (entry.TeamTurnLock)
-        {
-            entry.TeamTurnText.Clear();
-            entry.TeamTurnShownLength = 0;
-            entry.TurnSawAngleBracket = false;
-            entry.TeamTurnAsked = false;
-        }
-        // Прерванный ход result не пришлёт — погасим маркер итерации цикла, иначе он
-        // заблокирует разбор очереди (drain уступает, пока LoopTurnInFlight).
-        entry.LoopTurnInFlight = false;
-        entry.DrainOnExitedRun = entry.RunId;
-        _log.LogInformation("Interrupt адаптера {Session}: callsite={Callsite}", sessionId, callsite);
-        entry.Process?.Interrupt();
-    }
+    // «Прервать ход и доставить ждущее сейчас» (S3-7): тело — в ядре приёма (прерывание
+    // принадлежит той же границе, что и очередь). Фасад — переадресация кнопки карточки.
+    public bool PreemptForPending(string sessionId) => _intake.PreemptForPending(sessionId);
 
-    // Явное «прервать ход и доставить ждущее сейчас» (кнопка на карточке очереди). Отдельно
-    // от «Стоп»: тот морозит очередь и возвращает сообщение в композер, а здесь наоборот —
-    // очередь разбирается сразу по exited. Без живого хода и без очереди делать нечего:
-    // холостой kill убил бы чужой только что стартовавший ход. false — прерывать было нечего.
-    public bool PreemptForPending(string sessionId)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
-        if (entry.Info.Status is not (SessionStatus.Working or SessionStatus.Waiting)) return false;
-        // Живого прогона нет — убивать нечего, exited не придёт, а взведённая метка разбора
-        // осталась бы висеть. Два случая, и оба должны получить честный отказ:
-        //  • чат залип в Working/Waiting (ход убил ватчдог/сбой либо статус выставил протухший
-        //    ответ на карточку) — реанимирует его «Стоп», клиенту подскажет 409;
-        //  • окно ротации фолбэка (OrchestrationActive без прогона): Interrupt внутреннего
-        //    адаптера там no-op, придержанного терминала у попытки нет (Held очищен при
-        //    SwallowCleanup), и SettleAsync вынесет наружу пустоту — ни exited, ни доставки.
-        if (entry.Process is null or { HasLiveTurn: false }) return false;
-        // Идёт сворачивание контекста: это тоже ход (CompactAsync → QueueTurnAsync), но обёртка
-        // фолбэка его не оркеструет (_turn == null), и exited убитой компакции она ГЛОТАЕТ —
-        // до SessionManager не дойдёт ничего. Перебой оставил бы чат в вечном Working с
-        // застрявшей очередью, поэтому отказываем: компакция короткая, её стоит дождаться.
-        if (entry.CompactRun != 0 && entry.CompactRun == entry.RunId) return false;
-        if (entry.QueueFrozen) return false;
-        lock (entry.PendingLock)
-            if (entry.Pending.Count == 0) return false;
-        PreemptTurnForQueue(sessionId, entry, "pending-preempt (кнопка «прервать и отправить»)", byUser: true);
-        return true;
-    }
-
-    // Отменить ожидающее сообщение (крестик на карточке-призраке). false — уже доставлено.
-    public async Task<bool> CancelPendingAsync(string sessionId, string messageId)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
-        bool removed;
-        var removedWaiting = false;
-        lock (entry.PendingLock)
-        {
-            removed = entry.Pending.RemoveAll(p => p.Id == messageId) > 0;
-            // Крестик на карточке «ждёт устройство» — снимает сообщение с сессии
-            if (!removed && entry.Info.DeviceWaitQueue is { } waiting && waiting.Any(m => m.Id == messageId))
-            {
-                var rest = waiting.Where(m => m.Id != messageId).ToList();
-                entry.Info.DeviceWaitQueue = rest.Count > 0 ? rest : null;
-                removed = removedWaiting = true;
-            }
-        }
-        if (removedWaiting) SaveSessions();
-        if (removed) await BroadcastPendingAsync(sessionId, entry);
-        return removed;
-    }
+    // Отменить ожидающее сообщение (S3-7): тело — в ядре приёма (очередь — его владение).
+    public Task<bool> CancelPendingAsync(string sessionId, string messageId) => _intake.CancelPendingAsync(sessionId, messageId);
 
     // Убрать поставленное (queued) сообщение по тексту — для служебных отправок (записка-передача),
     // которые не должны отработать отдельным ходом, если чат занялся между проверкой занятости и
     // отправкой. true, если что-то убрано. Тело — в PendingQueueService (S3-2).
     public bool RemovePendingByText(string sessionId, string text) => _pending.RemovePendingByText(sessionId, text);
 
-    // Шов ITurnStarter (S3-2, целиком — S3-4): очередь просит разбор при переходе 0→1,
-    // добивание сабагента и продолжение цикла поднимают ход тем же путём. В переходном режиме
-    // его реализует ядро; шов снимается на шаге S3-7, когда приём хода уходит в свою роль.
-    // Явные реализации нужны для тех методов, что приватные; публичные (SendMessageAsync,
-    // SendOrEnqueueAsync) реализуют шов неявно — сигнатуры совпадают.
-    // S3-7: точки карточек из шва убраны — их пишет SessionHistory, вызывающий (TurnRecovery,
-    // TurnProcessHost) идёт к ней напрямую; карточка хода не стартует и на шве не нужна.
-    async Task Sessions.ITurnStarter.DrainNextPendingAsync(string sessionId) => await DrainNextPendingAsync(sessionId);
-
     // Переходный шов цикла «до готово» (S3-7): продолжение и добивание не стартуют ход сами —
     // они просят фасад, чьё тело цикла остаётся здесь до шага 2 (TurnContinuation).
+    // Шов ITurnStarter с фасада снят: с S3-7 его реализует ядро приёма (SessionCoreRegistration),
+    // ход в сессии запускает только оно.
     Task Sessions.IWorkLoopContinuation.ContinueWorkLoopAsync(string sessionId) => ContinueWorkLoopAsync(sessionId);
     Task Sessions.IWorkLoopContinuation.NudgeTruncatedSubagentAsync(string sessionId,
         Llm.SubagentRunPassport run, int attempt) => NudgeTruncatedSubagentAsync(sessionId, run, attempt);
@@ -2395,156 +1778,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // возобновление (новое пользовательское сообщение при свободном чате) снимает заморозку.
     // Ошибка отправки не должна ронять разбор — сообщение уже снято с очереди, иначе оно
     // застряло бы навсегда и блокировало остальные.
-    private async Task DrainNextPendingAsync(string sessionId)
-    {
-        // Окно штатной остановки: очередь осталась в памяти и новый ход не запускает
-        if (_completion.Stopping) return;
-        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
-        if (entry.QueueFrozen) return;
+    // Достать следующее сообщение и отправить его обычным ходом (S3-7): dequeue, пин и
+    // захват слота — одна атомарная операция в ядре приёма. Обёртка держит имя и сигнатуру:
+    // тесты порядка/иерархии/выключения зовут её reflection-ом по типу фасада, свои точки
+    // цикла (SetWorkLoop, рестарт) идут через неё же.
+    private Task DrainNextPendingAsync(string sessionId) => _intake.DrainNextPendingAsync(sessionId);
 
-        QueuedMessage? next;
-        var scheduleContinue = false;
-        lock (entry.PendingLock)
-        {
-            if (entry.QueueFrozen) return;
-            if (entry.Info.WorkLoop is not null)
-            {
-                // Цикл «до готово» активен: пользовательские сообщения продолжают цикл как
-                // следующие итерации, агентские ждут конца ВСЕГО цикла. Если итерация уже
-                // стартует (LoopTurnInFlight — системная директива продолжения из
-                // ContinueWorkLoopAsync либо ход, извлечённый здесь же в параллельном drain),
-                // очередь не трогаем: иначе два хода подряд ушли бы в один процесс. Маркер
-                // LoopTurnInFlight выставляем атомарно с извлечением — тогда параллельный
-                // ContinueWorkLoopAsync по result увидит его и уступит, не дублируя директиву.
-                if (entry.LoopTurnInFlight) return;
-                // При активном цикле подхватываем не только User, но и Report (доклад исполнителя):
-                // иначе доклад пролежит до конца ВСЕГО цикла, а цикл тем временем жжёт итерации в
-                // фазе waiting. Посторонние Agent-сообщения по-прежнему ждут (решение владельца
-                // 2026-09-01: посторонний агент не сбивает координатора).
-                next = entry.Pending.FirstOrDefault(p => p.Kind is PendingKind.User or PendingKind.Report);
-                if (next is null)
-                {
-                    // Minor 6: при активном цикле, свободном маркере и пустой user-очереди
-                    // (напр. сообщение удалили из очереди до exited прерванного хода, а result
-                    // не пришёл) — цикл продолжит свою работу директивой, иначе он висел бы
-                    // «активным» без движения. ContinueWorkLoopAsync пройдёт гейты сама: если
-                    // параллельный запуск (по result) уже взвёл маркер — она сразу уступит.
-                    scheduleContinue = true;
-                }
-                else
-                {
-                    entry.Pending.Remove(next);
-                    entry.LoopTurnInFlight = true;
-                }
-            }
-            else
-            {
-                // Параллельный drain уже вытащил сообщение и отправляет — уступаем, чтобы не
-                // запустить второй ход. Сообщение не теряется: по result этого хода отработает
-                // следующий drain (DrainInFlight к тому моменту уже погашен).
-                if (entry.DrainInFlight) return;
-                next = entry.Pending.FirstOrDefault();
-                if (next is not null)
-                {
-                    entry.Pending.RemoveAt(0);
-                    entry.DrainInFlight = true;
-                }
-            }
-        }
-        if (scheduleContinue)
-        {
-            _ = Task.Run(async () =>
-            {
-                try { await ContinueWorkLoopAsync(sessionId); }
-                catch (Exception ex) { Console.Error.WriteLine($"[SessionManager] Продолжение цикла из drain ({sessionId}): {ex.Message}"); }
-            });
-            return;
-        }
-        if (next is null) return;
-
-        bool delivered = false;
-        try
-        {
-            // Бродкаст внутри try (Minor 1): исключение хаба (disposed/отвал транспорта) не
-            // должно оставлять DrainInFlight взведённым навсегда и глушить разбор очереди чата
-            // до перезапуска сервера — finally гарантированно погасит флаг.
-            await BroadcastPendingAsync(sessionId, entry);
-            delivered = await DeliverPendingAsync(sessionId, entry, next);
-        }
-        finally
-        {
-            entry.DrainInFlight = false;
-            // Гейт каскада (Minor 3): перепроверяем очередь, ТОЛЬКО если предыдущая доставка
-            // выполнена (delivered — не бросилась). Имя шире «ход стартовал»: для гейта важен лишь
-            // факт «доставка не провалилась». При провале (CLI не поднялся) статус не ушёл в
-            // Working — без гейта перепроверка вычерпала бы ВСЮ очередь подряд, теряя каждое
-            // сообщение (одно потерянное — прежнее поведение, весь хвост — регрессия). Гонка
-            // «result пришёл раньше finally» (Minor 2): статус уже Idle, очередь непуста —
-            // перезапуск разыграет следующее сообщение. Сам DrainNextPendingAsync имеет гейт
-            // DrainInFlight, так что повторный запуск безопасен (уступит, если кто-то уже взял).
-            if (delivered && !entry.QueueFrozen
-                && entry.Info.Status is not (SessionStatus.Working or SessionStatus.Waiting or SessionStatus.Starting))
-            {
-                // Minor 2: чтение Pending.Count — под PendingLock, по конвенции файла.
-                bool hasPending;
-                lock (entry.PendingLock) hasPending = entry.Pending.Count > 0;
-                if (hasPending)
-                {
-                    _ = Task.Run(async () =>
-                    {
-                        try { await DrainNextPendingAsync(sessionId); }
-                        catch (Exception ex) { Console.Error.WriteLine($"[SessionManager] Повторный разбор очереди ({sessionId}): {ex.Message}"); }
-                    });
-                }
-            }
-        }
-    }
-
-    // Флаг «уже предупредили про opt-out»: выводим ровно один раз на инстанс процесса, иначе
-    // прод-настройки с потолком 0 будут сыпать Warning на каждом ходе. opt-out — исключительный
-    // кейс (тесты или явное выключение защиты), в нормальной работе потолок = 8.
-    private static int _awaitExitOptOutLogged;
-
-    // Ожидание подтверждённой смерти прогона предыдущего хода перед отложенной доставкой
-    // (инцидент 2026-08-10, П2-Ф1 «сериализация на смерти»). См. комментарий в DeliverPendingAsync.
-    // Потолок — Delivery:AwaitProcessExitSeconds (дефолт 8): латентность старта авто-хода в
-    // секунды принята владельцем как цена за устранение класса гонок с доживающим прогоном.
-    // По истечении — НЕ fail-open (вернуло бы гонку) и НЕ честная ошибка (доставка нужна):
-    // прерываем доживающий прогон (фоновые агенты гибнут, добиваются в следующем ходе через
-    // notification — как при смене окружения) и коротко ждём его финализации.
-    private async Task AwaitPreviousTurnExitAsync(string sessionId, SessionEntry entry)
-    {
-        var ceiling = int.TryParse(_config["Delivery:AwaitProcessExitSeconds"], out var s) && s >= 0
-            ? s : 8;
-        // Потолок 0 — отключить сериализацию (тесты, или явный opting-out). Иначе ждём смерти.
-        // Один раз на процесс предупреждаем в лог: защита от гонок на смерти прогона выключена,
-        // это исключительный кейс — в проде потолок должен быть положительным.
-        if (ceiling <= 0)
-        {
-            if (Interlocked.Exchange(ref _awaitExitOptOutLogged, 1) == 0)
-                _log.LogWarning(
-                    "Delivery:AwaitProcessExitSeconds={Ceiling} — сериализация отложенной доставки выключена (opt-out)",
-                    ceiling);
-            return;
-        }
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(ceiling);
-        while (Busy(entry.Process))
-        {
-            if (DateTime.UtcNow >= deadline)
-            {
-                _log.LogInformation(
-                    "Ожидание смерти прогона {Session} истекло ({Ceiling} с) — прерываю доживание ради отложенной доставки",
-                    sessionId, ceiling);
-                entry.Process?.Interrupt();
-                // Interrupt асинхронен: прогон финализируется за секунды, даём короткий grace.
-                var grace = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-                while (Busy(entry.Process) && DateTime.UtcNow < grace)
-                    await Task.Delay(50);
-                break;
-            }
-            await Task.Delay(50);
-        }
-    }
 
     internal static bool Busy(ILlmSessionAdapter? p) => SessionStore.Busy(p);
 
@@ -2552,86 +1791,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Пользовательское идёт со своими вложениями и режимом; агентское — как серверная отправка.
     // Возвращает true, если доставка выполнена (ход стартовал — можно ждать result); false —
     // бросилась внутри, ход не поднялся и его повторная обработка по result не придёт (Minor 3).
-    private async Task<bool> DeliverPendingAsync(string sessionId, SessionEntry entry, QueuedMessage next)
-    {
-        // Сериализация отложенной доставки на смерти предыдущего хода (инцидент 2026-08-10, П2-Ф1):
-        // статус Active ставится по result РАНЬШЕ, чем ClaudeSession отпустит _turnLock и финализирует
-        // прогон. Старт нового хода в этом окне гоняется с доживающим процессом — same-process reuse
-        // (Ч1), лок миграции (Ч2 — держатель .jsonl жив), interrupt свежего прогона. Ждём, пока прогон
-        // умрёт (HasLiveTurn=false) И фолбэк-оркестрация снимется (OrchestrationActive=false) — тогда
-        // _turnLock свободен, транзрипт закрыт, новый ход стартует свежим процессом. Только для
-        // отложенной доставки (из Pending): свежий ход человека через SendDirectAsync сюда не попадает.
-        await AwaitPreviousTurnExitAsync(sessionId, entry);
-
-        // F2-O3 доработка 2 (дельта-ревью 627bd324): гонка «отзыв против уже начатой доставки».
-        // Сообщение изымается из очереди под PendingLock (DrainNextPendingAsync), а доставляется
-        // вне замка: в окне между изъятием и стартом хода может прийти отзыв участника.
-        // StopChatsOfRevokedMember чистит очередь, но до уже изъятых сообщений не дотягивается.
-        // Без перепроверки здесь стартует ход-сирота в приватном чате отозванного: его события
-        // ушли бы в user_{id}, а сам автор чата его больше не видит. Перепроверяем перед стартом:
-        // автор приватного чата всё ещё участник проекта. Нет — ход не начинаем, сообщение уже
-        // вычерпано. Образец — «Стоп успел снять цикл — ход-сироту не шлём» (ContinueWorkLoopAsync).
-        // Обычный (не приватный) чат и чат неотозванного участника не затронуты: гейт срабатывает
-        // только когда автор приватного чата выведен из проекта.
-        if (PrivateChatAuthorRevoked(entry))
-        {
-            // Ход не стартовал. При активном цикле drain выставил LoopTurnInFlight до отправки —
-            // гасим, иначе цикл завис бы на мёртвой итерации (тот же финализирующий путь, что в
-            // catch ниже). После отзыва цикла уже нет (StopChatsOfRevokedMember его снимает),
-            // поэтому ветка доходит только до общего пути.
-            if (entry.Info.WorkLoop is not null) entry.LoopTurnInFlight = false;
-            return false;
-        }
-
-        try
-        {
-            if (next.Kind == PendingKind.User)
-                // fromQueue: true — клиент рисовал призраком, бродкастим live-баллон (как auto).
-                // Режим уже применён при постановке, повторно не передаём, чтобы не сбросить
-                // возможную смену режима после (SetMode) — Info.Mode источник правды.
-                await SendDirectAsync(sessionId, entry, next.Text,
-                    next.AttachedPaths ?? [], mode: next.Mode, systemDirective: false, auto: false,
-                    senderPersonaId: next.SenderPersonaId, suppressTasksExecute: next.SuppressTasksExecute,
-                    senderOrigin: next.SenderOrigin, fromQueue: true, cause: DeliveryCause.QueueUser,
-                    senderUserId: next.SenderUserId);
-            else
-                // Глубина сообщения едет в ход: агентское из очереди так же делегированное,
-                // как поданное сразу (иначе chats_send, отстоявший очередь, получил бы
-                // возможности хода человека)
-                await SendMessageAsync(sessionId, next.Text, [], auto: true,
-                    senderPersonaId: next.SenderPersonaId, senderOrigin: next.SenderOrigin,
-                    suppressTasksExecute: next.SuppressTasksExecute, staffNote: next.StaffNote,
-                    cause: DeliveryCause.QueueAgent, agentDepth: next.AgentDepth,
-                    senderUserId: next.SenderUserId);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            // При активном цикле drain выставил LoopTurnInFlight=true до отправки. Если ход
-            // так и не стартовал — ход-то не пришлёт result, и маркер повис бы навсегда,
-            // заблокировав разбор очереди. Сбрасываем, чтобы цикл не завис на мёртвой итерации.
-            if (entry.Info.WorkLoop is not null)
-                entry.LoopTurnInFlight = false;
-            Console.Error.WriteLine($"[SessionManager] Доставка отложенного сообщения ({sessionId}): {ex.Message}");
-            return false;
-        }
-    }
-
-    // F2-O3 доработка 2: автор приватного чата больше не участник проекта (или проекта нет).
-    // Приватный чат виден только автору (SessionAccess.CanSee): после его отзыва сообщения и
-    // ходы в этом чате некому ни показать, ни начать. Только для приватных чатов
-    // (PrivateToUserId != null): общий чат принадлежит проекту и доставляется как раньше.
-    private bool PrivateChatAuthorRevoked(SessionEntry entry)
-    {
-        if (entry.Info.PrivateToUserId is not { } author) return false;
-        var project = entry.Info.ProjectId is not null ? _projects.GetById(entry.Info.ProjectId) : null;
-        // Тот же признак видимости приватного чата, что у шлюзов этого файла (GetOwnedVisible,
-        // VisibleTo): после вывода автора из проекта CanSee гаснет (ProjectAccess.Check = null),
-        // и стартующий ход-сирота сливал бы события в user_{id} отозванного. Id автора входит
-        // только в видимость его же чата; право уже реализовано RemoveAsync — здесь перечитывается
-        // его следствие, нового права никто не получает.
-        return !Access.SessionAccess.CanSee(entry.Info, project, author);
-    }
+    // Доставка конкретного сообщения из очереди обычным ходом (S3-7): тело — в ядре приёма
+    // (ожидание смерти предыдущего прогона, перепроверка автора приватного чата, старт —
+    // всё на границе приёма). Обёртка держит имя и сигнатуру: тесты зовут её reflection-ом
+    // по типу фасада.
+    private Task<bool> DeliverPendingAsync(string sessionId, SessionEntry entry, QueuedMessage next)
+        => _intake.DeliverPendingAsync(sessionId, entry, next);
 
     // Клиенту уходят только видимые элементы (silent — не призрак). Тело — в PendingQueueService (S3-2).
     private Task BroadcastPendingAsync(string sessionId, SessionEntry entry) =>
@@ -2693,16 +1858,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         await _process.CompactAsync(sessionId, entry);
     }
 
+
     // Создание/переиспользование аккумулятора истории — в SessionHistory (S3-5): ключ
-    // истории и общий лок внеходовых записей — её дело. Обёртка сохранена: на ней сидят
-    // локальный голосовой ход и гидратация после рестарта (они в фасаде до S3-6/S3-7).
+    // истории и общий лок внеходовых записей — её дело. Тел здесь с S3-7 не осталось
+    // (приём хода — в ядре, оно зовёт хост процесса), но обёртка держится как место,
+    // на которое смотрит белый тест VoiceLocalTurnTests (рефлексия по типу фасада) —
+    // тот же приём, что у MakeChatTitle и ShouldRunLocalVoice выше.
     private async Task EnsureAccumulatorAsync(SessionEntry entry) => await _sessionHistory.EnsureAccumulatorAsync(entry);
-
-    // Переподключение процесса CLI — в TurnProcessHost (S3-5): лок запуска (EnsureLock)
-    // остаётся по sessionId, не по экземпляру класса.
-    private async Task EnsureProcessAsync(string sessionId, SessionEntry entry)
-        => await _process.EnsureProcessAsync(sessionId, entry);
-
 
     // Именование чата (S3-3): авто-заголовок и его уточнение — тело в ChatNaming. Обёртки
     // сохранены и как точка вызова (создание/приём хода ещё живут здесь), и как место,
@@ -2862,37 +2024,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // уходе со страницы: UI перечитывал Session.Mode и показывал прежний режим.
     // На сам ход это не влияет — процесс claude всё равно пересоздаётся в RunTurnAsync
     // и читает --permission-mode из Info.Mode.
-    public Session? SetMode(string sessionId, string mode, string? userId = null)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
-        if (userId is not null && ResolveOwnerId(entry.Info) != userId) return null;
-        if (!Enum.TryParse<ClaudeMode>(mode, true, out var parsed))
-            throw new InvalidOperationException($"Неизвестный режим: {mode}");
-        // Штаб думает (Э8): на стадиях интервью и планирования чат держится в план-режиме, а
-        // селектор у человека заблокирован — менять режим мимо него нельзя, иначе правки
-        // перестали бы упираться в permission-механику там, где план ещё не согласован.
-        // Признак — навязанный режим (SavedMode), а не стадия: у провайдера без поддержки
-        // плана мы деградировали и ничего не навязывали, блокировать там нечего.
-        if (entry.Info.TeamImplement is { SavedMode: not null } && parsed != ClaudeMode.Plan)
-            throw new InvalidOperationException(
-                "Штаб планирует. Режим вернётся после согласования плана");
-        // «План» у провайдера без поддержки не принимаем — та же защита, что и на ходе
-        if (parsed == ClaudeMode.Plan && !_settings.SupportsPlanMode(entry.Info.Model))
-            throw new InvalidOperationException("Провайдер не поддерживает режим «План»");
-        // M1: гард «координатор не пишет код» держится на permission-запросах CLI, а в
-        // acceptEdits/bypassPermissions CLI не спрашивает — такой режим штабу запрещён в
-        // любой точке смены, не только при включении режима (аудит 2026-08-01: обход
-        // селектором в стадии волны → координатор писал файлы мимо задач).
-        if (entry.Info.TeamImplement is { } teamForGuard)
-            parsed = PermissionModeGuard.GuardCompatibleMode(parsed, teamForGuard.CoordinatorNoCode);
-        if (entry.Info.Mode == parsed) return entry.Info;
-        entry.Info.Mode = parsed;
-        SaveSessions();
-        // Живой ход перенастраиваем на лету (control-протокол set_permission_mode):
-        // новый режим применяется уже к идущему ходу, а не только со следующего.
-        entry.Process?.TrySetPermissionModeLive(parsed);
-        return entry.Info;
-    }
+    // Смена режима (S3-7): тело — в ядре приёма (режим — часть состава хода, та же точка,
+    // что и сообщение с mode). Фасад — точка переадресации API и внутренних вызовов.
+    public Session? SetMode(string sessionId, string mode, string? userId = null) => _intake.SetMode(sessionId, mode, userId);
 
     // manual=true — отключение по кнопке «Остановить цикл» в UI (в отличие от внутренних
     // отключений из ContinueWorkLoopAsync по лимиту/ошибке — те шлют СВОЁ сообщение сами,
@@ -3368,7 +2502,13 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // TaskExecutionService — по тем же причинам, что HasLiveDelegatedTasks: продолжение в чате
     // исполнителя после «Стоп» снимает пометку остановки, иначе задача числилась бы мёртвой.
     // Сбой хука ход не роняет. null — хук не задан (тесты без стора задач).
-    public Func<string, Task>? TurnStarting { get; set; }
+    // С S3-7 хук читается в ядре приёма (там старт хода); фасад — точка его установки
+    // (та же, что была) и переадресует в ядро.
+    public Func<string, Task>? TurnStarting
+    {
+        get => _intake.TurnStarting;
+        set => _intake.TurnStarting = value;
+    }
 
     // Резолв названия задачи по id (волна 1 team-blocker-honest, дефект 1430b732): штаб
     // публикует карточку остановки с TaskId, и подпись диалога снятия должна показать
@@ -3910,13 +3050,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     bool ITeamRunState.ShouldSuppressAsyncAgentStallGuard(string sessionId) =>
         _teamRunState.ShouldSuppressAsyncAgentStallGuard(sessionId);
 
+    // Шов штаба (S3-7, аддендум §1): реализует ядро приёма; здесь — однострочная
+    // переадресация на него (тест кастует фасад к ITeamTurnIntake, код Services/Team не меняется).
     Task<bool> ITeamTurnIntake.SendOrEnqueueAsync(string sessionId, string text,
         string? senderPersonaId, bool silent, bool suppressTasksExecute, string? staffNote, string? senderUserId)
-        => SendOrEnqueueAsync(sessionId, text, senderPersonaId,
+        => _intake.SendOrEnqueueAsync(sessionId, text, senderPersonaId,
             silent: silent, suppressTasksExecute: suppressTasksExecute, staffNote: staffNote,
             senderUserId: senderUserId);
 
-    void ITeamTurnIntake.InterruptTurn(string sessionId) => InterruptCore(sessionId, byUser: false);
+    void ITeamTurnIntake.InterruptTurn(string sessionId) => _intake.InterruptTurn(sessionId);
 
     // Публикация карточки остановки: запись в ленту + WS + стадия «ждёт решения».
     // Тело в TeamDecisionService (волна Д).
@@ -4055,8 +3197,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     private async Task NudgeTruncatedSubagentAsync(string sessionId,
         Llm.SubagentRunPassport run, int attempt)
     {
-        // Окно штатной остановки: директива ушла бы в умирающий адаптер
-        if (_completion.Stopping) return;
+        // Окно штатной остановки: директива ушла бы в умирающий адаптер (флаг — в ядре,
+        // S3-7; здесь чтение как ранняя отсечка, решающая проверка — внутри ядра)
+        if (_intake.Stopping) return;
         if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Process is null) return;
         // Обрыв опровергнут, пока добивание планировалось (финал агента доехал до транскрипта
         // после перепроверки): последний паспорт агента уже штатный — директиву не шлём.
@@ -4073,8 +3216,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         var directive = run.FinishedBy == "interrupted"
             ? Prompts.SubagentPrompts.ResumeInterrupted(run, attempt, MaxSubagentNudges)
             : Prompts.SubagentPrompts.ResumeTruncated(run, attempt, MaxSubagentNudges);
-        await SendMessageAsync(sessionId, directive,
-            [], systemDirective: true, cause: DeliveryCause.SubagentNudge);
+        // (S3-7) Директиву в ход просит ядро приёма: отказ ядра (остановка, нет сессии) —
+        // хода нет, нудж молча не состоялся; повторной постановки здесь не было и раньше.
+        await _intake.TrySubmitContinuationAsync(sessionId, directive, DeliveryCause.SubagentNudge);
     }
 
     // Автопродолжение цикла «до готово»: вызывается по result хода, нёсшего протокол цикла.
@@ -4082,8 +3226,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // либо уход в фазу waiting, если у чата есть живые делегированные задачи.
     private async Task ContinueWorkLoopAsync(string sessionId)
     {
-        // Окно штатной остановки: новый ход цикла поднял бы процесс, который тут же убьют
-        if (_completion.Stopping) return;
+        // Окно штатной остановки: новый ход цикла поднял бы процесс, который тут же убьют.
+        // Флаг — в ядре приёма (S3-7); здесь чтение — ранняя отсечка, решающая проверка —
+        // внутри TrySubmitContinuation (Stop между ними не поднимает хода в остановленную сессию)
+        if (_intake.Stopping) return;
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         if (entry.Info.WorkLoop is not { } loop) return;
 
@@ -4185,7 +3331,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 SaveSessions();
                 await BroadcastWorkLoopAsync(sessionId, entry);
                 if (entry.Info.WorkLoop is null) return; // Стоп успел снять цикл — ход-сироту не шлём
-                await SendMessageAsync(sessionId, OmoPrompts.WorkLoopVerification, [], systemDirective: true);
+                // (S3-7) Директиву в ход просит ядро приёма (решающая проверка остановки — там).
+                // Отказ ядра — хода нет; снятый здесь маркер не оставит цикл на мёртвой итерации.
+                if (!await _intake.TrySubmitContinuationAsync(sessionId, OmoPrompts.WorkLoopVerification))
+                    entry.LoopTurnInFlight = false;
                 return;
             }
 
@@ -4242,8 +3391,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             await BroadcastWorkLoopAsync(sessionId, entry);
             if (await StopIfWorkLoopLimitReachedAsync(sessionId, entry, loop)) return;
             if (entry.Info.WorkLoop is null) return; // Стоп успел снять цикл — ход-сироту не шлём
-            await SendMessageAsync(sessionId,
-                OmoPrompts.WorkLoopContinuation(loop.Promise, loop.Iteration, loop.MaxIterations), [], systemDirective: true);
+            // (S3-7) Директиву продолжения в ход просит ядро приёма; отказ ядра (Stop между
+            // ранней отсечкой и этим местом) — хода нет, маркер итерации снимаем здесь же.
+            if (!await _intake.TrySubmitContinuationAsync(sessionId,
+                OmoPrompts.WorkLoopContinuation(loop.Promise, loop.Iteration, loop.MaxIterations)))
+                entry.LoopTurnInFlight = false;
         }
         catch
         {
@@ -4387,11 +3539,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             SaveSessions();
             await BroadcastWorkLoopAsync(sessionId, entry);
             if (entry.Info.WorkLoop is null) continue; // стоп успел снять цикл
-            await SendMessageAsync(sessionId,
+            // (S3-7) Тик просит ход у ядра приёма (директива — тем же путём, что и продолжение).
+            // Сам тик маркера не взводил (его поднимает состав хода в ядре) — отказ ядра нечего снимать.
+            await _intake.TrySubmitContinuationAsync(sessionId,
                 OmoPrompts.WorkLoopWaitingTick(loop.WaitingReason,
                     loop.WaitingTicks, _maxWaitingTicks,
-                    (int)_waitingTickInterval.TotalSeconds),
-                [], systemDirective: true);
+                    (int)_waitingTickInterval.TotalSeconds));
         }
     }
 
@@ -4511,9 +3664,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
     // Остановка всех живых адаптеров — вызывается при graceful shutdown приложения,
     // иначе после остановки сервера остаются зомби-процессы (claude + node MCP-серверов).
-    // С3-5: само гашение — в TurnProcessHost.KillProcesses. Флаг «штатная остановка» с S3-6
-    // живёт в TurnCompletion (Stopping): здесь он поднимается этим методом и читается
-    // телами приёма хода; таймер тика ожидания (цикл «до готово», S3-7) остаётся здесь,
+    // С3-5: само гашение — в TurnProcessHost.KillProcesses. Флаг «штатная остановка» с S3-7
+    // живёт в ядре приёма (TurnIntake.Stopping): здесь он поднимается единственным
+    // писателем (BeginShutdown) ДО гашения адаптеров и читается телами разбора и цикла
+    // как ранняя отсечка; таймер тика ожидания (цикл «до готово») остаётся здесь,
     // порядок тот же, что был.
     public void KillAllProcesses()
     {
@@ -4521,7 +3675,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // ExitedMessage, и OnMessageAsync при поднятом признаке гасит их (newStatus = null),
         // не перетирая Working в Error/Active (ADR-033). Новый SaveSessions() здесь НЕ
         // добавляем: его убрали (5c6606282) как источник зависаний остановки (ожидание _saveLock).
-        _completion.Stopping = true;
+        _intake.BeginShutdown();
         // Таймер не должен пытаться писать одновременно с убийством процессов:
         // сценарий — shutdown, SaveSessions() ждёт _saveLock, а в это время адаптеры
         // claude не диспозятся → процессы зависают в памяти (боролись ранее). Тот же

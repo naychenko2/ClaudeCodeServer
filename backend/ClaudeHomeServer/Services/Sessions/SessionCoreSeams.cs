@@ -28,6 +28,11 @@ namespace ClaudeHomeServer.Services.Sessions;
 // публичной поверхности у шва нет.
 public interface ITurnStarter
 {
+    // Чтение признака штатной остановки (аддендум §2): проситель (TurnCompletion, цикл фасада)
+    // использует его только как раннюю отсечку; писатель и решающая проверка — в ядре
+    // (BeginShutdown / TrySubmitContinuationAsync под флагом ядра), иначе TOCTOU.
+    bool IsStopping { get; }
+
     Task<SessionManager.SendUserOutcome> SendMessageAsync(string sessionId, string text,
         IReadOnlyList<string> attachedPaths, string? mode, bool systemDirective, bool auto,
         string? senderPersonaId, bool suppressTasksExecute, string? senderOrigin,

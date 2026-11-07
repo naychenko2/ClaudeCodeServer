@@ -26,10 +26,11 @@ public static class SessionCoreRegistration
             sp.GetRequiredService<ITaskLookup>()));
 
         // --- Роли ядра (S3-2) ---
-        // Шов «очередь → приём хода»: ленивый на синглтон SessionManager — прямая зависимость
-        // дала бы цикл PendingQueueService → SessionManager → PendingQueueService; на резолве ленивого
-        // шва SessionManager ещё не строится, цикл разрывается отложенным вызовом (S3-0 §3).
-        services.AddSingleton(sp => new Lazy<ITurnStarter>(() => sp.GetRequiredService<SessionManager>()));
+        // Шов «очередь → приём хода»: ленивый — прямая зависимость дала бы цикл
+        // PendingQueueService → приём хода → очередь. С S3-7 (аддендум §1) шов резолвит ядро
+        // приёма TurnIntake, а не фасад: ход в сессии запускает только оно; на резолве ленивого
+        // шва ядро ещё не строится, цикл разрывается отложенным вызовом (S3-0 §3).
+        services.AddSingleton(sp => new Lazy<ITurnStarter>(() => sp.GetRequiredService<TurnIntake>()));
         // Переходный шов цикла «до готово» (S3-7): продолжение и добивание не стартуют ход сами
         // и не видят шов приёма; реализует его SessionManager — тело цикла на фасаде до шага 2,
         // там шов снимается (продолжение зовёт ядро через TrySubmitContinuation).
@@ -270,6 +271,35 @@ public static class SessionCoreRegistration
             sp.GetRequiredService<Lazy<ITurnStarter>>(),
             sp.GetRequiredService<ClaudeHomeServer.Services.Turn.ITurnEventBus>(),
             sp.GetRequiredService<ILogger<TurnProcessHost>>()));
+        // Локальный голосовой ход (S3-7): общий синглтон фасада и ядра приёма — два экземпляра
+        // дали бы два состояния голосовой ветки. Router/ollama — GetService: та же
+        // опциональность, что у параметров фасада (без них локальной ветки нет, разговор
+        // идёт через CLI, как раньше).
+        services.AddSingleton(sp => new LocalVoiceTurn(
+            sp.GetService<ClaudeHomeServer.Services.Llm.LocalActionRouter>(),
+            sp.GetService<ClaudeHomeServer.Services.Llm.ILocalLlmClient>(),
+            sp.GetRequiredService<PersonaManager>(),
+            sp.GetRequiredService<SessionStore>(),
+            sp.GetRequiredService<TurnCompletion>()));
+        // Ядро приёма хода (S3-7, аддендум Александра §1): ход в сессии запускает только оно;
+        // реализует шов ITurnStarter и штабной Team.ITeamTurnIntake. Зависимости ровно десять
+        // (правило 2 сторожа): стор, слой персоны, очередь, хост процесса, конец хода, настройки,
+        // именование, голос, ленивый шов штаба, конфиг. Вызов цикла (пустая очередь при активном
+        // цикле) — переходный хук OnLoopContinueRequested, его ставит фасад (тело цикла на фасаде
+        // до шага 2); конструктор internal — сам класс public только как параметр публичного
+// конструктора фасада (CS0051); конструктор зовёт его только отсюда и из запасной сборки.
+        services.AddSingleton(sp => new TurnIntake(
+            sp.GetRequiredService<SessionStore>(),
+            sp.GetRequiredService<PersonaLayerBuilder>(),
+            sp.GetRequiredService<PendingQueueService>(),
+            sp.GetRequiredService<TurnProcessHost>(),
+            sp.GetRequiredService<TurnCompletion>(),
+            sp.GetRequiredService<ChatSettings>(),
+            sp.GetRequiredService<ChatNaming>(),
+            sp.GetRequiredService<LocalVoiceTurn>(),
+            sp.GetRequiredService<Lazy<ITeamNotifier>>(),
+            sp.GetRequiredService<IConfiguration>(),
+            sp.GetRequiredService<ILogger<TurnIntake>>()));
         // Возобновление оборванного хода: кандидаты auto-resume, маркеры обрыва, ручной
         // перезапуск зависшего хода. Порог свежести хода читается из конфига в самой роли.
         services.AddSingleton(sp => new TurnRecovery(

@@ -39,8 +39,10 @@ backend/ClaudeHomeServer/Services/ChatUserStateService.cs|1
 # в видимость его же чата; роль и рубильник не решаются — членство уже реализовано RemoveAsync,
 # здесь перечитывается его следствие, чтобы не поднимать ход-сироту в чате, который автор больше
 # не видит. Ключом хранилищ id не служит, нового права никто не получает.
-# S3-3: второй вызов (SetChatIconsAsync) переехал в ChatNaming — см. строку ниже; остаётся VisibleTo.
-backend/ClaudeHomeServer/Services/SessionManager.cs|1
+# S3-7: последнее прямое место в SessionManager (тот же F2-O3) переехал в ядро приёма TurnIntake
+# НЕ прямым вызовом: ядро не содержит ProjectManager, резолв проекта по сессии делает сам стор —
+# _store.VisibleTo (SessionStore.cs, ровно SessionAccess.CanSee с тем же резолвом). Прямого
+# вызова в коде нет — строка снимка снята.
 # S3-1: GetOwnedVisible и VisibleTo переехали из SessionManager в SessionStore дословно (две
 # строки SessionAccess.CanSee), роль и смысл те же — см. записи S2d-3a/S2d-4a выше: арендатор уже
 # установлен GetOwned, CanSee добавляет только приватность чата, ключом хранилищ id не служит.

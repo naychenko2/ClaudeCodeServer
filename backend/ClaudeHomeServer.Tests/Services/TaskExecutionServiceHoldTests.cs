@@ -1020,13 +1020,24 @@ public class TaskExecutionServiceHoldTests : IDisposable
     // ─── W4-HOLD-N: хвосты R-HOLD-D2 / R-HOLD-J ───────────────────────────────────────────
 
     // Лог-сборник: cause доставки наблюдаем только в строке «Доставка хода» — иначе она
-    // нигде не проявляется.
-    private sealed class CapturingLogger(List<string> sink) : ILogger<SessionManager>
+    // нигде не проявляется. Generic — потому что лог пишет не фасад, а роль-владелец
+    // (S3-7: «Доставка хода» в ядре приёма TurnIntake), у роли свой ILogger<T>.
+    private sealed class CapturingLogger<T>(List<string> sink) : ILogger<T>
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null!;
         public bool IsEnabled(LogLevel logLevel) => true;
         public void Log<TState>(LogLevel level, EventId id, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter) => sink.Add(formatter(state, exception));
+    }
+
+    // Проба к логгеру ядра приёма: поле _intake фасада — экземпляр роли, его _log и подменяем.
+    private void CaptureIntakeDeliveryLog(List<string> sink)
+    {
+        var intake = typeof(SessionManager).GetField("_intake",
+            BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(_sessions)!;
+        typeof(ClaudeHomeServer.Services.Sessions.TurnIntake)
+            .GetField("_log", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(intake, new CapturingLogger<ClaudeHomeServer.Services.Sessions.TurnIntake>(sink));
     }
 
     // W4-HOLD-N (хвост R-N, критерий c1): честная причина: продолжение в чат шага —
@@ -1050,8 +1061,7 @@ public class TaskExecutionServiceHoldTests : IDisposable
         SetRunningTurn(keyChat.Id);
 
         var logLines = new List<string>();
-        typeof(SessionManager).GetField("_log", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .SetValue(_sessions, new CapturingLogger(logLines));
+        CaptureIntakeDeliveryLog(logLines);
 
         _tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
         _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);

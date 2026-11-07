@@ -27,8 +27,10 @@ namespace ClaudeHomeServer.Services.Sessions;
 // тело конца хода не зовёт ни одного метода хоста процесса, entry.Process — поле записи,
 // то есть стор. Экземпляра PendingQueueService тоже нет: тело пользуется только его
 // статикой HasPending/HasContinuingPending.
-// Флаг «штатная остановка» (Stopping) — здесь: его смысл в разборе хода (ADR-033: обрывы
-// умирающего процесса статус не меняют), поднимает его SessionManager.KillAllProcesses.
+// Флаг «штатная остановка» (Stopping) — в ядре приёма TurnIntake (S3-7, аддендум §2): писатель
+// один — BeginShutdown (его зовёт SessionManager.KillAllProcesses ДО гашения адаптеров); здесь
+// его читают через IsStopping шва ITurnStarter — только как раннюю отсечку разбора (ADR-033:
+// обрывы умирающего процесса статус не меняют).
 // Событие OnSessionMessage (подписка наблюдателей ленты) — здесь: его единственный потребитель —
 // ProcessPipelineItemAsync; фасад держит аксессоры подписки — внешняя сигнатура прежняя.
 // Класс public ТОЛЬКО потому, что он параметр публичного конструктора SessionManager (CS0051);
@@ -46,13 +48,6 @@ public sealed class TurnCompletion : ITurnMessageSink
     private readonly Lazy<IWorkLoopContinuation> _workLoop;
     private readonly Lazy<ITeamNotifier> _teamNotifier;
     private readonly ILogger<TurnCompletion> _log;
-
-    // ADR-033: «штатная остановка» — ставится SessionManager.KillAllProcesses ДО гашения
-    // адаптеров; error/exited умирающего процесса статус не меняют (см. употребление Stopping
-    // в OnMessageQueuedAsync и в плане штабу). Read-поля живого разбора цикла/добивания
-    // остались в фасаде до шага 2 (вынос TurnContinuation) и читают этот флаг через это
-    // свойство; S3-7 перенаправил их вызовы на переходный шов IWorkLoopContinuation.
-    internal volatile bool Stopping;
 
     // Наблюдатели сообщения сессии (автоматизация персон, git-автокоммит, журнал событий):
     // подписка идёт через фасадный аксессор на этот экземляр; потребитель — ProcessPipelineItemAsync.
@@ -530,7 +525,7 @@ public sealed class TurnCompletion : ITurnMessageSink
             // на auto-resume. Working живёт на диске только до следующего старта — там LoadSessions
             // сразу переводит его в Orphaned. result хода пишется как обычно: ход честно
             // завершился, и «продолжать» его после рестарта нельзя.
-            if (Stopping && msg is ErrorMessage or ExitedMessage)
+            if (_turnStarter.Value.IsStopping && msg is ErrorMessage or ExitedMessage)
                 newStatus = null;
 
             // Конец хода/обрыв — ожидающей карточки больше нет
@@ -601,7 +596,7 @@ public sealed class TurnCompletion : ITurnMessageSink
             // При поднятом Stopping план штабу не кладём: разбор хода (HandleTeamTurnEndAsync)
             // планирует новую работу, а процессы уже гасятся. Подписчик turn/completed без плана
             // только пишет предупреждение; состояние штаба остаётся на диске как есть.
-            if (!Stopping && msg is ResultMessage or ErrorMessage && entry.Info.TeamImplement is not null)
+            if (!_turnStarter.Value.IsStopping && msg is ResultMessage or ErrorMessage && entry.Info.TeamImplement is not null)
             {
                 // Этап 4 / шаг 1в: кладём план вызова HandleTeamTurnEndAsync в LastTeamTurnEnds.
                 // Подписчик turn/completed изымает план и асинхронно зовёт HandleTeamTurnEndAsync

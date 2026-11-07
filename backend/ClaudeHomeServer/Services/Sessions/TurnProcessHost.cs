@@ -151,6 +151,13 @@ public sealed class TurnProcessHost
         finally { entry.EnsureLock.Release(); }
     }
 
+    // Аккумулятор истории — часть контекста запуска хода (его ключ и лок держит роль истории):
+    // локальный голосовой ход идёт мимо CLI-процесса, но контекст поднимает тот же хост,
+    // поэтому ядро приёма просит аккумулятор здесь, а не прямой зависимостью от роли истории
+    // (S3-7: список зависимостей ядра — ровно десять).
+    internal async Task EnsureAccumulatorAsync(SessionEntry entry)
+        => await _sessionHistory.EnsureAccumulatorAsync(entry);
+
     private async Task EnsureProcessCoreAsync(string sessionId, SessionEntry entry)
     {
         // Отложенная уборка устаревшего адаптера (смена собеседника/правка персоны):

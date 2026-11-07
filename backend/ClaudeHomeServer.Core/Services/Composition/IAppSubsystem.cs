@@ -109,8 +109,12 @@ public sealed class SubsystemStateStore
     // (он не может столкнуться с ключом вертикали). Панель «Компоненты» рисует их
     // отдельной группой без тумблеров (docs/mockups/components-admin-v1-proposal.md).
     // `ImplType` — сам стор: он в сборке Core, и `SubsystemUsageAttribution` по
-    // «CoreAssemblies» пропускает такие строки — обращений ядра ни за какую
-    // подсистему не считаются.
+    // «CoreAssemblies» пропускает такие строки: ядро не становится наблюдаемым по
+    // своей регистрации, а его обработчики без атрибута неатрибутируемы. Но явный
+    // [SubsystemUsage("core:…")] в Main или в домашней сборке активной вертикали
+    // делает строку ядра наблюдаемой — обращения ядра считаются по атрибуту
+    // вертикальной ручки (поведение закреплено тестом
+    // Composition/SubsystemUsageAttributionTests.cs:273).
     public void RecordCore(string key, string title, string description)
     {
         if (!IsCoreKey(key))

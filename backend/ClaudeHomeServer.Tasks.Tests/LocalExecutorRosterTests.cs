@@ -13,8 +13,11 @@ namespace ClaudeHomeServer.Tasks.Tests;
 // LocalExecutorsContributorTests бьют по подставному FakeRoster: он сам повторяет «тир weak →
 // локальный», поэтому поломка боевой реализации — подмена ExecutorModel на PersonaModel, игнор
 // тира задачи, опускание персоны — в них не краснеет. Здесь проверяется сама реализация шва:
-// разворот модели — только ModelAssignmentResolver (та же проводка, что в бою: LlmSubsystem +
-// Program.cs), локальность — IModelResolver.IsLocal провайдера этой модели.
+// разворот модели — только ModelAssignmentResolver, проводкой как в бою: DI собирает его через
+// AddSingleton<ModelAssignmentResolver> (LlmSubsystem.cs:268) и подставляет все пять аргументов,
+// включая SpecialtySettingsStore (:351) и LlmProviderRegistry (:296); тест держит тот же набор
+// (инвариант «резолвер теста = боевой резолвер»). Локальность — IModelResolver.IsLocal
+// провайдера этой модели.
 //
 // Слоты инстанса (личных слотов у пользователя нет, UserModelTierResolver падает на них):
 // strong/medium — облачная модель, weak — локальная. Провайдеры: живой локальный (IsLocal +
@@ -23,6 +26,7 @@ namespace ClaudeHomeServer.Tasks.Tests;
 public class LocalExecutorRosterTests : IDisposable
 {
     private const string Owner = "u";
+    private const string Project = "p1";
     private const string LocalModel = "qwen-roster-test";
     private const string CloudModel = "cloud-roster-test";
     private const string DisabledLocalModel = "qwen-roster-off-test";
@@ -30,6 +34,7 @@ public class LocalExecutorRosterTests : IDisposable
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "ler_" + Guid.NewGuid().ToString("N"));
     private readonly PersonaManager _personas;
     private readonly ModelAssignmentResolver _models;
+    private readonly SpecialtySettingsStore _specialty;
     private readonly IModelResolver _resolver;
     private readonly LocalExecutorRoster _sut;
 
@@ -64,8 +69,13 @@ public class LocalExecutorRosterTests : IDisposable
 
         var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var registry = new LlmProviderRegistry(config);
+        // Те же пять аргументов, что подставляет боевой DI (см. шапку файла). Без specialty форма
+        // «персона без явной модели + дефолт тира специальности» развернулась бы по-другому —
+        // по дефолту места Strong: см. ПерсонаБезМодели_ДефолтТираСпециальности_...
+        _specialty = new SpecialtySettingsStore(config, users,
+            NullLogger<SpecialtySettingsStore>.Instance, registry);
         _models = new ModelAssignmentResolver(appSettings, new LocalActionOverridesStore(config),
-            new UserModelTierResolver(users, appSettings));
+            new UserModelTierResolver(users, appSettings), _specialty, registry);
         _resolver = new LlmModelResolverAdapter(registry);
         _personas = new PersonaManager(config);
         _sut = new LocalExecutorRoster(_personas, _models, _resolver, registry);
@@ -77,15 +87,21 @@ public class LocalExecutorRosterTests : IDisposable
     }
 
     // Персона: исполнитель (Access=Full + специальность исполнителя — PersonaConsultantToolset.
-    // IsExecutor) или вне ростера (ревьюер). model — явная модель персоны, сильнее слотов.
-    private Persona NewPersona(string name, PersonaSpecialty specialty, string model) =>
-        _personas.Create(Owner, name, null, null, null, model, null, PersonaScope.Global, null,
+    // IsExecutor) или вне ростера (ревьюер). model — явная модель персоны, сильнее слотов
+    // (null — без явной модели: решает уровень задачи/специальности/места). scope/projectId —
+    // зона персоны (для роста контекста проекта).
+    private Persona NewPersona(string name, PersonaSpecialty specialty, string? model = null,
+        PersonaScope scope = PersonaScope.Global, string? projectId = null) =>
+        _personas.Create(Owner, name, null, null, null, model, null, scope, projectId,
             null, null, true, specialty: specialty);
 
     private static TaskItem NewTask(string? personaId, ModelTier? tier) =>
         new() { Title = "Шаг", PersonaId = personaId, ModelTier = tier };
 
-    private IEnumerable<string> RosterIds() => _sut.For(Owner, null).Select(r => r.PersonaId);
+    // Ростер контекста: без id — вне проекта; с id — как в бою (LocalExecutorsContributor.Render
+    // зовёт For(ownerId, session.ProjectId), LocalIdleNudgeService.TickProjectAsync — id группы).
+    private IEnumerable<string> RosterIds(string? projectId = null) =>
+        _sut.For(Owner, projectId).Select(r => r.PersonaId);
 
     // Кейс 1 постановки ревью: тир задачи weak без персоны → модель по слоту владельца,
     // ход локальный; имени персоны в строке нет.
@@ -169,6 +185,46 @@ public class LocalExecutorRosterTests : IDisposable
             "Enabled=false — запуск на этот провайдер невозможен");
         _sut.LocalTurnOf(NewTask(p.Id, null), Owner).Should().NotBeNull(
             "ход уже идёт на этой модели: выключатель провайдера на неё не влияет");
+    }
+
+    // Хвост ревью 7eb1552e4 (минор 1): форма «персона без явной модели + заданный админом дефолт
+    // тира специальности». В бою уровень такой персоны даёт SpecialtyDefaultTier (ModelAssignment
+    // Resolver.PersonaModelDetailed), а не дефолт места «исполнитель задач» (Strong, LocalAction
+    // Catalog.cs:194); без SpecialtySettingsStore в резолвере она падала бы на сильный (облачный)
+    // слот и локального хода не было бы. Здесь дефолт тира — слабый: исход LocalTurnOf обязан
+    // совпасть с боевым разворотом модели задачи.
+    [Fact]
+    public void ПерсонаБезМодели_ДефолтТираСпециальности_ЛокальныйХодСИменемПерсоны()
+    {
+        // Своих ячеек у специальности нет, только DefaultTier=Weak → разворот падает на слот weak.
+        _specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            Specialties = { ["backendExecutor"] = new SpecialtyTemplateSettings { DefaultTier = ModelTier.Weak } },
+        });
+        var p = NewPersona("Кузьма", PersonaSpecialty.BackendExecutor);
+
+        _models.ExecutorModel(NewTask(p.Id, null), p, Owner)
+            .Should().Be(LocalModel, "уровень даёт DefaultTier специальности: модель — разворот её уровня");
+
+        var turn = _sut.LocalTurnOf(NewTask(p.Id, null), Owner);
+        turn.Should().NotBeNull("тот же исход, что боевой разворот: слабый слот занят локальной моделью");
+        turn!.PersonaName.Should().Be(p.Name);
+    }
+
+    // Хвост ревью 7eb1552e4 (минор 2): ростер проверяется с проектным id — как его зовёт бой
+    // (LocalExecutorsContributor.Render → For(ownerId, session.ProjectId), LocalIdleNudgeService.
+    // TickProjectAsync → For(ownerId, projectId) группы эпика). Инвариант: ростер = локальные
+    // исполнители владельца в контексте проекта (PersonaManager.GetForContext: глобальные + своего
+    // проекта + своей сферы) — персона другой зоны вне ростера этого контекста.
+    [Fact]
+    public void ПроектнаяПерсона_ВРостереСвоегоПроекта_ВнеРостераБезПроекта()
+    {
+        var p = NewPersona("Кира", PersonaSpecialty.BackendExecutor, LocalModel, PersonaScope.Project, Project);
+
+        RosterIds(Project).Should().Contain(p.Id,
+            "боевой вызов идёт с проектным id: своя проектная персона — в ростере своего проекта");
+        RosterIds().Should().NotContain(p.Id,
+            "Scope=Project не входит в контекст без проекта: в глобальный ростер она не попадает");
     }
 
     // Инвариант: LocalTurnOf даёт ровно тот же исход, что боевой разворот модели задачи

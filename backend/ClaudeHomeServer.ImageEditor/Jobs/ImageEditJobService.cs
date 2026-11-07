@@ -26,7 +26,9 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 // - котировка без суммы запуск НЕ запрещает (C1 пересмотрен 2026-09-26, решение Андрея:
 //   Higgsfield доступен всем без запретов). Такая трата ложится на запустившего сразу при
 //   принятии с подписью SpendLabelPendingAmount («сумма уточняется»), а фактическая сумма
-//   из ответа поставщика (ActualCost) догоняет её отдельной записью;
+//   из ответа поставщика (ActualCost) догоняет её отдельной записью; у асинхронного ответа
+//   fal (queue.fal.run) цены нет — сумму догоняет опрос по request_id через Core-шов
+//   IFalRequestCost: только fal, только доллары, только пока своей суммы нет (шаг S-SPEND-7);
 // - потолки одновременных задач не распространяются на Higgsfield: работа идёт у
 //   поставщика, а не на нашем железе;
 // - чужая задача и чужая котировка неотличимы от несуществующих.
@@ -43,6 +45,9 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     private readonly IEnumerable<IImageEditor> _editors;
     private readonly ISessionBroadcaster? _broadcaster;
     private readonly ISpendCollector? _spend;
+    // Фактическая цена запроса fal по request_id (Core-шов, шаг S-SPEND-7): null — опроса нет,
+    // трата остаётся такой, какой её сказал поставщик
+    private readonly IFalRequestCost? _falCost;
     private readonly ImageEditWorkspace _workspace;
     private readonly ILogger<ImageEditJobService> _log;
     private readonly TimeProvider _time;
@@ -61,12 +66,14 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         ISessionBroadcaster? broadcaster = null,
         TimeProvider? time = null,
         IImageRaster? raster = null,
-        ISessionDirectory? sessions = null)
+        ISessionDirectory? sessions = null,
+        IFalRequestCost? falCost = null)
     {
         _sessions = sessions;
         _fitter = raster is null ? null : new InputFitter(raster);
         _editors = editors;
         _spend = spend;
+        _falCost = falCost;
         _workspace = workspace;
         _log = log;
         _broadcaster = broadcaster;
@@ -588,6 +595,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         var cost = result.ActualCost ?? EstimateCost(job.Quote);
         // Поставщик вернул результат, не сообщив о принятии, — трата всё равно была
         RecordSpend(job, cost?.Amount);
+        string? askPriceFor = null;
         lock (job.Gate)
         {
             job.Variants.AddRange(tail);
@@ -599,10 +607,48 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             job.SizeNote = sizeNote ?? job.SizeNote;
             job.Status = ImageEditJobStatus.Completed;
             sizeNote = job.SizeNote;
+            // Фактическую цену догоняет только fal в долларах и только когда своей суммы нет:
+            // кредиты опросом fal не спрашиваются, а сумму, которую поставщик назвал сам
+            // (ActualCost или котировка), фактом не заменяем. request_id — из тела ответа
+            // очереди (FalImageEditor.ParseTicket → ImageEditResult.RemoteId, шаг S-SPEND-7)
+            if (_falCost is not null
+                && string.Equals(job.Quote.Provider, SpendSources.Fal, StringComparison.OrdinalIgnoreCase)
+                && job.Quote.Estimate.Unit == ImageEditPriceUnits.Usd
+                && job.RecordedAmount is null
+                && !string.IsNullOrWhiteSpace(result.RemoteId))
+                askPriceFor = result.RemoteId;
         }
+        if (askPriceFor is not null) _ = TopUpAmountAsync(job, askPriceFor);
         await NotifyFinishedAsync(job);
         await Broadcast(job.OwnerId, ImageEditScope.ProjectIdOf(job.ProjectId), job.ChatSessionId, new ImageEditCompletedMessage(job.Id, job.ProjectId, [.. job.Variants], cost,
             job.ChatSessionId, job.Initiator, sizeNote, job.ThreadId));
+    }
+
+    // Фактическая цена по request_id ответа очереди — через Core-шов IFalRequestCost (тот же
+    // экземпляр FalCostService, что и у чата; образец — ImageGenerationService.TopUpAmountAsync).
+    // Свой токен: job.Cts гасится отменой задачи (CancelAsync) и к опросу цены завершённой
+    // задачи не относится; окно опроса ограничивает сам FalCostService. Цены нет — штатный
+    // исход: первая запись остаётся без суммы. Исключение внутрь фона ловится здесь:
+    // необработанный фон хост не роняет.
+    // Пишем только в свой job: RecordSpend под job.Gate сам решает, писать ли, по RecordedAmount
+    // — повторный ответ с той же суммой записей не добавляет, чужой задаче сумма не уходит.
+    private async Task TopUpAmountAsync(Job job, string requestId)
+    {
+        try
+        {
+            var usd = await _falCost!.ResolveUsdAsync(requestId, CancellationToken.None);
+            if (usd is null)
+            {
+                _log.LogWarning("Редактор картинок: цена fal по {RequestId} не появилась за окно опроса, трата задачи {JobId} остаётся без суммы",
+                    requestId, job.Id);
+                return;
+            }
+            RecordSpend(job, usd);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Редактор картинок: опрос цены fal ({RequestId}) задачи {JobId} не удался", requestId, job.Id);
+        }
     }
 
     private async Task FailAsync(Job job, IImageEditor editor, ImageEditResult result)

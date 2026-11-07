@@ -39,11 +39,17 @@ backend/ClaudeHomeServer/Services/ChatUserStateService.cs|1
 # в видимость его же чата; роль и рубильник не решаются — членство уже реализовано RemoveAsync,
 # здесь перечитывается его следствие, чтобы не поднимать ход-сироту в чате, который автор больше
 # не видит. Ключом хранилищ id не служит, нового права никто не получает.
-backend/ClaudeHomeServer/Services/SessionManager.cs|2
+# S3-3: второй вызов (SetChatIconsAsync) переехал в ChatNaming — см. строку ниже; остаётся VisibleTo.
+backend/ClaudeHomeServer/Services/SessionManager.cs|1
 # S3-1: GetOwnedVisible и VisibleTo переехали из SessionManager в SessionStore дословно (две
 # строки SessionAccess.CanSee), роль и смысл те же — см. записи S2d-3a/S2d-4a выше: арендатор уже
 # установлен GetOwned, CanSee добавляет только приватность чата, ключом хранилищ id не служит.
 backend/ClaudeHomeServer/Services/Sessions/SessionStore.cs|2
+# S3-3: та же строка S2d-3f (SetChatIconsAsync) переехала дословно из SessionManager в роль
+# ChatNaming (docs/research/session-manager-split-2026-11.md §1): пакетный отбор чатов для значков
+# фильтром арендатора (ResolveOwnerId) + приватность чата (CanSee). Вердикт не меняется: роль и
+# рубильник неприменимы — вызывающий и есть арендатор; ключом хранилищ id не служит.
+backend/ClaudeHomeServer/Services/Sessions/ChatNaming.cs|1
 # S2d-4c: доска агентов — id вызывающего (зрителя доски) входит только в видимость чата:
 # невидимый чат теряет ссылку (SessionId/PermissionPending в BoardItem). Право на проект
 # здесь не решается (роль и рубильник неприменимы: это маска ссылки, не допуск к данным —

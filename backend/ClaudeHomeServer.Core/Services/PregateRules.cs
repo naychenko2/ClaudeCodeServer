@@ -15,13 +15,18 @@ public static class PregateRules
         role is TaskRoles.Step or TaskRoles.Rework && !string.IsNullOrWhiteSpace(worktreePath);
 
     // Новая запись по вердикту. Красный по той же причине (тот же отпечаток), что и предыдущий красный,
-    // наращивает серию; зелёный и красный по новой причине начинают её заново
+    // наращивает серию; зелёный и красный по новой причине начинают её заново.
+    // «Нечего проверять» — нейтральный исход: серию не наращивает и не обнуляет, а переносит как была
+    // (RedStreak/RedKey прежней записи), чтобы красный после него считался от последнего настоящего вердикта
     public static PregateRecord Next(PregateRecord? previous, string sha, bool green, string summary,
         string? redKey, DateTime now, bool nothingApplicable = false)
     {
-        if (nothingApplicable) return new PregateRecord(sha, false, summary, now, NothingApplicable: true);
+        if (nothingApplicable)
+            return new PregateRecord(sha, false, summary, now, previous?.RedStreak ?? 0, previous?.RedKey,
+                NothingApplicable: true);
         if (green) return new PregateRecord(sha, true, summary, now);
-        var streak = previous is { Green: false, NothingApplicable: false } && previous.RedKey == redKey ? previous.RedStreak + 1 : 1;
+        var streak = previous is { Green: false } && previous.RedStreak > 0 && previous.RedKey == redKey
+            ? previous.RedStreak + 1 : 1;
         return new PregateRecord(sha, false, summary, now, streak, redKey);
     }
 

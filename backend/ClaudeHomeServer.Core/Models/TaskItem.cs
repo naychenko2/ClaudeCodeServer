@@ -307,10 +307,20 @@ public record AcceptanceEvidence(string CriterionId, string How, string Result);
 // Результат предгейта: Sha — коммит дерева, по которому гнали проверки; Green — вердикт; Summary — вывод
 // красных проверок (для зелёного пусто); RedKey — «отпечаток» причины красного (имена красных
 // проверок), RedStreak — сколько красных подряд по одному RedKey (зелёный обнуляет).
-// NothingApplicable — отдельный вердикт «ни одна проверка не применима» (Green при этом false: «зелёным» он не считается,
-// ни одна проверка не выполнена); закрытие шага он разрешает.
+// NothingApplicable — отдельный НЕЙТРАЛЬНЫЙ исход «ни одна проверка не применима» (Green при этом false: «зелёным» он
+// не считается, ни одна проверка не выполнена), но и не красный: в серию красных и эскалацию не входит, серию прежнего
+// красного переносит как есть (PregateRules.Next); закрытие шага он разрешает.
+// Outcome — производный трёхзначный исход для читателей вне кода (карточка, выгрузка, статистика): по одному Green
+// «нечего проверять» неотличим от провала. Хранится производно — формат записи и бэкапа не меняется.
 public record PregateRecord(string Sha, bool Green, string Summary, DateTime At, int RedStreak = 0, string? RedKey = null,
-    bool NothingApplicable = false);
+    bool NothingApplicable = false)
+{
+    public const string OutcomeGreen = "green";
+    public const string OutcomeRed = "red";
+    public const string OutcomeNeutral = "neutral";
+
+    public string Outcome => NothingApplicable ? OutcomeNeutral : Green ? OutcomeGreen : OutcomeRed;
+}
 
 public class TaskSubtask
 {

@@ -1,8 +1,14 @@
 // Вспомогательные домены чатов (вынесено из lib/api.ts, docs/research/frontend-api-split-2026-11.md):
 // сторожа чатов, workflow-агенты, голоса TTS. Тонкая обёртка над живым REST;
 // типы — types/index.ts (переедут в эту папку в S5-P3).
-import { request } from '../../lib/offline';
-import type { TtsVoicesResponse, WorkflowAgentBlock, WorkflowAgentInfo } from '../../types';
+import { readStoredToken, request } from '../../lib/offline';
+import { forgetChatContextSession } from '../../lib/chatContext/forget';
+import { projectRouteOf, uploadAgentAttachment } from '../../lib/deviceAgent';
+// eslint-disable-next-line module/no-cross-feature-import -- курсор докачки истории один для
+// проектных сессий и чатов: две вертикали, одна строка формата (features/sessions/api.ts)
+import { historyCursorParams } from '../sessions/api';
+import type { HistoryCursorQuery, HistoryReply } from '../../lib/historyTail';
+import type { Session, TtsVoicesResponse, WorkflowAgentBlock, WorkflowAgentInfo } from '../../types';
 
 // Методы этих доменов; lib/api.ts подмешивает их в объект api spread'ом
 // (адреса api.watchdogs.* и т. д. остаются прежними для всех потребителей).
@@ -31,5 +37,230 @@ export const chatAuxApi = {
     // live — мимо офлайн-кеша: сразу после того, как ключ SpeechKit пропишут в конфиг,
     // из IndexedDB прилетал бы устаревший configured: false и форма врала бы про синтез
     voices: () => request<TtsVoicesResponse>('/tts/voices', { live: true }),
+  },
+};
+
+// «Чаты вне проекта» (вынесено из lib/api.ts, тем же порядком): тот же тонкий слой.
+// Таймауты «Продолжить/Перенести в новый чат» едут с доменом — они нужны только этим методам.
+
+// Потолок ожидания «Продолжить в новом чате»: ход записки-передачи — полноценный ход
+// агента, бэкенд ждёт его до HandoffTurnTimeout = 15 мин (ChatContinueService.cs). Берём
+// чуть больше (16 мин): обрыв по этому таймауту — RequestTimeoutError («Сервер не ответил
+// за N с»), а не OfflineError, и приложение не уводится в офлайн (offline.ts:423–447).
+const CONTINUE_TIMEOUT_MS = 16 * 60 * 1000;
+
+// Потолок ожидания «Перенести в новый чат» (фича prompt-cache, шаг F-4): тёплый путь —
+// видимый ход самого чата, бэкенд ждёт его до WarmTurnTimeout = 5 мин (ChatHandoffService.cs);
+// холодный — быстрый раннер по транскрипту. Берём 6 мин: обрыв по этому таймауту —
+// RequestTimeoutError, а не OfflineError (тот же приём, что у CONTINUE_TIMEOUT_MS).
+const HANDOFF_TIMEOUT_MS = 6 * 60 * 1000;
+
+// Методы домена; lib/api.ts подмешивает их в объект api spread'ом.
+export const chatsApi = {
+  // Чаты вне проекта (project-less)
+  chats: {
+    list: () => request<Session[]>('/chats'),
+    // id чатов (в т.ч. проектных) с живой фоновой работой: отдельно агенты, отдельно фоновые
+    // команды Bash. Снимок нужен потому, что событие bg_agents_presence приходит только на
+    // смене состояния — открывший список позже старта иначе о нём не узнает
+    agentsPresence: () => request<{ agents: string[]; commands: string[] }>('/chats/agents-presence'),
+    get: (id: string) => request<Session>(`/chats/${id}`, { chatScope: id }),
+    create: (mode?: string, resumeSessionId?: string, name?: string, model?: string, effort?: string) =>
+      request<Session>('/chats', {
+        method: 'POST',
+        body: JSON.stringify({ mode, resumeSessionId, name, model, effort }),
+      }),
+    update: (id: string, data: { name?: string | null; model?: string | null; effort?: string | null; pinned?: boolean; expiresAfterMinutes?: number | null; notificationsMuted?: boolean; voiceMode?: boolean; voiceStyle?: string }) =>
+      request<Session>(`/chats/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    // Ручная группировка чатов (drag-and-drop в списке): вложить в родительский чат
+    // либо вынести в корень (parentId: null). Один эндпоинт на оба списка —
+    // работает и для проектных сессий, и для чатов вне проектов
+    setParent: (id: string, parentId: string | null) =>
+      request<Session>(`/chats/${encodeURIComponent(id)}/parent`, {
+        method: 'PUT',
+        body: JSON.stringify({ parentId }),
+      }),
+    // Отметить чат прочитанным (синк непрочитанности между устройствами).
+    // Работает и для проектных сессий, и для чатов вне проектов; не двигает updatedAt
+    markRead: (id: string) =>
+      request<void>(`/chats/${encodeURIComponent(id)}/read`, { method: 'PUT' }),
+    // Обновить название чата по текущей переписке (AI-хаб, действие chat.retitle)
+    retitle: (id: string) =>
+      request<Session>(`/chats/${encodeURIComponent(id)}/retitle`, { method: 'POST' }),
+    // Групповой чат персон (флаг persona-group-chats): 2-4 участника, первый — ведущая.
+    // Зона — по ведущей: проектная персона → сессия её проекта, глобальная → чат вне проекта.
+    createGroup: (personaIds: string[], mode?: string, name?: string) =>
+      request<Session>('/chats/group', {
+        method: 'POST',
+        body: JSON.stringify({ personaIds, mode, name }),
+      }),
+    // Обновить состав участников группового чата (спикер сохраняется, если остался)
+    setParticipants: (id: string, personaIds: string[]) =>
+      request<Session>(`/chats/${id}/participants`, {
+        method: 'PUT',
+        body: JSON.stringify({ personaIds }),
+      }),
+    // Цикл «до готово» (флаг work-loop): агент работает итерациями до отчёта о завершении.
+    // Работает и для проектных сессий, и для чатов вне проекта
+    setWorkLoop: (id: string, enabled: boolean) =>
+      request<Session>(`/chats/${id}/loop`, {
+        method: 'PUT',
+        body: JSON.stringify({ enabled }),
+      }),
+    // Режим «Командная реализация»: вкл/выкл режима чата-штаба.
+    // При включении можно сразу задать авто-волны и состав (пустой список = вся команда)
+    setTeamImplement: (id: string, enabled: boolean, opts?: { autoWaves?: boolean; coordinatorPersonaId?: string; plannerPersonaId?: string; executorPersonaIds?: string[] }) =>
+      request<Session>(`/chats/${id}/team-implement`, {
+        method: 'PUT',
+        body: JSON.stringify({ enabled, ...opts }),
+      }),
+    // Переключение авто-волн на ходу (из бейджа режима): трогает только флаг, не режим
+    setTeamImplementAuto: (id: string, autoWaves: boolean) =>
+      request<Session>(`/chats/${id}/team-implement/auto`, {
+        method: 'PUT',
+        body: JSON.stringify({ autoWaves }),
+      }),
+    // «Остановить» (кнопка человека): новые волны не стартуют, текущие исполнители
+    // дорабатывают начатое. В ленте появляется карточка остановки с «Продолжить»
+    stopTeamImplement: (id: string) =>
+      request<Session>(`/chats/${id}/team-implement/stop`, { method: 'PUT' }),
+    // Полный снимок пульса волны (Э2 КР-наблюдаемости): пульс + список задач +
+    // пороги liveness. Зовётся при КАЖДОМ открытии поповера бейджа — кэшировать
+    // нельзя. live: true + cache: 'no-store' по той же причине, что и у статуса
+    // выкатки: офлайн-слой кладёт GET в IndexedDB и при обрыве подставил бы
+    // прошлый ответ — поповер показывал бы «в работе, 5 мин» при мёртвой волне.
+    // Для индикатора живости это хуже, чем не показать ничего
+    getTeamWaveSnapshot: (id: string) =>
+      request<import('../../types').TeamWaveSnapshot>(
+        `/chats/${id}/team-wave-snapshot`,
+        { cache: 'no-store', live: true },
+      ),
+    // Перезапуск одной под-задачи волны (КР-наблюдаемость, этап 3): та же перевыдача,
+    // что у провала хода — потолок попыток общий. 409 несёт человеческий текст
+    // (живая задача, завершена, повторный клик) — показываем его, а не пустую кнопку
+    restartTeamWaveTask: (id: string, taskId: string) =>
+      request<import('../../types').TeamTaskRestartResponse>(
+        `/chats/${id}/team-wave/tasks/${taskId}/restart`,
+        { method: 'POST', live: true },
+      ),
+    // Перезапуск волны: без confirm — предупреждение о живых исполнениях (liveTasks),
+    // повтор с confirm=true останавливает их и перевыдаёт незакрытое. Done не трогается
+    restartTeamWave: (id: string, confirm: boolean) =>
+      request<import('../../types').TeamWaveRestartResponse>(
+        `/chats/${id}/team-wave/restart`,
+        { method: 'POST', body: JSON.stringify({ confirm }), live: true },
+      ),
+    // Перезапуск зависшего хода штаба: kill → валидация транскрипта → новый ход с
+    // --resume, отложенные сообщения уходят. startFresh=true — «начать ход заново» при
+    // повреждённом транскрипте (409 code=transcript_damaged). Долгий: kill и ожидание
+    // смерти процесса могут занять десятки секунд
+    restartTeamWaveTurn: (id: string, startFresh = false) =>
+      request<import('../../types').TeamTurnRestartResponse>(
+        `/chats/${id}/team-wave/restart-turn`,
+        { method: 'POST', body: JSON.stringify({ startFresh }), live: true, timeoutMs: 90_000 },
+      ),
+    // Отдельное git worktree чата: вкл — сессия переезжает в изолированное дерево на новой
+    // ветке (начатый чат — с переносом контекста), выкл — возврат в корень проекта.
+    // force подтверждает потерю несохранённых правок дерева. Только проектные чаты.
+    // Создание дерева = checkout репы, на большой может быть небыстрым
+    setWorktree: (id: string, enabled: boolean, branch?: string, force = false) =>
+      request<Session>(`/chats/${id}/worktree`, {
+        method: 'PUT',
+        body: JSON.stringify({ enabled, branch: branch ?? null, force }),
+        timeoutMs: 120_000,
+      }),
+    // Миграция чата на другого провайдера («Продолжить на …» при исчерпании лимита):
+    // транскрипт переезжает в профиль провайдера, контекст сохраняется. Работает и для
+    // проектных сессий. subscriptionKey — явный выбор аккаунта того же пула подписок
+    // (кнопка kind='subscription' карточки лимита); для сторонних провайдеров не передаётся
+    migrateProvider: (id: string, model: string, subscriptionKey?: string) =>
+      request<Session>(`/chats/${id}/migrate-provider`, {
+        method: 'POST',
+        body: JSON.stringify(subscriptionKey ? { model, subscriptionKey } : { model }),
+      }),
+    // Ветвление чата (фича chat-branch): новый чат с копией истории до userMessageIndex
+    // (включительно или нет — задаёт include). anchorText — сверка «тот ли это шаг»: на
+    // расхождении текста сервер отдаёт 409, без молчаливого отреза не там. Имя опционально,
+    // дефолт — «{имя оригинала} — ветка». Ответ — chatId+claudeSessionId новой ветки и draft
+    // (null при include='turn', текст исходного промпта при include='beforePrompt' для
+    // композера). Серверные 400 «ветвить нечего» / 409 «идёт ход» / 409 «границу не
+    // сопоставить» несут человеческий текст — он доезжает до вызывающего кода через Error.message
+    // (request() пробрасывает server body как Error & { body })
+    branch: (
+      id: string,
+      body: {
+        userMessageIndex: number;
+        anchorText: string;
+        include: 'turn' | 'beforePrompt';
+        name?: string;
+      },
+    ) =>
+      request<{ chatId: string; projectId: string | null; claudeSessionId: string; draft: string | null }>(
+        `/chats/${id}/branch`,
+        { method: 'POST', body: JSON.stringify(body) },
+      ),
+    // «Продолжить в новом чате»: агент пишет записку-передачу (один ход, десятки секунд),
+    // платформа открывает новый чат той же персоны. 409 — чат занят, 400 — нет ходов агента;
+    // оба несут человеческий текст в Error.message. timeoutMs чуть больше серверного лимита
+    // хода (15 мин) — см. CONTINUE_TIMEOUT_MS: обрыв по таймауту не уводит в офлайн
+    continue: (id: string, note?: string) =>
+      request<{ newSessionId: string; handoffNoteId: string | null }>(
+        `/chats/${id}/continue`,
+        { method: 'POST', body: JSON.stringify(note ? { note } : {}), timeoutMs: CONTINUE_TIMEOUT_MS },
+      ),
+    // «Перенести в новый чат» (фича prompt-cache, шаг F-4): путь выбирает сервер — тёплый
+    // (записку пишет сам чат, пока его кэш тёплый) или холодный (её собирает дешёвый раннер
+    // по транскрипту). Ответ — id нового чата, его проект и черновик композера. 409 — чат
+    // занят/повторный клик/не тот тип чата, 502 — модель не дала записку; текст ошибки
+    // человеческий и показывается как есть. Тёплый путь — видимый ход чата до 5 мин,
+    // таймаут фронта чуть больше — см. HANDOFF_TIMEOUT_MS.
+    handoff: (id: string) =>
+      request<{ chatId: string; projectId: string | null; draft: string | null; warm: boolean }>(
+        `/chats/${id}/handoff`,
+        { method: 'POST', timeoutMs: HANDOFF_TIMEOUT_MS },
+      ),
+    // Режим прав: сохраняем сразу при выборе в Composer, иначе он доехал бы до сессии
+    // только вместе со следующим сообщением и терялся при уходе со страницы
+    setMode: (id: string, mode: string) =>
+      request<Session>(`/chats/${id}/mode`, {
+        method: 'PUT',
+        body: JSON.stringify({ mode }),
+      }),
+    // «Продолжить в стандартном окне 200K» под карточкой отказа Window1MUnavailable.
+    // Единственный путь, которым суффикс [1m] снимается с чата: тихая деградация длинного
+    // разговора в 200K — мина, решение принимает человек, сервер только исполняет.
+    // Возвращает обновлённый чат: фронт по нему перерисовывает выбранную модель,
+    // отдельного сигнала не приходит
+    dropWindow1M: (id: string) =>
+      request<Session>(`/chats/${id}/window-1m/drop`, { method: 'POST' }),
+    delete: (id: string) => request<void>(`/chats/${id}`, { method: 'DELETE' })
+      .then(r => { forgetChatContextSession(id); return r; }),
+    getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`, { chatScope: id }),
+    // То же, что api.sessions.getHistoryTail, для чата вне проекта
+    getHistoryTail: (id: string, q: HistoryCursorQuery, onBytes?: (n: number) => void) =>
+      request<HistoryReply>(`/chats/${id}/history?${historyCursorParams(q)}`,
+        { live: q.after >= 0, chatScope: q.after < 0 ? id : undefined, onBytes }),
+    // Вложение локального проекта ложится на машину проекта через агента: сервер на свой
+    // маршрут для него отвечает отказом G1
+    uploadFile: async (id: string, file: File, projectId?: string): Promise<{ path: string }> => {
+      if (projectId && projectRouteOf(projectId) === 'agent') return uploadAgentAttachment(projectId, file);
+      const token = readStoredToken();
+      const form = new FormData();
+      form.append('file', file);
+      const res = await fetch(`/api/chats/${id}/files/upload`,
+        { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body: form });
+      if (res.status === 401) {
+        if (token && typeof window !== 'undefined') window.dispatchEvent(new Event('cc-unauthorized'));
+        throw new Error('Нет доступа');
+      }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error ?? res.statusText);
+      }
+      return res.json();
+    },
   },
 };

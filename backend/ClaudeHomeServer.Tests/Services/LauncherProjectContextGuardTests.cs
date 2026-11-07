@@ -27,7 +27,9 @@ public class LauncherProjectContextGuardTests(ITestOutputHelper output)
         ["ClaudeHomeServer.Services.Llm.Claude.ClaudeCliAutoUpdateOps.RunAsync"] = (1, "автообновление CLI хоста, проекта нет"),
         ["ClaudeHomeServer.Services.Mcp.McpProbeService.ProbeStdioAsync"] = (1, "проба сервера из личного реестра MCP владельца"),
         ["ClaudeHomeServer.Controllers.HostFilesController.GetContent"] = (1, "файл хоста по пути владельца, вне проекта"),
-        ["ClaudeHomeServer.Services.SessionManager.ResolveTasksApiUrl"] = (1,
+        // Тело ResolveTasksApiUrl переехало в роль McpEndpoint (S3-4): в фасаде осталась
+        // обёртка, вызов ForOwner — теперь здесь (тот же приём, что с CliRoute.CwdForOwner выше).
+        ["ClaudeHomeServer.Services.Sessions.McpEndpoint.ResolveTasksApiUrl"] = (1,
             "адрес MCP для среды владельца; у раннера устройства адрес переписывается на сайдкар"),
         // Тело CwdForOwner переехало в роль CliRoute (S3-2): в фасаде осталась обёртка,
         // вызов ForOwner — теперь здесь.

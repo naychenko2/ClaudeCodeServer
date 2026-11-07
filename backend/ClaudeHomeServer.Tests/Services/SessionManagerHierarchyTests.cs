@@ -5,6 +5,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Memory;
@@ -959,8 +960,12 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
         var user = _userStore.Add("arch-gate-owner", "password123", "user");
         var project = _projectManager.Create("GA", dir, user.Id, user.Username);
         var states = new SubsystemStateStore();
-        typeof(SessionManager).GetField("_subsystemStates", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .SetValue(_sut, states);
+        // С3-4: стор подсистем читает роль BuiltinMcpContexts (на фасаде осталась только
+        // обёртка BuildArchitectureContext) — поле ставится там, где живёт решение.
+        var builtin = typeof(SessionManager).GetField("_builtin", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(_sut)!;
+        typeof(BuiltinMcpContexts).GetField("_subsystemStates", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(builtin, states);
 
         InvokePrivate("BuildArchitectureContext", user.Id, project.Id, null)
             .Should().BeNull("модуль не загружен — записи architecture в сторе нет");

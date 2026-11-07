@@ -110,15 +110,18 @@ public class PrivateChatBroadcastLeakTests : IDisposable
         }
     }
 
-    // S3-3: точки «архив» и «переименование» живут в ролях ядра (ChatSettings, ChatNaming).
+    // S3-3: точки «архив» и «переименование» живут в ролях ядра (ChatSettings, ChatNaming), S3-5:
+    // точка «удаление» — в ChatDeletion, а её адресация — в SessionStore (публичный метод).
     // Метод ищется на фасаде, а если его там нет — на его полях-ролей: проверяется адресация
-    // события, а не то, в каком классе лежит тело.
+    // события, а не то, в каком классе лежит тело. Поиск охватывает и public-методы ролей:
+    // у роли они открыты намеренно (фасад их не дублирует).
     private static Task Invoke(SessionManager sut, string method, params object?[] args)
     {
         foreach (var target in CoreObjects(sut))
         {
             var mi = target.GetType().GetMethod(method,
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
+                    | System.Reflection.BindingFlags.Public);
             if (mi is not null) return (Task)mi.Invoke(target, args)!;
         }
         throw new MissingMethodException(nameof(SessionManager), method);

@@ -52,6 +52,13 @@ public sealed class PersonaLayerBuilder
     private string? ResolveOwnerId(Session s) => _store.ResolveOwnerId(s);
     private ISphereDirectory SphereDir => _spheres ?? NoSphereDirectory.Instance;
 
+    // Резолв одной персоны по id (тот же путь, что у BuildPersonaProvider). Единая точка,
+    // которой пользуются и сборщик контекста запуска, и создание чата (S3-5): PersonaManager
+    // остаётся у этой роли, роли ядра не берут его в свои конструкторы. Отказ («Персона
+    // не найдена») — у вызывающего: здесь только null, когда id или владельца нет.
+    internal Persona? ResolvePersona(string? personaId, string? ownerId) =>
+        personaId is { } pid && ownerId is not null ? _personas.Get(pid, ownerId) : null;
+
     // null — у чата нет персоны (или владельца).
     internal Func<Persona?> BuildPersonaProvider(Session session, string? ownerId) =>
         () => session.PersonaId is { } pid && ownerId is not null ? _personas.Get(pid, ownerId) : null;

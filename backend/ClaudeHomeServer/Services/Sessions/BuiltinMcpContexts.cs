@@ -86,6 +86,13 @@ public sealed class BuiltinMcpContexts
             UseHttp: _endpoint.HttpEndpointUsable(apiUrl));
     }
 
+    // Решение «даём ли персоне сервер заметок» — близнец TasksMcpEnabled, только без
+    // форсирования по роли сессии: заметок у исполнителя задачи нет по замыслу. Формула
+    // живёт здесь, а не в сборщике контекста запуска: у TurnLaunchContextFactory нет права
+    // на PersonaBindingsService напрямую (S3-5, план §2 «зависимости ровно 10»).
+    internal bool NotesMcpEnabled(string? ownerId, Persona? persona) =>
+        _bindings.EffectiveToolEnabled(ownerId, persona, "notes");
+
     // Контекст MCP-сервера заметок; null — только для чата без владельца.
     // Модуль комментариев к документам и редких операций — за ключом notes-annotations
     // (дефолт выключен, решение ПО ПЕРСОНЕ: PersonaBindingsService.SectionEnabled).

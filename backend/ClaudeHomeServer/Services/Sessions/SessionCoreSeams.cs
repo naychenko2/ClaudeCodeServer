@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
 
 namespace ClaudeHomeServer.Services.Sessions;
@@ -43,4 +44,19 @@ public interface ITurnStarter
     Task AddWorkLoopStoppedNoticeAsync(string sessionId, string reason, string text);
 
     Task AppendServerRestartCardAsync(string sessionId);
+}
+
+// «Сообщение хода в ленту»: процесс CLI (TurnProcessHost) и сборка контекста запуска
+// (TurnLaunchContextFactory) отдают сообщения хода в ленту сессии — это обратный шов
+// к SessionManager.OnMessageQueuedAsync, который держит разбор сообщения (end-of-turn,
+// цены, карточки). S3-5 вводит шов и передаёт его процессу; перенос самого владельца
+// (OnMessageQueuedAsync) — S3-6: там смена владельца правкой одной строки регистрации
+// в AddSessionCore и одной строки запасной сборки в конструкторе SessionManager.
+// internal: параметр сигнатуры — TurnAccumulator (internal класс ленты хода), поэтому публичной
+// сигнатуры у шва быть не может (CS0051). Он нужен только ролям ядра: его держит internal-фабрика
+// контекста (TurnLaunchContextFactory), а та входит в internal-конструктор хоста процесса.
+internal interface ITurnMessageSink
+{
+    Task OnMessageQueuedAsync(string sessionId, TurnAccumulator accumulator,
+        ServerMessage message, long runId);
 }

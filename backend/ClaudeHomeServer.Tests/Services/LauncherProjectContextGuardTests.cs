@@ -35,8 +35,10 @@ public class LauncherProjectContextGuardTests(ITestOutputHelper output)
         // вызов ForOwner — теперь здесь.
         ["ClaudeHomeServer.Services.Sessions.CliRoute.CwdForOwner"] = (1,
             "путь транскрипта в серверном профиле CLI; у локального проекта транскрипт на устройстве"),
-        ["ClaudeHomeServer.Services.SessionManager.StartNewSessionAsync"] = (1, "ветка чата вне проекта"),
-        ["ClaudeHomeServer.Services.SessionManager.EnsureProcessCoreAsync"] = (1, "ветка чата вне проекта"),
+        // Оба места сборки контекста (StartNewSessionAsync и EnsureProcessCoreAsync) с S3-5 сведены
+        // в одну — Compose в фабрике контекста; вызов ForOwner здесь один, внепроектная ветка та же:
+        // проект резолвит вызывающий (TurnProcessHost), и без проекта раннер — среда владельца.
+        ["ClaudeHomeServer.Services.Sessions.TurnLaunchContextFactory.Compose"] = (1, "ветка чата вне проекта"),
         ["ClaudeHomeServer.Services.Watchdog.WatchdogCommandRunner.RunAsync"] = (1, "сторож чата вне проекта"),
         ["ClaudeHomeServer.Services.TaskExecutionService.ResolveCategoryProfilesPath"] = (1, "задача без проекта"),
         // Файловая группа (ADR-016 §4): вход для локального проекта отказывает guard 3.3 (G1)

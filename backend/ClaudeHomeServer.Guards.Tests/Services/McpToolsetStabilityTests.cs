@@ -82,6 +82,27 @@ public class McpToolsetStabilityTests
             .Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal)));
     }
 
+    // Единая точка сборки LlmSessionContext (S3-5). До выноса процесса CLI их было три в
+    // SessionManager — StartNewSessionAsync и обе ветки EnsureProcessCoreAsync, и проверки ниже
+    // ловили забытую ветку «вне проекта» по телам этих методов. После S3-5 конструкция одна
+    // (TurnLaunchContextFactory.Compose), поэтому проверка та же по смыслу, но другая по форме:
+    // что точка в Services/ ровно одна (инвариант шага закреплён в коде, а не только в разборе
+    // диффа) и что в ней — каждый проверяемый сервер. Забытый сервер дал бы личному чату другой
+    // состав инструментов на первом ходу и после перезапуска процесса — «No such tool available».
+    private static string ContextConstructionPoint()
+    {
+        var path = FindSource("Services", "Sessions", "TurnLaunchContextFactory.cs");
+        Skip.If(path is null, "TurnLaunchContextFactory.cs не найден (сборка вне дерева репозитория)");
+
+        var servicesDir = Path.GetDirectoryName(Path.GetDirectoryName(path!))!;
+        Directory.EnumerateFiles(servicesDir, "*.cs", SearchOption.AllDirectories)
+            .Sum(f => Regex.Matches(File.ReadAllText(f), @"new LlmSessionContext\(").Count)
+            .Should().Be(1, "после S3-5 конструкция LlmSessionContext в Services/ одна — "
+                + "TurnLaunchContextFactory.Compose; любая новая точка обязана пройти те же проверки ниже");
+
+        return MethodBody(File.ReadAllText(path!), "private LlmSessionContext Compose(");
+    }
+
     [Fact]
     public void СоставИнструментовХода_НеЗависитОтСостоянияХода()
     {
@@ -397,40 +418,24 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
-    /// Сервер image-editor едет и в личные чаты, поэтому контекст обязаны собирать ВСЕ три
-    /// точки сборки LlmSessionContext: StartNewSessionAsync и обе ветки EnsureProcessCoreAsync.
-    /// Забытая ветка «вне проекта» дала бы личному чату сервер на первом ходу и отняла бы его
-    /// после перезапуска процесса — другая сигнатура запуска и «No such tool available».
+    /// Сервер image-editor едет и в личные чаты, поэтому его контекст обязан быть в ЕДИНСТВЕННОЙ
+    /// точке сборки LlmSessionContext (с S3-5 это TurnLaunchContextFactory.Compose; до неё таких
+    /// мест было три в SessionManager, и сторож ловил забытую ветку «вне проекта»). Забытый сервер
+    /// дал бы личному чату другой состав инструментов на первом ходу и после перезапуска процесса —
+    /// «No such tool available».
     /// </summary>
     [SkippableFact]
     public void СерверРедактораКартинок_ВсеТочкиСборкиКонтекстаПередаютЕгоСинхронно()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
-        var source = File.ReadAllText(path!);
+        var body = ContextConstructionPoint();
 
-        var ensure = MethodBody(source, "private async Task EnsureProcessCoreAsync(");
-        var split = ensure.IndexOf("if (entry.Info.ProjectId is null)", StringComparison.Ordinal);
-        split.Should().BeGreaterThan(0, "ветвление «вне проекта / проект» обязано существовать");
-        var elseAt = ensure.IndexOf("\n        else\n", split, StringComparison.Ordinal);
-        elseAt.Should().BeGreaterThan(split, "у ветвления обязана быть проектная ветка");
-
-        var points = new Dictionary<string, string>
-        {
-            ["StartNewSessionAsync"] = MethodBody(source, "private async Task StartNewSessionAsync("),
-            ["EnsureProcessCoreAsync, вне проекта"] = ensure[split..elseAt],
-            ["EnsureProcessCoreAsync, проект"] = ensure[elseAt..],
-        };
-        foreach (var (name, body) in points)
-        {
-            body.Should().Contain("BuildImageEditorContext(", $"{name} обязан собирать контекст image-editor");
-            body.Should().Contain("ImageEditorMcp: imageEditorMcp", $"{name} обязан передать его в LlmSessionContext");
-            var active = body.IndexOf("HttpMcpActive: HttpMcpActive(", StringComparison.Ordinal);
-            active.Should().BeGreaterThan(0, $"{name} обязан считать признак HttpMcpActive");
-            var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
-            body[active..activeEnd].Should().Contain("imageEditorMcp",
-                $"{name}: без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
-        }
+        body.Should().Contain("BuildImageEditorContext(", "точка сборки обязана собирать контекст image-editor");
+        body.Should().Contain("ImageEditorMcp: imageEditorMcp", "точка сборки обязана передать его в LlmSessionContext");
+        var active = body.IndexOf("HttpMcpActive:", StringComparison.Ordinal);
+        active.Should().BeGreaterThan(0, "точка сборки обязана считать признак HttpMcpActive");
+        var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
+        body[active..activeEnd].Should().Contain("imageEditorMcp",
+            "без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
     }
 
     /// <summary>
@@ -456,38 +461,22 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
-    /// Сервер audio-editor едет и в личные чаты: контекст обязаны собирать ВСЕ три точки сборки
-    /// LlmSessionContext — иначе после перезапуска процесса личный чат теряет сервер («No such tool available»).
+    /// Сервер audio-editor едет и в личные чаты: он обязан быть в единственной точке сборки
+    /// LlmSessionContext — иначе после перезапуска процесса личный чат теряет сервер
+    /// («No such tool available»).
     /// </summary>
     [SkippableFact]
     public void СерверЗвука_ВсеТочкиСборкиКонтекстаПередаютЕгоСинхронно()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
-        var source = File.ReadAllText(path!);
+        var body = ContextConstructionPoint();
 
-        var ensure = MethodBody(source, "private async Task EnsureProcessCoreAsync(");
-        var split = ensure.IndexOf("if (entry.Info.ProjectId is null)", StringComparison.Ordinal);
-        split.Should().BeGreaterThan(0, "ветвление «вне проекта / проект» обязано существовать");
-        var elseAt = ensure.IndexOf("\n        else\n", split, StringComparison.Ordinal);
-        elseAt.Should().BeGreaterThan(split, "у ветвления обязана быть проектная ветка");
-
-        var points = new Dictionary<string, string>
-        {
-            ["StartNewSessionAsync"] = MethodBody(source, "private async Task StartNewSessionAsync("),
-            ["EnsureProcessCoreAsync, вне проекта"] = ensure[split..elseAt],
-            ["EnsureProcessCoreAsync, проект"] = ensure[elseAt..],
-        };
-        foreach (var (name, body) in points)
-        {
-            body.Should().Contain("BuildAudioEditorContext(", $"{name} обязан собирать контекст audio-editor");
-            body.Should().Contain("AudioEditorMcp: audioEditorMcp", $"{name} обязан передать его в LlmSessionContext");
-            var active = body.IndexOf("HttpMcpActive: HttpMcpActive(", StringComparison.Ordinal);
-            active.Should().BeGreaterThan(0, $"{name} обязан считать признак HttpMcpActive");
-            var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
-            body[active..activeEnd].Should().Contain("audioEditorMcp",
-                $"{name}: без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
-        }
+        body.Should().Contain("BuildAudioEditorContext(", "точка сборки обязана собирать контекст audio-editor");
+        body.Should().Contain("AudioEditorMcp: audioEditorMcp", "точка сборки обязана передать его в LlmSessionContext");
+        var active = body.IndexOf("HttpMcpActive:", StringComparison.Ordinal);
+        active.Should().BeGreaterThan(0, "точка сборки обязана считать признак HttpMcpActive");
+        var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
+        body[active..activeEnd].Should().Contain("audioEditorMcp",
+            "без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
     }
 
     /// <summary>
@@ -513,38 +502,22 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
-    /// Сервер video-editor едет и в личные чаты: контекст обязаны собирать ВСЕ три точки сборки LlmSessionContext —
-    /// иначе после перезапуска процесса личный чат теряет сервер («No such tool available»).
+    /// Сервер video-editor едет и в личные чаты: он обязан быть в единственной точке сборки
+    /// LlmSessionContext — иначе после перезапуска процесса личный чат теряет сервер
+    /// («No such tool available»).
     /// </summary>
     [SkippableFact]
     public void СерверВидео_ВсеТочкиСборкиКонтекстаПередаютЕгоСинхронно()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
-        var source = File.ReadAllText(path!);
+        var body = ContextConstructionPoint();
 
-        var ensure = MethodBody(source, "private async Task EnsureProcessCoreAsync(");
-        var split = ensure.IndexOf("if (entry.Info.ProjectId is null)", StringComparison.Ordinal);
-        split.Should().BeGreaterThan(0, "ветвление «вне проекта / проект» обязано существовать");
-        var elseAt = ensure.IndexOf("\n        else\n", split, StringComparison.Ordinal);
-        elseAt.Should().BeGreaterThan(split, "у ветвления обязана быть проектная ветка");
-
-        var points = new Dictionary<string, string>
-        {
-            ["StartNewSessionAsync"] = MethodBody(source, "private async Task StartNewSessionAsync("),
-            ["EnsureProcessCoreAsync, вне проекта"] = ensure[split..elseAt],
-            ["EnsureProcessCoreAsync, проект"] = ensure[elseAt..],
-        };
-        foreach (var (name, body) in points)
-        {
-            body.Should().Contain("BuildVideoEditorContext(", $"{name} обязан собирать контекст video-editor");
-            body.Should().Contain("VideoEditorMcp: videoEditorMcp", $"{name} обязан передать его в LlmSessionContext");
-            var active = body.IndexOf("HttpMcpActive: HttpMcpActive(", StringComparison.Ordinal);
-            active.Should().BeGreaterThan(0, $"{name} обязан считать признак HttpMcpActive");
-            var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
-            body[active..activeEnd].Should().Contain("videoEditorMcp",
-                $"{name}: без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
-        }
+        body.Should().Contain("BuildVideoEditorContext(", "точка сборки обязана собирать контекст video-editor");
+        body.Should().Contain("VideoEditorMcp: videoEditorMcp", "точка сборки обязана передать его в LlmSessionContext");
+        var active = body.IndexOf("HttpMcpActive:", StringComparison.Ordinal);
+        active.Should().BeGreaterThan(0, "точка сборки обязана считать признак HttpMcpActive");
+        var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
+        body[active..activeEnd].Should().Contain("videoEditorMcp",
+            "без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
     }
 
     /// <summary>
@@ -570,38 +543,22 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
-    /// Сервер turn-context едет и в личные чаты: контекст обязаны собирать ВСЕ три точки сборки LlmSessionContext —
-    /// иначе после перезапуска процесса чат теряет сервер («No such tool available»).
+    /// Сервер turn-context едет и в личные чаты: он обязан быть в единственной точке сборки
+    /// LlmSessionContext — иначе после перезапуска процесса чат теряет сервер
+    /// («No such tool available»).
     /// </summary>
     [SkippableFact]
     public void СерверКонтекстаЧата_ВсеТочкиСборкиКонтекстаПередаютЕгоСинхронно()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
-        var source = File.ReadAllText(path!);
+        var body = ContextConstructionPoint();
 
-        var ensure = MethodBody(source, "private async Task EnsureProcessCoreAsync(");
-        var split = ensure.IndexOf("if (entry.Info.ProjectId is null)", StringComparison.Ordinal);
-        split.Should().BeGreaterThan(0, "ветвление «вне проекта / проект» обязано существовать");
-        var elseAt = ensure.IndexOf("\n        else\n", split, StringComparison.Ordinal);
-        elseAt.Should().BeGreaterThan(split, "у ветвления обязана быть проектная ветка");
-
-        var points = new Dictionary<string, string>
-        {
-            ["StartNewSessionAsync"] = MethodBody(source, "private async Task StartNewSessionAsync("),
-            ["EnsureProcessCoreAsync, вне проекта"] = ensure[split..elseAt],
-            ["EnsureProcessCoreAsync, проект"] = ensure[elseAt..],
-        };
-        foreach (var (name, body) in points)
-        {
-            body.Should().Contain("BuildTurnContextContext(", $"{name} обязан собирать контекст turn-context");
-            body.Should().Contain("TurnContextMcp: turnContextMcp", $"{name} обязан передать его в LlmSessionContext");
-            var active = body.IndexOf("HttpMcpActive: HttpMcpActive(", StringComparison.Ordinal);
-            active.Should().BeGreaterThan(0, $"{name} обязан считать признак HttpMcpActive");
-            var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
-            body[active..activeEnd].Should().Contain("turnContextMcp",
-                $"{name}: без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
-        }
+        body.Should().Contain("BuildTurnContextContext(", "точка сборки обязана собирать контекст turn-context");
+        body.Should().Contain("TurnContextMcp: turnContextMcp", "точка сборки обязана передать его в LlmSessionContext");
+        var active = body.IndexOf("HttpMcpActive:", StringComparison.Ordinal);
+        active.Should().BeGreaterThan(0, "точка сборки обязана считать признак HttpMcpActive");
+        var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
+        body[active..activeEnd].Should().Contain("turnContextMcp",
+            "без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
     }
 
     /// <summary>

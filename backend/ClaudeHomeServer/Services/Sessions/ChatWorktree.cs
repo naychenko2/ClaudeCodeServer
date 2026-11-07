@@ -120,6 +120,40 @@ public sealed class ChatWorktree
         try { _codeGraphs?.Invalidate(worktreePath); } catch { /* уборка best-effort */ }
     }
 
+    // Уборка worktree удаляемого чата (S3-5, тело переехало из DeleteAsync): своё (создано
+    // тумблером, WorktreeOwned) сносим вместе с чатом; чужое/общее (привязано) или старое
+    // (без признака) — только ReleaseWorktreeGraph, без git worktree remove: дерево делят
+    // другие живые чаты, и его снос унёс бы их работу. Запись этого чата из реестра уже
+    // вынята вызывающим (TryRemove), поэтому Any видит только чужие. removeReviewSlots —
+    // слоты ревью волны дерева: их передаёт удаляющая роль (у неё ленивый ReviewTreePool),
+    // здесь остаётся гейт FilesOnServer — порядок тот же, что был в фасаде.
+    internal async Task RemoveOwnWorktreeAsync(SessionEntry entry, Func<Project, string, Task>? removeReviewSlots)
+    {
+        if (entry.Info.WorktreePath is not string wt || entry.Info.ProjectId is not string wpid || _git is null) return;
+        var removeTree = entry.Info.WorktreeOwned
+            && !_store.Sessions.Values.Any(e => e.Info.WorktreePath is string other
+                && WorkspaceKnowledgeStore.NormalizePath(other) == WorkspaceKnowledgeStore.NormalizePath(wt));
+        if (removeTree)
+        {
+            try
+            {
+                if (_projects.GetById(wpid) is { } wproj)
+                {
+                    // Слоты ревью — детища дерева волны; имя слота строится по ветке дерева,
+                    // поэтому сносим их ДО самого дерева (после него ветку не узнать)
+                    if (ProjectCapabilities.FilesOnServer(wproj) && removeReviewSlots is { } removeSlots)
+                        await removeSlots(wproj, wt);
+                    await _git.WorktreeRemoveAsync(_store.ResolveOwnerId(entry.Info), wproj.RootPath, wt, force: true);
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SessionManager] Worktree чата не удалён ({entry.Info.Id}): {ex.Message}");
+            }
+        }
+        ReleaseWorktreeGraph(entry.Info.Id, wt);
+    }
+
     // Начатый чат переезжает С КОНТЕКСТОМ: транскрипт CLI копируется в папку нового cwd
     // (--resume ищет его по уплощённому cwd); не удалось скопировать — операция отменяется,
     // контекст дороже фичи. У container-пользователя и профиль, и cwd берутся в песочной

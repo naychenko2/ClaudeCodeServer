@@ -213,6 +213,76 @@ public static class SessionCoreRegistration
             sp.GetRequiredService<SessionStore>(),
             sp.GetRequiredService<Lazy<ITurnStarter>>(),
             sp.GetServices<ClaudeHomeServer.Services.Turn.IPromptSectionContributor>()));
+
+        // --- Процесс CLI и жизненный цикл чата (S3-5) ---
+        // Шов «сообщения процесса → разбор ленты»: ленивый на синглтон SessionManager —
+        // пока его держит фасад. S3-6 переносит владельца: меняется ровно эта строка и одна
+        // строка запасной сборки в конструкторе SessionManager (GetRequiredService → роль).
+        services.AddSingleton(sp => new Lazy<ITurnMessageSink>(() => sp.GetRequiredService<SessionManager>()));
+        // Хост процесса CLI: старт/переподключение, «Стоп», ответы на карточки, ожидание
+        // устройства. Фабрика контекста — internal-тип (её сигнатура держит internal-шов
+        // ITurnMessageSink с internal TurnAccumulator), отдельным синглтоном она не становится:
+        // единственный её потребитель — этот хост, и она строится здесь же. IPluginDirSource —
+        // GetService: без подсистемы Plugins ход идёт без --plugin-dir (та же опциональность,
+        // что у параметра фасада). IProjectDeviceGate — GetService: без неё ожидания устройства
+        // нет (тесты).
+        services.AddSingleton(sp => new TurnProcessHost(
+            sp.GetRequiredService<ILlmSessionAdapterFactory>(),
+            new TurnLaunchContextFactory(
+                sp.GetRequiredService<BuiltinMcpContexts>(),
+                sp.GetRequiredService<PersonaLayerBuilder>(),
+                sp.GetRequiredService<ExternalMcpContexts>(),
+                sp.GetRequiredService<ModulesMcpContexts>(),
+                sp.GetRequiredService<ClaudeHomeServer.Services.Execution.ILauncherFactory>(),
+                sp.GetService<ClaudeHomeServer.Services.Plugins.IPluginDirSource>(),
+                sp.GetRequiredService<IConfiguration>(),
+                sp.GetRequiredService<SessionStore>(),
+                sp.GetRequiredService<Lazy<ITurnMessageSink>>(),
+                sp.GetRequiredService<Lazy<ITurnStarter>>()),
+            sp.GetRequiredService<SessionStore>(),
+            sp.GetRequiredService<SessionHistory>(),
+            sp.GetRequiredService<CliRoute>(),
+            sp.GetRequiredService<PendingQueueService>(),
+            sp.GetService<ClaudeHomeServer.Services.Execution.IProjectDeviceGate>(),
+            sp.GetRequiredService<ProjectManager>(),
+            sp.GetRequiredService<Lazy<ITurnStarter>>(),
+            sp.GetRequiredService<ClaudeHomeServer.Services.Turn.ITurnEventBus>(),
+            sp.GetRequiredService<ILogger<TurnProcessHost>>()));
+        // Возобновление оборванного хода: кандидаты auto-resume, маркеры обрыва, ручной
+        // перезапуск зависшего хода. Порог свежести хода читается из конфига в самой роли.
+        services.AddSingleton(sp => new TurnRecovery(
+            sp.GetRequiredService<SessionStore>(),
+            sp.GetRequiredService<PendingQueueService>(),
+            sp.GetRequiredService<CliRoute>(),
+            sp.GetRequiredService<ChatHistoryService>(),
+            sp.GetRequiredService<Lazy<ITurnStarter>>(),
+            sp.GetRequiredService<IConfiguration>()));
+        // Создание чата: обычный, вне проекта, от лица персоны, групповой, ветка, перенос,
+        // продолжение.
+        services.AddSingleton(sp => new ChatCreation(
+            sp.GetRequiredService<SessionStore>(),
+            sp.GetRequiredService<ChatHistoryService>(),
+            sp.GetRequiredService<CliRoute>(),
+            sp.GetRequiredService<TurnProcessHost>(),
+            sp.GetRequiredService<ProjectManager>(),
+            sp.GetRequiredService<PersonaLayerBuilder>(),
+            sp.GetRequiredService<ModelAssignmentResolver>(),
+            sp.GetRequiredService<ChatSettings>(),
+            sp.GetRequiredService<ClaudeHomeServer.Services.Turn.ITurnEventBus>()));
+        // Удаление чата. PromptSnapshotStore — GetService: без него снимков промпта нет.
+        // Lazy<ReviewTreePool?> вместо IServiceProvider (решение 05.11, 1dda7103): настоящий
+        // цикл ReviewTreePool → SessionManager; при отсутствии пула — null, как был null у
+        // прежнего GetService.
+        services.AddSingleton(sp => new Lazy<ReviewTreePool?>(() => sp.GetService<ReviewTreePool>()));
+        services.AddSingleton(sp => new ChatDeletion(
+            sp.GetRequiredService<SessionStore>(),
+            sp.GetRequiredService<ChatHistoryService>(),
+            sp.GetRequiredService<CliRoute>(),
+            sp.GetRequiredService<ChatWorktree>(),
+            sp.GetService<PromptSnapshotStore>(),
+            sp.GetRequiredService<Lazy<ReviewTreePool?>>(),
+            sp.GetRequiredService<ClaudeHomeServer.Services.Turn.ITurnEventBus>(),
+            sp.GetRequiredService<ILogger<ChatDeletion>>()));
         return services;
     }
 }

@@ -286,6 +286,14 @@ public sealed class CliRoute
         }
     }
 
+    // Архивная копия транскрипта для ролей жизненного цикла (S3-5): поиск копии и потолок её
+    // размера нужны ветвлению, удаление копии вместе с чатом — удалению. Сам
+    // ArchivedTranscriptStore остаётся у маршрута (здесь же его Archive/Restore), а создающему
+    // и удаляющему роли он в конструктор не нужен — достаточно этих трёх тонких записей.
+    internal string? FindArchivedCopyPath(string csid) => _archive.FindCopyPath(csid);
+    internal long ArchivedCopyMaxBytes => _archive.MaxCopyBytes;
+    internal void DeleteArchivedCopy(string csid) => _archive.Delete(csid);
+
     // Корни профилей CLI для поиска транскрипта чата: все конфиг-корни провайдеров плюс
     // профили песочницы владельца (раскладка RewriteProfileEnv; берём ВСЕ папки владельца,
     // а не один ключ — чат мог мигрировать). Выделено из DeleteTranscript: тот же список

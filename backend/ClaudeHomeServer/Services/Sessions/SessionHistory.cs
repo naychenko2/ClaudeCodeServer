@@ -82,6 +82,51 @@ public sealed class SessionHistory
         return AppendResult.Added;
     }
 
+    // Создание/переиспользование аккумулятора истории (без CLI-процесса). Вырезано из
+    // EnsureProcessCoreAsync: локальному голосовому ходу (chat-voice) процесс не нужен,
+    // а аккумулятор — да (реплики разговора пишутся в ту же историю). Ключ: ClaudeSessionId
+    // чата, а при его отсутствии (ходов CLI ещё не было) — id чата: локальные ходы пишут
+    // историю в data/sessions/{id чата}/history.json, и после рестарта сервера, и при
+    // возврате на CLI она подхватывается отсюда же. (S3-5: переехал в роль истории — процессу
+    // и восстановлению нужен тот же ключ и тот же лок, а они здесь.)
+    internal async Task EnsureAccumulatorAsync(SessionEntry entry)
+    {
+        if (entry.Accumulator is not null) return;
+        // Оживление под _falPersistLock — сериализуем с прямой записью fal-стоимости в
+        // историю неактивной сессии (PublishFalCostAsync): иначе LoadAsync тут и запись там
+        // теряли бы друг друга (lost update). Повторная проверка под локом.
+        await WithFalPersistLockAsync(async () =>
+        {
+            if (entry.Accumulator is not null) return;
+            // Ключ сохранения — тот же, что у чтения: до первого ответа агента это id чата, иначе
+            // внеходовая запись в свежий чат (AppendStoredAsync) не легла бы на диск вовсе.
+            // Ответ CLI переключит ключ на ClaudeSessionId (SessionStartedMessage → SetSaveKey)
+            var key = HistoryKeyOf(entry.Info);
+            var existingHistory = await _history.LoadAsync(key);
+            entry.Accumulator = new TurnAccumulator(existingHistory, key);
+        });
+    }
+
+    // Снимок аккумулятора на диск, fire-and-forget (тонкая запись для процесса: отметка
+    // прерывания хода, S3-5). Тот же путь, что был у RecordUserInterrupt в фасаде.
+    internal void SaveAccumulatorSnapshot(SessionEntry entry, string what)
+    {
+        if (entry.Accumulator is not { } acc) return;
+        DeferredRun.FireAndForget(acc.SaveSnapshotAsync(_history), what);
+    }
+
+    // Карточка «Цикл работы остановлён» (причина и текст) — в ленту и в рассылку. Молча
+    // выходит при null-аккумуляторе (в отличие от AppendServerRestartCardAsync, которая
+    // создаёт его явно — та остаётся на фасаде до S3-7). S3-5: тело переехало из фасада;
+    // фасадная реализация ITurnStarter.AddWorkLoopStoppedNoticeAsync делегирует сюда.
+    internal async Task AddWorkLoopStoppedNoticeAsync(string sessionId, string reason, string text)
+    {
+        if (!_store.Sessions.TryGetValue(sessionId, out var entry) || entry.Accumulator is not { } acc) return;
+        acc.Append(new StoredWorkLoopStoppedMessage(reason, text));
+        await acc.SaveSnapshotAsync(_history);
+        await _store.BroadcastAsync(sessionId, new WorkLoopStoppedMessage(reason, text));
+    }
+
     // Запись StoredMessage в историю сессии ВНЕ хода + broadcast (обобщение паттерна
     // PublishFalCostAsync): активная сессия → через Accumulator + SaveSnapshot;
     // неактивная → LoadAsync + append + SaveAsync под локом. Используется совещаниями.

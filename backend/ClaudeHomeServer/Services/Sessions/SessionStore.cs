@@ -26,7 +26,7 @@ internal readonly record struct SessionLoadResult(
 // Класс public ТОЛЬКО потому, что он параметр публичного конструктора SessionManager (CS0051) и
 // DI нужен публичный конструктор; обход фасада закрывает сторож формы ядра (правило 4:
 // на типы Services.Sessions ссылаются лишь SessionManager, сами Services.Sessions и тесты).
-public sealed class SessionStore : ITeamRunState
+public sealed class SessionStore : ITeamRunState, Access.ITurnFrameSource
 {
     // Реестр сессий: одна точка правды на процесс (синглтон в DI). SessionManager держит ссылку
     // на этот же словарь в своём поле _sessions — тесты читают его рефлексией.
@@ -792,6 +792,13 @@ public sealed class SessionStore : ITeamRunState
         return Access.TurnFrame.Resolve(project, session, ResolveOwnerId(session), GetTurnActor(sessionId, ownerId));
     }
 
+    // Рамка хода для контекста запуска (S2a-4): с S3-5 вердикт в LlmSessionContext передаётся
+    // сам стор, а не обходится через фасад (FrameSource: store в TurnLaunchContextFactory).
+    // Регистрация ITurnFrameSource в Program.cs (её читают http-тулсеты) остаёт на фасаде —
+    // здесь только явная реализация для прямой передачи стора в контекст.
+    Access.TurnFrameKind Access.ITurnFrameSource.Frame(string? sessionId, string ownerId) =>
+        GetTurnFrame(sessionId, ownerId);
+
     // Владелец чата (арендатор) либо автор идущего хода (S2a-10): им доступно «Стоп»/перебой/ответ на
     // вопрос агента. Неизвестный актор автором не считается (fail-closed).
     public bool IsOwnerOrTurnAuthor(string sessionId, string userId)
@@ -895,6 +902,18 @@ public sealed class SessionStore : ITeamRunState
             with { SessionId = sessionId };
         var tasks = new List<Task> { _broadcaster.ToSession(sessionId, statusMsg) };
         tasks.Add(_broadcaster.ToChatAudience(info, statusMsg));
+        await Task.WhenAll(tasks);
+    }
+
+    // Уведомить клиентов об удалении чата (в т.ч. авто-удалении временного) — адресация как у
+    // BroadcastStatusChangeAsync: проект или владелец чата. Тело переехало из фасада в S3-5:
+    // удаляющему ролью нужен тот же адресный путь, а записи к этому моменту в реестре уже нет
+    // (TryRemove раньше), поэтому info передаётся явно, а не читается из Sessions.
+    public async Task BroadcastChatDeletedAsync(string sessionId, Session info)
+    {
+        var msg = new ChatDeletedMessage() with { SessionId = sessionId };
+        var tasks = new List<Task> { _broadcaster.ToSession(sessionId, msg) };
+        tasks.Add(_broadcaster.ToChatAudience(info, msg));
         await Task.WhenAll(tasks);
     }
 

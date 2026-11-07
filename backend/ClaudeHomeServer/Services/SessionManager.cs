@@ -1815,9 +1815,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // Режим, выбранный в Composer, применяется со следующего хода: процесс claude
         // пересоздаётся в RunTurnAsync и читает --permission-mode из Info.Mode.
         // Режим «План» у провайдера без поддержки тихо игнорируем (защита от рассинхрона UI).
-        var caps = _llmProviders.CapabilitiesFor(entry.Info.Model);
         if (mode is not null && Enum.TryParse<ClaudeMode>(mode, true, out var parsedMode)
-            && (parsedMode != ClaudeMode.Plan || caps.SupportsPlanMode))
+            && (parsedMode != ClaudeMode.Plan || _settings.SupportsPlanMode(entry.Info.Model)))
         {
             // M1: сообщение с mode — та же точка смены режима, что и селектор (SetMode).
             // На стадиях интервью/планирования чат держится в план-режиме (SavedMode), и
@@ -1981,17 +1980,18 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // («No conversation found» / ход без контекста). Штатный переезд провайдера идёт
             // только через MigrateProviderAsync с guard'ом, а override его обходит. Поэтому
             // override применяем, только если провайдер модели override совпадает с провайдером
-            // модели чата (резолв — LlmProviderRegistry, тот же, что у guard'а; профиль
-            // локального CLI-провайдера тоже считается другим). Миграцию на каждый ход НЕ
+            // модели чата (сравнение — через ProviderKey настроек, тот же свод, что у
+            // guard'а и SetPersona; профиль локального CLI-провайдера тоже считается
+            // другим). Миграцию на каждый ход НЕ
             // делаем: ход идёт на модели чата, как раньше.
             if (voiceModel is not null
-                && !string.Equals(_llmProviders.ProviderKey(voiceModel), _llmProviders.ProviderKey(entry.Info.Model),
+                && !string.Equals(_settings.ProviderKey(voiceModel), _settings.ProviderKey(entry.Info.Model),
                     StringComparison.OrdinalIgnoreCase))
             {
                 _log.LogWarning(
                     "Голосовой ход чата {SessionId}: модель места chat-voice «{VoiceModel}» (провайдер {VoiceKey}) " +
                     "не совпадает с провайдером модели чата {ChatKey} — ход идёт на модели чата, транскрипт не мигрируем",
-                    sessionId, voiceModel, _llmProviders.ProviderKey(voiceModel), _llmProviders.ProviderKey(entry.Info.Model));
+                    sessionId, voiceModel, _settings.ProviderKey(voiceModel), _settings.ProviderKey(entry.Info.Model));
                 voiceModel = null;
             }
             await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text, auto, systemDirective, senderPersonaId), attachedPaths,
@@ -2914,8 +2914,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             throw new InvalidOperationException(
                 "Штаб планирует. Режим вернётся после согласования плана");
         // «План» у провайдера без поддержки не принимаем — та же защита, что и на ходе
-        var caps = _llmProviders.CapabilitiesFor(entry.Info.Model);
-        if (parsed == ClaudeMode.Plan && !caps.SupportsPlanMode)
+        if (parsed == ClaudeMode.Plan && !_settings.SupportsPlanMode(entry.Info.Model))
             throw new InvalidOperationException("Провайдер не поддерживает режим «План»");
         // M1: гард «координатор не пишет код» держится на permission-запросах CLI, а в
         // acceptEdits/bypassPermissions CLI не спрашивает — такой режим штабу запрещён в

@@ -660,6 +660,16 @@ public sealed class ChatSettings
         return changed;
     }
 
+    // Гейты режима по модели (подготовка к S3-7, вердикт архитектора 07.11): эти две проверки
+    // уже делаются здесь — сравнение провайдеров через ProviderKey в SetPersona, гейт
+    // план-фазы — в ProviderMigration. Приём хода не получает одиннадцатую зависимость
+    // LlmProviderRegistry — зовёт их через настройки.
+    /// <summary>Поддерживает ли провайдер модели режим «План» (тот же гейт, что на ходе и в SetMode).</summary>
+    internal bool SupportsPlanMode(string? model) => _llmProviders.CapabilitiesFor(model).SupportsPlanMode;
+
+    /// <summary>Ключ провайдера модели (сравнение провайдеров — тот же свод, что в SetPersona).</summary>
+    internal string ProviderKey(string? model) => _llmProviders.ProviderKey(model);
+
     // Запомнить заметку-итог сессии (SessionSummaryService) — для обновления при повторной генерации
     public void SetSummaryNoteId(string sessionId, string noteId)
     {

@@ -61,7 +61,12 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 /// фикстуры, а связь «фикстура ↔ бэк» держалась комментарием. Кейс
 /// <see cref="Фронтовый_реестр_содержит_каждый_ключ_стора"/> читает фронтовый файл и закрывает
 /// цепочку со стороны бэка: новый ключ стора без пары в реестре — красный здесь, а не тихое
-/// отставание на следующем шаге (меню/рельса/маршрут).
+/// отставание на следующем шаге (меню/рельса/маршрут). Равенство держится в обе стороны:
+/// мёртвую строку реестра (остаток снятой вертикали, которого нет в сторе) ловит
+/// <see cref="Фронтовый_реестр_не_содержит_ключей_вне_стора"/> — фронтовый тест против своей
+/// фикстуры зелёен в обоих пропусках. В множество реестра попадают только значения пар
+/// «ключ: 'значение'»; тестовые заглушки — точный список <see cref="TestStubKeys"/>, а не
+/// префикс <c>__</c>.
 ///
 /// ═══ Строки ядра и CanDisable (S2b-1) ═══
 ///
@@ -256,7 +261,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             + "хоста: новая подсистема без строки в матрице — красный здесь, а не тихая дыра в гейте");
     }
 
-    // ─── Фронтовый реестр: ключи стора → SUBSYSTEMS (хвост R-S2b-2a) ─────────────────
+    // ─── Фронтовый реестр: ключи стора ↔ SUBSYSTEMS, обе половины (хвост R-S2b-2a) ─────
 
     /// <summary>
     /// Фронтовый реестр <c>SUBSYSTEMS</c> (frontend/src/lib/subsystems.ts) обязан содержать каждый
@@ -267,13 +272,15 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// <c>DynamicModules</c> в appsettings.json), фикстуру не тронули — фронтовый тест зелёный, а
     /// реестр молча отстаёт, и следующий шаг (меню/рельса/маршрут) не может гейтить новый ключ.
     /// Этот кейс закрывает цепочку со стороны бэка: новый ключ стора без пары в реестре — красный
-    /// здесь, а не молча.
+    /// здесь, а не молча. Обратная половина равенства — <see cref="Фронтовый_реестр_не_содержит_ключей_вне_стора"/>.
     ///
     /// Два исключения, оба объявлены в коде: строки ядра (<see cref="SubsystemStateStore.IsCoreKey"/>;
     /// <see cref="SubsystemStateStore.ActiveKeys"/> не отдаёт их фронту — ядро на фронте не гейтится,
-    /// IAppSubsystem.cs:157-158) и тестовые заглушки с префиксом <c>__</c> (<c>__stub</c> — PoC-модуль
-    /// appsettings.Testing.json для StubModuleEndpointTests, не подсистема пользователя). Новая строка
-    /// ядра или новый тестовый стаб — не повод трогать реестр; новая пользовательская вертикаль — повод.
+    /// IAppSubsystem.cs:157-158) и тестовые заглушки из точного списка <see cref="TestStubKeys"/>
+    /// (<c>__stub</c> — PoC-модуль appsettings.Testing.json для StubModuleEndpointTests, не подсистема
+    /// пользователя). Список, а не префикс <c>__</c> (п. 2 хвоста R-S2b-2a): пользовательская вертикаль
+    /// с <c>__</c>-префиксом не должна молча выпасть из проверки. Новая строка ядра или новый
+    /// тестовый стаб — не повод трогать реестр; новая пользовательская вертикаль — повод.
     /// </summary>
     [Fact]
     public async Task Фронтовый_реестр_содержит_каждый_ключ_стора()
@@ -293,48 +300,89 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             + "если ключ — ядро или тестовая заглушка, объяви это здесь (IsCoreKey/IsTestStubKey)");
     }
 
-    // Тестовые заглушки с префиксом `__` (__stub — PoC-модуль appsettings.Testing.json): не
-    // пользовательские вертикали, фронтовый реестр их не гейтит и знать не обязан.
-    private static bool IsTestStubKey(string key) => key.StartsWith("__", StringComparison.Ordinal);
+    // Тестовые заглушки DynamicModules (__stub — PoC-модуль appsettings.Testing.json): не
+    // пользовательские вертикали, фронтовый реестр их не гейтит и знать не обязан. Точный
+    // список, а не префикс `__` (п. 2 хвоста R-S2b-2a): ключ пользовательской вертикали с
+    // `__`-префиксом не должен молча выпасть из проверки — новая заглушка добавляется сюда,
+    // и только с этой строки она прощена реестру.
+    private static readonly string[] TestStubKeys = ["__stub"];
+
+    private static bool IsTestStubKey(string key) => TestStubKeys.Contains(key, StringComparer.Ordinal);
+
+    /// <summary>
+    /// Обратная половина равенства (п. 4 хвоста R-S2b-2a): в <c>SUBSYSTEMS</c>
+    /// (frontend/src/lib/subsystems.ts) не должно ключей, которых нет в сторе. Ущерба от лишней
+    /// строки на глаз нет: useSubsystem по имени, которого бэк не называет, даёт false и гейт
+    /// сработает «как надо» — но это случайность, а не проверка: мёртвая строка (остаток снятой
+    /// вертикали) живёт в реестре и в фикстуре фронтового теста, который зелёен ровно против своей
+    /// фикстуры. Контракт реестра — «дублирует ключи бэкового реестра» (subsystems.ts:18-25),
+    /// т. е. равенство множеств; первая половина — <see cref="Фронтовый_реестр_содержит_каждый_ключ_стора"/>.
+    /// Разрешены ровно не-ядровые не-заглушечные ключи стора: ядро фронтом не гейтится
+    /// (ActiveKeys его не отдаёт), заглушка — не пользовательская вертикаль.
+    /// </summary>
+    [Fact]
+    public async Task Фронтовый_реестр_не_содержит_ключей_вне_стора()
+    {
+        var live = await LiveKeysAsync(Enabled);
+        var allowed = live
+            .Where(k => !SubsystemStateStore.IsCoreKey(k) && !IsTestStubKey(k))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var stale = FrontendRegistryKeys().Where(k => !allowed.Contains(k)).ToList();
+        stale.Should().BeEmpty(
+            "ключ SUBSYSTEMS без пары в SubsystemStateStore — остаток снятой вертикали: фронтовый "
+            + "тест зелёен против своей фикстуры, и мёртвая строка живёт в реестре и в BACKEND_KEYS "
+            + "subsystemsRegistry.test.ts, пока её не заметят руками. Сними её оттуда, а не добавляй "
+            + "ключ в стор; если ключ — заглушка или ядро, это не пара реестру");
+    }
 
     /// <summary>
     /// Значения фронтового реестра: блок <c>export const SUBSYSTEMS = { … } as const;</c> из
-    /// frontend/src/lib/subsystems.ts. Без блока — явная ошибка, а не «пустой реестр»: сторож
-    /// потерял источник, а не строку.
+    /// frontend/src/lib/subsystems.ts. Ключами реестра считаются только значения пар
+    /// «ключ: 'значение'» (п. 3 хвоста R-S2b-2a): кавычка вне пары — одиночная строка или поле
+    /// не-ключа — не ключ, и сторож считает такую строку дефектом источника, а не значением:
+    /// иначе ложное «ключ есть» маскировало бы настоящую дыру. Комментарии <c>//</c>
+    /// пропускаются: в множество они не попадают и отсутствующий ключ не маскируют. Без блока —
+    /// явная ошибка, а не «пустой реестр»: сторож потерял источник, а не строку.
     /// </summary>
     private static HashSet<string> FrontendRegistryKeys()
     {
-        var body = FrontendRegistryBlock.Match(File.ReadAllText(RepoFile("frontend", "src", "lib", "subsystems.ts")));
+        var body = FrontendRegistryBlock.Match(
+            File.ReadAllText(TestRepoFiles.RepoFile("frontend", "src", "lib", "subsystems.ts")));
         if (!body.Success)
             throw new InvalidOperationException(
                 "блок `export const SUBSYSTEMS = { … } as const;` не найден в "
                 + "frontend/src/lib/subsystems.ts — фронтовый реестр нечем померить");
-        return new HashSet<string>(
-            RegistryValue.Matches(body.Groups["body"].Value).Select(m => m.Groups[1].Value),
-            StringComparer.OrdinalIgnoreCase);
+
+        var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var foreign = new List<string>();
+        foreach (var raw in body.Groups["body"].Value.Split('\n'))
+        {
+            var line = raw.Trim();
+            var comment = line.IndexOf("//", StringComparison.Ordinal);
+            if (comment >= 0) line = line[..comment].TrimEnd();
+            if (line.Length == 0) continue;
+            var pair = RegistryPair.Match(line);
+            if (pair.Success) values.Add(pair.Groups[1].Value);
+            else foreign.Add(line);
+        }
+        if (foreign.Count > 0)
+            throw new InvalidOperationException(
+                "блок SUBSYSTEMS содержит строки не-пары «ключ: 'значение'»: "
+                + string.Join(" | ", foreign.Take(5))
+                + " — кавычка вне пары не ключ, и с ней сторож не отвечает ни за отсутствие "
+                + "ключа, ни за его присутствие");
+        return values;
     }
 
     private static readonly Regex FrontendRegistryBlock =
         new(@"export const SUBSYSTEMS = \{(?<body>.*?)\} as const;", RegexOptions.Singleline | RegexOptions.Compiled);
 
-    private static readonly Regex RegistryValue = new(@"'([^']+)'", RegexOptions.Compiled);
-
-    // Файл репозитория по пути от корня: корень — подъём от bin-каталога тестов до .git
-    // (каталог в основном дереве, файл в worktree и в копии мутации) — паттерн
-    // MemoryToolsetParityTests.RepoFile.
-    private static string RepoFile(params string[] parts)
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null
-               && !Directory.Exists(Path.Combine(dir.FullName, ".git"))
-               && !File.Exists(Path.Combine(dir.FullName, ".git")))
-            dir = dir.Parent;
-        var path = dir is null ? null : Path.Combine([dir.FullName, .. parts]);
-        if (path is null || !File.Exists(path))
-            throw new InvalidOperationException(
-                $"{Path.Combine(parts)} не найден — сторож фронтового реестра не может работать");
-        return path;
-    }
+    // Строка реестра: идентификатор: 'значение', опционально с запятой. Одна пара на строку:
+    // вторая пара на той же строке не разбирается и красит её целиком — формат блока такой,
+    // как он записан в файле.
+    private static readonly Regex RegistryPair =
+        new(@"^[A-Za-z_$][A-Za-z0-9_$]*\s*:\s*'([^']+)',?$", RegexOptions.Compiled);
 
     /// <summary>
     /// Структура словаря нарушений: ключ — из перечня матрицы (не из воздуха), причина — с файлом

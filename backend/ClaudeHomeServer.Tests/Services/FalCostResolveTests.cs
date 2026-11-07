@@ -27,7 +27,22 @@ public class FalCostResolveTests
         }
     }
 
-    private static FalCostService MakeService(StubHandler handler)
+    // Заглушка с транспортным сбоем: первая попытка — TaskCanceledException (так же бросает
+    // HttpClient при своём Timeout на неотменённом ct), дальше — ответ-эталон.
+    private sealed class TimeoutThenHandler(HttpResponseMessage ok) : HttpMessageHandler
+    {
+        private int _attempt;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            _attempt++;
+            return _attempt == 1
+                ? Task.FromException<HttpResponseMessage>(new TaskCanceledException("Транспортный таймаут"))
+                : Task.FromResult(ok);
+        }
+    }
+
+    private static FalCostService MakeService(HttpMessageHandler handler)
     {
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["Fal:ApiKey"] = "test-key" })
@@ -85,5 +100,42 @@ public class FalCostResolveTests
         Func<Task> call = async () => usd = await svc.ResolveUsdAsync("req-2", CancellationToken.None);
         await call.Should().NotThrowAsync();
         usd.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ResolveUsdAsync_ОтменённыйCt_ВозвращаетNullБезИсключения()
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"billing_events":[]}"""),
+        });
+        var svc = MakeService(handler);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        double? usd = null;
+        Func<Task> call = async () => usd = await svc.ResolveUsdAsync("req-cancel", cts.Token);
+        await call.Should().NotThrowAsync("отмена вызывающего — штатный исход шва, а не исключение");
+        usd.Should().BeNull();
+        handler.LastRequest.Should().BeNull("отменённый цикл выходит до обращения к транспорту");
+    }
+
+    [Fact]
+    public async Task ResolveUsdAsync_ТранспортныйТаймаут_ПродолжаетЦиклИВозвращаетЦену()
+    {
+        // Таймаут транспорта (ct не отменён) — не отмена вызывающего: цикл жив, следующая
+        // попытка находит цену. Две попытки с нулевым бэкоффом — чтобы не ждать реальных 77 с.
+        var ok = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""
+                {"billing_events":[{"request_id":"req-3","endpoint_id":"fal-ai/flux/schnell","cost_estimate_nano_usd":123000000}]}
+                """),
+        };
+        var svc = MakeService(new TimeoutThenHandler(ok));
+        svc.BackoffSeconds = [0, 0];
+
+        var usd = await svc.ResolveUsdAsync("req-3", CancellationToken.None);
+
+        usd.Should().Be(0.123, "таймаут первой попытки не убивает цикл: цена со второй попытки");
     }
 }

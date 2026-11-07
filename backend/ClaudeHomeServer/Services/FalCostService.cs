@@ -72,7 +72,10 @@ public class FalCostService : IFalRequestCost
                 await Task.Delay(TimeSpan.FromSeconds(BackoffSeconds[attempt]), ct);
                 cost = await FetchCostAsync(requestId, ct);
             }
-            catch (OperationCanceledException)
+            // Отмена вызывающего и таймаут транспорта — разные исходы (тот же приём, что в
+            // McpProbeService/McpOAuthService): таймаут HttpClient бросает TaskCanceledException
+            // при неотменённом ct → следующий catch → continue, цикл жив.
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 return null; // вызывающий отменил запрос — штатный исход, не ошибка
             }

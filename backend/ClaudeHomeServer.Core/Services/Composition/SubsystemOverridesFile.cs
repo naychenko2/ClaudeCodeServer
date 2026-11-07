@@ -17,6 +17,12 @@ namespace ClaudeHomeServer.Services.Composition;
 //
 // Формат: { "Subsystems": { "<key>": { "Enabled": false } } } — та же форма, которую читает
 // SubsystemGate (`Subsystems:{Key}:Enabled`), поэтому файл сам по себе валидная конфигурация.
+//
+// Битый файл не роняет старт процесса: как обычный источник конфигурации он был бы
+// прочитан на старте (JsonConfigurationProvider.Load бросает на невалидном JSON, и инстанс
+// не поднимался бы вовсе), а ручка на живом процессе на том же файле отвечает 503 с
+// причиной. Старт дороже: Program.cs спрашивает здесь DescribeConfigurationLoadError и
+// пропускает такой источник (состав подсистем — по умолчанию).
 public static class SubsystemOverridesFile
 {
     public const string FileName = "subsystems.json";
@@ -35,6 +41,29 @@ public static class SubsystemOverridesFile
     // от DataPath), отличается только имя файла.
     public static string PathFor(IConfiguration config) =>
         Path.Combine(SubsystemHostingExtensions.ResolveDataDir(config), FileName);
+
+    // Можно ли подключать файл как источник конфигурации: null — можно, иначе — причина отказа.
+    // Спрашиваем ТЕМ ЖЕ путём, что им подключается (AddJsonFile + Build): правила парсера —
+    // корень не объект, дублирующийся ключ — своей копией не повторяются, а «здесь» и «там»
+    // обязаны отвечать одинаково, иначе пропуск источника был бы ложным. Построить
+    // JsonConfigurationProvider напрямую — мимо EnsureDefaults: он враньёт «файл не найден»
+    // на существующем файле (проверено пробой).
+    // Ловим широко: старт процесса не должен зависеть от состояния файла — любая причина
+    // здесь заканчивается одинаково (источник не подключён, состав по умолчанию, человек
+    // видит причину в stderr). Нет файла — отказа нет: источник не нужен (optional).
+    public static string? DescribeConfigurationLoadError(string path)
+    {
+        if (!File.Exists(path)) return null;
+        try
+        {
+            new ConfigurationBuilder().AddJsonFile(path, optional: false).Build();
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex.Message;
+        }
+    }
 
     // Текущее содержимое: ключ → Enabled. Ключи без учёта регистра — как их видит провайдер
     // конфигурации и SubsystemStateStore: «TTS» в файле и «tts» из панели — один ключ.
@@ -61,6 +90,7 @@ public static class SubsystemOverridesFile
         lockObj.Wait();
         try
         {
+            SweepStaleTemps(path); // хвосты прошлых падений процесса — до своей записи
             var values = ReadEnabled(path); // битый файл бросает здесь — оригинал не тронут
             values[key] = enabled;
 
@@ -75,7 +105,9 @@ public static class SubsystemOverridesFile
             var json = JsonSerializer.Serialize(payload, WriteOptions);
 
             // Запись: temp с уникальным именем + File.Move(overwrite) — читающий никогда не
-            // видит полфайла, а неудачная запись оставляет оригинал как был.
+            // видит полфайла, а неудачная запись оставляет оригинал как был. Падение процесса
+            // между WriteAllText и File.Move оставляет temp в каталоге — его снимает
+            // следующая запись (SweepStaleTemps выше).
             var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {
@@ -91,6 +123,30 @@ public static class SubsystemOverridesFile
         finally
         {
             lockObj.Release();
+        }
+    }
+
+    // Хвосты прошлых падений: temp с префиксом нашего файла остаётся в каталоге, если
+    // процесс умер между WriteAllText и File.Move. Снимаем их под тем же замком пути и до
+    // своего temp: живой записи по этому пути сейчас нет (замок), а в бою файл пишет только
+    // этот процесс (InstanceLock не даёт второму инстансу тот же каталог) — значит любой
+    // такой temp здесь мусор прошлого запуска. В бэкап он не попадает (`.tmp` отсекается),
+    // но в data/ лежал бы вечно.
+    private static void SweepStaleTemps(string path)
+    {
+        var dir = Path.GetDirectoryName(Path.GetFullPath(path));
+        if (string.IsNullOrEmpty(dir)) return;
+        try
+        {
+            foreach (var stale in Directory.EnumerateFiles(dir, Path.GetFileName(path) + ".*.tmp"))
+            {
+                try { File.Delete(stale); } catch { /* уборка мусора — не предмет проверки */ }
+            }
+        }
+        catch (Exception)
+        {
+            // Каталог недоступен: причину назовёт сама запись ниже (тот же путь, тот же
+            // замок) — вторая копия той же причины в ответе панели не нужна.
         }
     }
 

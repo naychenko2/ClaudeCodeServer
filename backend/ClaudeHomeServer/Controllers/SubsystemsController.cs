@@ -31,6 +31,11 @@ public class SubsystemsController(
     // (ADR-014), поэтому изменение действует после перезапуска — это и отдаёт RestartRequired
     // в ответе. Файл подключён источником конфигурации после Local.json (Program.cs), поэтому
     // записанное панелью перекрывает ручную настройку.
+    //
+    // Путь записи — SubsystemOverridesFile.PathFor(хост-конфигурации): тот же резолв от того
+    // же DataPath, что у источника на старте. Это и есть связка «пишу туда, читает оттуда»;
+    // держится она пока Program.cs резолвит путь последним по финальному DataPath —
+    // осторожнее с новым источником конфигурации или правкой DataPath после его AddJsonFile.
     [HttpPut("{key}")]
     public IActionResult Put(string key, SubsystemToggleRequest? body)
     {

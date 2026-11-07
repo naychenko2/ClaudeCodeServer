@@ -78,11 +78,33 @@ var inspectionMode = builder.Configuration.GetValue<bool>("InspectionMode");
 // записанное панелью, перекрывает ручную настройку в Local.json (обратного нет — этот файл
 // переписывает JSON-парсер, и комментарии Local.json не пережили бы его). optional: нет
 // файла — ничего не выключено, всё как раньше. reloadOnChange: чтобы GET /api/admin/subsystems
-// показывал свежий Enabled без рестарта процесса; сам гейт применения остаётся одноразовым
-// (ADR-014). Путь резолвится по финальному DataPath — уже после инспекционного оверрайда,
-// чтобы копия читала свой каталог, а не боевой.
-builder.Configuration.AddJsonFile(
-    SubsystemOverridesFile.PathFor(builder.Configuration), optional: true, reloadOnChange: true);
+// показывал свежий Enabled без рестарта процесса (проверено тестом
+// Put_ЗатемGET_ТотЖеХост_ПоказываетНовыйEnabled, SubsystemsWriteTests); сам гейт применения
+// остаётся одноразовым (ADR-014).
+//
+// Путь резолвится по финальному DataPath — уже после инспекционного оверрайда, чтобы копия
+// читала свой каталог, а не боевой. Связка «путь источника == путь записи»: контроллер пишет
+// SubsystemOverridesFile.PathFor(хост-конфигурации) — тот же резолв от того же DataPath,
+// поэтому записанное доезжает до следующего старта (сторож связки — тест
+// Put_ПослеЗаписи_НовыйХостНаТомЖеКаталоге_НеАктивизируетПодсистему). Она держится ровно
+// пока: (1) ни один источник конфигурации не добавлен ПОСЛЕ этой строки и (2) DataPath здесь
+// финальный. Любой AddJsonFile/AddInMemory ниже или правка DataPath ниже молча разорвут
+// связку — файл начнёт читаться не там, где пишется. Правило: ниже этого места источники
+// конфигурации не добавляются (сейчас их действительно нет ни одного — проверено по файлу).
+var subsystemsPath = SubsystemOverridesFile.PathFor(builder.Configuration);
+// Битый файл как обычный источник конфигурации ронял весь старт процесса: AddSource грузит
+// источник сразу, и InvalidDataException прилетает из этого же AddJsonFile — инстанс не
+// поднимался бы вовсе (проверено тестом Host_БитыйФайлНаСтарте... на коде без пропуска),
+// при том что ручка на живом процессе на том же файле отвечает 503 с причиной. Старт дороже:
+// такой источник пропускаем (состав подсистем — по умолчанию, как без файла) и говорим
+// причину в stderr: человек чинит файл руками, панель на нём до починки отвечает 503.
+var subsystemsLoadError = SubsystemOverridesFile.DescribeConfigurationLoadError(subsystemsPath);
+if (subsystemsLoadError is null)
+    builder.Configuration.AddJsonFile(subsystemsPath, optional: true, reloadOnChange: true);
+else
+    Console.Error.WriteLine(
+        $"{subsystemsPath} не подключён источником конфигурации: {subsystemsLoadError} " +
+        "Тумблеры панелей на этот запуск не применены — состав подсистем по умолчанию.");
 
 // Таймстемп в консольном логе (I11): обёртка Console.Out/Error добавляет UTC-время в начало
 // каждой строки — и для ILogger, и для голых Console.WriteLine. Здесь, чтобы Local.json тоже

@@ -30,6 +30,10 @@ namespace ClaudeHomeServer.Tests.Composition;
 /// фабрики — встроенный InMemory и ExtraConfig — отложены и до этой точки не доходят:
 /// та же грабля, что разобрана в шапке NotesDisabledTests. UseSetting разворачивается в
 /// аргументы командной строки точки входа и успевает в конфигурацию до AddSubsystems.
+///
+/// По той же причине DataPath через UseSetting идёт и у хоста, чей предмет — состояние файла
+/// НА СТАРТЕ процесса (DataPathFromStart): без этого засеванный файл лежит в TempDir, которого
+/// AddJsonFile в Program.cs не видит, и тест был бы зелёным по чужому отсутствию.
 /// </summary>
 [Trait("Category", "Host")]
 public class SubsystemsWriteTests(SubsystemsWriteTests.Hosts hosts) : IClassFixture<SubsystemsWriteTests.Hosts>
@@ -54,6 +58,20 @@ public class SubsystemsWriteTests(SubsystemsWriteTests.Hosts hosts) : IClassFixt
         {
             var next = new Hosts();
             next._dataPathOverride = Path.Combine(TempDir, "projects.json");
+            return next;
+        }
+
+        /// <summary>
+        /// Хост со СВОИМ каталогом данных, заданным до старта процесса (UseSetting → аргументы
+        /// точки входа). Нужен там, где предмет — состояние файла НА СТАРТЕ: AddJsonFile в
+        /// Program.cs резолвит путь по DataPath этой же конфигурации, и только этот путь
+        /// доезжает до него (InMemory-конфиг фабрики — после Build, см. шапку класса).
+        /// Без этого засеванный файл лежал бы в каталоге, который стартом не читается.
+        /// </summary>
+        public Hosts DataPathFromStart()
+        {
+            var next = new Hosts();
+            next._dataPathOverride = Path.Combine(next.TempDir, "projects.json");
             return next;
         }
 
@@ -234,6 +252,118 @@ public class SubsystemsWriteTests(SubsystemsWriteTests.Hosts hosts) : IClassFixt
 
         File.ReadAllBytes(path).Should().Equal(before,
             "ошибка формы — до записи, файл остаётся ровно таким, каким был");
+    }
+
+    // ─── Битый файл НА СТАРТЕ процесса ────────────────────────────────────────────
+
+    // Файл засеян ДО первого обращения к хосту и в том каталоге, который читает старт
+    // процесса: DataPath через UseSetting (DataPathFromStart) — иначе засеванный файл лежал
+    // бы в TempDir, которого AddJsonFile в Program.cs не видит (конфиг фабрики доезжает
+    // только до Build), и тест был бы зелёным по чужому отсутствию. Без пропуска битого
+    // источника AddSource грузит его сразу и бросает InvalidDataException из самого
+    // AddJsonFile — инстанс не поднимается вовсе (красным на коде без пропуска проверено).
+    [Fact]
+    public async Task Host_БитыйФайлНаСтарте_Поднимается_СоставПоУмолчанию()
+    {
+        using var own = _hosts.DataPathFromStart();
+        Directory.CreateDirectory(own.TempDir); // ConfigureWebHost создаст его сам, но файл нужен раньше
+        var path = Path.Combine(own.TempDir, SubsystemOverridesFile.FileName);
+        File.WriteAllText(path, "{ это не json");
+        var client = own.CreateAuthenticatedClient();
+
+        var rows = await client.GetFromJsonAsync<JsonElement>("/api/admin/subsystems");
+        var tts = rows.EnumerateArray().Single(r => r.GetProperty("key").GetString() == "tts");
+
+        tts.GetProperty("active").GetBoolean().Should().BeTrue(
+            "источник с битым файлом пропущен: состав подсистем — такой же, как без файла");
+        tts.GetProperty("enabled").GetBoolean().Should().BeTrue(
+            "Enabled читается из конфигурации, а её нет для этого ключа — дефолт true");
+        tts.GetProperty("restartRequired").GetBoolean().Should().BeFalse(
+            "конфиг и состояние процесса совпали: панель не должна требовать рестарта там, где менять нечего");
+
+        // При этом панель не молчит о состоянии файла: та же ручка, что на живом процессе.
+        var put = await client.PutAsJsonAsync("/api/admin/subsystems/tts", new { enabled = false });
+        put.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable,
+            "битый файл переживает старт процесса, но остаётся видимым: PUT отвечает 503 с причиной");
+        var body = await put.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("code").GetString().Should().Be("write_failed");
+        body.GetProperty("message").GetString().Should().NotBeNullOrWhiteSpace(
+            "в ней человек поймёт, какой файл чинить");
+    }
+
+    // ─── Живой перечит после записи (reloadOnChange) ───────────────────────────────
+
+    // Обещание доки и комментариев («GET /api/admin/subsystems показывает свежий Enabled без
+    // рестарта») проверяется там, где оно может быть выполнено: у хоста, у которого путь
+    // источника (Program.cs) и путь записи (контроллер) — ОДИН файл. Это только DataPath через
+    // UseSetting: в классном хосте AddJsonFile резолвит путь до того, как доедет конфиг
+    // фабрики, и следит за другим каталогом — там тест был бы красным по чужому устройству,
+    // а не по делу. Ждём факта, а не паузы: наблюдатель файла асинхронен, поэтому ждём до
+    // потолка и называем причину, если факта нет.
+    [Theory]
+    [InlineData(false)] // файла нет на старте, его создаёт первая запись — трудный случай
+    [InlineData(true)]  // файл был на старте: наблюдатель следил с подъёма процесса
+    public async Task Put_ЗатемGET_ТотЖеХост_ПоказываетНовыйEnabledБезРестарта(bool fileAtStart)
+    {
+        using var own = _hosts.DataPathFromStart();
+        if (fileAtStart)
+        {
+            Directory.CreateDirectory(own.TempDir);
+            File.WriteAllText(
+                Path.Combine(own.TempDir, SubsystemOverridesFile.FileName),
+                "{\"Subsystems\":{\"tts\":{\"Enabled\":true}}}");
+        }
+        var client = own.CreateAuthenticatedClient();
+
+        var put = await client.PutAsJsonAsync("/api/admin/subsystems/tts", new { enabled = false });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        var reloaded = false;
+        JsonElement row = default;
+        while (DateTime.UtcNow < deadline)
+        {
+            var rows = await client.GetFromJsonAsync<JsonElement>("/api/admin/subsystems");
+            row = rows.EnumerateArray().Single(r => r.GetProperty("key").GetString() == "tts");
+            if (!row.GetProperty("enabled").GetBoolean())
+            {
+                reloaded = true;
+                break;
+            }
+            await Task.Delay(200);
+        }
+
+        reloaded.Should().BeTrue(
+            "reloadOnChange источника data/subsystems.json: тот же процесс обязан показать " +
+            "записанное без рестарта — иначе обещание в доке и в Program.cs ложное");
+
+        row.GetProperty("active").GetBoolean().Should().BeTrue(
+            "гейт одноразовый: живой процесс по-прежнему зарегистрировал tts");
+        row.GetProperty("restartRequired").GetBoolean().Should().BeTrue(
+            "свежий Enabled ≠ состояние процесса — панель обязана показать разницу, а не гасить её");
+    }
+
+    // ─── Остаток temp после падения процесса ──────────────────────────────────────
+
+    [Fact]
+    public async Task Put_СнимаетОстатокTempПрошлогоПадения()
+    {
+        using var own = _hosts.Fresh();
+        var path = FilePathOf(own);
+        // Хвост краша между WriteAllText и File.Move: временное имя с префиксом файла,
+        // живой записи по этому пути нет.
+        var stale = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        File.WriteAllText(stale, "осталось после падения процесса");
+        File.Exists(path).Should().BeFalse("первая запись после краша — самого файла ещё нет");
+
+        var response = await own.CreateAuthenticatedClient()
+            .PutAsJsonAsync("/api/admin/subsystems/tts", new { enabled = false });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        File.Exists(stale).Should().BeFalse(
+            "temp прошлого падения снимается следующей записью: в data/ он не остаётся");
+        Directory.GetFiles(Path.GetDirectoryName(path)!, Path.GetFileName(path) + ".*.tmp")
+            .Should().BeEmpty("после записи мусора в каталоге данных нет");
     }
 
     // ─── Гонка двух записей ───────────────────────────────────────────────────────

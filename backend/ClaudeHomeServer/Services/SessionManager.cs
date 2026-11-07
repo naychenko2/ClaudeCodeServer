@@ -3408,8 +3408,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // Пути остановки снимают цикл через SetWorkLoop(false) — та сбрасывает маркер сама;
             // здесь ловим только исключение до отправки. Перебрасываем — вызывающий (Task.Run по
             // result) залогирует.
+            // (S3-7c) Снятие — под PendingLock, как подъём маркера в начале метода и в drain'e:
+            // гейт разбора очереди читает маркер под этим же замком, состояние маркера меняется
+            // атомарно относительно операций над очередью. Сам этот catch очередь не трогает.
             if (entry.Info.WorkLoop is not null)
-                entry.LoopTurnInFlight = false;
+                lock (entry.PendingLock) entry.LoopTurnInFlight = false;
             throw;
         }
     }

@@ -1076,8 +1076,11 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
             // При активном цикле drain выставил LoopTurnInFlight=true до отправки. Если ход
             // так и не стартовал — ход-то не пришлёт result, и маркер повис бы навсегда,
             // заблокировав разбор очереди. Сбрасываем, чтобы цикл не завис на мёртвой итерации.
+            // (S3-7c) Снятие — под PendingLock, как подъём маркера в DrainNextPendingAsync:
+            // гейт разбора очереди читает маркер под этим же замком, состояние маркера меняется
+            // атомарно относительно операций над очередью. Сам этот catch очередь не трогает.
             if (entry.Info.WorkLoop is not null)
-                entry.LoopTurnInFlight = false;
+                lock (entry.PendingLock) entry.LoopTurnInFlight = false;
             Console.Error.WriteLine($"[SessionManager] Доставка отложенного сообщения ({sessionId}): {ex.Message}");
             return false;
         }

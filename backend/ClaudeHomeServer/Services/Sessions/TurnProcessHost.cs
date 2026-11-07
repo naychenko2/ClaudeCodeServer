@@ -122,7 +122,9 @@ public sealed class TurnProcessHost
             session.ProjectId is { } launchProjectId ? _projects.GetById(launchProjectId) : null,
             rootPath, projectRoot, rawSystemPrompt, permissionRules, accumulator, runId,
             BuildEnqueueBypass(session.Id), _turnEvents,
-            _route.ConfigRootFor(ownerId, session.Provider));
+            _route.ConfigRootFor(ownerId, session.Provider),
+            // ADR-016: правило «транскрипт на диске сервера» — одна запись, в CliRoute
+            _route.TranscriptOnServer(session));
         var adapter = _adapters.Create(session, context);
         entry.Process = adapter;
         entry.RunId = runId;
@@ -182,7 +184,8 @@ public sealed class TurnProcessHost
                 ?? throw new InvalidOperationException("У чата не задан владелец"));
             context = _factory.BuildForReconnect(entry, null, rootPath, accumulator, runId,
                 permissionRules: null, BuildEnqueueBypass(sessionId), _turnEvents,
-                _route.ConfigRootFor(entry.Info.OwnerId, entry.Info.Provider));
+                _route.ConfigRootFor(entry.Info.OwnerId, entry.Info.Provider),
+                _route.TranscriptOnServer(entry.Info));
         }
         else
         {
@@ -198,7 +201,8 @@ public sealed class TurnProcessHost
                 () => _projects.GetById(entry.Info.ProjectId!)?.PermissionRules
                     ?? (IReadOnlyList<PermissionRule>)Array.Empty<PermissionRule>(),
                 BuildEnqueueBypass(sessionId), _turnEvents,
-                _route.ConfigRootFor(project.OwnerId, entry.Info.Provider));
+                _route.ConfigRootFor(project.OwnerId, entry.Info.Provider),
+                _route.TranscriptOnServer(entry.Info));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

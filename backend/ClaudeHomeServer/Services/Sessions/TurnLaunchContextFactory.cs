@@ -23,6 +23,7 @@ namespace ClaudeHomeServer.Services.Sessions;
 // рождается в момент вызова — передаёт вызывающий
 // (TurnProcessHost, у него есть маршрут и проекты): rootPath/mainRootPath (EffectiveRoot /
 // ResolveChatRoot — территория маршрута), cliConfigRoot (CliRoute.ConfigRootFor — метод экземпляра),
+// transcriptOnServer (CliRoute.TranscriptOnServer — единственная запись правила ADR-016),
 // project (резолв вызывающего, вместе с отказом «Проект не найден»), permissionRules (замыкание на
 // ProjectManager), колбэк EnqueueBypass (очередь — дело хоста). Фабрика не берёт ProjectManager и
 // CliRoute в конструктор — ровно это и значит «зависимостей десять».
@@ -124,9 +125,9 @@ internal sealed class TurnLaunchContextFactory
         string rootPath, string mainRootPath, string? rawSystemPrompt,
         Func<IReadOnlyList<PermissionRule>>? permissionRules, TurnAccumulator accumulator, long runId,
         Func<string, string, IReadOnlyList<string>?, int, bool, Task> enqueueBypass,
-        ITurnEventBus? events, string cliConfigRoot)
+        ITurnEventBus? events, string cliConfigRoot, bool transcriptOnServer)
         => Compose(session, ownerId, project, rootPath, mainRootPath, rawSystemPrompt, permissionRules,
-            accumulator, runId, enqueueBypass, events, cliConfigRoot);
+            accumulator, runId, enqueueBypass, events, cliConfigRoot, transcriptOnServer);
 
     // Переподключение: project — найден и проверен вызывающим (отказ «Проект не найден»
     // остаётся у хоста); rootPath — EffectiveRoot/ResolveChatRoot, посчитанные хостом
@@ -137,16 +138,16 @@ internal sealed class TurnLaunchContextFactory
         // (правил разрешения проекта нет)
         Func<IReadOnlyList<PermissionRule>>? permissionRules,
         Func<string, string, IReadOnlyList<string>?, int, bool, Task> enqueueBypass,
-        ITurnEventBus? events, string cliConfigRoot)
+        ITurnEventBus? events, string cliConfigRoot, bool transcriptOnServer)
         => Compose(entry.Info, project?.OwnerId ?? entry.Info.OwnerId, project, rootPath,
             project?.RootPath, project?.SystemPrompt, permissionRules,
-            accumulator, runId, enqueueBypass, events, cliConfigRoot);
+            accumulator, runId, enqueueBypass, events, cliConfigRoot, transcriptOnServer);
 
     private LlmSessionContext Compose(Session session, string? ownerId, Project? project,
         string rootPath, string? mainRootPath, string? rawSystemPrompt,
         Func<IReadOnlyList<PermissionRule>>? permissionRules, TurnAccumulator accumulator, long runId,
         Func<string, string, IReadOnlyList<string>?, int, bool, Task> enqueueBypass,
-        ITurnEventBus? events, string cliConfigRoot)
+        ITurnEventBus? events, string cliConfigRoot, bool transcriptOnServer)
     {
         var persona = BuildPersonaLayer(session, ownerId);
         var workspace = _external.BuildWorkspaceContext(ownerId, session.ProjectId, session.Id, persona.Persona);
@@ -232,9 +233,10 @@ internal sealed class TurnLaunchContextFactory
             // fallback сводится к no-op в CodeGraphPromptProvider.GetSliceAsync.
             MainRootPath: mainRootPath,
             ServerContent: _builtin.ServerContentFor(session.ProjectId),
-            // Лежит ли транскрипт на диске сервера (ADR-016): та же формула CliRoute
-            // .TranscriptOnServer, развёрнутая по найденному вызывающим проекту
-            TranscriptOnServer: project is null || ProjectCapabilities.TranscriptOnServer(project),
+            // Лежит ли транскрипт на диске сервера (ADR-016): значение считает вызывающий
+            // (_route.TranscriptOnServer) и передаёт параметром — единственная запись правила
+            // остаётся в CliRoute (замечание 07.11)
+            TranscriptOnServer: transcriptOnServer,
             HandsEnabled: hands,
             LlmGatewayApiUrl: _builtin.LlmGatewayApiUrlFor(session, ownerId),
             // ADR-031, шаг 2.1: каталоги плагинов для --plugin-dir (опционально) и проект

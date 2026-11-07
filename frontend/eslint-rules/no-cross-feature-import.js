@@ -27,7 +27,7 @@
  * Легальные исключения (текущие нарушения, которые ещё не вычищены) —
  * allow-list `CROSS_FEATURE_IMPORT_ALLOWED` в eslint.design.config.js. Разовое
  * отклонение оформляется построчно с причиной:
- *   // eslint-disable-next-line design/no-cross-feature-import -- причина
+ *   // eslint-disable-next-line module/no-cross-feature-import -- причина
  */
 
 // В пути импорта ловим «features/<X>» независимо от префикса (`./`, `../`,
@@ -35,10 +35,12 @@
 // разделителя.
 const FEATURE_RE = /(?:^|[./])features\/([^/'"\\]+)/;
 
-// То, что идёт после имени фичи в пути импорта. Пустая строка или `.js`,
-// `.ts`, `.tsx` без суффикса-пути — легальный импорт через `index.ts`
-// (`from '@/features/notes'` резолвится в `.../notes/index.ts`). Любой
-// дальнейший сегмент — прямое обращение к внутреннему модулю, нарушение.
+// Дальнейший путь после имени фичи — прямое обращение к внутреннему модулю,
+// нарушение. Пустой tail — импорт самого `features/<X>`: в TS-резолве это
+// `features/<X>/index.ts`, публичный фасад фичи, — легально.
+// Ветка `.` + что-либо (суффикс расширения сразу после имени) с текущим
+// FEATURE_RE недостижима: суффикс жадно уходит в имя фичи
+// (`'@/features/notes.ts'` → имя `notes.ts`), tail с `.` не возникает.
 const DEEP_PATH_RE = /^(\/.*|\..+)$/;
 
 // Где живут фичи на диске. Поддерживаем и абсолютный путь от корня линта
@@ -88,7 +90,7 @@ export default {
         '`import ... from \'@/features/{{feature}}\'` (через index.ts). Прямые импорты ' +
         'из внутренних модулей делают невозможным отключение подсистемы без точечных ' +
         'правок по всем потребителям. Осознанное исключение — ' +
-        'eslint-disable-next-line design/no-cross-feature-import с причиной.',
+        'eslint-disable-next-line module/no-cross-feature-import с причиной.',
     },
   },
 
@@ -121,13 +123,12 @@ export default {
         if (!enabled.has(feature)) continue;
         // Свой файл внутри той же фичи — свои правила.
         if (ownFeature === feature) continue;
-        // Идёт ли после имени фичи что-то ещё, кроме коротких суффиксов
-        // расширения (`/notes.ts` — эквивалент `/notes/index.ts` в TS-резолве)?
         const tail = src.slice(m.index + m[0].length);
-        // Всё, что не «пусто или короткое расширение», — прямое обращение к
-        // внутреннему модулю. Здесь ловим и `/saveToNote`, и `/saveToNote.ts`,
-        // и глубже (`/graph/useThemeColors`).
-        if (!DEEP_PATH_RE.test(tail) && tail !== '') continue;
+        // Пустой tail — сам `features/<X>` (в TS-резолве `…/index.ts`): это
+        // публичный фасад фичи, а не обращение к её внутреннему модулю.
+        // Нарушение — только дальнейший сегмент пути: ловим и `/saveToNote`,
+        // и `/saveToNote.ts`, и глубже (`/graph/useThemeColors`).
+        if (!DEEP_PATH_RE.test(tail)) continue;
         const path = tail.startsWith('/') ? tail.slice(1) : tail;
         context.report({
           node: sourceNode,

@@ -446,8 +446,10 @@ public static class ClaudeRuntimeSettings
                 "Заблокировано: dotnet test, dotnet build и npx vitest из Bash в чате-исполнителе задачи "
                 "запрещены — такой прогон идёт мимо общей очереди сборок и давит память ccs-agents.slice. "
                 "Используй инструменты: mcp__tests__run_tests (kind=dotnet|vitest|playwright, target "
-                "обязателен) и mcp__dev__build (kind=dotnet|npm). Копия мутации (scripts/mutation-copy.sh "
-                "create) — те же инструменты с параметром tree=<путь копии>. Нет схемы инструмента — "
+                "обязателен) и mcp__dev__build (kind=dotnet|npm). Собираешь в своём worktree — передай "
+                "его полный путь в tree (worktree проекта из git worktree list): разные деревья друг друга "
+                "не блокируют. Копия мутации (если в проекте есть scripts/mutation-copy.sh) — тот же "
+                "параметр tree=<путь копии>. Нет схемы инструмента — "
                 "сначала ToolSearch с запросом select:mcp__tests__run_tests,mcp__dev__build.\n")
             sys.exit(2)
         """;

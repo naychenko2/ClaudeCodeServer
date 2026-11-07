@@ -34,7 +34,9 @@ public sealed class DevToolset(
     // реестра, что у панели. Нет — стенд честно отказывает, сборка работает
     DevServerService? devServer = null,
     ProjectServiceDiscovery? discovery = null,
-    TestRunsOptions? options = null) : IMcpParameterizedToolset
+    TestRunsOptions? options = null,
+    // Список worktree проекта для параметра tree; нет — tree принимает только копию мутации
+    Git.GitService? git = null) : IMcpParameterizedToolset
 {
     public const string ServerName = McpEndpoints.DevName;
     public const string ToolName = "build";
@@ -88,10 +90,11 @@ public sealed class DevToolset(
             return ProjectRunCaller.Deny(error);
 
         var root = ProjectRunCaller.RootOf(session, project);
-        // tree: сборка в копии мутации ЭТОГО дерева; корень меняется, очередь и счётчик те же
-        if (!MutationCopyTree.TryResolve(ProjectRunCaller.StringArg(arguments, MutationCopyTree.ParamName), root,
-                out root, out error))
-            return ProjectRunCaller.Deny(error);
+        // tree: сборка в worktree проекта или копии мутации; корень меняется, очередь и счётчик те же
+        var tree = await MutationCopyTree.ResolveAsync(ProjectRunCaller.StringArg(arguments, MutationCopyTree.ParamName),
+            root, ProjectRunCaller.WorktreeLister(git, project, context.OwnerId), ct);
+        if (!tree.Ok) return ProjectRunCaller.Deny(tree.Error);
+        root = tree.Root;
         if (!TryParseKind(ProjectRunCaller.StringArg(arguments, "kind"), out var isNpm, out error))
             return ProjectRunCaller.Deny(error);
         var script = ProjectRunCaller.StringArg(arguments, "script");

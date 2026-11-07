@@ -245,8 +245,8 @@ git grep -l 'SessionManager' 03d78e1aa -- backend | sed 's/^[^:]*://' \
 | `TurnLaunchContextFactory` | builtin, personaLayer, external, moduleContexts, launchers, pluginDir, store, `Lazy<ITurnStarter>`, `Lazy<ITurnMessageSink>`, config | **10** |
 | `TurnProcessHost` | adapters, factory, store, history, route, queue, deviceGate, projects, `Lazy<ITurnStarter>`, bus | **10** |
 | `TurnRecovery` | store, queue, route, `ChatHistoryService`, `Lazy<ITurnStarter>`, config | 6 |
-| `TurnCompletion` | store, history, queue, route, worktree, `ProviderMigration`, ledger, `Lazy<ITurnStarter>`, `Lazy<ITeamNotifier>` | 9 |
-| `LocalVoiceTurn` | router, ollama, store, history, completion | 5 |
+| `TurnCompletion` | store, history, route, worktree, `ProviderMigration`, ledger, `Lazy<ITurnStarter>`, `Lazy<ITeamNotifier>` | 8 |
+| `LocalVoiceTurn` | router, ollama, store, personas, completion | 5 |
 | `TurnIntake` | store, history, queue, processHost, completion, settings, naming, voice, `Lazy<ITeamNotifier>`, config | **10** |
 | `ChatCreation` | store, history, route, settings, processHost, projects, assignments, pluginDir | 8 |
 | `ChatDeletion` | store, `ChatHistoryService`, route, worktree, promptSnapshots, `Lazy<ReviewTreePool?>`, bus | 7 |
@@ -263,6 +263,17 @@ git grep -l 'SessionManager' 03d78e1aa -- backend | sed 's/^[^:]*://' \
 класс, а не поднимать лимит.** В `SessionManager` после S3-8c останется ~20 параметров
 (роли, нужные фасаду, плюс штаб). Он не новый класс и под лимит не попадает, но число
 надо фиксировать в итоге S3-8c.
+
+Правка по вердикту S3-6 (агент-разбор 07.11, Александр; перенос — коммит `8e1c07df1`):
+оба отклонения переноса от таблицы верны и приняты, таблица приведена к ним.
+В `TurnCompletion` снята зависимость `queue`: экземпляр `PendingQueueService` телу конца
+хода не нужен, оно пользуется только его статикой `HasPending`/`HasContinuingPending`
+(`TurnCompletion.cs:633,722,725`), полей класса — восемь (`TurnCompletion.cs:37-44`),
+число 9 → 8. В `LocalVoiceTurn` `history` заменена на `personas` (`PersonaManager`):
+в голосовом ходе истории чата нет вовсе — хвост реплик берётся из аккумулятора
+(`LocalVoiceTurn.cs:87,136`), контракт персоны читается через
+`_personas.GetByIdInternal(pid)?.Contract` (`LocalVoiceTurn.cs:91`). Счёт остаётся 5.
+Ни один из этих классов не стоит на потолке, число потолочных не меняется.
 
 ## 3. Швы и направление вызовов
 

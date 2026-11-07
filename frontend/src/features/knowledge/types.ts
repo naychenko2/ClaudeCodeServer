@@ -1,4 +1,5 @@
-// Типы домена «Знания» (переехали из lib/api.ts, docs/research/frontend-api-split-2026-11.md).
+// Типы домена «Знания» (docs/research/frontend-api-split-2026-11.md): DifyDocument переехал
+// из lib/api.ts (S5-P2); типы раздела «Знания» — из types/index.ts (S5-P3).
 // lib/api.ts ре-экспортирует их через `export type *` — внешние импорты не меняются.
 
 // Документ Dify-датасета проекта: статус индексации и теги.

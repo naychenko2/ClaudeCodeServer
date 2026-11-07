@@ -1,10 +1,9 @@
 // Домен «Ридер ссылок» (вынесено из lib/api.ts, docs/research/frontend-api-split-2026-11.md):
 // чтение страницы по ссылке и проба встраиваемости (ADR-005, ADR-006 §1) вместе со своими
-// хелперами. ReaderReadResult — в ./types.ts; ReaderPage и ReaderErrorCode — types/index.ts
-// (переедут в эту папку в S5-P3).
+// хелперами. ReaderReadResult, ReaderPage и ReaderErrorCode — в ./types (S5-P3) — импорт
+// через types/index.ts не нужен.
 import { request } from '../../lib/offline';
-import type { ReaderErrorCode, ReaderPage } from '../../types';
-import type { ReaderReadResult } from './types';
+import type { ReaderErrorCode, ReaderPage, ReaderReadResult } from './types';
 
 // Методы домена; lib/api.ts подмешивает их в объект api spread'ом
 // (адреса api.reader.* остаются прежними для всех потребителей).

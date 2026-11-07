@@ -637,10 +637,11 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
 
     /// <summary>
     /// Ключи, починенные отказом 503 с причиной (S2a-2: tts, yandex, video, backgrounds, deploy,
-    /// reader; S2b-1: images, changelog — шапка <see cref="KnownViolations"/>): их контроллеры
-    /// держат сервисы вертикалей опциональными и на выключенном хосте отвечают 503, тело которого
-    /// называет рубильник, вызвавший отказ. Строки вне списка (ядро, KnownViolations)
-    /// здесь не меряются: их 503 — не «отказ починенной вертикали».
+    /// reader; S2b-1: images, changelog): их контроллеры держат сервисы вертикалей опциональными
+    /// и на выключенном хосте отвечают 503, тело которого называет рубильник, вызвавший отказ.
+    /// Строки вне списка (ядро, KnownViolations) здесь не меряются: их 503 — не «отказ починенной
+    /// вертикали». KnownViolations — перечень ещё НЕ починенных нарушений: images была в нём
+    /// и снята после починки (сдача 2 S2b-1, см. его шапку), changelog в нём не была.
     /// </summary>
     internal static readonly string[] ReasonBearingKeys =
         ["tts", "yandex", "video", "backgrounds", "deploy", "reader", "images", "changelog"];

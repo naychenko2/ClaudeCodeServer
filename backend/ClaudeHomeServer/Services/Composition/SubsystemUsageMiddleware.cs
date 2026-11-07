@@ -135,7 +135,7 @@ public sealed class SubsystemUsageMiddleware(
     ILogger<SubsystemUsageMiddleware> log)
 {
     // Префикс маршрутов шлюза ходов: /gw/t/{turnId}/… (McpGatewayEndpoints.RoutePattern,
-    // LlmGatewayEndpoints.Route, EgressGatewayEndpoints.RoutePattern)
+    // LlmGatewayEndpoints.Route, EgressGatewayEndpoints.RoutePattern, OcrGatewayEndpoints.Route)
     private const string GatewaySegment = "gw";
     public async Task InvokeAsync(HttpContext ctx)
     {

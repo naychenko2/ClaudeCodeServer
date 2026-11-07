@@ -180,6 +180,16 @@ public sealed class SessionCoreTestHost : IDisposable
         services.AddSingleton(sp => new GlifAccountService(new Mock<IHttpClientFactory>().Object,
             sp.GetRequiredService<IConfiguration>()));
         services.AddSingleton<ClaudeHomeServer.Services.Turn.ITurnEventBus>(_ => new ClaudeHomeServer.Services.Turn.TurnEventBus());
+        // Рекордер лимитов подписок: единственная продовая регистрация — в слое Llm
+        // (LlmSubsystem.cs:447), а тестовый контейнер эту вертикаль не поднимает — рекордер
+        // собирается здесь из тех же умолчаний (UsageService, пул). Трекер активности —
+        // GetService: тесты, регистрирующие свой трекер в configure, им и обеспечиваются
+        // (резолв ленивый, последний выигрывает); без него — null, как опциональный
+        // параметр конструктора.
+        services.AddSingleton(sp => new SubscriptionLimitRecorder(
+            sp.GetRequiredService<UsageService>(),
+            sp.GetRequiredService<ClaudeSubscriptionPool>(),
+            sp.GetService<SubscriptionActivityTracker>()));
         // Пустой поиск задач без реестра — то же, что прежний null; с реестром — адаптер над ним
         services.AddSingleton<ITaskLookup>(sp => sp.GetService<TaskManager>() is { } tasks
             ? new TaskLookupAdapter(tasks)

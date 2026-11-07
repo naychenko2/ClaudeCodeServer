@@ -1,6 +1,6 @@
 // ПОТОЛОК РОСТА (frontend-api-split-2026-11.md): файл только худеет. Лимит строк — в
-// lib/__tests__/apiFileBudget.test.ts; он снижается после каждого выноса домена в
-// features/<домен>/api.ts, поднимать его нельзя. Новые методы — сразу в features/<домен>/.
+// lib/__tests__/apiFileBudget.test.ts; он равен фактической длине файла: снижается после
+// каждого выноса домена в features/<домен>/api.ts, поднимать нельзя. Новые методы — сразу в features/<домен>/.
 import type { WorkflowAgentInfo, WorkflowAgentBlock } from '../types';
 import { localModelApi } from '../features/localModel/api';
 import { providerAccountsApi } from '../features/providerAccounts/api';

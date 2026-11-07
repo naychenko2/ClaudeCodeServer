@@ -2,7 +2,13 @@ namespace ClaudeHomeServer.Services.Images;
 
 // Сгенерированное изображение: байты и MIME-тип (переехало из FalImageService —
 // тип общий для всех генераторов).
-public sealed record GeneratedImage(byte[] Bytes, string ContentType);
+// RequestId — идентификатор запроса поставщика, по которому позже догоняется фактическая
+// стоимость (дефект 22068e9d, шаг S-SPEND-2). У синхронного fal.run его нет в ТЕЛЕ ответа
+// (фал кладёт его в заголовок x-fal-request-id, и тем же id ключуется billing-events —
+// docs fal «Request Headers»/«Billing Events»). У glif идентификатора, по которому его цена
+// спрашивается, в ответе нет (GlifJobParser берёт jobId, media и status — поля цены там
+// отсутствуют), поэтому там RequestId = null и сумма не догоняется.
+public sealed record GeneratedImage(byte[] Bytes, string ContentType, string? RequestId = null);
 
 // Модель генератора для пикера в UI. Id — то, что уходит драйверу «как есть»
 // (у fal это полный endpoint_id, у glif — id глифа/модели).

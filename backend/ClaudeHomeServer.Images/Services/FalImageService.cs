@@ -99,6 +99,10 @@ public class FalImageService : IImageGenerator
                 return [];
             }
 
+            // Идентикатор запроса для учёта расхода берётся ДО разбора тела: у синхронного
+            // fal.run его в теле нет, он в заголовке (см. ResponseRequestId).
+            var requestId = ResponseRequestId(resp);
+
             var json = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
             if (!json.TryGetProperty("images", out var images) || images.ValueKind != JsonValueKind.Array)
                 return [];
@@ -112,7 +116,8 @@ public class FalImageService : IImageGenerator
                 // (у векторного recraft это image/svg+xml, и молча считать его png нельзя)
                 var declared = img.TryGetProperty("content_type", out var c) ? c.GetString() : null;
                 var (bytes, contentType) = await DownloadAsync(url, declared, ct);
-                if (bytes is not null) result.Add(new GeneratedImage(bytes, contentType));
+                // id один на весь запрос — каждая полученная картинка несёт его
+                if (bytes is not null) result.Add(new GeneratedImage(bytes, contentType, requestId));
             }
             return result;
         }
@@ -122,6 +127,17 @@ public class FalImageService : IImageGenerator
             return [];
         }
     }
+
+    // Идентикатор запроса — из заголовка x-fal-request-id: синхронный fal.run его в тело
+    // не кладёт (тело — вывод модели, форма зависит от схемы), а фал отдаёт его заголовком
+    // и тем же id ключуется billing-events (docs fal: «Request Headers», «Billing Events»).
+    // Существующий SpendMapping.TryExtractFalRequestId здесь неприменим: он разбирает ТЕЛО
+    // tool_result чата (JSON/текст с маркером изображения) и живёт в сборке Main, куда
+    // вертикаль Images не ссылается. Своего разбора не заводим — поля читать не надо.
+    private static string? ResponseRequestId(HttpResponseMessage resp) =>
+        resp.Headers.TryGetValues("x-fal-request-id", out var values)
+            ? values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))
+            : null;
 
     // Тело запроса собирается ПО МОДЕЛИ: схемы входа у семейств fal разные, и лишний
     // параметр возвращает 422 (nano-banana не знает image_size, у recraft-вектора нет

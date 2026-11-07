@@ -1,3 +1,6 @@
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Spend;
+
 namespace ClaudeHomeServer.Services.Images;
 
 // Роутер генерации картинок: единая точка входа вместо прямой привязки к fal. Драйверы
@@ -9,16 +12,31 @@ namespace ClaudeHomeServer.Services.Images;
 // (glif → fal) плюс фолбэк на следующего, если первый вернул пусто (нет ключа у генерации,
 // отвалился эндпоинт). Явный выбор провайдера фолбэка НЕ даёт: админ выбрал конкретный
 // сервис — молча уходить на другой нельзя.
+//
+// Здесь же пишется трата серверной генерации в общий учёт расхода (дефект 22068e9d,
+// шаг S-SPEND-2): роутер — единственное место, где известен ФАКТИЧЕСКИ отработавший
+// провайдер (после фолбэка) и модель, с которой он пошёл. Прецедент — редактор картинок
+// (ImageEditJobService.RecordSpend/WriteSpend).
 public sealed class ImageGenerationService
 {
+    // Подписи записей в общем учёте: по ним серверная генерация отличима от правки в
+    // редактора («image-editor») и от генерации в ходе чата через MCP (там Label —
+    // endpoint или тип вывода).
+    public const string SpendLabel = "image-generation";
+    public const string SpendLabelPendingAmount = "image-generation: сумма уточняется";
+
     private readonly IReadOnlyList<IImageGenerator> _generators;
     private readonly ImageGenerationSettingsStore _settings;
     private readonly ILogger<ImageGenerationService>? _log;
+    private readonly ISpendCollector? _spend;
+    private readonly IFalRequestCost? _falCost;
 
     public ImageGenerationService(
         IEnumerable<IImageGenerator> generators,
         ImageGenerationSettingsStore settings,
-        ILogger<ImageGenerationService>? log = null)
+        ILogger<ImageGenerationService>? log = null,
+        ISpendCollector? spend = null,
+        IFalRequestCost? falCost = null)
     {
         // Порядок фиксируем сами: он определяет auto-выбор и не должен зависеть
         // от порядка регистрации в DI.
@@ -28,6 +46,8 @@ public sealed class ImageGenerationService
             .ToList();
         _settings = settings;
         _log = log;
+        _spend = spend;
+        _falCost = falCost;
     }
 
     // Все зарегистрированные драйверы (в порядке auto-выбора) — для UI настроек
@@ -49,8 +69,11 @@ public sealed class ImageGenerationService
     // Модель, с которой провайдер пойдёт в этом месте (настройка → конфиг → дефолт драйвера = null)
     public string? ModelFor(string place, string providerKey) => _settings.ModelFor(place, providerKey);
 
+    // ownerId — тот, на кого пишется трата (RecordSpend): вызывающий знает владельца всегда,
+    // роутер — нет. Параметр стоит ПОСЛЕ ct, чтобы существующие вызовы с токеном не
+    // сдвинулись. Без владельца трата не пишется: повесить её не на кого.
     public async Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
-        string place, string prompt, int count, CancellationToken ct = default)
+        string place, string prompt, int count, CancellationToken ct = default, string? ownerId = null)
     {
         var chain = Resolve(place);
         if (chain.Count == 0)
@@ -63,8 +86,14 @@ public sealed class ImageGenerationService
         for (var i = 0; i < chain.Count; i++)
         {
             var generator = chain[i];
-            var images = await generator.GenerateManyAsync(prompt, count, _settings.ModelFor(place, generator.Key), ct);
-            if (images.Count > 0) return images;
+            var model = _settings.ModelFor(place, generator.Key);
+            var images = await generator.GenerateManyAsync(prompt, count, model, ct);
+            // Трата — только за того, кто реально отдал картинки: пустой провайдер не стоил ничего
+            if (images.Count > 0)
+            {
+                RecordSpend(place, generator, model, images, ownerId);
+                return images;
+            }
             if (i + 1 < chain.Count)
                 _log?.LogWarning("Генератор {Provider} не вернул картинок для места {Place} — пробую {Next}",
                     generator.Key, place, chain[i + 1].Key);
@@ -73,9 +102,10 @@ public sealed class ImageGenerationService
     }
 
     // Одна картинка (первый вариант) — для мест, где выбора не предлагается
-    public async Task<GeneratedImage?> GenerateAsync(string place, string prompt, CancellationToken ct = default)
+    public async Task<GeneratedImage?> GenerateAsync(
+        string place, string prompt, CancellationToken ct = default, string? ownerId = null)
     {
-        var many = await GenerateManyAsync(place, prompt, 1, ct);
+        var many = await GenerateManyAsync(place, prompt, 1, ct, ownerId);
         return many.Count > 0 ? many[0] : null;
     }
 
@@ -138,4 +168,105 @@ public sealed class ImageGenerationService
         }
         return _generators.Where(g => g.Enabled).ToList();
     }
+
+    // ── Учёт расхода (дефект 22068e9d, шаг S-SPEND-2) ────────────────────────────────
+    //
+    // По прецеденту редактора картинок (ImageEditJobService.RecordSpend/WriteSpend):
+    // первая запись — ВСЕГДА и сразу после того, как провайдер отдал картинки: число
+    // вариантов, суммы нет (Label — SpendLabelPendingAmount). Фактическую сумму догоняет
+    // ОТДЕЛЬНАЯ запись с Generations = 0. Валюты не смешиваем: у этого пути только CostUsd.
+    //
+    // Траты нет, когда: коллектора нет (учёт выключен), владельца нет (повесить не на
+    // кого), провайдер не отдал картинок (за них не платили).
+
+    private void RecordSpend(
+        string place, IImageGenerator generator, string? model,
+        IReadOnlyList<GeneratedImage> images, string? ownerId)
+    {
+        if (_spend is null)
+        {
+            _log?.LogWarning("Генерация картинок: учёт расхода выключен, трата {Place} ({Provider}) не записана",
+                place, generator.Key);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(ownerId))
+        {
+            // Вызывающий, который ещё не назвал владельца (часть путей — следующий шаг):
+            // молча класть чужую трату в «системную» не будем — её потом не разделить.
+            _log?.LogWarning("Генерация картинок: вызывающий не назвал владельца, трата {Place} ({Provider}) не записана",
+                place, generator.Key);
+            return;
+        }
+
+        WriteSpend(ownerId, generator.Key, model, amount: null, generations: images.Count);
+
+        // Сумму догоняет только fal: в ответах glif (compose_project / get_job_status) нет
+        // идентификатора, по которому его цена спрашивается — GlifJobParser берёт jobId, media
+        // и status, поля цены там отсутствуют. Трата glif остаётся счётчиком вызовов, как и в
+        // пишущейся записи чата (SpendMapping.RecordGlifGeneration: CostUsd = null).
+        var requestId = RequestIdOf(images);
+        if (requestId is null || _falCost is null
+            || !string.Equals(generator.Key, SpendSources.Fal, StringComparison.OrdinalIgnoreCase)) return;
+        _ = TopUpAmountAsync(ownerId, model, requestId);
+    }
+
+    // Фактическая цена по request_id — через существующий Core-шов IFalRequestCost
+    // (тот же экземпляр FalCostService, что и у чата). Свой токен: token вызывающего к этому
+    // моменту уже снят вместе с его запросом, а окно опроса ограничено самим FalCostService.
+    // Цены нет — штатный исход: остаётся первая запись без суммы.
+    private async Task TopUpAmountAsync(string ownerId, string? model, string requestId)
+    {
+        try
+        {
+            var usd = await _falCost!.ResolveUsdAsync(requestId, CancellationToken.None);
+            if (usd is null)
+            {
+                _log?.LogWarning("Учёт расхода: цена fal по {RequestId} не появилась за окно опроса, трата остаётся без суммы",
+                    requestId);
+                return;
+            }
+            WriteSpend(ownerId, SpendSources.Fal, model, amount: usd, generations: 0);
+        }
+        catch (Exception ex)
+        {
+            _log?.LogError(ex, "Учёт расхода: опрос цены fal ({RequestId}) не удался", requestId);
+        }
+    }
+
+    private void WriteSpend(string ownerId, string providerKey, string? model, double? amount, int generations)
+    {
+        try
+        {
+            _spend!.Record(new SpendRecord
+            {
+                Timestamp = DateTime.UtcNow,
+                OwnerId = ownerId,
+                // Серверная генерация не относится к проекту: «Расход» не должен получить
+                // несуществующий проект (тот же приём, что у личной области редактора).
+                ProjectId = null,
+                Provider = providerKey,
+                // null — драйвер пошёл на свою дефолтную модель: её знает только драйвер,
+                // выдумывать за него не будем.
+                Model = model,
+                // Ключ провайдера и есть ключ источника (как в прецеденте): у fal/glif токенов
+                // нет, их расход — счётчик вызовов (SpendSources.IsTokenless).
+                Source = providerKey,
+                CostUsd = amount,
+                Generations = generations,
+                // Инициатор — человек: сегодня этот путь вызывает только генерация аватара
+                // по действию человека (PersonasCrudService). Фоновая очередь владельца не
+                // называет и до RecordSpend не доходит как трата.
+                Initiator = SpendInitiators.Human,
+                Label = amount is null && generations > 0 ? SpendLabelPendingAmount : SpendLabel,
+            });
+        }
+        catch (Exception ex)
+        {
+            _log?.LogError(ex, "Генерация картинок: не удалось записать трату {Provider}", providerKey);
+        }
+    }
+
+    // id один на весь запрос — его несёт каждая картинка этого вызова
+    private static string? RequestIdOf(IReadOnlyList<GeneratedImage> images) =>
+        images.Select(i => i.RequestId).FirstOrDefault(r => !string.IsNullOrWhiteSpace(r));
 }

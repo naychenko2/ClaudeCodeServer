@@ -548,7 +548,9 @@ public sealed class PersonasCrudService(
             return BadRequest(new { error = ImageGenerationOffError, queued = canBackfill });
         }
 
-        var generated = await images.GenerateManyAsync(Services.Images.ImagePlaces.PersonaAvatar, prompt, count);
+        // Трату генерации пишем на того, кто её попросил (учёт расхода, S-SPEND-2)
+        var generated = await images.GenerateManyAsync(
+            Services.Images.ImagePlaces.PersonaAvatar, prompt, count, CancellationToken.None, userId);
         // Провайдер не отдал картинок (таймаут, отказ) — аватар тоже не теряем: заявка
         // догонит персону фоном. queued в ответе — чтобы фронт сказал человеку честное
         // «появится сам», а не «генератор не ответил, аватар остался прежним».
@@ -623,7 +625,8 @@ public sealed class PersonasCrudService(
         if (!images.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar)) return EnqueueAvatarBackfill(userId, persona, prompt);
         try
         {
-            var generated = await images.GenerateManyAsync(Services.Images.ImagePlaces.PersonaAvatar, prompt, 1);
+            var generated = await images.GenerateManyAsync(
+                Services.Images.ImagePlaces.PersonaAvatar, prompt, 1, CancellationToken.None, userId);
             if (generated.Count == 0) return EnqueueAvatarBackfill(userId, persona, prompt);
             var dir = Path.Combine(personas.AssetsDir, persona.Id);
             Directory.CreateDirectory(dir);

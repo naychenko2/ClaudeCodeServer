@@ -17,7 +17,9 @@ import { SUBSYSTEMS } from '../subsystems';
 // Перечень сверен с кодом бэка: AddSubsystems(Program.cs) — статические подсистемы —
 // плюс секция DynamicModules в appsettings.json (динамические модули). Соответствие
 // держит бэковый кейс SubsystemDisableMatrixTests.Фронтовый_реестр_содержит_каждый_ключ_стора:
-// он читает этот файл и проверяет, что каждый ключ SubsystemStateStore есть в SUBSYSTEMS.
+// он читает этот файл и проверяет, что каждый не-ядровой ключ SubsystemStateStore есть в
+// SUBSYSTEMS. Ключи ядра (с префиксом `core:`) не требуются парой: ActiveKeys() не отдаёт их
+// фронту и на фронте они не гейтятся.
 // Заглушка
 // __stub не включена: это PoC-модуль, не подсистема пользователя. Ключи
 // контрибьюторов хода (prompt-sections, persona-layer, …) и провайдеров

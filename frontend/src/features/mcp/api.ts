@@ -33,6 +33,13 @@ export const mcpApi = {
       request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}/enable`, {
         method: 'POST', body: JSON.stringify({ enabled }),
       }),
+    // Пометка «для участников» (S2a-F6): меняет только владелец записи; участник общего
+    // проекта получает 403 (запись для него реальна, но чужие настройки он не правит),
+    // посторонний — 404. Ответ — обновлённая запись
+    setShared: (id: string, shared: boolean) =>
+      request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}/shared`, {
+        method: 'PUT', body: JSON.stringify({ sharedWithMembers: shared }),
+      }),
     delete: (id: string) => request<void>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     // Разовая проверка «по кнопке»: рукопожатие + tools/list, результат едет и в стор статусов.
     // Для записи из каталога + stdio + local-владелец передаём confirmed:true — иначе сервер

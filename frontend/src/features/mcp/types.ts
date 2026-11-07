@@ -49,6 +49,10 @@ export interface McpServer {
   allowReadOnlyPersonas: boolean;
   // Доезжать ли в чаты вне проектов при allow-модели (флаг mcp-allowlist); deny-ветка не читает
   allowOutsideProjects: boolean;
+  // «Для участников» (shared-projects, S2a-7/S2a-F6): в узкой рамке общего проекта это единственный
+  // путь реестровой записи в ход (McpDelivery). Пометку меняет только владелец записи
+  // (PUT {id}/shared); без неё сервер в ходах общего проекта недоступен и не показывается.
+  sharedWithMembers: boolean;
   source: string;               // manual | legacymcpconfig | legacyuserscope
   authVersion: number;
   createdAt: string;

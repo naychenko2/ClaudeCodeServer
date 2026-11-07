@@ -23,6 +23,13 @@
 // в fake-DOM (desksotp, 1600px), тяжёлые либы — no-op-моки. Открытость панели
 // читается по стору раскладки (wsPanels.getZones() + openKeysOf) — прямому состоянию,
 // которое рельса и обработчик делят.
+//
+// п. 5 (хвост): ветка `follow` обработчика (клик по карточке, genPanelFollow) держит
+// тот же гейт — на строке `host`. Реальный список ген-панелей (genPanelKeys) содержит
+// один ключ, поэтому соперницы у followHost в нём нет и ветка недостижима: третий кейс
+// на время этого теста расширяет список вторым ключом ('tasks'), оставляя живую логику
+// followHost. Мутация «второй построитель только в строке follow» краснит ровно этот
+// кейс: первые два не доходят до ветки (флага follow в событии нет).
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -172,6 +179,25 @@ vi.mock('../../../lib/terminalSignalr', () => {
 vi.mock('../../../lib/subsystems/registry', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../../lib/subsystems/registry')>();
   return { ...orig, useSlot: () => [], useSlotItem: () => null };
+});
+
+// ── genPanelKeys: реальный список — один ключ ('chatContext'), соперницы у followHost
+//     в нём нет и ветка follow недостижима. Третий кейс добавляет в список второй ключ
+//     (см. преамбулу); живая логика followHost остаётся. Мок доходит только до функции
+//     genPanelKeys(): у panelCatalog своя обёртка над константой (panelCatalog.ts:24,304),
+//     а потребители genPanelDismissed (isGenPanelKey в «Чатах» — ChatsPage.tsx:369,
+//     autoReveal в действиях вертикалей) в этом тесте не зовутся. ──
+const genMock = vi.hoisted(() => ({ extra: [] as string[] }));
+vi.mock('../../../lib/genPanelKeys', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../../lib/genPanelKeys')>();
+  return { ...orig, genPanelKeys: () => [...orig.GEN_PANEL_KEYS, ...genMock.extra] };
+});
+
+// ── ContextPanelHost (тело панели 'chatContext'): тела панелей в тесте не рисуются
+//     (тот же приём, что TaskBoard) — тест читает раскладку, не содержимое панели. ──
+vi.mock('../../../components/generation/ContextPanelHost', async () => {
+  const { createElement } = await import('react');
+  return { ContextPanelHost: () => createElement('div', { 'data-testid': 'context-panel-stub' }) };
 });
 
 // ── projectCapabilities / personas / git: no-op ──
@@ -387,6 +413,7 @@ describe('WorkspacePage: показ панели по REVEAL_PANEL_EVENT идё�
   afterEach(() => {
     __resetSubsystems();
     subsMock.hookActive = [];
+    genMock.extra = [];
     vi.useRealTimers();
     uninstallFakeDom();
     vi.restoreAllMocks();
@@ -400,8 +427,9 @@ describe('WorkspacePage: показ панели по REVEAL_PANEL_EVENT идё�
 
   // Открытость панели — прямое состояние стора раскладки, который делят рельса и обработчик
   const openKeys = () => openKeysOf(wsPanels.getZones());
-  const revealKey = (key: string) => {
-    act(() => { window.dispatchEvent(new CustomEvent(REVEAL_PANEL_EVENT, { detail: { key } })); });
+  const revealKey = (key: string, follow?: boolean) => {
+    const detail = follow ? { key, follow: true } : { key };
+    act(() => { window.dispatchEvent(new CustomEvent(REVEAL_PANEL_EVENT, { detail })); });
   };
   const mountReady = async () => {
     mountPage();
@@ -428,5 +456,26 @@ describe('WorkspacePage: показ панели по REVEAL_PANEL_EVENT идё�
     // но и сам факт: обработчик не попросил стор открыть панель вне набора рельсы
     expect(revealSpy.mock.calls.map(c => c[0]), 'обработчик запросил показ панели вне набора рендера').not.toContain('notes');
     expect(openKeys(), 'панель выключенной подсистемы раскрылась вопреки набору рельсы').not.toContain('notes');
+  });
+
+  it('клик по карточке (follow): панель встаёт на место открытой соперницы, а не по правилу рельсы', async () => {
+    // Соперница возможна только внутри списка ген-панелей: для этого кейса мок
+    // добавляет в него 'tasks' (см. преамбулу). Гейт здесь же, что и в первых двух
+    // кейсах: строка `host` читает мемоизированный набор рендера, а не вторую
+    // копию по геттеру стора — 'tasks' в наборе рендера есть, в наборе стора её нет.
+    genMock.extra = ['tasks'];
+    // Снимается ДО mount: Page берёт ops.replaceWith через use() (spread на каждый рендер).
+    const replaceSpy = vi.spyOn(wsPanels.ops, 'replaceWith');
+    await mountReady();
+    // Открыть соперницу обычным показом: 'tasks' в наборе рендера (тот же путь, что первый кейс),
+    // wsOpenKeys.current обновляется рендером после показа (use() подписан на стор).
+    revealKey('tasks');
+    expect(openKeys(), 'соперница не открыта до клика по карточке').toContain('tasks');
+    // Просьба о 'chatContext' с флагом follow: панель обязана занять место 'tasks',
+    // а не открыться по правилу рельсы рядом с ней.
+    revealKey('chatContext', true);
+    expect(replaceSpy.mock.calls.some(c => c[0] === 'chatContext' && c[1] === 'tasks'), 'обработчик не заменил соперницу').toBe(true);
+    expect(openKeys(), 'соперница осталась в раскладке').not.toContain('tasks');
+    expect(openKeys(), 'запрошенная панель не заняла место соперницы').toContain('chatContext');
   });
 });

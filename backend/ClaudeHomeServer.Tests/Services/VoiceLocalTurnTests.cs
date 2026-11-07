@@ -26,6 +26,9 @@ namespace ClaudeHomeServer.Tests.Services;
 public class VoiceLocalTurnTests : IDisposable
 {
     private readonly string _tempDir;
+    // Тот же экземпляр UserStore, что передан SessionManager: добавление пользователя
+    // идёт напрямую, без чтения поля фасада через рефлексию (поле _users снято).
+    private readonly UserStore _userStore;
     private readonly ChatHistoryService _historyService;
     private readonly LocalActionOverridesStore _actionOverrides;
     private readonly AppSettingsService _appSettings;
@@ -82,6 +85,7 @@ public class VoiceLocalTurnTests : IDisposable
             .Build();
 
         var userStore = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        _userStore = userStore;
         _appSettings = new AppSettingsService(config);
         var appSettings = _appSettings;
         var projectManager = new ProjectManager(config, userStore, appSettings);
@@ -140,7 +144,7 @@ public class VoiceLocalTurnTests : IDisposable
 
     private async Task<Session> MakeVoiceChatAsync(bool local = true)
     {
-        var user = ((UserStore)GetInstanceField(_sut, "_users")!).Add("voice-user", "password123", "user");
+        var user = _userStore.Add("voice-user", "password123", "user");
         var session = await _sut.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits);
         _sut.SetVoiceMode(session.Id, true);
         if (local)
@@ -149,9 +153,6 @@ public class VoiceLocalTurnTests : IDisposable
             _actionOverrides.Reset(LocalActionCatalog.ChatVoice);
         return session;
     }
-
-    private static object GetInstanceField(object obj, string name) =>
-        obj.GetType().GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(obj)!;
 
     private object GetEntry(string sessionId)
     {

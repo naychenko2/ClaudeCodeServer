@@ -134,17 +134,11 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // ResolveStalePlanCardAsync) переехали сюда; SessionManager держит тонкие
     // обёртки-делегаты, чтобы не переписывать тесты (18 мест вызывают _sut.CreateTeamPlanAsync).
     private readonly TeamPlanService _teamPlan;
-    // Платформа внешних модулей: реестр манифестов + выпуск модульных токенов (R7)
-    private readonly Modules.ModuleRegistry? _modules;
-    private readonly Modules.ModuleTokenService? _moduleTokens;
     private readonly ChatHistoryService _history;
     // Снимки промпта ходов (кнопка «какой промпт ушёл»); null — в тестах
     private readonly PromptSnapshotStore? _promptSnapshots;
     // Паспорта прогонов сабагентов (диагностика обрывов + сигнал для автодобивания); null — в тестах
     private readonly Llm.Claude.SubagentRunLog? _subagentRuns;
-    // Паспорта ходов (исход/попытки/подмены), единственный источник записи — шина
-    // turn/completed (CLAUDE.md, раздел LLM-провайдеры). null — в тестах.
-    private readonly Llm.TurnRunLog? _turnRuns;
     // Шина событий хода (ADR-013): уезжает в LlmSessionContext.Events каждой сессии.
     // null — в тестах без DI: лениво создаётся в TurnEvents, чтобы подписчики могли
     // звать шину и без явной передачи (тесты SessionManagerTests опираются на это).
@@ -247,9 +241,6 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private readonly ITierModelResolver _appSettings;
     // Резолвер моделей агентных мест: пустая модель → назначение места → слот тира
     private readonly Llm.ModelAssignmentResolver _assignments;
-    private readonly UserStore _users;
-    private readonly JwtService _jwt;
-    private readonly Microsoft.AspNetCore.Hosting.Server.IServer _server;
     private readonly IConfiguration _config;
     // Копии транскриптов заархивированных чатов (data/archived-transcripts) — шаг 0 плана
     // «Архив чатов»: создаётся в конструкторе напрямую, см. там же
@@ -278,7 +269,6 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // Удаление сессии (чат/проектная сессия) — для авто-движков: сбросить ссылки на чат правила.
     public event Action<Session>? OnSessionDeleted;
 
-    private readonly FeatureFlagService _flags;
     private readonly IServiceProvider? _services;
     private Services.Mcp.Http.McpToolsetRegistry? _mcpToolsets;
     private readonly PersonaManager _personas;
@@ -295,15 +285,11 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // Фабрика логгеров для вертикали (волна В): TeamPlanService получает собственный
     // типизированный ILogger. null — в тестах без DI, TeamPlanService работает на NullLogger.
     private readonly ILoggerFactory? _loggerFactory;
-    // Снимок загруженных подсистем: гейт объявления arch_* по факту загрузки модуля
-    private readonly Composition.SubsystemStateStore? _subsystemStates;
     // Драйверы среды исполнения владельцев (local / docker-песочница)
     private readonly Execution.ILauncherFactory _launchers;
     private readonly Execution.SandboxManager _sandbox;
     // Домашняя папка владельца ({база по среде}/{username} либо override из конфига)
     private readonly UserHomeResolver _homes;
-
-    private readonly PersonaAgentFileSync? _agentSync;
     // Git-операции worktree чата (null — в тестах: worktree-фича выключена)
     private readonly Git.GitService? _git;
     // Учёт glif-генераций — не поле фасада: он в TurnCostLedger (S3-2), glif идёт в его конструктор.
@@ -342,20 +328,6 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // Включение и переключение режима «Командная реализация» (волна Ж): SetTeamImplementAsync
     // и SetTeamImplementAutoAsync. Owning-паттерн по тому же рецепту.
     private readonly TeamEnableService _teamEnable;
-    // Личный реестр MCP-серверов владельца + значения их секретов (null — в тестах:
-    // ход идёт только со встроенными серверами и наследством .mcp.json)
-    private readonly Mcp.McpRegistry? _mcpRegistry;
-    private readonly Mcp.McpSecretStore? _mcpSecrets;
-    // Последний известный статус серверов: пишется из system/init каждого хода; null — в тестах
-    private readonly Mcp.McpStatusStore? _mcpStatus;
-    // OAuth внешних серверов: обновление протухшего токена перед сборкой конфига хода; null — в тестах
-    private readonly Mcp.McpOAuthService? _mcpOAuth;
-    // OAuth-сервис Higgsfield (инстансное подключение): null — в тестах
-    private readonly Mcp.HiggsfieldOAuthService? _higgsfieldOAuth;
-    // Секция Dify (ApiUrl/ApiKey/неймспейс) — для BuildDifyContext (волна 4): единственное
-    // потребление тут — проверка настроенности и строки stdio-ветки отката; вся работа с
-    // Dify — в KnowledgeService со своей копией IOptions
-    private readonly Models.DifyOptions _dify = new();
     // Резолв задач (SessionTaskLinks.ParentSessionId / IsTaskDone) живёт в сторе (S3-1):
     // Core-шов ITaskLookup, null — задача не резолвится (ParentSessionId=null, TaskDone=false).
     private ITaskLookup? _taskLookup => _store.TaskLookup;
@@ -517,27 +489,17 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         _pluginDirSource = pluginDirSource;
         _deviceGate = deviceGate;
         _services = services;
-        _subsystemStates = subsystemStates;
         _turnEvents = turnEvents;
         _loggerFactory = loggerFactory;
         _subagentRuns = subagentRuns;
-        _turnRuns = turnRuns;
         _router = router;
         _ollama = ollama;
 
-        _mcpRegistry = mcpRegistry;
-        _mcpSecrets = mcpSecrets;
-        _mcpStatus = mcpStatus;
-        _mcpOAuth = mcpOAuth;
-        _higgsfieldOAuth = higgsfieldOAuth;
         _promptSnapshots = promptSnapshots;
         _teamPlanning = teamPlanning;
         _activity = activity;
         _spend = spend;
-        _agentSync = agentSync;
         _cheap = cheap;
-        _modules = modules;
-        _moduleTokens = moduleTokens;
         _git = git;
         _homes = homes ?? UserHomeResolver.WithoutOverrides(appSettings, sandbox);
         _launchers = launchers;
@@ -598,17 +560,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         _usage = usage;
         _appSettings = appSettings;
         _assignments = assignments ?? new Llm.ModelAssignmentResolver(appSettings);
-        _users = users;
-        _jwt = jwt;
-        _server = server;
         _config = config;
         // Копии транскриптов архивных чатов (шаг 0 плана «Архив чатов»): стор файловый и
         // без зависимостей. Точки вызова (SetArchived/DeleteAsync) живут здесь, а поиск,
         // перенос и удаление — в CliRoute (S3-2), поэтому экземляр общий: без DI собирается
         // здесь, с DI приходит из AddSessionCore тем же синглтоном.
         _archivedTranscripts = archivedTranscripts ?? new ArchivedTranscriptStore(config);
-        config.GetSection(Models.DifyOptions.Section).Bind(_dify);
-        _flags = flags;
         // _personas инициализирован выше (до создания TeamPlanService, чтобы вертикаль
         // не получила null в конструкторе).
         _bindings = bindings;

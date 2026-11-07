@@ -50,4 +50,19 @@ public sealed class SessionCoreTestHostTests : IDisposable
 
         host.Services.GetRequiredService<SessionStore>().GetById(chat.Id).Should().BeSameAs(chat);
     }
+
+    [Fact]
+    public void Build_FacadeViewers_AreVisibleInContainerStore()
+    {
+        using var host = SessionCoreTestHost.Build(_dir);
+
+        // Тождество сторов: сквозные методы вьюеров фасада идут прямо в его _store
+        // (SessionManager.cs:259-267), а словарь зрителей — приватное поле конкретного
+        // экземпляра стора. Зритель, заявленный через фасад, виден в сторе контейнера —
+        // значит это один и тот же экземпляр. Если фасад получает запасной стор
+        // (mutation store: null в фабрике помощника), стор контейнера остаётся пустым.
+        host.Manager.AddViewer("s-1", "conn-1");
+
+        host.Services.GetRequiredService<SessionStore>().HasViewers("s-1").Should().BeTrue();
+    }
 }

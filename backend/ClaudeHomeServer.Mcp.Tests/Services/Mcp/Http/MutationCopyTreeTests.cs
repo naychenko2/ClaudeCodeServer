@@ -149,4 +149,138 @@ public class MutationCopyTreeTests : IDisposable
 
         Resolve(Path.Combine(_copies, ".meta"), out _, out _).Should().BeFalse();
     }
+
+    // ---- tree = worktree проекта (git worktree list) ----
+
+    private string MakeWorktree(string name)
+    {
+        var dir = Path.Combine(_base, "wt", name);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, ".git"), "gitdir: x");
+        return dir;
+    }
+
+    private Task<(bool Ok, string Root, string Error)> ResolveAsync(string? tree, params string[] worktrees) =>
+        MutationCopyTree.ResolveAsync(tree, _chatTree, _copies,
+            _ => Task.FromResult<IReadOnlyList<string>>(worktrees), default);
+
+    [Fact]
+    public async Task WorktreeИзСпискаПроекта_Принимается_КореньИменноОн()
+    {
+        var mine = MakeWorktree("mine");
+        var other = MakeWorktree("other");
+
+        var r = await ResolveAsync(mine, _chatTree, mine, other);
+
+        r.Ok.Should().BeTrue(r.Error);
+        r.Root.Should().Be(mine);
+    }
+
+    [Fact]
+    public async Task ПутьВнеСпискаИВнеКопий_Отказ_СОбеимиФормами()
+    {
+        var listed = MakeWorktree("listed");
+        var stray = MakeWorktree("stray");
+
+        var r = await ResolveAsync(stray, listed);
+
+        r.Ok.Should().BeFalse();
+        r.Root.Should().Be(_chatTree);
+        r.Error.Should().Contain("git worktree list").And.Contain("копии мутации");
+        (await ResolveAsync("/etc", listed)).Ok.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task БезСпискаWorktree_ПринимаетсяТолькоКопия()
+    {
+        var wt = MakeWorktree("w");
+        var copy = MakeCopy("c1", _chatTree);
+
+        (await MutationCopyTree.ResolveAsync(wt, _chatTree, _copies, null, default)).Ok.Should().BeFalse();
+        var r = await MutationCopyTree.ResolveAsync(copy, _chatTree, _copies, null, default);
+        r.Ok.Should().BeTrue(r.Error);
+        r.Root.Should().Be(copy);
+    }
+
+    [Fact]
+    public async Task ТочкиТочки_СворачиваютсяДоWorktree_ВыходНаружу_Отказ()
+    {
+        var wt = MakeWorktree("w");
+        Directory.CreateDirectory(Path.Combine(wt, "backend"));
+
+        var r = await ResolveAsync(Path.Combine(wt, "backend", ".."), wt);
+        r.Ok.Should().BeTrue(r.Error);
+        r.Root.Should().Be(wt);
+
+        // «..» уводит из worktree в его родителя — родителя в списке нет
+        (await ResolveAsync(Path.Combine(wt, ".."), wt)).Ok.Should().BeFalse();
+        // Вложенный каталог worktree — не сам worktree
+        (await ResolveAsync(Path.Combine(wt, "backend"), wt)).Ok.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task СсылкаНаWorktree_ТотЖеКанонический_СсылкаНаЧужое_Отказ()
+    {
+        var wt = MakeWorktree("w");
+        var stray = MakeWorktree("stray");
+        var toWt = Path.Combine(_base, "link-to-wt");
+        var toStray = Path.Combine(_base, "link-to-stray");
+        Directory.CreateSymbolicLink(toWt, wt);
+        Directory.CreateSymbolicLink(toStray, stray);
+
+        var r = await ResolveAsync(toWt, wt);
+        r.Ok.Should().BeTrue(r.Error);
+        r.Root.Should().Be(wt, "корень — каноническая форма: от неё ключуются блокировка и отпечатки");
+
+        (await ResolveAsync(toStray, wt)).Ok.Should().BeFalse();
+        // Ссылка в самом списке: запись списка тоже сверяется канонически
+        (await ResolveAsync(wt, toWt)).Ok.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task КаталогБезGit_ДажеИзСписка_Отказ()
+    {
+        var dir = Path.Combine(_base, "plain");
+        Directory.CreateDirectory(dir);
+
+        (await ResolveAsync(dir, dir)).Ok.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task ОтносительныйПуть_Отказ_СОбеимиФормами()
+    {
+        var r = await ResolveAsync("wt/w", MakeWorktree("w"));
+
+        r.Ok.Should().BeFalse();
+        r.Error.Should().Contain("абсолютный").And.Contain("git worktree list");
+    }
+
+    [Fact]
+    public async Task ПопыткаКопии_ПодКорнемКопий_ОтказСТочнойПричинойКопии()
+    {
+        var copy = MakeCopy("c1", Path.Combine(_base, "other-tree"));
+
+        var r = await ResolveAsync(copy);
+
+        r.Ok.Should().BeFalse();
+        r.Error.Should().Contain("другого дерева");
+    }
+
+    [Fact]
+    public async Task СбойЧтенияСписка_FailClosed()
+    {
+        var wt = MakeWorktree("w");
+
+        var r = await MutationCopyTree.ResolveAsync(wt, _chatTree, _copies,
+            _ => throw new InvalidOperationException("git упал"), default);
+
+        r.Ok.Should().BeFalse();
+    }
+
+    [Fact]
+    public void ОписаниеПараметра_НеНавязываетСкриптКопийИНазываетWorktree()
+    {
+        MutationCopyTree.ParamDescription.Should().Contain("git worktree list")
+            .And.Contain("если он есть в проекте");
+    }
 }

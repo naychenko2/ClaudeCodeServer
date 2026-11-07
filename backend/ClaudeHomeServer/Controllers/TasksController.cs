@@ -1799,7 +1799,7 @@ public class TasksController(
         var outcome = await pregate.RunAsync(UserId, taskId, callerSessionId, ct);
         return outcome.Status switch
         {
-            TaskPregateStatus.Recorded => Ok(new { green = outcome.Record!.Green, sha = outcome.Record.Sha, text = outcome.Text, record = outcome.Record }),
+            TaskPregateStatus.Recorded => Ok(new { green = outcome.Record!.Green, outcome = outcome.Record.Outcome, sha = outcome.Record.Sha, text = outcome.Text, record = outcome.Record }),
             TaskPregateStatus.NotFound => NotFound(),
             TaskPregateStatus.Disabled => StatusCode(503, new { error = outcome.Text }),
             _ => Conflict(new { error = outcome.Text }),

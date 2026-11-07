@@ -4,7 +4,7 @@
 // бэк отказывает 409 { code: "private_chat_dossiers" } (SessionsController.cs:126).
 // Раньше catch в persist (NewChatSetup.tsx:55) молчал: тумблер не двигался без объяснения.
 // Теперь — тот же текст, что в четырёх закрытых местах (общая точка разбора —
-// chatFieldsErrorText, api.ts:1064; в компоненте нет второго литерала отказа); прочие
+// chatFieldsErrorText, features/chat/api.ts:53; в компоненте нет второго литерала отказа); прочие
 // ошибки — нейтральный текст, как у соседних контролов той же настройки
 // (DossierOptOutButton.tsx:35-39, ExpiryButton.tsx:37-38). Отказ не меняет локальное
 // состояние: тумблер остаётся включённым, onSessionUpdated не зовётся.
@@ -19,8 +19,8 @@ import { installFakeDom, mount, reactProps, findNodeByAttr, textNodes } from './
 installFakeDom();
 
 // Частичное обновление полей и выбор эндпоинта по projectId — в updateChatFields.
-// chatUpdate: подменён только updateChatFields (разбор кода — НАСТОЯЩИЙ api:
-// тексты отказов живут в api и проверяются как есть). Тип мока — реальная сигнатура
+// chatUpdate: подменён только updateChatFields (разбор кода — НАСТОЯЩИЙ
+// features/chat/api: тексты отказов живут в нём и проверяются как есть). Тип мока — реальная сигнатура
 // вызова (chatUpdate.ts:38)
 const updateMock = vi.hoisted(() => vi.fn<(s: Session, p: { excludeFromDossiers?: boolean | null }) => Promise<Session>>());
 const toastMock = vi.hoisted(() => vi.fn());

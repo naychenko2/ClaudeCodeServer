@@ -127,11 +127,16 @@ public sealed class SubsystemUsageAttribution
 // подсистемы или его нет вовсе) — обращения не было; с эндпоинтом ответил сам обработчик
 // вертикали («заметка не найдена», «доступа нет») — это состоявшееся обращение (R-S1b, m1).
 // SignalR-хаб и ручки ядра неатрибутируемы и не считаются. MCP — по сегменту mcp в любой
-// позиции пути: прямой /mcp/{name} и через шлюз ходов /gw/t/{turnId}/mcp/{name}.
+// позиции пути (прямой /mcp/{name}), КРОМЕ внешней ноги шлюза ходов /gw/t/{turnId}/mcp/{name}:
+// она не есть обращение к тулсету — до тулсета доходит внутренний запрос шлюза, он и даёт +1
+// (инвариант: один вызов тулсета = ровно +1; R-S1b, M1).
 public sealed class SubsystemUsageMiddleware(
     RequestDelegate next, SubsystemUsageAttribution attribution, SubsystemUsageStore store,
     ILogger<SubsystemUsageMiddleware> log)
 {
+    // Префикс маршрутов шлюза ходов: /gw/t/{turnId}/… (McpGatewayEndpoints.RoutePattern,
+    // LlmGatewayEndpoints.Route, EgressGatewayEndpoints.RoutePattern)
+    private const string GatewaySegment = "gw";
     public async Task InvokeAsync(HttpContext ctx)
     {
         await next(ctx);
@@ -158,11 +163,11 @@ public sealed class SubsystemUsageMiddleware(
 
     private string? Resolve(HttpContext ctx, Endpoint? endpoint)
     {
-        // Сегмент mcp ищется в любой позиции пути: вызовы через шлюз ходов /gw/t/{turnId}/mcp/{name}
-        // относятся к тому же тулсету, что и прямые /mcp/{name} (R-S1b, п.7). Сравнение сегмента
-        // регистронезависимо, как прежний StartsWithSegments: /MCP/{name} атрибутировался и раньше.
+        // Сегмент mcp ищется в любой позиции пути (кроме внешней ноги шлюза): прямой /mcp/{name}
+        // и его хвосты относятся к тулсету. Сравнение сегмента регистронезависимо, как прежний
+        // StartsWithSegments: /MCP/{name} атрибутировался и раньше.
         var segments = ctx.Request.Path.Value?.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (segments is not null)
+        if (segments is not null && !IsGatewayOuter(segments))
         {
             var mcpIndex = Array.FindIndex(segments, s => s.Equals("mcp", StringComparison.OrdinalIgnoreCase));
             if (mcpIndex >= 0 && mcpIndex + 1 < segments.Length)
@@ -172,6 +177,15 @@ public sealed class SubsystemUsageMiddleware(
         var action = endpoint?.Metadata.GetMetadata<ControllerActionDescriptor>();
         return action is null ? null : attribution.KeyOfAction(action);
     }
+
+    // Внешняя нога шлюза ходов: /gw/t/{turnId}/mcp/{name}/{хвост}. Не считается: шлюз проксирует её
+    // на /mcp/{name}/{хвост} своего же Kestrel (McpGatewayEndpoints.cs:94 → McpBackendAccess.cs:8 →
+    // SessionManager.ResolveTasksApiUrl), и тот запрос проходит этот же мидлвар (Program.cs:1082) —
+    // он единственный дошёл до тулсета и он же счёт. Считать обе ноги = +2 за один вызов (R-S1b, M1).
+    // Отличать внутренний запрос по X-Caller-Session-Id и считать только внешний — другой контракт
+    // счётчика для всех MCP-вызовов: решение постановщика, не этот шаг.
+    private static bool IsGatewayOuter(string[] segments) =>
+        segments.Length > 0 && segments[0].Equals(GatewaySegment, StringComparison.OrdinalIgnoreCase);
 }
 
 public static class SubsystemUsageMiddlewareExtensions

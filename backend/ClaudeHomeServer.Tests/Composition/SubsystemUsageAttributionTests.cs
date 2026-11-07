@@ -1,13 +1,19 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Devices;
+using ClaudeHomeServer.Services.Llm.Gateway;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Tests.Helpers;
+using ClaudeHomeServer.Tests.Services.Gateway;
 using FluentAssertions;
+using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc.Controllers;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -36,6 +42,15 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
             next.ExtraConfig["DataPath"] = Path.Combine(TempDir, "projects.json");
             return next;
         }
+
+        // Хост, у которого звонок шлюза «в свой Kestrel» уходит в TestServer этого же хоста —
+        // тот же подвох, что в боевой интеграции шлюза (McpGatewayIntegrationTests.Hosts):
+        // без него внутренний запрос шлюза не доезжает до мидлвара этого же процесса.
+        public static Hosts GatewayLoopback() => new()
+        {
+            ExtraServices = s => s.AddHttpClient(McpGatewayEndpoints.HttpClientName)
+                .ConfigurePrimaryHttpMessageHandler(sp => ((TestServer)sp.GetRequiredService<IServer>()).CreateHandler()),
+        };
     }
 
     private readonly Hosts _factory = hosts;
@@ -317,11 +332,14 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
     [Fact]
     public async Task ОтменённыйТокенОстановки_ФинальныйСбросВсёРавноПишетФайл()
     {
-        // п.3: остановка с отменённым токеном — файл обязан быть записан. Финальный Flush
-        // в finally не зависит от поведения base.StopAsync: в прежней реализации .NET
-        // (Task.WhenAny + Task.Delay(∞, token)) отменённый токен давал OperationCanceledException
-        // и последний сброс терялся; в net10 base не ретраит (WaitAsync + SuppressThrowing —
-        // source release/10.0, подтверждено прогоном), но и другой его отказ не смеет снять сброс.
+        // п.3: остановка с отменённым токеном — файл обязан быть записан. Закреплено этим тестом:
+        // именно путь отменённого токена, а НЕ finally. В net10 base.StopAsync отказа не даёт ни на
+        // отменённом токене, ни на упавшем ExecuteAsync, ни без предшествующего StartAsync
+        // (проверено прогоном на SDK 10.0.114: три случая — без исключения); в 9.0 тот же исход по
+        // исходникам рантайма (Task.WhenAny). Поэтому без finally этот тест зелёный — и в этом
+        // дереве (проведено снятием finally: 1/1 зелёный), и в прогоне ревьюера (16/16).
+        // Страховка «любой отказ base не снимает последний сброс» тестом не закреплена:
+        // достижимого отказа base в текущем рантайме нет (R-S1b, M2).
         var dir = Path.Combine(Path.GetTempPath(), "subsys-flush-" + Guid.NewGuid().ToString("N"));
         var store = new SubsystemUsageStore(["notes"]);
         store.Hit("notes", DateTimeOffset.UtcNow);
@@ -397,11 +415,13 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
         log.Lines.Should().Contain(l => l.Contains("Сбой атрибуции"));
     }
 
-    // п.7: путь шлюза ходов /gw/t/{turnId}/mcp/{name}/{хвост} приписывается тому же ключу,
-    // что и прямой /mcp/{name}/{хвост}: эндпоинт шлюза — минимальный (app.Map), без
-    // ControllerActionDescriptor, поэтому для него решает только сегмент mcp.
+    // M1: одна нога вызова через шлюз = один счёт. Внешняя /gw/t/{turnId}/mcp/{name} — не обращение
+    // к тулсету: до него доходит внутренний запрос шлюза /mcp/{name}/{хвост}, он и есть +1.
+    // Эндпоинт шлюза — минимальный (app.Map), без ControllerActionDescriptor, поэтому внешняя нога
+    // не даёт счёта ни по сегменту, ни по действию. Прямая ручка — прежний ключ, в том числе
+    // в другом регистре: StartsWithSegments был регистронезависим — сегментный поиск обязан быть таким же.
     [Fact]
-    public async Task ШлюзХодовMcp_ПриписываетсяКлючуТулсета()
+    public async Task ШлюзХодовMcp_СчитаетсяВнутреннийЗапрос_ВнешнийНет()
     {
         var state = new SubsystemStateStore();
         state.RecordActive(new NotesStubSubsystem());
@@ -411,19 +431,48 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
             static ctx => { ctx.Response.StatusCode = StatusCodes.Status200OK; return Task.CompletedTask; },
             attribution, store, NullLogger<SubsystemUsageMiddleware>.Instance);
 
-        var now = DateTimeOffset.UtcNow;
+        static DefaultHttpContext Ctx(string path)
+        {
+            var ctx = new DefaultHttpContext();
+            ctx.Request.Path = path;
+            return ctx;
+        }
 
-        var viaGateway = new DefaultHttpContext();
-        viaGateway.Request.Path = "/gw/t/" + Guid.NewGuid().ToString("N") + "/mcp/notes/" + Guid.NewGuid().ToString("N");
-        await middleware.InvokeAsync(viaGateway);
-        store.Snapshot(now).Single(e => e.Key == "notes").Last24h.Should().Be(1);
+        // нога 1: клиент → шлюз. До тулсета ещё не дошло — обращения не было
+        await middleware.InvokeAsync(Ctx("/gw/t/" + Guid.NewGuid().ToString("N") + "/mcp/notes/" + Guid.NewGuid().ToString("N")));
+        HitsOf(store, "notes").Should().Be(0, "внешний /gw-запрос — не обращение к тулсету");
 
-        // прямая ручка — тот же ключ (прежнее поведение сохранено), в том числе в другом регистре:
-        // StartsWithSegments был регистронезависим — сегментный поиск обязан быть таким же
-        var direct = new DefaultHttpContext();
-        direct.Request.Path = "/MCP/notes/" + Guid.NewGuid().ToString("N");
-        await middleware.InvokeAsync(direct);
-        store.Snapshot(now).Single(e => e.Key == "notes").Last24h.Should().Be(2);
+        // нога 2: шлюз → свой же бэкенд, путь /mcp/{name}/{хвост} — единственный, кто дошёл до тулсета
+        await middleware.InvokeAsync(Ctx("/mcp/notes/" + Guid.NewGuid().ToString("N")));
+        HitsOf(store, "notes").Should().Be(1, "один вызов тулсета через шлюз = ровно +1");
+
+        // прямая ручка — тот же ключ (прежнее поведение сохранено)
+        await middleware.InvokeAsync(Ctx("/MCP/notes/" + Guid.NewGuid().ToString("N")));
+        HitsOf(store, "notes").Should().Be(2);
+    }
+
+    // M1 на боевом маршруте: внешний /gw/t/{turnId}/mcp/notes/{chat} → шлюз → внутренний
+    // /mcp/notes/{chat} в свой же TestServer (тот же мидлвар, Program.cs:1082) = ровно +1.
+    // До правки здесь было 2: внешний приписывался по сегменту mcp, внутренний — по своему пути.
+    // Мутация «считать обе ноги» = прежний код, краснит ровно на этом тесте.
+    [Fact]
+    public async Task ВызовТулсетаЧерезШлюзХодов_РовноПлюсОдин()
+    {
+        using var host = Hosts.GatewayLoopback();
+        var ownerId = host.Services.GetRequiredService<UserStore>()
+            .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        using var dev = new GatewayTestDevice(ownerId, host.Services.GetRequiredService<DeviceRegistry>());
+        var chat = Guid.NewGuid().ToString("N");
+        var turn = host.Services.GetRequiredService<TurnTokenService>().Issue(ownerId, chat, dev.Id);
+
+        var req = new HttpRequestMessage(HttpMethod.Post, $"/gw/t/{turn.Grant.TurnId}/mcp/notes/{chat}")
+        { Content = JsonContent.Create(new { jsonrpc = "2.0", id = 1, method = "tools/list" }) };
+        req.Headers.Add(TurnTokenEndpointFilter.HeaderName, turn.Token);
+        var resp = await host.CreateClient().SendAsync(dev.Sign(req));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        HitsOf(StoreOf(host), "notes").Should().Be(1,
+            "один вызов тулсета через шлюз = ровно +1: счёт даёт внутренний запрос шлюза, не внешний");
     }
 
     private sealed class NotesStubSubsystem : IAppSubsystem

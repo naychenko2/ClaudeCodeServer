@@ -94,7 +94,7 @@ public class PrivateChatBroadcastLeakTests : IDisposable
                 await Invoke(sut, "BroadcastStatusChangeAsync", chat.Id, chat, SessionStatus.Active, null, 0);
                 break;
             case "archived":
-                await Invoke(sut, "BroadcastChatArchivedAsync", chat.Id, chat, true);
+                await Invoke(sut, "BroadcastChatArchivedAsync", chat.Id, true);
                 break;
             case "renamed":
                 await Invoke(sut, "BroadcastChatRenamedAsync", chat.Id, chat, "Новое имя");

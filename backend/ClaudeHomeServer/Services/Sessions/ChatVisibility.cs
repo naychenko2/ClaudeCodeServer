@@ -14,8 +14,10 @@ namespace ClaudeHomeServer.Services.Sessions;
 // поле этой роли — тот же замок, что у оставшейся в фасаде записи Participants (см. его
 // комментарий); PendingLock — тот же, под которым работает очередь.
 // Класс public ТОЛЬКО потому, что он параметр публичного конструктора SessionManager (CS0051);
-// сам конструктор internal: SessionStore — internal-тип. Обход фасада закрывает сторож формы
-// ядра (правило 4).
+// сам конструктор internal: все типы его параметров публичны (SessionStore публичный), поэтому
+// internal-ность здесь не вынуждена CS0051 (в отличие от ProviderMigration, где причина —
+// internal-тип Lazy<ITeamNotifier>) — роль собирается только фасадом (запасная сборка) и
+// регистрацией ядра, вовне она не строится. Обход фасада закрывает сторож формы ядра (правило 4).
 // Зависимости (5): store, chatHistory, projects, broadcaster, шов Lazy<IFeatureChatLinks>.
 // В таблице S3-0 их шесть (route, queue вместо broadcaster): EffectiveRoot и
 // MapQueuedAttachedPaths — статические методы CliRoute и PendingQueueService, экземпляр роли

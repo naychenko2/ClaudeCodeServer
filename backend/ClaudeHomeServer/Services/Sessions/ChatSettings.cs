@@ -17,8 +17,10 @@ namespace ClaudeHomeServer.Services.Sessions;
 // правка имени/модели (UpdateAsync со сменой провайдера через ProviderMigration) и зона
 // персоны. Вынесено из SessionManager; фасад держит тонкие обёртки с прежними сигнатурами.
 // Класс public ТОЛЬКО потому, что он параметр публичного конструктора SessionManager (CS0051);
-// сам конструктор internal: SessionStore — internal-тип. Обход фасада закрывает сторож формы
-// ядра (правило 4).
+// сам конструктор internal: все типы его параметров публичны (SessionStore публичный), поэтому
+// internal-ность здесь не вынуждена CS0051 (в отличие от ProviderMigration, где причина —
+// internal-тип Lazy<ITeamNotifier>) — роль собирается только фасадом (запасная сборка) и
+// регистрацией ядра, вовне она не строится. Обход фасада закрывает сторож формы ядра (правило 4).
 // Инвариант всей роли: UpdatedAt не двигают настройки (закрепление, темы, архив, срок,
 // уведомления, озвучка, прочитанность, пометка, контекст, сводки) — признак архива и
 // непрочитанность производные от UpdatedAt; активность (ход, смена собеседника) двигает.
@@ -439,15 +441,15 @@ public sealed class ChatSettings
         var updated = SetArchived(sessionId, archived, by: "user");
         if (updated is null) return null;
         _store.SaveSessions();
-        await BroadcastChatArchivedAsync(sessionId, updated, archived);
+        await BroadcastChatArchivedAsync(sessionId, archived);
         return updated;
     }
 
     // Уведомить клиентов об архивации/возврате чата (адресация как у BroadcastChatDeletedAsync):
-    // project-группа для проектной сессии, user-группа для чата вне проекта. Та же склейка,
-    // что у store.BroadcastSessionMessageAsync (session-группа + ToChatAudience по этой же
-    // записи) — поэтому отдельного шва к вещателю роли не нужно.
-    private async Task BroadcastChatArchivedAsync(string sessionId, Session info, bool archived)
+    // project-группа для проектной сессии, user-группа для чата вне проекта. Стор сам находит
+    // запись по sessionId (session-группа + ToChatAudience по ней) — параметра с записью
+    // здесь не нужно (R-S3-3, замечание 3: после перехода на стор он стал мёртвым).
+    private async Task BroadcastChatArchivedAsync(string sessionId, bool archived)
         => await _store.BroadcastSessionMessageAsync(sessionId, new ChatArchivedMessage(archived));
 
     // Проход автоправила архивации (ChatArchiveService, шаг 6 плана v4): заархивировать
@@ -458,16 +460,16 @@ public sealed class ChatSettings
     // записью — допустимая гонка, чат вернёт из архива собственная активность.
     public async Task ArchiveBatchAsync(IReadOnlyCollection<string> sessionIds, string batchId)
     {
-        var archived = new List<(string Id, Session Info)>();
+        var archived = new List<string>();
         foreach (var id in sessionIds)
         {
             var updated = SetArchived(id, archived: true, by: "rule", batchId);
-            if (updated is not null) archived.Add((id, updated));
+            if (updated is not null) archived.Add(id);
         }
         if (archived.Count == 0) return;
         _store.SaveSessions();
-        foreach (var (id, info) in archived)
-            await BroadcastChatArchivedAsync(id, info, archived: true);
+        foreach (var id in archived)
+            await BroadcastChatArchivedAsync(id, archived: true);
     }
 
     // Откат пачки автоправила из уведомления/раздела «Архив»: вернуть РОВНО чаты прохода
@@ -476,19 +478,19 @@ public sealed class ChatSettings
     // приходит из URL, чужой не должен возвращать чужие чаты (даже угаданный).
     public async Task<int> RestoreArchiveBatchAsync(string ownerId, string batchId)
     {
-        var restored = new List<(string Id, Session Info)>();
+        var restored = new List<string>();
         foreach (var s in _store.Sessions.Values.Select(e => e.Info)
                      .Where(s => s.ArchiveBatchId == batchId && s.ArchivedBy == "rule" && s.IsArchived)
                      .ToList())
         {
             if (_store.GetOwned(s.Id, ownerId) is null) continue;
             var updated = SetArchived(s.Id, archived: false, by: "user");
-            if (updated is not null) restored.Add((s.Id, updated));
+            if (updated is not null) restored.Add(s.Id);
         }
         if (restored.Count == 0) return 0;
         _store.SaveSessions();
-        foreach (var (id, info) in restored)
-            await BroadcastChatArchivedAsync(id, info, archived: false);
+        foreach (var id in restored)
+            await BroadcastChatArchivedAsync(id, archived: false);
         return restored.Count;
     }
 

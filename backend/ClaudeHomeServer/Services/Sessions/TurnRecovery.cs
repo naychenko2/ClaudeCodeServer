@@ -19,13 +19,13 @@ namespace ClaudeHomeServer.Services.Sessions;
 // на фасаде (на них стоит SpySessionManager в Tests/Services/TurnAutoResume), сюда приходят
 // делегатами вызова.
 //
-// Зависимостей шесть: стор, очередь (плашка «не доставлено»), маршрут (поиск resume-
+// Зависимостей семь: стор, очередь (плашка «не доставлено»), маршрут (поиск resume-
 // транскрипта), ChatHistoryService (маркер обрыва при загрузке — это спинка, не роль
-// истории: запись делает сам стор истории), ленивый шов ITurnStarter — разбор очереди и
-// карточки «цикл остановлен» / «сервер перезапущен» делает приём хода, он остаётся у фасада
-// до S3-7 — и конфиг (порог свежести хода). Роль истории (SessionHistory) в конструктор не
-// взята: ни одно тело этой роли её не вызывает — таблица плана (§2, «history») здесь не
-// подтвердилась кодом.
+// истории: запись делает сам стор истории), роль истории SessionHistory (карточки
+// «цикл остановлен» / «сервер перезапущен» пишет она; S3-7: тела карточек переехали
+// в неё, прежний путь через шов ITurnStarter снят — здесь прямой вызов роли), ленивый
+// шов ITurnStarter (остался только разбор очереди — карточки из шва убраны) — и конфиг
+// (порог свежести хода).
 //
 // Отклонения от таблицы плана §2 (каждое — с комментарием у места; отдельным решением они не
 // подтверждены — на проверке у Александра):
@@ -47,17 +47,19 @@ public sealed class TurnRecovery
     private readonly PendingQueueService _queue;
     private readonly CliRoute _route;
     private readonly ChatHistoryService _history;
+    private readonly SessionHistory _sessionHistory;
     private readonly Lazy<ITurnStarter> _turnStarter;
     private readonly IConfiguration _config;
 
     public TurnRecovery(SessionStore store, PendingQueueService queue,
-        CliRoute route, ChatHistoryService history, Lazy<ITurnStarter> turnStarter,
-        IConfiguration config)
+        CliRoute route, ChatHistoryService history, SessionHistory sessionHistory,
+        Lazy<ITurnStarter> turnStarter, IConfiguration config)
     {
         _store = store;
         _queue = queue;
         _route = route;
         _history = history;
+        _sessionHistory = sessionHistory;
         _turnStarter = turnStarter;
         _config = config;
     }
@@ -268,7 +270,7 @@ public sealed class TurnRecovery
             bool willContinue;
             lock (entry.PendingLock) willContinue = !entry.QueueFrozen && entry.Pending.Count > 0;
             willContinue |= entry.Info.WorkLoop is not null;
-            await _turnStarter.Value.AddWorkLoopStoppedNoticeAsync(sessionId, "team_restart",
+            await _sessionHistory.AddWorkLoopStoppedNoticeAsync(sessionId, "team_restart",
                 startFresh
                     ? "Ход перезапущен вручную с чистого листа: прежний контекст утерян — напишите, что делать дальше"
                     : willContinue
@@ -321,12 +323,12 @@ public sealed class TurnRecovery
         if (!isTailIntactForResume(sessionId))
             return new RestartResumeResult(false, "Хвост транскрипта повреждён");
 
-        // 3. Явная гидратация аккумулятора + карточка в ленту.
-        //    EnsureAccumulatorAsync создаёт аккумулятор из существующей истории, но в
-        //    сценарии 1 (чат уже имел ClaudeSessionId, ход был Error) аккумулятор может
-        //    остаться null, если LoadAsync вернул пустой список и TurnAccumulator не создан.
-        //    Явная гидратация гарантирует, что карточка дописана в _history и сохранена.
-        await _turnStarter.Value.AppendServerRestartCardAsync(sessionId);
+        // 3. Явная гидратация аккумулятора + карточка в ленту — делает их роль истории
+        //    целиком (S3-7): AppendServerRestartCardAsync сама создаёт аккумулятор из
+        //    существующей истории, если он null (в сценарии 1 — чат уже имел ClaudeSessionId,
+        //    ход был Error — после LoadSessions он может остаться null), и лишь потом пишет
+        //    карточку в историю и сохраняет её.
+        await _sessionHistory.AppendServerRestartCardAsync(sessionId);
 
         // 5. Счётчик попыток + сохранение. UpdatedAt не двигаем: SaveSessions лишь
         //    персистит, Touch/UpdatedAt=now здесь не вызываем (служебная операция).

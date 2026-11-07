@@ -15,11 +15,12 @@ namespace ClaudeHomeServer.Services.Sessions;
 // целиком, по всем точкам, которыми сейчас пользуется SessionManager; владелец станет
 // отдельной ролью приёма хода в S3-7.
 //
-// Две оговорки к «сигнатурам как у SessionManager»:
-// — параметры без значений по умолчанию: их не принимает интерфейс; делегирующая реализация
-//   на фасаде подставляет те же значения, что были у вызовов;
-// — AddWorkLoopStoppedNoticeAsync и AppendServerRestartCardAsync берут sessionId, а не
-//   SessionEntry: тип записи internal, а шов публичный (CS0051), entry реализуется на фасаде.
+// Оговорка к «сигнатурам как у SessionManager»: параметры без значений по умолчанию — их
+// не принимает интерфейс; делегирующая реализация на фасаде подставляет те же значения,
+// что были у вызовов.
+// S3-7: точки карточек (AddWorkLoopStoppedNoticeAsync, AppendServerRestartCardAsync) из
+// шва убраны — карточку пишет роль истории (SessionHistory), а её вызывающий (TurnRecovery,
+// TurnProcessHost) идёт к роли напрямую: шов про старт хода, карточка хода не стартует.
 // public ТОЛЬКО потому, что Lazy<ITurnStarter> — параметр публичного конструктора
 // PendingQueueService (CS0051: менее доступный тип в параметре доступного конструктора);
 // публичной поверхности у шва нет.
@@ -40,10 +41,6 @@ public interface ITurnStarter
     Task ContinueWorkLoopAsync(string sessionId);
 
     Task NudgeTruncatedSubagentAsync(string sessionId, SubagentRunPassport run, int attempt);
-
-    Task AddWorkLoopStoppedNoticeAsync(string sessionId, string reason, string text);
-
-    Task AppendServerRestartCardAsync(string sessionId);
 }
 
 // «Сообщение хода в ленту»: процесс CLI (TurnProcessHost) и сборка контекста запуска

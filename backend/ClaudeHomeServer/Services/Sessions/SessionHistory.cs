@@ -116,12 +116,42 @@ public sealed class SessionHistory
     }
 
     // Карточка «Цикл работы остановлён» (причина и текст) — в ленту и в рассылку. Молча
-    // выходит при null-аккумуляторе (в отличие от AppendServerRestartCardAsync, которая
-    // создаёт его явно — та остаётся на фасаде до S3-7). S3-5: тело переехало из фасада;
-    // фасадная реализация ITurnStarter.AddWorkLoopStoppedNoticeAsync делегирует сюда.
+    // выходит при null-аккумуляторе (в отличие от AppendServerRestartCardAsync ниже, которая
+    // создаёт его явно). S3-5: тело переехало из фасада; S3-7: карточки больше не проходят
+    // через шов ITurnStarter — пишущий их вызывает эту роль напрямую (TurnRecovery,
+    // TurnProcessHost), фасадная реализация шва снята вместе с самими точками шва.
     internal async Task AddWorkLoopStoppedNoticeAsync(string sessionId, string reason, string text)
     {
         if (!_store.Sessions.TryGetValue(sessionId, out var entry) || entry.Accumulator is not { } acc) return;
+        acc.Append(new StoredWorkLoopStoppedMessage(reason, text));
+        await acc.SaveSnapshotAsync(_history);
+        await _store.BroadcastAsync(sessionId, new WorkLoopStoppedMessage(reason, text));
+    }
+
+    // Явная гидратация аккумулятора + идемпотентная карточка server_restart (B-cards).
+    // В отличие от AddWorkLoopStoppedNoticeAsync (молча выходит при null), здесь аккумулятор
+    // создаётся явно: в сценарии 1 (чат уже имел ClaudeSessionId, ход был Error) аккумулятор
+    // после LoadSessions может быть null, и вызов просто вышел бы. Идемпотентность: если
+    // карточка с reason=server_restart уже в истории (повторный вызов после рестарта),
+    // не дублируем. S3-7: тело перенесено из фасада дословно; entry берётся из стора,
+    // как в AddWorkLoopStoppedNoticeAsync — точка входа одна для обеих карточек.
+    internal async Task AppendServerRestartCardAsync(string sessionId)
+    {
+        const string reason = "server_restart";
+        const string text = "Сервер был перезапущен — продолжаю ход с того же места";
+
+        if (!_store.Sessions.TryGetValue(sessionId, out var entry)) return;
+
+        // Явная гидратация: если аккумулятор null — создаём из существующей истории.
+        if (entry.Accumulator is null)
+            await EnsureAccumulatorAsync(entry);
+
+        if (entry.Accumulator is not { } acc) return;
+
+        // Идемпотентность: карточка с таким reason уже есть — не дублируем.
+        if (acc.GetAll().Any(m => m is StoredWorkLoopStoppedMessage w && w.Reason == reason))
+            return;
+
         acc.Append(new StoredWorkLoopStoppedMessage(reason, text));
         await acc.SaveSnapshotAsync(_history);
         await _store.BroadcastAsync(sessionId, new WorkLoopStoppedMessage(reason, text));

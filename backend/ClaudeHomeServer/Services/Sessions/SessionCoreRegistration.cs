@@ -271,6 +271,7 @@ public static class SessionCoreRegistration
             sp.GetRequiredService<PendingQueueService>(),
             sp.GetRequiredService<CliRoute>(),
             sp.GetRequiredService<ChatHistoryService>(),
+            sp.GetRequiredService<SessionHistory>(),
             sp.GetRequiredService<Lazy<ITurnStarter>>(),
             sp.GetRequiredService<IConfiguration>()));
         // Создание чата: обычный, вне проекта, от лица персоны, групповой, ветка, перенос,

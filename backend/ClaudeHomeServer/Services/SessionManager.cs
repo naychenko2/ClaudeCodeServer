@@ -718,7 +718,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
             loggerFactory?.CreateLogger<Sessions.TurnProcessHost>()
                 ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.TurnProcessHost>.Instance);
         _recovery = recovery ?? new Sessions.TurnRecovery(
-            _store, _pending, _route, history, new Lazy<Sessions.ITurnStarter>(() => this), config);
+            _store, _pending, _route, history, _sessionHistory,
+            new Lazy<Sessions.ITurnStarter>(() => this), config);
         _creation = chatCreation ?? new Sessions.ChatCreation(
             _store, history, _route, _process, projects, _persona, _assignments, _settings, TurnEvents);
         // Lazy<ReviewTreePool?> вместо IServiceProvider (решение Александра 05.11, 1dda7103):
@@ -2375,24 +2376,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // его реализует ядро; шов снимается на шаге S3-7, когда приём хода уходит в свою роль.
     // Явные реализации нужны для тех методов, что приватные; публичные (SendMessageAsync,
     // SendOrEnqueueAsync) реализуют шов неявно — сигнатуры совпадают.
+    // S3-7: точки карточек из шва убраны — их пишет SessionHistory, вызывающий (TurnRecovery,
+    // TurnProcessHost) идёт к ней напрямую; карточка хода не стартует и на шве не нужна.
     async Task Sessions.ITurnStarter.DrainNextPendingAsync(string sessionId) => await DrainNextPendingAsync(sessionId);
     Task Sessions.ITurnStarter.ContinueWorkLoopAsync(string sessionId) => ContinueWorkLoopAsync(sessionId);
     Task Sessions.ITurnStarter.NudgeTruncatedSubagentAsync(string sessionId,
         Llm.SubagentRunPassport run, int attempt) => NudgeTruncatedSubagentAsync(sessionId, run, attempt);
-
-    // Две точки шва берут sessionId, а не SessionEntry (тип записи internal, шов публичный):
-    // запись достается из того же реестра, чем её зовёт сам фасад.
-    async Task Sessions.ITurnStarter.AddWorkLoopStoppedNoticeAsync(string sessionId, string reason, string text)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
-        await AddWorkLoopStoppedNoticeAsync(sessionId, entry, reason, text);
-    }
-
-    async Task Sessions.ITurnStarter.AppendServerRestartCardAsync(string sessionId)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
-        await AppendServerRestartCardAsync(sessionId, entry);
-    }
 
     // Достать следующее сообщение и отправить его обычным ходом. Вызывается по концу хода
     // (OnMessageAsync). Замороженная «Стоп» очередь не разбирается автоматически — только
@@ -2962,32 +2951,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // хода или ручной стоп. Reason ∈ limit|error|manual — контракт для фронта (Кира, п.5).
     private async Task AddWorkLoopStoppedNoticeAsync(string sessionId, SessionEntry entry, string reason, string text)
         => await _sessionHistory.AddWorkLoopStoppedNoticeAsync(sessionId, reason, text);
-
-    // Явная гидратация аккумулятора + идемпотентная карточка server_restart (B-cards).
-    // В отличие от AddWorkLoopStoppedNoticeAsync (молча выходит при null), здесь аккумулятор
-    // создаётся явно: в сценарии 1 (чат уже имел ClaudeSessionId, ход был Error) аккумулятор
-    // после LoadSessions может быть null, и AddWorkLoopStoppedNoticeAsync просто выходил.
-    // Идемпотентность: если карточка с reason=server_restart уже в _history (повторный вызов
-    // после рестарта), не дублируем.
-    private async Task AppendServerRestartCardAsync(string sessionId, SessionEntry entry)
-    {
-        const string reason = "server_restart";
-        const string text = "Сервер был перезапущен — продолжаю ход с того же места";
-
-        // Явная гидратация: если аккумулятор null — создаём из существующей истории.
-        if (entry.Accumulator is null)
-            await EnsureAccumulatorAsync(entry);
-
-        if (entry.Accumulator is not { } acc) return;
-
-        // Идемпотентность: карточка с таким reason уже есть — не дублируем.
-        if (acc.GetAll().Any(m => m is StoredWorkLoopStoppedMessage w && w.Reason == reason))
-            return;
-
-        acc.Append(new StoredWorkLoopStoppedMessage(reason, text));
-        await acc.SaveSnapshotAsync(_history);
-        await BroadcastAsync(sessionId, new WorkLoopStoppedMessage(reason, text));
-    }
 
     private Task BroadcastWorkLoopAsync(string sessionId, SessionEntry entry)
     {

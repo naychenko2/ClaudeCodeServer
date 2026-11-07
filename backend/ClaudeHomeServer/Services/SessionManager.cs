@@ -1549,42 +1549,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public void SetOnboardingFinalized(string sessionId, string ownerId) =>
         _settings.SetOnboardingFinalized(sessionId, ownerId);
 
-    // Общее ядро смены собеседника/спикера (SetPersona и роутинг группового чата):
-    // PersonaId и модель/усилие персоны (у начатой сессии — только при том же провайдере),
-    // флаг PersonaSwitched, сброс адаптера (новый слой подхватится при следующем ходе), Save.
-    // Общее ядро смены собеседника/спикера (SetPersona и роутинг группового чата) — тело в
-    // ChatSettings (S3-3). Здесь остаётся точка вызова роутинга: смена спикера по @упоминанию
-    // живёт в ядре до S3-4/S3-7.
-    private void SwitchSpeaker(SessionEntry entry, Persona? persona, string? agentName = null) =>
-        _settings.SwitchSpeaker(entry, persona, agentName);
-
-    // Роутинг спикера группового чата перед ходом: @упоминание участника переключает
-    // активного спикера (SwitchSpeaker + speaker_changed клиентам). Во время активного
-    // хода (Working/Waiting) состав не трогаем — переключение подействует со следующего.
-    private async Task RouteGroupSpeakerAsync(string sessionId, SessionEntry entry, string text)
-    {
-        if (entry.Info.Participants is not { Count: > 1 } participantIds) return;
-        if (entry.Info.Status is SessionStatus.Working or SessionStatus.Waiting) return;
-        var ownerId = ResolveOwnerId(entry.Info);
-        if (ownerId is null) return;
-
-        var participants = participantIds
-            .Select(id => _personas.Get(id, ownerId))
-            .OfType<Persona>()
-            .ToList();
-        if (participants.Count == 0) return;
-
-        var route = GroupChatRouter.Resolve(text, participants, entry.Info.PersonaId);
-        if (!route.Switched) return;
-
-        var speaker = participants.First(p => p.Id == route.SpeakerPersonaId);
-        SwitchSpeaker(entry, speaker);
-
-        var label = string.IsNullOrWhiteSpace(speaker.Role) ? speaker.Name : $"{speaker.Role} ({speaker.Name})";
-        // Только в session-группу: клиент открытого чата состоит и в user_/project_-группе,
-        // рассылка в обе дублировала разделитель «Теперь отвечает» в ленте
-        await BroadcastAsync(sessionId, new SpeakerChangedMessage(speaker.Id, label));
-    }
+    // Общее ядро смены собеседника/спикера и роутинг спикера группового чата — тело в
+    // ChatSettings (S3-3; роутинг опущен туда же в S3-7 — политика спикера принадлежит
+    // настройкам, приём хода остаётся только точкой вызова).
 
     // Приём сообщения от пользователя (Hub SendMessage) и серверных отправок (авто-ходы).
     // Пользовательское сообщение в занятом чате встаёт в видимую серверную очередь
@@ -1760,9 +1727,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         // после рестарта (DrainRestoredPendingAsync → DeliverPendingAsync), которая отметки не ставила
         ClaimFirstMessage(entry);
         // Проект вышел из сферы персоны чата: ход не стартует, персону молча не подменяем
-        if (entry.Info.PersonaId is { } zonePersonaId && ResolveOwnerId(entry.Info) is { } zoneOwnerId
-            && _personas.Get(zonePersonaId, zoneOwnerId) is { } zonePersona
-            && OutOfZoneRefusal(zonePersona, entry.Info.ProjectId) is { } refusal)
+        // (S3-7: проверка опущена к владельцу зоны — ChatSettings.ZoneRefusalForTurn).
+        if (_settings.ZoneRefusalForTurn(entry) is { } refusal)
         {
             await RefuseTurnAsync(sessionId, entry, refusal);
             return;
@@ -1849,7 +1815,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
         // Групповой чат: @упоминание участника в тексте переключает активного спикера
         // ДО пересоздания процесса — новый персона-слой применяется уже к этому ходу
-        await RouteGroupSpeakerAsync(sessionId, entry, text);
+        await _settings.RouteGroupSpeakerAsync(sessionId, entry, text);
 
         // Аккаунт чата могли исчерпать другие чаты, пока этот простаивал: перед ходом
         // тихо перевозим его на здоровую подписку пула (та же модель и эндпоинт)
@@ -1974,7 +1940,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             // на модели чата, как раньше. Неголосовой ход override не получает (место
             // chat-voice к нему не относится), поэтому обычная модель чата не подменяется.
             var voiceModel = entry.Info.VoiceMode
-                ? _router?.VoiceModelFor(Llm.LocalActionCatalog.ChatVoice, ResolveOwnerId(entry.Info))
+                ? _voice.VoiceModelFor(ResolveOwnerId(entry.Info))
                 : null;
             // Блокер: override на модели ДРУГОГО провайдера ломает транскрипт — CLI стартует
             // в чужом профиле (CLAUDE_CONFIG_DIR) с --resume на транскрипт, которого там нет

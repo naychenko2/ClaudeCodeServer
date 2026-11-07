@@ -698,6 +698,15 @@ public sealed class ChatSettings
     public string? OutOfZoneRefusal(Persona persona, string? projectId) =>
         PersonaZone.OutOfZoneRefusal(persona, projectId, SphereDir);
 
+    // Гейт приёма хода: чат остался без персоны или проект вышел из её сферы — ход не стартует
+    // (S3-7: проверка опущена к владельцу зоны; приём хода — только точка вызова. Резолв
+    // владельца и персоны — тот же путь, что у SetParticipants выше).
+    internal string? ZoneRefusalForTurn(SessionEntry entry) =>
+        entry.Info.PersonaId is { } personaId && _store.ResolveOwnerId(entry.Info) is { } ownerId
+        && _personas.Get(personaId, ownerId) is { } persona
+            ? OutOfZoneRefusal(persona, entry.Info.ProjectId)
+            : null;
+
     // Отказ 400 (InvalidOperationException), если персона не видна в проекте чата
     internal void EnsurePersonaVisible(Persona persona, string? projectId)
     {
@@ -833,6 +842,36 @@ public sealed class ChatSettings
         if (entry.Info.OnboardingFinalized) return;
         entry.Info.OnboardingFinalized = true;
         _store.SaveSessions();
+    }
+
+    // Роутинг спикера группового чата перед ходом: @упоминание участника переключает
+    // активного спикера (SwitchSpeaker + speaker_changed клиентам). Во время активного
+    // хода (Working/Waiting) состав не трогаем — переключение подействует со следующего.
+    // S3-7: опущено из приёма хода к владельцу смены спикера (SwitchSpeaker здесь же);
+    // точка вызова — приём хода (фасадная обёртка и приватные форвардеры в SessionManager сняты).
+    internal async Task RouteGroupSpeakerAsync(string sessionId, SessionEntry entry, string text)
+    {
+        if (entry.Info.Participants is not { Count: > 1 } participantIds) return;
+        if (entry.Info.Status is SessionStatus.Working or SessionStatus.Waiting) return;
+        var ownerId = _store.ResolveOwnerId(entry.Info);
+        if (ownerId is null) return;
+
+        var participants = participantIds
+            .Select(id => _personas.Get(id, ownerId))
+            .OfType<Persona>()
+            .ToList();
+        if (participants.Count == 0) return;
+
+        var route = GroupChatRouter.Resolve(text, participants, entry.Info.PersonaId);
+        if (!route.Switched) return;
+
+        var speaker = participants.First(p => p.Id == route.SpeakerPersonaId);
+        SwitchSpeaker(entry, speaker);
+
+        var label = string.IsNullOrWhiteSpace(speaker.Role) ? speaker.Name : $"{speaker.Role} ({speaker.Name})";
+        // Только в session-группу: клиент открытого чата состоит и в user_/project_-группе,
+        // рассылка в обе дублировала разделитель «Теперь отвечает» в ленте
+        await _store.BroadcastAsync(sessionId, new SpeakerChangedMessage(speaker.Id, label));
     }
 
     // Общее ядро смены собеседника/спикера (SetPersona и роутинг группового чата):

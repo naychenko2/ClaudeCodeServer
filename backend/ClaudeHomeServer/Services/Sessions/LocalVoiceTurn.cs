@@ -38,6 +38,12 @@ internal sealed class LocalVoiceTurn
         _completion = completion;
     }
 
+    // Модель места chat-voice по явному выбору админа (слот → UserModelTierResolver.ModelFor,
+    // конкретная модель → как есть; null — ход идёт на модели чата). Ограничитель решения —
+    // приём хода, резолвер — здесь: LocalActionRouter входит в зависимости этой роли (S3-7).
+    internal string? VoiceModelFor(string? ownerId) =>
+        _router?.VoiceModelFor(LocalActionCatalog.ChatVoice, ownerId);
+
     // Сводка локального разговора для CLI-хода: «Пользователь: … / Ассистент: …» из
     // хвоста истории. null/пусто — реплик не нашлось (тогда и блок не нужен).
     internal static string? BuildVoiceContextBlock(TurnAccumulator acc)

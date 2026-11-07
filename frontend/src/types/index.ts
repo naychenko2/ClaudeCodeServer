@@ -2031,13 +2031,7 @@ export type * from '../features/mcp/types';
 
 export type * from '../features/telemetry/types';
 
-// Быстрая фраза композера: готовое сообщение и необязательная группа (второй
-// уровень попапа). Пустая/отсутствующая group — фраза лежит в корне списка.
-// Логика набора (порядок, раскладка по группам) — в lib/quickPhrases.ts
-export interface QuickPhrase {
-  text: string;
-  group?: string | null;
-}
+export type * from '../features/quickPhrases/types';
 
 export type * from '../features/video/types';
 

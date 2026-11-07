@@ -26,7 +26,7 @@ internal readonly record struct SessionLoadResult(
 // Класс public ТОЛЬКО потому, что он параметр публичного конструктора SessionManager (CS0051) и
 // DI нужен публичный конструктор; обход фасада закрывает сторож формы ядра (правило 4:
 // на типы Services.Sessions ссылаются лишь SessionManager, сами Services.Sessions и тесты).
-public sealed class SessionStore : ITeamRunState, Access.ITurnFrameSource, Access.ITurnActorRegistry
+public sealed class SessionStore : ITeamRunState, Access.ITurnFrameSource, Access.ITurnActorRegistry, IDisposable
 {
     // Реестр сессий: одна точка правды на процесс (синглтон в DI). SessionManager держит ссылку
     // на этот же словарь в своём поле _sessions — тесты читают его рефлексией.
@@ -146,7 +146,23 @@ public sealed class SessionStore : ITeamRunState, Access.ITurnFrameSource, Acces
             _autoSaveTimer = new Timer(_ => SaveSessions(), null, _autoSaveInterval, _autoSaveInterval);
     }
 
-    internal void StopAutoSave() => _autoSaveTimer?.Dispose();
+    // Гашение автосейва идемпотентно: поле снимается атомарно, повторный вызов — no-op.
+    // Поэтому его зовут и фасад (KillAllProcesses/Dispose), и Dispose стора ниже — дубль
+    // безопасен, второй путь ничего не находит.
+    internal void StopAutoSave() => Interlocked.Exchange(ref _autoSaveTimer, null)?.Dispose();
+
+    // IDisposable: гасит оба фоновых таймера — автосейв (StopAutoSave) и one-shot дебаунса
+    // MarkRead (FlushPendingSave, с синхронным сбросом висящей записи). Стор — синглтон DI:
+    // контейнер диспозит его после ApplicationStopping, и без этого гашения таймеры жили бы
+    // в процессе сами по себе (фасад гасил их только в своём cleanup-пути). Порядок тот же,
+    // что у фасада: автосейв → дебаунс. Идемпотентен: оба метода повторны безопасны, поэтому
+    // гашение фасада и диспоз контейнера не конфликтуют — второй путь no-op.
+    public void Dispose()
+    {
+        StopAutoSave();
+        FlushPendingSave();
+        GC.SuppressFinalize(this);
+    }
 
     // --- Зрители ---
 

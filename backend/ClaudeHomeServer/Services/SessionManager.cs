@@ -10847,7 +10847,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                         entry.Info.RestartResumeAttempts = 0;
                         SaveSessions();
                     }
-                    TryTrackFalCost(sessionId, m.Content); // fire-and-forget: стоимость придёт позже
+                    TryTrackFalCost(sessionId, m.Content, m.FinishedAt); // fire-and-forget: стоимость придёт позже
                     TryTrackGlifCost(sessionId, m.Content); // синхронно: кредиты уже в tool_result
                     break;
                 case WorkflowProgressMessage m:
@@ -11415,12 +11415,14 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     }
 
     // Ставит результат генерации fal.ai на отслеживание стоимости (опрос billing-events — в фоне).
-    private void TryTrackFalCost(string sessionId, string content)
+    // finishedAtMs — время прихода результата: service построит по нему окно запроса, если не
+    // сможет прочитать время из самого request_id (дефект S-SPEND-4).
+    private void TryTrackFalCost(string sessionId, string content, long? finishedAtMs)
     {
         if (!_falCost.Enabled) return;
         var requestId = SpendMapping.TryExtractFalRequestId(content);
         if (!string.IsNullOrEmpty(requestId))
-            _falCost.Track(sessionId, requestId);
+            _falCost.Track(sessionId, requestId, finishedAtMs);
     }
 
     // Догоняет стоимость для СТАРЫХ генераций fal.ai в истории, у которых ещё нет fal_cost
@@ -11436,7 +11438,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             if (m is not StoredToolUseMessage t || t.IsError || string.IsNullOrEmpty(t.Result)) continue;
             var rid = SpendMapping.TryExtractFalRequestId(t.Result);
             if (rid != null && !have.Contains(rid))
-                _falCost.Track(sessionId, rid);
+                // t.FinishedAt — время генерации из истории (null для истории до 02.10.2026):
+                // без окна запроса older 24 ч цена не находилась никогда (дефект S-SPEND-4);
+                // для старых записей service возьмёт время из request_id (UUIDv7).
+                _falCost.Track(sessionId, rid, t.FinishedAt);
         }
     }
 

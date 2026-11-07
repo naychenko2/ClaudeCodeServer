@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
@@ -26,6 +27,16 @@ public class FalCostService : IFalRequestCost
     // Дедуп: один request_id приходит в run_model и в get_job_result — опрашиваем один раз
     private readonly ConcurrentDictionary<string, byte> _seen = new();
 
+    // Троттлинг опроса (дефект S-SPEND-4): всплески бэкфилла при открытии старых чатов
+    // упираются в лимит fal (207 строк «billing-events 429» в журнале проде за 28.10/04–07.11).
+    // Все запросы идут через однослотовый гейт с минимальным интервалом между стартами.
+    // Механизм временной, а не по-id: он работает и в свежем процессе (в отличие от in-process
+    // дедупа _seen) — новый всплеск после рестарта так же растягивается по интервалу.
+    // internal для тестов (тот же приём, что BackoffSeconds): тесты сжимают интервал до 0.
+    internal int MinRequestIntervalMs = 1000;
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    private long _lastRequestAtMs; // Unix ms; 0 — запросов в этом процессе ещё не было
+
     // Публикация найденной стоимости (broadcast в SignalR + запись в историю). Ставит SessionManager.
     public Func<string, FalCostMessage, Task>? OnCostResolved { get; set; }
 
@@ -42,11 +53,13 @@ public class FalCostService : IFalRequestCost
     }
 
     // Запустить отслеживание стоимости по request_id. Идемпотентно, не блокирует вызывающего.
-    public void Track(string sessionId, string requestId)
+    // finishedAtMs — время генерации от вызывающего (Unix ms, ToolResultMessage.FinishedAt):
+    // служит для окна запроса, когда время не читается из самого request_id (см. ResolveGenerationMs).
+    public void Track(string sessionId, string requestId, long? finishedAtMs)
     {
         if (!Enabled || string.IsNullOrWhiteSpace(requestId)) return;
         if (!_seen.TryAdd(requestId, 0)) return;
-        _ = PollAsync(sessionId, requestId);
+        _ = PollAsync(sessionId, requestId, finishedAtMs);
     }
 
     // Реализация шва IFalRequestCost: фактическая цена по request_id либо null — когда
@@ -55,22 +68,25 @@ public class FalCostService : IFalRequestCost
     public async Task<double?> ResolveUsdAsync(string requestId, CancellationToken ct)
     {
         if (!Enabled || string.IsNullOrWhiteSpace(requestId)) return null;
-        var cost = await PollForCostAsync(requestId, ct);
+        var cost = await PollForCostAsync(requestId, null, ct);
         return cost?.CostUsd;
     }
 
     // Единый цикл опроса billing-events (бэкофф → FetchCostAsync по request_id). Зовут его
     // и ResolveUsdAsync (шов), и PollAsync (путь чата с публикацией) — цикл один.
     // Сбои опроса глотаются, как прежде: «цены нет» → null после исчерпанного окна.
-    private async Task<FalCostMessage?> PollForCostAsync(string requestId, CancellationToken ct)
+    private async Task<FalCostMessage?> PollForCostAsync(string requestId, long? finishedAtMs, CancellationToken ct)
     {
+        // Окно времени запроса: без start API отдаёт только последние 24 ч (доки fal: start по
+        // умолчанию = −24ч) — генерации старше суток не находились никогда (дефект S-SPEND-4).
+        var startParam = BuildStartParam(ResolveGenerationMs(finishedAtMs, requestId));
         for (var attempt = 0; attempt < BackoffSeconds.Length; attempt++)
         {
             FalCostMessage? cost;
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(BackoffSeconds[attempt]), ct);
-                cost = await FetchCostAsync(requestId, ct);
+                cost = await FetchCostAsync(requestId, startParam, ct);
             }
             // Отмена вызывающего и таймаут транспорта — разные исходы (тот же приём, что в
             // McpProbeService/McpOAuthService): таймаут HttpClient бросает TaskCanceledException
@@ -89,9 +105,9 @@ public class FalCostService : IFalRequestCost
         return null; // окно опроса исчерпано — цены нет
     }
 
-    private async Task PollAsync(string sessionId, string requestId)
+    private async Task PollAsync(string sessionId, string requestId, long? finishedAtMs)
     {
-        var cost = await PollForCostAsync(requestId, CancellationToken.None);
+        var cost = await PollForCostAsync(requestId, finishedAtMs, CancellationToken.None);
         if (cost is null)
         {
             Console.Error.WriteLine($"[FalCost] Стоимость не появилась за отведённое время: {requestId}");
@@ -108,23 +124,79 @@ public class FalCostService : IFalRequestCost
         }
     }
 
-    private async Task<FalCostMessage?> FetchCostAsync(string requestId, CancellationToken ct)
+    // Запас к времени вызывающего для start окна: длительность генерации (request_id
+    // создаётся до прихода результата) + ход часов. Для v7-id базой служит сам момент
+    // создания запроса — запас только страховка.
+    private const long StartMarginMs = 3_600_000;
+
+    // Время генерации (Unix ms) для окна запроса. Сначала request_id, если он UUIDv7:
+    // его первые 48 бит — Unix ms (RFC 9562). Реальный id из разведки f7e8c46d
+    // (01a19694-7252-73d0…) — именно такой: читается как 2026-11-01T10:07:53Z, дата
+    // фактической генерации (01.11). Время из id — момент создания запроса на стороне fal,
+    // без хода часов и раньше прихода результата, поэтому приоритетнее времени вызывающего.
+    // Для id другой формы (v4) — время вызывающего; ни того, ни другого — null, окно не
+    // добавляем (прежнее поведение: запрос без окна).
+    private static long? ResolveGenerationMs(long? finishedAtMs, string requestId)
+        => TryParseUuidV7Ms(requestId) ?? finishedAtMs;
+
+    private static long? TryParseUuidV7Ms(string requestId)
     {
-        var client = _httpFactory.CreateClient("fal");
-        var url = $"{_billingEventsUrl}?request_id={Uri.EscapeDataString(requestId)}";
-        using var req = new HttpRequestMessage(HttpMethod.Get, url);
-        req.Headers.Authorization = new AuthenticationHeaderValue("Key", _apiKey);
-
-        using var resp = await client.SendAsync(req, ct);
-        if (!resp.IsSuccessStatusCode)
-        {
-            // 404 — события ещё нет (нормально на ранних попытках); прочее — логируем
-            if (resp.StatusCode != HttpStatusCode.NotFound)
-                Console.Error.WriteLine($"[FalCost] billing-events {(int)resp.StatusCode} для {requestId}");
+        // UUID 8-4-4-4-12; версия 7 — первая цифра третьей группы.
+        if (requestId.Length != 36 || requestId[8] != '-' || requestId[13] != '-'
+            || requestId[18] != '-' || requestId[23] != '-' || requestId[14] != '7')
             return null;
-        }
+        if (!long.TryParse(requestId[..8] + requestId[9..13], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var ms))
+            return null;
+        // Здравый смысл: с 2010 по «завтра» — v7 с бессмысленным временем не является временем.
+        const long minMs = 1_262_304_000_000; // 2010-01-01T00:00:00Z
+        return ms >= minMs && ms <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 86_400_000 ? ms : null;
+    }
 
-        var json = await resp.Content.ReadAsStringAsync();
+    // start окна запроса: время генерации − запас, ISO 8601 UTC (format доков fal).
+    // end не передаём: дефолт API — его «сейчас», по часам fal (наш ход часов не сужает окно).
+    private static string? BuildStartParam(long? generationMs) => generationMs is null
+        ? null
+        : Uri.EscapeDataString(DateTimeOffset.FromUnixTimeMilliseconds(generationMs.Value - StartMarginMs)
+            .ToString("yyyy-MM-ddTHH:mm:ss'Z'", CultureInfo.InvariantCulture));
+
+    private async Task<FalCostMessage?> FetchCostAsync(string requestId, string? startParam, CancellationToken ct)
+    {
+        // Троттлинг (MinRequestIntervalMs): однослотовый гейт + минимальный интервал между
+        // стартами запросов. Очередь живёт под ct: отмена вызывающего в очереди — штатный выход.
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var minStart = _lastRequestAtMs + MinRequestIntervalMs;
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            if (now < minStart) await Task.Delay((int)(minStart - now), ct);
+            _lastRequestAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            var client = _httpFactory.CreateClient("fal");
+            var url = $"{_billingEventsUrl}?request_id={Uri.EscapeDataString(requestId)}"
+                + (startParam is null ? "" : $"&start={startParam}");
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.Authorization = new AuthenticationHeaderValue("Key", _apiKey);
+
+            using var resp = await client.SendAsync(req, ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                // 404 — события ещё нет (нормально на ранних попытках); прочее — логируем
+                if (resp.StatusCode != HttpStatusCode.NotFound)
+                    Console.Error.WriteLine($"[FalCost] billing-events {(int)resp.StatusCode} для {requestId}");
+                return null;
+            }
+
+            var json = await resp.Content.ReadAsStringAsync();
+            return ParseBillingEvents(requestId, json);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private static FalCostMessage? ParseBillingEvents(string requestId, string json)
+    {
         using var doc = JsonDocument.Parse(json);
         if (!doc.RootElement.TryGetProperty("billing_events", out var events)
             || events.ValueKind != JsonValueKind.Array)

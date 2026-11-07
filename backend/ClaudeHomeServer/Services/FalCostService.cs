@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Spend;
 
 namespace ClaudeHomeServer.Services;
 
@@ -10,10 +11,14 @@ namespace ClaudeHomeServer.Services;
 // В результате run_model/submit_job есть request_id; по нему billing-events отдаёт
 // cost_estimate_nano_usd. Биллинг приходит с задержкой → опрашиваем с бэкоффом.
 // Найденную стоимость отдаём наверх делегатом OnCostResolved (его ставит SessionManager).
-public class FalCostService
+// Реализует Core-шов IFalRequestCost (дефект 22068e9d, шаг S-SPEND-1): тот же цикл опроса
+// доступен потребителям (Images) как ResolveUsdAsync — только числом, без публикаций в чат.
+public class FalCostService : IFalRequestCost
 {
     // Задержки между попытками (сек). Суммарно ~77с — обычно биллинг готов раньше.
-    private static readonly int[] BackoffSeconds = [2, 5, 10, 20, 40];
+    // internal для тестов (InternalsVisibleTo): тесты ResolveUsdAsync сжимают бэкофф до [0] —
+    // цикл и его контракт проверяются без реальных 77с; производственный дефолт не меняется.
+    internal int[] BackoffSeconds = [2, 5, 10, 20, 40];
 
     private readonly IHttpClientFactory _httpFactory;
     private readonly string? _apiKey;
@@ -44,44 +49,70 @@ public class FalCostService
         _ = PollAsync(sessionId, requestId);
     }
 
-    private async Task PollAsync(string sessionId, string requestId)
+    // Реализация шва IFalRequestCost: фактическая цена по request_id либо null — когда
+    // биллинга ещё нет. Без исключений: отсутствие цены — штатный исход, не ошибка.
+    // Дедуп _seen здесь не участвует: он про однократную публикацию в чат, а не про вопрос.
+    public async Task<double?> ResolveUsdAsync(string requestId, CancellationToken ct)
+    {
+        if (!Enabled || string.IsNullOrWhiteSpace(requestId)) return null;
+        var cost = await PollForCostAsync(requestId, ct);
+        return cost?.CostUsd;
+    }
+
+    // Единый цикл опроса billing-events (бэкофф → FetchCostAsync по request_id). Зовут его
+    // и ResolveUsdAsync (шов), и PollAsync (путь чата с публикацией) — цикл один.
+    // Сбои опроса глотаются, как прежде: «цены нет» → null после исчерпанного окна.
+    private async Task<FalCostMessage?> PollForCostAsync(string requestId, CancellationToken ct)
     {
         for (var attempt = 0; attempt < BackoffSeconds.Length; attempt++)
         {
-            await Task.Delay(TimeSpan.FromSeconds(BackoffSeconds[attempt]));
             FalCostMessage? cost;
             try
             {
-                cost = await FetchCostAsync(requestId);
+                await Task.Delay(TimeSpan.FromSeconds(BackoffSeconds[attempt]), ct);
+                cost = await FetchCostAsync(requestId, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                return null; // вызывающий отменил запрос — штатный исход, не ошибка
             }
             catch (Exception ex)
             {
                 Console.Error.WriteLine($"[FalCost] Опрос billing-events ({requestId}) упал: {ex.Message}");
-                continue;
+                continue; // цены ещё нет / сбой транспорта — ждём следующую попытку
             }
-            if (cost is null) continue; // ещё не посчитано — ждём следующую попытку
-            try
-            {
-                if (OnCostResolved is not null)
-                    await OnCostResolved(sessionId, cost);
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"[FalCost] Публикация стоимости ({requestId}) упала: {ex.Message}");
-            }
-            return;
+            if (cost is not null) return cost;
         }
-        Console.Error.WriteLine($"[FalCost] Стоимость не появилась за отведённое время: {requestId}");
+        return null; // окно опроса исчерпано — цены нет
     }
 
-    private async Task<FalCostMessage?> FetchCostAsync(string requestId)
+    private async Task PollAsync(string sessionId, string requestId)
+    {
+        var cost = await PollForCostAsync(requestId, CancellationToken.None);
+        if (cost is null)
+        {
+            Console.Error.WriteLine($"[FalCost] Стоимость не появилась за отведённое время: {requestId}");
+            return;
+        }
+        try
+        {
+            if (OnCostResolved is not null)
+                await OnCostResolved(sessionId, cost);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[FalCost] Публикация стоимости ({requestId}) упала: {ex.Message}");
+        }
+    }
+
+    private async Task<FalCostMessage?> FetchCostAsync(string requestId, CancellationToken ct)
     {
         var client = _httpFactory.CreateClient("fal");
         var url = $"{_billingEventsUrl}?request_id={Uri.EscapeDataString(requestId)}";
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
         req.Headers.Authorization = new AuthenticationHeaderValue("Key", _apiKey);
 
-        using var resp = await client.SendAsync(req);
+        using var resp = await client.SendAsync(req, ct);
         if (!resp.IsSuccessStatusCode)
         {
             // 404 — события ещё нет (нормально на ранних попытках); прочее — логируем

@@ -637,6 +637,11 @@ builder.Services.AddSingleton<PromptAuditService>();
 // (волна 3, шаг 3): миграция из старых Project-записей — отдельный блок
 // PostConfigure ниже (см. ограничения в шапке KnowledgeSubsystem.cs).
 builder.Services.AddSingleton<FalCostService>();
+// Шов фактической цены fal (дефект 22068e9d, шаг S-SPEND-1): IFalRequestCost указывает на
+// ТОТ ЖЕ экземпляр FalCostService (тот же приём, что ISpendCollector → SpendStore и
+// IHumanEditJournal → HumanEditCommitter), иначе опрос и потребители разъедутся по разным
+// клиентам и разным дедупам.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.IFalRequestCost>(sp => sp.GetRequiredService<FalCostService>());
 builder.Services.AddSingleton<FalAccountService>();
 builder.Services.AddSingleton<GlifAccountService>();
 // UsageService — DI в подсистеме `LlmSubsystem` (волна 4B, шаг 2: переезд подписок и

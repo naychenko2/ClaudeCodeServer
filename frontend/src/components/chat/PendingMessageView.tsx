@@ -15,10 +15,15 @@ import { IconButton } from '../ui/IconButton';
 import { Button } from '../ui/Button';
 import { Badge } from '../ui/Badge';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
+import { UserAvatar } from '../ui/UserAvatar';
+import { useMessageAuthor } from '../../features/projects/members/MessageAuthorLine';
+import { AUTHOR_GONE_LABEL } from '../../features/projects/members/messageAuthor';
 import { MarkdownContent } from './MarkdownContent';
 import { MessageOriginChip } from '../MessageOriginChip';
 import { getPersonaById, ensurePersonasLoaded, personaLabel } from '../../lib/personas';
 import { useAgentsRunning } from '../../lib/agentsPresence';
+import { showToast } from '../../lib/toast';
+import { denialTextOf } from '../../features/projects/members/participantGate';
 import type { PendingChatMessage } from '../../lib/chatReducer';
 
 // Длительность ухода строки после доставки/отмены — столько же держим её в DOM
@@ -54,7 +59,10 @@ function waitedFor(iso: string): string {
 interface RowProps {
   item: PendingChatMessage;
   // Отмена доставки; undefined — нет связи, вместо крестика показываем причину
-  onCancel?: (id: string) => void;
+  // Возвращает Promise: отказ по коду поднимается наверх — строка откатит отметку (useSession)
+  onCancel?: (id: string) => void | Promise<unknown>;
+  // false — отменять нельзя по роли (чужое в общем проекте): кнопки нет вовсе, а не «нет связи»
+  cancelAllowed?: boolean;
   // Прервать идущий ход и доставить это сейчас; undefined — нет связи или ход уже кончился
   onPreempt?: () => void;
   isMobile?: boolean;
@@ -65,7 +73,7 @@ interface RowProps {
   sessionId: string;
 }
 
-function PendingMessageRow({ item, onCancel, onPreempt, isMobile, leaving, sessionId }: RowProps) {
+function PendingMessageRow({ item, onCancel, cancelAllowed = true, onPreempt, isMobile, leaving, sessionId }: RowProps) {
   // Предупреждаем только ради INLINE-агентов: фоновая команда (дев-сервер, watch) переживёт
   // Interrupt и сообщение о ней было бы ложью. Источник — стор agentsPresence, ветка _ids
   const agentsRunning = useAgentsRunning(sessionId);
@@ -85,16 +93,26 @@ function PendingMessageRow({ item, onCancel, onPreempt, isMobile, leaving, sessi
   // kind=user — своё сообщение, ждущее в «честной очереди»: подпись «Вы», без персоны и
   // чипа-источника (это не чужое входящее). Агентские строки (chats_send) — прежняя логика.
   const isUser = item.kind === 'user';
+  // Чужое сообщение человека в общем проекте: аватар и имя автора вместо «Вы»
+  // (свои, личный проект и записи без senderUserId — author = null)
+  const author = useMessageAuthor(isUser ? item.senderUserId : undefined);
   // Ждёт устройство, а не конец хода: своя рамка, подпись и пояснение, перебоя нет
   const deviceWait = !!item.waitingForDevice;
   // Персона → её имя; иначе имя чата-отправителя; иначе нейтральная подпись
-  const title = isUser ? 'Вы' : (sender ? personaLabel(sender) : (item.senderChatName || 'Входящее сообщение'));
+  const title = isUser ? (author ? author.name : 'Вы') : (sender ? personaLabel(sender) : (item.senderChatName || 'Входящее сообщение'));
   const preview = previewOf(item.text);
 
   const cancel = () => {
     if (!onCancel || cancelling) return;
     setCancelling(true);
-    onCancel(item.id);
+    // Отметка «отменяем» оптимистична. Отказ по коду (not_sender — чужое сообщение, S2a-10b):
+    // строка возвращается в живое состояние (сообщение всё ещё в очереди), причина — тостом,
+    // по коду текстом клиента. Случай сети сюда не доходит: useSession глотает его молча,
+    // снимок от сервера поправит.
+    void Promise.resolve(onCancel(item.id)).catch((e: unknown) => {
+      setCancelling(false);
+      showToast('Очередь', denialTextOf(e) ?? 'Не удалось отменить сообщение');
+    });
   };
 
   return (
@@ -113,7 +131,9 @@ function PendingMessageRow({ item, onCancel, onPreempt, isMobile, leaving, sessi
           cursor: 'pointer', minHeight: isMobile ? 44 : undefined,
         }}
       >
-        {isUser
+        {author
+          ? <UserAvatar userId={author.userId} displayName={author.name} size={18} gone={author.gone} />
+          : isUser
           ? <User size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
               style={{ color: C.textMuted, flexShrink: 0 }} />
           : sender
@@ -127,6 +147,9 @@ function PendingMessageRow({ item, onCancel, onPreempt, isMobile, leaving, sessi
         }}>
           {title}
         </span>
+        {author?.gone && (
+          <span style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap', flexShrink: 0 }}>· {AUTHOR_GONE_LABEL}</span>
+        )}
 
         {deviceWait && (
           <Badge tone="warning" size="xs" title="Уйдёт в работу, когда устройство проекта выйдет на связь"
@@ -162,7 +185,7 @@ function PendingMessageRow({ item, onCancel, onPreempt, isMobile, leaving, sessi
           }}
         />
 
-        {onCancel ? (
+        {!cancelAllowed ? null : onCancel ? (
           <span onClick={e => e.stopPropagation()} style={{ display: 'inline-flex', flexShrink: 0 }}>
             <IconButton
               onClick={cancel}
@@ -243,7 +266,7 @@ function PendingMessageRow({ item, onCancel, onPreempt, isMobile, leaving, sessi
             display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
             fontSize: FS.xs, color: C.textMuted,
           }}>
-            <span>Уйдёт в работу, когда Claude закончит текущий шаг</span>
+            <span>{author ? `Уйдёт, когда агент ответит ${author.name}` : 'Уйдёт в работу, когда Claude закончит текущий шаг'}</span>
             {onPreempt && (
               <Button
                 variant="ghost"
@@ -276,7 +299,10 @@ function PendingMessageRow({ item, onCancel, onPreempt, isMobile, leaving, sessi
 
 interface Props {
   items: PendingChatMessage[];
-  onCancel?: (id: string) => void;
+  // Возвращает Promise: отказ по коду поднимается наверх — строка откатит отметку (useSession)
+  onCancel?: (id: string) => void | Promise<unknown>;
+  // Можно ли отменять именно это сообщение (отправитель или владелец проекта); не задано — можно
+  canCancelItem?: (item: PendingChatMessage) => boolean;
   // Прервать ход ради очереди; undefined — нет связи или ход уже не идёт
   onPreempt?: () => void;
   isMobile?: boolean;
@@ -286,7 +312,7 @@ interface Props {
 
 // Держит ушедшие строки лишние 150мс, чтобы доставка/отмена не выглядела мгновенной
 // подменой. Сервер шлёт очередь полным снимком, поэтому «ушедшие» вычисляются здесь.
-export function PendingMessageList({ items, onCancel, onPreempt, isMobile, sessionId }: Props) {
+export function PendingMessageList({ items, onCancel, canCancelItem, onPreempt, isMobile, sessionId }: Props) {
   const [leavingIds, setLeavingIds] = useState<string[]>([]);
   const [shown, setShown] = useState(items);
   const prevRef = useRef(items);
@@ -327,6 +353,7 @@ export function PendingMessageList({ items, onCancel, onPreempt, isMobile, sessi
           leaving={leavingIds.includes(p.id)}
           sessionId={sessionId}
           onCancel={onCancel}
+          cancelAllowed={canCancelItem ? canCancelItem(p) : true}
           // Перебой доставляет ГОЛОВУ очереди (DrainNextPendingAsync), а не ту строку, что
           // раскрыл пользователь — поэтому кнопка только у первой. Иначе «отправить это
           // сейчас» на второй реплике отправляло бы первую.

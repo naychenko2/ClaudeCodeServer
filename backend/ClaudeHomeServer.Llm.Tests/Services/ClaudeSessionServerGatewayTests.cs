@@ -101,9 +101,11 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
 
     private sealed record TurnResult(Dictionary<string, string>? Env, ClaudeSession Session, TaskCompletionSource Exited);
 
+    // ownerId — владелец на сессии; contextOwnerId/projectId — боевой путь проектного чата:
+    // сессия без своего владельца, владелец хода приходит контекстом (SessionManager.cs:7242).
     private async Task<TurnResult> RunTurnAsync(string model, string? gatewayApiUrl = GatewayApi,
         bool gatewayEnabled = true, bool failStart = false, bool localStatsEnabled = false,
-        string? ownerId = "owner-1")
+        string? ownerId = "owner-1", string? contextOwnerId = null, string? projectId = null)
     {
         _kit.Options.CurrentValue = new LlmGatewayOptions
         {
@@ -124,8 +126,9 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
             PermissionRules: null,
             TasksMcp: null,
             Launcher: launcher,
-            LlmGatewayApiUrl: gatewayApiUrl);
-        var session = new ClaudeSession(new Session { Model = model, OwnerId = ownerId }, context,
+            LlmGatewayApiUrl: gatewayApiUrl,
+            OwnerId: contextOwnerId);
+        var session = new ClaudeSession(new Session { Model = model, OwnerId = ownerId, ProjectId = projectId }, context,
             providers: _kit.Providers,
             serverGateway: new ServerTurnGateway(_kit.Selector, _tokens, _kit.Options),
             localModelStats: new MutableOptionsMonitor<LocalModelStatsOptions>(
@@ -324,5 +327,25 @@ public sealed class ClaudeSessionServerGatewayTests : IDisposable
         session.UseServerGateway();
         session.UseServerGateway();
         logger.WarningCount.Should().Be(1, "одно предупреждение за жизнь процесса");
+    }
+
+    // Возврат финального ревью 892deb00 (О1): гейт и старт шлюза читали Info.OwnerId, а у
+    // проектного чата он пуст по контракту — такой чат на шлюз не уходил: ни нормализации
+    // tool_use.input для провайдера с дефектом, ни статистики локальных моделей.
+    // Ключ — владелец хода из контекста (тот же, что резолвит модель, DEC-FALLBACK 3f2f33fb).
+    [Theory]
+    [InlineData("mmx-m3", false)] // провайдер с дефектом tool_use.input → нормализатор шлюза
+    [InlineData("qwen3.8-27b", true)] // локальная модель со статистикой → учёт хода
+    public async Task ПроектныйЧат_ШлюзВключён_ТокенВладельцуХода(string model, bool localStats)
+    {
+        var turn = await RunTurnAsync(model, localStatsEnabled: localStats,
+            ownerId: null, contextOwnerId: "owner-1", projectId: "p1");
+
+        var (turnId, token) = GatewayOf(turn.Env!);
+        turnId.Should().NotBe(new string('0', 32), "проектный чат идёт через шлюз, а не напрямую");
+        var grant = _tokens.Validate(turnId, token);
+        grant.Should().NotBeNull("токен выдан");
+        grant!.OwnerId.Should().Be("owner-1", "ход шлюза принадлежит владельцу хода, а не пустому владельцу сессии");
+        await KillAndWaitAsync(turn);
     }
 }

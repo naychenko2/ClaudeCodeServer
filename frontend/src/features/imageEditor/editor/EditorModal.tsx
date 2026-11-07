@@ -323,11 +323,6 @@ export function EditorModal({ projectId, sessionId, threadId, versionId = null, 
         case 'busy': setFaceUi(u => ({ ...u, busy: true })); break;
         case 'providerUnavailable': setFaceUi(u => ({ ...u, providerUnavailable: true })); break;
         case 'facesChanged': setFaceUi(u => ({ ...u, facesChanged: true })); break;
-        case 'featureDisabled':
-          // Флаг выключили, пока экран был открыт: режим закрывается с коротким сообщением
-          showToast(FS_TEXT.featureDisabled, '', 'info');
-          setFaceSwapMode(false);
-          break;
         case 'generic': showToast(`Запуск не удался: ${msg}`, '', 'error'); break;
         default: {
           // Исчерпывающесь: все виды LaunchFailure обработаны выше; f сужен до never

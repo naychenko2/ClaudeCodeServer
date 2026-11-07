@@ -2,6 +2,7 @@
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Spend;
@@ -249,8 +250,10 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
     /// Запуск выполнения задачи Claude-ом: отдельная сессия в проекте задачи
     /// (личная — чат вне проекта) в режиме acceptEdits, первым сообщением — постановка.
     /// </summary>
+    /// <param name="actorUserId">Кто запустил исполнителя (человек или актор хода-вызывателя); null — автозапуск, актор неизвестен (fail-closed).</param>
     /// <exception cref="InvalidOperationException">задача не подходит или уже выполняется</exception>
-    public async Task<TaskItem> ExecuteAsync(TaskItem task, bool auto, ExecutorLauncher? launcher = null)
+    public async Task<TaskItem> ExecuteAsync(TaskItem task, bool auto, ExecutorLauncher? launcher = null,
+        string? actorUserId = null)
     {
         if (task.Status == TaskItemStatus.Done)
             throw new InvalidOperationException("Задача уже завершена");
@@ -285,7 +288,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
             throw new InvalidOperationException("По задаче уже запускается исполнитель — подождите и повторите");
         try
         {
-            return await ExecuteClaimedAsync(task, auto, launcher).ConfigureAwait(false);
+            return await ExecuteClaimedAsync(task, auto, launcher, actorUserId).ConfigureAwait(false);
         }
         finally
         {
@@ -304,7 +307,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         _tasks.SetExecutorLauncher(task.Id, launcher.SessionId, launcher.PersonaId);
     }
 
-    private async Task<TaskItem> ExecuteClaimedAsync(TaskItem task, bool auto, ExecutorLauncher? launcher)
+    private async Task<TaskItem> ExecuteClaimedAsync(TaskItem task, bool auto, ExecutorLauncher? launcher,
+        string? actorUserId)
     {
         // Инвариант проверен в ExecuteAsync ДО claim'а; повторяем ради nullability-анализа
         // этого метода (граница методов рвёт поток null-check из вызывающего)
@@ -352,7 +356,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         {
             _log.LogWarning("Задача {TaskId}: исполнитель отклонён — {Reason}", task.Id, zoneRefusal);
             if (_tasks.MarkClaudeResult(task.Id, "error") is { } refused)
-                await _broadcaster.ToOwner(task.OwnerId, new TaskChangedMessage("updated", refused));
+                await _broadcaster.ToTaskBoard(task.OwnerId, refused.ProjectId, new TaskChangedMessage("updated", refused));
             throw new InvalidOperationException(zoneRefusal);
         }
 
@@ -389,6 +393,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         // её же слот. Единственный источник правды об аренде — пул; здесь держим лишь выданную
         // сейчас аренду ради абзаца в постановке
         ReviewTreeLease? reviewLease = null;
+        string? detachedTree = null;
         if (task.WorktreePath is not { } worktree || task.ProjectId is null)
             ReleaseReviewTree(task.Id);
         else
@@ -409,8 +414,13 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
                 }
             }
             if (!attached && !await _sessions.AttachWorktreeAsync(session.Id, worktree, task.WorktreeBranch))
+            {
                 _log.LogWarning("Дерево {Worktree} задачи {TaskId} не подошло (нет на диске либо не числится " +
                     "в git worktree list проекта) — исполнитель стартует в корне проекта", worktree, task.Id);
+                // Молча работать в корне нельзя: сборка и тесты встанут в общую блокировку корня
+                detachedTree = BuildDetachedTreeSection(worktree,
+                    await _sessions.IsProjectWorktreeAsync(task.ProjectId, task.OwnerId, worktree));
+            }
         }
 
         ApplyLauncher(task, launcher);
@@ -420,12 +430,14 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
             ReleaseReviewTree(task.Id);
             throw new InvalidOperationException("Задача удалена");
         }
-        await _broadcaster.ToOwner(task.OwnerId, new TaskChangedMessage("updated", updated));
+        await _broadcaster.ToTaskBoard(task.OwnerId, updated.ProjectId, new TaskChangedMessage("updated", updated));
 
         var prompt = BuildPrompt(updated, persona, ResolveTierAliases(task.OwnerId),
             ResolveCategoryProfilesPath(task), ResolveRulesTemplate(session.Id, task.OwnerId));
         if (reviewLease is not null)
             prompt += BuildReviewTreeSection(reviewLease);
+        if (detachedTree is not null)
+            prompt += detachedTree;
         // Обогащение контекста семантически близкими заметками
         var notesBlock = await BuildNotesContextAsync(updated);
         prompt += notesBlock;
@@ -448,7 +460,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
             metrics.OmOChars, metrics.ContextChars, metrics.NotesContextChars));
         try
         {
-            await _sessions.SendMessageAsync(session.Id, prompt, [], auto: true, senderPersonaId: persona?.Id);
+            await _sessions.SendMessageAsync(session.Id, prompt, [], auto: true, senderPersonaId: persona?.Id,
+                senderUserId: actorUserId);
         }
         catch (Exception ex)
         {
@@ -457,7 +470,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
             _log.LogError(ex, "Постановка исполнителю задачи {TaskId} не отправлена", task.Id);
             ReleaseReviewTree(task.Id);
             if (_tasks.MarkClaudeResult(task.Id, "error") is { } failed)
-                await _broadcaster.ToOwner(task.OwnerId, new TaskChangedMessage("updated", failed));
+                await _broadcaster.ToTaskBoard(task.OwnerId, failed.ProjectId, new TaskChangedMessage("updated", failed));
             throw;
         }
 
@@ -486,7 +499,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         var first = _tasks.GetById(task.Id)?.DeviceWaitSince is null;
         var updated = _tasks.MarkDeviceWait(task.Id, DateTime.UtcNow, reason)
             ?? throw new InvalidOperationException("Задача удалена");
-        await _broadcaster.ToOwner(task.OwnerId!, new TaskChangedMessage("updated", updated));
+        await _broadcaster.ToTaskBoard(task.OwnerId!, updated.ProjectId, new TaskChangedMessage("updated", updated));
         if (first)
         {
             await NotifyAsync(updated, new NotificationMessage(
@@ -539,7 +552,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
             }
             if (!gate.IsReady) return;
             _log.LogInformation("Устройство проекта готово — запускаю ждавшую задачу {TaskId} «{Title}»", task.Id, task.Title);
-            await ExecuteAsync(task, auto: true);
+            // Возобновление автоматикой: актор — создатель задачи, как у автозапуска по сроку (F-9)
+            await ExecuteAsync(task, auto: true, actorUserId: TaskLaunchActor.For(task));
         }
         catch (Exception ex)
         {
@@ -892,6 +906,26 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
 
     private void ReleaseReviewTree(string taskId) => _reviewTrees?.Release(taskId);
 
+    // Абзац постановки, когда дерево задачи не подключилось к чату: исполнитель стоит в корне проекта.
+    // listed — путь есть на диске и числится в `git worktree list`: тогда работать в нём и собирать
+    // через tree; иначе дерева нет, и подсказывать путь в tree бессмысленно (инструмент откажет)
+    internal static string BuildDetachedTreeSection(string worktree, bool listed)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine();
+        sb.AppendLine("## ДЕРЕВО ЗАДАЧИ");
+        if (listed)
+            sb.AppendLine($"Дерево задачи `{worktree}` не подключилось, чат стоит в корне проекта. Свои правки делай " +
+                          $"в `{worktree}`, а для сборки и тестов (mcp__dev__build, mcp__tests__run_tests) передавай " +
+                          $"tree=`{worktree}`: иначе прогон пойдёт в корне и встанет в общую блокировку корня.");
+        else
+            sb.AppendLine($"Дерево задачи `{worktree}` не найдено: его нет на диске или оно не числится в " +
+                          "`git worktree list` проекта. Чат стоит в корне проекта. Не правь корень вслепую: " +
+                          "заведи своё дерево (git worktree add) и передавай его путь в tree у mcp__dev__build и " +
+                          "mcp__tests__run_tests, либо эскалируй постановщику через chats_report_up.");
+        return sb.ToString();
+    }
+
     internal static string BuildReviewTreeSection(ReviewTreeLease lease)
     {
         var sb = new StringBuilder();
@@ -1115,7 +1149,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
                     var ok = IsSuccess(result) && stopReason is null;
                     var updated = _tasks.MarkClaudeResult(task.Id, ok ? "success" : "error");
                     if (updated is null) return;
-                    await _broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
+                    await _broadcaster.ToTaskBoard(updated.OwnerId!, updated.ProjectId, new TaskChangedMessage("updated", updated));
                     if (stopReason is not null)
                     {
                         // Своё уведомление вместо обычного «Не смог выполнить задачу»: у человека
@@ -1264,7 +1298,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         var stopped = _tasks.MarkExecutorStopped(task.Id, DateTime.UtcNow, ExecutorStopClassifier.InterruptedByUserReason);
         if (stopped is null) return null;
         ReleaseReviewTree(task.Id);
-        await _broadcaster.ToOwner(stopped.OwnerId!, new TaskChangedMessage("updated", stopped));
+        await _broadcaster.ToTaskBoard(stopped.OwnerId!, stopped.ProjectId, new TaskChangedMessage("updated", stopped));
         return stopped;
     }
 
@@ -1278,7 +1312,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         if (task is null || task.ExecutorStopReason != ExecutorStopClassifier.InterruptedByUserReason) return;
         var resumed = _tasks.ClearExecutorStopped(task.Id, ExecutorStopClassifier.InterruptedByUserReason);
         if (resumed is null) return;
-        await _broadcaster.ToOwner(resumed.OwnerId!, new TaskChangedMessage("updated", resumed));
+        await _broadcaster.ToTaskBoard(resumed.OwnerId!, resumed.ProjectId, new TaskChangedMessage("updated", resumed));
     }
 
     // Физическое прерывание идущих ходов фичи при постановке паузы (W4-HOLD-E, контракт §1 :208):
@@ -1386,7 +1420,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         // ПРОДОЛЖЕНным шагам, а если прерванных не было — вещания нет вовсе. Тот же формат, что
         // у постановки: task_changed("updated") по эпику — с снятым Hold проектор считает
         // состояние не-пауза, экран уходит с «на паузе» живьём.
-        await _broadcaster.ToOwner(ownerId, new TaskChangedMessage("updated", epic));
+        await _broadcaster.ToTaskBoard(ownerId, epic.ProjectId, new TaskChangedMessage("updated", epic));
         // W4-HOLD-D (контракт §1, :231): снятие паузы возвращает отнятое — прерванные ходы
         // продолжаются в своих сессиях, карточка уходит оркестратору в ключевой чат при любом
         // снятии (W4-HOLD-K): draft — «фича запущена», без продолженных — «пауза снята, запуски
@@ -1478,7 +1512,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
                 // остальные шаги продолжают, карточка оркестратору уходит.
                 try
                 {
-                    await _broadcaster.ToOwner(marked.OwnerId!, new TaskChangedMessage("updated", marked));
+                    await _broadcaster.ToTaskBoard(marked.OwnerId!, marked.ProjectId, new TaskChangedMessage("updated", marked));
                 }
                 catch (Exception ex)
                 {
@@ -1546,7 +1580,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
                 resumed++;
                 try
                 {
-                    await _broadcaster.ToOwner(cleared.OwnerId!, new TaskChangedMessage("updated", cleared));
+                    await _broadcaster.ToTaskBoard(cleared.OwnerId!, cleared.ProjectId, new TaskChangedMessage("updated", cleared));
                 }
                 catch (Exception ex)
                 {
@@ -1735,7 +1769,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
     {
         var stopped = _tasks.MarkExecutorStopped(task.Id, DateTime.UtcNow, reason) ?? task;
         ReleaseReviewTree(task.Id);
-        await _broadcaster.ToOwner(stopped.OwnerId!, new TaskChangedMessage("updated", stopped));
+        await _broadcaster.ToTaskBoard(stopped.OwnerId!, stopped.ProjectId, new TaskChangedMessage("updated", stopped));
 
         var persona = stopped.PersonaId is not null ? _personas.Get(stopped.PersonaId, stopped.OwnerId!) : null;
         await NotifyAsync(stopped, BuildExecutorStoppedNotification(stopped, persona));
@@ -1970,25 +2004,28 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
     public async Task CheckStalledExecutorAsync(TaskItem task, DateTime nowUtc)
     {
         var session = task.LinkedSessionId is not null ? _sessions.GetById(task.LinkedSessionId) : null;
-        // Резолв «есть ли открытая карточка блокера по этой задаче» — на стороне штаба.
-        // Сейчас штабный реестр эскалаций живёт в TeamWaveService через ITeamHistoryStore,
-        // и его резолв делает подключаемый крючок (OpenBlockerLookup ниже). null — крючок не
-        // подключён (например, режим «Командная реализация» выключен): страховка работает
-        // как раньше, без новой ветки.
-        var hasOpenBlocker = false;
-        if (_openBlockerLookup is not null)
+        // Фича задачи на паузе (W4-HOLD-I, контракт §1 :179): та же сфера, что у гейта запуска
+        // (TaskManager.FeatureIsPaused) — задач удержанной фичи сторож не окликает и человека
+        // не зовёт: их тишина — сама пауза, а не брошенная работа.
+        var featurePaused = _tasks.FeatureIsPaused(task);
+        var action = ClassifyStall(task, session, nowUtc, _staleAfter, hasOpenBlocker: false, featurePaused);
+        // Резолв «есть ли открытая карточка блокера по этой задаче» — на стороне штаба
+        // (крючок OpenBlockerLookup ниже; null — режим «Командная реализация» выключен).
+        // Признак меняет только исходы Nudge/Alert, а резолв читает историю чата-постановщика
+        // целиком — поэтому зовём его лишь для них, а не для каждой задачи на каждом тике
+        // (прод 2026-11-05: ~1100 загрузок history.json раз в 30 с ради одной задачи).
+        if (_openBlockerLookup is not null && action is ExecutorStallAction.Nudge or ExecutorStallAction.Alert)
         {
+            var hasOpenBlocker = false;
             try { hasOpenBlocker = await _openBlockerLookup(task); }
             catch (Exception ex)
             {
                 _log.LogError(ex, "Резолв открытого блокера по задаче {TaskId} не удался", task.Id);
             }
+            if (hasOpenBlocker)
+                action = ClassifyStall(task, session, nowUtc, _staleAfter, hasOpenBlocker: true, featurePaused);
         }
-        // Фича задачи на паузе (W4-HOLD-I, контракт §1 :179): та же сфера, что у гейта запуска
-        // (TaskManager.FeatureIsPaused) — задач удержанной фичи сторож не окликает и человека
-        // не зовёт: их тишина — сама пауза, а не брошенная работа.
-        var featurePaused = _tasks.FeatureIsPaused(task);
-        switch (ClassifyStall(task, session, nowUtc, _staleAfter, hasOpenBlocker, featurePaused))
+        switch (action)
         {
             case ExecutorStallAction.Nudge:
                 await NudgeExecutorAsync(task, session!, nowUtc);
@@ -2014,7 +2051,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         if (updated is null) return;
         _log.LogWarning("Задача {TaskId} «{Title}» закрыта, а итог хода не пришёл (сессия {SessionId}) — " +
             "доставляю доклад по сигналу D", updated.Id, updated.Title, updated.LinkedSessionId);
-        await _broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
+        await _broadcaster.ToTaskBoard(updated.OwnerId!, updated.ProjectId, new TaskChangedMessage("updated", updated));
         await TryDeliverCompletionAsync(updated);
     }
 
@@ -2058,7 +2095,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
     private async Task AlertStaleTaskAsync(TaskItem task, DateTime nowUtc, bool waitingForBlocker)
     {
         var updated = _tasks.MarkExecutorStaleAlerted(task.Id, nowUtc) ?? task;
-        await _broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
+        await _broadcaster.ToTaskBoard(updated.OwnerId!, updated.ProjectId, new TaskChangedMessage("updated", updated));
 
         var persona = updated.PersonaId is not null ? _personas.Get(updated.PersonaId, updated.OwnerId!) : null;
         await NotifyAsync(updated, BuildStaleNotification(updated, persona, waitingForBlocker));
@@ -2198,6 +2235,13 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         // только по сессии владельца задачи, иначе fallback на TaskUrl
         var sourceSession = task.SourceSessionId is not null ? _sessions.GetById(task.SourceSessionId) : null;
         if (sourceSession is not null && _sessions.ResolveOwnerId(sourceSession) != task.OwnerId)
+            sourceSession = null;
+        // S2d-4b2: уведомление несёт id исходного чата в ссылке — чужой приватный чат владельцу
+        // задачи не виден, ссылка на него невозможна (откат на TaskUrl).
+        // Резолвера проектов нет — решения нет, поведение прежнее (как в ChatRefs.For).
+        if (sourceSession is not null && _projects is not null
+            && !SessionAccess.CanSee(sourceSession,
+                sourceSession.ProjectId is { } srcPid ? _projects.GetById(srcPid) : null, task.OwnerId))
             sourceSession = null;
         await NotifyAsync(task, BuildDelegatorNotification(task, ok, delegator, sourceSession));
         _log.LogInformation("L0 задачи {TaskId}: отправлено постановщику {PersonaId} (обычное уведомление подавлено)", task.Id, delegator.Id);
@@ -2432,6 +2476,12 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         {
             var reportText = BuildDelegationReportText(task);
             var executorChatName = executorSession?.Name;
+            // S2d-4b2 (К5): название чата-исполнителя уходит в чат-адресат доклада — читателям
+            // ЭТОГО чата. Решает та же ChatRefs.For, что маска задачи: чужой приватный чат
+            // исполнителя для аудитории адресата закрыт, вместо названия — подпись формы.
+            if (_sessions.GetById(cardSessionId) is { } cardSession
+                && ChatRefs.For(_sessions, _projects, task.LinkedSessionId, ReportCardAudience(cardSession)) is { Private: true })
+                executorChatName = ChatRef.PrivateFormTitle;
             // Время доклада ставим один раз и кладём в оба слоя (история + живая лента) —
             // тот же приём, что у reportTs в ReportUpAsync: фронт дедупит призрачный повтор
             // (BroadcastSessionMessageAsync шлёт событие и в session-, и в project_/user_-группу)
@@ -2520,6 +2570,13 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         _log.LogInformation("Доклад Z задачи {TaskId}: отправлен (гостевая реплика + реакция{Deferred}) в чат {SessionId}",
             task.Id, deferred ? " отложена — чат занят" : "", targetSessionId);
     }
+
+    // Аудитория карточки доклада = читатели чата, куда она кладётся (S2d-4b2): общий чат проекта —
+    // вся группа проекта, приватный — только автор приватности, чат вне проекта — владелец.
+    internal static ChatAudience ReportCardAudience(Session target) =>
+        target.ProjectId is { } pid && target.PrivateToUserId is null
+            ? ChatAudience.Group(pid)
+            : ChatAudience.Viewer(target.PrivateToUserId ?? target.OwnerId);
 
     // Маркер гостевой реплики-доклада: контракт для фронта — по нему отличают доклад
     // делегированной задачи от обычной реплики персоны в ленте

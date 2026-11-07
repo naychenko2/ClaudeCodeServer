@@ -211,7 +211,7 @@ one-shot действия и разговор с исполнителем «Ло
 Пропорции, ступень и «Точно…» результата, чип «Формат»; сквозная фича (Core, ImageEditor, VideoEditor, фронт) ([ADR-025](docs/adr/ADR-025-media-format.md), контракты — [ADR-025-contracts.md](docs/adr/ADR-025-contracts.md)).
 **Арифметика только в `MediaFormatResolver`** (Core), фронт её не повторяет; **хранится желание, а не подмена**; схемы MCP статичны (пропорции модели в `enum` не попадают). Кадры видео подрезаются только по явному формату.
 
-## Статистика локальных моделей (флаг `local-model-stats`)
+## Статистика локальных моделей
 
 Панель админа «Локальные модели» (текст — vLLM, медиа — ComfyUI), живая скорость и очередь в кольце Ctx, строка ожидания GPU в карточках редакторов; живое — ~1 ч в памяти, история медиа — 7 дней на диске ([ADR-029](docs/adr/ADR-029-local-model-stats.md), [ADR-030](docs/adr/ADR-030-local-media-history.md), [local-model-stats.md](docs/features/local-model-stats.md)).
 **Учёт за ход — только шлюз `/gw`** (`LocalModelStats:Enabled` плюс обязательный `LlmGateway:Enabled`, иначе ход идёт напрямую); **атрибуция медиа — только реестр prompt_id `ComfyPromptLedger`** с меткой `LocalJobOrigin` через швы Core.
@@ -446,7 +446,7 @@ OpenTelemetry в двух режимах: dev → Aspire Dashboard, prod → Sig
 ## Фич-флаги (feature toggles)
 
 Dark launch: фича коммитится выключенной и включается per-user в меню «Экспериментальные функции». Реестр (source of truth) — в коде: `FeatureFlagCatalog.All` ([Models/FeatureFlag.cs](backend/ClaudeHomeServer.Core/Models/FeatureFlag.cs)), там же у каждого ключа title и описание; хранение — override в `data/users.json`; фронт — стор [lib/featureFlags.ts](frontend/src/lib/featureFlags.ts), хук `useFeature(FLAGS.key)`.
-Перечня флагов карта не держит: он протухает быстрее всего остального. Активные — `workspace-destructive`, `spheres`, `change-dossiers-recall`, `plugins-mvp`, `plugins-build-yourself`; снятые (15): chat-context, chat-branch, visual-plan, specialty-prompt-sections, chat-auto-archive, mcp-catalog, project-map-hygiene, image-editor, local-projects, local-media-default, audio-editor, midi-editor, image-panel-v5, video-editor, media-format.
+Перечня флагов карта не держит: он протухает быстрее всего остального. Активные (6) — `workspace-destructive`, `spheres`, `plugins-mvp`, `plugins-build-yourself`, `shared-projects`, `llm-wiki`; снятые (24): chat-context, chat-branch, visual-plan, specialty-prompt-sections, chat-auto-archive, mcp-catalog, project-map-hygiene, image-editor, local-projects, local-media-default, audio-editor, midi-editor, image-panel-v5, video-editor, media-format, а в ноябре 2026 ещё 9 — character-smart-photos, character-face-swap, local-model-stats, turn-plan-feature-mode, features-overview, prompt-cache, change-dossiers-recall, turn-auto-resume, notes-wiki-unified (последний сведён к `llm-wiki`).
 **Пометки «за флагом …» в доках — исторические**, актуальный состав только в каталоге кода (ADR-013, например, до сих пор описывает сторожей чатов как флажных — флаг снят 2026-09-01).
 
 Флаги, снятые после dark launch, работают у всех безусловно: ассистент по умолчанию и

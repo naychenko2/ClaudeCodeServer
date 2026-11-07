@@ -102,8 +102,9 @@ public interface IChatContextStore
 - Один и тот же объект может быть основным и референсом одновременно — нет: при `SetPrimary` его референс
   снимается.
 - Ревизия `null` у агента — без сверки (как `VideoSceneService` на ветке).
-- Изменение рассылается SignalR-событием `chat_context_changed` владельцу (`ChatContextChangedMessage` в
-  `Core/Protocol`, с полным DTO — см. ниже).
+- Изменение рассылается SignalR-событием `chat_context_changed` по аудитории чата (`ChatContextChangedMessage` в
+  `Core/Protocol`) — только сигнал с ревизией, без DTO (решение CONSULT-CONTEXT-SUBJECT): карточки клиент
+  перечитывает по REST под своим субъектом.
 - Черновик «Новая картинка / Новый звук» — основной объект вида `image` / `audio` с нитью без файла: отдельной
   сущности «черновик» в сторе нет.
 

@@ -42,12 +42,12 @@ public sealed class VideoEditorToolsetFeedParityTests
     {
         var (scene, version) = w.F.SceneWithClip();
         // Сохранённая сцена — это уже файл фильма; для правки и сборки готовим его заранее одинаково в обоих мирах
-        var saved = await w.Saver.SaveAsync(w.Owner, w.F.Scope,
+        var saved = await w.Saver.SaveAsync(w.Owner, w.Owner, w.F.Scope,
             new SaveSceneRequest(w.Chat, scene.SceneId, version.VersionId, null, null), VideoInitiators.Human, default);
         saved.IsOk.Should().BeTrue(saved.Error);
         if (extraClip) w.F.WriteFile("video/утро/extra.mp4");
         var film = "video/утро/утро.film";
-        return new Ctx(scene.SceneId, version.VersionId, film, w.F.Service.State(w.Owner, w.F.Scope, film).Value!.Revision);
+        return new Ctx(scene.SceneId, version.VersionId, film, w.F.Service.State(w.Owner, w.Owner, w.F.Scope, film).Value!.Revision);
     }
 
     private static readonly Case[] Cases =

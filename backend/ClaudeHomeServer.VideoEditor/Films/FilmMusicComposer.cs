@@ -27,7 +27,7 @@ public sealed class FilmMusicComposer(
     // короткий фильм честно получает «не короче 10 с», а не обещание 0:05
     public const int MinMusicSeconds = 10;
 
-    public async Task<FilmCallResult<FilmMusicDraftDto>> CreateDraftAsync(string ownerId, VideoEditScope scope, string? path,
+    public async Task<FilmCallResult<FilmMusicDraftDto>> CreateDraftAsync(string ownerId, string? actorId, VideoEditScope scope, string? path,
         FilmMusicRequest? req, CancellationToken ct)
     {
         if (req is null || string.IsNullOrWhiteSpace(req.SessionId))
@@ -35,7 +35,7 @@ public sealed class FilmMusicComposer(
         if (audio is null)
             return FilmCallResult<FilmMusicDraftDto>.Fail(VideoEditorErrors.ProviderUnavailable,
                 "Редактор звука выключен: музыку под фильм сочинить нельзя");
-        var resolved = FilmService.ResolveFilm(scope, path);
+        var resolved = FilmService.ResolveFilm(scope, path, actorId);
         if (!resolved.IsOk) return FilmCallResult<FilmMusicDraftDto>.Fail(resolved.ErrorCode!, resolved.Error!);
         var read = films.Films.ReadFile(resolved.Value!.Full);
         if (read.Status == FilmStore.ReadStatus.NotFound)
@@ -46,7 +46,7 @@ public sealed class FilmMusicComposer(
         var draft = await audio.CreateDraftAsync(ownerId, scope.Key, req.SessionId.Trim(), FilmPaths.MusicRoot, ct);
         if (draft is null)
             return FilmCallResult<FilmMusicDraftDto>.Fail(VideoEditorErrors.ChatNotFound, "Не удалось завести звук в этом чате");
-        var expected = films.ExpectMusic(ownerId, scope, path, req.SessionId.Trim(), draft.ThreadId);
+        var expected = films.ExpectMusic(ownerId, actorId, scope, path, req.SessionId.Trim(), draft.ThreadId);
         return expected.IsOk
             ? FilmCallResult<FilmMusicDraftDto>.Ok(DraftOf(draft.ThreadId, read.Document))
             : FilmCallResult<FilmMusicDraftDto>.Fail(expected.ErrorCode!, expected.Error!);
@@ -89,7 +89,7 @@ public sealed class FilmMusicComposer(
     {
         if (projects.GetById(projectId) is not { } project || project.OwnerId != evt.OwnerId) return;
         var scope = VideoEditScope.Of(project);
-        var resolved = FilmService.ResolveFilm(scope, state.Path);
+        var resolved = FilmService.ResolveFilm(scope, state.Path, evt.OwnerId);
         if (!resolved.IsOk) return;
         var film = resolved.Value!;
         if (await audio!.GetMainFileAsync(evt.OwnerId, evt.ThreadId, evt.VersionId, default) is not { } track) return;
@@ -101,7 +101,7 @@ public sealed class FilmMusicComposer(
         for (var attempt = 1; attempt <= MaxNameAttempts && musicPath is null; attempt++)
         {
             var candidate = $"{stem}{(attempt == 1 ? "" : $".v{attempt}")}{extension}";
-            if (FilmService.ResolveInside(project, candidate) is not { IsOk: true, Value: { } target }) return;
+            if (FilmService.ResolveInside(project, candidate, evt.OwnerId) is not { IsOk: true, Value: { } target }) return;
             Directory.CreateDirectory(Path.GetDirectoryName(target.Full)!);
             try
             {

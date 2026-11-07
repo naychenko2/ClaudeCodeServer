@@ -188,10 +188,17 @@ public sealed class LlamaServerClient : ILocalLlmClient
 
     public async Task<string?> GenerateTextAsync(
         string prompt, string? model, TimeSpan timeout, int numPredict, int numCtx,
+        string? ownerId = null, string? label = null, CancellationToken ct = default) =>
+        (await GenerateTextDetailedAsync(prompt, model, timeout, numPredict, numCtx, ownerId, label, ct)).Text;
+
+    // Тот же вызов, что GenerateTextAsync, но usage того же ответа отдаётся наружу, а не только
+    // в RecordSpend: локальный маршрут ночного разбора меряет им нагрузку GPU (WC-4c).
+    public async Task<(string? Text, Protocol.UsageInfo? Usage)> GenerateTextDetailedAsync(
+        string prompt, string? model, TimeSpan timeout, int numPredict, int numCtx,
         string? ownerId = null, string? label = null, CancellationToken ct = default)
     {
         var used = string.IsNullOrWhiteSpace(model) ? TextModel : model!;
-        if (string.IsNullOrWhiteSpace(BaseUrl) || string.IsNullOrWhiteSpace(used)) return null;
+        if (string.IsNullOrWhiteSpace(BaseUrl) || string.IsNullOrWhiteSpace(used)) return (null, null);
         var budget = InputBudgetChars(numCtx, numPredict);
         var trimmed = TrimToBudget(prompt, budget, out var origLen, out var newLen);
         if (newLen < origLen)
@@ -209,20 +216,20 @@ public sealed class LlamaServerClient : ILocalLlmClient
             if (!resp.IsSuccessStatusCode)
             {
                 _logger.LogDebug("llama-server /v1/chat/completions (text) вернул {Status}", resp.StatusCode);
-                return null;
+                return (null, null);
             }
 
             var json = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
             var content = ExtractContent(json);
-            if (string.IsNullOrWhiteSpace(content)) return null;
+            if (string.IsNullOrWhiteSpace(content)) return (null, null);
             content = ThinkingStripper.Strip(content);
             RecordSpend(used, json, ownerId, label);
-            return content;
+            return (content, ReadUsage(json));
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "llama-server (text) недоступен ({BaseUrl}), фолбэк на claude", BaseUrl);
-            return null;
+            return (null, null);
         }
     }
 
@@ -235,10 +242,19 @@ public sealed class LlamaServerClient : ILocalLlmClient
     public async Task<string?> ChatJsonAsync(
         string systemPrompt, string userPrompt, object jsonFormat, CancellationToken ct = default,
         string? model = null, int? timeoutMs = null, int? numPredict = null, int? numCtx = null,
+        string? ownerId = null, string? label = null) =>
+        (await ChatJsonDetailedAsync(systemPrompt, userPrompt, jsonFormat, ct, model, timeoutMs,
+            numPredict, numCtx, ownerId, label)).Text;
+
+    // Тот же вызов со строгой схемой, но usage того же ответа отдаётся наружу, а не только в
+    // RecordSpend: им меряют нагрузку локали (ночной разбор вики, WC-4c).
+    public async Task<(string? Text, Protocol.UsageInfo? Usage)> ChatJsonDetailedAsync(
+        string systemPrompt, string userPrompt, object jsonFormat, CancellationToken ct = default,
+        string? model = null, int? timeoutMs = null, int? numPredict = null, int? numCtx = null,
         string? ownerId = null, string? label = null)
     {
         var used = string.IsNullOrWhiteSpace(model) ? Model : model!;
-        if (string.IsNullOrWhiteSpace(BaseUrl) || string.IsNullOrWhiteSpace(used)) return null;
+        if (string.IsNullOrWhiteSpace(BaseUrl) || string.IsNullOrWhiteSpace(used)) return (null, null);
         var ctx = numCtx ?? 0;
         var pred = numPredict ?? 120;
         // Суммарный бюджет: при нехватке режем с хвоста user-промпта, системный не трогаем.
@@ -293,20 +309,20 @@ public sealed class LlamaServerClient : ILocalLlmClient
             if (!resp.IsSuccessStatusCode)
             {
                 _logger.LogDebug("llama-server /v1/chat/completions вернул {Status}", resp.StatusCode);
-                return null;
+                return (null, null);
             }
 
             var json = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
             var answer = ExtractContent(json);
-            if (string.IsNullOrWhiteSpace(answer)) return null;
+            if (string.IsNullOrWhiteSpace(answer)) return (null, null);
             answer = ThinkingStripper.Strip(answer);
             if (!string.IsNullOrEmpty(answer)) RecordSpend(used, json, ownerId, label);
-            return answer;
+            return (answer, ReadUsage(json));
         }
         catch (Exception ex)
         {
             _logger.LogDebug(ex, "llama-server недоступен ({BaseUrl}), фолбэк на claude", BaseUrl);
-            return null;
+            return (null, null);
         }
     }
 

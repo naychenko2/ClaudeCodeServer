@@ -223,6 +223,21 @@ export interface Project {
   // Только в ответе создания и перепривязки локального проекта: агент устройства создал или
   // разрешил папку («Папка «…» создана и разрешена агенту на «…»»). Показывается уведомлением
   folderNotice?: string | null;
+  // Участники общего проекта: сводка из DTO (S1-2b, ProjectsController.WithCount →
+  // ProjectMembersView.Summary): { count, first }. null у обычного проекта, где
+  // вызывающий — владелец, и у старого бэка. Полный список — только в
+  // /api/projects/{id}/members; здесь решать «кого пригласили» нельзя.
+  members?: ProjectMembersSummary | null;
+  // Роль вызывающего в общем проекте (Summary.MyRole): null у обычного проекта и у старого
+  // бэка. Где есть — авторитетна; где её нет — право действия по ownerId.
+  myRole?: ProjectRoleView;
+  // Владелец общего проекта для заголовка «Проект Андрея» и метки на чужом проекте
+  // (Summary.OwnerUsername/OwnerDisplayName). null у обычного проекта и у старого бэка.
+  ownerUsername?: string | null;
+  ownerDisplayName?: string | null;
+  // Бывшие участники общего проекта: подпись «больше не в проекте» над их сообщениями.
+  // Нет у обычного проекта и у старого бэка
+  formerMembers?: { userId: string; displayName?: string | null }[];
 }
 
 // Иконка проекта (ADR-009): initials — две буквы на цветной плитке; glyph — значок из
@@ -569,9 +584,14 @@ export interface Task {
   reminderMinutes?: number;  // офсет напоминания до срока в минутах (0 = в момент срока)
   reminderSentAt?: string;   // UTC-отметка отправленного напоминания
   assignee?: TaskAssignee;
+  // Общий проект: человек-исполнитель и кто поставил задачу (S2b-1). Нет у задач личного
+  // проекта и у старого бэка — тогда вид карточки прежний
+  assigneeUserId?: string | null;
+  createdByUserId?: string | null;
   recurrence?: TaskRecurrence;
   seriesId?: string;         // общий id серии регулярной задачи
-  linkedSessionId?: string;
+  // S2d-4b (К5): чат, невидимый зрителю, приходит обнулённым (null), форма — в linkedChat
+  linkedSessionId?: string | null;
   // Режим «Исполнение фичи»: связь задачи с фичей (эпик) и кодом шага.
   // Аддитивно и nullable — старые задачи без разметки не несут этих полей.
   featureId?: string | null;   // id задачи-эпика
@@ -582,6 +602,12 @@ export interface Task {
   // Чат, породивший задачу (бэк TaskItem.SourceSessionId). Для фичи — связь эпика с чатом:
   // GET /api/tasks/features?sessionId= выбирает эпики по этому полю (и ExecutorLaunchedBySessionId).
   sourceSessionId?: string | null;
+  // Маска чужих приватных чатов (бэк TaskView.MaskForeignChats, S2d-4b): форма стоит рядом с
+  // обнулённым id-полем и приходит ТОЛЬКО когда чат не виден зрителю; для видимого чата её нет.
+  linkedChat?: ChatRef | null;
+  sourceChat?: ChatRef | null;
+  executorLaunchedByChat?: ChatRef | null;
+  reportToChat?: ChatRef | null;
   personaId?: string;        // исполнение от лица персоны (assignee=claude)
   // Уровень модели исполнителя (слот strong/medium/weak); отсутствует — не задан:
   // модель берётся от персоны-исполнителя и назначения места «Исполнитель задач»
@@ -683,7 +709,7 @@ export interface CreateTaskDto {
   reminderMinutes?: number;
   assignee?: TaskAssignee;
   recurrence?: TaskRecurrence;
-  linkedSessionId?: string;
+  linkedSessionId?: string | null;   // null — не задано (то же, что поле отсутствует)
   personaId?: string;        // исполнение от лица персоны
   // Уровень модели исполнителя; не указано — не задан (модель по персоне и месту)
   modelTier?: ModelTierValue;
@@ -736,6 +762,7 @@ export interface PregateRecord {
   redStreak: number;
   redKey?: string | null;
   nothingApplicable?: boolean;
+  outcome?: 'green' | 'red' | 'neutral';
 }
 
 // Подтверждение проверки: personaId == null означает проверку человеком (UI-форма
@@ -762,9 +789,13 @@ export interface UpdateTaskDto {
   // Отрицательное значение = убрать напоминание, undefined = не менять
   reminderMinutes?: number;
   assignee?: TaskAssignee;
+  // Человек-исполнитель общего проекта (S2b-1): undefined = не менять, null = снять,
+  // guid участника = назначить
+  assigneeUserId?: string | null;
   // type 'none' = убрать повторение, undefined = не менять
   recurrence?: TaskRecurrence;
-  linkedSessionId?: string;
+  // '' = очистить, null = не менять (маска S2d-4b), undefined = не менять
+  linkedSessionId?: string | null;
   // Персона-исполнитель: '' = убрать, undefined = не менять
   personaId?: string;
   // Уровень модели исполнителя: '' = сбросить, undefined = не менять
@@ -953,6 +984,12 @@ export interface Session {
   archiveSummary?: string | null;
   archiveSummaryAt?: string | null;
   summaryNoteId?: string | null;
+  // Видимость проектного чата (S2d). privateToUserId — id человека, которому чат приватен
+  // (null/отсутствует — общий); createdByUserId — автор чата (создавший): тумблер видимости
+  // разрешён только ему (бэк SessionManager.SetChatVisibility). Оба поля приходят с бэка
+  // как есть (SessionJsonConverter их не вырезает), старые записи читаются как null.
+  privateToUserId?: string | null;
+  createdByUserId?: string | null;
 }
 
 // Тип материала контекста чата — те же значения, что SessionContextTypes на бэке
@@ -1066,7 +1103,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'text_delta'; text: string }
   // delegationTaskId — доклад о завершении делегированной задачи: id задачи структурным
   // полем (см. ChatItem user_message), а не вытащенный из текста маркера
-  | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; timestamp?: number; delegationTaskId?: string; imageSnapshot?: ImageSnapshotMark | null }
+  | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; timestamp?: number; delegationTaskId?: string; imageSnapshot?: ImageSnapshotMark | null; senderUserId?: string }
   // Гостевая реплика персоны без агентского хода (0 токенов) — доклад о завершении
   // делегированной задачи (модель Z); маркер доклада распознаётся на рендере (см.
   // lib/delegationReport.ts). Живой аналог StoredTextMessage.PersonaId из истории.
@@ -1116,7 +1153,7 @@ export type ServerMessage = { sessionId: string } & (
   // usage для этого не годится: он суммирует все запросы хода, включая сабагентов.
   // usageModel — фактическая модель хода (её же бэк проставляет постам в истории):
   // на этом событии лента клеит модель постам текущего хода.
-  // promptCache — состояние prompt cache хода (фич-флаг prompt-cache); null/отсутствует —
+  // promptCache — состояние prompt cache хода; null/отсутствует —
   // ход без сигнала кэша и история до появления поля
   | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number; usageModel?: string; durationApiMs?: number; promptCache?: PromptCacheWire }
   | { type: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
@@ -1169,6 +1206,11 @@ export type ServerMessage = { sessionId: string } & (
   // Принимает строго по этому типу: подписки на chat_archived не должны случайно
   // отрабатывать событие удаления, и наоборот.
   | { type: 'chat_archived'; archived: boolean }
+  // Чат стал приватным (S2d-F2): сервер СНЯЛ чужие соединения с группы чата и лишь потом
+  // послал это в project-группу — после него клиент участника не получит ни одного события
+  // чата. Без содержимого: только id и новое состояние. private всегда true: возврат в
+  // общий события не шлёт — участники догонят его поллингом списка (чата у них не было).
+  | { type: 'chat_visibility_changed'; private: boolean }
   | { type: 'chat_renamed'; name: string; topic?: string | null }
   // «Продолжить в новом чате»: исходный чат (sessionId) продолжён в newSessionId.
   // Живое событие: если открыт именно исходный чат, фронт сам переходит в новый (тост).
@@ -1255,7 +1297,7 @@ export type ServerMessage = { sessionId: string } & (
   // Полный снимок очереди сообщений занятой сессии (постановка/отмена/доставка).
   // kind: 'user' — сообщение человека из «честной очереди» (рисуется карточкой «Вы» с
   // вложениями и режимом, который вернётся в композер по «Стоп»); 'agent' — chats_send.
-  | { type: 'pending_messages'; items: { id: string; text: string; senderPersonaId?: string; senderOrigin?: string; enqueuedAt: string; senderChatName?: string; kind?: 'user' | 'agent'; attachedPaths?: string[]; mode?: string | null; waitingForDevice?: boolean }[] }
+  | { type: 'pending_messages'; items: { id: string; text: string; senderPersonaId?: string; senderOrigin?: string; enqueuedAt: string; senderChatName?: string; kind?: 'user' | 'agent'; attachedPaths?: string[]; mode?: string | null; waitingForDevice?: boolean; senderUserId?: string }[] }
   // «Стоп» вернул прерванное пользовательское сообщение в композер (фича «честная
   // очередь»). text=null — восстанавливать нечего (прерван авто/агентский ход, очередь
   // пуста): композер не трогаем. Иначе — текст, вложения и режим, которые подставятся
@@ -1272,7 +1314,7 @@ export type ServerMessage = { sessionId: string } & (
   // Текст сюда не кладём — шторка забирает его отдельным REST-запросом.
   // applied=false — ход доигрывался в живом процессе, и этот промпт модели не уходил
   | { type: 'prompt_snapshot'; snapshotId: string; applied: boolean; inheritedFromId?: string }
-  // Живые метрики локальной модели (флаг local-model-stats). Эфемерные: в историю не
+  // Живые метрики локальной модели. Эфемерные: в историю не
   // пишутся, после F5 подхватываются следующим снимком/REST. phase — фаза генерации
   // (queued|prefill|generating), genTps — ток/с, waitingTotal — сколько прогонов ждут GPU.
   | { type: 'local_model_live'; phase: string; genTps?: number | null; waitingTotal?: number | null }
@@ -1280,7 +1322,7 @@ export type ServerMessage = { sessionId: string } & (
   // time-to-first-token, оценка времени в очереди, доля prefix-кэша, число выданных токенов.
   | { type: 'local_model_turn_stats'; genTps?: number | null; prefillTps?: number | null; ttftMs?: number | null; queueMsApprox?: number | null; cacheHitPerc?: number | null; outTokens?: number | null; mainRequests?: number; subagentRequests?: number; compactionRequests?: number; auxiliaryRequests?: number; agentTypes?: string[] | null; compactionKind?: 'auto' | 'manual' | 'reactive' | null; toolCallLeakTail?: number; toolCallLeakWholeCall?: number }
   // Ход ждёт свободный слот локальной модели (гейт допуска, бэк 4683acb29). В отличие от
-  // local_model_live идёт БЕЗ флага local-model-stats: человек обязан видеть, что ход ждёт,
+  // local_model_live идёт БЕЗ : человек обязан видеть, что ход ждёт,
   // а не «виснет молча». position — место в очереди (1-based), active/limit — «заняты N из M».
   // position=0 — ожидание кончилось (ход допущен/отказан/остановлен): строку снять.
   // Эфемерное: в историю не пишется, свою строку ленты снимает и на конце хода (редьюсер).
@@ -1508,7 +1550,7 @@ export type ChatItem =
   // delegationTaskId — доклад о завершении делегированной задачи: id задачи, к которой
   // ведёт карточка доклада. Нет у обычных сообщений и у историй до появления поля
   // imageSnapshot — сообщение из чата картинки: приложен ли снимок холста (ADR-018 §3)
-  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; ts?: number; promptSnapshotId?: string; delegationTaskId?: string; imageSnapshot?: ImageSnapshotMark }
+  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; ts?: number; promptSnapshotId?: string; delegationTaskId?: string; imageSnapshot?: ImageSnapshotMark; senderUserId?: string }
   | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[]; turnWorktree?: { path: string; name: string } | null }
   // personaId — авторство реплики (персона на момент хода); после смены собеседника
   // старые реплики сохраняют прежний аватар. Отсутствует у обычного ассистента.

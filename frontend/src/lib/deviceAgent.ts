@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import type { Project } from '../types';
-import { request } from './offline';
+import { request, type EtagRef } from './offline';
 import { projectFilesRoute, routeSupports, RELAY_ROUTE_REASON, type DevicePresence, type ProjectFilesRoute } from './projectCapabilities';
 import { agentServesPath, relayServesPath, type ProjectRoute } from './deviceAgentRoutes';
 
@@ -241,7 +241,9 @@ const PROJECT_FILES_URL = /^\/projects\/([^/?]+)\/((?:files|git|services|preview
 // Замена request() для маршрутов файлов, git, сервисов и навыков: у локального проекта запрос уходит в агента,
 // у серверного — как раньше. Маршрут, которого агент не умеет, отказывает понятным текстом
 // до сети, а не падает там 404.
-export function projectRequest<T>(url: string, options?: RequestInit & { timeoutMs?: number; live?: boolean; chatScope?: string }): Promise<T> {
+// etagRef (K8) доходит только до request() — сервера и ретранслятора; агент ETag не отдаёт
+// (LocalApi.MapFiles), и его If-Match не проверяет: на агентской ветке sink остаётся пустым.
+export function projectRequest<T>(url: string, options?: RequestInit & { timeoutMs?: number; live?: boolean; chatScope?: string; etagRef?: EtagRef }): Promise<T> {
   const m = PROJECT_FILES_URL.exec(url);
   if (!m) return request<T>(url, options);
   const projectId = decodeURIComponent(m[1]);

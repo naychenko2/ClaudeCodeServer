@@ -20,6 +20,10 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
     private readonly SessionManager sessions;
     private readonly Mcp.McpStatusStore? mcpStatus;
     private readonly ILogger<HiggsfieldToolset> log;
+    // Вердикт рамки хода (S2a-3b). Обязательный шов, как в четырёх остальных тулсетах
+    // (R-S2a-3b): прежний nullable означал fail-open — собранный без шва тулсет молча
+    // выключал узкую рамку. Тестовые фабрики передают стаб с широкой рамкой
+    private readonly ClaudeHomeServer.Services.Access.ITurnFrameSource frames;
 
     public HiggsfieldToolset(
         HiggsfieldOAuthService higgsfield,
@@ -27,13 +31,15 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
         SessionManager sessions,
         IConfiguration config,
         Mcp.McpStatusStore? mcpStatus,
-        ILogger<HiggsfieldToolset> log)
+        ILogger<HiggsfieldToolset> log,
+        ClaudeHomeServer.Services.Access.ITurnFrameSource frames)
     {
         this.higgsfield = higgsfield;
         this.clientFactory = clientFactory;
         this.sessions = sessions;
         this.mcpStatus = mcpStatus;
         this.log = log;
+        this.frames = frames;
         _snapshotPath = ResolveSnapshotPath(config);
         // Холодный старт: поднимаем снимок с диска. lastSuccessAt берём из снимка
         // (новый формат с полем SavedAt); если поля нет — старый формат — считаем снимок
@@ -212,6 +218,19 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
     {
         if (!TryResolveSession(context, out _))
             return Deny("Chat invoker not found or belongs to another owner.");
+
+        // Узкая рамка хода (общий проект, S2a-3b, решение 29.10): Higgsfield подключён к
+        // инстансному аккаунту — это деньги и история генераций владельца. Генерация
+        // (generate_*) и чтение аккаунта (job_status/jobs_wait/show_generation_by_ids —
+        // история генераций; media_* — запись в хранилище аккаунта) закрыты в общем чате
+        // всем, включая владельца. Остаётся models_explore: публичный справочник моделей,
+        // не читает аккаунт и не тратит деньги. Отказ стоит ДО проверки токена: в общем
+        // проекте причина отказа — рамка, а не состояние подключения.
+        var frame = frames.Frame(context.CallerSessionId, context.OwnerId);
+        if (frame == ClaudeHomeServer.Services.Access.TurnFrameKind.Narrow
+            && tool != "models_explore")
+            return Deny(NarrowAccountText);
+
         var token = higgsfield.EnsureFresh();
         if (token is null)
             return Deny("Higgsfield is not connected on this instance - contact the admin.");
@@ -567,6 +586,12 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
             log.LogWarning(ex, "Higgsfield tools/list: snapshot save failed");
         }
     }
+
+    // Текст отказа узкой рамки — фиксированный, без id и названий из личных данных владельца
+    private const string NarrowAccountText =
+        "Higgsfield закрыт в общем проекте: это аккаунт владельца — его деньги и его история "
+        + "генераций. Доступен только справочник моделей (models_explore): он не читает "
+        + "аккаунт и не тратит деньги.";
 
     private static McpToolCallResult Deny(string text) => new(text, IsError: true);
     private static string OneLine(string text) => text.Replace("\r", " ").Replace("\n", " ");

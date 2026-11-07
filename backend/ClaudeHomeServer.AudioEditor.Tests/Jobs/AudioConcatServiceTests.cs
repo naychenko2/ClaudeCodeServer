@@ -34,6 +34,25 @@ public sealed class AudioConcatServiceTests : IDisposable
         Directory.CreateDirectory(Path.Combine(projectRoot, "sfx"));
         File.WriteAllBytes(Path.Combine(projectRoot, "sfx", "jingle.wav"), "JINGLE"u8.ToArray());
         File.WriteAllBytes(Path.Combine(_root, "secret.wav"), "SECRET"u8.ToArray());
+        // Closed-поддерево участников в корне проекта: чужое и своё (F2-P2b)
+        var foreign = Path.Combine(projectRoot, ".cc-attachments", "private", "other-user", "g1");
+        var own = Path.Combine(projectRoot, ".cc-attachments", "private", Owner, "g1");
+        Directory.CreateDirectory(foreign);
+        Directory.CreateDirectory(own);
+        File.WriteAllBytes(Path.Combine(foreign, "secret.wav"), "FOREIGN"u8.ToArray());
+        File.WriteAllBytes(Path.Combine(own, "mine.wav"), "MINE"u8.ToArray());
+        // та же раскладка в глубине дерева, не под .cc-attachments корня
+        var nested = Path.Combine(projectRoot, "nested", ".cc-attachments", "private", "other-user");
+        Directory.CreateDirectory(nested);
+        File.WriteAllBytes(Path.Combine(nested, "deep.wav"), "NESTED"u8.ToArray());
+        // ссылка на корень чужого проекта (без права создавать ссылку путь просто не существует —
+        // отказ остаётся тем же)
+        var otherRoot = Path.Combine(_root, "other-project");
+        var otherPrivate = Path.Combine(otherRoot, ".cc-attachments", "private", "other-user", "g1");
+        Directory.CreateDirectory(otherPrivate);
+        File.WriteAllBytes(Path.Combine(otherPrivate, "secret.wav"), "OTHER"u8.ToArray());
+        try { Directory.CreateSymbolicLink(Path.Combine(projectRoot, "other"), otherRoot); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         _project = new Project { Id = "p-1", RootPath = projectRoot };
         _scope = AudioEditScope.Of(_project);
     }
@@ -71,7 +90,7 @@ public sealed class AudioConcatServiceTests : IDisposable
         var (threadId, versionId) = ThreadWithVersion("VOICE", license: "CC BY-NC 4.0");
         var before = _store.Get(Owner, Session).Threads.Single();
 
-        var result = await Service().ConcatAsync(Owner, _scope, new AudioConcatInput(Session,
+        var result = await Service().ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session,
         [
             new AudioConcatPiece(ThreadId: threadId, VersionId: versionId),
             new AudioConcatPiece(ProjectFile: "sfx/jingle.wav"),
@@ -112,7 +131,7 @@ public sealed class AudioConcatServiceTests : IDisposable
     public async Task Без_флажка_громкость_не_выравнивается_а_стык_по_умолчанию_встык()
     {
         var (threadId, _) = ThreadWithVersion("A");
-        var result = await Service().ConcatAsync(Owner, _scope, new AudioConcatInput(Session,
+        var result = await Service().ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session,
             [new AudioConcatPiece(threadId), new AudioConcatPiece(threadId)], NormalizeLoudness: false), CancellationToken.None);
 
         result.Error.Should().BeNull();
@@ -124,7 +143,7 @@ public sealed class AudioConcatServiceTests : IDisposable
     public async Task Меньше_двух_кусков_отказ_до_шва()
     {
         var (threadId, _) = ThreadWithVersion("A");
-        var result = await Service().ConcatAsync(Owner, _scope, new AudioConcatInput(Session, [new AudioConcatPiece(threadId)]),
+        var result = await Service().ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session, [new AudioConcatPiece(threadId)]),
             CancellationToken.None);
 
         result.ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
@@ -138,7 +157,7 @@ public sealed class AudioConcatServiceTests : IDisposable
     {
         var (threadId, _) = ThreadWithVersion("A");
         var pieces = Enumerable.Range(0, AudioDspLimits.MaxConcatPieces + 1).Select(_ => new AudioConcatPiece(threadId)).ToList();
-        var result = await Service().ConcatAsync(Owner, _scope, new AudioConcatInput(Session, pieces), CancellationToken.None);
+        var result = await Service().ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session, pieces), CancellationToken.None);
 
         result.ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
         _dsp.Calls.Should().Be(0);
@@ -148,7 +167,7 @@ public sealed class AudioConcatServiceTests : IDisposable
     public async Task Файл_проекта_в_личной_области_отказ()
     {
         var (threadId, _) = ThreadWithVersion("A");
-        var result = await Service().ConcatAsync(Owner, Personal, new AudioConcatInput(Session,
+        var result = await Service().ConcatAsync(Owner, Owner, Personal, new AudioConcatInput(Session,
             [new AudioConcatPiece(threadId), new AudioConcatPiece(ProjectFile: "sfx/jingle.wav")]), CancellationToken.None);
 
         result.ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
@@ -161,7 +180,7 @@ public sealed class AudioConcatServiceTests : IDisposable
     {
         var origin = _store.Open(Owner, Session, "sfx/jingle.wav", null, null).Thread!;
         var (threadId, _) = ThreadWithVersion("A");
-        var result = await Service().ConcatAsync(Owner, Personal, new AudioConcatInput(Session,
+        var result = await Service().ConcatAsync(Owner, Owner, Personal, new AudioConcatInput(Session,
             [new AudioConcatPiece(threadId), new AudioConcatPiece(origin.Id, AudioThreadVersion.OriginId)]), CancellationToken.None);
 
         result.Error.Should().Contain(AudioConcatService.PersonalProjectFileText);
@@ -175,11 +194,44 @@ public sealed class AudioConcatServiceTests : IDisposable
     public async Task Путь_вне_проекта_или_несуществующий_отказ(string file)
     {
         var (threadId, _) = ThreadWithVersion("A");
-        var result = await Service().ConcatAsync(Owner, _scope, new AudioConcatInput(Session,
+        var result = await Service().ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session,
             [new AudioConcatPiece(threadId), new AudioConcatPiece(ProjectFile: file)]), CancellationToken.None);
 
         result.Error.Should().StartWith("Кусок 2:");
         _dsp.Calls.Should().Be(0);
+    }
+
+    // F2-P2b: чужое private участника не читается куском склейки — общий предикат
+    // (ProjectLinkGuard.ResolveInsideAs → PrivateAttachments.IsForeignResolved). Отказ — тот же
+    // «путь вне проекта»: наличие чужого файла не раскрываем
+    [Theory]
+    [InlineData(".cc-attachments/private/other-user/g1/secret.wav")]
+    [InlineData(".cc-attachments/PRIVATE/other-user/g1/../g1/secret.wav")]
+    [InlineData("nested/.cc-attachments/private/other-user/deep.wav")]
+    [InlineData("other/.cc-attachments/private/other-user/g1/secret.wav")]
+    public async Task Кусок_из_чужого_private_отказ_без_байтов(string file)
+    {
+        var (threadId, _) = ThreadWithVersion("A");
+        var result = await Service().ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session,
+            [new AudioConcatPiece(threadId), new AudioConcatPiece(ProjectFile: file)]), CancellationToken.None);
+
+        result.Error.Should().Be("Кусок 2: путь вне проекта", file);
+        _dsp.Calls.Should().Be(0);
+        _store.Get(Owner, Session).Threads.Should().HaveCount(1, "отказанная склейка нить не заводит");
+    }
+
+    // Свой private и обычный файл проекта читаются как раньше
+    [Fact]
+    public async Task Кусок_из_своего_private_и_обычного_файла_читается()
+    {
+        var (threadId, _) = ThreadWithVersion("A");
+        var result = await Service().ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session,
+            [new AudioConcatPiece(threadId),
+             new AudioConcatPiece(ProjectFile: $".cc-attachments/private/{Owner}/g1/mine.wav"),
+             new AudioConcatPiece(ProjectFile: "sfx/jingle.wav")]), CancellationToken.None);
+
+        result.Error.Should().BeNull();
+        _dsp.Pieces.Select(System.Text.Encoding.UTF8.GetString).Should().Equal("A", "MINE", "JINGLE");
     }
 
     [Fact]
@@ -187,13 +239,13 @@ public sealed class AudioConcatServiceTests : IDisposable
     {
         var (threadId, _) = ThreadWithVersion("A");
         var svc = Service();
-        (await svc.ConcatAsync(Owner, _scope, new AudioConcatInput("chat-2",
+        (await svc.ConcatAsync(Owner, Owner, _scope, new AudioConcatInput("chat-2",
             [new AudioConcatPiece(threadId), new AudioConcatPiece(threadId)]), CancellationToken.None))
             .Error.Should().Contain("нить не найдена");
-        (await svc.ConcatAsync(Owner, _scope, new AudioConcatInput(Session,
+        (await svc.ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session,
             [new AudioConcatPiece(threadId), new AudioConcatPiece(threadId, ProjectFile: "sfx/jingle.wav")]), CancellationToken.None))
             .ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
-        (await svc.ConcatAsync(Owner, _scope, new AudioConcatInput(Session,
+        (await svc.ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session,
             [new AudioConcatPiece(threadId), new AudioConcatPiece(threadId)], Name: "../x"), CancellationToken.None))
             .ErrorCode.Should().Be(AudioEditErrorCodes.InvalidRequest);
         _dsp.Calls.Should().Be(0);
@@ -205,9 +257,9 @@ public sealed class AudioConcatServiceTests : IDisposable
         var (threadId, _) = ThreadWithVersion("A");
         var input = new AudioConcatInput(Session, [new AudioConcatPiece(threadId), new AudioConcatPiece(threadId)]);
 
-        (await Service(noDsp: true).ConcatAsync(Owner, _scope, input, CancellationToken.None))
+        (await Service(noDsp: true).ConcatAsync(Owner, Owner, _scope, input, CancellationToken.None))
             .ErrorCode.Should().Be(AudioEditErrorCodes.DspUnavailable);
-        (await Service(new FakeDsp { Available = false }).ConcatAsync(Owner, _scope, input, CancellationToken.None))
+        (await Service(new FakeDsp { Available = false }).ConcatAsync(Owner, Owner, _scope, input, CancellationToken.None))
             .ErrorCode.Should().Be(AudioEditErrorCodes.DspUnavailable);
     }
 
@@ -216,7 +268,7 @@ public sealed class AudioConcatServiceTests : IDisposable
     {
         var (threadId, _) = ThreadWithVersion("A");
         var result = await Service(new FakeDsp { Error = "Кусок 1 короче плавных переходов на его краях." })
-            .ConcatAsync(Owner, _scope, new AudioConcatInput(Session, [new AudioConcatPiece(threadId), new AudioConcatPiece(threadId)]),
+            .ConcatAsync(Owner, Owner, _scope, new AudioConcatInput(Session, [new AudioConcatPiece(threadId), new AudioConcatPiece(threadId)]),
                 CancellationToken.None);
 
         result.Error.Should().Contain("короче плавных переходов");

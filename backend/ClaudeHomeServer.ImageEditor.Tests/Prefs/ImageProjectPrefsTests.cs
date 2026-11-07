@@ -68,8 +68,9 @@ public class ImageProjectPrefsTests : IDisposable
         saved.Should().Be(new ImageProjectPrefs("fal", "m1", 3, false, null));
         _prefs.Get(Owner, _project).Should().Be(saved);
         _store.Get("owner-2", ProjectId).Should().Be(ImageProjectPrefs.Default, "у другого владельца свой выбор");
-        var sent = _broadcaster.ToOwnerCalls.Should().ContainSingle().Subject;
-        sent.OwnerId.Should().Be(Owner);
+        var sent = _broadcaster.ToProjectCalls.Should().ContainSingle().Subject;
+        sent.ProjectId.Should().Be(ProjectId);
+        _broadcaster.ToOwnerCalls.Should().BeEmpty();
         var message = sent.Message.Should().BeOfType<ImageProjectPrefsChangedMessage>().Subject;
         message.Type.Should().Be("image_prefs_changed");
         message.ProjectId.Should().Be(ProjectId);

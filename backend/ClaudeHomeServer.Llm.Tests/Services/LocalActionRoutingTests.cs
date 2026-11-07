@@ -2,6 +2,7 @@
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition.Llm;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Llm.Claude;
 using ClaudeHomeServer.Tests.Helpers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -445,12 +446,368 @@ public class LocalActionRoutingTests
     [InlineData(LocalActionCatalog.CharacterSceneParse)]
     public async Task ЛокальЗанятаХодом_БезОблака(string actionKey)
     {
-        // Движок занят ходом исполнителя (LocalBlockedByTurn) → шаг локали пропускается,
-        // и на маршруте local облачного шага всё равно нет.
+        // Вариант А (06.11): движок занят ходом (LocalBlockedByTurn), но на локальном маршруте
+        // в режиме «без облака» облачного шага нет — пропуск шага локали был потерей вызова.
+        // Вызов идёт в движок: ответ локали, облака нет.
         var (result, claude) = await RunLocalOrChosenNoCloud(actionKey, localAnswer: "ответ", busy: true);
+
+        Assert.Equal("ответ", result);
+        Assert.Empty(claude.Calls);
+    }
+
+    [Theory]
+    [InlineData(LocalActionCatalog.ActionRank)]
+    [InlineData(LocalActionCatalog.CharacterSceneParse)]
+    public async Task ЛокальПустоПриЗанятомДвижке_БезОблака(string actionKey)
+    {
+        // Занятость не пропускает вызов (вариант А), но движок вернул null — в бою это полный
+        // счётчик слотов: TrackedLocalLlmClient берёт слот через TryEnter без ожидания и при
+        // полном отдаёт null. Цепочка отдаёт null без исключения, облачного шага нет —
+        // этот отказ ловит повтор ночи (WN-2), а не цепочка.
+        var (result, claude) = await RunLocalOrChosenNoCloud(actionKey, localAnswer: null, busy: true);
 
         Assert.Null(result);
         Assert.Empty(claude.Calls);
+    }
+
+    // --- WC-4c: detailed-цепочка RunLocalOrChosenDetailedAsync. Тот же путь без облачного
+    //     фолбэка, но usage локального ответа доходит до вызывающего: им ночной разбор вики и
+    //     ступень 2 отбора чатов меряют фактическую нагрузку GPU локали. ---
+
+    // Фейк движка с метриками того же ответа — как реальные LlamaServerClient/OllamaClient.
+    // throws — «движок бросает» (реальные клиенты своё исключение глушат; здесь проверяется,
+    // что цепочка по нему в облако не уходит). usage = null — «метрик не было»: вызов успешен.
+    // busy — движок занят чужим ходом: слот в собственном трекере (тот же протягивается
+    // роутеру → LocalBlockedByTurn=true). Calls — сколько detailed-вызовов прошло через движок.
+    private sealed class DetailedLocalEngine : ILocalLlmClient
+    {
+        private readonly string? _answer;
+        private readonly Protocol.UsageInfo? _usage;
+        private readonly bool _throws;
+        private readonly LocalEngineBusyTracker _tracker = new();
+        private readonly IDisposable? _slot;
+
+        public DetailedLocalEngine(string? answer, Protocol.UsageInfo? usage, bool throws = false,
+            bool busy = false)
+        {
+            _answer = answer;
+            _usage = usage;
+            _throws = throws;
+            _slot = busy ? _tracker.Enter() : null;
+        }
+
+        public LocalEngineBusyTracker Tracker => _tracker;
+        public int Calls;
+
+        public bool Enabled => true;
+        public string BaseUrl => "http://localhost:11434";
+        public string Model => "qwen-test";
+        public string TextModel => "qwen-test";
+        public string ProviderKey => "llama-server";
+
+        public Task<string?> ChatJsonAsync(string systemPrompt, string userPrompt, object jsonFormat,
+            CancellationToken ct = default, string? model = null, int? timeoutMs = null, int? numPredict = null,
+            int? numCtx = null, string? ownerId = null, string? label = null) => Task.FromResult(_answer);
+        public Task<string?> GenerateTextAsync(string prompt, string? model, TimeSpan timeout, int numPredict,
+            int numCtx, string? ownerId = null, string? label = null, CancellationToken ct = default)
+            => Task.FromResult(_answer);
+        public Task<ChatTurnResult> ChatTurnAsync(IReadOnlyList<ChatMsg> messages, string? model, TimeSpan timeout,
+            int numPredict, int numCtx, string? ownerId, Func<string, Task>? onDelta = null,
+            CancellationToken ct = default) => Task.FromResult(new ChatTurnResult(_answer, _usage));
+        public Task WarmUpAsync(string? model, CancellationToken ct = default) => Task.CompletedTask;
+
+        private Task<(string? Text, Protocol.UsageInfo? Usage)> Result()
+        {
+            Calls++;
+            return _throws
+                ? Task.FromException<(string?, Protocol.UsageInfo?)>(
+                    new InvalidOperationException("движок недоступен"))
+                : Task.FromResult((_answer, _usage));
+        }
+
+        public Task<(string? Text, Protocol.UsageInfo? Usage)> ChatJsonDetailedAsync(
+            string systemPrompt, string userPrompt, object jsonFormat, CancellationToken ct = default,
+            string? model = null, int? timeoutMs = null, int? numPredict = null, int? numCtx = null,
+            string? ownerId = null, string? label = null) => Result();
+
+        public Task<(string? Text, Protocol.UsageInfo? Usage)> GenerateTextDetailedAsync(
+            string prompt, string? model, TimeSpan timeout, int numPredict, int numCtx,
+            string? ownerId = null, string? label = null, CancellationToken ct = default) => Result();
+    }
+
+    // busy — занятость движка ходом: его собственный трекер протягивается роутеру, как в DI
+    // (признак LocalBlockedByTurn). Движок возвращаем: тестам нужен счётчик его вызовов.
+    private static (CheapTextRunner Runner, FakeOneShot Claude, DetailedLocalEngine Engine) DetailedNoCloudRunner(
+        string? answer, Protocol.UsageInfo? usage, bool throws = false, bool busy = false)
+    {
+        var engine = new DetailedLocalEngine(answer, usage, throws, busy);
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "qwen-test" });
+        var router = new LocalActionRouter(engine, Store(config), config, NullLogger<LocalActionRouter>.Instance,
+            busy: engine.Tracker);
+        var claude = new FakeOneShot();
+        return (new CheapTextRunner(router, engine, Cloud(config), claude, NullLogger<CheapTextRunner>.Instance),
+            claude, engine);
+    }
+
+    private static async Task<(OneShotResult? Result, FakeOneShot Claude)> RunLocalOrChosenDetailedNoCloud(
+        string actionKey, string? answer, Protocol.UsageInfo? usage)
+    {
+        var (runner, claude, _) = DetailedNoCloudRunner(answer, usage);
+        return (await runner.RunLocalOrChosenDetailedAsync(actionKey, "prompt-text", jsonFormat: "json"), claude);
+    }
+
+    [Fact]
+    public async Task Detailed_ЛокальныйМаршрут_ОтдаётТекстИUsageЛокали()
+    {
+        // Тот же путь, что RunLocalOrChosenAsync (маршрут local, облачного шага нет), но с
+        // расходом: usage того же ответа движка переводится в OneShotUsage с CostUsd 0.
+        // Клиент обёрнут в TrackedLocalLlmClient, как в DI: без его делегирования в
+        // detailed-методы метрики терялись бы на обёртке и в бою не дошли бы ни до кого.
+        var inner = new DetailedLocalEngine("ответ-локали", new Protocol.UsageInfo(1_000, 50, 0, 0));
+        var local = new TrackedLocalLlmClient(inner, new LocalEngineBusyTracker(), "test", () => 3,
+            NullLogger<TrackedLocalLlmClient>.Instance);
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "qwen-test" });
+        var router = new LocalActionRouter(local, Store(config), config, NullLogger<LocalActionRouter>.Instance);
+        var claude = new FakeOneShot();
+        var runner = new CheapTextRunner(router, local, Cloud(config), claude, NullLogger<CheapTextRunner>.Instance);
+
+        var result = await runner.RunLocalOrChosenDetailedAsync(
+            LocalActionCatalog.ActionRank, "prompt-text", jsonFormat: "json");
+
+        result.Should().NotBeNull();
+        result!.Text.Should().Be("ответ-локали");
+        result.Usage.Should().NotBeNull("usage того же ответа — смысл этого шага");
+        result.Usage!.InputTokens.Should().Be(1_000);
+        result.Usage.TotalInputTokens.Should().Be(1_000, "кеша у локального вызова нет");
+        result.Usage.OutputTokens.Should().Be(50);
+        result.Usage.CostUsd.Should().Be(0, "локальный вызов бесплатный");
+        result.Usage.Model.Should().Be("qwen-test");
+        Assert.Empty(claude.Calls);
+    }
+
+    [Theory]
+    [InlineData(LocalActionCatalog.ActionRank)]
+    [InlineData(LocalActionCatalog.CharacterSceneParse)]
+    public async Task ЛокальПусто_БезОблака_Detailed(string actionKey)
+    {
+        // Мутация «убрать ранний return (null, null) при !allowCloudFallback && Local в
+        // RunChainCoreAsync»: цепочка доходит до claude-шага → result не null, claude.Calls
+        // не пуст → этот тест красный.
+        var (result, claude) = await RunLocalOrChosenDetailedNoCloud(actionKey, answer: null, usage: null);
+
+        result.Should().BeNull("сбой/пусто локали не уводит содержимое в облако молча");
+        Assert.Empty(claude.Calls);
+    }
+
+    [Fact]
+    public async Task ЛокальЗанятаХодом_БезОблака_Detailed()
+    {
+        // Вариант А (06.11) на detailed-цепочке ночного разбора вики: движок занят ходом
+        // (LocalBlockedByTurn=true), вызов всё равно идёт в движок — пропуск шага был потерей
+        // работы ночи. Ответ и usage того же ответа локали доходят до вызывающего, облака нет.
+        var (runner, claude, engine) = DetailedNoCloudRunner(
+            "ответ-ночи", new Protocol.UsageInfo(2_000, 120, 0, 0), busy: true);
+
+        var result = await runner.RunLocalOrChosenDetailedAsync(
+            LocalActionCatalog.WikiNightly, "prompt-text", jsonFormat: "json");
+
+        engine.Calls.Should().Be(1, "занятость больше не пропускает вызов");
+        result.Should().NotBeNull();
+        result!.Text.Should().Be("ответ-ночи");
+        result.Usage.Should().NotBeNull("usage того же ответа — смысл detailed-цепочки");
+        result.Usage!.InputTokens.Should().Be(2_000);
+        result.Usage.OutputTokens.Should().Be(120);
+        result.Usage.CostUsd.Should().Be(0, "локальный вызов бесплатный");
+        Assert.Empty(claude.Calls);
+    }
+
+    [Theory]
+    [InlineData(LocalActionCatalog.ActionRank)]
+    [InlineData(LocalActionCatalog.CharacterSceneParse)]
+    public async Task ЛокальБросает_БезОблака_ОблачногоШагаНет(string actionKey)
+    {
+        // Тот же контракт, что у строкового RunLocalOrChosenAsync: исключение движка
+        // пробрасывается наружу (его ловит вызывающий своим отказом), облачного шага нет.
+        var (runner, claude, _) = DetailedNoCloudRunner(
+            answer: "не важно", usage: new Protocol.UsageInfo(1, 1, 0, 0), throws: true);
+
+        var act = async () => await runner.RunLocalOrChosenDetailedAsync(
+            actionKey, "prompt-text", jsonFormat: "json");
+
+        await act.Should().ThrowAsync<InvalidOperationException>();
+        claude.Calls.Should().BeEmpty("сбой локали не переводит вызов в облако");
+    }
+
+    // ─── WN-4: ночной вызов ждёт свободный слот общего счётчика, а не отказывается ───
+    // Тот же путь, что DetailedNoCloudRunner, но клиент обёрнут в TrackedLocalLlmClient и
+    // делит счётчик с чужим «ходом» (держателем слота): без обёртки очередь не проверяется,
+    // с ней проверяется и гонка с ходом, и порядок в очереди, и отмена.
+
+    private const string SlotKey = "test";
+
+    // Держатель единственного слота ключа: тесту уверенный слот нужен по смыслу (иначе
+    // «полный счётчик» в тесте не собран).
+    private static IDisposable TakeSlot(LocalEngineBusyTracker tracker, int limit = 1) =>
+        tracker.TryEnter(SlotKey, limit) ?? throw new InvalidOperationException("слот не выдан");
+
+    private static (CheapTextRunner Runner, DetailedLocalEngine Inner, LocalEngineBusyTracker Tracker)
+        TrackedNoCloudRunner(string answer, int limit = 1, TimeSpan? waitTimeout = null)
+    {
+        var inner = new DetailedLocalEngine(answer, new Protocol.UsageInfo(1_000, 50, 0, 0));
+        var tracker = new LocalEngineBusyTracker();
+        var local = new TrackedLocalLlmClient(inner, tracker, SlotKey, () => limit,
+            NullLogger<TrackedLocalLlmClient>.Instance,
+            // Та же форма политики ожидания, что у провайдера в бою, только короче потолок:
+            // тест про отказ по времени не должен ждать минуты.
+            waitTimeout is { } t ? () => new LocalSlotWaitPolicy(limit * 4, t) : null);
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "qwen-test" });
+        var router = new LocalActionRouter(local, Store(config), config,
+            NullLogger<LocalActionRouter>.Instance, busy: tracker);
+        return (new CheapTextRunner(router, local, Cloud(config), new FakeOneShot(),
+            NullLogger<CheapTextRunner>.Instance), inner, tracker);
+    }
+
+    [Fact]
+    public async Task НочнойВызовЖдётСлот_ИОтвечаетПослеОсвобождения()
+    {
+        // c1 (WN-4): при полном счётчике ночной вызов не отказывается — он стоит в очереди
+        // общего счётчика и даёт ответ, как только слот освободится. Мутация c5 (заменить
+        // ожидание на TryEnter без ожидания): вызов вернулся бы сразу с null, assertion
+        // «не завершился отказом» и inner.Calls — красные.
+        var (runner, inner, tracker) = TrackedNoCloudRunner("ответ-ночи");
+        var turn = TakeSlot(tracker); // ход держит единственный слот движка
+
+        var run = runner.RunLocalOrChosenDetailedAsync(LocalActionCatalog.WikiNightly, "prompt-text",
+            jsonFormat: "json");
+
+        var finished = await Task.WhenAny(run, Task.Delay(TimeSpan.FromMilliseconds(300)));
+        finished.Should().NotBeSameAs(run, "слот занят: ночной вызов ждёт, а не вернулся с отказом");
+        tracker.QueuedFor(SlotKey).Should().Be(1, "заявка стоит в очереди общего счётчика");
+        inner.Calls.Should().Be(0, "пока слота нет, модель не звалась");
+
+        turn.Dispose();
+
+        var result = await run.WaitAsync(TimeSpan.FromSeconds(10));
+        result.Should().NotBeNull("освободившийся слот достался очереди");
+        result!.Text.Should().Be("ответ-ночи");
+        result.Usage.Should().NotBeNull("usage того же ответа — смысл detailed-цепочки");
+        inner.Calls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task НочьНеОбгоняетОчередь_СлотСначалаРаньшеВставшему()
+    {
+        // c3 (WN-4): очередь одна на движок, и обгон запрещён и для ночи. Мутация: отдельный
+        // допуск для ночи (второй семафор или обход очереди) — ночь взяла бы слот первой,
+        // IsCompleted после первого освобождения стал бы true, тест красный.
+        var (runner, inner, tracker) = TrackedNoCloudRunner("ответ-ночи");
+        var turn = TakeSlot(tracker);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(1));
+        // «Ход CLI» встал в очередь раньше ночи — тот же AcquireAsync, что у FallbackLlmSessionAdapter.
+        var cli = tracker.AcquireAsync(SlotKey, 1, 8, TimeSpan.FromMinutes(1), cts.Token);
+        var run = runner.RunLocalOrChosenDetailedAsync(LocalActionCatalog.WikiNightly, "prompt-text",
+            jsonFormat: "json");
+        tracker.QueuedFor(SlotKey).Should().Be(2, "ночь встала в конец очереди, за уже ждущим ходом");
+
+        turn.Dispose(); // освободился единственный слот
+
+        var admission = await cli.WaitAsync(TimeSpan.FromSeconds(10));
+        admission.Slot.Should().NotBeNull("слот достался голове очереди");
+        run.IsCompleted.Should().BeFalse("ночь ждёт своей очереди, обгона нет");
+
+        admission.Slot!.Dispose();
+        var result = await run.WaitAsync(TimeSpan.FromSeconds(10));
+        result.Should().NotBeNull();
+        result!.Text.Should().Be("ответ-ночи");
+        inner.Calls.Should().Be(1, "модель звалась ровно один раз");
+    }
+
+    [Fact]
+    public async Task ОтменаПрерываетОжиданиеСлота_НеКакОтказЗанято()
+    {
+        // c4 (WN-4): остановка ночи/закрытие окна/остановка службы гасят и ожидание слота.
+        // Отмена — не отказ «движок занят»: она уходит наружу отменой (и снимает заявку с
+        // очереди), иначе остановленная ночь отказала бы каждый оставшийся чат по занятости.
+        // Мутация: обернуть AcquireAsync в LocalEngineSlotRefusalException — тест красный.
+        var (runner, inner, tracker) = TrackedNoCloudRunner("не важно");
+        var turn = TakeSlot(tracker);
+        using var cts = new CancellationTokenSource();
+        var run = runner.RunLocalOrChosenDetailedAsync(LocalActionCatalog.WikiNightly, "prompt-text",
+            jsonFormat: "json", ct: cts.Token);
+        tracker.QueuedFor(SlotKey).Should().Be(1);
+
+        cts.Cancel();
+
+        // ThrowsAnyAsync: WaitAsync отдаёт TaskCanceledException (наследник OCE) — важна не
+        // точная форма, а то, что это отмена, а не отказ по занятости.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+        inner.Calls.Should().Be(0, "модель не звалась");
+        tracker.QueuedFor(SlotKey).Should().Be(0, "отменённая заявка снята с очереди");
+        turn.Dispose();
+    }
+
+    [Fact]
+    public async Task НочьНеДождаласьСлота_ОтказНазываетЗанятостьADNePustoyOtvet()
+    {
+        // Требования 3 и 4 (WN-4): истечение потолка ожидания — отказ с причиной, а не
+        // молчаливый null: «модель дала пустой ответ» прятало бы сбой занятости за обычным
+        // исходом модели (прод 06.11: 108 таких отказов, ни одного вызова модели).
+        // Мутация: вернуть (null, null) вместо исключения — тест красный.
+        var (runner, inner, tracker) = TrackedNoCloudRunner("не важно",
+            waitTimeout: TimeSpan.FromMilliseconds(200));
+        var turn = TakeSlot(tracker);
+
+        var ex = await Assert.ThrowsAsync<LocalEngineSlotRefusalException>(
+            () => runner.RunLocalOrChosenDetailedAsync(LocalActionCatalog.WikiNightly, "prompt-text",
+                jsonFormat: "json"));
+
+        ex.Why.Should().Be(LocalTurnRefusal.Timeout);
+        ex.Message.Should().Contain("занят").And.Contain("вышло время ожидания");
+        inner.Calls.Should().Be(0, "модель не звалась ни разу");
+        turn.Dispose();
+    }
+
+    // Подменённый шов БЕЗ переопределения detailed-метода: работает реализация по умолчанию
+    // интерфейса — текст тот же, что у строкового метода, usage = null, исключений нет. Так
+    // существующие потребители и тестовые фейки шва от нового метода не меняются.
+    private sealed class LegacyRunner : ICheapTextRunner
+    {
+        private readonly string? _answer;
+        public LegacyRunner(string? answer) => _answer = answer;
+
+        public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => true;
+        public bool HasRoute(string actionKey) => true;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "legacy";
+
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+            => Task.FromResult(_answer ?? "");
+
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) => Task.FromResult(_answer);
+
+        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
+            string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
+            => Task.FromResult(new OneShotResult(_answer ?? "", null, 0));
+    }
+
+    [Fact]
+    public async Task ФейкШваБезDetailed_РаботаетРеализацияПоУмолчанию_UsageNull()
+    {
+        ICheapTextRunner legacy = new LegacyRunner("ответ");
+
+        var result = await legacy.RunLocalOrChosenDetailedAsync(LocalActionCatalog.WikiNightly, "p");
+
+        result.Should().NotBeNull();
+        result!.Text.Should().Be("ответ");
+        result.Usage.Should().BeNull("шов метрик не давал — обёртка их не выдумывает");
+        result.DurationMs.Should().Be(0);
+
+        // Пустой ответ строкового метода — тот же null, обёртка не подставляет пустой ответ.
+        ICheapTextRunner empty = new LegacyRunner(null);
+        (await empty.RunLocalOrChosenDetailedAsync(LocalActionCatalog.WikiNightly, "p")).Should().BeNull();
     }
 
     [Fact]
@@ -2181,6 +2538,85 @@ public class LocalActionRoutingTests
             previewModel.Should().Be(combatChain.FirstOrDefault(),
                 $"модель превью чата = первый шаг боевой цепочки (sessionModel={sessionModel})");
         }
+    }
+
+    // --- Ключ владельца цепочки: владелец хода, а не пустой владелец сессии (DEC-FALLBACK 3f2f33fb) ---
+    // У проектной сессии Session.OwnerId пуст по контракту, владелец хода приходит через
+    // LlmSessionContext.OwnerId. ClaudeSession обязан резолвить модель и хвост цепочки по
+    // владельцу хода (_turnOwnerId): иначе старт заморожен из личного слота арендатора
+    // (SessionManager), а хвост и пустая Info.Model уходят на общий слот инстанса — правило
+    // «старт и фолбэк одним ключом» (инцидент 26.08) нарушен.
+
+    // Инстансовый сильный слот — «instance-opus»; личный сильный слот владельца — пресет
+    // «owner» → ["owner-kimi","owner-glm"]. Два разных слота: по цепочке видно, каким ключом
+    // прошёл резолв.
+    private static (ModelAssignmentResolver Resolver, string OwnerId) BuildOwnerSlotFixture()
+    {
+        var (resolver, app, users, _, specialty, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "instance-opus" });
+        specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            Presets = { Preset("owner", "owner-kimi", "owner-glm") },
+        });
+        var owner = users.Add("owner", "p", "user");
+        users.SetModelTiers(owner.Id, strong: "preset:owner", null, null);
+        return (resolver, owner.Id);
+    }
+
+    private static ClaudeSession BuildSessionWithResolver(ModelAssignmentResolver resolver,
+        string? sessionOwnerId, string? contextOwnerId, string? model)
+    {
+        var context = new LlmSessionContext(
+            RootPath: Path.GetTempPath(),
+            OnMessage: _ => Task.CompletedTask,
+            RawSystemPrompt: null, BuiltInSystemPrompt: ProjectManager.BuiltInSystemPrompt,
+            PermissionRules: null,
+            TasksMcp: null)
+        { OwnerId = contextOwnerId };
+        return new ClaudeSession(new Session { Model = model, OwnerId = sessionOwnerId },
+            context, assignments: resolver);
+    }
+
+    [Fact]
+    public void ПроектнаяСессия_ЦепочкаФолбэка_ПоВладельцуХода_АНеПоПустомуВладельцуСессии()
+    {
+        // c2: Info.OwnerId пуст (проектная сессия), владелец хода — в контексте. Хвост цепочки
+        // продолжается личным пресетом владельца, пустая Info.Model резолвится тем же ключом.
+        // До правки обе точки шли по Info.OwnerId=null → общий слот инстанса («instance-opus»).
+        var (resolver, ownerId) = BuildOwnerSlotFixture();
+
+        // Старт заморожен из личного пресета владельца (как делает SessionManager для чата
+        // проекта): хвост обязан идти тем же пресетом, а не слотом инстанса.
+        var frozen = BuildSessionWithResolver(resolver, sessionOwnerId: null, contextOwnerId: ownerId,
+            model: "owner-kimi");
+        frozen.EffectiveTurnChain.Should().Equal("owner-kimi", "owner-glm");
+
+        // Пустая Info.Model: старт резолвится по личному слоту владельца (первый шаг его
+        // пресета), а не по слоту инстанса.
+        var empty = BuildSessionWithResolver(resolver, sessionOwnerId: null, contextOwnerId: ownerId,
+            model: null);
+        empty.EffectiveTurnModel.Should().Be("owner-kimi");
+    }
+
+    [Fact]
+    public void ЧатВнеПроекта_ЦепочкаФолбэка_НеМеняется_ВладелецНаСессии()
+    {
+        // c3 (регрессия): у чата вне проекта владелец — на сессии: context.OwnerId == Info.OwnerId
+        // (обычный путь SessionManager) или контекст его не несёт вовсе (старый контракт/тесты).
+        // _turnOwnerId = context.OwnerId ?? info.OwnerId даёт тот же ключ — цепочка не меняется.
+        var (resolver, ownerId) = BuildOwnerSlotFixture();
+
+        var sameKey = BuildSessionWithResolver(resolver, sessionOwnerId: ownerId, contextOwnerId: ownerId,
+            model: "owner-kimi");
+        sameKey.EffectiveTurnChain.Should().Equal("owner-kimi", "owner-glm");
+
+        var onSession = BuildSessionWithResolver(resolver, sessionOwnerId: ownerId, contextOwnerId: null,
+            model: "owner-kimi");
+        onSession.EffectiveTurnChain.Should().Equal("owner-kimi", "owner-glm");
+
+        var emptyModel = BuildSessionWithResolver(resolver, sessionOwnerId: ownerId, contextOwnerId: null,
+            model: null);
+        emptyModel.EffectiveTurnModel.Should().Be("owner-kimi");
     }
 
     private sealed class SingleFactory(System.Net.Http.HttpMessageHandler handler) : IHttpClientFactory

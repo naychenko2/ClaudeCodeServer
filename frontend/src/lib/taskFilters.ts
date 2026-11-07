@@ -15,7 +15,7 @@ const FILTERS_KEY_PREFIX = 'cc_task_filters:';
 // неизвестные/устаревшие (как normalize в chatFilters).
 const VALID_STATUSES = new Set<TaskStatus>(['todo', 'inProgress', 'done']);
 const VALID_PRIORITIES = new Set<TaskPriority>(['urgent', 'high', 'medium', 'low']);
-const VALID_ASSIGNEE = new Set<TaskAssigneeFilter>(['all', 'me', 'claude']);
+const VALID_ASSIGNEE = new Set<TaskAssigneeFilter>(['all', 'me', 'claude', 'member']);
 const VALID_DUE = new Set<DueKey>(['overdue', 'today', 'week', 'later', 'none']);
 
 function normalizeFilters(p: Partial<TaskListFilters> | null | undefined): TaskListFilters {
@@ -24,7 +24,9 @@ function normalizeFilters(p: Partial<TaskListFilters> | null | undefined): TaskL
   const priorities = Array.isArray(p.priorities) ? p.priorities.filter(v => VALID_PRIORITIES.has(v)) : [];
   const due = Array.isArray(p.due) ? p.due.filter(v => VALID_DUE.has(v)) : [];
   const assignee = VALID_ASSIGNEE.has(p.assignee as TaskAssigneeFilter) ? p.assignee as TaskAssigneeFilter : 'all';
-  return { status, assignee, priorities, due };
+  // id участника живёт только у фильтра «Участники»; при другом сегменте — сбрасывается
+  const assigneeUserId = assignee === 'member' && typeof p.assigneeUserId === 'string' ? p.assigneeUserId : null;
+  return { status, assignee, assigneeUserId, priorities, due };
 }
 
 export function loadTaskFilters(scopeKey: string): TaskListFilters {

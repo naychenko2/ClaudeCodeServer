@@ -72,7 +72,7 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
     // text несёт JSON задачи при успехе или текст Deny при отказе (паттерн TasksToolsetDefectTests).
     private async Task<(string Text, bool IsError)> CallToolAsync(string sessionId, string tool, object args)
     {
-        var resp = await _client.PostAsync($"/mcp/tasks/{sessionId}",
+        var resp = await _client.AsCaller(sessionId).PostAsync($"/mcp/tasks/{sessionId}",
             new StringContent(JsonSerializer.Serialize(new
             {
                 jsonrpc = "2.0", id = 1, method = "tools/call",

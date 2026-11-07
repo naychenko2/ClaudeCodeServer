@@ -32,7 +32,7 @@ public class WikiRelinkTests : IDisposable
         var projects = new ProjectManager(config, users, new AppSettingsService(config));
         // Флаг llm-wiki включён: страницы вики должны быть в графе — именно их входящие
         // ссылки триггерят relink (тот же setup, что у WikiKeeperTests).
-        _notes = new NotesService(projects, config, NullLogger<NotesService>.Instance, null, new WikiFlagOn());
+        _notes = new NotesService(projects, config, NullLogger<NotesService>.Instance, null, flags: new WikiFlagOn());
         _sut = new WikiKeeper(_notes, config);
         // Та же обвязка, что ставит регистрация вертикали: побочный писатель →
         // внутренний IWikiRelink Хранителя (NotesSubsystem.Register, factory WikiKeeper).

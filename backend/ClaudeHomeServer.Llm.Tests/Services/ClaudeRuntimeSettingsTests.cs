@@ -453,4 +453,103 @@ public class ClaudeRuntimeSettingsTests : IClassFixture<ClaudeRuntimeSettingsTes
         })
             RunKillHook(cmd).Exit.Should().Be(0, $"команда должна проходить: {cmd}");
     }
+
+    // Хук «сборка и тесты — только инструментами»: действует лишь при CCS_TASK_EXECUTOR=1
+    private static (int Exit, string Err) RunToolsHook(string command, bool executor = true)
+    {
+        var json = Settings(browserEnabled: true).Json;
+        var hookCommand = json.GetProperty("hooks").GetProperty("PreToolUse").EnumerateArray()
+            .Select(h => h.GetProperty("hooks")[0].GetProperty("command").GetString()!)
+            .Single(c => c.Contains("block-build-in-bash.py"));
+        var parts = hookCommand.Split(' ', 3);
+        var psi = new ProcessStartInfo(parts[0])
+        {
+            RedirectStandardInput = true, RedirectStandardError = true, RedirectStandardOutput = true,
+        };
+        psi.ArgumentList.Add(parts[1]);
+        psi.ArgumentList.Add(parts[2].Trim('"'));
+        psi.Environment.Remove(ClaudeRuntimeSettings.TaskExecutorEnv);
+        if (executor) psi.Environment[ClaudeRuntimeSettings.TaskExecutorEnv] = "1";
+        using var proc = Process.Start(psi)!;
+        proc.StandardInput.Write(JsonSerializer.Serialize(new { tool_input = new { command } }));
+        proc.StandardInput.Close();
+        var err = proc.StandardError.ReadToEnd();
+        proc.WaitForExit();
+        return (proc.ExitCode, err);
+    }
+
+    [Fact]
+    public void ХукСборки_БлокируетDotnetИVitest_ВЧатеИсполнителя()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        foreach (var cmd in new[]
+        {
+            "dotnet test",
+            "dotnet build backend/ClaudeHomeServer.slnx -v q",
+            "cd ~/.cache/ccs-mutation/c1 && dotnet test backend/X.Tests --filter A",
+            "DOTNET_CLI_TELEMETRY_OPTOUT=1 dotnet build",
+            "FOO=1 BAR=2 npx vitest run src/a.test.ts",
+            "cd frontend && npx --no-install vitest run",
+            "echo start; sudo dotnet test",
+            "timeout 60 true || dotnet build",
+            "time dotnet test",
+            "if dotnet build; then echo ok; fi",
+            "bash -c 'dotnet test backend/X'",
+            "echo $(dotnet build)",
+            "/usr/bin/dotnet build",
+        })
+        {
+            var (exit, err) = RunToolsHook(cmd);
+            exit.Should().Be(2, $"команда должна блокироваться: {cmd}");
+            err.Should().Contain("run_tests").And.Contain("tree");
+            // Свой worktree — подсказка про tree; скрипт копий не навязывается проектам без него
+            err.Should().Contain("своём worktree").And.Contain("git worktree list")
+                .And.Contain("если в проекте есть scripts/mutation-copy.sh");
+        }
+    }
+
+    [Fact]
+    public void ХукСборки_ПропускаетСловаВСтрокахИКомментариях_ИДругиеКоманды()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        foreach (var cmd in new[]
+        {
+            "echo \"dotnet test\"",
+            "grep -rn 'dotnet build' docs/",
+            "git commit -m \"fix: вынести dotnet test в run_tests\"",
+            "git commit -F - <<'EOF'\ndotnet test теперь через run_tests\nEOF",
+            "ls # потом dotnet test",
+            "dotnet --version",
+            "dotnet restore backend/X.slnx",
+            "dotnet format --verify-no-changes",
+            "npx tsc -b",
+            "npm run lint:design",
+            "cat notes-about-dotnet-test.md",
+            "scripts/mutation-copy.sh create",
+        })
+            RunToolsHook(cmd).Exit.Should().Be(0, $"команда должна проходить: {cmd}");
+    }
+
+    [Fact]
+    public void ХукСборки_НеДействуетВОбычномЧате()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        // Чат человека и оркестратор: переменной нет — Bash со сборкой им бывает нужен
+        RunToolsHook("dotnet test", executor: false).Exit.Should().Be(0);
+        RunToolsHook("npx vitest run", executor: false).Exit.Should().Be(0);
+    }
+
+    [Fact]
+    public void ХукСборки_ВТойЖеЗаписиФайлаДляВсехЧатов_ОдинФайлНастроек()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        // Признак ходит в окружении, а не в файле: путь --settings не зависит от роли чата
+        Settings(browserEnabled: true).Path.Should().Be(Settings(browserEnabled: true).Path);
+        Settings(browserEnabled: true).Json.GetProperty("hooks").GetProperty("PreToolUse").EnumerateArray()
+            .Select(h => h.GetProperty("matcher").GetString()).Should().Equal("Bash", "Bash", "Edit|Write");
+    }
 }

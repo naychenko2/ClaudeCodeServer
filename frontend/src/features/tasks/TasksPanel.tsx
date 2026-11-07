@@ -14,12 +14,16 @@ import {
   STATUS_DOT, STATUS_LABEL, daysFromToday, ensureTasksLoaded, useTasks,
 } from '../../lib/tasks';
 import type { BoardGroupBy } from '../../lib/tasks';
+import { useMe } from '../../lib/defaultPersona';
 import { TaskCard } from './TaskCard';
 import { NewTaskDialog } from './NewTaskDialog';
 import { BoardToolbar } from './board/BoardToolbar';
 import { BoardIcon, ByDateIcon, ListIcon, PillViewSwitcher } from './bits';
+import { useProjectPeople } from './TaskUserBadge';
+import { canWriteTasks, TASK_WRITE_DENIED } from '../projects/members/participantGate';
 import {
-  TasksListFilterButton, applyTaskFilters, EMPTY_TASK_FILTERS, type TaskListFilters,
+  TasksListFilterButton, applyTaskFilters, isOwnerProjectView, isSharedProjectView,
+  memberOptionName, EMPTY_TASK_FILTERS, type AssigneePersonOption, type TaskListFilters,
 } from './TasksListFilter';
 
 // Группировки доски внутри проекта (без «по проекту»)
@@ -124,6 +128,24 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
   const filters = filtersProp ?? localFilters;
   const onFilters = onFiltersProp ?? setLocalFilters;
 
+  // Общий проект (S2b-F5): список участников для «Участников» в фильтре и на тулбаре
+  // доски; контекст взгляда для «Я» (assigneeUserId = я, старый Me — только у владельца).
+  const me = useMe();
+  const shared = isSharedProjectView(project);
+  // Право править задачи (F2-Q3, разрез CONSULT-TASK-RIGHTS): в общем проекте читатель
+  // только смотрит — входы создания (и в шапке, и на мобиле) скрыты вовсе, как в панели
+  // чатов (SessionList.hideNew). Владелец, редактор и личный проект (myRole нет) — как раньше.
+  const canCreate = canWriteTasks(project);
+  const { view } = useProjectPeople(project.id, shared);
+  const people = useMemo<AssigneePersonOption[]>(
+    () => view ? view.members.map(m => ({ userId: m.userId, name: memberOptionName(m) })) : [],
+    [view],
+  );
+  const filterCtx = useMemo(
+    () => ({ currentUserId: me.userId, isOwner: isOwnerProjectView(project, me.userId) }),
+    [me.userId, project],
+  );
+
   // Панель в карточке с шапкой — контролы уезжают туда (компактный ряд иконок);
   // без шапки (мобила) остаётся полноразмерная строка действий в теле панели.
   const inHeader = useHasPanelHeader();
@@ -150,8 +172,8 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
   // Фильтры применяются ДО группировки (работают в обеих — «Список» и «По дате»).
   // В режиме доски не применяются: там свой BoardToolbar.
   const filteredTasks = useMemo(
-    () => boardMode ? tasks : applyTaskFilters(tasks, filters),
-    [tasks, filters, boardMode],
+    () => boardMode ? tasks : applyTaskFilters(tasks, filters, filterCtx),
+    [tasks, filters, boardMode, filterCtx],
   );
 
   const groups = useMemo(
@@ -195,6 +217,7 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
               onFilters={onFilters}
               total={tasks.length}
               found={filteredTasks.length}
+              people={people}
             />
           )}
           <IconSegmented<PanelTab>
@@ -207,15 +230,17 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
             onChange={onPanelTab}
           />
         </PanelHeaderSlot>
-        <PanelHeaderSlot pinned>
-          <Button
-            variant="primary" size="xs" title="Новая задача"
-            leftIcon={<Plus size={13} strokeWidth={ICON_STROKE} />}
-            onClick={() => setShowCreate(true)}
-          >
-            Задача
-          </Button>
-        </PanelHeaderSlot>
+        {canCreate && (
+          <PanelHeaderSlot pinned>
+            <Button
+              variant="primary" size="xs" title="Новая задача"
+              leftIcon={<Plus size={13} strokeWidth={ICON_STROKE} />}
+              onClick={() => setShowCreate(true)}
+            >
+              Задача
+            </Button>
+          </PanelHeaderSlot>
+        )}
         </>
       )}
 
@@ -225,32 +250,39 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
         <>
           {/* Строка действий: «Новая задача» (flex:1) + «Фильтр» (Funnel) — НАД
               переключателем видов (правка пользователя к макету А). Funnel скрыт
-              в режиме доски (там свой BoardToolbar); Plus виден во всех режимах. */}
-          <div style={{ padding: isMobile ? '8px 12px 4px' : '8px 12px 4px', display: 'flex', gap: 7, alignItems: 'stretch', flexShrink: 0 }}>
-            <button
-              onClick={() => setShowCreate(true)}
-              style={{
-                flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                padding: isMobile ? '9px 12px' : '8px 12px',
-                border: `1px solid ${C.border}`, borderRadius: R.lg,
-                background: C.bgWhite, color: C.accent,
-                fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
-              }}
-            >
-              <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-              Новая задача
-            </button>
-            {!boardMode && (
-              <TasksListFilterButton
-                variant="sidebar"
-                filters={filters}
-                onFilters={onFilters}
-                total={tasks.length}
-                found={filteredTasks.length}
-                isMobile={isMobile}
-              />
-            )}
-          </div>
+              в режиме доски (там свой BoardToolbar); Plus виден во всех режимах
+              кроме читателя общего проекта (canCreate=false, F2-Q3) — тогда строка
+              остаётся только под фильтр и не рисуется вовсе в режиме доски. */}
+          {(canCreate || !boardMode) && (
+            <div style={{ padding: isMobile ? '8px 12px 4px' : '8px 12px 4px', display: 'flex', gap: 7, alignItems: 'stretch', flexShrink: 0 }}>
+              {canCreate && (
+                <button
+                  onClick={() => setShowCreate(true)}
+                  style={{
+                    flex: 1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                    padding: isMobile ? '9px 12px' : '8px 12px',
+                    border: `1px solid ${C.border}`, borderRadius: R.lg,
+                    background: C.bgWhite, color: C.accent,
+                    fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600, cursor: 'pointer',
+                  }}
+                >
+                  <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                  Новая задача
+                </button>
+              )}
+              {!boardMode && (
+                <TasksListFilterButton
+                  variant="sidebar"
+                  filters={filters}
+                  onFilters={onFilters}
+                  total={tasks.length}
+                  found={filteredTasks.length}
+                  isMobile={isMobile}
+                  people={people}
+                />
+              )}
+            </div>
+          )}
 
           <div style={{ padding: isMobile ? '4px 14px 4px' : '0 16px 4px', flexShrink: 0 }}>
             <PillViewSwitcher<PanelTab>
@@ -287,7 +319,7 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
           ) : (
             // Десктоп: управление доской (группировка/фильтры/поиск/колонки) — в сайдбаре
             <div style={{ padding: '10px 2px' }}>
-              <BoardToolbar layout="sidebar" groupOptions={PROJECT_GROUP_OPTIONS} onEditColumns={onEditColumns} />
+              <BoardToolbar layout="sidebar" groupOptions={PROJECT_GROUP_OPTIONS} onEditColumns={onEditColumns} people={people} />
             </div>
           )
         ) : loading ? (
@@ -297,12 +329,14 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
         ) : tasks.length === 0 ? (
           // Задач в проекте нет вовсе — тот же примитив пустого состояния, что у
           // остальных панелей (чаты, документы). Кнопки создания тут нет — «Новая
-          // задача» живёт в шапке панели, дублировать её в empty незачем
+          // задача» живёт в шапке панели, дублировать её в empty незачем. Читателю
+          // (canCreate=false) вместо подсказки «поставьте» — та же строка, что в
+          // панели деталей: он задачу не поставит (F2-Q3)
           <EmptyState
             compact
             icon={<ListTodo size={20} strokeWidth={ICON_STROKE} />}
             title="Задач пока нет"
-            subtitle="Поставьте первую задачу по проекту."
+            subtitle={canCreate ? 'Поставьте первую задачу по проекту.' : TASK_WRITE_DENIED}
           />
         ) : filteredTasks.length === 0 ? (
           // Фильтры отсеяли всё — предлагаем сбросить (стандартный EmptyState)

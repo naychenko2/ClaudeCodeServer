@@ -7,6 +7,8 @@ namespace ClaudeHomeServer.Services.Composition.Sessions;
 // SessionManager — god-объект; вертикаль Deploy не должна знать о нём напрямую.
 public sealed class SessionMessageSenderAdapter(SessionManager sessions) : ISessionMessageSender
 {
-    public Task<bool> SendOrEnqueueAsync(string sessionId, string text, bool suppressTasksExecute = false) =>
-        sessions.SendOrEnqueueAsync(sessionId, text, suppressTasksExecute: suppressTasksExecute);
+    public Task<bool> SendOrEnqueueAsync(string sessionId, string text, bool suppressTasksExecute = false,
+        string? senderUserId = null) =>
+        sessions.SendOrEnqueueAsync(sessionId, text, suppressTasksExecute: suppressTasksExecute,
+            senderUserId: senderUserId);
 }

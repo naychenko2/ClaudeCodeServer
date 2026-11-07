@@ -5,8 +5,10 @@ import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ConfirmDialog, Toggle } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
+import { useMe } from '../../lib/defaultPersona';
 import type { McpServer, Project } from '../../types';
 import { AccordionSection } from '../projects/dialogs/AccordionSection';
+import { isParticipant } from '../projects/members/participantGate';
 
 // Серверы, которые требуют подтверждения включения (каталог + stdio + local-владелец):
 // бэк возвращает массив {key, command} с ПОЛНОЙ строкой запуска — её показываем
@@ -23,9 +25,23 @@ interface PendingCatalogConfirm {
 // Своих серверов нет — секция не рисуется вовсе, чтобы не занимать место пустотой.
 export function McpProjectSection({ project, onUpdated }: { project: Project; onUpdated?: (updated: Project) => void }) {
   const isMobile = useIsMobile();
+  const me = useMe();
+  // Взгляд владельца общего проекта (S2a-F6): то же решение, что в SharedBadge.kindOf (S1-F4)
+  // и participantGate.isParticipant — myRole авторитетна, когда есть, без неё (старый бэк)
+  // по ownerId; «общий» — это наличие участников (count > 0). Участнику и в личном проекте
+  // пометки нет: бэк позволяет ставить её только владельцу записи (участнику — 403).
+  const ownerOfShared = !isParticipant(project)
+    && (project.myRole === 'owner' || (!!me.userId && project.ownerId === me.userId))
+    && (project.members?.count ?? 0) > 0;
   const [servers, setServers] = useState<McpServer[]>([]);
   const [on, setOn] = useState<string[]>(project.mcpServersOn ?? []);
   const [err, setErr] = useState('');
+  // Пометка «для участников» (S2a-F6): изменение оптимистичное (запись в списке servers),
+  // затем PUT {id}/shared; при отказе (403/сеть) — откат и короткая подпись только по той
+  // строке. seq по id: запоздалый ответ не должен перечеркнуть более новое значение
+  // (тот же приём, что у счётчика «on» выше)
+  const [sharedErrFor, setSharedErrFor] = useState<string | null>(null);
+  const sharedSeqRef = useRef<Record<string, number>>({});
   // Подтверждение включения каталожной stdio-записи у local-владельца: бэк отдаёт
   // 400 с requiresConfirmation=true и полной строкой запуска в servers[].command.
   // Показываем диалог, по согласию шлём тот же запрос с mcpCatalogConfirmed=true
@@ -77,6 +93,27 @@ export function McpProjectSection({ project, onUpdated }: { project: Project; on
     void sendUpdate(next, false, prev, seq);
   };
 
+  // Пометка «для участников» (S2a-F6): только у владельца общего проекта; сервер при этом
+  // может быть и вне mcpServersOn этого проекта — пометка всё равно действует во всех
+  // его общих проектах (S2a-7). Ответ бэка — обновлённая запись, она и становится истиной
+  const toggleShared = (server: McpServer, nextVal: boolean) => {
+    const prev = server.sharedWithMembers;
+    const seq = (sharedSeqRef.current[server.id] ?? 0) + 1;
+    sharedSeqRef.current[server.id] = seq;
+    setServers(list => list.map(s => (s.id === server.id ? { ...s, sharedWithMembers: nextVal } : s)));
+    setSharedErrFor(null);
+    api.mcp.setShared(server.id, nextVal)
+      .then(saved => {
+        if (sharedSeqRef.current[server.id] !== seq) return;
+        setServers(list => list.map(s => (s.id === saved.id ? saved : s)));
+      })
+      .catch(() => {
+        if (sharedSeqRef.current[server.id] !== seq) return;
+        setServers(list => list.map(s => (s.id === server.id ? { ...s, sharedWithMembers: prev } : s)));
+        setSharedErrFor(server.id);
+      });
+  };
+
   const confirmPending = () => {
     if (!pending) return;
     const seq = ++seqRef.current;
@@ -98,32 +135,61 @@ export function McpProjectSection({ project, onUpdated }: { project: Project; on
       title={isMobile ? 'MCP-серверы' : 'MCP-серверы в проекте'}
       summary={summary}
     >
-      {servers.map((server, i) => (
-        <div
-          key={server.id}
-          style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP.sm,
-            padding: '8px 4px',
-            // Контейнер аккордеона уже дал верхнюю границу тела — у первой строки
-            // свою не рисуем, иначе двойная линия.
-            borderTop: i === 0 ? 'none' : `1px solid ${C.borderLight}`,
-            opacity: server.enabled ? 1 : 0.62,
-          }}
-          title={server.enabled ? undefined : 'Сервер выключен в личном реестре — в ходы он не едет нигде'}
-        >
-          <span style={{
-            fontSize: 13, color: C.textPrimary, minWidth: 0,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>
-            {server.label || server.key}
-          </span>
-          <Toggle
-            checked={on.includes(server.key)}
-            onChange={v => toggleOn(server.key, v)}
-            ariaLabel={`${server.label || server.key} в проекте`}
-          />
-        </div>
-      ))}
+      {servers.map((server, i) => {
+        // Пометка — свойство записи владельца и действует во всех его общих проектах (S2a-7):
+        // бэк доставляет помеченный сервер даже вне mcpServersOn этого проекта, поэтому
+        // владельцу показываем тумблер и у таких серверов — иначе пометку нечем снять
+        const canShare = ownerOfShared && (on.includes(server.key) || server.sharedWithMembers === true);
+        return (
+          <div
+            key={server.id}
+            style={{
+              padding: '8px 4px',
+              // Контейнер аккордеона уже дал верхнюю границу тела — у первой строки
+              // свою не рисуем, иначе двойная линия.
+              borderTop: i === 0 ? 'none' : `1px solid ${C.borderLight}`,
+              opacity: server.enabled ? 1 : 0.62,
+            }}
+            title={server.enabled ? undefined : 'Сервер выключен в личном реестре — в ходы он не едет нигде'}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP.sm }}>
+              <span style={{
+                fontSize: 13, color: C.textPrimary, minWidth: 0,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {server.label || server.key}
+              </span>
+              <Toggle
+                checked={on.includes(server.key)}
+                onChange={v => toggleOn(server.key, v)}
+                ariaLabel={`${server.label || server.key} в проекте`}
+              />
+            </div>
+            {canShare && (
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP.sm,
+                flexWrap: 'wrap', padding: '6px 0 0 12px',
+              }}>
+                <span style={{ flex: '1 1 200px', minWidth: 0 }}>
+                  <span style={{ fontSize: FS.sm, color: C.textSecondary }}>И для участников</span>
+                  {' '}
+                  <span style={{ fontSize: FS.xs, color: C.textMuted }}>
+                    Включено — сервер доступен участникам во всех ваших общих проектах; без пометки он не доступен в их ходах.
+                  </span>
+                </span>
+                <Toggle
+                  checked={server.sharedWithMembers}
+                  onChange={v => toggleShared(server, v)}
+                  ariaLabel={`${server.label || server.key} для участников`}
+                />
+              </div>
+            )}
+            {sharedErrFor === server.id && (
+              <div style={{ padding: '4px 0 0 12px', fontSize: FS.xs, color: C.dangerText }}>Не удалось сохранить</div>
+            )}
+          </div>
+        );
+      })}
       {err && (
         <div style={{
           padding: '7px 4px', fontSize: FS.sm, color: C.dangerText, background: C.dangerBg,

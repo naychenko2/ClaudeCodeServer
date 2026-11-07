@@ -1,5 +1,4 @@
 import type { Project } from '../types';
-import { getFlag, flagsLoaded, FLAGS } from './featureFlags';
 
 // Снимок навигационного положения. Хранится в history.state, чтобы кнопки
 // «назад/вперёд» браузера могли восстановить экран. Дополнительно снапшот
@@ -60,11 +59,8 @@ function toHash(s: NavSnapshot): string {
       if (s.task) h += `/task/${s.task}`;
       else if (s.file) h += `/file/${encodeURIComponent(s.file)}`;
       else if (s.board) h += '/board';
-      // Страница фичи — отдельная поверхность (не чат): сегмент в адресе при включённом
-      // флаге «Обзор фич» (dark launch). Гейт — «загружено и выключено»: пока флаги ещё
-      // не пришли (не загружены) адрес не схлопываем, а к проекту деградируем только когда
-      // флаг пришёл и выключен (иначе диплинк терял бы сегмент до ответа /me).
-      else if (s.feature && !(flagsLoaded() && !getFlag(FLAGS.featuresOverview))) h += `/feature/${encodeURIComponent(s.feature)}`;
+      // Страница фичи — отдельная поверхность (не чат): сегмент в адресе
+      else if (s.feature) h += `/feature/${encodeURIComponent(s.feature)}`;
       else if (s.chatId) h += `/chat/${encodeURIComponent(s.chatId)}`;
       else if (s.persona) h += `/persona/${encodeURIComponent(s.persona)}`;
       return h;

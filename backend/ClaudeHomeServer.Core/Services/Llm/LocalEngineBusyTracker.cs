@@ -79,8 +79,12 @@ public sealed class LocalEngineBusyTracker
     // OperationCanceledException. Если Slot != null — его надо освободить (Dispose).
     // onWait — наблюдатель очереди: зовётся при постановке в очередь и при каждом сдвиге
     // позиции (позиция 1-based, затем занято слотов и потолок); исключения наблюдателя глотаются.
+    // raiseBusy=false — слот фоновой работы (прямой клиент LocalLlm, цепочки без облачной
+    // страховки): ёмкость движка он занимает, но признак «идёт ход исполнителя» НЕ взводит —
+    // иначе одна фоновая заявка отправила бы в облако все остальные фоновые. Очередь и потолок
+    // при этом те же, что у ходов: отдельного допуская для фона нет.
     public async Task<LocalTurnAdmission> AcquireAsync(string key, int maxConcurrent, int maxQueued,
-        TimeSpan timeout, CancellationToken ct, Action<int, int, int>? onWait = null)
+        TimeSpan timeout, CancellationToken ct, Action<int, int, int>? onWait = null, bool raiseBusy = true)
     {
         ct.ThrowIfCancellationRequested();
         Waiter waiter;
@@ -92,12 +96,12 @@ public sealed class LocalEngineBusyTracker
             if (state.Active < state.Limit && state.Queue.Count == 0)
             {
                 state.Active++;
-                _active++;
-                return LocalTurnAdmission.Admitted(new Slot(this, key, true), state.Active);
+                if (raiseBusy) _active++;
+                return LocalTurnAdmission.Admitted(new Slot(this, key, raiseBusy), state.Active);
             }
             if (state.Queue.Count >= Math.Max(0, maxQueued))
                 return LocalTurnAdmission.Rejected(LocalTurnRefusal.QueueFull, state.Active);
-            waiter = new Waiter { OnWait = onWait };
+            waiter = new Waiter { OnWait = onWait, RaiseBusy = raiseBusy };
             waiter.Node = state.Queue.AddLast(waiter);
             position = state.Queue.Count;
             active = state.Active;
@@ -152,8 +156,10 @@ public sealed class LocalEngineBusyTracker
                 state.Queue.RemoveFirst();
                 head.Value.Node = null;
                 state.Active++;
-                _active++;
-                head.Value.Tcs.TrySetResult(new Slot(this, key, true));
+                // Признак взводит только тот, кому он принадлежит: фоновый слот из очереди
+                // не должен становиться «ходом исполнителя».
+                if (head.Value.RaiseBusy) _active++;
+                head.Value.Tcs.TrySetResult(new Slot(this, key, head.Value.RaiseBusy));
             }
             // Оставшимся в очереди позиция сдвинулась — сообщаем им вне лока.
             var pos = 0;
@@ -184,6 +190,8 @@ public sealed class LocalEngineBusyTracker
     {
         public LinkedListNode<Waiter>? Node;
         public Action<int, int, int>? OnWait;
+        // Взводит ли этот ожидающий признак «идёт ход» (см. AcquireAsync.raiseBusy).
+        public bool RaiseBusy = true;
         public readonly TaskCompletionSource<Slot> Tcs =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -206,6 +214,28 @@ public sealed class LocalEngineBusyTracker
 // Вызывающие one-shot ловят общий Exception и идут по своей цепочке — как при LocalBlockedByTurn.
 public sealed class LocalEngineBusyException(string providerKey)
     : InvalidOperationException($"Локальный движок «{providerKey}» занят ходами — one-shot не запущен");
+
+// Ждущий слот вызов (цепочка БЕЗ облачной страховки — ночной разбор вики, ступень 2 отбора)
+// встал в очередь общего счётчика и слота не получил: очередь полна либо вышел потолок
+// ожидания. Модель при этом не звалась ни разу, поэтому причина — занятость движка, а не
+// «модель дала пустой ответ»: вызывающий обязан назвать её в своём итоге (WN-4), иначе
+// сто отказов по занятости выглядят как сто пустых ответов модели.
+// Сообщение с нижнего регистра: его всегда составляют в предложение вызывающего.
+public sealed class LocalEngineSlotRefusalException(string engineKey, LocalTurnRefusal why, int running, int limit)
+    : InvalidOperationException(
+        $"локальный движок «{engineKey}» занят: слота не дождались ({Reason(why)}, занято {running} из {limit})")
+{
+    // Причина отказа — для вызывающего, который различает «очередь полна» и «вышли время
+    // ожидания» (в журнале ночи это разные строки).
+    public LocalTurnRefusal Why { get; } = why;
+
+    private static string Reason(LocalTurnRefusal why) => why switch
+    {
+        LocalTurnRefusal.QueueFull => "очередь ожидания полна",
+        LocalTurnRefusal.Timeout => "вышло время ожидания",
+        _ => "слот не выдан",
+    };
+}
 
 public enum LocalTurnRefusal { None, QueueFull, Timeout }
 

@@ -28,8 +28,9 @@ export interface WikiSubTab {
   label: string;
   icon: LucideIcon;
   /** Компонент подвкладки; нет — рисовать заглушку (подвкладка ещё не сделана).
-   *  Получает выбранный раздел: подвкладка не читает состояние WikiTab */
-  component?: ComponentType<{ selectedKey: string | null }>;
+   *  Получает выбранный раздел: подвкладка не читает состояние WikiTab.
+   *  sectionScope — область панели (W9a/W9b): в панелях её задаёт чип шапки, в подвкладке мобилы не передаётся */
+  component?: ComponentType<{ selectedKey: string | null; sectionScope?: string | null | 'all' }>;
   /** Что сказать в заглушке: каким шагом подкладка придёт */
   stubNote?: string;
 }
@@ -47,6 +48,16 @@ export const WIKI_SUBTABS: WikiSubTab[] = [
   // блок делает шаг F2), «Применение» (S7d-1) и «Отбор чатов» (S7d-2)
   { id: 'settings', label: 'Настройки', icon: Settings, component: WikiSettings },
 ];
+
+// Подвкладка → ключ панели в реестре зон (W3): подпись и значок панели обязаны совпадать со
+// строкой WIKI_SUBTABS (тест wikiPanelKeys). У «Страниц» панели нет — это центр экрана.
+export type WikiPanelId = 'wikiInbox' | 'wikiJournal' | 'wikiHealth' | 'wikiSettings';
+export const WIKI_SUBTAB_PANEL: Record<Exclude<WikiSubTabId, 'pages'>, WikiPanelId> = {
+  inbox: 'wikiInbox',
+  journal: 'wikiJournal',
+  health: 'wikiHealth',
+  settings: 'wikiSettings',
+};
 
 export function wikiSubTabIcon(tab: WikiSubTab) {
   const Icon = tab.icon;

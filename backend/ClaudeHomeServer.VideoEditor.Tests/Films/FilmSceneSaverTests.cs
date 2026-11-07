@@ -22,7 +22,7 @@ public sealed class FilmSceneSaverTests : IDisposable
 
     private Task<FilmCallResult<SaveSceneResult>> Save(FilmSceneSaver saver, VideoSceneDto scene, VideoClipVersionDto version,
         string? folder = null, string? fileName = null, VideoEditScope? scope = null, string initiator = VideoInitiators.Human) =>
-        saver.SaveAsync(Owner, scope ?? _w.Scope, new SaveSceneRequest(Session, scene.SceneId, version.VersionId, folder, fileName),
+        saver.SaveAsync(Owner, Owner, scope ?? _w.Scope, new SaveSceneRequest(Session, scene.SceneId, version.VersionId, folder, fileName),
             initiator, default);
 
     [Fact]
@@ -47,7 +47,7 @@ public sealed class FilmSceneSaverTests : IDisposable
         saved.SavedFiles.Should().ContainSingle(f => f.Path == "video/утро/scene-01.mp4" && f.VersionId == version.VersionId);
         saved.FilmRef.Should().Be(new VideoFilmRefDto("video/утро/утро.film", 0));
         _w.Feed.Records.Should().Contain(r => r.Record.RecordType == VideoThreadRecordTypes.Saved);
-        _w.Service.State(Owner, _w.Scope, "video/утро/утро.film").Value!.Marks.Single().Updated
+        _w.Service.State(Owner, Owner, _w.Scope, "video/утро/утро.film").Value!.Marks.Single().Updated
             .Should().BeTrue("новый файл сцены встаёт в фильм с точкой «обновлена»");
     }
 
@@ -57,7 +57,7 @@ public sealed class FilmSceneSaverTests : IDisposable
         var (scene, version) = _w.SceneWithClip();
         _w.WriteFilm("video/утро/черновик.film", Doc());
 
-        var result = await Saver().SaveAsync(Owner, _w.Scope,
+        var result = await Saver().SaveAsync(Owner, Owner, _w.Scope,
             new SaveSceneRequest(Session, scene.SceneId, version.VersionId, "video/другая", null, "video/утро/черновик.film"),
             VideoInitiators.Human, default);
 
@@ -73,7 +73,7 @@ public sealed class FilmSceneSaverTests : IDisposable
     {
         var (scene, version) = _w.SceneWithClip();
 
-        var result = await Saver().SaveAsync(Owner, _w.Scope,
+        var result = await Saver().SaveAsync(Owner, Owner, _w.Scope,
             new SaveSceneRequest(Session, scene.SceneId, version.VersionId, null, null, "docs/x.film"), VideoInitiators.Human, default);
 
         result.IsOk.Should().BeFalse();
@@ -218,13 +218,29 @@ public sealed class FilmSceneSaverTests : IDisposable
     {
         var (scene, version) = _w.SceneWithClip();
 
-        var noScene = await Saver().SaveAsync(Owner, _w.Scope, new SaveSceneRequest(Session, "нет-такой", null, null, null), VideoInitiators.Human, default);
-        var noVersion = await Saver().SaveAsync(Owner, _w.Scope, new SaveSceneRequest(Session, scene.SceneId, "нет-версии", null, null), VideoInitiators.Human, default);
+        var noScene = await Saver().SaveAsync(Owner, Owner, _w.Scope, new SaveSceneRequest(Session, "нет-такой", null, null, null), VideoInitiators.Human, default);
+        var noVersion = await Saver().SaveAsync(Owner, Owner, _w.Scope, new SaveSceneRequest(Session, scene.SceneId, "нет-версии", null, null), VideoInitiators.Human, default);
 
         noScene.ErrorCode.Should().Be(VideoEditorErrors.SceneNotFound);
         noVersion.ErrorCode.Should().Be(VideoEditorErrors.VersionNotFound);
         Directory.Exists(_w.Full("video")).Should().BeFalse();
         version.Should().NotBeNull();
+    }
+
+    // F2-P2i: субъект приватности кадра-нити — вызывающий, а не арендатор (в общем проекте они расходятся)
+    [Fact]
+    public async Task Кадр_нити_читается_от_имени_актора_а_не_арендатора()
+    {
+        var settings = new VideoSceneSettingsDto(FrameRef.Image("t1", "v1"), null, "Камера", "fal", "veo", 5, "16:9", false, 1);
+        var (scene, version) = _w.SceneWithClip(settings: settings);
+        var images = new FakeFrames(new ImageFrame([8, 8, 8], "image/png"));
+
+        var result = await Saver(images).SaveAsync(Owner, "member-a", _w.Scope,
+            new SaveSceneRequest(Session, scene.SceneId, version.VersionId, null, null), VideoInitiators.Human, default);
+
+        result.IsOk.Should().BeTrue(result.Error);
+        images.Asked.Should().Equal((Owner, "t1", "v1"));
+        images.Actors.Should().Equal("member-a");
     }
 
     [Fact]
@@ -234,16 +250,18 @@ public sealed class FilmSceneSaverTests : IDisposable
 
         await Save(Saver(), scene, version, initiator: VideoInitiators.Agent);
 
-        _w.Service.State(Owner, _w.Scope, "video/утро/утро.film").Value!.Marks.Single().Claude.Should().BeTrue();
+        _w.Service.State(Owner, Owner, _w.Scope, "video/утро/утро.film").Value!.Marks.Single().Claude.Should().BeTrue();
     }
 
     private sealed class FakeFrames(ImageFrame? frame) : IImageFrameSource
     {
         public List<(string, string, string)> Asked { get; } = [];
+        public List<string?> Actors { get; } = [];
 
-        public Task<ImageFrame?> GetAsync(string ownerId, string threadId, string versionId, CancellationToken ct)
+        public Task<ImageFrame?> GetAsync(string ownerId, string? actorId, string threadId, string versionId, CancellationToken ct)
         {
             Asked.Add((ownerId, threadId, versionId));
+            Actors.Add(actorId);
             return Task.FromResult(frame);
         }
 

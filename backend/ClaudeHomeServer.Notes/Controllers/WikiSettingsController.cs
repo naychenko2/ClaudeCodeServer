@@ -18,6 +18,10 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // умолчаниями. Образец — WikiController: владелец только из claim sub, чужая
 // вики — 403, выключенный флаг llm-wiki — 409 (тот же код, что у линта).
 //
+// С LI-2 PUT с включённой ночью заводит вику тем же вызовом WikiKeeper.EnsureInitializedAsync,
+// что и остальные человеческие точки: человек поставил тумблер — ночной разбор без заведённой
+// вики невозможен, а сама служба её не заводит. GET остаётся читающим и вику не заводит.
+//
 // GET оценивает здоровье классов (WikiClassHealth) и возвращает настройки с замером: блок
 // «Применение» обязан показывать текущую долю, а не память прошлого просмотра. Оценка
 // идемпотентна и однопоточна на владельца; выключение класса и уведомление — её часть, а не
@@ -39,12 +43,20 @@ public class WikiSettingsController : ControllerBase
 {
     private readonly WikiClassHealth _health;
     private readonly IFeatureFlagGate? _flags;
+    private readonly WikiKeeper _keeper;
+    // WN-5: ручка ручного запуска обращается к самой ночной службе (в приложении она зарегистрирована
+    // синглтоном — NotesSubsystem.cs:134). Необязательна: состав без службы (тест/сборка без шва)
+    // отвечает на POST 503, GET/PUT работают как раньше.
+    private readonly WikiNightlyService? _nightly;
     private readonly string _dataDir;
 
-    public WikiSettingsController(WikiClassHealth health, IFeatureFlagGate? flags, IConfiguration config)
+    public WikiSettingsController(WikiClassHealth health, IFeatureFlagGate? flags, WikiKeeper keeper, IConfiguration config,
+        WikiNightlyService? nightly = null)
     {
         _health = health;
         _flags = flags;
+        _keeper = keeper;
+        _nightly = nightly;
         // Каталог данных — как у всех сервисов (DataPath указывает на projects.json в dataDir).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
@@ -69,6 +81,11 @@ public class WikiSettingsController : ControllerBase
     private const string CodeNothingToChange = "wiki_settings_nothing_to_change";
     private const string CodeNightly = "wiki_nightly";
     private const string CodeWriteFailed = "wiki_settings_write_failed";
+    // WN-5: коды отказа ручки ручного запуска — по исходам TryStartManual.
+    private const string CodeNightlyDisabled = "wiki_nightly_disabled";
+    private const string CodeNightlyRunning = "wiki_nightly_running";
+    private const string CodeSettingsInvalid = "wiki_settings_invalid";
+    // 503 «службы нет» — без своего кода: общая форма проекта { error = … } (TasksController.cs:760).
 
     /// <summary>GET /api/wiki/settings — настройки своей вики с замером доли откатов по классам
     /// и источникам за 7 и 30 дней (мера 8). Побочный эффект — оценка здоровья: она же
@@ -91,7 +108,7 @@ public class WikiSettingsController : ControllerBase
         var stats = outcome.State == WikiClassHealth.RunState.Ran ? outcome.Stats : [];
         // Итог последней ночи — из того же файла, что читает служба (ReadLast): без файла или
         // битый — null, тот же reading, что у её собственной проверки даты прохода.
-        return Ok(BuildDto(settings, stats, WikiNightlyService.ReadLast(root)));
+        return Ok(BuildDto(settings, stats, WikiNightlyService.ReadLast(root), WikiNightlyService.IsRunning(root)));
     }
 
     /// <summary>PUT /api/wiki/settings — общий выключатель «Применять без ревью», состояние
@@ -101,9 +118,13 @@ public class WikiSettingsController : ControllerBase
     /// одновременные PUT и оценка не рвут файл и не затирают друг друга; мердж ночного блока
     /// делается от состояния на момент записи, а не от чтения вне замка. Кривой merged-блок —
     /// 400 с кодом, файл не тронут. Отказ записи (диск отказал) — {code}, а не исключение наружу.
-    /// Замер не возвращается: он читается GET после действия.</summary>
+    /// Замер не возвращается: он читается GET после действия.
+    /// LI-2: PUT, включивший ночной разбор, заводит вику — она нужна ночной службе. Заведение
+    /// после успешного Mutate и только когда в итоговых настройках nightly.enabled == true:
+    /// PUT класса или автоприменения вику не заводит, svc и выключенный флаг до заведения
+    /// не доходят (порядок проверок не менялся).</summary>
     [HttpPut]
-    public ActionResult<WikiSettingsDto> Put([FromBody] WikiSettingsRequest? req)
+    public async Task<ActionResult<WikiSettingsDto>> Put([FromBody] WikiSettingsRequest? req)
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
@@ -193,8 +214,46 @@ public class WikiSettingsController : ControllerBase
             return StatusCode(500, new { code = CodeWriteFailed, message = "файл настроек не записан" });
         }
 
+        // LI-2: включённая ночь — действие человека, после которого вики нужна сразу (ночная
+        // служба её не заводит, она только разбирает). Идемпотентный EnsureInitializedAsync под
+        // замком владельца: повторный PUT ничего не меняет, две одновременные точки (PUT +
+        // analyze) дают ровно один шаблон. Класс и автоприменение сюда не доходят: в итоговых
+        // настройках ночь остаётся выключенной.
+        if (next.NightlyOrDefaults().Enabled)
+            await _keeper.EnsureInitializedAsync(userId);
+
         // PUT итога ночи не несёт: он меняет настройки, а не читает прошлые проходы (шапка).
-        return Ok(BuildDto(next, [], null));
+        return Ok(BuildDto(next, [], null, WikiNightlyService.IsRunning(WikiPaths.Root(_dataDir, userId))));
+    }
+
+    /// <summary>POST /api/wiki/settings/nightly/run — ручной запуск ночного разбора (WN-5,
+    /// «Разобрать сейчас»): тот же проход, что у тика, но окно не проверяется и отметка «за дату
+    /// уже пройдено» не мешает. 202 {started:true} — проход начат (работа идёт в фоне службы,
+    /// её состояние видно по nightlyRunning в GET). 409 — по причине отказа: функция выключена
+    /// (wiki_llm_wiki_off), ночь выключена (wiki_nightly_disabled), этот владелец уже проходит
+    /// (wiki_nightly_running — тот же замок, что у тика), настройки нечитаемы
+    /// (wiki_settings_invalid). 403 — сервисный токен (B2b: проход запускает только пользовательский
+    /// токен, отказ раньше любого состояния). 503 — службы нет в этом составе: ответ общей формой
+    /// проекта { error = … }, своего кода не заводим. Никакой записи настроек действие не делает.</summary>
+    [HttpPost("nightly/run")]
+    public ActionResult NightlyRun()
+    {
+        var userId = OwnerOrNull();
+        if (userId is null) return Unauthorized();
+        // B2b: ручной запуск — действие человека, как PUT настроек: отказ по типу токена раньше
+        // любого состояния (службы, флага, тумблера) — по ответу нельзя узнать, что из них есть.
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Сервисный JWT: ночной разбор запускает только пользовательский токен" });
+        if (_nightly is null)
+            return StatusCode(503, new { error = "Ночной разбор не зарегистрирован в этом составе" });
+        return _nightly.TryStartManual(userId) switch
+        {
+            WikiNightlyService.ManualStart.Started => Accepted(new { started = true }),
+            WikiNightlyService.ManualStart.LlmWikiOff => LlmWikiOff(),
+            WikiNightlyService.ManualStart.Disabled => StatusCode(409, new { code = CodeNightlyDisabled, message = "ночной разбор выключен" }),
+            WikiNightlyService.ManualStart.AlreadyRunning => StatusCode(409, new { code = CodeNightlyRunning, message = "разбор этой вики уже идёт" }),
+            _ => StatusCode(409, new { code = CodeSettingsInvalid, message = "настройки нечитаемы: разбор не начат" }),
+        };
     }
 
     /// <summary>Мerged-ночной блок кривой: сигнал функции мерджа (под замком, по состоянию на
@@ -210,8 +269,9 @@ public class WikiSettingsController : ControllerBase
     // Строки класса — объединение состояния из settings и замера оценки: класс без замера
     // (выключен давно, активности нет) остаётся видимым; активный без записи — тоже.
     // lastNight — прочитанный итог ночи (GET) или null (PUT, и GET без читаемого файла).
+    // nightlyRunning (WN-5) — идёт ли сейчас проход этой вики (состояние процесса, не файла).
     private static WikiSettingsDto BuildDto(WikiSettingsStore.Settings settings, IReadOnlyList<WikiClassHealth.ClassStat> stats,
-        WikiNightlyService.NightResult? lastNight)
+        WikiNightlyService.NightResult? lastNight, bool nightlyRunning)
     {
         var night = settings.NightlyOrDefaults();
         var byClass = new Dictionary<string, WikiClassDto>(StringComparer.Ordinal);
@@ -248,6 +308,8 @@ public class WikiSettingsController : ControllerBase
                 MaxChatsPerSection = night.MaxChatsPerSection,
                 InputTokenBudget = night.InputTokenBudget,
             },
+            // Идёт ли сейчас проход этой вики — состояние процесса (static-замок службы), не файла.
+            NightlyRunning = nightlyRunning,
             // Итог ночи — как есть из файла службы; читающий различает только null
             // («итога не было») и строку.
             LastNight = lastNight is null ? null : new WikiLastNightDto
@@ -259,6 +321,9 @@ public class WikiSettingsController : ControllerBase
                 ToInbox = lastNight.ToInbox,
                 EstTokens = lastNight.EstTokens,
                 Outcome = lastNight.Outcome,
+                Rejected = lastNight.Rejected,
+                FirstRejectReason = lastNight.FirstRejectReason,
+                Manual = lastNight.Manual,
             },
         };
     }
@@ -274,6 +339,9 @@ public sealed class WikiSettingsDto
     public bool AutoApplyEnabled { get; set; }
     public List<WikiClassDto> Classes { get; set; } = [];
     public WikiNightlyDto Nightly { get; set; } = new();
+    // WN-5: идёт ли сейчас проход ночного разбора этой вики (тот же замок, что у тика и ручки
+    // ручного запуска): состояние процесса, а не файла; нужен кнопке «Разобрать сейчас».
+    public bool NightlyRunning { get; set; }
     public WikiLastNightDto? LastNight { get; set; }
 }
 
@@ -290,6 +358,13 @@ public sealed class WikiLastNightDto
     public int ToInbox { get; set; }
     public long EstTokens { get; set; }
     public string Outcome { get; set; } = "";
+    // WN-2: отказанные разборы и причина первого из них — поле в точности нового файла
+    // nightly-last.json; старый файл читается нулём/null (аддитивность, как у inputTokens).
+    public int Rejected { get; set; }
+    public string? FirstRejectReason { get; set; }
+    // WN-5: проход был запущен кнопкой вручную (не ночным тиком); старый файл без поля
+    // читается false (та же аддитивность).
+    public bool Manual { get; set; }
 }
 
 /// <summary>Блок «Ночной разбор» (макет Ф2): тумблер, окно [WindowStartHour, WindowEndHour),

@@ -195,7 +195,11 @@ public class McpRegistry
             // PUT молча сбрасывал разрешение — а это единственный способ его выдать
             existing.AllowOutsideProjects = draft.AllowOutsideProjects;
             // CatalogRef намеренно не переносится: указатель на реестр переживает любую
-            // правку записи сам (план «Каталог», п.4), а в черновике его нет
+            // правку записи сам (план «Каталог», п.4), а в черновике его нет.
+            // SharedWithMembers — по той же схеме: пометка «для участников» живёт своим
+            // эндпоинтом (S2a-7), форма правки записи её не содержит и сбрасывать её не должна
+            // (иначе правка URL молча снимала бы разрешение, как это делал AllowOutsideProjects
+            // до переноса строкой выше)
             existing.AuthVersion++;
             existing.UpdatedAt = DateTime.UtcNow;
             Save();
@@ -213,6 +217,27 @@ public class McpRegistry
             if (existing is null) return null;
             if (existing.Enabled == enabled) return existing;
             existing.Enabled = enabled;
+            existing.UpdatedAt = DateTime.UtcNow;
+            Save();
+            return existing;
+        }
+    }
+
+    /// <summary>
+    /// Пометка «для участников» (S2a-7). Отдельный метод, а не часть Update: тумблер живёт
+    /// в чужом месте экрана (настройки общего проекта), и его правка не должна трогать
+    /// остальную запись или поднимать AuthVersion — состав серверов меняется сам,
+    /// и это уже видно по сигнатуре запуска. null — записи нет у владельца.
+    /// </summary>
+    public McpServerRecord? SetSharedWithMembers(string ownerId, string id, bool shared)
+    {
+        lock (_lock)
+        {
+            var existing = _byOwner.TryGetValue(ownerId, out var list)
+                ? list.FirstOrDefault(r => r.Id == id) : null;
+            if (existing is null) return null;
+            if (existing.SharedWithMembers == shared) return existing;
+            existing.SharedWithMembers = shared;
             existing.UpdatedAt = DateTime.UtcNow;
             Save();
             return existing;

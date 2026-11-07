@@ -35,8 +35,11 @@ public class ClaudeSession : ILlmSessionAdapter
     // со следующего хода, чат её не «замораживает». Итоговый null = слот пуст, решает CLI.
     // _turnModelOverride (голосовой ход на модели места chat-voice) — явная модель: она
     // сильнее Info.Model и места, поэтому подставляется в резолв как explicit.
+    // Ключ владельца — _turnOwnerId (владелец хода), а не Info.OwnerId: у проектной сессии
+    // тот пуст по контракту и резолв по нему падал на общий слот инстанса, хотя старт
+    // заморожен из личного слота арендатора (DEC-FALLBACK 3f2f33fb).
     private string? EffectiveModel =>
-        _assignments?.Resolve(UsageKey, _turnModelOverride ?? Info.Model, Info.OwnerId)
+        _assignments?.Resolve(UsageKey, _turnModelOverride ?? Info.Model, _turnOwnerId)
         ?? (_turnModelOverride ?? Info.Model);
 
     // Эффективная модель для слоя фолбэка (FallbackLlmSessionAdapter): пара «модель × подписка»
@@ -82,9 +85,11 @@ public class ClaudeSession : ILlmSessionAdapter
     // цепочка нужна оркестратору, чтобы при сбое шагать по ней, а не автоподбирать. Без резолвера
     // (тесты) — один элемент (эффективная модель), т.е. цепочки нет. Персона передаётся в резолв:
     // хвост тира строится по её узким матрицам (персона → специальность), а не по общему слоту
-    // владельца — старт и фолбэк идут по одним правилам.
+    // владельца — старт и фолбэк идут по одним правилам. Ключ владельца — тот же, что у старта:
+    // _turnOwnerId; по Info.OwnerId хвост чата проекта брался из общего слота инстанса
+    // (DEC-FALLBACK 3f2f33fb).
     internal IReadOnlyList<string> EffectiveTurnChain =>
-        _assignments?.ResolveChain(UsageKey, _turnModelOverride ?? Info.Model, Info.OwnerId, _personaProvider?.Invoke())
+        _assignments?.ResolveChain(UsageKey, _turnModelOverride ?? Info.Model, _turnOwnerId, _personaProvider?.Invoke())
         ?? (EffectiveModel is { } m ? new[] { m } : Array.Empty<string>());
 
     // Размер контекста последнего запроса для слоя фолбэка (оценка заполнения окна): при
@@ -364,8 +369,9 @@ public class ClaudeSession : ILlmSessionAdapter
     private sealed class CliRun
     {
         public required Process Process { get; init; }
-        // Сигнатура окружения запуска (модель/режим/env/набор MCP/слой персоны) — следующий
-        // ход можно отдать живому процессу только при полном совпадении (см. BuildLaunchSignature)
+        // Сигнатура окружения запуска (модель/режим/env/набор MCP/рамка хода/слой персоны) —
+        // следующий ход можно отдать живому процессу только при полном совпадении
+        // (см. BuildLaunchSignature)
         public required string Signature { get; init; }
         public string? TurnMcpPath { get; init; }
         // Per-run файл --agents (состав сабагентов-персон): та же жизнь, что у MCP-конфига —
@@ -874,6 +880,9 @@ public class ClaudeSession : ILlmSessionAdapter
     // подписчика SubagentRunLog в SessionManager). null — тесты, шина не подана, события
     // просто не публикуются и поведение остаётся прежним.
     private readonly Turn.ITurnEventBus? _events;
+    // Источник вердикта рамки хода (S2a-4): ITurnFrameSource (S2a-1), тот же шов, что у
+    // платформенных тулсетов (S2a-3). Вердикт — свойство проекта (общий/личный), не хода.
+    private readonly ClaudeHomeServer.Services.Access.ITurnFrameSource? _frameSource;
     // Корень профиля CLI этого хода (CLAUDE_CONFIG_DIR) — для блока «слой CLI»
     private readonly string? _cliConfigRoot;
     // Id снимка текущего хода: пишет поток хода (RunTurnAsync), читает поток stdout-ридера,
@@ -1053,7 +1062,10 @@ public class ClaudeSession : ILlmSessionAdapter
         var needsNormalization = provider.NormalizeToolInputArrays;
         var viaLocalStats = provider.IsLocal && _localModelStats?.CurrentValue.Enabled == true;
         if (!needsNormalization && !viaLocalStats) return false;
-        if (_serverGateway is null || string.IsNullOrWhiteSpace(_llmGatewayApiUrl) || string.IsNullOrEmpty(Info.OwnerId))
+        // Ключ — владелец хода (_turnOwnerId), а не Info.OwnerId: у проектной сессии OwnerId пуст
+        // по контракту (Models/Session.cs:382), и такой чат на шлюз не уходил (дефект 29.09):
+        // ни нормализатора tool_use.input, ни статистики локальных моделей за ход.
+        if (_serverGateway is null || string.IsNullOrWhiteSpace(_llmGatewayApiUrl) || string.IsNullOrEmpty(_turnOwnerId))
             return false;
         if (_serverGateway.Enabled) return true;
         // Одно предупреждение за жизнь процесса (см. _gatewayDisabledWarned): повторные
@@ -1093,7 +1105,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // Отзыв — финализация прогона (FinalizeRunAsync) или сбой запуска.
     private (string TurnId, string Token) BindGatewayTurn(IDictionary<string, string> env)
     {
-        var start = _serverGateway!.Start(Info.OwnerId!, Info.Id, EffectiveModel);
+        var start = _serverGateway!.Start(_turnOwnerId!, Info.Id, EffectiveModel);
         if (start.Token is not { } issued)
             throw new InvalidOperationException(start.FailureText ?? "Шлюз LLM не выдал ходу маршрут.");
         env["ANTHROPIC_BASE_URL"] = GatewayBaseUrl(issued.Grant.TurnId);
@@ -1207,6 +1219,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _memoryMcp = context.MemoryMcp;
         _chatContextProvider = context.ChatContextProvider;
         _events = context.Events;
+        _frameSource = context.FrameSource;
         _cliConfigRoot = context.CliConfigRoot;
         _personasMcp = context.PersonasMcp;
         _workspaceMcp = context.WorkspaceMcp;
@@ -1337,10 +1350,19 @@ public class ClaudeSession : ILlmSessionAdapter
             || personaAgents?.MemoryServers.Any(s => !ConsultantHttp(s)) == true;
         var memoryServerPath = _memoryMcp is not null || hasConsultants
             ? (hasStdioMemory ? MapMcpPath(MemoryServerLocator.FindMemoryServerPath()) : null) : null;
-        var hasMemory = _memoryMcp is not null && (memoryHttp || memoryServerPath is not null);
+        // Приватный чат не пишет в общую память в ЛЮБОМ транспорте: гейт приватности стоит только в
+        // http-тулсете, замороженный node-сервер (stdio) его не знает и пишет в team-memory
+        // сервисным JWT владельца. Fail-closed: на откате приватному чату memory не объявляется
+        // (признак — свойство сессии, не хода: сигнатура запуска стабильна)
+        var privateStdioMemoryBlocked = Info.PrivateToUserId is not null;
+        var hasMemory = _memoryMcp is not null
+            && (memoryHttp || (memoryServerPath is not null && !privateStdioMemoryBlocked));
         var personasServerPath = _personasMcp is not null && !personasHttp
             ? MapMcpPath(PersonasServerLocator.FindPersonasServerPath()) : null;
-        var hasPersonas = _personasMcp is not null && (personasHttp || personasServerPath is not null);
+        // Замороженный stdio-сервер персон ходит в REST без гейта приватной сессии: приватному чату
+        // на откате он не объявляется (симметрично privateStdioMemoryBlocked)
+        var hasPersonas = _personasMcp is not null
+            && (personasHttp || (personasServerPath is not null && !privateStdioMemoryBlocked));
         // wsp/notifications/codegraph живут в Kestrel (ADR-012, фаза 2 волна 3), но пути их
         // stdio-серверов резолвим у откатившихся — как у tasks/notes/personas
         var workspaceServerPath = _workspaceMcp is not null && !workspaceHttp
@@ -1754,10 +1776,9 @@ public class ClaudeSession : ILlmSessionAdapter
 
             if (hasMemory)
             {
-                // Секция dossier_lookup/dossier_get (этап 2, ADR-004 §5): гейт по флагу
-                // ВЛАДЕЛЬЦА change-dossiers-recall — стабилен в рамках сессии (меняется
-                // человеком из меню редко), от свойств хода не зависит. Флаг входит в
-                // отпечаток состава: переключение корректно перезапустит процесс CLI.
+                // Секция dossier_lookup/dossier_get (этап 2, ADR-004 §5): значение стабильно
+                // в рамках сессии и от свойств хода не зависит; оно входит в отпечаток состава
+                // и нужно stdio-откату (env MEMORY_DOSSIER_TOOLS).
                 var memoryDossierTools = _memoryMcp!.DossierToolsEnabled ? "1" : "0";
                 // Токен — фабрикой на каждый ход: контекст живёт столько же, сколько адаптер,
                 // а захваченный строкой JWT у долгоживущего чата истекал, и инструменты
@@ -2330,7 +2351,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 {
                     // stdio-ветке нужен файл сервера (в песочнице может не резолвиться);
                     // http-запись едет и без него — процесса node нет
-                    if (!ConsultantHttp(c) && memoryServerPath is null) continue;
+                    // приватный чат на stdio: тот же memory-сервер пишет в общую полку — не объявляем
+                    if (!ConsultantHttp(c) && (memoryServerPath is null || privateStdioMemoryBlocked)) continue;
                     servers[c.ServerKey] = ConsultantHttp(c)
                         ? new System.Text.Json.Nodes.JsonObject
                         {
@@ -3663,6 +3685,19 @@ public class ClaudeSession : ILlmSessionAdapter
         // (снимок пишется уже после развилки same-process, когда известно, применён ли он)
         List<PromptSectionDto> sections = [];
 
+        // Рамка хода (S2a-4, разрез И.3 в ревизии 29.10): вердикт ITurnFrameSource (S2a-1) —
+        // Narrow в общем проекте при любом акторе, включая владельца, Wide в личном.
+        // Вердикт — свойство проекта, а не хода; рамка ВХОДИТ в сигнатуру запуска
+        // (BuildLaunchSignature, доработка по ревью R-S2a-4 Major 2): пока рамка не
+        // менялась, живой процесс постоялен; сменилась (участника добавили/сняли) —
+        // следующий ход стартует НОВЫМ процессом с подборкой новой рамки. Нет вердикта
+        // (нет источника — тестовые пути без SessionManager, или нет арендатора — чей
+        // приватный горизонт закрывать не определено) — Wide: существующие пути без
+        // владельца остаются как были.
+        var turnFrame = _frameSource is { } frameSource && _turnOwnerId is { } frameOwnerId
+            ? frameSource.Frame(Info.Id, frameOwnerId)
+            : ClaudeHomeServer.Services.Access.TurnFrameKind.Wide;
+
         // RecallInTurnText: нестабильные секции не идут в системный блок (он обязан быть
         // побайтово неизменным, иначе prefix cache движка рвёт кэш всей истории), а
         // копятся здесь и уезжают хвостом — вклейкой в текст хода. Признак берём от
@@ -3670,8 +3705,15 @@ public class ClaudeSession : ILlmSessionAdapter
         // Ручка провайдера действует и БЕЗ облегчённого контекста (персона с выключенным
         // LightContext на local-qwen: профиль null, а кэш движка рвётся так же —
         // LlmProviderRegistry.RecallInTurnTextFor).
+        // Общий проект — то же при любой ручке провайдера (S2a-4): подборка собирается на ход
+        // и на участника, а same-process ход системный промпт живого процесса НЕ обновляет
+        // (ниже по файлу) — в системном блоке замерла бы подборка того хода, что поднял
+        // процесс. Стал бы проект общим посреди прогона — рамка меняется и вместе с ней
+        // сигнатура (доработка по ревью R-S2a-4 Major 2): ход участника стартует НОВЫМ
+        // процессом с узкой подборкой, личная подборка владельца к участнику не едет.
         var recallInTurnText = LightProfile is { RecallInTurnText: true }
-            || _providers?.RecallInTurnTextFor(EffectiveModel) == true;
+            || _providers?.RecallInTurnTextFor(EffectiveModel) == true
+            || turnFrame == ClaudeHomeServer.Services.Access.TurnFrameKind.Narrow;
         List<PromptSectionDto> turnRecallSections = [];
         // Секции PromptSection.InTurnTail: хвостом при любом провайдере, ближе всего к тексту хода
         List<PromptSectionDto> alwaysTailSections = [];
@@ -3693,6 +3735,12 @@ public class ClaudeSession : ILlmSessionAdapter
         // сохраняется в транскрипте сессии: не передать → инструкции (fal-ai/правило
         // Mermaid-схем, Dify, теги) пропадут. Same-process ход промпт живого процесса НЕ обновляет —
         // recall/подсказки на нём остаются со старта прогона (мягкая деградация).
+        // Для общего проекта эта деградация закрыта рамкой (S2a-4 + доработка по ревью
+        // R-S2a-4 Major 2): личных секций при Narrow нет вовсе, нестабильные всегда
+        // уезжают хвостом (выше по файлу), а рамка входит в сигнатуру запуска — живой
+        // процесс, поднятый Wide, хода Narrow не принимает. Системный блок процесса,
+        // поднятого в общем проекте, личной подборки владельца не содержит: он собран
+        // по рамке Narrow с первого своего хода.
         {
             // Секции — единственный источник правды: из этого списка собирается и текст для
             // --append-system-prompt (TurnPromptAssembler.Combine), и снимок «что ушло модели»
@@ -3749,7 +3797,8 @@ public class ClaudeSession : ILlmSessionAdapter
                     HasAudioEditorMcp: _audioEditorMcp is not null && McpDelivered(McpEndpoints.AudioEditorName),
                     HasVideoEditorMcp: _videoEditorMcp is not null && McpDelivered(McpEndpoints.VideoEditorName),
                     Unattended: Turn.TurnAudience.IsUnattended(Info, _currentTurnAgentDepth),
-                    ConsumersHookActive: ConsumersHookDelivered);
+                    ConsumersHookActive: ConsumersHookDelivered,
+                    Frame: turnFrame);
                 var assembling = new Turn.PromptAssembling(
                     turn: CurrentTurnContext(), session: promptContext, turnText: text);
                 try
@@ -4185,7 +4234,7 @@ public class ClaudeSession : ILlmSessionAdapter
             if (contributorSections.TryGetValue("code-graph", out var codeGraph))
                 Add("code-graph", "Главные узлы кода проекта", codeGraph.Text, stable: false, group: "project");
 
-            // Сценарное правило выбора codegraph / LSP / Grep (ADR-011 шаг 3): slice выше —
+            // Сценарное правило выбора codegraph / Grep (ADR-011 шаг 3): slice выше —
             // данные и могут отсутствовать (граф не построен), правило же статично и доезжает
             // до каждого хода проектного чата. Тот же гейт, что у slice: провайдер не null
             // (проектный чат с включённым codegraph) — правило не советует инструменты,
@@ -4372,9 +4421,11 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         else if (localProvider is not null)
         {
-            // Локальный ход МИМО шлюза (прямой путь CLI → прокси локальной модели): шлюз не
-            // включается у сессии без владельца (UseServerGateway требует Info.OwnerId — у части
-            // боевых чатов он пуст, проверено на sessions.json 2026-10-18) и при LlmGateway:Enabled=false.
+            // Локальный ход МИМО шлюза (прямый путь CLI → прокси локальной модели): шлюз не
+            // включается, если владелец хода неизвестен (UseServerGateway требует _turnOwnerId;
+            // раньше требовал Info.OwnerId, пустого у проектной сессии по контракту
+            // Models/Session.cs:382, — такой чат на шлюз не уходил, дефект 29.09) и при
+            // LlmGateway:Enabled=false.
             // Прокси читает маркер сжатия из сырого x-claude-code-compaction сам, поэтому
             // подсказочные заголовки нужны и здесь — без них автосжатие не уходит в облако по маркеру.
             // vLLM лишние x-claude-code-* принимает (проверено живьём: 200), значение стабильно по сессии.
@@ -4414,6 +4465,14 @@ public class ClaudeSession : ILlmSessionAdapter
         if (_lastBareModeApplied)
             envOverrides["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1";
 
+        // Приватный чат общего проекта (S2d-5c): авто-память CLI пишет факты в общую папку
+        // ~/.claude/projects/<папка>/memory, откуда их прочтёт чат любого участника. Выключаем
+        // для чатов с PrivateToUserId. Только значение "1" (0 включило бы принудительно).
+        // Признак — свойство СЕССИИ, не хода: сигнатура запуска стабильна; «Сделать общим»
+        // меняет env и перезапускает процесс один раз.
+        if (Info.PrivateToUserId is not null)
+            envOverrides["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1";
+
         // План хода (TaskCreate/TaskUpdate): с CLI 2.1.281 (24.09) план-тулы в -p отдаются
         // лишь части моделей, остальным — только по этой переменной (гейт найден в бинарнике
         // 2.1.292; замер: без неё у Fable 5.1 и Sonnet 5.5 их нет). Ставим всегда:
@@ -4452,6 +4511,12 @@ public class ClaudeSession : ILlmSessionAdapter
             envOverrides[ConsumersHookProjectEnv] = hookGraph.ProjectId;
             envOverrides[ConsumersHookTokenEnv] = ConsumersHookTokenPlaceholder;
         }
+
+        // Признак чата-исполнителя задачи для хука «сборка и тесты — только инструментами»
+        // (ClaudeRuntimeSettings, восьмая обязанность): файл настроек один на все чаты, различие
+        // — только здесь. Свойство сессии, не хода: значение стабильно и сигнатуру не мерцает.
+        if (Info.TaskExecution)
+            envOverrides[ClaudeRuntimeSettings.TaskExecutorEnv] = "1";
 
         // Родной Claude (подписка — основной аккаунт или аккаунт пула): объявляем окно
         // контекста сами, как сторонним провайдерам это делает BuildCliEnv. Считаем по модели
@@ -4618,7 +4683,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // учтены в его базе отдельно). Картинки не считаем: у local-qwen их нет.
         _lastTurnInputChars = (combinedPrompt?.Length ?? 0) + turnTextForCli.Length;
 
-        var signature = BuildLaunchSignature(args, mcpServerKeys, turnAgentsFingerprint, envOverrides, personaLayerPrompt);
+        var signature = BuildLaunchSignature(args, mcpServerKeys, turnAgentsFingerprint, envOverrides, personaLayerPrompt, turnFrame);
         LastLaunchSignature = signature;
 
         // Same-process ход: прогон дожил с прошлого хода (фоновые агенты ещё работают),
@@ -5767,7 +5832,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // путь temp MCP-конфига (вместо него набор ключей серверов + отпечаток СОСТАВА их
     // инструментов — write/mentions/секции; токены/URL из содержимого намеренно опущены как
     // изменчивые) и системный промпт целиком — из него в сигнатуре только слой персоны,
-    // recall/подсказки деградируют мягко.
+    // recall/подсказки деградируют мягко. Рамка хода (Wide/Narrow) — В сигнатуре
+    // (доработка S2a-4 по ревью R-S2a-4 Major 2): это свойство проекта, а не хода —
+    // два хода одного чата дают один отпечаток, а смена состава участников (рамки)
+    // перезапускает процесс, стартующий уже с подборкой новой рамки.
     // Решение о ретрае same-process хода при пустой смерти процесса (гонка TOCTOU). Чистая
     // функция: FinalizeRunAsync применяет её исход, тест вызывает напрямую. activeTurnDied —
     // ход был активен (ждуresult) в момент смерти (не между ходами и не после result);
@@ -6021,9 +6089,16 @@ public class ClaudeSession : ILlmSessionAdapter
     }
 
     // internal для поведенческого теста --agents (зовёт её на реальных args PrepareTurnAgents).
+    // Рамка хода (TurnFrameKind) — в сигнатуре (доработка S2a-4 по ревью R-S2a-4, Major 2):
+    // рамка — свойство проекта, а не хода, и у живого процесса она обязана быть постоянной:
+    // сменилась (участника добавили/сняли) → другой отпечаток → новый процесс, чей системный
+    // блок собран уже по рамке его первого хода. Инвариант стабильности состава инструментов
+    // (McpToolsetStabilityTests) это не трогает: рамка не зависит от свойств хода, два хода
+    // одного чата дают один отпечаток (сторож: РукиВключены_ДваХода_ОднаСигнатура).
     internal static string BuildLaunchSignature(
         IReadOnlyList<string> args, string mcpServerKeys, string turnAgentsFingerprint,
-        IReadOnlyDictionary<string, string> envOverrides, string? personaLayerPrompt)
+        IReadOnlyDictionary<string, string> envOverrides, string? personaLayerPrompt,
+        ClaudeHomeServer.Services.Access.TurnFrameKind frame)
     {
         var sb = new System.Text.StringBuilder();
         for (var i = 0; i < args.Count; i++)
@@ -6034,6 +6109,10 @@ public class ClaudeSession : ILlmSessionAdapter
             sb.Append(args[i]).Append('\u0001');
         }
         sb.Append("mcp=").Append(mcpServerKeys).Append('\u0001');
+        // Рамка хода: Wide/Narrow — разные отпечатки. Смена рамки проекта (добавили/сняли
+        // участника) не отдаёт живому процессу, поднятому в другой рамке: новый процесс
+        // стартует с подборкой своей рамки (доработка S2a-4 по ревью R-S2a-4, Major 2).
+        sb.Append("frame=").Append(frame.ToString()).Append('\u0001');
         // Отпечаток содержимого файла --agents (вместо пути): смена состава сабагентов-персон
         // → новый отпечаток → новый процесс; правка персоны (personaLayerPrompt) — отдельно.
         if (!string.IsNullOrEmpty(turnAgentsFingerprint))

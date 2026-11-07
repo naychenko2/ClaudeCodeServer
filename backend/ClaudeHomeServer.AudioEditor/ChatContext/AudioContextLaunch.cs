@@ -48,7 +48,7 @@ public sealed class AudioContextLaunch(
     public const string NoSessionText = "Для запуска по ревизии контекста нужен чат (sessionId)";
 
     // Сверить ревизию клиента со стором. Чат обязан быть из области запроса: чужой — как несуществующий
-    public AudioContextRead Read(string ownerId, AudioEditScope scope, string? sessionId, long revision)
+    public AudioContextRead Read(string ownerId, AudioEditScope scope, string? sessionId, long revision, string? actorId = null)
     {
         if (store is null || registry is null) return new(null, AudioEditErrorCodes.Unavailable, UnavailableText);
         if (string.IsNullOrWhiteSpace(sessionId)) return new(null, AudioEditErrorCodes.InvalidRequest, NoSessionText);
@@ -58,24 +58,24 @@ public sealed class AudioContextLaunch(
             && ((session = directory.GetById(id)) is null || AudioEditScope.Of(session).Key != scope.Key))
             return new(null, AudioEditErrorCodes.ChatNotFound, "Чат не найден");
         var state = store.Get(ownerId, id);
-        return state.Revision == revision ? new(state) : Stale(ownerId, scope, id, session, state);
+        return state.Revision == revision ? new(state) : Stale(ownerId, scope, id, session, state, actorId);
     }
 
     // Свежий DTO для тела 409 (ревизия котировки не совпала с запуском и т. п.)
-    public AudioContextRead Stale(string ownerId, AudioEditScope scope, string sessionId)
+    public AudioContextRead Stale(string ownerId, AudioEditScope scope, string sessionId, string? actorId = null)
     {
         if (store is null || registry is null) return new(null, AudioEditErrorCodes.Unavailable, UnavailableText);
         var id = sessionId.Trim();
-        return Stale(ownerId, scope, id, directory?.GetById(id), store.Get(ownerId, id));
+        return Stale(ownerId, scope, id, directory?.GetById(id), store.Get(ownerId, id), actorId);
     }
 
     private AudioContextRead Stale(string ownerId, AudioEditScope scope, string sessionId, Models.Session? session,
-        ChatContextState state)
+        ChatContextState state, string? actorId)
     {
         session ??= directory?.GetById(sessionId);
         if (session is null || registry is null)
             return new(null, AudioEditErrorCodes.ContextChanged, StaleText);
-        var dto = ChatContextDtoBuilder.Build(registry, new ContextScope(ownerId, session, scope.Project), state);
+        var dto = ChatContextDtoBuilder.Build(registry, new ContextScope(ownerId, session, scope.Project, actorId), state);
         return new(null, AudioEditErrorCodes.ContextChanged, StaleText, dto);
     }
 

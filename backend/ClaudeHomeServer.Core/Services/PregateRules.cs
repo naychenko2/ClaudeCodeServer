@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 
 namespace ClaudeHomeServer.Services;
 
@@ -14,14 +15,45 @@ public static class PregateRules
         role is TaskRoles.Step or TaskRoles.Rework && !string.IsNullOrWhiteSpace(worktreePath);
 
     // Новая запись по вердикту. Красный по той же причине (тот же отпечаток), что и предыдущий красный,
-    // наращивает серию; зелёный и красный по новой причине начинают её заново
+    // наращивает серию; зелёный и красный по новой причине начинают её заново.
+    // «Нечего проверять» — нейтральный исход: серию не наращивает и не обнуляет, а переносит как была
+    // (RedStreak/RedKey прежней записи), чтобы красный после него считался от последнего настоящего вердикта
     public static PregateRecord Next(PregateRecord? previous, string sha, bool green, string summary,
         string? redKey, DateTime now, bool nothingApplicable = false)
     {
-        if (nothingApplicable) return new PregateRecord(sha, false, summary, now, NothingApplicable: true);
+        if (nothingApplicable)
+            return new PregateRecord(sha, false, summary, now, previous?.RedStreak ?? 0, previous?.RedKey,
+                NothingApplicable: true);
         if (green) return new PregateRecord(sha, true, summary, now);
-        var streak = previous is { Green: false, NothingApplicable: false } && previous.RedKey == redKey ? previous.RedStreak + 1 : 1;
+        var streak = previous is { Green: false } && previous.RedStreak > 0 && previous.RedKey == redKey
+            ? previous.RedStreak + 1 : 1;
         return new PregateRecord(sha, false, summary, now, streak, redKey);
+    }
+
+    // Заголовок блока флаков в выводе scripts/test-shards.py: «Флаки (прошли со второго раза): N»
+    public const string FlakyHeader = "Флаки (прошли со второго раза)";
+
+    // Сводка записи по вердикту: красные проверки — «✗ имя: деталь»; зелёная с деталью (флаки быстрых тестов
+    // прошли со второго раза) — «⚠ имя: флаки N» и FQN следом. Зелёный без флаков — пустая строка, как раньше
+    public static string Summary(PregateVerdict verdict)
+    {
+        var lines = new List<string>();
+        foreach (var c in verdict.Checks)
+        {
+            if (c.Status == PregateStatus.Red) lines.Add($"✗ {c.Name}: {c.Detail}");
+            else if (c.Status == PregateStatus.Green && c.Detail.Length > 0) lines.Add($"⚠ {c.Name}: {Warning(c.Detail)}");
+        }
+        return string.Join("\n", lines);
+    }
+
+    // Деталь зелёной проверки: блок флаков сворачивается в «флаки N» + FQN, иное — как есть
+    private static string Warning(string detail)
+    {
+        var parts = detail.Split('\n');
+        if (!parts[0].StartsWith(FlakyHeader, StringComparison.Ordinal)) return detail;
+        var count = parts[0][FlakyHeader.Length..].TrimStart(':', ' ');
+        var n = int.TryParse(count, out var parsed) ? parsed : parts.Length - 1;
+        return string.Join("\n", [$"флаки {n}", .. parts[1..]]);
     }
 
     public const string UiRoutesMarker = "UI-маршруты:";

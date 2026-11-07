@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Mcp;
 using FluentAssertions;
 using Xunit;
@@ -11,6 +12,9 @@ namespace ClaudeHomeServer.Tests.Services;
 /// гонять все значимые комбинации «проектный/внепроектный чат × grant проекта × grant
 /// персоны × профиль только-чтение». Правило — docs/research/mcp-allowlist-plan.md,
 /// блок-схема «Правило доставки».
+/// Матрица ниже — поведение широкой рамки (личный проект, чат вне проекта): с приходом
+/// рамки (S2a-7) она осталась дословно той же, ей передаётся TurnFrameKind.Wide.
+/// Узкая рамка (общий проект) — отдельная матрица ниже.
 /// </summary>
 public class McpDeliveryTests
 {
@@ -48,7 +52,8 @@ public class McpDeliveryTests
         IReadOnlyCollection<string>? projectServersOn =
             isProjectChat && inProjectOn ? ["srv"] : null;
 
-        McpDelivery.ShouldDeliver(record, projectServersOn, isProjectChat, personaGranted, readOnly)
+        McpDelivery.ShouldDeliver(record, projectServersOn, isProjectChat, personaGranted,
+                readOnly, TurnFrameKind.Wide)
             .Should().Be(expected);
     }
 
@@ -58,11 +63,67 @@ public class McpDeliveryTests
     {
         var record = new McpServerRecord { Key = "srv", Enabled = true };
         // пустой McpServersOn = «в проекте не включён никто» → проектный grant не срабатывает
-        McpDelivery.ShouldDeliver(record, [], isProjectChat: true, personaGranted: false, readOnly: false)
+        McpDelivery.ShouldDeliver(record, [], isProjectChat: true, personaGranted: false,
+                readOnly: false, TurnFrameKind.Wide)
             .Should().BeFalse();
         // но выдача персоны спасает
-        McpDelivery.ShouldDeliver(record, [], isProjectChat: true, personaGranted: true, readOnly: false)
+        McpDelivery.ShouldDeliver(record, [], isProjectChat: true, personaGranted: true,
+                readOnly: false, TurnFrameKind.Wide)
             .Should().BeTrue();
+    }
+
+    // --- Узкая рамка (S2a-7, решение 29.10): любой чат общего проекта, любой актор ---
+    //
+    // Личные оси («включён в проекте», «выдан персоне») — свойства личного пространства
+    // арендатора, от общего проекта оно закрыто всем, включая самого арендатора. Поэтому в
+    // Narrow они не смотрятся вовсе: единственный путь записи реестра в ход — явная пометка
+    // SharedWithMembers. RO-гейт пометка не снимает: она про участников, а не про профиль.
+    // Параметры: enabled, shared, allowReadOnly, inProjectOn, personaGranted, readOnly, expected
+    [Theory]
+    // Не помеченный — не едет ни при каких выдачах (это и есть мутационный ряд: без
+    // гейта рамки первая строка стала бы true)
+    [InlineData(true, false, false, true,  true,  false, false)] // grant проекта, без пометки → мимо
+    [InlineData(true, false, false, false, true,  false, false)] // grant персоны, без пометки → мимо
+    [InlineData(true, false, false, false, false, false, false)] // без пометки и без выдач → мимо
+    // Помеченный — едет сам, без каких либо выдач: пометка и есть разрешение
+    [InlineData(true, true,  false, false, false, false, true)]
+    // Пометка не расширяет рубильник: выключенная запись не едет и помеченная
+    [InlineData(false, true, false, true,  true,  false, false)]
+    // RO-гейт поверх пометки не поглощается
+    [InlineData(true, true,  false, false, false, true,  false)] // RO без явного разрешения → режет
+    [InlineData(true, true,  true,  false, false, true,  true)]  // RO с явным разрешением → едет
+    public void ShouldDeliver_NarrowТолькоПомеченные(bool enabled, bool shared, bool allowReadOnly,
+        bool inProjectOn, bool personaGranted, bool readOnly, bool expected)
+    {
+        var record = new McpServerRecord
+        {
+            Key = "srv",
+            Enabled = enabled,
+            SharedWithMembers = shared,
+            AllowReadOnlyPersonas = allowReadOnly,
+        };
+        // проектный grant общий проект тоже мог бы иметь — он не решает ничего (строки
+        // с inProjectOn/personaGranted=true стоят ровно для этого)
+        IReadOnlyCollection<string>? projectServersOn = inProjectOn ? ["srv"] : null;
+
+        McpDelivery.ShouldDeliver(record, projectServersOn, isProjectChat: true, personaGranted,
+                readOnly, TurnFrameKind.Narrow)
+            .Should().Be(expected);
+    }
+
+    // Wide-поведение не изменилось ни для одной оси (тот же состав, что матрица выше,
+    // но в узкой рамке эти же комбинации дали бы другой ответ) — контраст держится явным тестом:
+    // выдать сервер в личный проект или персоне по-прежнему достаточно без пометки
+    [Fact]
+    public void ShouldDeliver_WideПометкаНеНужна()
+    {
+        var record = new McpServerRecord { Key = "srv", Enabled = true }; // SharedWithMembers=false
+        McpDelivery.ShouldDeliver(record, ["srv"], isProjectChat: true, personaGranted: false,
+                readOnly: false, TurnFrameKind.Wide)
+            .Should().BeTrue("в личном проекте пометка не требуется: прежнее поведение сохранено");
+        McpDelivery.ShouldDeliver(record, null, isProjectChat: false, personaGranted: false,
+                readOnly: false, TurnFrameKind.Wide)
+            .Should().BeFalse("вне проектов — прежняя ось AllowOutsideProjects, не пометка");
     }
 
     // --- IsBuiltinDelivered: продуктовая встроенная интеграция (Higgsfield) ---

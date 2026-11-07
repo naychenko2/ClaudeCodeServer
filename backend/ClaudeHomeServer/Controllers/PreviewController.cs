@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.ProjectServices;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -19,17 +20,19 @@ namespace ClaudeHomeServer.Controllers;
 public class PreviewController : ControllerBase
 {
     private readonly ProjectManager _projects;
+    private readonly IProjectAccess _access;
     private readonly ProjectServicesApi _api;
     private readonly ExternalPreviewRouter _external;
     private readonly ExternalPreviewStore _links;
     private readonly JwtService _jwt;
     private readonly ILogger<PreviewController> _log;
 
-    public PreviewController(ProjectManager projects, ProjectServicesApi api,
+    public PreviewController(ProjectManager projects, IProjectAccess access, ProjectServicesApi api,
         ExternalPreviewRouter external, ExternalPreviewStore links, JwtService jwt,
         ILogger<PreviewController> log)
     {
         _projects = projects;
+        _access = access;
         _api = api;
         _external = external;
         _links = links;
@@ -39,57 +42,55 @@ public class PreviewController : ControllerBase
 
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub) ?? "";
 
-    private Models.Project? OwnedProject(string projectId)
-    {
-        var project = _projects.GetById(projectId);
-        return project?.OwnerId == UserId ? project : null;
-    }
+    // Контракт «нет доступа — 403» сохранён, поэтому вместо [ProjectScope] (у него 404) — явный Resolve
+    private Models.Project? ScopedProject(string projectId, ProjectRight right = ProjectRight.Read) =>
+        _access.Resolve(UserId, projectId, right) is null ? null : _projects.GetById(projectId);
 
     private IActionResult Result(ProjectServicesResult r) => StatusCode(r.Status, r.Body);
 
     /// <summary>Список запускаемых сервисов проекта (инференс из манифестов + сохранённые) с runtime-статусом.</summary>
     [HttpGet("/api/projects/{projectId}/services")]
     public async Task<IActionResult> Services(string projectId) =>
-        OwnedProject(projectId) is { } project ? Result(await _api.ServicesAsync(project, UserId)) : Forbid();
+        ScopedProject(projectId) is { } project ? Result(await _api.ServicesAsync(project, UserId)) : Forbid();
 
     /// <summary>Показать в превью сервис, поднятый вне продукта (порт — из конфигурации, не от клиента).</summary>
     [HttpPost("/api/projects/{projectId}/preview/active-external")]
     public async Task<IActionResult> SetActiveExternal(string projectId, [FromBody] PreviewActiveRequest req) =>
-        OwnedProject(projectId) is { } project ? Result(await _api.SetActiveExternalAsync(project, req)) : Forbid();
+        ScopedProject(projectId, ProjectRight.Write) is { } project ? Result(await _api.SetActiveExternalAsync(project, req)) : Forbid();
 
     [HttpPost("/api/projects/{projectId}/preview/start")]
     public async Task<IActionResult> Start(string projectId, [FromBody] PreviewStartRequest req) =>
-        OwnedProject(projectId) is { } project ? Result(await _api.StartAsync(project, UserId, req)) : Forbid();
+        ScopedProject(projectId, ProjectRight.Write) is { } project ? Result(await _api.StartAsync(project, UserId, req)) : Forbid();
 
     [HttpPost("/api/projects/{projectId}/preview/stop")]
     public async Task<IActionResult> Stop(string projectId, [FromBody] PreviewStopRequest? req) =>
-        OwnedProject(projectId) is { } project ? Result(await _api.StopAsync(project, UserId, req)) : Forbid();
+        ScopedProject(projectId, ProjectRight.Write) is { } project ? Result(await _api.StopAsync(project, UserId, req)) : Forbid();
 
     /// <summary>Остановить сервис, поднятый ВНЕ продукта: свой осиротевший — сразу, чужой — с подтверждением.</summary>
     [HttpPost("/api/projects/{projectId}/preview/stop-external")]
     public async Task<IActionResult> StopExternal(string projectId, [FromBody] StopExternalRequest req) =>
-        OwnedProject(projectId) is { } project
+        ScopedProject(projectId, ProjectRight.Write) is { } project
             ? Result(await _api.StopExternalAsync(project, UserId, req, ct: HttpContext.RequestAborted))
             : Forbid();
 
     [HttpGet("/api/projects/{projectId}/preview/status")]
     public IActionResult Status(string projectId) =>
-        OwnedProject(projectId) is { } project ? Result(_api.Status(project, UserId)) : Forbid();
+        ScopedProject(projectId) is { } project ? Result(_api.Status(project, UserId)) : Forbid();
 
     /// <summary>Назначить активный для превью сервис (на его порт указывает iframe).</summary>
     [HttpPost("/api/projects/{projectId}/preview/active")]
     public IActionResult SetActive(string projectId, [FromBody] PreviewActiveRequest req) =>
-        OwnedProject(projectId) is { } project ? Result(_api.SetActive(project, req)) : Forbid();
+        ScopedProject(projectId, ProjectRight.Write) is { } project ? Result(_api.SetActive(project, req)) : Forbid();
 
     /// <summary>Прочитать .claude/launch.json проекта.</summary>
     [HttpGet("/api/projects/{projectId}/launch-config")]
     public async Task<IActionResult> GetLaunchConfig(string projectId) =>
-        OwnedProject(projectId) is { } project ? Result(await _api.GetLaunchConfigAsync(project)) : Forbid();
+        ScopedProject(projectId) is { } project ? Result(await _api.GetLaunchConfigAsync(project)) : Forbid();
 
     /// <summary>Записать .claude/launch.json проекта.</summary>
     [HttpPut("/api/projects/{projectId}/launch-config")]
     public async Task<IActionResult> PutLaunchConfig(string projectId, [FromBody] LaunchConfigPutRequest req) =>
-        OwnedProject(projectId) is { } project ? Result(await _api.PutLaunchConfigAsync(project, req)) : Forbid();
+        ScopedProject(projectId, ProjectRight.Write) is { } project ? Result(await _api.PutLaunchConfigAsync(project, req)) : Forbid();
 
     // ── Внешний доступ по поддомену (см. ExternalPreviewOptions) ──────────────────
 
@@ -103,7 +104,7 @@ public class PreviewController : ControllerBase
     [HttpPost("/api/projects/{projectId}/preview/external-link")]
     public async Task<IActionResult> IssueExternalLink(string projectId, [FromBody] PreviewActiveRequest req)
     {
-        var project = OwnedProject(projectId);
+        var project = ScopedProject(projectId, ProjectRight.Write);
         if (project is null) return Forbid();
         // Выключенная фича не должна даже признавать существование эндпоинта
         if (!_external.Options.Enabled) return NotFound();

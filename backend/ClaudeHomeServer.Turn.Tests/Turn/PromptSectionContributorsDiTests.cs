@@ -349,6 +349,23 @@ public class PromptSectionContributorsDiTests
             // Устав сферы: справочник сфер в проде даёт Program.cs; здесь — заглушка
             services.AddSingleton<ISphereDirectory>(new Mock<ISphereDirectory>().Object);
 
+            // Реестр актора хода в проде — SessionManager, который сам получает всех контрибьюторов
+            // в конструкторе. Имитируем этот цикл: контрибьютор с зависимостью от реестра в
+            // конструкторе не резолвится (циклическая зависимость), хост не поднялся бы.
+            // Фабрики для детектора циклов DI непрозрачны, поэтому реэнтрантный вход ловим сами —
+            // иначе возврат зависимости дал бы бесконечную рекурсию, а не внятное падение.
+            var inRegistry = false;
+            services.AddSingleton<ClaudeHomeServer.Services.Access.ITurnActorRegistry>(sp =>
+            {
+                if (inRegistry)
+                    throw new InvalidOperationException(
+                        "Циклическая зависимость: реестр актора хода запрошен при построении контрибьюторов");
+                inRegistry = true;
+                try { _ = sp.GetServices<IPromptSectionContributor>().ToList(); }
+                finally { inRegistry = false; }
+                return new Mock<ClaudeHomeServer.Services.Access.ITurnActorRegistry>().Object;
+            });
+
             // Логгеры для контрибьюторов с ILogger в конструкторе
             services.AddSingleton<ILogger<NotesRecallContributor>>(NullLogger<NotesRecallContributor>.Instance);
             services.AddSingleton<ILogger<PersonaBindingsContributor>>(NullLogger<PersonaBindingsContributor>.Instance);

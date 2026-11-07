@@ -50,29 +50,44 @@ describe('стор контекста чата', () => {
     expect(getChatContextState('s1').primary?.label).toBe('hero.png');
   });
 
-  it('событие chat_context_changed обновляет показанный чат, старое и чужое пропускает', async () => {
+  it('событие с большей ревизией перечитывает по REST, меньшая, равная и чужой чат — нет', async () => {
     await showChat('s1', dto(5));
     const off = __subscribeForTests();
-    h.onMessage!({ type: 'chat_context_changed', sessionId: 's1', context: dto(6, false) });
-    expect(getChatContextState('s1').revision).toBe(6);
+    h.request.mockResolvedValueOnce(dto(6, false));
+    h.onMessage!({ type: 'chat_context_changed', sessionId: 's1', revision: 6 });
+    await vi.waitFor(() => expect(getChatContextState('s1').revision).toBe(6));
+    expect(h.request).toHaveBeenCalledTimes(2);
     expect(getChatContextState('s1').primary).toBeNull();
-    h.onMessage!({ type: 'chat_context_changed', sessionId: 's1', context: dto(4) });
-    expect(getChatContextState('s1').revision).toBe(6);
-    h.onMessage!({ type: 'chat_context_changed', sessionId: 'other', context: dto(9) });
-    expect(getChatContextState('other').revision).toBe(0);
+    h.onMessage!({ type: 'chat_context_changed', sessionId: 's1', revision: 4 });
+    h.onMessage!({ type: 'chat_context_changed', sessionId: 's1', revision: 6 });
+    h.onMessage!({ type: 'chat_context_changed', sessionId: 'other', revision: 9 });
+    await Promise.resolve();
+    expect(h.request).toHaveBeenCalledTimes(2);
     off();
   });
 
-  it('события не по порядку: принимается только ревизия больше известной, равная — нет', async () => {
+  it('событие без revision (старый формат с context) не обрабатывается', async () => {
     await showChat('s1', dto(5));
     const off = __subscribeForTests();
-    h.onMessage!({ type: 'chat_context_changed', sessionId: 's1', context: dto(7, false) });
-    h.onMessage!({ type: 'chat_context_changed', sessionId: 's1', context: dto(6) });
-    expect(getChatContextState('s1').revision).toBe(7);
-    expect(getChatContextState('s1').primary).toBeNull();
-    // Та же ревизия с другим содержимым — дубль или гонка, состояние не меняется
-    h.onMessage!({ type: 'chat_context_changed', sessionId: 's1', context: dto(7, true) });
-    expect(getChatContextState('s1').primary).toBeNull();
+    h.onMessage!({ type: 'chat_context_changed', sessionId: 's1', context: dto(9, false) });
+    await Promise.resolve();
+    expect(h.request).toHaveBeenCalledTimes(1);
+    expect(getChatContextState('s1').revision).toBe(5);
+    off();
+  });
+
+  it('событие во время полёта запроса: после ответа с меньшей ревизией идёт ещё один GET', async () => {
+    await showChat('s1', dto(5));
+    const off = __subscribeForTests();
+    let first!: (d: ChatContextDto) => void;
+    h.request.mockImplementationOnce(() => new Promise<ChatContextDto>(r => { first = r; }));
+    h.request.mockResolvedValueOnce(dto(8, false));
+    h.onMessage!({ type: 'chat_context_changed', sessionId: 's1', revision: 6 });
+    h.onMessage!({ type: 'chat_context_changed', sessionId: 's1', revision: 8 }); // в полёте
+    expect(h.request).toHaveBeenCalledTimes(2);
+    first(dto(6));
+    await vi.waitFor(() => expect(getChatContextState('s1').revision).toBe(8));
+    expect(h.request).toHaveBeenCalledTimes(3);
     off();
   });
 

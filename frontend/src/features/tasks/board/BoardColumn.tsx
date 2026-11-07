@@ -89,7 +89,9 @@ function WipEditor({ wip, onWip }: { wip?: number; onWip: (v?: number) => void }
 }
 
 // Ячейка доски: конкретная колонка статуса в конкретной дорожке. Droppable + сортируемый список.
-export function BoardCell({ cellId, cards, windowSize, projectNameOf, deviceNameOf, onOpen, onQuickAdd, minEmptyHeight }: {
+// canDrag=false (читатель общего проекта, F2-Q3): карточки не активируются для броска и
+// подсказка «Перетащите сюда» не нужна — она обещала бы действие, которого нет.
+export function BoardCell({ cellId, cards, windowSize, projectNameOf, deviceNameOf, onOpen, onQuickAdd, canDrag = true, minEmptyHeight }: {
   cellId: string;
   cards: Task[];
   // Окно отрисовки (колонка «Готово»): показываем первые windowSize карточек + «Показать ещё»
@@ -98,6 +100,7 @@ export function BoardCell({ cellId, cards, windowSize, projectNameOf, deviceName
   deviceNameOf?: (t: Task) => string | undefined;
   onOpen: (t: Task) => void;
   onQuickAdd?: (title: string) => void;   // undefined = без быстрого добавления (в режиме дорожек)
+  canDrag?: boolean;                      // false = карточки не перетаскиваются (право читателя)
   minEmptyHeight: number;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: cellId });
@@ -133,7 +136,7 @@ export function BoardCell({ cellId, cards, windowSize, projectNameOf, deviceName
     >
       <SortableContext items={visibleIds} strategy={verticalListSortingStrategy}>
         {visible.map(t => (
-          <BoardCard key={t.id} task={t} projectName={projectNameOf(t)} deviceName={deviceNameOf?.(t)} onOpen={onOpen} />
+          <BoardCard key={t.id} task={t} projectName={projectNameOf(t)} deviceName={deviceNameOf?.(t)} onOpen={onOpen} canDrag={canDrag} />
         ))}
       </SortableContext>
 
@@ -143,7 +146,7 @@ export function BoardCell({ cellId, cards, windowSize, projectNameOf, deviceName
         </Button>
       )}
 
-      {cards.length === 0 && !adding && (
+      {cards.length === 0 && !adding && canDrag && (
         <div style={{
           flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
           fontFamily: FONT.sans, fontSize: 12, color: C.textMuted, minHeight: 40,

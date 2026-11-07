@@ -24,6 +24,8 @@ import { openDeployModal } from '../lib/deployState';
 import { PowerModal } from './PowerModal';
 import { RemoteCommandsModal } from './RemoteCommandsModal';
 import { api } from '../lib/api';
+import { MembersStack } from '../features/projects/members/MembersStack';
+import { isParticipant, ownerNameOf } from '../features/projects/members/participantGate';
 import { hasPendingOpen, subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { getUnreadCount, subscribeToNotifications, ensureNotificationsSubscribed, ensureUnreadCountLoaded } from '../lib/notifications';
 import { BADGE_EVENT, loadIncidentBadge } from '../features/telemetry/incidentBadge';
@@ -44,6 +46,8 @@ interface Props {
   // Заметки…) проекта нет — крошка не рисуется. Только десктоп.
   project?: Project;
   onOpenProjectSettings?: () => void;
+  // Клик по стопке аватаров участников: настройки проекта на «Участниках»
+  onOpenMembers?: () => void;
 }
 
 // Событие открытия продуктовой истории — слушает App (overlay на верхнем уровне)
@@ -66,7 +70,7 @@ export const productHistorySeenKey = (userId?: string | null) =>
 
 // Верхняя шапка-хаб главной страницы: логотип слева, переключатель «Чаты | Проекты» по центру,
 // аватар/меню справа. На мобилке логотип и URL-бейдж скрыты (не помещаются).
-export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenExternal, project, onOpenProjectSettings }: Props) {
+export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenExternal, project, onOpenProjectSettings, onOpenMembers }: Props) {
   const isMobile = useIsMobile();
   // Планшет (601–1199): вкладки хаба занимают всю ширину центра, и текст логотипа
   // «Home AI» рядом с крошкой проекта уже не помещается — левая секция обрезается.
@@ -330,6 +334,8 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   // «где я»: в вертикальном доке проект узнаётся только по подсветке иконки, а имя
   // всплывает лишь по наведению. Крошка держит его на виду всегда. Настройки —
   // отдельной кнопкой в плашке (тот же диалог, что и из подписи иконки в доке).
+  // Участнику шестерёнка открывает настройки проекта владельца — так и подписываем
+  const settingsTitle = project && isParticipant(project) ? `Настройки проекта: ${ownerNameOf(project)}` : 'Настройки проекта';
   const projectCrumb = project && (
     <>
       <ChevronRight size={ICON_SIZE.xs} strokeWidth={2} color={C.textMuted} style={{ flexShrink: 0 }} />
@@ -341,8 +347,9 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
         >
           {project.name}
         </span>
+        {onOpenMembers && <MembersStack project={project} onOpen={onOpenMembers} />}
         {onOpenProjectSettings && (
-          <IconButton size="sm" ariaLabel="Настройки проекта" title="Настройки проекта" onClick={onOpenProjectSettings}>
+          <IconButton size="sm" ariaLabel={settingsTitle} title={settingsTitle} onClick={onOpenProjectSettings}>
             <Settings size={ICON_SIZE.sm} strokeWidth={2} />
           </IconButton>
         )}

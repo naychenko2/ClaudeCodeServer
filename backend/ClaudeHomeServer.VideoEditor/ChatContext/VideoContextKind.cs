@@ -62,7 +62,7 @@ public sealed class VideoContextKind(
         if (Text(reference, FilmKey) is not { } path) return "Не указан фильм";
         if (!FilmPaths.IsFilmPath(FilmPaths.Normalize(path) ?? ""))
             return "Фильм должен лежать в папке video/<имя фильма>/ и называться *.film";
-        return ProjectLinkGuard.ResolveInside(project.RootPath, path) is { } full && File.Exists(full)
+        return ProjectLinkGuard.ResolveInsideAs(project.RootPath, path, scope.OwnerId) is { } full && File.Exists(full)
             ? null
             : "Фильм не найден в проекте";
     }
@@ -76,7 +76,7 @@ public sealed class VideoContextKind(
             var exists = scope.Project is { } project
                 && FilmPaths.IsFilmPath(FilmPaths.Normalize(path) ?? "")
                 && ProjectCapabilityGuard.Allows(project, ProjectCapabilityArea.FileBound)
-                && ProjectLinkGuard.ResolveInside(project.RootPath, path) is { } full && File.Exists(full);
+                && ProjectLinkGuard.ResolveInsideAs(project.RootPath, path, scope.OwnerId) is { } full && File.Exists(full);
             return new ContextItemSummary(FilmName(path), null, null, !exists);
         }
         if (Text(item.Ref, SceneKey) is not { } sceneId || Find(scope, sceneId) is not { } scene)

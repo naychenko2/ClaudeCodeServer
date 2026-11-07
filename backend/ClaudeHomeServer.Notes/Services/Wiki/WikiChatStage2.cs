@@ -53,7 +53,11 @@ public sealed class WikiChatStage2
     /// в прежней зоне; Detail — причина для лога и ночной хроники.</summary>
     public enum Outcome { Judged, NotApplicable, Refused }
 
-    public sealed record Stage2Result(Outcome Outcome, string? Zone, string? Detail);
+    /// <summary>InputTokens (WC-4c) — полный вход того ответа модели, по которому вынесен
+    /// вердикт (вместе с кэшем): мера нагрузки на GPU локали, а не деньги; деньги из этого
+    /// поля не считать — стоимость облачного пути в OneShotUsage.CostUsd. 0 — модель не
+    /// звалась (NotApplicable) либо движок метрик не отдал.</summary>
+    public sealed record Stage2Result(Outcome Outcome, string? Zone, string? Detail, long InputTokens = 0);
 
     private readonly ICheapTextRunner _llm;
     private readonly ISessionDirectory _sessions;
@@ -121,15 +125,22 @@ public sealed class WikiChatStage2
             return Refused("в чате нет реплик");
 
         var prompt = PromptHeader + Slice(lines);
-        // Решение Андрея 02.11: ступень 2 не уходит в облако. RunLocalOrChosenAsync — цепочка
-        // без финального claude-шага при локальном маршруте; недоступность/сбой локали —
-        // отказ вызова, чат остаётся в серой зоне (stage2Zone не пишется). Расход не
-        // учитывается — решение допускает потерю. Отмена — не сбой, её пробрасываем.
+        // Решение Андрея 02.11: ступень 2 не уходит в облако. RunLocalOrChosenDetailedAsync —
+        // та же цепочка без финального claude-шага при локальном маршруте; недоступность/сбой
+        // локали — отказ вызова, чат остаётся в серой зоне (stage2Zone не пишется). Фактический
+        // вход этого ответа (usage движка) идёт в Stage2Result.InputTokens — ночь суммирует
+        // его в итоге; метрик не было → 0, вердикт от этого не меняется. Отмена — не сбой,
+        // её пробрасываем.
         string? text;
+        long inputTokens = 0;
         try
         {
-            text = await _llm.RunLocalOrChosenAsync(
+            var answer = await _llm.RunLocalOrChosenDetailedAsync(
                 LocalActionCatalog.WikiTriage, prompt, ownerId, jsonFormat: "json", ct: ct);
+            text = answer?.Text;
+            // Вход считается по факту вызова, а не по исходу вердикта: ответ, который модель
+            // дала и который мы не разобрали, понёс расход так же, как принятый.
+            inputTokens = answer?.Usage?.TotalInputTokens ?? 0;
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
@@ -138,14 +149,15 @@ public sealed class WikiChatStage2
         if (string.IsNullOrWhiteSpace(text))
             return Refused("модель дала пустой ответ");
         if (!TryParseVerdict(text, out var hasKnowledge, out var about, out var why))
-            return Refused("ответ модели не контракт {hasKnowledge, about, reason}");
+            return new Stage2Result(Outcome.Refused, null,
+                "ответ модели не контракт {hasKnowledge, about, reason}", inputTokens);
 
         var zone = hasKnowledge ? WikiChatScorer.ZoneTriage : WikiChatScorer.ZoneSkipped;
         var reason = BuildReason(hasKnowledge, about, why);
         var up = WikiChatTriageStore.UpdateStage2(root, sessionId, zone, reason, humanCount, _log);
         if (!up.Ok)
-            return Refused($"вердикт не записан: {up.Code}");
-        return new Stage2Result(Outcome.Judged, zone, reason);
+            return new Stage2Result(Outcome.Refused, null, $"вердикт не записан: {up.Code}", inputTokens);
+        return new Stage2Result(Outcome.Judged, zone, reason, inputTokens);
     }
 
     // ─── Срез входа ────────────────────────────────────────────────────────

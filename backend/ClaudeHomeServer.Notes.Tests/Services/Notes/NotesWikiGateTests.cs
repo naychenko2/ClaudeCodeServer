@@ -75,6 +75,7 @@ public class NotesWikiGateTests : IDisposable
         ["GetGraph"] = "чтение",
         ["GetFolders"] = "чтение",
         ["GetTemplates"] = "чтение",
+        ["EnsureSourceWrite"] = "проверка права (общие проекты, S2c-5): ничего не пишет, только ResolveRoot с ProjectRight.Write",
         ["GetExpiredNotes"] = "чтение",
         ["GetReplies"] = "чтение",
         ["GetDocAnnotations"] = "чтение",

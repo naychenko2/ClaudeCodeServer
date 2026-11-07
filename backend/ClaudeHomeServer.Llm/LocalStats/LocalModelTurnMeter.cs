@@ -4,7 +4,7 @@ using Microsoft.Extensions.Options;
 
 namespace ClaudeHomeServer.Services.Llm;
 
-// Счётчик хода локальной модели (флаг local-model-stats): собирает метрики запросов хода
+// Счётчик хода локальной модели (статистика локальных моделей): собирает метрики запросов хода
 // (фазы, скорость, итог) и отдаёт живые события (OnLive, ≤1 Гц на сессию) и итог хода
 // (OnTurn). Подписан на шину хода (TurnCompleted/SessionDeleted), как FallbackLlmSessionAdapter.
 //

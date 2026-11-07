@@ -420,15 +420,18 @@ public class ChatContextControllerTests : IClassFixture<ChatContextControllerTes
                 got.TrySetResult(m);
         });
         await conn.StartAsync();
-        await conn.InvokeAsync("JoinUser", _ownerId);
+        // Чат проектный: рассылка идёт в группу проекта (ToProjectOrOwner), а не в личную
+        await conn.InvokeAsync("JoinProject", _projectId);
 
         (await _client.PutAsJsonAsync($"{Ctx(chat)}/primary", new { kind = "image", @ref = new { threadId = imageId } }))
             .StatusCode.Should().Be(HttpStatusCode.OK);
 
         (await Task.WhenAny(got.Task, Task.Delay(TimeSpan.FromSeconds(20)))).Should().BeSameAs(got.Task,
-            "chat_context_changed должен долететь до группы владельца");
+            "chat_context_changed должен долететь до группы проекта");
         var msg = await got.Task;
-        msg.GetProperty("context").GetProperty("revision").GetInt64().Should().Be(1);
-        msg.GetProperty("context").GetProperty("primary").GetProperty("ref").GetProperty("threadId").GetString().Should().Be(imageId);
+        // Сигнал с ревизией без карточек (решение CONSULT-CONTEXT-SUBJECT): на проводе ровно три поля —
+        // ни путей, ни Missing, ни Ref, приватность через рассылку не утекает.
+        msg.EnumerateObject().Select(p => p.Name).Should().BeEquivalentTo(new[] { "type", "sessionId", "revision" });
+        msg.GetProperty("revision").GetInt64().Should().Be(1);
     }
 }

@@ -8,7 +8,6 @@ import { useState, type ReactNode } from 'react';
 import { AudioLines, Download, Mic, Music, Save, Sparkles, Target, X } from 'lucide-react';
 import {
   Badge, Button, Dot, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, isCardPick,
-  FLAGS, useFeature,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { audioApi, type AudioMode, type AudioOp, type AudioThread, type AudioThreadVersion } from '../api';
@@ -181,7 +180,6 @@ function RunningLine({ scope, sessionId, thread, jobId, op, mode, count }: {
 }) {
   const job = getJobsOf(sessionId, thread.id).find(j => j.jobId === jobId) ?? null;
   const [cancelling, setCancelling] = useState(false);
-  const feature = useFeature(FLAGS.localModelStats);
   const percent = job && job.count > 0 && job.stage !== 'queued' ? Math.round(((job.variant - 1) / job.count) * 100) : 0;
   return (
     <div data-audio-running="" style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
@@ -196,9 +194,9 @@ function RunningLine({ scope, sessionId, thread, jobId, op, mode, count }: {
         </Button>
       </div>
       {/* Собственная полоса: прячем, когда есть строка GPU (ровно одна полоса, не дубль) */}
-      {!showQueueLine(feature, job?.gpu ?? null) && <ProgressBar value={percent} transition="width .5s linear" />}
+      {!showQueueLine(job?.gpu ?? null) && <ProgressBar value={percent} transition="width .5s linear" />}
       <GpuQueueBlock scope={scope} sessionId={sessionId} thread={thread} job={job}
-        feature={feature} op={op} mode={mode} count={count} />
+        op={op} mode={mode} count={count} />
       <Note>Варианты появятся здесь по мере готовности.</Note>
     </div>
   );

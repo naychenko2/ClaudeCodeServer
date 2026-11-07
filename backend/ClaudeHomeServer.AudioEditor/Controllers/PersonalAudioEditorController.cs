@@ -71,7 +71,7 @@ public class PersonalAudioEditorController(
 
     [HttpGet("threads")]
     public IActionResult Threads(string sessionId) =>
-        Gate(sessionId, out _, out var denied) ? ThreadsIn(sessionId) : denied;
+        Gate(sessionId, out var scope, out var denied) ? ThreadsIn(scope, sessionId) : denied;
 
     // Только черновик в корне: файл и папка черновика — 400, файлов проекта у личного чата нет
     [HttpPost("threads")]

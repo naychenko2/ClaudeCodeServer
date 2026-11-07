@@ -51,6 +51,8 @@ public class ImagePrefsEndpointTests : IClassFixture<ImagePrefsEndpointTests.Hos
         _broadcaster = hosts.Broadcaster;
         // Сброс перед каждым тестом: общий хост помнит рассылки чужих PUT
         while (_broadcaster.ToOwnerCalls.TryDequeue(out _)) { }
+        // Выбор проекта рассылается в группу проекта (S1-5) — её журнал тоже общий на хост
+        while (_broadcaster.ToProjectCalls.TryDequeue(out _)) { }
         (_projectId, _root) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.TestUsername);
         _ownerId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         _client = _factory.CreateAuthenticatedClient();
@@ -91,9 +93,9 @@ public class ImagePrefsEndpointTests : IClassFixture<ImagePrefsEndpointTests.Hos
         got.GetProperty("count").GetInt32().Should().Be(3);
         got.GetProperty("matchSourceSize").GetBoolean().Should().BeFalse();
 
-        var sent = _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageProjectPrefsChangedMessage>()
+        var sent = _broadcaster.AllMessages.OfType<ImageProjectPrefsChangedMessage>()
             .Should().ContainSingle().Subject;
-        _broadcaster.ToOwnerCalls.Single(c => c.Message == sent).OwnerId.Should().Be(_ownerId);
+        _broadcaster.ToProjectCalls.Single(c => c.Message == sent).ProjectId.Should().Be(_projectId);
         sent.ProjectId.Should().Be(_projectId);
         sent.Prefs.Provider.Should().Be("fal");
     }

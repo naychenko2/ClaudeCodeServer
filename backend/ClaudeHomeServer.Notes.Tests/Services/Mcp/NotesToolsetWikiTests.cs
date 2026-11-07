@@ -28,7 +28,9 @@ namespace ClaudeHomeServer.Tests.Services;
 ///      21-я открытая заявка → отказ «разберите Входящие»;
 /// c4 — ссылка на раздел вне набора в отданной странице — [скрыто].
 /// Плюс: не заведённая вика — отказ на вызове (состав tools/list от неё не зависит, сторож —
-/// McpToolsetStabilityTests), и дословная цитата как условие факта.
+/// McpToolsetStabilityTests), и дословная цитата как условие факта. Плюс хвосты FIN3-3:
+/// приватный чат не принимает ни один из трёх входов — «Запиши это», форма session:{id}#m{a}-{b}
+/// и пересчёт (WikiChatRecalc) — и отвечает как несуществующий.
 ///
 /// Никакого прямого письма в файлы здесь нет: заявка идёт через захват (S6h) и очередь
 /// разбора (S6b-3, подменённая модель), чтение — каталог и страницы внутренним читателем
@@ -38,6 +40,9 @@ public class NotesToolsetWikiTests : IDisposable
 {
     private const string User = "u1";
     private const string Own = "projects/p1";
+    // Автор приватного чата в общем проекте (FIN3-3): чат резолвится на владельца (OwnerId),
+    // приватность держит PrivateToUserId — как в фикстурах WikiPrivateChatTests.
+    private const string Participant = "u2";
 
     // p1 и q1 — одна сфера s1 (q1 виден из хода p1), q2 — другая сфера s2 (не виден).
     private const string OtherSphere = "projects/q2";
@@ -106,13 +111,15 @@ public class NotesToolsetWikiTests : IDisposable
     // ── обвязка вызова ──
 
     private (NotesToolset Toolset, McpToolCallContext Ctx) McpEnv(string? projectId, string sessionId = "s-call",
-        ClaudeHomeServer.Services.Composition.IFeatureFlagGate? flags = null)
+        ClaudeHomeServer.Services.Composition.IFeatureFlagGate? flags = null, string? privateTo = null)
     {
-        var session = new Session { Id = sessionId, OwnerId = User, ProjectId = projectId, Name = "Чат вызова" };
+        var session = new Session { Id = sessionId, OwnerId = User, ProjectId = projectId, Name = "Чат вызова",
+            PrivateToUserId = privateTo };
         _sessions.All.Add(session);
         return (
             new NotesToolset(new AllowAllPersonas(), new AllowAllBindings(), new OwnSession(session),
-                new TestSessionBroadcaster(), _notes, _kb, _ai, _noteTasks,
+                new ClaudeHomeServer.Tests.Helpers.NotesNoopHubNotifier(), new ClaudeHomeServer.Tests.Helpers.NotesWideTurnFrame(),
+                new ClaudeHomeServer.Tests.Helpers.NotesNoActorDenials(), _notes, _kb, _ai, _noteTasks,
                 _config, _ingest, _capture, _chatIngest, _sessions, _spheres, _projects,
                 flags ?? new WikiFlagOn()),
             new McpToolCallContext(User, sessionId, sessionId));
@@ -128,10 +135,13 @@ public class NotesToolsetWikiTests : IDisposable
         return obj;
     }
 
+    /// <summary>Отказ проверяется дословно (Be, а не Contain): ожидаемая строка — весь текст
+    /// отказа из кода вызывающего. Через Contain прошла бы любая формулировка, содержащая
+    /// фразу, — и молча нарушила бы неразличимость отказов (хвост R-WIKI-PRIV, п.2).</summary>
     private static void AssertDenied(McpToolCallResult res, string because)
     {
         res.IsError.Should().BeTrue($"отказ обязан быть отказом: {res.Text}");
-        res.Text.Should().Contain(because, $"причина отказа: {res.Text}");
+        res.Text.Should().Be(because, $"причина отказа: {res.Text}");
     }
 
     // ── состояние вики: страницы в четырёх разделах и их каталоги ──
@@ -277,7 +287,7 @@ public class NotesToolsetWikiTests : IDisposable
         var res = await toolset.CallAsync("wiki_ingest",
             Args(("source", note.Id), ("target", "common")), ctx, CancellationToken.None);
 
-        AssertDenied(res, "проектный источник не идёт в 'common'");
+        AssertDenied(res, "проектный источник не идёт в 'common': в «Общее» только повышением");
         // Отказ — до записи: карточки в «Общем» не появилось.
         File.Exists(SafePath.Join(Root, "pages/Общее/Источники")).Should().BeFalse();
     }
@@ -297,7 +307,7 @@ public class NotesToolsetWikiTests : IDisposable
 
         var res = Call(toolset, ctx, "wiki_ingest", Args(("source", note.Id)));
 
-        AssertDenied(res, "разберите Входящие");
+        AssertDenied(res, "Открытых пакетов уже 20: разберите Входящие, потом повторяй заявку.");
     }
 
     // ── S7b0a: «разобрать этот чат» (session:{id} без диапазона) — только свой чат ──
@@ -307,18 +317,39 @@ public class NotesToolsetWikiTests : IDisposable
     // обращения к модели; чужой и несуществующий неразличимы кодом.
 
     [Fact]
-    public void С7b0a_РазборЧата_ЧужойЧат_ОтказДоМодели()
+    public void S7b0a_РазборЧата_ЧужойЧат_ОтказДоМодели()
     {
         var (toolset, ctx) = McpEnv("p1");
         _sessions.All.Add(new Session { Id = "s-foreign", OwnerId = "u2", ProjectId = "p1", Name = "Чужой чат" });
 
         var res = Call(toolset, ctx, "wiki_ingest", Args(("source", "session:s-foreign")));
-        AssertDenied(res, "чат не существует");
+        var missing = Call(toolset, ctx, "wiki_ingest", Args(("source", "session:s-none")));
 
+        res.IsError.Should().BeTrue($"отказ обязан быть отказом: {res.Text}");
+        missing.IsError.Should().BeTrue($"отказ обязан быть отказом: {missing.Text}");
         // Несуществующий — тот же путь и та же форма отказа, одним и тем же сообщением
         // (W3-6 F1): «принадлежит другому владельцу» выдавало бы существование чужого.
-        var missing = Call(toolset, ctx, "wiki_ingest", Args(("source", "session:s-none")));
-        AssertDenied(missing, "чат не существует");
+        // Сравнение пословное, а не Contain: «чат не существует (приватный)» содержало бы
+        // фразу и прошло бы через Contain, но неразличимость была бы нарушена.
+        res.Text.Should().Be("чат не существует").And.Be(missing.Text);
+    }
+
+    [Fact]
+    public void S7b0a_ВыдержкаЧужогоЧата_ФормаСДиапазоном_ОтказКакНесуществующий()
+    {
+        var (toolset, ctx) = McpEnv("p1");
+        _sessions.All.Add(new Session { Id = "s-foreign", OwnerId = "u2", ProjectId = "p1", Name = "Чужой чат" });
+
+        var res = Call(toolset, ctx, "wiki_ingest", Args(("source", "session:s-foreign#m1-2")));
+        var missing = Call(toolset, ctx, "wiki_ingest", Args(("source", "session:s-none#m1-2")));
+
+        res.IsError.Should().BeTrue($"отказ обязан быть отказом: {res.Text}");
+        missing.IsError.Should().BeTrue($"отказ обязан быть отказом: {missing.Text}");
+        // Тот же инвариант, что у разбора выше, на форме с диапазоном (путь TryParseSessionRef,
+        // NotesToolset.cs:937-938): «принадлежит другому владельцу» выдавало бы существование
+        // чужого чата. Сравнение пословное: любая формулировка, отличающая чужой чат от
+        // несуществующего, краснеет на Be и на Be(missing.Text).
+        res.Text.Should().Be("чат не существует").And.Be(missing.Text);
     }
 
     private void AddOpenPackages(int count)
@@ -366,8 +397,18 @@ public class NotesToolsetWikiTests : IDisposable
         {
             var res = Call(toolset, ctx, tool, Args(("question", Question), ("fact", "ф"), ("quote", "цитата из чата"),
                 ("sessionRange", "m1-2")));
-            AssertDenied(res, "не заведена");
+            AssertDenied(res, "Вики этого владельца не заведена: её инструменты работают только с заведённой.");
         }
+        // Заявка — тоже не заводит: агент не приводит вику в существование своим вызовом
+        // (инвариант «svc/MCP вики не заводят», LI-2).
+        var note = _notes.Create(User, new CreateNoteRequest(Title: "Заметка для отказа", Content: "Содержимое.", Source: "p1"));
+        AssertDenied(Call(toolset, ctx, "wiki_ingest", Args(("source", note.Id))),
+            "Вики этого владельца не заведена: её инструменты работают только с заведённой.");
+
+        // Мутация (критерий c2): позвать EnsureInitializedAsync из инструмента — этот тест
+        // красный: под pages/ появился бы _schema.md.
+        File.Exists(SafePath.Join(Root, "pages/_schema.md")).Should().BeFalse(
+            "ни один вызов MCP не оставил заведённой вики");
         // Состав tools/list при этом не изменился: инструменты вики в нём остаются.
         var (toolset2, _) = McpEnv("p1");
         toolset2.ToolsFor(ctx).Select(t => t.Name).Should().Contain(["wiki_ingest", "wiki_add_fact", "wiki_query", "wiki_status"]);
@@ -375,9 +416,10 @@ public class NotesToolsetWikiTests : IDisposable
 
     // ── wiki_add_fact: факт без дословной цитаты из этого чата не принимается ──
 
-    private Session AddChat(string id, string? projectId)
+    private Session AddChat(string id, string? projectId, string? privateTo = null)
     {
-        var session = new Session { Id = id, OwnerId = User, ProjectId = projectId, Name = "Чат разбора" };
+        var session = new Session { Id = id, OwnerId = User, ProjectId = projectId, Name = "Чат разбора",
+            PrivateToUserId = privateTo };
         _sessions.All.Add(session);
         _sessions.History[id] =
         [
@@ -424,7 +466,8 @@ public class NotesToolsetWikiTests : IDisposable
             ("quote", "Никогда не было такой фразы в этом чате"),
             ("sessionRange", "m1-2")), ctx, CancellationToken.None);
 
-        AssertDenied(res, "цитаты нет");
+        AssertDenied(res, "цитаты нет в выдержке этого чата: факт обязан быть её дословным фрагментом; "
+            + "страницу выводит Хранитель по этой выдержке");
         WikiPackageStore.CountOpen(Root).Should().Be(0, "отказанная заявка не оставила пакета");
     }
 
@@ -441,9 +484,125 @@ public class NotesToolsetWikiTests : IDisposable
                 ("fact", "Нарезку выдержки делает код"),
                 ("quote", "Решили: нарезку делает код"),
                 ("sessionRange", bad)), ctx, CancellationToken.None);
-            AssertDenied(res, "sessionRange");
+            AssertDenied(res, "sessionRange — та же форма, что в ссылке на чат: m{a}-{b}, например m12-17");
         }
         Directory.Exists(SafePath.Join(Root, "pages/Проекты/p1/Источники")).Should().BeFalse();
+    }
+
+    // ── FIN3-3, хвосты: ни один из трёх входов не принимает приватный чат ──
+    // Тот же инвариант, что у WikiPrivateChatTests (очередь ночи, разбор, список): приватный
+    // чат виден только автору, машинные потребители вики не читают его вовсе. Здесь три
+    // оставшихся входа: «Запиши это» и форма session:{id}#m{a}-{b} — оба через общий
+    // chokepoint WikiSourceCapture.CaptureSession — и пересчёт (WikiChatRecalc), который
+    // пишет балл/зону в стор и counts ответа. Отказ неотличим от несуществующего.
+
+    [Fact]
+    public async Task ПриватныйЧат_ЗапишиЭто_ОтказКакНесуществующий_ОбычныйРаботает()
+    {
+        SeedWiki();
+        AddChat("s-priv", "p1", privateTo: User); // чат-вызыватель приватный: его автор — владелец
+        var (toolsetPriv, ctxPriv) = McpEnv("p1", "s-priv", privateTo: User);
+
+        var res = await toolsetPriv.CallAsync("wiki_add_fact", Args(
+            ("fact", "Нарезку выдержки делает код"),
+            ("quote", "Решили: нарезку делает код"),
+            ("sessionRange", "m1-2")), ctxPriv, CancellationToken.None);
+
+        // Мутация «убрать проверку PrivateToUserId в CaptureSession»: выдержка режется,
+        // заявка доходит до модели, карточка ложится на диск — IsError и BeFalse краснеют.
+        // Мутация «вернуть текст, выдающий приватность» («(приватный)») — краснеет
+        // сравнение с несуществующим чатом ниже: оно пословное.
+        res.IsError.Should().BeTrue($"отказ обязан быть отказом: {res.Text}");
+        Directory.Exists(SafePath.Join(Root, "pages/Проекты/p1/Источники")).Should().BeFalse(
+            "отказ — до захвата: карточки выдержки нет");
+
+        // Тот же вызов из обычного чата того же проекта работает как прежде (путь —
+        // AddFact_ЦитатаПодтверждена выше).
+        AddChat("s-open", "p1");
+        var (toolsetOpen, ctxOpen) = McpEnv("p1", "s-open");
+        var ok = await toolsetOpen.CallAsync("wiki_add_fact", Args(
+            ("fact", "Нарезку выдержки делает код"),
+            ("quote", "Решили: нарезку делает код"),
+            ("sessionRange", "m1-2")), ctxOpen, CancellationToken.None);
+        ok.IsError.Should().BeFalse(ok.Text);
+        ok.Text.Should().Contain("нечего добавить");
+
+        // Тот же текст у несуществующего чата, пословно. Точки отказа разные: несуществующий
+        // отсекается пред-проверкой входа (NotesToolset.cs:935-936) и до CaptureSession не
+        // доходит; приватный проходит её (резолвится на владельца) и отказывает проверкой
+        // приватности захвата (WikiSourceCapture.cs:275-276). Текст один на обеих точках:
+        // приватность не выдавала бы существования чата.
+        var missing = await toolsetOpen.CallAsync("wiki_ingest",
+            Args(("source", "session:s-none#m1-2")), ctxOpen, CancellationToken.None);
+        missing.IsError.Should().BeTrue($"отказ обязан быть отказом: {missing.Text}");
+        res.Text.Should().Be("чат не существует").And.Be(missing.Text);
+    }
+
+    [Fact]
+    public async Task ПриватныйЧат_ФормаВыдержки_ОтказКакНесуществующий_ОбычныйПринят()
+    {
+        SeedWiki();
+        AddChat("s-participant-private", "p1", privateTo: Participant); // чат участника, резолвится на владельца
+        AddChat("s-owner-private", "p1", privateTo: User);              // и свой приватный — тот же отказ
+        var (toolset, ctx) = McpEnv("p1");
+
+        var foreign = await toolset.CallAsync("wiki_ingest",
+            Args(("source", "session:s-participant-private#m1-2")), ctx, CancellationToken.None);
+        var own = await toolset.CallAsync("wiki_ingest",
+            Args(("source", "session:s-owner-private#m1-2")), ctx, CancellationToken.None);
+        // Несуществующий чат неотличим: та же форма отказа пословно — приватность не выдаёт
+        // существования чата вызывающему.
+        var missing = await toolset.CallAsync("wiki_ingest",
+            Args(("source", "session:s-none#m1-2")), ctx, CancellationToken.None);
+
+        foreign.IsError.Should().BeTrue($"отказ обязан быть отказом: {foreign.Text}");
+        own.IsError.Should().BeTrue($"отказ обязан быть отказом: {own.Text}");
+        missing.IsError.Should().BeTrue($"отказ обязан быть отказом: {missing.Text}");
+        own.Text.Should().Be("чат не существует").And.Be(missing.Text);
+        foreign.Text.Should().Be(missing.Text);
+
+        Directory.Exists(SafePath.Join(Root, "pages/Проекты/p1/Источники")).Should().BeFalse(
+            "отказанные выдержки не оставили карточек");
+
+        // Та же форма для обычного чата принимается: карточка на диске.
+        AddChat("s-open", "p1");
+        var ok = await toolset.CallAsync("wiki_ingest",
+            Args(("source", "session:s-open#m1-2")), ctx, CancellationToken.None);
+        ok.IsError.Should().BeFalse(ok.Text);
+        var cards = Directory.GetFiles(SafePath.Join(Root, "pages/Проекты/p1/Источники"), "*.md");
+        cards.Should().NotBeEmpty("выдержка обычного чата стала карточкой источника");
+        File.ReadAllText(cards[0]).Should().Contain("session:s-open#m1-2");
+    }
+
+    [Fact]
+    public async Task ПриватныйЧат_Пересчёт_НеСчитаетИНеПишет_ОбычныйСчитает()
+    {
+        AddChat("c-open", "p1");
+        AddChat("c-participant-private", "p1", privateTo: Participant);
+        AddChat("c-owner-private", "p1", privateTo: User);
+
+        // Старые записи приватных чатов в сторе — попавшие туда до правила приватности
+        // (хвост R-WIKI-PRIV, п.3): их не читает ни один потребитель, и пересчёт обязан их
+        // вычистить. Без этой части теста проверка ниже тривиальна: стор был бы пуст.
+        WikiChatTriageStore.Upsert(Root, new WikiChatTriageEntry("c-participant-private", 3, null, null, null, 0, default))
+            .Ok.Should().BeTrue("старая запись приватного чата обязана быть поставлена");
+        WikiChatTriageStore.Upsert(Root, new WikiChatTriageEntry("c-owner-private", 1, null, null, null, 0, default))
+            .Ok.Should().BeTrue("старая запись приватного чата обязана быть поставлена");
+
+        var res = await new WikiChatRecalc(_sessions, _config).RecalculateAsync(User);
+
+        res.Ok.Should().BeTrue(res.Reason ?? "пересчёт валиден");
+        // Мутация «убрать фильтр PrivateToUserId из цикла пересчёта»: Counted и сумма counts
+        // краснеют (3 вместо 1), а в сторе появляются записи приватных чатов.
+        res.Counted.Should().Be(1, "приватные чаты не пересчитываются");
+        res.Counts.Values.Sum().Should().Be(1, "приватные чаты не попадают в counts ответа");
+
+        // Данные о чужих чатах не оседают в сторе разбора владельца: ни новых записей, ни
+        // старых — запись одна, обычная. Мутация «убрать чистку приватных записей из
+        // пересчёта» (WikiChatRecalc): Equal краснеет — две старые записи останутся в файле.
+        var store = WikiChatTriageStore.Get(Root);
+        store.State.Should().Be(WikiTriageFileState.Valid);
+        store.Entries.Select(e => e.SessionId).Should().Equal("c-open");
     }
 
     // ── гейт флага llm-wiki на входах с расходом модели (хвост финала W1-3) ──
@@ -468,7 +627,7 @@ public class NotesToolsetWikiTests : IDisposable
 
         var res = Call(toolset, ctx, "wiki_ingest", Args(("source", note.Id)));
 
-        AssertDenied(res, "выключена");
+        AssertDenied(res, "Функция выключена: включите «LLM-вики» в экспериментальных функциях.");
         PackageCount().Should().Be(before, "при выключенном флаге пакет не создаётся");
         File.Exists(SafePath.Join(Root, "pages/Проекты/p1/Источники")).Should().BeFalse();
     }
@@ -483,7 +642,7 @@ public class NotesToolsetWikiTests : IDisposable
         var res = Call(toolset, ctx, "wiki_add_fact", Args(
             ("fact", "Нарезку делает код"), ("quote", "Решили: нарезку делает код"), ("sessionRange", "m1-2")));
 
-        AssertDenied(res, "выключена");
+        AssertDenied(res, "Функция выключена: включите «LLM-вики» в экспериментальных функциях.");
         PackageCount().Should().Be(before);
     }
 
@@ -584,8 +743,8 @@ public class NotesToolsetWikiTests : IDisposable
 
     private sealed class NoopNotesNotifier : INotesHubNotifier
     {
-        public Task BroadcastNotesChangedAsync(string userId, string action, string noteId) => Task.CompletedTask;
-        public Task BroadcastTaskChangedAsync(string userId, string action, string taskId) => Task.CompletedTask;
+        public Task BroadcastNotesChangedAsync(string userId, string action, string noteId, string? projectId = null) => Task.CompletedTask;
+        public Task BroadcastTaskChangedAsync(string userId, string action, string taskId, string? projectId = null) => Task.CompletedTask;
     }
 
     private sealed class NoopCheapRunner : ICheapTextRunner

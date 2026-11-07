@@ -1,3 +1,4 @@
+﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Services.Composition;
@@ -52,4 +53,110 @@ public interface ISessionBroadcaster
     Task ToOwner(string ownerId, ServerMessage message);
     Task ToProject(string projectId, ServerMessage message);
     Task ToPreviewLog(string projectId, string serviceId, ServerMessage message);
+}
+
+// Опциональный шов вещателя (S2d-4b2): резолвер видимости чатов для маски в ToTaskBoard.
+// Вещатель, реализующий его, сам несёт каталог чатов и проектов, поэтому событие доски
+// маскирует чужие приватные чаты у ВСЕХ вызывающих (исполнитель задач, штаб, MCP, планировщик…),
+// а не только у тех, кто передал резолвер явно. null — резолвера нет, поведение прежнее.
+public interface IChatVisibilitySource
+{
+    ISessionDirectory? Sessions { get; }
+    IProjectManager? Projects { get; }
+}
+
+// Опциональный шов вещателя (S2d-7a): снять соединения перечисленных пользователей с session-группы чата.
+// Нужен переводу чата в приватный: группа session_{id} не фильтруется по ToChatAudience, поэтому
+// содержимое чата льётся в неё всем, кто туда вошёл (и LeaveSession из группы не выводит).
+// Возвращает снятые соединения — SessionManager чистит по ним реестр зрителей.
+// Вещатель без шва (юнит-тесты) — вышибать нечем, SessionManager молча пропускает.
+public interface ISessionGroupEvictor
+{
+    Task<IReadOnlyList<string>> EvictUsersFromSessionGroup(string sessionId, IReadOnlyCollection<string> userIds);
+}
+
+// Проектные рассылки общих проектов (S1-5): событие про проект идёт всем участникам группы
+// project_{id}, а не только владельцу. Условная форма нужна там, где сущность бывает личной.
+public static class SessionBroadcasterExtensions
+{
+    // Проектное событие: есть projectId — группа проекта, нет — личное владельцу
+    public static Task ToProjectOrOwner(this ISessionBroadcaster broadcaster, string ownerId, string? projectId, ServerMessage message) =>
+        string.IsNullOrEmpty(projectId)
+            ? broadcaster.ToOwner(ownerId, message)
+            : broadcaster.ToProject(projectId, message);
+
+    // Событие чата (статус, имя, архив, удаление, внеходовое сообщение), уходящее за пределы session-группы:
+    // общий чат проекта — группе project_{id}; приватный (PrivateToUserId) — только автору, иначе название,
+    // последнее сообщение и статус утекли бы остальным участникам; чат вне проекта — владельцу.
+    // PrivateToUserId читается В МОМЕНТ вызова (синхронно, до первого await): после «сделать общим» событие
+    // уйдёт группе проекта, обратное направление безопасно — лишнего не утечёт.
+    public static Task ToChatAudience(this ISessionBroadcaster broadcaster, Session session, ServerMessage message)
+    {
+        if (session.ProjectId is not string pid || string.IsNullOrEmpty(pid))
+            return string.IsNullOrEmpty(session.OwnerId) ? Task.CompletedTask : broadcaster.ToOwner(session.OwnerId, message);
+        // null — общий чат; пустая строка — «не видит никто» (fail-closed, как SessionAccess.CanSee): уйдёт в user_ без адресата
+        var author = session.PrivateToUserId;
+        return author is null ? broadcaster.ToProject(pid, message) : broadcaster.ToOwner(author, message);
+    }
+
+    // То же по id чата: сессия читается из каталога В МОМЕНТ отправки (приватность не кэшируется).
+    // Чата нет в запросе — событие не про чат (старое проектное/личное поведение); id указан, а чата
+    // уже нет (удалён) ИЛИ каталог не внедрён — только владельцу (fail-closed, S2d-3f): событие
+    // с id приватного чата не уходит группе проекта ни при каких настройках DI.
+    public static Task ToChatAudience(this ISessionBroadcaster broadcaster, ISessionDirectory? sessions,
+        string ownerId, string? projectId, string? sessionId, ServerMessage message)
+    {
+        if (string.IsNullOrEmpty(sessionId))
+            return broadcaster.ToProjectOrOwner(ownerId, projectId, message);
+        // S2d-3f (дефект b9a2601f): раньше при sessions == null откатывалось к ToProjectOrOwner —
+        // приватный чат утекал группе проекта. Живого дефекта в проде нет (ISessionDirectory
+        // зарегистрирован), но любая новая точка создания сервиса без шва возвращала бы утечку молча.
+        if (sessions is null)
+            return broadcaster.ToOwner(ownerId, message);
+        return sessions.GetById(sessionId) is { } session
+            ? broadcaster.ToChatAudience(session, message)
+            : broadcaster.ToOwner(ownerId, message);
+    }
+
+    // Событие доски: у задачи проекта — участникам группы проекта и дополнительно владельцу
+    // карточки, потому что общий стор задач (календарь, список вне проекта) подписан только
+    // на user_{id} и без второй адресации не увидел бы собственных проектных задач.
+    // sessions/projects — резолвер видимости чатов (S2d-4b): без них маска чужих приватных чатов
+    // не применяется (решения нет — поведение прежнее). Подключённые точки — контроллеры задач;
+    // остальные вызывающие получают резолвер от самого вещателя (IChatVisibilitySource, S2d-4b2).
+    public static async Task ToTaskBoard(this ISessionBroadcaster broadcaster, string ownerId, string? projectId,
+        ServerMessage message, ISessionDirectory? sessions = null, IProjectManager? projects = null)
+    {
+        // Явно переданный резолвер главнее; иначе берём тот, что несёт сам вещатель.
+        if (broadcaster is IChatVisibilitySource source)
+        {
+            sessions ??= source.Sessions;
+            projects ??= source.Projects;
+        }
+        if (string.IsNullOrEmpty(projectId))
+        {
+            await broadcaster.ToOwner(ownerId, ForOwner(message, ownerId, sessions, projects));
+            return;
+        }
+        // Группе проекта — та же проекция, что список в REST (TaskView.ForMemberListItem): без
+        // Description/ResultMarkdown и без id чужой заметки-источника (SourceNoteId личного vault
+        // раскрывает участнику путь и название личной заметки владельца). Иначе участник получил бы
+        // по WS то, чего REST ему не отдаёт. Исходный TaskItem не правится (копия).
+        // Плюс маска чужих приватных чатов (S2d-4b, К5) для всей группы одним payload'ом:
+        // отдать группе можно только то, что видно всем, — общий чат этого проекта; приватный чат
+        // участника закрыт и для его автора (свой чат он видит точковыми путями REST).
+        var forProject = message is TaskChangedMessage { Task: { } task } tc
+            ? tc with { Task = TaskView.MaskForeignChats(TaskView.ForMemberListItem(task), sessions, projects, ChatAudience.Group(projectId)) }
+            : message;
+        await broadcaster.ToProject(projectId, forProject);
+        // Владелец — полная карточка (состав полей как раньше), но и он чужой приватный чат не
+        // видит: та же маска по его видимости.
+        await broadcaster.ToOwner(ownerId, ForOwner(message, ownerId, sessions, projects));
+    }
+
+    private static ServerMessage ForOwner(ServerMessage message, string ownerId,
+        ISessionDirectory? sessions, IProjectManager? projects) =>
+        message is TaskChangedMessage { Task: { } task } tc
+            ? tc with { Task = TaskView.MaskForeignChats(TaskView.CopyOf(task), sessions, projects, ChatAudience.Viewer(ownerId)) }
+            : message;
 }

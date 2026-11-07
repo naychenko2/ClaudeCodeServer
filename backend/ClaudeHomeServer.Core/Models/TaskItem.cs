@@ -1,9 +1,13 @@
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Services;
 
 namespace ClaudeHomeServer.Models;
 
 // Задача пользователя; может быть привязана к проекту или быть личной (ProjectId == null).
 // Хранение — data/tasks.json (TaskManager).
+// Полиморфная сериализация (без дискриминатора) нужна, чтобы поле, объявленное как TaskItem
+// (TaskChangedMessage.Task), несло поля облегчённого TaskListItem; чтение всегда даёт TaskItem.
+[JsonDerivedType(typeof(TaskListItem))]
 public class TaskItem
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();
@@ -24,6 +28,23 @@ public class TaskItem
     // сбрасывается при изменении срока или офсета
     public DateTime? ReminderSentAt { get; set; }
     public TaskItemAssignee? Assignee { get; set; }
+    // ─── S2b-1 (общие проекты): человек-исполнитель и автор задачи ───
+    // Участник общего проекта, на которого назначена задача. Смысл имеет только при
+    // Assignee=Me: «Me» читается как это поле, а при его отсутствии — как владелец
+    // (TaskManager.ResolveMeUserId). Путь записи — определение исполнителя (S2b-2),
+    // здесь только модель и чтение. Инвариант «персона ⇒ Claude» не трогает поля:
+    // у Claude-задачи человека-исполнителя нет. Аддитивные nullable-поля: старый
+    // tasks.json без них читается как null, BackupSchema.Version не растёт
+    // (прецедент ExecutorLaunchedBySessionId/ReportToSessionId). WhenWritingNull:
+    // null не входит ни в файл стора, ни в ответ — формат старых записей не меняется.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AssigneeUserId { get; set; }
+    // Кто поставил задачу: человек (UI/API, заметка — ни персоны-постановщика, ни чата-
+    // источника) — id этого пользователя; агент (персона, чат) и сервер — null
+    // (TaskManager.Create). Происхождение Update не переписывает. Для регулярной серии
+    // — устойчивый атрибут (SpawnNextOccurrence, как CreatedByPersonaId).
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CreatedByUserId { get; set; }
     // Правило повторения; при завершении экземпляра создаётся следующий (см. TaskManager)
     public TaskRecurrence? Recurrence { get; set; }
     // Общий id серии повторяющейся задачи (= id первого экземпляра)
@@ -125,6 +146,20 @@ public class TaskItem
     // а не этой молчаливой сессии. Ставит только tasks_create при создании; аддитивное nullable-поле,
     // BackupSchema.Version не растёт.
     public string? ReportToSessionId { get; set; }
+    // ─── S2d-4b (К5): форма вместо чужого приватного чата ───
+    // Ряд с каждым id-полем выше: null — id в своём поле виден как раньше (ссылки нет);
+    // заполнено — id-поле обнулено, это чат, который зрителю не виден (решение — ChatRefs.For,
+    // ставит только TaskView). Поля проекции: проецируемая копия в стор не кладётся, поэтому в
+    // tasks.json они не появляются; WhenWritingNull — форма старых записей не меняется,
+    // BackupSchema.Version не растёт (прецедент ExecutorLaunchedBySessionId/ReportToSessionId).
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ChatRef? LinkedChat { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ChatRef? SourceChat { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ChatRef? ExecutorLaunchedByChat { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ChatRef? ReportToChat { get; set; }
     // ─── Фича (режим «Исполнение фичи», docs/research/turn-plan-feature-mode-cut-2026-10.md) ───
     // Аддитивные nullable-поля: размеченные по-новому задачи получают их, старые — null.
     // BackupSchema.Version не растёт (прецедент ExecutorLaunchedBySessionId/ReportToSessionId).
@@ -272,10 +307,20 @@ public record AcceptanceEvidence(string CriterionId, string How, string Result);
 // Результат предгейта: Sha — коммит дерева, по которому гнали проверки; Green — вердикт; Summary — вывод
 // красных проверок (для зелёного пусто); RedKey — «отпечаток» причины красного (имена красных
 // проверок), RedStreak — сколько красных подряд по одному RedKey (зелёный обнуляет).
-// NothingApplicable — отдельный вердикт «ни одна проверка не применима» (Green при этом false: «зелёным» он не считается,
-// ни одна проверка не выполнена); закрытие шага он разрешает.
+// NothingApplicable — отдельный НЕЙТРАЛЬНЫЙ исход «ни одна проверка не применима» (Green при этом false: «зелёным» он
+// не считается, ни одна проверка не выполнена), но и не красный: в серию красных и эскалацию не входит, серию прежнего
+// красного переносит как есть (PregateRules.Next); закрытие шага он разрешает.
+// Outcome — производный трёхзначный исход для читателей вне кода (карточка, выгрузка, статистика): по одному Green
+// «нечего проверять» неотличим от провала. Хранится производно — формат записи и бэкапа не меняется.
 public record PregateRecord(string Sha, bool Green, string Summary, DateTime At, int RedStreak = 0, string? RedKey = null,
-    bool NothingApplicable = false);
+    bool NothingApplicable = false)
+{
+    public const string OutcomeGreen = "green";
+    public const string OutcomeRed = "red";
+    public const string OutcomeNeutral = "neutral";
+
+    public string Outcome => NothingApplicable ? OutcomeNeutral : Green ? OutcomeGreen : OutcomeRed;
+}
 
 public class TaskSubtask
 {

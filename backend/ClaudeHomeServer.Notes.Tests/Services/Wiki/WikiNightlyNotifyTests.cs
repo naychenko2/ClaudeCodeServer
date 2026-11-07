@@ -47,7 +47,7 @@ public class WikiNightlyNotifyTests : IDisposable
             .Build();
         var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var projects = new ProjectManager(_config, users, new AppSettingsService(_config));
-        _notes = new NotesService(projects, _config, NullLogger<NotesService>.Instance, null, _flag);
+        _notes = new NotesService(projects, _config, NullLogger<NotesService>.Instance, null, flags: _flag);
         _keeper = new WikiKeeper(_notes, _config);
         _keeper.EnsureInitializedAsync(User).GetAwaiter().GetResult();
         _keeper.WritePageAsync(User, Section, PagePath, "---\ntype: topic\naliases: []\nowns: []\nsources: []\nstatus: active\n---\n\n# Сущность\n\n## Сводка\n\n## Хронология\n\n## Противоречия\n\n## История\n")
@@ -104,7 +104,7 @@ public class WikiNightlyNotifyTests : IDisposable
         INotificationSender? notifier = null,
         ILogger<WikiNightlyService>? log = null) =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
-            analyze ?? Done(), _llm, _config, log ?? NullLogger<WikiNightlyService>.Instance, _flag, () => _now, notifier);
+            analyze ?? Done(), _llm, _config, log ?? NullLogger<WikiNightlyService>.Instance, _flag, () => _now, notifier, _keeper);
 
     private static Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> Done() =>
         (owner, chat, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(

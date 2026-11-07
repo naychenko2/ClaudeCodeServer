@@ -78,7 +78,7 @@ function entryBadge(e: WikiJournalEntryOverrideDto): { tone: 'success' | 'warnin
 // «оспорил» — оспорил, не переписывая (disputed). Нераспознанный вид остаётся без метки:
 // словарь не выдумывает смысл незнакомому слову (тот же приём, что UNKNOWN_OP_TEXT).
 function kindBadge(e: WikiJournalEntryOverrideDto): { tone: 'info' | 'warning'; text: string } | null {
-  if (!e.overrodeHuman) return null;
+  if (!e.overrodeHuman || e.overrideReverted === true) return null;
   if (e.overrodeKind === 'replaced') return { tone: 'info', text: OVERRIDE_TEXT.kindReplaced };
   if (e.overrodeKind === 'disputed') return { tone: 'warning', text: OVERRIDE_TEXT.kindDisputed };
   return null;
@@ -167,7 +167,7 @@ function LoadingSkeleton() {
 // двойной клик не откроет второго. Записи без страниц вести некуда — кнопки нет.
 function rowOpenPage(e: WikiJournalEntryOverrideDto): (() => void) | null {
   if (e.pages.length === 0) return null;
-  return () => requestOpenWikiPage({ section: e.section, path: e.pages[0] });
+  return () => requestOpenWikiPage({ section: e.section, path: e.overridePageKey ?? e.pages[0] });
 }
 
 function JournalRow({ entry, onOpen }: { entry: WikiJournalEntryOverrideDto; onOpen: () => void }) {
@@ -213,7 +213,7 @@ function JournalRow({ entry, onOpen }: { entry: WikiJournalEntryOverrideDto; onO
           <span style={{ flexShrink: 0, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>{timeText(entry.ts)}</span>
         )}
       </button>
-      {entry.overrodeHuman && openPage && (entry.overrodeKind === 'replaced' ? (
+      {entry.overrodeHuman && entry.overrideReverted !== true && openPage && (entry.overrodeKind === 'replaced' ? (
         <Button variant="secondary" size="sm" dataTestId="wiki-journal-restore" onClick={openPage}>{OVERRIDE_TEXT.restore}</Button>
       ) : entry.overrodeKind === 'disputed' ? (
         <Button variant="ghost" size="sm" dataTestId="wiki-journal-open-page" onClick={openPage}>{OVERRIDE_TEXT.openPage}</Button>
@@ -311,11 +311,21 @@ function JournalEntry({
 
 // ─── Подвкладка ───
 
-export function WikiJournal() {
+// sectionScope (W9b): раздел задаёт снаружи — в панели его выбирает чип в шапке, и Select
+// в теле дублировал бы его. undefined — прежняя раскладка (старый WikiTab, подвкладка без
+// флага): свой sectionFilter и Select раздела. 'all'/null — весь журнал, без фильтра.
+// Смена пропа перезапрашивает журнал: load держит действующий раздел в зависимостях,
+// эффект — load; поколение (loadSeq) то же, что у фильтров: ответ прежнего раздела не ляжет
+// на экран нового.
+export function WikiJournal(
+  // selectedKey — прежнее звание из реестра (WikiTab передаёт выбранный раздел): журнал его
+  // не читает — свой раздел здесь либо свой Select (без пропа), либо sectionScope.
+  { sectionScope }: { selectedKey?: string | null; sectionScope?: string | null | 'all' },
+) {
   const tree = useWikiTree();
   const [data, setData] = useState<WikiJournalDto | null>(null);
   const [loadError, setLoadError] = useState<unknown>(null);
-  // '' — все разделы / все источники (пункт-заглушка Select)
+  // '' — все разделы / все источники (пункт-заглушка Select); с sectionScope фильтр раздела здесь не живёт
   const [sectionFilter, setSectionFilter] = useState('');
   const [originFilter, setOriginFilter] = useState('');
   // «ИИ поменял моё» (F6b): чип-переключатель — живой, пока не снят; фильтр — серверный
@@ -328,13 +338,21 @@ export function WikiJournal() {
   // пишет список; filters живут в запросе — поздний ответ прежнего фильтра не затеряет новый
   const loadSeq = useRef(0);
 
+  // Действующий раздел (W9b): с пропом — из пропа ('all'/null — без фильтра раздела),
+  // без пропа — из своего Select. Значение примитивное: load пересоздаётся только при
+  // настоящей смене раздела, а не на каждом рендере.
+  const scoped = sectionScope !== undefined;
+  const activeSection = scoped
+    ? (sectionScope === 'all' || sectionScope === null ? null : sectionScope)
+    : (sectionFilter || null);
+
   const load = useCallback(() => {
     const mine = ++loadSeq.current;
     setLoadError(null);
-    loadWikiJournal({ section: sectionFilter || null, origin: originFilter || null, overrodeHuman: overrodeOnly })
+    loadWikiJournal({ section: activeSection, origin: originFilter || null, overrodeHuman: overrodeOnly })
       .then(d => { if (loadSeq.current === mine) setData(d); })
       .catch(e => { if (loadSeq.current === mine) setLoadError(e); });
-  }, [sectionFilter, originFilter, overrodeOnly]);
+  }, [activeSection, originFilter, overrodeOnly]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- старт загрузки при монтировании подвкладки и при смене фильтра: другого места старта нет, список живёт в компоненте
@@ -422,7 +440,8 @@ export function WikiJournal() {
   // ровно тот сценарий, ради которого держится поколение запросов
   const filterRow = (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, padding: `${SP.sm}px ${SP.md}px 0` }}>
-      <Select value={sectionFilter} onChange={setSectionFilter} placeholder="Все разделы" options={sectionOptions} />
+      {/* Select раздела — только без пропа: с sectionScope раздел выбирает чип в шапке панели (W9b) */}
+      {!scoped && <Select value={sectionFilter} onChange={setSectionFilter} placeholder="Все разделы" options={sectionOptions} />}
       <Select value={originFilter} onChange={setOriginFilter} placeholder="Все источники" options={originOptions} />
       <Chip variant="toggle" selected={overrodeOnly} onClick={() => setOverrodeOnly(v => !v)}>
         {OVERRIDE_TEXT.filter}
@@ -466,7 +485,7 @@ export function WikiJournal() {
           subtitle={
             <span style={{ maxWidth: 360 }}>
               Здесь появятся события вашей вики: применения, откаты, системные операции.
-              {' '}{sectionFilter || originFilter || overrodeOnly ? 'Под выбранный фильтр ничего нет.' : ''}
+              {' '}{activeSection || originFilter || overrodeOnly ? 'Под выбранный фильтр ничего нет.' : ''}
             </span>
           }
         />

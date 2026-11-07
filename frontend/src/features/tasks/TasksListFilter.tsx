@@ -14,24 +14,80 @@ import { IconButton, Chip } from '../../components/ui';
 import {
   STATUS_DOT, STATUS_LABEL, PRIORITY_COLOR, PRIORITY_LABEL, PRIORITY_ORDER, daysFromToday,
 } from '../../lib/tasks';
-import type { Task, TaskPriority, TaskStatus } from '../../types';
+import type { Project, Task, TaskPriority, TaskStatus } from '../../types';
 import { useIsMobile } from '../../lib/breakpoints';
 import { useUserScrollGate } from '../../lib/userScrollGate';
 
 // === Состояние фильтров ===
 
-export type TaskAssigneeFilter = 'all' | 'me' | 'claude';
+// 'member' — фильтр по человеку-исполнителю общего проекта (S2b-F5); есть только
+// там, где вызывающий дал список участников (people). В личном проекте состава
+// 'all' | 'me' | 'claude' достаточно.
+export type TaskAssigneeFilter = 'all' | 'me' | 'claude' | 'member';
 
 export interface TaskListFilters {
   status: TaskStatus[];
   assignee: TaskAssigneeFilter;
+  // При assignee === 'member': id выбранного участника; null — любой человек
+  assigneeUserId?: string | null;
   priorities: TaskPriority[];
   due: DueKey[];   // ключи taskDueKey: overdue|today|week|later|none
 }
 
 export const EMPTY_TASK_FILTERS: TaskListFilters = {
-  status: [], assignee: 'all', priorities: [], due: [],
+  status: [], assignee: 'all', assigneeUserId: null, priorities: [], due: [],
 };
+
+// Участник для выбора в фильтре «Участники» и подписи дорожек
+export interface AssigneePersonOption { userId: string; name: string }
+
+// Имя человека по строке участников/списка: displayName, запасной — username,
+// нет обоих — «Участник» (то же правило, что в TaskUserBadge)
+export function memberOptionName(p: { displayName?: string | null; username?: string | null }): string {
+  return p.displayName?.trim() || p.username?.trim() || 'Участник';
+}
+
+// Общий ли проект для текущего взгляда (тот же критерий, что у SharedBadge):
+// myRole авторитетна, когда есть; иначе — сводка участников. Личный проект — false.
+export function isSharedProjectView(p: Pick<Project, 'myRole' | 'members'>): boolean {
+  return p.myRole != null || (p.members?.count ?? 0) > 0;
+}
+
+// Владелец ли текущего взгляда: myRole авторитетна; по ownerId — когда её нет;
+// ни того, ни другого (личный проект, старый бэк) — взгляд владельца, как и было
+export function isOwnerProjectView(
+  p: Pick<Project, 'myRole' | 'ownerId'>, currentUserId: string | null,
+): boolean {
+  if (p.myRole) return p.myRole === 'owner';
+  if (currentUserId && p.ownerId) return currentUserId === p.ownerId;
+  return true;
+}
+
+// Контекст взгляда для «Я»: кто я и владелец ли я этого проекта. Без контекста
+// (личный проект, хаб) «Я» остаётся прежним: t.assignee === 'me'.
+export interface AssigneeMatchContext {
+  currentUserId?: string | null;
+  isOwner?: boolean;
+}
+
+// Совпадает ли исполнитель задачи с фильтром (общая логика списка и доски, S2b-F5).
+// К9: человек-исполнитель — assignee 'me' + assigneeUserId; нет assigneeUserId →
+// старый «me» владельца. «Участники» без выбранного — любой человек с id.
+export function matchTaskAssignee(
+  t: Task, assignee: TaskAssigneeFilter, assigneeUserId: string | null | undefined,
+  ctx?: AssigneeMatchContext,
+): boolean {
+  if (assignee === 'all') return true;
+  if (assignee === 'claude') return t.assignee === 'claude';
+  if (assignee === 'member') return assigneeUserId ? t.assigneeUserId === assigneeUserId : !!t.assigneeUserId;
+  // 'me'. С контекстом (доска/список проекта) — как бэк (TaskManager.ResolveMeUserId):
+  // любая человеческая задача без id — владельца; это и старый 'me' без id (К9), и задача
+  // вообще без assignee (прежний дефолт Create). Без контекста (хаб) — прежнее поведение master.
+  if (!ctx) return t.assignee === 'me';
+  if (t.assignee === 'claude') return false;
+  if (t.assigneeUserId) return t.assigneeUserId === (ctx.currentUserId ?? null);
+  return ctx.isOwner === true;
+}
 
 // Число активных ГРУПП фильтров — его показывает бейдж на кнопке Funnel
 // (как indicator в ToolbarOverflowMenu / BoardToolbar).
@@ -60,11 +116,12 @@ export function taskDueKey(t: Task): DueKey {
 }
 
 // Применяет фильтры к массиву задач. Пустой набор фильтров — отдаёт массив как есть.
-export function applyTaskFilters(tasks: Task[], f: TaskListFilters): Task[] {
+// ctx — взгляд общего проекта («Я» по assigneeUserId, К9); без него — прежнее поведение.
+export function applyTaskFilters(tasks: Task[], f: TaskListFilters, ctx?: AssigneeMatchContext): Task[] {
   if (countActiveFilterGroups(f) === 0) return tasks;
   return tasks.filter(t => {
     if (f.status.length > 0 && !f.status.includes(t.status)) return false;
-    if (f.assignee !== 'all' && t.assignee !== f.assignee) return false;
+    if (!matchTaskAssignee(t, f.assignee, f.assigneeUserId, ctx)) return false;
     if (f.priorities.length > 0 && !f.priorities.includes(t.priority)) return false;
     if (f.due.length > 0 && !f.due.includes(taskDueKey(t))) return false;
     return true;
@@ -81,6 +138,37 @@ const ASSIGNEE_OPTIONS: { value: TaskAssigneeFilter; label: string }[] = [
   { value: 'me',     label: 'Я' },
   { value: 'claude', label: 'AI' },
 ];
+
+// «Участники» добавляется к сегменту только там, где есть список участников
+// (общий проект): как в списке задач, так и в тулбаре доски (S2b-F5)
+export function assigneeFilterOptions(people?: AssigneePersonOption[]): { value: TaskAssigneeFilter; label: string }[] {
+  return people && people.length > 0
+    ? [...ASSIGNEE_OPTIONS, { value: 'member', label: 'Участники' }]
+    : ASSIGNEE_OPTIONS;
+}
+
+// Выбор конкретного участника под сегментом «Участники»: общий ui/Chip.
+// Наружный отступ несёт вызывающий — в поповере и в строке тулбара он разный.
+export function MemberChips({ people, selectedUserId, onPick, mobile }: {
+  people: AssigneePersonOption[];
+  selectedUserId?: string | null;
+  onPick: (userId: string) => void;
+  mobile?: boolean;
+}) {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+      {people.map(p => (
+        <Chip
+          key={p.userId} variant="toggle" large={mobile} minHeight={mobile ? 40 : undefined}
+          selected={selectedUserId === p.userId}
+          onClick={() => onPick(p.userId)}
+        >
+          {p.name}
+        </Chip>
+      ))}
+    </div>
+  );
+}
 
 // Срок: все 5 групп taskDueKey (включая «Позже») — иначе задачи «позже» выпадали бы
 // при любом активном фильтре срока. Лейблы/цвета — из TasksPanel.DATE_GROUPS.
@@ -111,13 +199,16 @@ const POPOVER_W = 252;
 // variant:
 //   'icon'    — компактная 26×26 в шапке острова (cc-panels)
 //   'sidebar' — квадратная 34px в строке действий старого сайдбара
-export function TasksListFilterButton({ variant, filters, onFilters, total, found, isMobile }: {
+// people — участники общего проекта (загружает вызывающий, TasksPanel): с ними
+// сегмент «Исполнитель» получает «Участники». Личный проект — people нет.
+export function TasksListFilterButton({ variant, filters, onFilters, total, found, isMobile, people }: {
   variant: 'icon' | 'sidebar';
   filters: TaskListFilters;
   onFilters: (f: TaskListFilters) => void;
   total: number;   // всего задач (до фильтров) — для счётчика «N из M»
   found: number;   // найдено после фильтров
   isMobile?: boolean;
+  people?: AssigneePersonOption[];
 }) {
   // Хук вызывается безусловно (rules-of-hooks): prop лишь переопределяет его
   // значение, но не отменяет сам вызов — иначе порядок хуков плавал бы между
@@ -202,7 +293,7 @@ export function TasksListFilterButton({ variant, filters, onFilters, total, foun
   );
 
   const sections = (
-    <FilterSections filters={filters} onFilters={onFilters} mobile={mobile} />
+    <FilterSections filters={filters} onFilters={onFilters} mobile={mobile} people={people} />
   );
 
   return (
@@ -309,10 +400,12 @@ function FilterBadge({ count, style }: { count: number; style: CSSProperties }) 
 
 // Экспортируется для рендер-теста: чи́пы-фильтры (статус/приоритет/срок) — общий ui/Chip
 // variant="toggle"; клик переключает группу. «Исполнитель» — отдельный сегмент, не чип.
-export function FilterSections({ filters, onFilters, mobile }: {
+// people (общий проект) добавляет к сегменту «Участники» и выбор конкретного участника.
+export function FilterSections({ filters, onFilters, mobile, people }: {
   filters: TaskListFilters;
   onFilters: (f: TaskListFilters) => void;
   mobile: boolean;
+  people?: AssigneePersonOption[];
 }) {
   return (
     <>
@@ -337,15 +430,16 @@ export function FilterSections({ filters, onFilters, mobile }: {
         </div>
       </FilterSection>
 
-      {/* Исполнитель — сегмент Все / Я / AI (как в BoardToolbar) */}
+      {/* Исполнитель — сегмент Все / Я / AI (+ «Участники» в общем проекте, как в BoardToolbar) */}
       <FilterSection label="Исполнитель">
         <div style={{ display: 'flex', border: `1px solid ${C.border}`, borderRadius: R.lg, overflow: 'hidden' }}>
-          {ASSIGNEE_OPTIONS.map(o => {
+          {assigneeFilterOptions(people).map(o => {
             const on = filters.assignee === o.value;
             return (
               <button
                 key={o.value} type="button"
-                onClick={() => onFilters({ ...filters, assignee: o.value })}
+                // любой переход по сегменту начинает выбор участника заново
+                onClick={() => onFilters({ ...filters, assignee: o.value, assigneeUserId: null })}
                 style={{
                   flex: 1, padding: mobile ? '9px 11px' : '6px 11px', cursor: 'pointer', border: 'none',
                   background: on ? C.accentLight : C.bgWhite, color: on ? C.accent : C.textSecondary,
@@ -357,6 +451,14 @@ export function FilterSections({ filters, onFilters, mobile }: {
             );
           })}
         </div>
+        {filters.assignee === 'member' && people && people.length > 0 && (
+          <div style={{ marginTop: 6 }}>
+            <MemberChips
+              people={people} selectedUserId={filters.assigneeUserId} mobile={mobile}
+              onPick={userId => onFilters({ ...filters, assignee: 'member', assigneeUserId: userId })}
+            />
+          </div>
+        )}
       </FilterSection>
 
       {/* Приоритет */}

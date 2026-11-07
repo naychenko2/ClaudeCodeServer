@@ -405,6 +405,20 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             SourceNoteLine = req.SourceNoteLine,
             CreatedByPersonaId = string.IsNullOrEmpty(req.CreatedByPersonaId) ? null : req.CreatedByPersonaId,
             SourceSessionId = string.IsNullOrEmpty(req.SourceSessionId) ? null : req.SourceSessionId,
+            // Кто поставил задачу (S2b-1, доработка): явный признак req.CreatedByHuman — его
+            // проставляют только человеческие пути (UI/API в TasksController). Fail-closed:
+            // любой серверный/агентский путь — null; происхождение НЕ выводится из отсутствия
+            // маркеров (CreatedByPersonaId/SourceSessionId): серверный вызов без маркеров
+            // (merge-задача TasksController, сборка архитектора ArchitectureAgentLauncherAdapter)
+            // неотличим от человеческого и автора не получает.
+            // Автор — явный актор, когда он назван (F2-T1): в общем проекте запись лежит под
+            // арендатором (OwnerId — ключ хранилищ, перенос на арендатора в Update), а поставил её
+            // участник с правом WriteContent, поэтому автор не совпадает с владельцем записи.
+            // Актор не назван — человеческий путь: создающий человек и есть владелец записи
+            // (прежнее поведение, личных и своих проектов).
+            CreatedByUserId = string.IsNullOrWhiteSpace(req.CreatedByActorUserId)
+                ? (req.CreatedByHuman ? ownerId : null)
+                : req.CreatedByActorUserId.Trim(),
             ReportToSessionId = string.IsNullOrEmpty(req.ReportToSessionId) ? null : req.ReportToSessionId,
             DelegationDepth = ComputeDelegationDepth(req.SourceSessionId),
             Order = NextOrder(ownerId),
@@ -566,6 +580,16 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     {
         if (task.PersonaId is not null) task.Assignee = TaskItemAssignee.Claude;
     }
+
+    // Чтение «Me» (S2b-1, общие проекты): человек-исполнитель задачи — AssigneeUserId,
+    // если задан; задачи без него (старые и личные проекты) — владельца (арендатора)
+    // проекта: в общем проекте старые задачи мог создать только владелец (Write
+    // участника закрыт, пометка плана S2b). Assignee=null читается как Me — прежний
+    // дефолт Create. Assignee=Claude — человека-исполнителя нет (null); инвариант
+    // «персона ⇒ Claude» (NormalizePersonaAssignee) не трогает: задача с персоной
+    // в человеческую ветку не попадает.
+    public static string? ResolveMeUserId(TaskItem task) =>
+        task.Assignee == TaskItemAssignee.Claude ? null : task.AssigneeUserId ?? task.OwnerId;
 
     // Инвариант: worktree — дерево репы ПРОЕКТА. У личной задачи (и у задачи, которую сделали
     // личной) хранить путь незачем — исполнитель всё равно стартует в чате вне проекта.
@@ -857,9 +881,29 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     /// <summary>Отказ возобновить закрытый эпик фичи не из чата человека; симметричен FeatureCloseDeniedException (дефект df85c799).</summary>
     public sealed class FeatureReopenDeniedException() : InvalidOperationException(FeatureReopenDeniedText);
 
+    // Машинные коды отказа назначить человека-исполнителя (S2b-2a, контракт К9 плана
+    // docs/research/shared-projects-plan-v2-2026-10.md). Словарь один на обе двери (REST
+    // TasksController, MCP TasksToolset — шаг S2b-2b): по коду фронт решает текст подсказки,
+    // поэтому он часть записи задач, а не строчка одного контроллера.
+    public const string AssigneeNotMemberCode = "assignee_not_member";
+    public const string ReaderNotAssignableCode = "reader_not_assignable";
+    public const string PersonTaskNotAssignableCode = "person_task_not_assignable";
+
+    /// <summary>Отказ назначить человека-исполнителя задачи; Code — машинный код ответа 400.
+    /// Наследник InvalidOperationException — старые catch-и вызывающих (400/Deny) его тоже ловят.</summary>
+    public sealed class TaskAssigneeDeniedException(string code, string message) : InvalidOperationException(message)
+    {
+        public string Code { get; } = code;
+    }
+
+    // tenantOwnerId (S2b-2a) — арендатор проекта задачи (владелец проекта), когда вызывающий
+    // его знает: REST-дверь берёт его из ProjectManager по целевому проекту задачи. Он нужен
+    // для двух вещей: «назначение на владельца» сравнивается с ним, а не с записью, и ключ
+    // записи проектной задачи нормализуется им (см. блок ниже). null — вызывающий проекта не
+    // видит (личная задача, внутренний путь): поведение прежнее, фолбэк — OwnerId записи.
     public TaskItem? Update(string id, UpdateTaskRequest req, BoardColumn? effectiveColumn = null,
         bool isAgentCall = false, bool callerIsExecutor = false, bool denyFeatureClose = false,
-        bool denyFeatureReopen = false)
+        bool denyFeatureReopen = false, string? tenantOwnerId = null)
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
@@ -1003,6 +1047,19 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 : task.PlanSteps.Where(s => s.IsStep && !string.IsNullOrWhiteSpace(s.StepRef))
                     .Select(s => s.StepRef.Trim()).ToHashSet(FeatureStepAccounting.StepKeyComparer));
         EnsureReturnReason(req.Verification);
+
+        // Человек-исполнитель (S2b-2a): задача с персоной-исполнителем человеку не отдаётся.
+        // Назначить человека — значит поставить Assignee=Me (смысл AssigneeUserId — только при
+        // Me), а инвариант «персона ⇒ Claude» (NormalizePersonaAssignee) при этом либо
+        // нарушался бы, либо персону пришлось бы молча снять: оба варианта меняют исполнение,
+        // о котором просил постановщик. Отказ внятным кодом, а не игнор — по правилу
+        // ValidateFeatureFields: «тихо отбрасывать неверное значение нельзя». Проверка по
+        // ЭФФЕКТИВНОЙ персоне (effPersonaId): запрос «персона + человек» в одном ходе
+        // отказывается так же, как уже персонная задача. Снятие исполнителя («») — не
+        // назначение: персону не трогает, не отказывается.
+        if (Trimmed(req.AssigneeUserId) is not null && effPersonaId is not null)
+            throw new TaskAssigneeDeniedException(PersonTaskNotAssignableCode,
+                "Задачу с персоной-исполнителем нельзя назначить человеку: исполнение ведёт персона.");
 
         if (req.Title is not null) task.Title = req.Title;
         if (req.Description is not null) task.Description = req.Description;
@@ -1175,6 +1232,46 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             }
         }
 
+        // Ключ записи проектной задачи — арендатор проекта (хвост ревью S2b-1, п.2). Фолбэк
+        // чтения «Me» (ResolveMeUserId) опирается на OwnerId записи, и он обязан быть
+        // владельцем проекта: иначе при открытии записи участникам (S2c) задача, созданная
+        // участником, уедет из календаря и выдачи арендатора. Автор при этом не меняется —
+        // он в CreatedByUserId. С F2-T1 это уже не no-op в человеческой двери: POST
+        // /api/projects/{p}/tasks открыт редактору (WriteContent) и зовёт id арендатора,
+        // поэтому запись участника приходит здесь же, под ключом проекта. Остальные точки
+        // создания зовут id арендатора и раньше (NoteTaskSync — проект только своего
+        // владельца, TeamWave — owner чата, тулсет задач — токен арендатора). Личная задача
+        // (ProjectId null) и вызывающий без проекта (tenantOwnerId null) — без изменения.
+        if (task.ProjectId is not null && tenantOwnerId is not null && task.OwnerId != tenantOwnerId)
+            task.OwnerId = tenantOwnerId;
+
+        // Человек-исполнитель (S2b-2a): null = не менять, "" = снять (обратно к владельцу).
+        // id владельца = то же, что снять: «Me» без AssigneeUserId читается как владелец
+        // (ResolveMeUserId), отдельного значения «на себя» в записи нет — и старый формат
+        // задачи остаётся старым. Назначение участника ставит Assignee=Me: смысл поля —
+        // «этот человек исполняет», при Assignee=Claude оно не читается. Членство и роль
+        // проверяет дверь (TaskManager проекта не видит): здесь — только применение.
+        // Порядок после req.Assignee: явное назначение человека сильнее присланного Assignee
+        // (прислать «claude» и id участника в одном запросе — противоречие, исполнитель —
+        // человек). Инвариант «персона ⇒ Claude» не ломается: персонная задача отклонена выше.
+        if (req.AssigneeUserId is not null)
+        {
+            var assigneeUser = Trimmed(req.AssigneeUserId);
+            var owner = tenantOwnerId ?? task.OwnerId;
+            if (assigneeUser is null)
+                task.AssigneeUserId = null;
+            else if (assigneeUser == owner)
+            {
+                task.AssigneeUserId = null;
+                task.Assignee = TaskItemAssignee.Me;
+            }
+            else
+            {
+                task.AssigneeUserId = assigneeUser;
+                task.Assignee = TaskItemAssignee.Me;
+            }
+        }
+
         // Инвариант «персона ⇒ Claude» — после того как учли и Assignee, и PersonaId
         NormalizePersonaAssignee(task);
         // Инвариант «worktree только у проектной задачи» — после смены проекта выше
@@ -1238,6 +1335,12 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             // экземпляра терялось бы уведомление постановщика. SourceSessionId НЕ переносим —
             // конкретная сессия (как LinkedSessionId) у нового экземпляра начинается заново
             CreatedByPersonaId = completed.CreatedByPersonaId,
+            // Человек-исполнитель и автор-человек (S2b-1) — устойчивые атрибуты серии
+            // (как PersonaId/CreatedByPersonaId): регулярная задача, поставленная человеком
+            // или назначенная участнику, не теряла бы их со 2-го экземпляра — без переноса
+            // исполнитель молча падал бы на владельца (чтение Me, ResolveMeUserId).
+            AssigneeUserId = completed.AssigneeUserId,
+            CreatedByUserId = completed.CreatedByUserId,
             // Глубина делегирования — устойчивый атрибут серии (как CreatedByPersonaId):
             // без переноса регулярная делегированная задача «сбрасывала» бы гард на 2-м экземпляре
             DelegationDepth = completed.DelegationDepth,
@@ -1927,6 +2030,19 @@ public record CreateTaskRequest(
     // хода; UI/API их не шлют — null). См. TaskItem.CreatedByPersonaId/SourceSessionId.
     string? CreatedByPersonaId = null,
     string? SourceSessionId = null,
+    // Явный признак происхождения (S2b-1, доработка): запись создана человеком. Проставляет
+    // вызывающий: только человеческие пути (UI/API в TasksController). Дефолт false —
+    // CreatedByUserId=null (fail-closed): merge-задача, сборка архитектора, тулсет задач и
+    // волна автора не получают; происхождение не выводится из отсутствия маркеров выше.
+    // См. TaskItem.CreatedByUserId.
+    bool CreatedByHuman = false,
+    // Актор-создатель, подставленный СЕРВЕРОМ (F-9): актор хода-создателя в MCP (GetTurnActor),
+    // автор чата-штаба у волны, вызывающий человек у сборки архитектора/мержа. Автозапуск
+    // исполнителя наследует именно его (TaskLaunchActor). Из тела REST не принимается: его
+    // ставит сам контроллер — для личной задачи зануляет (создающий и есть владелец записи),
+    // для задачи общего проекта называет id вызывающего-участника: автор там не совпадает с
+    // ключом записи (F2-T1, см. CreatedByUserId выше). Фон/система без актора — null.
+    string? CreatedByActorUserId = null,
     // Дерево для чата-исполнителя (см. TaskItem.WorktreePath): путь СУЩЕСТВУЮЩЕГО worktree
     // проекта и его ветка. У личной задачи игнорируются.
     string? WorktreePath = null,
@@ -1973,6 +2089,14 @@ public record UpdateTaskRequest(
     // null = не менять, отрицательное = убрать напоминание
     int? ReminderMinutes = null,
     TaskItemAssignee? Assignee = null,
+    // Человек-исполнитель (S2b-2a): id участника проекта задачи. null = не менять,
+    // "" = снять (обратно к владельцу). id самого владельца — то же, что снять: «Me» без поля
+    // читается как владелец (ResolveMeUserId), отдельного значения «на себя» в записи нет.
+    // Членство и роль проверяет дверь (TaskManager проекта не видит): не участник → 400
+    // assignee_not_member, читатель → 400 reader_not_assignable, личная задача для чужого id
+    // — тот же отказ. Задача с персоной-исполнителем — отказ в TaskManager
+    // (person_task_not_assignable): инвариант «персона ⇒ Claude» не ломается.
+    string? AssigneeUserId = null,
     // null = не менять, Type=None = убрать повторение
     TaskRecurrence? Recurrence = null,
     string? LinkedSessionId = null,

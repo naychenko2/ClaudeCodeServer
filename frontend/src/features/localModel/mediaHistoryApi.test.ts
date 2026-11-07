@@ -130,7 +130,7 @@ describe('api.localModel.history — контракт GET /api/local-model/histo
     await expect(api.localModel.history()).rejects.toMatchObject({ status: 403 });
   });
 
-  it('404 (флаг local-model-stats выключен) — ошибка со статусом', async () => {
+  it('404 ( выключен) — ошибка со статусом', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ error: 'Не найдено' }, 404));
     await expect(api.localModel.history()).rejects.toMatchObject({ status: 404 });
   });

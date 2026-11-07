@@ -71,7 +71,9 @@ public sealed class WikiJournalReader
         string? Policy,
         IReadOnlyList<string> Classes,
         bool OverrodeHuman = false,
-        string? OverrodeKind = null);
+        string? OverrodeKind = null,
+        string? OverridePageKey = null,
+        bool OverrideReverted = false);
 
     /// <summary>Вид действия ИИ над утверждением человека в строке `overrodeHuman` (ADR-038,
     /// предохранители 1 и 6): ИИ заменил формулировку (`supersede@human`).</summary>
@@ -131,9 +133,10 @@ public sealed class WikiJournalReader
             byId.TryAdd(p.Id, p);
 
         var names = new Dictionary<string, string?>(StringComparer.Ordinal);
+        var restores = parsed.Where(x => x.Op == WikiPackage.ActionRestore).ToList();
         var entries = new List<Entry>(parsed.Count);
         foreach (var e in parsed)
-            entries.Add(JoinWithPackages(e, byId, ownerId, names));
+            entries.Add(JoinWithPackages(e, byId, ownerId, names, restores));
 
         // Новые сверху — обратный порядок файла: строки дописываются append, его порядок и есть
         // хронология. Фильтры — по собранному хвосту: они сужают окно, а не ищут за его краем.
@@ -348,13 +351,15 @@ public sealed class WikiJournalReader
     /// <summary>Метка «ИИ заменил моё» страницы: строки `apply` с overrodeHuman за окно [since, ∞)
     /// и автоприменённые операции их пакета с классом `…@human` на этой странице. Состояния у метки
     /// нет — она целиком выводится из журнала и пакетов; новые сверху.</summary>
-    public IReadOnlyList<PageOverride> PageOverrides(string ownerId, string section, string page, DateTimeOffset since)
+    public IReadOnlyList<PageOverride> PageOverrides(string ownerId, string section, string page, DateTimeOffset since,
+        string? pageContent = null)
     {
         var root = WikiPaths.Root(_dataDir, ownerId);
         var result = new List<PageOverride>();
         // Журнал читается целиком построчно, без окна выдачи MaxTake: окно меток — по времени
         // (since), а не по числу строк, и хвост в 1000 строк не должен гасить метку раньше срока.
         var hits = new List<Entry>();
+        var restores = new List<Entry>();
         try
         {
             var path = SafePath.Join(root, LogRelPath);
@@ -366,6 +371,9 @@ public sealed class WikiJournalReader
                 while ((line = reader.ReadLine()) is not null)
                 {
                     var e = ParseLine(line);
+                    if (e is not null && e.Op == WikiPackage.ActionRestore && e.Ts >= since && e.Section == section
+                        && e.Pages.Contains(page, StringComparer.Ordinal))
+                        restores.Add(e);
                     if (e is null || !e.OverrodeHuman || e.Op != "apply" || e.Ts < since || e.Section != section
                         || !e.Pages.Contains(page, StringComparer.Ordinal))
                         continue;
@@ -384,6 +392,10 @@ public sealed class WikiJournalReader
         var byId = new Dictionary<string, WikiPackage>(StringComparer.Ordinal);
         foreach (var p in WikiPackageStore.List(root).Packages)
             byId.TryAdd(p.Id, p);
+        // Формулировки ИИ, которые человек уже вернул («Вернуть мою»): обратный supersede пакета
+        // human с целью — текстом ИИ. Строка restore пакета ИИ не называет, связь — по тексту цели.
+        var returned = ReturnedStatements(restores, byId, page);
+        var active = pageContent is null ? null : ActiveAssertionLines(pageContent);
         foreach (var e in hits)
         {
             if (e.Op != "apply" || e.Ts < since || !e.Pages.Contains(page, StringComparer.Ordinal))
@@ -393,11 +405,33 @@ public sealed class WikiJournalReader
                 {
                     if (op.Page != page || !WikiPackage.IsAutoOverrideOfHuman(op))
                         continue;
+                    // Замена, которой уже нет: человек вернул свою формулировку (строка restore позже
+                    // применения) либо текста ИИ нет среди действующих утверждений страницы.
+                    // Спор (conflict) не трогаем: он стоит на живой строке человека.
+                    if (op.Op == WikiPackage.OpSupersede)
+                    {
+                        var statement = StripFootnoteRefs(op.Text);
+                        if (!string.IsNullOrEmpty(statement)
+                            && (IsReturned(returned, e.Ts, statement)
+                                || (active is not null && !active.Any(l => QuoteMatcher.ContainsVerbatim(l, statement)))))
+                            continue;
+                    }
                     result.Add(new PageOverride(op.Op, StripFootnoteRefs(op.Text), StripFootnoteRefs(op.Target), e.Ts, pkg.Id));
                 }
         }
         return result;
     }
+
+    private static bool SameStatement(string a, string b) =>
+        QuoteMatcher.ContainsVerbatim(a, b) || QuoteMatcher.ContainsVerbatim(b, a);
+
+    // Действующие утверждения страницы: строки секций утверждений без «Истории»; null — страница
+    // не разбирается, тогда вычитать по тексту нечем.
+    private static List<string>? ActiveAssertionLines(string content) =>
+        WikiPage.Parse(content).Model is { } model
+            ? model.Sections.Where(s => s.Name != "История" && WikiPage.AssertionSectionNames.Contains(s.Name))
+                .SelectMany(s => s.Lines).ToList()
+            : null;
 
     private static readonly System.Text.RegularExpressions.Regex FootnoteRefRx =
         new(@"\s*\[\^[^\]\r\n]+\]", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
@@ -411,7 +445,7 @@ public sealed class WikiJournalReader
     // переходов), а второй пакет того же источника имеет свою строку позже. Пакет, созданный
     // позже строки, — не этот: он ещё не применялся.
     private Entry JoinWithPackages(Entry e, Dictionary<string, WikiPackage> byId, string ownerId,
-        Dictionary<string, string?> names)
+        Dictionary<string, string?> names, List<Entry> restores)
     {
         var joined = PackagesOf(e, byId);
 
@@ -433,17 +467,24 @@ public sealed class WikiJournalReader
         // или строка без признака — вида нет (старые строки, системные операции). Замена и
         // оспаривание в одной строке — «replaced»: замена весомее.
         string? kind = null;
+        string? overridePage = null;
+        var reverted = false;
         if (e.OverrodeHuman)
         {
             var overrides = joined.SelectMany(p => p.Operations).Where(WikiPackage.IsAutoOverrideOfHuman).ToList();
             kind = overrides.Any(o => o.Op == WikiPackage.OpSupersede) ? KindReplaced
                 : overrides.Any(o => o.Op == WikiPackage.OpConflict) ? KindDisputed
                 : null;
+            // Страница замены — первая по порядку операций пакета (фронт открывает её, а не pages[0]).
+            overridePage = overrides.FirstOrDefault()?.Page;
+            reverted = IsReverted(e, overrides, overridePage, restores, byId);
         }
 
         return e with
         {
             OverrodeKind = kind,
+            OverridePageKey = overridePage,
+            OverrideReverted = reverted,
             // Статус — только когда пакет один: строка retract могла откатать несколько, и
             // одного статуса у них нет — их id лежат в поле packages, их видно по ним.
             Status = joined.Count == 1 ? joined[0].Status : null,
@@ -451,6 +492,43 @@ public sealed class WikiJournalReader
             Classes = [.. classes],
             SourceName = SourceNameOf(e, joined, ownerId, names),
         };
+    }
+
+    // Формулировки ИИ, которые человек вернул на странице: обратный supersede пакета human с целью —
+    // текстом ИИ. Единая логика «жива ли замена на странице» для журнала и метки страницы.
+    private List<(DateTimeOffset Ts, string Target)> ReturnedStatements(IEnumerable<Entry> restores,
+        Dictionary<string, WikiPackage> byId, string page)
+    {
+        var returned = new List<(DateTimeOffset Ts, string Target)>();
+        foreach (var r in restores)
+            foreach (var hp in PackagesOf(r, byId))
+                foreach (var op in hp.Operations)
+                    if (op.Page == page && op.Op == WikiPackage.OpSupersede && !string.IsNullOrWhiteSpace(op.Target))
+                        returned.Add((r.Ts, StripFootnoteRefs(op.Target)!));
+        return returned;
+    }
+
+    // Замена возвращена: строка restore не раньше применения целится в текст ИИ.
+    private static bool IsReturned(List<(DateTimeOffset Ts, string Target)> returned, DateTimeOffset appliedAt, string statement) =>
+        returned.Any(x => x.Ts >= appliedAt && SameStatement(x.Target, statement));
+
+    // Замена на странице overridePageKey уже возвращена: считаем постранично, как метка страницы.
+    // Возвращены должны быть все замены пакета НА ЭТОЙ странице; спор (conflict) стоит на живой строке
+    // человека и «возвращённым» не бывает. Окно — вся история журнала, не take-окно выдачи.
+    private bool IsReverted(Entry e, List<WikiPackage.Operation> overrides, string? page, List<Entry> restores,
+        Dictionary<string, WikiPackage> byId)
+    {
+        if (page is null)
+            return false;
+        var replaced = overrides.Where(o => o.Op == WikiPackage.OpSupersede && o.Page == page).ToList();
+        if (replaced.Count == 0)
+            return false;
+        var returned = ReturnedStatements(restores.Where(x => x.Section == e.Section), byId, page);
+        return replaced.All(o =>
+        {
+            var statement = StripFootnoteRefs(o.Text);
+            return !string.IsNullOrEmpty(statement) && IsReturned(returned, e.Ts, statement);
+        });
     }
 
     // Тот же источник, что записан в пакете: SourceOf — joined Ref его источников (форма,

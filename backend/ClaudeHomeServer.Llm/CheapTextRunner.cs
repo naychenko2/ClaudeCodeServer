@@ -147,9 +147,9 @@ public sealed class CheapTextRunner(
     public async Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
         string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
     {
-        var result = await RunChainAsync(actionKey, prompt, fallbackModel, ownerId, jsonFormat, ct,
+        var (text, _) = await RunChainCoreAsync(actionKey, prompt, fallbackModel, ownerId, jsonFormat, ct,
             allowCloudFallback: true);
-        return result ?? string.Empty;
+        return text ?? string.Empty;
     }
 
     // Та же цепочка, что RunAsync, но БЕЗ финального claude-шага, когда маршрут места —
@@ -158,17 +158,37 @@ public sealed class CheapTextRunner(
     // уходить наружу без явного выбора облака. Явный выбор облака/слота/модели — цепочка
     // полная, как в RunAsync. null — ни выбранное, ни локаль не дали ответа (и облака по
     // маршруту нет).
-    public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+    public async Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
         object? jsonFormat = null, CancellationToken ct = default)
-        => RunChainAsync(actionKey, prompt, fallbackModel: null, ownerId, jsonFormat, ct,
+    {
+        var (text, _) = await RunChainCoreAsync(actionKey, prompt, fallbackModel: null, ownerId, jsonFormat, ct,
             allowCloudFallback: false);
+        return text;
+    }
 
-    // Общая цепочка RunAsync/RunLocalOrChosenAsync: выбранный исполнитель → локальная модель →
-    // (опционально) claude. allowCloudFallback=false — финальный claude-шаг пропускается, когда
+    // Та же цепочка и та же ранняя развилка, что у RunLocalOrChosenAsync, но отдаёт и расход:
+    // usage шага локали (CostUsd 0 — локаль бесплатна) либо usage провайдера для выбранной
+    // модели и облачного шага. Нужен ночному разбору вики и ступени 2 отбора чатов: им нужна
+    // фактическая нагрузка GPU локали, а не только текст. null — ни выбранное, ни локаль не
+    // дали ответа (и облака по маршруту нет).
+    public async Task<OneShotResult?> RunLocalOrChosenDetailedAsync(string actionKey, string prompt,
+        string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+    {
+        var (text, usage) = await RunChainCoreAsync(actionKey, prompt, fallbackModel: null, ownerId,
+            jsonFormat, ct, allowCloudFallback: false);
+        return text is null ? null : new OneShotResult(text, usage, 0);
+    }
+
+    // Общая цепочка RunAsync / RunLocalOrChosenAsync / RunLocalOrChosenDetailedAsync:
+    // выбранный исполнитель → локальная модель → (опционально) claude. Возвращает пару
+    // «текст + usage»: строковые варианты берут из неё Text, detailed — всё. Копии цепочки
+    // нет намеренно: инвариант «локальный маршрут без облачного фолбэка» обязан жить в одном
+    // месте (в RunDetailedAsync он скопирован — известное место расхождения, вне этого шага).
+    // allowCloudFallback=false — финальный claude-шаг пропускается, когда
     // маршрут места локальный (дефолт или явный выбор): тогда сбой локали не уводит данные в
     // облако молча. Для явного выбора облака/слота/модели allowCloudFallback=true (RunAsync).
-    private async Task<string?> RunChainAsync(string actionKey, string prompt, string? fallbackModel,
-        string? ownerId, object? jsonFormat, CancellationToken ct, bool allowCloudFallback)
+    private async Task<(string? Text, OneShotUsage? Usage)> RunChainCoreAsync(string actionKey, string prompt,
+        string? fallbackModel, string? ownerId, object? jsonFormat, CancellationToken ct, bool allowCloudFallback)
     {
         if (RefuseImageAction(actionKey))
             throw new InvalidOperationException(
@@ -180,10 +200,19 @@ public sealed class CheapTextRunner(
         // claude CLI. Оба при неудаче отдают null и уходят дальше по цепочке.
         if (route.Kind == RouteKind.Model && !string.IsNullOrWhiteSpace(route.Model))
         {
-            var picked = CloudCheapClient.IsDirectRoute(route.Model)
-                ? await TryDirectAsync(actionKey, route.Model!, prompt, ownerId, ct)
-                : await TryModelAsync(actionKey, route.Model!, prompt, ownerId, ct);
-            if (picked is not null) return picked;
+            if (CloudCheapClient.IsDirectRoute(route.Model))
+            {
+                // Прямого адаптера метрик не несёт (CloudTextResult их не имеет) — usage null,
+                // как в RunDetailedAsync.
+                var direct = await TryDirectAsync(actionKey, route.Model!, prompt, ownerId, ct);
+                if (direct is not null) return (direct, null);
+            }
+            else
+            {
+                var picked = await TryDetailedModelAsync(actionKey, route.Model!, prompt, ownerId,
+                    CloudTimeoutFor(actionKey), ct);
+                if (picked is not null) return (picked.Text, picked.Usage);
+            }
         }
 
         // Шаг 2 — локальная модель. Идёт и как основной путь (Kind=Local), и как страховка
@@ -198,18 +227,22 @@ public sealed class CheapTextRunner(
         // когда запрос реально уходит в движок. Учёт — только цепочки с движком: явная
         // модель админа (шаг 1) и места не на движке в журнал не входят.
         EngineCallHandle? call = null;
+        // Режим слота этого шага — по режиму цепочки (см. AwaitsSlot): без облачной страховки
+        // шаг локали ждёт свободный слот в общем счётчике, а не отказывается.
+        var awaitSlot = AwaitsSlot(allowCloudFallback, route.Kind);
         try
         {
             if (router.EngineOf(route) is { } engine)
             {
                 call = ledger?.Begin(engine.Name, actionKey);
-                var viaEngine = await RunEngineAsync(engine, actionKey, prompt, jsonFormat, ownerId, ct, call);
+                var (viaEngine, engineUsage) = await RunEngineAsync(engine, actionKey, prompt, jsonFormat,
+                    ownerId, ct, call, awaitSlot);
                 if (!string.IsNullOrWhiteSpace(viaEngine))
                 {
                     call?.End(EngineCallOutcome.Engine);
-                    return viaEngine;
+                    return (viaEngine, engineUsage);
                 }
-                // Страховка движка — облако: в режиме «без облака» (RunLocalOrChosenAsync) её нет.
+                // Страховка движка — облако: в режиме «без облака» (RunLocalOrChosen*) её нет.
                 if (allowCloudFallback && engine.Spec.FallbackRoute is { } insurance)
                 {
                     call?.Step(EngineCallLink.Insurance);
@@ -217,14 +250,15 @@ public sealed class CheapTextRunner(
                     if (insured is not null)
                     {
                         call?.End(EngineCallOutcome.Insurance);
-                        return insured;
+                        return (insured, null);
                     }
                 }
             }
-            else if (LocalStepReady(actionKey, route.Kind))
+            else if (LocalStepReady(actionKey, route.Kind, allowCloudFallback))
             {
-                var local = await RunLocalAsync(actionKey, prompt, jsonFormat, ownerId, ct);
-                if (!string.IsNullOrWhiteSpace(local)) return local;
+                var (local, localUsage) = await RunLocalAsync(actionKey, prompt, jsonFormat, ownerId, ct,
+                    awaitSlot);
+                if (!string.IsNullOrWhiteSpace(local)) return (local, localUsage);
                 log.LogDebug("cheap-runner: действие {Action} — фолбэк с Ollama на claude", actionKey);
             }
 
@@ -236,7 +270,7 @@ public sealed class CheapTextRunner(
             // Режим RunLocalOrChosenAsync (allowCloudFallback=false): шаг пропускается, когда
             // маршрут места локальный — сбой/пусто локали не уводит данные в облако молча.
             // Пустой ответ финального шага — тоже «без ответа» (корзина missed).
-            if (!allowCloudFallback && route.Kind == RouteKind.Local) return null;
+            if (!allowCloudFallback && route.Kind == RouteKind.Local) return (null, null);
             // Звено Claude — только у цепочек, которые реально дошли до облачного шага:
             // в режиме «без облака» цепочка с движком закончится без ответа, и «кто сейчас
             // на модели» не должна показывать Claude у места, которое в облако не уходит
@@ -247,11 +281,14 @@ public sealed class CheapTextRunner(
             var model = claude.NormalizeModel(effFallback);
             try
             {
-                var answer = await claude.RunAsync(prompt, model, timeout: cloudTimeout, ct: ct,
+                // Detailed-вариант того же вызова: текст идентичен RunAsync (у OneShotClaudeRunner
+                // оба метода ведут в один RunCliAsync), но usage провайдера доходит до
+                // detailed-потребителя цепочки.
+                var answer = await claude.RunDetailedAsync(prompt, model, timeout: cloudTimeout, ct: ct,
                     ownerId: ownerId, label: actionKey);
-                call?.End(string.IsNullOrWhiteSpace(answer)
+                call?.End(string.IsNullOrWhiteSpace(answer.Text)
                     ? EngineCallOutcome.Missed : EngineCallOutcome.Claude);
-                return answer;
+                return (answer.Text, answer.Usage);
             }
             catch (LlmTimeoutException ex) when (!ct.IsCancellationRequested)
             {
@@ -262,11 +299,11 @@ public sealed class CheapTextRunner(
                 // шаблон с плейсхолдером вместо цифр — то есть ровно то, ради чего строка писалась
                 log.LogWarning("cheap-runner: действие {Action} — {Reason}; повторяю один раз",
                     actionKey, ex.Message);
-                var answer = await claude.RunAsync(prompt, model, timeout: cloudTimeout, ct: ct,
+                var answer = await claude.RunDetailedAsync(prompt, model, timeout: cloudTimeout, ct: ct,
                     ownerId: ownerId, label: actionKey);
-                call?.End(string.IsNullOrWhiteSpace(answer)
+                call?.End(string.IsNullOrWhiteSpace(answer.Text)
                     ? EngineCallOutcome.Missed : EngineCallOutcome.Claude);
-                return answer;
+                return (answer.Text, answer.Usage);
             }
         }
         finally
@@ -276,27 +313,6 @@ public sealed class CheapTextRunner(
             // остаться в «кто сейчас на модели» призраком. Уже закрытый End — no-op.
             call?.End(EngineCallOutcome.Missed);
         }
-    }
-
-    // Вызов выбранной модели. null — шаг не удался (провайдер не настроен, ошибка CLI,
-    // таймаут или пустой ответ), вызывающий идёт дальше по цепочке. Отмену ct наверх НЕ
-    // проглатываем: это не сбой модели, а осознанный обрыв — фолбэчить по нему бессмысленно.
-    private async Task<string?> TryModelAsync(string actionKey, string model, string prompt,
-        string? ownerId, CancellationToken ct)
-    {
-        try
-        {
-            var text = await claude.RunAsync(prompt, model, timeout: CloudTimeoutFor(actionKey),
-                ct: ct, ownerId: ownerId, label: actionKey);
-            if (!string.IsNullOrWhiteSpace(text)) return text;
-            log.LogDebug("cheap-runner: действие {Action} — модель {Model} вернула пустой ответ", actionKey, model);
-        }
-        catch (Exception ex) when (!ct.IsCancellationRequested)
-        {
-            log.LogWarning(ex, "cheap-runner: действие {Action} — модель {Model} недоступна, иду дальше по цепочке",
-                actionKey, model);
-        }
-        return null;
     }
 
     // Прямой HTTP-адаптер (CloudCheapClient) на бесплатной модели агрегатора. maxTokens и
@@ -342,14 +358,27 @@ public sealed class CheapTextRunner(
         kind == RouteKind.Local
         || (kind == RouteKind.Model && LocalActionCatalog.Find(actionKey)?.DefaultLocal == true);
 
+    // Одно место, где названо исключение ночи (WN-4): цепочка БЕЗ облачной страховки на
+    // локальном маршруте (allowCloudFallback=false и Kind=Local, RunLocalOrChosen*) не имеет
+    // куда отступать, поэтому она и шаг локали не пропускает, и слот берёт с ожиданием.
+    // Обычные фоновые действия (теги, сводки, заголовки, чат-субъекты) к правилу «фон не лезет
+    // в занятый движок» относятся как раньше: их цепочка продолжается облачным шагом.
+    private static bool AwaitsSlot(bool allowCloudFallback, RouteKind kind) =>
+        !allowCloudFallback && kind == RouteKind.Local;
+
     // Идёт ли шаг локали ПРЯМО СЕЙЧАС: маршрут её допускает (LocalStepApplies), движок настроен
     // и на нём не идёт ход исполнителя. Последнее — правило «фон не лезет в занятый движок»
     // (LocalActionRouter.LocalBlockedByTurn): фоновый запрос кэшем не пользуется, а KV-бюджет
     // занимает и вытесняет префикс чата (живой прогон 2026-09-23). Действие не теряется —
     // оно идёт дальше по своей цепочке, к облачному шагу.
-    private bool LocalStepReady(string actionKey, RouteKind kind)
+    // Исключение — режим «без облака» (AwaitsSlot): там облачного шага нет, пропуск = потеря
+    // вызова, поэтому занятость не применяется — идём в движок (вариант А, 06.11), и слот
+    // берётся с ожиданием в общей очереди (WN-4): отказ по занятости был повтором ночи,
+    // а не её работой.
+    private bool LocalStepReady(string actionKey, RouteKind kind, bool allowCloudFallback)
     {
         if (!LocalStepApplies(actionKey, kind) || !ollama.Enabled) return false;
+        if (AwaitsSlot(allowCloudFallback, kind)) return true;
         if (!router.LocalBlockedByTurn) return true;
         log.LogDebug(
             "cheap-runner: действие {Action} — на локальном движке идёт ход, шаг локали пропускаю",
@@ -357,45 +386,73 @@ public sealed class CheapTextRunner(
         return false;
     }
 
-    private Task<string?> RunLocalAsync(string actionKey, string prompt, object? jsonFormat,
-        string? ownerId, CancellationToken ct) =>
-        RunOnClientAsync(ollama, actionKey, prompt, jsonFormat, ownerId, router.ProfileFor(actionKey), ct);
+    private Task<(string? Text, OneShotUsage? Usage)> RunLocalAsync(string actionKey, string prompt,
+        object? jsonFormat, string? ownerId, CancellationToken ct, bool awaitSlot) =>
+        RunOnClientAsync(ollama, actionKey, prompt, jsonFormat, ownerId, router.ProfileFor(actionKey),
+            ct, awaitSlot);
 
     // Шаг именованного движка: сначала проба готовности (движок под арбитром GPU бывает
     // выгружен штатно — отказ обязан быть мгновенным, а не таймаутом), затем вызов по профилю
     // места с контекстом не выше окна движка (NumCtx спецификации — потолок обрезки промпта).
-    private async Task<string?> RunEngineAsync(LocalEngine engine, string actionKey, string prompt,
-        object? jsonFormat, string? ownerId, CancellationToken ct, EngineCallHandle? call = null)
+    private async Task<(string? Text, OneShotUsage? Usage)> RunEngineAsync(LocalEngine engine,
+        string actionKey, string prompt, object? jsonFormat, string? ownerId, CancellationToken ct,
+        EngineCallHandle? call = null, bool awaitSlot = false)
     {
-        if (!engine.Enabled) return null;
+        if (!engine.Enabled) return (null, null);
         if (!await engine.IsReadyAsync(ct))
         {
             log.LogDebug("cheap-runner: действие {Action} — движок {Engine} не готов, иду дальше по цепочке",
                 actionKey, engine.Name);
-            return null;
+            return (null, null);
         }
         var spec = router.ProfileFor(actionKey);
         if (engine.Spec.NumCtx is { } cap && cap < spec.NumCtx) spec = spec with { NumCtx = cap };
         // Вызов вошёл в звено движка: проба готовности позади, запрос уходит сейчас
         // (в журнале — строка «кто сейчас на модели» со звеном, а не «ждёт в очереди»).
         call?.Step(EngineCallLink.Engine);
-        var text = await RunOnClientAsync(engine.Client, actionKey, prompt, jsonFormat, ownerId, spec, ct);
+        var (text, usage) = await RunOnClientAsync(engine.Client, actionKey, prompt, jsonFormat, ownerId,
+            spec, ct, awaitSlot);
         if (string.IsNullOrWhiteSpace(text))
             log.LogDebug("cheap-runner: действие {Action} — движок {Engine} не ответил, иду дальше по цепочке",
                 actionKey, engine.Name);
-        return text;
+        return (text, usage);
     }
 
-    private static Task<string?> RunOnClientAsync(ILocalLlmClient client, string actionKey, string prompt,
-        object? jsonFormat, string? ownerId, CheapProfileSpec spec, CancellationToken ct) =>
-        jsonFormat is null
-            ? client.GenerateTextAsync(
-                prompt, model: null, timeout: TimeSpan.FromMilliseconds(spec.TimeoutMs),
-                numPredict: spec.NumPredict, numCtx: spec.NumCtx, ownerId, label: actionKey, ct)
-            : client.ChatJsonAsync(
-                systemPrompt: "", userPrompt: prompt, jsonFormat: jsonFormat, ct,
-                model: client.TextModel, timeoutMs: spec.TimeoutMs,
-                numPredict: spec.NumPredict, numCtx: spec.NumCtx, ownerId, label: actionKey);
+    // Шаг одного клиента: тот же выбор транспорта, что раньше (свободная генерация без схемы,
+    // ChatJson со схемой), но detailed-варианты — чтобы usage того же ответа дошёл до
+    // цепочки. Локальные метрики переводятся в DTO шва: CostUsd 0 (бесплатно), кеша у
+    // локального вызова нет, Model — та, что реально отвечала (TextModel: GenerateText без
+    // model берёт его же, ChatJson вызывается с ним). Метрик не было — null: вызов успешен,
+    // потребитель прибавляет 0. Значение возвращается из этого вызова, в поле клиента или
+    // раннера не кладётся: параллельные вызовы (ночь + ступень 2 + changelog) перемешались бы.
+    // awaitSlot — режим слота (см. AwaitsSlot): обычный вызов или вызов, ждущий свободный слот
+    // в общем счётчике. Выбор транспорта (свободная генерация / ChatJson со схемой) от этого
+    // не зависит: у движка своей очереди нет, ждёт обёртка.
+    private static async Task<(string? Text, OneShotUsage? Usage)> RunOnClientAsync(
+        ILocalLlmClient client, string actionKey, string prompt, object? jsonFormat, string? ownerId,
+        CheapProfileSpec spec, CancellationToken ct, bool awaitSlot = false)
+    {
+        var (text, usage) = jsonFormat is null
+            ? await (awaitSlot
+                ? client.GenerateTextAwaitingSlotAsync(
+                    prompt, model: null, timeout: TimeSpan.FromMilliseconds(spec.TimeoutMs),
+                    numPredict: spec.NumPredict, numCtx: spec.NumCtx, ownerId, label: actionKey, ct)
+                : client.GenerateTextDetailedAsync(
+                    prompt, model: null, timeout: TimeSpan.FromMilliseconds(spec.TimeoutMs),
+                    numPredict: spec.NumPredict, numCtx: spec.NumCtx, ownerId, label: actionKey, ct))
+            : await (awaitSlot
+                ? client.ChatJsonAwaitingSlotAsync(
+                    systemPrompt: "", userPrompt: prompt, jsonFormat: jsonFormat, ct,
+                    model: client.TextModel, timeoutMs: spec.TimeoutMs,
+                    numPredict: spec.NumPredict, numCtx: spec.NumCtx, ownerId, label: actionKey)
+                : client.ChatJsonDetailedAsync(
+                    systemPrompt: "", userPrompt: prompt, jsonFormat: jsonFormat, ct,
+                    model: client.TextModel, timeoutMs: spec.TimeoutMs,
+                    numPredict: spec.NumPredict, numCtx: spec.NumCtx, ownerId, label: actionKey));
+        return usage is null
+            ? (text, null)
+            : (text, new OneShotUsage(usage.InputTokens, 0, 0, usage.OutputTokens, CostUsd: 0, client.TextModel));
+    }
 
     // Та же цепочка «выбранное → локаль → claude», но с расходом. Текст локали/адаптера
     // оборачивается в OneShotResult без usage (бесплатно — стоимости нет); у claude/провайдера
@@ -442,7 +499,7 @@ public sealed class CheapTextRunner(
         }
 
         // Шаг 2 — локальная модель (usage нет). Для «сильных» действий локаль-страховка пропускается — см. RunAsync.
-        // Именованный движок со своей direct-страховкой — как в RunChainAsync, включая
+        // Именованный движок со своей direct-страховкой — как в RunChainCoreAsync, включая
         // журналирование в EngineCallLedger: цепочек две, и учёт обязан быть в обеих
         // (риск из разреза §3: локальная модель дописывает вызов только в одну).
         EngineCallHandle? call = null;
@@ -451,10 +508,12 @@ public sealed class CheapTextRunner(
             if (router.EngineOf(route) is { } engine)
             {
                 call = ledger?.Begin(engine.Name, actionKey);
-                var viaEngine = await RunEngineAsync(engine, actionKey, prompt, jsonFormat, ownerId, ct, call);
+                var viaEngine = (await RunEngineAsync(engine, actionKey, prompt, jsonFormat, ownerId, ct, call)).Text;
                 if (!string.IsNullOrWhiteSpace(viaEngine))
                 {
                     call?.End(EngineCallOutcome.Engine);
+                    // usage локали здесь не берётся намеренно: контракт RunDetailedAsync для
+                    // локального шага — usage null (чangelog и прочие места, WC-4c).
                     return new OneShotResult(viaEngine, null, 0);
                 }
                 if (engine.Spec.FallbackRoute is { } insurance)
@@ -469,9 +528,15 @@ public sealed class CheapTextRunner(
                 }
                 call?.Step(EngineCallLink.Claude);
             }
-            else if (LocalStepReady(actionKey, route.Kind))
+            // Цепочка RunDetailedAsync всегда заканчивается на claude-шаге — режим «без облака»
+            // сюда не доходит, занятость пропускает шаг как раньше.
+            else if (LocalStepReady(actionKey, route.Kind, allowCloudFallback: true))
             {
-                var local = await RunLocalAsync(actionKey, prompt, jsonFormat, ownerId, ct);
+                // awaitSlot=false: здесь есть облачный шаг, и отказ по занятости — отступ, а не
+                // потеря работы (см. AwaitsSlot).
+                var local = (await RunLocalAsync(actionKey, prompt, jsonFormat, ownerId, ct,
+                    awaitSlot: false)).Text;
+                // usage локали здесь не берётся — тот же контракт, что у шага движка выше.
                 if (!string.IsNullOrWhiteSpace(local)) return new OneShotResult(local, null, 0);
             }
 
@@ -500,13 +565,15 @@ public sealed class CheapTextRunner(
         }
         finally
         {
-            // Как в RunChainAsync: любой выход без явного End — закрытие «без ответа»,
+            // Как в RunChainCoreAsync: любой выход без явного End — закрытие «без ответа»,
             // открытый вызов не остаётся в «кто сейчас на модели» призраком.
             call?.End(EngineCallOutcome.Missed);
         }
     }
 
     // Выбранная провайдерская модель через claude CLI, с расходом. null — шаг не удался.
+    // Зовётся обеими цепочками (RunChainCoreAsync и RunDetailedAsync), поэтому лог без
+    // пометки «detailed»: она приписывала бы вызову цепочку, которой он не делал.
     private async Task<OneShotResult?> TryDetailedModelAsync(string actionKey, string model, string prompt,
         string? ownerId, TimeSpan timeout, CancellationToken ct)
     {
@@ -514,11 +581,12 @@ public sealed class CheapTextRunner(
         {
             var run = await claude.RunDetailedAsync(prompt, model, timeout, ct, ownerId, label: actionKey);
             if (!string.IsNullOrWhiteSpace(run.Text)) return run;
-            log.LogDebug("cheap-runner (detailed): {Action} — модель {Model} вернула пустой ответ", actionKey, model);
+            log.LogDebug("cheap-runner: действие {Action} — модель {Model} вернула пустой ответ", actionKey, model);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
-            log.LogWarning(ex, "cheap-runner (detailed): {Action} — модель {Model} недоступна", actionKey, model);
+            log.LogWarning(ex, "cheap-runner: действие {Action} — модель {Model} недоступна, иду дальше по цепочке",
+                actionKey, model);
         }
         return null;
     }

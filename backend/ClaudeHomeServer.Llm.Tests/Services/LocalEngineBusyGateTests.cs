@@ -187,18 +187,20 @@ public class LocalEngineBusyGateTests
         Assert.Equal("LOCAL-TEXT", text);
     }
 
-    // Действие без облачного шага: во время хода — null (вызывающий деградирует), а не
-    // платный фолбэк.
+    // Действие без облачного шага (RunLocalOrChosen*): во время хода идёт в движок
+    // (вариант А, 06.11): на локальном маршруте облачного шага нет, и пропуск шага локали
+    // был потерей вызова. Занятость на этом пути держит очередь слотов самого движка,
+    // а не цепочка.
     [Fact]
-    public async Task RunLocalOnly_ВоВремяХода_ОтдаётNull()
+    public async Task RunLocalOnly_ВоВремяХода_ИдётВДвижок()
     {
         var (runner, local, busy) = Stand();
         using var turn = busy.Enter();
 
         var text = await runner.RunLocalOrChosenAsync(LocalActionCatalog.NotesTags, "теги");
 
-        Assert.Null(text);
-        Assert.Empty(local.Calls);
+        Assert.Single(local.Calls);
+        Assert.Equal("LOCAL-TEXT", text);
     }
 
     // «Не ломать владельцев без локали»: движок выключен — действие как и раньше идёт

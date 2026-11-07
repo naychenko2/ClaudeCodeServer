@@ -11,15 +11,11 @@ import {
 } from './useLocalModelStats';
 
 describe('configuredSource: откуда сторож берёт configured', () => {
-  it('admin + флаг — /stats', () => {
-    expect(configuredSource(true, true)).toBe('stats');
+  it('admin — /stats', () => {
+    expect(configuredSource(true)).toBe('stats');
   });
-  it('admin без флага — нет запросов (null)', () => {
-    expect(configuredSource(false, true)).toBeNull();
-  });
-  it('не admin — /stats/media (флаг не гейтит)', () => {
-    expect(configuredSource(true, false)).toBe('media');
-    expect(configuredSource(false, false)).toBe('media');
+  it('не admin — /stats/media', () => {
+    expect(configuredSource(false)).toBe('media');
   });
 });
 
@@ -44,7 +40,7 @@ describe('startConfiguredPolling: 60-с опрос configured вне панел�
   // Главный сценарий ревью: стартовое null, панель ещё не смонтирована;
   // после ответа configured:true значок становится доступен
   it('configured: null → ответ true → панель/значок видны', async () => {
-    const visible = () => isLocalModelPanelVisible({ flag: true, isAdmin: true, configured: getLocalModelConfigured() });
+    const visible = () => isLocalModelPanelVisible(getLocalModelConfigured());
     expect(visible()).toBe(false);
     const stop = start(async () => ({ ...mockLocalModelStats(), configured: true }));
     await vi.advanceTimersByTimeAsync(0);
@@ -71,7 +67,7 @@ describe('startConfiguredPolling: 60-с опрос configured вне панел�
     const stop = start(async () => { throw err; });
     await vi.advanceTimersByTimeAsync(0);
     expect(getLocalModelConfigured()).toBeNull();
-    expect(isLocalModelPanelVisible({ flag: true, isAdmin: true, configured: getLocalModelConfigured() })).toBe(false);
+    expect(isLocalModelPanelVisible(getLocalModelConfigured())).toBe(false);
     stop();
   });
 
@@ -79,7 +75,7 @@ describe('startConfiguredPolling: 60-с опрос configured вне панел�
     const stop = start(async () => { throw new Error('нет сети'); });
     await vi.advanceTimersByTimeAsync(0);
     expect(getLocalModelConfigured()).toBeNull();
-    expect(isLocalModelPanelVisible({ flag: true, isAdmin: true, configured: getLocalModelConfigured() })).toBe(false);
+    expect(isLocalModelPanelVisible(getLocalModelConfigured())).toBe(false);
     stop();
   });
 });

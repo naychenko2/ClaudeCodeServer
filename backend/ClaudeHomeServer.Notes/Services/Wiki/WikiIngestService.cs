@@ -39,7 +39,16 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //    исхода отдельно (ревью S6b-3, M2).
 // 7. Исход «нечего добавить» — штатный (ADR-035 §12б): пакет не создаётся, исход
 //    nothing_new. Пустой план (операций нет) — тот же исход: модель сказала, что писать
-//    нечего, только маркер не поставила.
+//    нечего, только маркер не поставила. Дыра WC-2 (WN-3): в пустом разделе (нет ни
+//    одной страницы знаний) такой отказ — не решение «уже написано», а невидение цели:
+//    модель не видит ни одной страницы и не знает, что для этого знания — create.
+//    Тогда — ровно один повторный вызов прохода B с прямой причиной («в разделе нет
+//    страниц знаний, для этого знания — create»); второй отказ МОДЕЛИ — прежний
+//    nothing_new, цикла нет; упавший или пустой повтор — rejected с причиной сбоя
+//    (тот же инвариант WN-4: сбой вызова не маскируется решением модели, иначе окно
+//    чата уходит как «разобрано»). Ремонт по причине п.6 (отказ плана кодом) этого не
+//    ловит: там план
+//    есть и отвергнут, здесь плана нет и валидатор не звался.
 // 8. Пакет — в WikiPackageStore (usage разбора — в операции пакета: токены того разбора,
 //    который их породил). Содержание операции — подтверждённая валидатором цитата прохода A:
 //    применение рендерит строку утверждения и сноску по op.Text и требует его дословности
@@ -94,8 +103,13 @@ public sealed class WikiIngestService
         string? Target);
 
     /// <summary>Исход заявки: Outcome + причина (для отказа и штатного nothing_new с
-    /// причиной модели) + id созданного пакета (для applied и awaiting_human).</summary>
-    public readonly record struct IngestResult(string Outcome, string? Reason, string? PackageId);
+    /// причиной модели) + id созданного пакета (для applied и awaiting_human) + входные
+    /// токены этого разбора (WC-4a): 0 — пока ни один вызов модели не ответил (отказ входа,
+    /// карточки, раздела; отказ вызова, после которого ничего не отвечало); после первого
+    /// ответившего вызова — сумма всех состоявшихся вызовов прогона независимо от исхода:
+    /// отказанный план расход не отменяет (он понесён).</summary>
+    public readonly record struct IngestResult(string Outcome, string? Reason, string? PackageId,
+        long InputTokens = 0);
 
     private readonly ICheapTextRunner _llm;
     private readonly ISphereDirectory _spheres;
@@ -266,20 +280,25 @@ public sealed class WikiIngestService
             var sectionIndex = BuildSectionIndex(root, sectionKey, upChain);
             var usage = new UsageAccumulator();
 
+            // Отказ ПОСЛЕ ответившего вызова модели: понесённый расход остаётся в исходе
+            // (WC-4a) — он был, даже если разбор его не окупил. Отказ до первого вызова —
+            // прежний Rejected: там расхода нет (usage пуст и сам, но форма называет смысл).
+            IngestResult RejectedUsed(string reason) => new(OutcomeRejected, reason, null, usage.InputTokens);
+
             // 3. Проход A: утверждения с дословными цитатами.
             var promptA = WikiKeeperPrompts.Claims(
                 request.SourceText, sectionIndex, WikiKeeperPrompts.NewNonce(),
                 WikiPage.MinQuoteLength, WikiPage.MaxQuoteLength);
             var answerA = await CallModelAsync(promptA, ownerId, "проход A", usage, ct, actionKey);
             if (answerA.Reason is not null)
-                return Rejected(answerA.Reason);
+                return RejectedUsed(answerA.Reason);
             if (TryNothingToAdd(answerA.Text!, out var modelReasonA))
-                return new IngestResult(OutcomeNothingNew, modelReasonA, null);
+                return new IngestResult(OutcomeNothingNew, modelReasonA, null, usage.InputTokens);
             var claims = ParseClaims(answerA.Text!, out var parseErrorA);
             if (claims is null)
-                return Rejected(parseErrorA ?? "проход A: ответ модели не разобран");
+                return RejectedUsed(parseErrorA ?? "проход A: ответ модели не разобран");
             if (claims.Count == 0)
-                return new IngestResult(OutcomeNothingNew, "проход A не назвал утверждений", null);
+                return new IngestResult(OutcomeNothingNew, "проход A не назвал утверждений", null, usage.InputTokens);
 
             // 4. Кандидаты-страницы: чей заголовок или алиас встречается в тексте утверждений
             //    (нормализация — та же, что у индекса ByName), не больше MaxCandidatePages.
@@ -296,14 +315,61 @@ public sealed class WikiIngestService
                 WikiKeeperPrompts.NewNonce(), existingPages);
             var answerB = await CallModelAsync(promptB, ownerId, "проход B", usage, ct, actionKey);
             if (answerB.Reason is not null)
-                return Rejected(answerB.Reason);
+                return RejectedUsed(answerB.Reason);
             var plan = ParsePlan(answerB.Text!, out var nothingB, out var modelReasonB, out var parseErrorB);
-            if (nothingB)
-                return new IngestResult(OutcomeNothingNew, modelReasonB, null);
-            if (plan is null)
-                return Rejected(parseErrorB ?? "проход B: ответ модели не разобран");
-            if (plan.Operations is { Count: 0 })
-                return new IngestResult(OutcomeNothingNew, "план без операций: писать нечего", null);
+            string? nothingReasonB = nothingB ? modelReasonB : "план без операций: писать нечего";
+
+            // Дыра WC-2 (WN-3): отказ «нечего добавить» / пустой план в разделе без страниц
+            // знаний — не решение «уже написано»: модель не видит ни одной цели и не знает,
+            // что для этого знания — create. Ровно один повторный вызов прохода B с прямой
+            // причиной; второй отказ модели — прежний nothing_new, цикла нет; упавший повтор —
+            // rejected с причиной сбоя (см. ниже). Условия держат
+            // истинность причины: «в разделе нет страниц знаний» — правда ровно когда в
+            // разделе назначения нет ни одной страницы знаний (тот же предикат, что у
+            // PickCandidatePages: не карточка, разбирается), а пустой раздел с кандидатами
+            // по цепочке вверх — отказ без повтора: там цель у модели была. Буквальное
+            // «PickCandidatePages пуст» не взяли: оно красит штатный nothing_new непустого
+            // раздела (страница есть, но заголовок не совпал с текстом утверждений) и врёт
+            // модели про пустой раздел (ревью этого шага).
+            // Folder() уже со слэшем на конце (WikiSections.cs:63-65).
+            var targetFolder = WikiSections.Folder(sectionKey)!;
+            var sectionHasKnowledgePages = sectionPages.Any(d =>
+                d.Path.StartsWith(targetFolder, StringComparison.Ordinal) &&
+                WikiPage.Parse(d.Content).Model is { } pm && pm.Frontmatter.Type != WikiFrontmatter.TypeSource);
+            if ((nothingB || plan is { Operations: { Count: 0 } }) && candidates.Count == 0
+                && !sectionHasKnowledgePages)
+            {
+                var emptySectionPrompt =
+                    "THE TARGET SECTION HAS NO KNOWLEDGE PAGES (в разделе нет страниц знаний). "
+                    + "For these claims the operation is create: a new page in the target section. "
+                    + "Produce a plan with a create operation, or answer the no-op outcome again.\n\n"
+                    + promptB;
+                var answerC = await CallModelAsync(emptySectionPrompt, ownerId, "пустой раздел", usage, ct, actionKey);
+                if (answerC.Reason is not null)
+                    // Сбой самого повторного вызова — не отказ модели: она могла не зваться ни
+                    // разу (тот же инвариант WN-4, catch в CallModelAsync). Причина сбоя
+                    // доезжает дословно, иначе «движок занят» читается вызывающим как решение
+                    // «нечего добавить»: ночный путь трактует это как nothing_new, двигает
+                    // lastOkTo и окно чата теряется при completed ночи (ревью WN-3, major).
+                    return RejectedUsed(answerC.Reason);
+                var planC = ParsePlan(answerC.Text!, out var nothingC, out var modelReasonC, out _);
+                if (nothingC)
+                    // Второй отказ молчит без своей причины — остаётся первая: модель
+                    // сказала это о тех же утверждениях, повтор её не опроверг.
+                    return new IngestResult(OutcomeNothingNew, modelReasonC ?? nothingReasonB, null, usage.InputTokens);
+                if (planC is not { Operations: { Count: > 0 } })
+                    return new IngestResult(OutcomeNothingNew, nothingReasonB, null, usage.InputTokens);
+                // Повтор дал план — он судится общим путём ниже (тот же валидатор и, при
+                // отказе кода, обычный ремонт п.6: это ремонт плана, а не повтор nothing_new
+                // — цикл дыры WC-2 всё равно один).
+                plan = planC;
+            }
+            else if (nothingB)
+                return new IngestResult(OutcomeNothingNew, modelReasonB, null, usage.InputTokens);
+            else if (plan is null)
+                return RejectedUsed(parseErrorB ?? "проход B: ответ модели не разобран");
+            else if (plan.Operations is { Count: 0 })
+                return new IngestResult(OutcomeNothingNew, "план без операций: писать нечего", null, usage.InputTokens);
 
             // 6. Проверки кода. Решение — по Rejected: это вина плана. Violations — состояние
             // раздела (уже лежит на страницах): план от него не зависит, модель его не чинит —
@@ -340,15 +406,17 @@ public sealed class WikiIngestService
                     + promptB;
                 var answerR = await CallModelAsync(repairPrompt, ownerId, "ремонт плана", usage, ct, actionKey);
                 if (answerR.Reason is not null)
-                    return WithSectionIssues(Rejected(answerR.Reason), verdict);
+                    return WithSectionIssues(RejectedUsed(answerR.Reason), verdict);
                 if (TryNothingToAdd(answerR.Text!, out var modelReasonR))
-                    return WithSectionIssues(new IngestResult(OutcomeNothingNew, modelReasonR, null), verdict);
+                    return WithSectionIssues(
+                        new IngestResult(OutcomeNothingNew, modelReasonR, null, usage.InputTokens), verdict);
                 var planR = ParsePlan(answerR.Text!, out _, out _, out var parseErrorR);
                 if (planR is null)
-                    return WithSectionIssues(Rejected("ремонт не дал плана: " + parseErrorR), verdict);
+                    return WithSectionIssues(RejectedUsed("ремонт не дал плана: " + parseErrorR), verdict);
                 if (planR.Operations is { Count: 0 })
                     return WithSectionIssues(
-                        new IngestResult(OutcomeNothingNew, "после ремонта план без операций", null), verdict);
+                        new IngestResult(OutcomeNothingNew, "после ремонта план без операций", null,
+                            usage.InputTokens), verdict);
                 // Пакет после ремонта — весь в «Входящие»: признак низкого качества прохода
                 // (WikiApplyPolicy.PackageAfterModelRepair), человек решает, код не применяет.
                 verdict = WikiPlanValidator.Validate(
@@ -356,7 +424,7 @@ public sealed class WikiIngestService
                     policy with { PackageAfterModelRepair = true });
                 if (verdict.Rejected.Count > 0)
                     return WithSectionIssues(
-                        Rejected("план после одной попытки ремонта снова отклонён кодом: "
+                        RejectedUsed("план после одной попытки ремонта снова отклонён кодом: "
                             + FirstReason(verdict)), verdict);
             }
 
@@ -366,7 +434,8 @@ public sealed class WikiIngestService
                 // человек их не спрашивает (мера 3); исход — тот же штатный.
                 var waiting = verdict.Waiting.FirstOrDefault();
                 return WithSectionIssues(new IngestResult(OutcomeNothingNew,
-                    waiting is null ? "ни одна операция не прошла проверки" : waiting.Reason, null), verdict);
+                    waiting is null ? "ни одна операция не прошла проверки" : waiting.Reason, null,
+                    usage.InputTokens), verdict);
             }
 
             // 7. Пакет: usage разбора — в каждую его операцию (токены того разбора,
@@ -393,23 +462,24 @@ public sealed class WikiIngestService
             };
             var created = WikiPackageStore.Create(root, package);
             if (!created.Ok || created.Package is null)
-                return Rejected($"магазин пакетов не принял пакет: {created.Reason ?? created.Code}");
+                return RejectedUsed($"магазин пакетов не принял пакет: {created.Reason ?? created.Code}");
 
             var proposed = WikiPackageStore.Transition(root, created.Package.Id, WikiPackage.StatusProposed);
             if (!proposed.Ok)
-                return Rejected($"вердикт проверок не записан: {proposed.Reason ?? proposed.Code}");
+                return RejectedUsed($"вердикт проверок не записан: {proposed.Reason ?? proposed.Code}");
 
             if (created.Package.Operations.Any(o => o.Decision != WikiPackage.DecisionAuto))
                 return WithSectionIssues(new IngestResult(OutcomeAwaitingHuman,
-                    "в пакете есть спорные операции: их решает человек («Входящие»)", created.Package.Id), verdict);
+                    "в пакете есть спорные операции: их решает человек («Входящие»)", created.Package.Id,
+                    usage.InputTokens), verdict);
 
             var accepted = WikiPackageStore.Transition(root, created.Package.Id, WikiPackage.StatusAccepted);
             if (!accepted.Ok)
-                return Rejected($"пакет не переведён в «accepted»: {accepted.Reason ?? accepted.Code}");
+                return RejectedUsed($"пакет не переведён в «accepted»: {accepted.Reason ?? accepted.Code}");
 
             return WithSectionIssues(
                 await ApplyAutoAsync(ownerId, root, created.Package,
-                    new WikiApplyService.ApplyContext(cardTitle, request.SourceText)), verdict);
+                    new WikiApplyService.ApplyContext(cardTitle, request.SourceText), usage.InputTokens), verdict);
         }
         finally
         {
@@ -427,9 +497,11 @@ public sealed class WikiIngestService
     /// (сбой до заявки пакета не трогает). internal — граница для теста: файловый сбой после
     /// заявки детерминированно в живой поток не поставить, поэтому обхват проверяется здесь
     /// формой отказа, а закрытие «applying» — в CrashedApply на диске с нужным статусом
-    /// (тот же приём, что у ревью S4g, M3; W3-1).</summary>
+    /// (тот же приём, что у ревью S4g, M3; W3-1). inputTokens (WC-4a) — входные токены
+    /// разбора, который породил этот пакет: применение своего расхода не имеет, и в исходе
+    /// лежит расход того прогона, который его создал (0 — вне прогона, напрямую).</summary>
     internal async Task<IngestResult> ApplyAutoAsync(string ownerId, string root, WikiPackage package,
-        WikiApplyService.ApplyContext context)
+        WikiApplyService.ApplyContext context, long inputTokens = 0)
     {
         WikiApplyService.ApplyResult applied;
         try
@@ -438,11 +510,11 @@ public sealed class WikiIngestService
         }
         catch (Exception ex)
         {
-            return Rejected(CrashedApply(root, package.Id, ex));
+            return Rejected(CrashedApply(root, package.Id, ex), inputTokens);
         }
         if (!applied.Applied)
-            return Rejected($"применение пакета не удалось: {applied.Reason ?? applied.Code}");
-        return new IngestResult(OutcomeApplied, null, package.Id);
+            return Rejected($"применение пакета не удалось: {applied.Reason ?? applied.Code}", inputTokens);
+        return new IngestResult(OutcomeApplied, null, package.Id, inputTokens);
     }
 
     /// <summary>Сбой применения вне контракта — та же форма, что у CrashedApply пути решения
@@ -556,10 +628,11 @@ public sealed class WikiIngestService
     private async Task<ModelAnswer> CallModelAsync(string prompt, string ownerId, string passName,
         UsageAccumulator usage, CancellationToken ct, string? actionKey)
     {
-        // Решение Андрея 02.11: ночной разбор не уходит в облако. Ночь идёт через
-        // RunLocalOrChosenAsync (цепочка без финального claude-шага при локальном маршруте):
+        // Решение Андрея 02.11: ночной разбор не уходит в облако. Ночь идёт через цепочку без
+        // финального claude-шага при локальном маршруте (RunLocalOrChosenDetailedAsync):
         // падение/недоступность локали посреди вызова — отказ вызова, а не уход в Tier/облако.
-        // Расход по этим вызовам не учитывается (usage шва нет) — решение допускает потерю.
+        // Расход этих вызовов берётся из usage того же ответа движка (WC-4c): метрик не будет
+        // только если движок их не отдал — тогда плюс 0, как и раньше.
         // Кнопка «Разобрать» и агент wiki_ingest (actionKey не задан) — человеческие места,
         // облако там допустимо: прежний путь с учётом расхода.
         var noCloud = actionKey == LocalActionCatalog.WikiNightly;
@@ -569,8 +642,10 @@ public sealed class WikiIngestService
         {
             if (noCloud)
             {
-                text = await _llm.RunLocalOrChosenAsync(
+                var viaLocal = await _llm.RunLocalOrChosenDetailedAsync(
                     LocalActionCatalog.WikiNightly, prompt, ownerId, jsonFormat: "json", ct: ct);
+                text = viaLocal?.Text;
+                used = viaLocal?.Usage;
             }
             else
             {
@@ -580,6 +655,21 @@ public sealed class WikiIngestService
                 text = result.Text;
                 used = result.Usage;
             }
+        }
+        catch (LocalEngineSlotRefusalException e)
+        {
+            // Движок занят, слота не дождались: модель не звалась ни разу. Это НЕ «модель дала
+            // пустой ответ» — та формулировка прятала сбой занятости за обычным исходом модели
+            // (ночь 06.11: 108 отказов, ни одного вызова). Причина доезжает до журнала ночи
+            // дословно — в rejected и firstRejectReason (WN-4).
+            return new ModelAnswer(null, $"{passName}: {e.Message}");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Ожидание слота прервано остановкой ночи / закрытием окна / остановкой службы:
+            // это не отказ одного чата, это конец прохода — он уходит наружу отменой, как и
+            // остальные точки прохода (тот же приём, что у цикла WikiNightlyService).
+            throw;
         }
         catch (Exception e)
         {
@@ -787,5 +877,6 @@ public sealed class WikiIngestService
 
     private static int ToIntOrMax(long value) => value > int.MaxValue ? int.MaxValue : (int)value;
 
-    private static IngestResult Rejected(string reason) => new(OutcomeRejected, reason, null);
+    private static IngestResult Rejected(string reason, long inputTokens = 0) =>
+        new(OutcomeRejected, reason, null, inputTokens);
 }

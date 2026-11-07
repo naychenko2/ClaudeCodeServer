@@ -173,6 +173,32 @@ public class TaskExecutionServiceJoinTests : IDisposable
         failure.Error.Should().ContainAny("уже запускается", "уже работает сессия");
     }
 
+    // ─── Актор хода исполнителя (S2a-1, критерий c1) ─────
+
+    [Fact]
+    public async Task ExecuteAsync_ЗапущенВладельцем_АкторомХодаИсполнителяСтановитсяВладелец()
+    {
+        var user = _userStore.Add("actor-owner", "password123", "user");
+        var task = _tasks.Create(null, user.Id, new CreateTaskRequest("Актор исполнителя"));
+
+        await _sut.ExecuteAsync(task, auto: false, null, actorUserId: user.Id);
+
+        var sessionId = _tasks.GetById(task.Id)!.LinkedSessionId!;
+        _sessions.GetTurnActor(sessionId, user.Id).Should().Be(user.Id);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_АвтозапускБезИнициатора_АкторНеизвестен()
+    {
+        var user = _userStore.Add("actor-auto", "password123", "user");
+        var task = _tasks.Create(null, user.Id, new CreateTaskRequest("Автозапуск"));
+
+        await _sut.ExecuteAsync(task, auto: true);
+
+        var sessionId = _tasks.GetById(task.Id)!.LinkedSessionId!;
+        _sessions.GetTurnActor(sessionId, user.Id).Should().BeNull("инициатор неизвестен — fail-closed");
+    }
+
     // ─── Запустивший записывается только после принятого запуска ─────
 
     [Fact]
@@ -771,6 +797,27 @@ public class TaskExecutionServiceJoinTests : IDisposable
     }
 
     // ─── Слот ревью: аренда освобождается на каждом пути выхода ─────
+
+    // ─── Дерево задачи не подключилось: абзац в постановке, а не молчание ─────
+
+    [Fact]
+    public void ДеревоНеПодключилось_НоЧислитсяВСписке_АбзацПроTree()
+    {
+        var text = TaskExecutionService.BuildDetachedTreeSection("/srv/wt/task-1", listed: true);
+
+        text.Should().Contain("Дерево задачи `/srv/wt/task-1` не подключилось, чат стоит в корне проекта")
+            .And.Contain("Свои правки делай в `/srv/wt/task-1`")
+            .And.Contain("tree=`/srv/wt/task-1`");
+    }
+
+    [Fact]
+    public void ДеревоНеНайдено_АбзацБезПодсказкиTreeНаНего()
+    {
+        var text = TaskExecutionService.BuildDetachedTreeSection("/srv/wt/gone", listed: false);
+
+        text.Should().Contain("не найдено").And.Contain("git worktree list");
+        text.Should().NotContain("tree=`/srv/wt/gone`");
+    }
 
     private static string BuildSection(int dirty) => TaskExecutionService.BuildReviewTreeSection(
         new ReviewTreeLease("/slot", "abc1234", Enumerable.Range(1, dirty).Select(i => $"f{i}.cs").ToList()));

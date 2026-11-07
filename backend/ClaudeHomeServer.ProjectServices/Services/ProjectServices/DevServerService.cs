@@ -721,7 +721,7 @@ public sealed class DevServerService : IDisposable
         {
             var project = _projects.GetById(projectId);
             if (project is null || string.IsNullOrEmpty(project.OwnerId)) return;
-            await _broadcaster.ToOwner(project.OwnerId,
+            await _broadcaster.ToProject(projectId,
                 new PreviewStatusMessage(status, port, error, serviceId));
         }
         catch (Exception ex)

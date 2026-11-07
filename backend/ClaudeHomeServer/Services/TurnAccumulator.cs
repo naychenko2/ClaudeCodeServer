@@ -73,14 +73,16 @@ internal class TurnAccumulator
         lock (_lock) _personaId = personaId;
     }
 
+    // senderUserId (S2a-6a) — человек-автор сообщения: пишется в StoredUserMessage как есть,
+    // что донёс вызывающий (по образцу senderPersonaId); без него — null, поле в JSON не встаёт.
     public void OnUserMessage(string text, IReadOnlyList<string> attachedPaths, bool viaAgent = false,
         string? senderPersonaId = null, bool systemDirective = false, bool auto = false,
-        string? senderOrigin = null, string? staffNote = null)
+        string? senderOrigin = null, string? staffNote = null, string? senderUserId = null)
     {
         lock (_lock)
             _currentTurn.Add(new StoredUserMessage(text, attachedPaths.Count > 0 ? [.. attachedPaths] : null,
                 viaAgent ? true : null, senderPersonaId, systemDirective ? true : null, auto ? true : null,
-                senderOrigin, staffNote: staffNote, timestamp: NowMs()));
+                senderOrigin, staffNote: staffNote, timestamp: NowMs(), senderUserId: senderUserId));
     }
 
     // Снимок промпта хода записан — привязываем его к сообщению, которым ход начался
@@ -685,6 +687,26 @@ internal class TurnAccumulator
             FlushBuffers();
             _currentTurn.Add(message);
         }
+    }
+
+    // Переписать пути вложений в сообщениях пользователя по карте «старый → новый» (снятие
+    // приватности переносит файлы, записанные пути должны за ними поехать). Правит элементы
+    // массива на месте — сами сообщения init-only. true — что-то изменилось.
+    public bool RewriteAttachedPaths(IReadOnlyDictionary<string, string> map)
+    {
+        lock (_lock) return RewriteAttachedPaths(_history.Concat(_currentTurn).Concat(_outOfTurn), map);
+    }
+
+    internal static bool RewriteAttachedPaths(IEnumerable<StoredMessage> messages, IReadOnlyDictionary<string, string> map)
+    {
+        var changed = false;
+        foreach (var m in messages)
+        {
+            if (m is not StoredUserMessage { AttachedPaths: { } paths }) continue;
+            for (var i = 0; i < paths.Length; i++)
+                if (map.TryGetValue(paths[i], out var to)) { paths[i] = to; changed = true; }
+        }
+        return changed;
     }
 
     // Снапшот: новый список; элементы разделяются (StoredToolUseMessage и карточки

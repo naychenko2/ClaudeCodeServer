@@ -52,7 +52,7 @@ vi.mock('../../../../lib/offline', async (orig) => ({
 }));
 
 // Флаги управляются тестом: по умолчанию выключены — прежние тесты видят прежний вид;
-// блок F3a включает notes-wiki-unified и llm-wiki
+// блок F3a включает и llm-wiki
 const flags = vi.hoisted(() => ({ on: new Set<string>() }));
 vi.mock('../../../../lib/featureFlags', async (orig) => ({
   ...await orig<typeof import('../../../../lib/featureFlags')>(),
@@ -500,7 +500,7 @@ const authored = (over: Partial<WikiPageAuthoredDto> = {}): WikiPageAuthoredDto 
 
 const cardText = (name: string, ref: string) => `---\ntype: source\nref: ${ref}\n---\n\n# ${name}\n`;
 
-function unifiedOn() { flags.on.add('notes-wiki-unified'); flags.on.add('llm-wiki'); }
+function unifiedOn() { flags.on.add('llm-wiki'); }
 const plates = (c: Cont) => allNodes(c).filter(n => n.getAttribute('data-testid') === 'wiki-footnote');
 const popover = (c: Cont) => findNodeByAttr(c, 'data-testid', 'wiki-footnote-popover');
 function press(node: AnyNode | null, what: string) {
@@ -992,13 +992,17 @@ updated: 2026-11-02
   });
 });
 
-// ─── Плашка «только чтение» и правка (F3a-qa, дефект QA a16c6167) ───
+// ─── Плашка «только чтение» и правка (F3a-qa, дефект QA a16c6167; TL-6 — без флагов) ───
 // Плашка противоречит кнопке «Править»: при доступной правке её нет; она остаётся без
 // флагов (прежние тесты выше) и там, где править нельзя: хроника — свой текст, локальный
 // раздел и сфера — «нельзя править здесь» с причиной отказа (тексты — в wikiLabels),
 // сирота — прежний текст (он верен).
-// Мутация этого прогона: «показывать плашку всегда» (снять условие !canEdit в
-// WikiPageView) → «с обоими флагами и доступной правкой» краснеет.
+// TL-6: причина — устройство раздела, а не флаг: в локальном разделе / разделе сферы
+// плашка не приписывает ведение Хранителю и без флагов (та же формулировка словаря).
+// Мутации этого прогона: «показывать плашку всегда» (снять условие !canEdit в
+// WikiPageView) → «с обоими флагами и доступной правкой» краснеет; «вернуть привязку
+// к флагам» (unified && перед section.local || section.sphereReserved) →
+// «локальный раздел без флага» краснеет.
 
 const LOCAL_SECTION = { ...SECTION, local: true };
 const SPHERE_SECTION = { ...SECTION, sphereReserved: true };
@@ -1054,6 +1058,34 @@ describe('Плашка «только чтение» и правка (F3a-qa)', 
     expect(has(c, 'Эту страницу нельзя править здесь')).toBe(true);
     expect(has(c, 'Раздел сферы — следующая фича')).toBe(true);
     expect(has(c, 'Только чтение')).toBe(false);
+    expect(buttonByText(c, 'Править')).toBeNull();
+  });
+
+  // TL-6: без флагов плашка локального раздела / сферы не приписывает ведение Хранителю:
+  // причина — устройство раздела, а не флаг; формулировка — та же, что под флагами
+  it('локальный раздел без флага: плашка без «Хранителя», та же причина, что под флагами', async () => {
+    await seedPage(withOvr([]));
+    const c = renderPage(LOCAL_SECTION);
+    await settle();
+    const plate = findNodeByAttr(c, 'data-testid', 'wiki-readonly');
+    expect(plate).not.toBeNull();
+    const t = texts(plate!).join(' ');
+    expect(t).toContain('Эту страницу нельзя править здесь');
+    expect(t).toContain('Вики локальных проектов — отдельной фичей');
+    expect(t).not.toContain('Хранитель');
+    expect(buttonByText(c, 'Править')).toBeNull();
+  });
+
+  it('раздел сферы без флага: плашка без «Хранителя», та же причина, что под флагами', async () => {
+    await seedPage(withOvr([]));
+    const c = renderPage(SPHERE_SECTION);
+    await settle();
+    const plate = findNodeByAttr(c, 'data-testid', 'wiki-readonly');
+    expect(plate).not.toBeNull();
+    const t = texts(plate!).join(' ');
+    expect(t).toContain('Эту страницу нельзя править здесь');
+    expect(t).toContain('Раздел сферы — следующая фича');
+    expect(t).not.toContain('Хранитель');
     expect(buttonByText(c, 'Править')).toBeNull();
   });
 

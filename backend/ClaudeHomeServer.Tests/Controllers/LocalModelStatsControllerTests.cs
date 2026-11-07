@@ -36,7 +36,7 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
     }
 
     // Хост на КОНФИГУРАЦИЮ, а не на тест: конфиг и состав DI меняются только хостом, всё остальное
-    // (читатель, карты, счётчик хода, Comfy, дорожки, журнал вызовов, флаг) тест переключает сам
+    // (читатель, карты, счётчик хода, Comfy, дорожки, журнал вызовов) тест переключает сам
     // через Use*. Объекты фабрик создаются сразу вместе с фикстурой, а ASP.NET-хост внутри каждой
     // стартует лениво при первом обращении; гасятся вместе с фикстурой.
     public sealed class Hosts : IDisposable
@@ -131,8 +131,7 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
             };
         }
 
-        // Чистое состояние: все цели — пустые фейки, флаг local-model-stats выключен
-        // (как у свежего пользователя), журнал вызовов новый
+        // Чистое состояние: все цели — пустые фейки, журнал вызовов новый
         public StatsHost Use(FakeReader? reader = null, ILocalModelTurnMeter? meter = null, IGpuSampler? gpuSampler = null)
         {
             _reader.Target = reader ?? new FakeReader();
@@ -142,7 +141,6 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
             _directory.Target = new FakeDirectory();
             _arbiter.Target = new FakeArbiterReader();
             _ledger = new EngineCallLedger();
-            SetFlag(this, false);
             return this;
         }
 
@@ -153,10 +151,10 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
             return this;
         }
 
-        // Второй стенд: читатель главного — по просьбе, дорожки и арбитр — фейки, флаг — по просьбе
+        // Второй стенд: читатель главного — по просьбе, дорожки и арбитр — фейки
         public StatsHost UseEngine(
             FakeDirectory dir, FakeArbiterReader? arbiter = null, IComfyStats? comfy = null,
-            bool mainConfigured = false, bool flag = true)
+            bool mainConfigured = false)
         {
             Use(new FakeReader
             {
@@ -169,7 +167,6 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
             _directory.Target = dir;
             if (arbiter is not null) _arbiter.Target = arbiter;
             if (comfy is not null) _comfy.Target = comfy;
-            SetFlag(this, flag);
             return this;
         }
 
@@ -1200,16 +1197,6 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         (await user.GetAsync("/api/local-model/engines")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
 
-    // Серверный флаг local-model-stats: без него 404 (образец — hardware), даже админу.
-    // Мутация: убрать проверку флага — 200, тест краснеет.
-    [Fact]
-    public async Task Engines_БезФлага_404()
-    {
-        var factory = _hosts.Engine.UseEngine(new FakeDirectory(), flag: false);
-        using var admin = factory.CreateAuthenticatedClient();
-        (await admin.GetAsync("/api/local-model/engines")).StatusCode.Should().Be(HttpStatusCode.NotFound);
-    }
-
     // Список для переключателя: main — всегда первым; известный движок с дорожкой — configured.
     // «Engine без vLLM тоже configured» (Ф6): main не настроен, gemma — настроен.
     // Мутация: не отдавать title/main — первые assert'ы краснеют.
@@ -1292,7 +1279,6 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
     public async Task Engines_LlmВыключена_НеПустойСписок()
     {
         var factory = _hosts.LlmOff;
-        SetFlag(factory, true);
         using var admin = factory.CreateAuthenticatedClient();
 
         var resp = await admin.GetAsync("/api/local-model/engines");
@@ -1318,16 +1304,6 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         (await user.GetAsync("/api/local-model/stats?engine=gemma")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
 
-    // Флаг для новой формы ручки: без него 404. Без engine флаг не проверялся и не проверяется
-    // (регрессионная guard: Админ_200 выше работает без флага).
-    [Fact]
-    public async Task StatsEngine_БезФлага_404()
-    {
-        var factory = _hosts.Engine.UseEngine(new FakeDirectory(), flag: false);
-        using var admin = factory.CreateAuthenticatedClient();
-        (await admin.GetAsync("/api/local-model/stats?engine=gemma")).StatusCode.Should().Be(HttpStatusCode.NotFound);
-    }
-
     // Неизвестный движок — 200 {configured:false, status:notConnected}, не 404/500; блока duty нет.
     [Fact]
     public async Task StatsEngine_НеизвестныйДвижок_ConfiguredFalse()
@@ -1348,7 +1324,6 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
     public async Task StatsEngine_LlmВыключена_ConfiguredFalse()
     {
         var factory = _hosts.LlmOff;
-        SetFlag(factory, true);
         using var admin = factory.CreateAuthenticatedClient();
 
         var resp = await admin.GetAsync("/api/local-model/stats?engine=gemma");
@@ -1652,12 +1627,5 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
                 LoadedModels: [], SlotsUsed: 0, SlotsLimit: 4, Running: [], Queue: [], LastHour: [], Unsupported: []));
 
         public string? DescribePromptKind(string idPrefix) => idPrefix == "a1b2c3d4" ? "video" : null;
-    }
-
-    // Флаг per-user, как в HardwareEndpointTests: admin TestUsername.
-    private static void SetFlag(TestWebApplicationFactory factory, bool on)
-    {
-        var users = factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id, "local-model-stats", on);
     }
 }

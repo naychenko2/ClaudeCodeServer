@@ -13,5 +13,5 @@ public interface IProjectEventLogService
     // Записать событие в журнал проекта; null если запись не удалась
     // (нет владельца/проекта) — вызывающий глотает, журнал не критичен.
     ProjectEvent? Append(string projectId, string ownerId, string type, string actor,
-        string summary, string? entityRef = null);
+        string summary, string? entityRef = null, string? actorUserId = null);
 }

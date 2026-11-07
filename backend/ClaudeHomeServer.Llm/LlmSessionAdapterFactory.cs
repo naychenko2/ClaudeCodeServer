@@ -152,6 +152,11 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         // пустая session.Model означает «по назначению места», и если назначение указывает
         // на стороннего провайдера, проверку настроенности надо проходить по нему.
         // Ключ места — как в ClaudeSession.UsageKey (исполнитель задач → персона → чат).
+        // Ключ владельца — владелец хода (context.OwnerId), а не session.OwnerId: у проектной
+        // сессии тот пуст по контракту, и резолв по нему шёл на общий слот инстанса, тогда как
+        // сам ClaudeSession резолвит модель по _turnOwnerId (DEC-FALLBACK 3f2f33fb). Разъезд
+        // концов и есть инцидент 14.08: модель из личного слота владельца × провайдер из общего.
+        var turnOwnerId = context.OwnerId ?? session.OwnerId;
         LlmProviderConfig? provider = null;
         if (!string.IsNullOrEmpty(session.Provider) && session.Provider != "claude")
             provider = _providers.GetByKey(session.Provider);
@@ -159,7 +164,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             : !string.IsNullOrWhiteSpace(session.PersonaId) ? LocalActionCatalog.ChatPersona
             : LocalActionCatalog.ChatNew;
         provider ??= _providers.ResolveByModel(
-            _assignments?.Resolve(usageKey, session.Model, session.OwnerId) ?? session.Model);
+            _assignments?.Resolve(usageKey, session.Model, turnOwnerId) ?? session.Model);
 
         // Guard согласованности пары «модель × провайдер»: модель — единственный источник
         // правды (см. комментарий ResolveByModel), поле Provider вторично. Инцидент 14.08.2026:
@@ -169,7 +174,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         // (self-heal и старых записей), с warning — молча такое проглатывать нельзя.
         if (provider is not null)
         {
-            var effectiveModel = _assignments?.Resolve(usageKey, session.Model, session.OwnerId) ?? session.Model;
+            var effectiveModel = _assignments?.Resolve(usageKey, session.Model, turnOwnerId) ?? session.Model;
             var byModelKey = _providers.ProviderKey(effectiveModel);
             if (provider.Key != byModelKey)
             {

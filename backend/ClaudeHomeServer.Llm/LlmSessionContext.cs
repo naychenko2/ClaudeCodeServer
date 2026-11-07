@@ -39,9 +39,9 @@ public record NotesMcpContext(string ApiUrl, Func<string> TokenFactory, string? 
 // проектного чата — пишет ли персона в команду, решает бэкенд (TeamMemoryService.
 // WriteDeniedFor: Persona.Scope==Project && Persona.ProjectId==id проекта памяти),
 // состав MCP-инструментов от этого не зависит (диета памяти команды, ч.3).
-// DossierToolsEnabled — секция dossier_lookup/dossier_get (этап 2, ADR-004 §5): включается
-// по флагу ВЛАДЕЛЬЦА change-dossiers-recall (не по свойствам хода — инвариант стабильности
-// состава tools/list); сама секция требует ещё и проектный чат.
+// DossierToolsEnabled — секция dossier_lookup/dossier_get (этап 2, ADR-004 §5): включена
+// всегда (не зависит от свойств хода — инвариант стабильности состава tools/list); сама секция
+// требует ещё и проектный чат.
 // SphereToolsEnabled — секция sphere_memory_*: гейт по флагу ВЛАДЕЛЬЦА spheres (не по членству
 // проекта и не по свойствам хода), входит в отпечаток состава сервера памяти.
 // TokenFactory, а не строка: контекст живёт столько же, сколько адаптер, а у чата старше
@@ -478,6 +478,13 @@ public sealed record LlmSessionContext(
     // Проект чата (null — чат вне проекта): уходит в IPluginDirSource для проверки локальности
     // (у локального проекта в MVP плагинов нет, ADR-016/ADR-031 §5.8).
     Project? Project = null,
+    // Источник вердикта рамки хода (S2a-4): тот же шов ITurnFrameSource (S2a-1), которым
+    // рамку применяют платформенные тулсеты (S2a-3). ClaudeSession зовёт его на каждый ход
+    // и кладет вердикт в PromptSessionContext.Frame; вердикт — свойство проекта, а не хода:
+    // рамка входит в сигнатуру запуска (доработка по ревью R-S2a-4 Major 2) — пока она
+    // не менялась, живой процесс постоялен, смена рамки поднимает новый процесс с
+    // подборкой новой рамки. null (тесты без SessionManager) — рамка не применяется.
+    ClaudeHomeServer.Services.Access.ITurnFrameSource? FrameSource = null,
     // Корень data/ из конфигурации сервера (тот же резолв, что у sessions.json в SessionManager).
     // Нужен встроенному deny {data}/wiki/** для CLI-агента (ADR-035 §2): предикату WikiPaths в
     // DecidePermissionAsync и статическому deny в настройках запуска CLI (ClaudeRuntimeSettings).

@@ -4,6 +4,8 @@ import { Search, Pin, PinOff, Plus, LayoutGrid } from 'lucide-react';
 import { C, R, SHADOW, Z, FONT, FS } from '../../lib/design';
 import type { Project } from '../../types';
 import { ProjectIcon } from './ProjectIcon';
+import { SharedBadge } from '../../components/SharedBadge';
+import { useMe } from '../../lib/defaultPersona';
 import { useAllProjects, openProjectViaEvent, openAllProjects, openNewProjectFlow } from './useAllProjects';
 import { usePinnedIds, useRecentIds, isPinned, togglePin } from '../../lib/pinnedProjects';
 import { useListAutoFocus } from '../../lib/listAutoFocus';
@@ -13,6 +15,7 @@ import { NO_AUTOFILL } from '../../lib/noAutofill';
 // Открывается лупой в зоне проектов (Ctrl+K занят AI-палитрой). Значки — projectColor/Initial.
 
 function ProjectRowItem({ p, active, onOpen }: { p: Project; active: boolean; onOpen: (p: Project) => void }) {
+  const me = useMe();
   const [hover, setHover] = useState(false);
   const pinned = isPinned(p.id);
   return (
@@ -32,8 +35,13 @@ function ProjectRowItem({ p, active, onOpen }: { p: Project; active: boolean; on
       }}>
         <ProjectIcon project={p} size={26} radius={R.md} />
       </span>
-      <span style={{ flex: 1, minWidth: 0, fontSize: FS.md, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {p.name}
+      {/* Имя + метка общего проекта (карта п.6): бейдж после имени; Badge несёт
+          flexShrink:0 — при длинном имени сжимается имя */}
+      <span style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ minWidth: 0, fontSize: FS.md, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {p.name}
+        </span>
+        <SharedBadge project={p} currentUserId={me.userId} />
       </span>
       <button
         aria-label={pinned ? 'Открепить' : 'Закрепить'}

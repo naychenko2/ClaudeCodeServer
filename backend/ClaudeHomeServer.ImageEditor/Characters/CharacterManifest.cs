@@ -163,11 +163,11 @@ public sealed record CharacterDto(
     IReadOnlyList<CharacterPhotoDto> Photos,
     DateTime CreatedAt,
     CharacterLocalDto? Local = null,
-    // Сколько фото ложится в один запрос: окно выбора фронта берёт предел отсюда. Только при включённом
-    // флаге character-smart-photos, иначе поля в JSON нет
+    // Сколько фото ложится в один запрос: окно выбора фронта берёт предел отсюда. Поля в JSON нет,
+    // пока значение не задано
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? PhotosPerRequest = null)
 {
-    // withLabels (ADR-027 §10) — флаг character-smart-photos у владельца: без него фото отдаются как до фичи
+    // withLabels (ADR-027 §10) — отдавать ли разметку фото: без неё фото отдаются как до фичи
     // (file, primary, angle), без pitch/emotion/labelSource
     public static CharacterDto From(CharacterManifest m, bool withLabels = false) =>
         new(m.Slug, m.Name, m.Description, $"{CharacterStore.Folder}/{m.Slug}",

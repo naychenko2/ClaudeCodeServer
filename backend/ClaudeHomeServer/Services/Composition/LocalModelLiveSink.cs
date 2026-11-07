@@ -5,7 +5,7 @@ using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services.Composition;
 
-// Боевая рассылка живых событий локальной модели (флаг local-model-stats): тиковый снимок
+// Боевая рассылка живых событий локальной модели (статистика локальных моделей): тиковый снимок
 // генерации (OnLive) и итог завершённого хода (OnTurn) — события ленты чата. Живёт в Main,
 // а не в вертикали Llm: нужен веер сессий (IHubContext<SessionHub>) и проверка зрителей
 // (SessionManager.HasViewers) — тот же приём, что у LocalHandsNotifier.

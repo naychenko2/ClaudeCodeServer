@@ -1520,7 +1520,7 @@ public class SubsystemBoundaryTests
                 Array.Empty<string>()),
         },
         // TurnAutoResume — чистая функция отбора кандидатов на авто-возобновление ходов
-        // (флаг turn-auto-resume). Микро-вертикаль без IAppSubsystem: одна статическая
+        // (ADR-033). Микро-вертикаль без IAppSubsystem: одна статическая
         // функция + record результата. Зависимости — только Core (Models: Session, Project).
         new object[]
         {
@@ -1890,6 +1890,17 @@ public class SubsystemBoundaryTests
         // `ClaudeHomeServer.Services.Plugins` теперь разделяет Core (швы) и Plugins.dll
         // (вертикаль) — осознанно, как у Skills (Core-швы + вертикаль).
         "ClaudeHomeServer.Services.Plugins",
+        // «Общие проекты», S0-1 (разрез §6.1): точка доступа к проекту и чату
+        // (ProjectAccess/SessionAccess) — чистые функции над моделями в спине, «не новая
+        // вертикаль и не строка в Boundaries»: зовут напрямую, как SafePath.Join.
+        // Прецедент SessionTaskLinks/FeatureTurnGate (примитив без владения вертикалью),
+        // но под своим namespace — под ним соберётся вся точка доступа (S0-2, S2a-2, S2d-1).
+        "ClaudeHomeServer.Services.Access",
+        // «Общие проекты», S1-6 (разрез §«Личное состояние чата»): оверлей личного состояния
+        // чата по пользователю (ChatUserStateStore, data/chat-user-state/{userId}.json) —
+        // Core-стор без вертикали-владельца, его зовут эндпоинты Main (S1-7). Тот же
+        // порядок, что у ChatContext/Access: спина без своей строки в Boundaries.
+        "ClaudeHomeServer.Services.ChatUserState",
     ];
 
     /// <summary>
@@ -1991,6 +2002,9 @@ public class SubsystemBoundaryTests
         // ── Shared contracts (interfaces crossing vertical boundaries) ──
         "ClaudeHomeServer.Services.IChatHistoryLoader",
         "ClaudeHomeServer.Services.IDailyBriefingRunner",
+        // Шов «чат привязан к фиче?» (S2d-7b-2): SetChatVisibility ядра не делает приватным чат фичи;
+        // реализация — в Main (FeatureChatLinks), резолв лениво из IServiceProvider, без цикла DI
+        "ClaudeHomeServer.Services.IFeatureChatLinks",
         "ClaudeHomeServer.Services.IDataBackupService",
         "ClaudeHomeServer.Services.IKnowledgeHubNotifier",
         "ClaudeHomeServer.Services.IModelCatalog",

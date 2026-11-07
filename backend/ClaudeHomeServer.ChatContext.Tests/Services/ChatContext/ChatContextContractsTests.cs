@@ -36,10 +36,25 @@ public class ChatContextContractsTests
         var msg = node.Deserialize<ChatContextChangedMessage>(Json)!;
         msg.Type.Should().Be(ChatContextEventNames.Changed);
         msg.SessionId.Should().Be("c1");
-        msg.Context.Primary!.By.Should().Be(ContextActor.Agent);
+        msg.Revision.Should().Be(9);
 
         var back = JsonSerializer.SerializeToNode(msg, Json);
         JsonNode.DeepEquals(back, node).Should().BeTrue($"событие должно сериализоваться обратно без потерь: {back}");
+    }
+
+    // Сторож решения CONSULT-CONTEXT-SUBJECT (вариант 3): сериализованное событие — только сигнал с
+    // ревизией, карточек в нём нет: ни refs, ни primary, ни ref, ни самого context. Мутация «вернуть DTO»
+    // (поле Context у ChatContextChangedMessage) красит и этот тест, и ChangedEvent_RoundTrips_WithoutLoss.
+    [Fact]
+    public void ChangedEvent_CarriesOnlyTheSignal_NoCards()
+    {
+        var node = (JsonObject)JsonSerializer.SerializeToNode(new ChatContextChangedMessage(9) { SessionId = "c1" }, Json)!;
+        node.Select(kv => kv.Key).Should().BeEquivalentTo(new[] { "type", "sessionId", "revision" },
+            "в событии не должно быть ничего, кроме сигнала с ревизией");
+        var json = node.ToJsonString(Json);
+        json.Should().NotContain("refs");
+        json.Should().NotContain("primary");
+        json.Should().NotContain("\"ref\"");
     }
 
     [Fact]

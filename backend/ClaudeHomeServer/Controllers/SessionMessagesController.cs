@@ -23,9 +23,14 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
     // internal — компактную историю рендерит и WorkspaceToolset (chats_history, ADR-012 волна 3)
     internal const int MaxTextLength = 2000;
 
-    // Сессия текущего пользователя: у проектной — владелец проекта, у чата — сама сессия.
-    // Чужая/несуществующая — как отсутствующая (404). Владелец резолвится в SessionManager.
-    private Models.Session? OwnedSession(string sessionId) => sessions.GetOwned(sessionId, UserId);
+    // Сессия текущего пользователя, видимая ему (S2d-3a): у проектной — владелец проекта,
+    // у чата — сама сессия; чужой приватный чат не виден даже владельцу. Чужая/несуществующая
+    // — как отсутствующая (404). Владелец резолвится в SessionManager.
+    private Models.Session? OwnedSession(string sessionId) => sessions.GetOwnedVisible(sessionId, UserId);
+
+    // Чат, который человек ВИДИТ (в т.ч. участник общего проекта): только для чтения. Снимки
+    // промпта, разбор, запись и очередь остаются на OwnedSession — в S1 участник чаты не пишет.
+    private Models.Session? VisibleSession(string sessionId) => sessions.GetAccessible(sessionId, UserId)?.Session;
 
     // GET /api/sessions/{sid}/prompt/{snapshotId} — что ушло модели на этом ходу
     // (секции системного промпта, текст хода, аргументы запуска, доступная часть слоя CLI).
@@ -113,7 +118,7 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
     [HttpGet("history")]
     public async Task<IActionResult> GetHistory(string sessionId, [FromQuery] int limit = 20)
     {
-        var session = OwnedSession(sessionId);
+        var session = VisibleSession(sessionId);
         if (session is null) return NotFound();
 
         var all = await sessions.GetHistoryAsync(sessionId);
@@ -156,8 +161,12 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
         var sender = Request.Headers.TryGetValue("X-Sender-Session-Id", out var sh)
             ? sh.FirstOrDefault() : null;
 
-        var outcome = await messaging.SendAsync(UserId, sessionId, req.Text,
-            caller, sender, agentDepth, req.Wait, req.TimeoutSec);
+        // Ход и его очередь — право RunTurn, не владение (S1-7); редактору открыто в S2a-10
+        if (sessions.DenyTurn(sessionId, UserId) is { } denied) return denied;
+        // Ключ чата — арендатор (владелец проекта), а не вызывающий: редактор отправляет в чужой каталог
+        var tenantId = (sessions.GetById(sessionId) is { } chat ? sessions.ResolveOwnerId(chat) : null) ?? UserId;
+        var outcome = await messaging.SendAsync(tenantId, sessionId, req.Text,
+            caller, sender, agentDepth, req.Wait, req.TimeoutSec, actorUserId: UserId);
         return outcome switch
         {
             SessionMessagingService.SendOutcome.NotFound => NotFound(),
@@ -252,7 +261,7 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
     [HttpGet("pending")]
     public IActionResult GetPending(string sessionId)
     {
-        if (OwnedSession(sessionId) is null) return NotFound();
+        if (VisibleSession(sessionId) is null) return NotFound();
         return Ok(sessions.GetPending(sessionId).Select(p => new
         {
             id = p.Id,
@@ -267,12 +276,24 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
         }));
     }
 
-    // DELETE /api/sessions/{sid}/pending/{messageId} — снять сообщение из очереди
+    // Машинный код «не отправитель» (S2a-10b): единственный адресат отказа «не доставлять».
+    private const string NotSenderCode = "not_sender";
+
+    // DELETE /api/sessions/{sid}/pending/{messageId} — «не доставлять» сообщение из очереди
     // (крестик на карточке-призраке). 404 — уже доставлено или отменено.
     [HttpDelete("pending/{messageId}")]
     public async Task<IActionResult> CancelPending(string sessionId, string messageId)
     {
-        if (OwnedSession(sessionId) is null) return NotFound();
+        // «Не доставлять» — только тому, кто поставил сообщение, или владельцу чата (S2a-10b): чужое
+        // сообщение не снимает ни другой участник, ни читатель. 404 — чата не видно (существование
+        // не раскрываем), 403 not_sender — не автор и не владелец. Отправитель читается из очереди
+        // под её PendingLock (SessionManager.PendingSentBy) — под тем же замком, под которым
+        // сообщение в неё ставится.
+        if (sessions.GetAccessible(sessionId, UserId) is null) return NotFound();
+        if (sessions.PendingSentBy(sessionId, messageId) != UserId
+            && sessions.GetWithRight(sessionId, UserId, Services.Access.ProjectRight.Configure) is null)
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new { error = "Сообщение из очереди снимает только его автор или владелец", code = NotSenderCode });
         return await sessions.CancelPendingAsync(sessionId, messageId) ? NoContent() : NotFound();
     }
 
@@ -282,7 +303,8 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
     [HttpPost("pending/preempt")]
     public IActionResult PreemptForPending(string sessionId)
     {
-        if (OwnedSession(sessionId) is null) return NotFound();
+        // Перебой убивает идущий ход — владелец или автор этого хода (S2a-10)
+        if (sessions.DenyTurnAuthor(sessionId, UserId) is { } denied) return denied;
         return sessions.PreemptForPending(sessionId)
             ? NoContent()
             : Conflict(new { error = "Прерывать нечего: ход уже завершился или очередь пуста" });

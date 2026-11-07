@@ -6,8 +6,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // ровно по одному разу и в строгом порядке (открывающий → тело → закрывающий), контракт
 // nonce (фабрика и валидация), штатный исход «нечего добавить», семь отрицательных
 // примеров, правило «кусок про другой проект не переносится», указание «данные, не
-// инструкции», цель операции (supersede/conflict/link) и ссылка хроники на утверждение
-// индексом.
+// инструкции», цель операции (supersede/conflict/link), ссылка хроники на утверждение
+// индексом, пример create в схеме и правило пустого раздела, предупреждение о карточках
+// источника («— source») в каталоге обоих проходов.
 public class WikiKeeperPromptsTests
 {
     private static string Build(bool isPlan, string source, string nonce) => isPlan
@@ -195,5 +196,42 @@ public class WikiKeeperPromptsTests
         Assert.Contains("\"about\":0", prompt);
         Assert.DoesNotContain("\"about\":\"", prompt);
         Assert.Contains("the index of the claim", prompt);
+    }
+
+    // Дефект ночи 05.11: в пустом разделе проход B отказывался заводить страницы — в схеме не
+    // было примера create, «never invent a path» читался как запрет новой страницы. Схема
+    // обязана нести create первым элементом операций; правило пустого раздела — в прозе;
+    // «never invent a path» относится только к страницам, которые каталог уже называет.
+    [Fact]
+    public void ПроходB_СхемаСодержитCreate_ИПравилоПустогоРаздела()
+    {
+        var prompt = WikiKeeperPrompts.Plan("src", "[]", "CATALOG", "n1");
+
+        // Пример create — ровно первым элементом operations (мутация «убрать его из схемы»
+        // краснеет именно здесь: в прозе op":"create" не встречается).
+        Assert.Contains("\"operations\":[{\"op\":\"create\",\"page\":\"<new title>\",\"claim\":0}", prompt);
+        // Нет подходящей страницы — новая; пустой раздел — нормальный случай, не отказ.
+        Assert.Contains("If no knowledge page in the catalog fits a claim", prompt);
+        Assert.Contains("an empty section is a normal case", prompt);
+        // Граница «пути» ограничена существующими страницами: новой страницы ещё нет.
+        Assert.Contains("never invent a path for a", prompt);
+        Assert.Contains("A new page has no path yet", prompt);
+    }
+
+    // Карточка источника в каталоге помечена «— source» (ее строку рисует WikiProjections:
+    // «- [[имя]] — source»). Она принимает только сноски: операции над карточкой — не план.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ОбаПрохода_КаталогПредупреждаетОКарточкахИсточника(bool isPlan)
+    {
+        var prompt = isPlan
+            ? WikiKeeperPrompts.Plan("src", "[]", "cat", "n1")
+            : WikiKeeperPrompts.Claims("src", "cat", "n1", 8, 300);
+
+        // Подстроки не пересегают перенос строки в промпте: фраза набрана в три строки.
+        Assert.Contains("Entries marked \"— source\"", prompt);
+        Assert.Contains("are source cards: they only receive footnotes", prompt);
+        Assert.Contains("never append/supersede/conflict/link", prompt);
     }
 }

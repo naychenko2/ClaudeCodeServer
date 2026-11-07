@@ -11,15 +11,13 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Фоновая разметка ракурса и эмоции фото персонажа (ADR-027 §9). Очередь на инстанс: один исполнитель,
 // персонажи строго по одному, дедупликация по (корень, slug). Ставят её ленивые поводы (загрузка фото,
-// чтение списка и карточки, запуск с персонажем), обхода диска при старте нет. Флаг владельца
-// выключен — ни одного вызова. Нет маршрута (модель разметки не настроена) или ComfyUI лежит — фото
-// получает noroute (повторим, когда разметка станет возможна); модель ответила, но не определила —
+// чтение списка и карточки, запуск с персонажем), обхода диска при старте нет.
+// Нет маршрута (модель разметки не настроена) или ComfyUI лежит — фото получает noroute (повторим, когда разметка станет возможна); модель ответила, но не определила —
 // auto+unknown (повторно не размечаем).
 public sealed class CharacterPhotoLabeling(
     CharacterLoraRuns locks,
     ILogger<CharacterPhotoLabeling> log,
     IImageLabeler? labeler = null,
-    IFeatureFlagGate? flags = null,
     ILocalImageMedia? localMedia = null,
     IImageRaster? raster = null,
     TimeProvider? time = null) : BackgroundService
@@ -43,14 +41,13 @@ public sealed class CharacterPhotoLabeling(
 
     public sealed record Job(string OwnerId, string Root, string Slug);
 
-    // Нет шва разметки (подсистема Llm выключена) или флага — работы нет
-    private bool Enabled(string ownerId) =>
-        labeler is not null && flags?.IsEnabled(ownerId, FeatureFlagKeys.CharacterSmartPhotos) == true;
+    // Нет шва разметки (подсистема Llm выключена) — работы нет
+    private bool Enabled() => labeler is not null;
 
-    // Поводы зовут это не глядя: флаг выключен или персонаж уже в очереди — тихо ничего
+    // Поводы зовут это не глядя: разметка не настроена или персонаж уже в очереди — тихо ничего
     public void Enqueue(string ownerId, string root, string slug)
     {
-        if (!Enabled(ownerId)) return;
+        if (!Enabled()) return;
         lock (_pending)
         {
             if (!_pending.Add((root, slug))) return;
@@ -72,7 +69,7 @@ public sealed class CharacterPhotoLabeling(
 
     public async Task ProcessAsync(Job job, CancellationToken ct)
     {
-        if (!Enabled(job.OwnerId)) return;
+        if (!Enabled()) return;
 
         var manifest = CharacterStore.Get(job.Root, job.Slug);
         if (manifest is null) return;

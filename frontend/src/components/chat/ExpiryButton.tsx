@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Hourglass } from 'lucide-react';
-import type { Session } from '../../types';
+import type { Project, Session } from '../../types';
 import { C, FONT, R, TB } from '../../lib/design';
 import { formatTimeLeft, expiresAt, formatExpiryDate } from '../../lib/expiry';
 import { updateChatFields } from '../../lib/chatUpdate';
+import { ownerSettingsDeniedReason } from '../../features/projects/members/participantGate';
 import { showToast } from '../../lib/toast';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Menu } from '../ui';
@@ -15,8 +16,13 @@ import { ExpiryPicker } from './ExpiryPicker';
 // Раньше это была неинтерактивная пилюля-индикатор, ведущая в диалог настроек чата,
 // а пилюли NewChatSetup доступны только в ПУСТОМ чате — то есть у начатого чата
 // сменить или снять срок было негде, кроме того диалога.
-export function ExpiryButton({ session, isMobile, onSessionUpdated }: {
+export function ExpiryButton({ session, project, isMobile, onSessionUpdated }: {
   session: Session;
+  // Роль в проекте (QA-P1F): срок хранения — настройка владельца, как на бэке
+  // (OwnerSettingsGate, 403 owner_settings). Участнику общего проекта кнопка неактивна
+  // с объяснением в title — тот же смысл, что у причины диспетчера для пунктов «⋯».
+  // Чат вне проекта и обычный проект (myRole нет) — без изменений, как раньше
+  project?: Pick<Project, 'myRole'> | null;
   isMobile?: boolean;
   onSessionUpdated?: (s: Session) => void;
 }) {
@@ -27,6 +33,7 @@ export function ExpiryButton({ session, isMobile, onSessionUpdated }: {
 
   const left = formatTimeLeft(session);
   const temporary = session.expiresAfterMinutes != null;
+  const denied = ownerSettingsDeniedReason(project);
 
   const pick = async (minutes: number | null) => {
     setMenu(null);
@@ -54,15 +61,19 @@ export function ExpiryButton({ session, isMobile, onSessionUpdated }: {
           const rect = e.currentTarget.getBoundingClientRect();
           setMenu(m => m ? null : rect);
         }}
-        disabled={saving}
-        title={temporary
-          ? `Временный чат — удалится ${left ?? 'по истечении срока'}, если не будет активности. Нажмите, чтобы изменить.`
-          : 'Чат хранится бессрочно. Нажмите, чтобы сделать временным.'}
+        disabled={saving || !!denied}
+        title={denied
+          ? 'Срок хранения этого чата меняет только владелец проекта'
+          : temporary
+            ? `Временный чат — удалится ${left ?? 'по истечении срока'}, если не будет активности. Нажмите, чтобы изменить.`
+            : 'Чат хранится бессрочно. Нажмите, чтобы сделать временным.'}
         style={{
           display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px',
           background: temporary ? C.bgWhite : 'transparent',
           border: `1px solid ${temporary ? C.border : 'transparent'}`,
-          borderRadius: R.lg, flexShrink: 0, cursor: saving ? 'default' : 'pointer',
+          // Состояние срока читается и участнику (остаток на кнопки — тот же), но
+          // указатель «можно нажать» при неактивной кнопке врал бы
+          borderRadius: R.lg, flexShrink: 0, cursor: saving || denied ? 'default' : 'pointer',
           fontFamily: FONT.sans, fontSize: 11, fontWeight: 600,
           // Тот же цвет, что у icon-кнопок шапки (TB.iconColor): кнопка стоит с ними
           // в одном ряду, и приглушать её сильнее — читается как «неактивна»

@@ -51,7 +51,7 @@ public sealed class VideoFormatJobTests : IDisposable
         public Task ToOwner(string ownerId, ServerMessage message) { lock (Sent) Sent.Add(message); return Task.CompletedTask; }
         public Task ToSession(string sessionId, ServerMessage message) => Task.CompletedTask;
         public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) => Task.CompletedTask;
-        public Task ToProject(string projectId, ServerMessage message) => Task.CompletedTask;
+        public Task ToProject(string projectId, ServerMessage message) { lock (Sent) Sent.Add(message); return Task.CompletedTask; }
         public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) => Task.CompletedTask;
     }
 
@@ -78,7 +78,7 @@ public sealed class VideoFormatJobTests : IDisposable
 
     private sealed class Frames(Dictionary<string, byte> byThread) : IImageFrameSource
     {
-        public Task<ImageFrame?> GetAsync(string ownerId, string threadId, string versionId, CancellationToken ct) =>
+        public Task<ImageFrame?> GetAsync(string ownerId, string? actorId, string threadId, string versionId, CancellationToken ct) =>
             Task.FromResult<ImageFrame?>(byThread.TryGetValue(threadId, out var b) ? new ImageFrame([b], "image/png") : null);
 
         public Task<ImageFrameDraft?> CreateDraftAsync(string ownerId, string scopeKey, string sessionId, string folder, CancellationToken ct) =>

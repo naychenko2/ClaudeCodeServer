@@ -3,9 +3,9 @@
 // Клик по элементу обзора открывает анализ с применённым контекстом. Все суммы —
 // в токенах, $ не показывается нигде; fal.ai — счётчик генераций.
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { X } from 'lucide-react';
-import type { SpendOverviewResponse } from '../../types';
-import { api, C, FONT, ISLAND, R, SHADOW, SP, Z, CONTENT_MAX_W, MOBILE_MAX, TABLET_MAX, useIsMobile, useWindowWidth, IconButton, MiniSegment } from 'aihome_shell/kit';
+import { Users, X } from 'lucide-react';
+import type { SpendCardRow, SpendOverviewResponse } from '../../types';
+import { api, C, FONT, ISLAND, R, SHADOW, SP, Z, CONTENT_MAX_W, MOBILE_MAX, TABLET_MAX, useIsMobile, useWindowWidth, IconButton, MiniSegment, Notice } from 'aihome_shell/kit';
 import { SPEND_PERIODS, periodRange, fmtDate, type SpendLevel } from './spendModel';
 import { spendQuery, type SpendFilter, type SpendOpenContext } from '../../lib/spendContract';
 import { SkelBlock, LoadError, WindowBadge, Chip } from './spendUi';
@@ -41,9 +41,13 @@ function initialState(ctx: SpendOpenContext, isAdmin: boolean): SpendState {
   };
 }
 
-export function SpendScreen({ ctx, isAdmin, onClose, embedded }: {
+export function SpendScreen({ ctx, isAdmin, sharedOwner = false, sharedMember = false, onClose, embedded }: {
   ctx: SpendOpenContext;
   isAdmin: boolean;
+  // Роль в общих проектах (из списка проектов): владелец видит расход по авторам ходов,
+  // участник — только свои ходы. Админу не нужны: у него «Все». Личный проект — оба false
+  sharedOwner?: boolean;
+  sharedMember?: boolean;
   onClose: () => void;
   // true — рендер как содержимое страницы-вкладки (без полноэкранного fixed-overlay):
   // шапка хаба остаётся сверху, раздел занимает оставшееся место
@@ -55,11 +59,12 @@ export function SpendScreen({ ctx, isAdmin, onClose, embedded }: {
   // источник признака на весь раздел, вниз идёт пропом (прецедент — HubHeader).
   const ww = useWindowWidth();
   const isTablet = !isMobile && ww > MOBILE_MAX && ww <= TABLET_MAX;
+  const ownerView = sharedOwner && !isAdmin;
   const [st, setSt] = useState<SpendState>(() => {
     const s = initialState(ctx, isAdmin);
     // «Разложить →» из контекста открытия: разрез — первым уровнем дефолтной цепочки
     if (ctx.pivotDim) {
-      const base: SpendLevel[] = isAdmin ? ['user', 'project', 'chat', 'turn'] : ['project', 'chat', 'turn'];
+      const base: SpendLevel[] = isAdmin || ownerView ? ['user', 'project', 'chat', 'turn'] : ['project', 'chat', 'turn'];
       s.levels = [ctx.pivotDim, ...base.filter(d => d !== ctx.pivotDim)];
       s.screen = 'analysis';
     }
@@ -93,7 +98,29 @@ export function SpendScreen({ ctx, isAdmin, onClose, embedded }: {
       .catch(() => { if (!cancelled) setOvError(true); });
     return () => { cancelled = true; };
   }, [ovQuery, ovTick]);
-  const overview = loaded?.query === ovQuery ? loaded.data : null;
+  const loadedOverview = loaded?.query === ovQuery ? loaded.data : null;
+
+  // Владелец общего проекта: в ответе scope=mine карточки пользователей нет, расход по
+  // автору хода берём из разреза «user» (бэк отдаёт его и не-админу, S2a-6b)
+  const usersQuery = useMemo(
+    () => spendQuery({ from: range.from, to: range.to, scope: st.scope, filters: st.filters, extra: { groupBy: 'user' } }),
+    [range.from, range.to, st.scope, st.filters],
+  );
+  const [usersLoaded, setUsersLoaded] = useState<{ query: string; rows: SpendCardRow[] } | null>(null);
+  useEffect(() => {
+    if (!ownerView) return;
+    let cancelled = false;
+    api.spend.pivot(usersQuery)
+      .then(d => { if (!cancelled) setUsersLoaded({ query: usersQuery, rows: d.nodes }); })
+      .catch(() => { if (!cancelled) setUsersLoaded({ query: usersQuery, rows: [] }); });
+    return () => { cancelled = true; };
+  }, [ownerView, usersQuery]);
+  // Пока разрез не пришёл, обзор не отдаём: иначе карточка мигнёт появлением
+  const overview = useMemo(() => {
+    if (!loadedOverview || !ownerView) return loadedOverview;
+    if (usersLoaded?.query !== usersQuery) return null;
+    return { ...loadedOverview, cards: { ...loadedOverview.cards, users: usersLoaded.rows } };
+  }, [loadedOverview, ownerView, usersLoaded, usersQuery]);
 
   // Пусто под текущий срез — почему? Фильтры/день трактуются срезом, а период сам по себе
   // тоже срез: горизонт раздела — самый широкий его период, и только пустота там означает
@@ -129,7 +156,7 @@ export function SpendScreen({ ctx, isAdmin, onClose, embedded }: {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const showUsers = isAdmin && st.scope === 'all';
+  const showUsers = (isAdmin && st.scope === 'all') || ownerView;
 
   // Переходы Обзор → Анализ с переносом контекста клика
   const openAnalysis = useCallback((patchCtx: {
@@ -137,6 +164,11 @@ export function SpendScreen({ ctx, isAdmin, onClose, embedded }: {
   }) => {
     setSt(prev => {
       const next: SpendState = { ...prev, screen: 'analysis', selKey: null };
+      // У не-админа уровень «пользователь» только чтение: бэк режет user != текущий (403),
+      // поэтому клик по участнику открывает анализ с группировкой по пользователю без фильтра
+      if (patchCtx.filter?.dim === 'user' && !isAdmin) {
+        patchCtx = { ...patchCtx, filter: undefined, pivotDim: 'user' };
+      }
       if (patchCtx.filter) {
         next.filters = [...prev.filters.filter(f => f.dim !== patchCtx.filter!.dim), patchCtx.filter];
       }
@@ -149,7 +181,7 @@ export function SpendScreen({ ctx, isAdmin, onClose, embedded }: {
       if (patchCtx.turnId) next.selKey = `turn:${patchCtx.turnId}`;
       return next;
     });
-  }, [showUsers]);
+  }, [showUsers, isAdmin]);
 
   const titleEl = (
     <span style={{ fontFamily: FONT.serif, fontSize: isMobile ? 16 : 17, fontWeight: 700, color: C.textHeading, whiteSpace: 'nowrap' }}>
@@ -243,6 +275,13 @@ export function SpendScreen({ ctx, isAdmin, onClose, embedded }: {
     </div>
   );
 
+  // Участник чужого общего проекта видит в «Моих» только свои ходы там
+  const memberNotice = sharedMember && !isAdmin && (
+    <div style={{ padding: isMobile ? '8px 12px 0' : '10px 16px 0' }}>
+      <Notice tone="info" icon={Users}>В общих проектах, где вы участник, видны только ваши ходы.</Notice>
+    </div>
+  );
+
   const body = st.screen === 'overview'
     ? (ovError
         ? <LoadError onRetry={() => setOvTick(t => t + 1)} />
@@ -252,7 +291,7 @@ export function SpendScreen({ ctx, isAdmin, onClose, embedded }: {
           : <SkelBlock />)
     : (
       <SpendAnalysis
-        st={st} patch={patch} range={range} showUsers={showUsers} isMobile={isMobile} isTablet={isTablet} emptyKind={emptyKind}
+        st={st} patch={patch} range={range} showUsers={showUsers} userReadOnly={ownerView} isMobile={isMobile} isTablet={isTablet} emptyKind={emptyKind}
         overview={overview} overviewError={ovError} onRetryOverview={() => setOvTick(t => t + 1)}
         onCloseScreen={onClose}
       />
@@ -288,6 +327,7 @@ export function SpendScreen({ ctx, isAdmin, onClose, embedded }: {
           ...(fill ? { flex: '1 0 auto', display: 'flex', flexDirection: 'column', minHeight: 0 } : null),
         }}>
           {header}
+          {memberNotice}
           {body}
         </div>
       </div>

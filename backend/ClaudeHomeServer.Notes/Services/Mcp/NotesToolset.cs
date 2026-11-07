@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
@@ -38,7 +39,9 @@ public sealed class NotesToolset(
     IPersonaResolver personas,
     IMcpPersonaBindings bindings,
     IMcpSessionAccessor sessions,
-    ISessionBroadcaster broadcaster,
+    INotesHubNotifier hubNotifier,
+    ITurnFrameSource frames,
+    IActorRightGate actorGate,
     NotesService? notes = null,
     // Все четыре — синглтоны одной отключаемой вертикали (NotesSubsystem.Register),
     // гейтятся ОДНИМ рубильником Subsystems:Notes:Enabled: либо все null, либо все не null.
@@ -59,7 +62,14 @@ public sealed class NotesToolset(
     ISphereDirectory? spheres = null,
     IProjectManager? projects = null,
     // Шов флага llm-wiki — та же опциональная зависимость, что у WikiLintService: нет шва — выключено.
-    IFeatureFlagGate? flags = null) : IMcpParameterizedToolset
+    IFeatureFlagGate? flags = null,
+    // R-F2-D1: право моста «чекбокс → задача» меряется по актору хода (ветка notes_promote_task):
+    // актор — из реестра хода (тот же, что читает гейт актора), право — из IProjectAccess (та же
+    // точка решения, что у REST-двери NotesController.PromoteTask → EnsureSourceWrite). Оба
+    // опциональны: без швов проверка выключена (тестовая обвязка вне DI), гейт актора на составе
+    // инструментов остаётся; в DI оба типа зарегистрированы (Program).
+    ITurnActorRegistry? turnActors = null,
+    IProjectAccess? access = null) : IMcpParameterizedToolset
 {
     // Корень data — для признака заведённой вики (WikiPaths) и корня чтения её разделов.
     // Та же формула, что у всех сервисов вертикали (DataPath указывает на projects.json).
@@ -112,6 +122,19 @@ public sealed class NotesToolset(
         var projectId = session.ProjectId;
         var defaultSource = projectId ?? "personal";
 
+        // Узкая рамка хода (общий проект, S2a-3a): доступны только заметки проекта чата-вызывателя;
+        // личный vault, поиск по всем источникам и заметки других проектов закрыты. Вердикт только
+        // читается — состав tools/list от него не зависит (McpToolsetStabilityTests).
+        var frame = frames.Frame(context.CallerSessionId, context.OwnerId);
+        var narrow = frame == TurnFrameKind.Narrow;
+        if (narrow && NarrowDenied(tool, arguments, projectId) is { } narrowDenied)
+            return Deny(narrowDenied);
+
+        // Право актора хода (S2c-6): запись заметок агентом участника — по WriteContent в проекте чата
+        if (actorGate.Denied(ActorToolRights.Notes, tool, context.CallerSessionId, context.OwnerId, projectId)
+            is { } actorDenied)
+            return Deny(actorDenied);
+
         switch (tool)
         {
             case "notes_list":
@@ -120,7 +143,9 @@ public sealed class NotesToolset(
                 // заметки не сужаются (решение 6): «посмотри мою заметку X» из чата проекта —
                 // живой сценарий.
                 var visible = VisibleSet(context.OwnerId, session, persona);
-                return Json(notesSvc.GetSummaries(context.OwnerId, OptionalArg(arguments, "source"), null)
+                return Json(notesSvc.GetSummaries(context.OwnerId,
+                        narrow ? projectId : OptionalArg(arguments, "source"), null)
+                    .Where(n => !narrow || n.Source == projectId)
                     .Where(n => WikiReadAllowed(n.Source, n.Path, visible))
                     .Select(n => Brief(n, WikiDisplayPath(context.OwnerId, n)))
                     .ToList());
@@ -133,7 +158,9 @@ public sealed class NotesToolset(
                 var status = StringArg(arguments, "status");
                 var query = status.Length > 0 ? $"status:{status} {q}".Trim() : q;
                 var visible = VisibleSet(context.OwnerId, session, persona);
-                return Json(notesSvc.GetSummaries(context.OwnerId, null, query.Length > 0 ? query : null)
+                return Json(notesSvc.GetSummaries(context.OwnerId, narrow ? projectId : null,
+                        query.Length > 0 ? query : null)
+                    .Where(n => !narrow || n.Source == projectId)
                     .Where(n => WikiReadAllowed(n.Source, n.Path, visible))
                     .Select(n => n.Annotation is null
                         ? Brief(n, WikiDisplayPath(context.OwnerId, n))
@@ -168,7 +195,7 @@ public sealed class NotesToolset(
                     // пользователя, его не трогаем.
                     detail = RedactHiddenWikiLinks(detail, IndexByIds(notesSvc, context.OwnerId), visible);
                 }
-                return Json(detail);
+                return Json(narrow ? NarrowDetail(detail, projectId!) : detail);
             }
 
             case "notes_suggest_title":
@@ -247,6 +274,7 @@ public sealed class NotesToolset(
                 // Обратная ссылка со страницы вне набора остаётся фактом связи, но без имени
                 // и текста: заголовок чужого раздела — тоже текст (решение 2).
                 return Json(notesSvc.GetBacklinks(context.OwnerId, id)
+                    .Where(b => !narrow || b.Source == projectId)
                     .Select(b => HiddenWikiRef(b.SourceId, index, visible)
                         ? new NoteBacklinkDto("", HiddenMark, "", "", "")
                         : b)
@@ -364,6 +392,7 @@ public sealed class NotesToolset(
                             root = RedactHiddenWikiLinks(rootDetail, IndexByIds(notesSvc, context.OwnerId), visible);
                         }
                     }
+                    if (narrow && root is not null) root = NarrowDetail(root, projectId!);
                     return Json(new
                     {
                         root,
@@ -465,6 +494,19 @@ public sealed class NotesToolset(
 
             case "notes_promote_task":
             {
+                // R-F2-D1: право моста «чекбокс → задача» — по АКТОРУ идущего хода, а не по
+                // владельцу записи: агент пишет под токеном арендатора, и без этой проверки агент
+                // редактора создавал бы в общем проекте задачи, закрытые человеку-редактору на
+                // REST (EnsureSourceWrite в NoteTaskSyncService.PromoteAsync мерит тот же
+                // ProjectRight.Write, но по UserId вызывающего). Порог — тот же, что у REST-двери;
+                // решает его IProjectAccess — общая точка, своей копии правила «свой/чужой» здесь
+                // нет. Актор-арендатор проходит Resolve как владелец; безымянный актор в общем
+                // проекте уже отрезан гейтом актора выше (требует права), в личном (без проекта) —
+                // права арендатора, как раньше.
+                var actor = turnActors?.Actor(session.Id, context.OwnerId);
+                if (actor is not null && projectId is not null &&
+                    access?.Resolve(actor, projectId, ProjectRight.Write) is null)
+                    return Deny(ActorRightGate.DeniedText);
                 var id = StringArg(arguments, "id");
                 try
                 {
@@ -484,7 +526,7 @@ public sealed class NotesToolset(
                                 + string.Join(", ", matches.Select(m => m.Line)) + ")");
                         line = matches[0].Line;
                     }
-                    return Json(await noteTasksSvc.PromoteAsync(context.OwnerId, id, line.Value));
+                    return Json(await noteTasksSvc.PromoteAsync(context.OwnerId, id, line.Value, createdByHuman: false));
                 }
                 catch (KeyNotFoundException) { return Deny($"Заметка {id} не найдена."); }
                 catch (UnauthorizedAccessException) { return Deny("Нет доступа к заметке."); }
@@ -535,6 +577,61 @@ public sealed class NotesToolset(
                 throw new ArgumentException($"Неизвестный инструмент: {tool}", nameof(tool));
         }
     }
+
+    // --- Узкая рамка (общий проект) ---
+
+    private const string NarrowText =
+        "Недоступно в общем проекте: заметки доступны только из источника этого проекта.";
+
+    // Отказ в узкой рамке или null. Текст фиксированный: ни id, ни названий из аргументов модели
+    // (в них может лежать адрес личной заметки владельца).
+    private static string? NarrowDenied(string tool, JsonObject arguments, string? projectId)
+    {
+        if (projectId is null) return NarrowText;
+        switch (tool)
+        {
+            // Поиск и обход по всем источникам: личный vault не отфильтровать на выходе
+            case "notes_graph" or "notes_semantic_search" or "notes_daily" or "notes_resolve":
+                return NarrowText;
+            case "notes_list":
+                return OptionalArg(arguments, "source") is { } src && src != projectId ? NarrowText : null;
+            case "notes_search":
+                return null;
+            case "notes_create":
+                return OptionalArg(arguments, "source") is { } cs && cs != projectId ? NarrowText : null;
+            case "notes_annotate" or "notes_annotations":
+                return OptionalArg(arguments, "scope") is { } sc && sc != projectId ? NarrowText : null;
+            case "notes_move":
+                if (OptionalArg(arguments, "targetSource") is { } ts && ts != projectId) return NarrowText;
+                return SourceOfId(StringArg(arguments, "id")) == projectId ? null : NarrowText;
+            default:
+                // Все остальные работают с заметкой по id: источник зашит в сам id
+                return SourceOfId(StringArg(arguments, "id")) == projectId ? null : NarrowText;
+        }
+    }
+
+    // Источник заметки из её id (base64url(sourceKey|relPath)); null — id не разобрался
+    private static string? SourceOfId(string id)
+    {
+        try
+        {
+            var b64 = id.Replace('-', '+').Replace('_', '/');
+            switch (b64.Length % 4) { case 2: b64 += "=="; break; case 3: b64 += "="; break; }
+            var raw = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(b64));
+            var sep = raw.IndexOf('|');
+            return sep < 0 ? null : raw[..sep];
+        }
+        catch (FormatException) { return null; }
+    }
+
+    // Карточка без ссылок и упоминаний из других источников (названия личных заметок владельца)
+    private static NoteDetail NarrowDetail(NoteDetail d, string projectId) => d with
+    {
+        Links = d.Links.Where(l => l.TargetId.StartsWith("ghost:", StringComparison.Ordinal)
+            || SourceOfId(l.TargetId) == projectId).ToList(),
+        Backlinks = d.Backlinks.Where(b => b.Source == projectId).ToList(),
+        UnlinkedMentions = d.UnlinkedMentions.Where(b => b.Source == projectId).ToList(),
+    };
 
     // --- Маршрут: /mcp/notes/{sessionId} ---
 
@@ -591,12 +688,16 @@ public sealed class NotesToolset(
         return true;
     }
 
-    // Любая мутация — отложенная синхронизация семантического индекса + событие ленты
-    // (как Broadcast контроллера: панель «Заметки» обновляется и при MCP-записи)
+    // Любая мутация — отложенная синхронизация семантического индекса + событие ленты.
+    // Адресация — тем же швом, что у контроллера (INotesHubNotifier, S2c-4): проектная
+    // заметка уходит группе проекта + вкладкам вызывающего, личная — только владельцу.
+    // Источник зашит в самом id (SourceOfId): personal → null.
     private async Task BroadcastAsync(string ownerId, string action, string? noteId)
     {
         kb?.QueueSync(ownerId);
-        await broadcaster.ToOwner(ownerId, new NotesChangedMessage(action, noteId));
+        var source = noteId is null ? null : SourceOfId(noteId);
+        await hubNotifier.BroadcastNotesChangedAsync(ownerId, action, noteId ?? string.Empty,
+            source is not null && source != "personal" ? source : null);
     }
 
     // Компактное представление заметки для списков — как brief у stdio-ветки. Для страницы
@@ -849,10 +950,12 @@ public sealed class NotesToolset(
 
         if (WikiPage.TryParseSessionRef(source, out var sessionId, out var from, out var to))
         {
+            // Чужой и несуществующий — одно слово на двоих (тот же инвариант, что у AnalyzeAsync):
+            // «принадлежит другому владельцу» выдавало бы существование чужого чата.
             if (sessionsDir?.GetById(sessionId) is not { } chat)
                 return Deny("чат не существует");
             if (sessionsDir.ResolveOwnerId(chat) != ownerId)
-                return Deny("чат принадлежит другому владельцу: источник — тому же владельцу, что вики");
+                return Deny("чат не существует");
             var home = chat.ProjectId is { Length: > 0 } projectId
                 ? WikiSections.ProjectsPrefix + projectId
                 : WikiSections.Personal;

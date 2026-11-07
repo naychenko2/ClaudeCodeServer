@@ -17,7 +17,8 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // просил. Окно полуоткрытое [start, end); start > end — окно через полночь (21→2). Дата прохода —
 // дата НАЧАЛА окна: тик в 01:00 окна 21→2 относится к вчерашней дате, иначе ночь разобралась бы дважды.
 //
-// Проход владельца: флаг llm-wiki → Nightly.Enabled → окно → пересчёт ступени 1 → очередь
+// Проход владельца: флаг llm-wiki → Nightly.Enabled → окно → (вики не заведена — WikiKeeper.EnsureInitializedAsync,
+// единственная запись ночи в незаведённую вики; сбой = error) → пересчёт ступени 1 → очередь
 // («важные», затем по UpdatedAt убыв.) → на каждый чат: перечитать тумблер и окно, лимит открытых
 // пакетов, дельта ≥ 3 реплик человека после курсора, лимиты раздела, ступень 2 для серых (лениво,
 // только когда очередь дошла до чата), бюджет → AnalyzeAsync(…, WikiNightly).
@@ -27,6 +28,11 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //   зону с «да» ступени 2; TaskExecution отсекается в очереди, AnalyzeAsync отказывает сам,
 //   ступень 2 такой чат не вердиктит.
 // - skip побеждает балл: чат с пометкой «не разбирать» в очередь не попадает при любом балле.
+// - Приватный чат (PrivateToUserId) не разбирается: приватный чат виден только автору, машинные
+//   потребители чата его не читают вовсе (FIN3-3; образец — автообучение памяти,
+//   TeamMemoryAutolearnService). Очередь отсекает его в BuildQueue (ResolveOwnerId резолвит
+//   чат участника на владельца проекта — одного владения для допуска мало), AnalyzeAsync
+//   отказывает его как несуществующий (not_found).
 // - Отказ ступени 2 → серая зона: серый чат без «да» ночь не берёт, следующая ночь спросит снова.
 //   Вердикт «да» устаревает так же: ≥3 новых реплик человека — ступень 2 переспрашивается
 //   симметрично «нет», чат берётся только по новому «да».
@@ -41,6 +47,10 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // - один проход на владельца: флаг «идёт» с ключом по корню вики владельца (не по экземпляру), второй
 //   тик пропускает; кнопка и ночь по одному чату — один разбор (single-flight AnalyzeAsync, движок
 //   того, кто пришёл первым);
+// - ручной запуск (WN-5, «Разобрать ночь сейчас»): тот же проход под тем же замком — параллельно
+//   с тиком или другим ручным он не идёт; окно при ручном не проверяется, отметка «за дату уже
+//   пройдено» не мешает (человек нажал кнопку — проход состоится); сам ручной проход дату не
+//   закрывает: ночной тик той же даты проходит ночь заново (Manual в итоге — признак ручного);
 // - PUT enabled=false посреди ночи: тумблер перечитывается перед КАЖДЫМ чатом, остановка до
 //   следующего — outcome=disabled_midway;
 // - дата прохода живёт в keeper/nightly-last.json, пишется атомарно (temp+Move) и ПОСЛЕ прохода:
@@ -56,8 +66,10 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // к тому моменту уже записан, исключение отправителя не выходит из службы (LogSafe).
 
 // Честные пределы:
-// - Токены — ОЦЕНКА (символы дельты / 4, плюс потолок входа на каждый вызов ступени 2): фактический
-//   расход ChatResult не возвращает. Чатам отдано ≤ 70 % InputTokenBudget, остаток — запас на
+// - Токены — ОЦЕНКА EstTokens (символы дельты / 4, плюс потолок входа на каждый вызов ступени 2):
+//   по ней ночь решает бюджет ЗАРАНЕЕ, до вызова. Фактический вход NightResult.InputTokens — сумма
+//   ChatResult.InputTokens разобранных чатов и входа ступени 2 (WC-4a/WC-4b/WC-4c): её пишут
+//   постфактум, решения она не меняет. Чатам отдано ≤ 70 % InputTokenBudget, остаток — запас на
 //   ступень 2 и ответы.
 // - Пакеты: хроника чата — страница, а не пакет, в ChatResult.PackageIds её нет; считаются только
 //   пакеты. У исхода awaiting_human число пакетов неизвестно — он засчитывается как один (нижняя
@@ -69,9 +81,12 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //   (не откатывать); превышение остатка раздела закрывает только его раздел — его последующие чаты
 //   пропускаются, ночь идёт по другим разделам (решение 02.11); при остатке 0 чат не начинается.
 // - Облако: ночной разбор и ступень 2 в облако не уходят (решение Андрея 02.11): WikiIngestService
-//   (ключ wiki-nightly) и WikiChatStage2 зовут модель через RunLocalOrChosenAsync, без финального
-//   claude-шага. Падение или недоступность локали — отказ вызова: окно разбора уходит в Rejected
-//   и курсор не двигается, ступень 2 оставляет чат серым. Расход по этим вызовам не учитывается.
+//   (ключ wiki-nightly) и WikiChatStage2 зовут модель через RunLocalOrChosenDetailedAsync (та же
+//   цепочка, что RunLocalOrChosenAsync), без финального claude-шага. Падение или недоступность
+//   локали — отказ вызова: окно разбора уходит в Rejected и курсор не двигается, ступень 2
+//   оставляет чат серым; целая ночь таких отказов (каждый разобранный чат отказан и вход нулевой)
+//   — итог error, не completed (WN-2, конец RunPassAsync). Фактический вход этих вызовов (usage
+//   того же ответа движка) суммируется в NightResult.InputTokens — меры нагрузки, не денег.
 //   Кнопка «Разобрать» и агент wiki_ingest не затронуты — облако там допустимо.
 public sealed class WikiNightlyService : BackgroundService
 {
@@ -94,10 +109,21 @@ public sealed class WikiNightlyService : BackgroundService
     /// исход; Applied — применённых пакетов; ToInbox — чатов с пакетами во «Входящих»; EstTokens —
     /// оценка расхода (см. шапку). OverrodeHuman — формулировок человека, которые ИИ заменил за ночь
     /// сам; DisputedPages — страниц, где он сам оспорил утверждение человека (conflict@human, ADR-038, предохранитель 6);
-    /// в файле итога поля аддитивны: старый итог читается нулями.</summary>
+    /// InputTokens (WC-4b/WC-4c) — полный вход (вместе с кэшем): сумма ChatResult.InputTokens всех
+    /// разобранных чатов плюс фактический вход ступени 2. Мера нагрузки на GPU локали, а не деньги:
+    /// деньги из этого поля не считать, стоимость облачного пути — OneShotUsage.CostUsd. Сумма —
+    /// независимо от исхода (отказанный план и отказ ступени 2 понесённого расхода не отменяют);
+    /// чат, упавший исключением, в сумму не входит. 0 до WC-4c означало «не измерено», а не
+    /// «ничего не потрачено». Rejected (WN-2) — число отказанных разборов (OutcomeRejected) среди
+    /// analyzed; FirstRejectReason — текст причины первого отказа (ChatResult.Reason), чтобы
+    /// «completed при нулевом входе» имел, чем объясниться. Сбой разбора исключением в Rejected
+    /// не идёт. Manual (WN-5) — проход запущен кнопкой вручную: он не закрывает дату, ночной тик
+    /// той же даты проходит ночь заново. В файле итога поля аддитивны: старый итог (без поля)
+    /// читается нулями, старый Manual — false.</summary>
     public sealed record NightResult(
         string Date, int Selected, int Analyzed, int Applied, int ToInbox, long EstTokens, string Outcome,
-        int OverrodeHuman = 0, int DisputedPages = 0);
+        int OverrodeHuman = 0, int DisputedPages = 0, long InputTokens = 0,
+        int Rejected = 0, string? FirstRejectReason = null, bool Manual = false);
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -119,31 +145,34 @@ public sealed class WikiNightlyService : BackgroundService
     private readonly IConfiguration _config;
     private readonly Composition.IFeatureFlagGate? _flags;
     private readonly Composition.INotificationSender? _notifications;
+    private readonly WikiKeeper? _keeper;
     private readonly ILogger<WikiNightlyService> _log;
     private readonly Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> _analyze;
     private readonly Func<DateTimeOffset> _clock;
     private readonly string _dataDir;
 
     public WikiNightlyService(ISessionDirectory sessions, WikiChatRecalc recalc, WikiChatStage2 stage2,
-        WikiChatIngestService ingest, ICheapTextRunner llm, IConfiguration config,
+        WikiChatIngestService ingest, WikiKeeper keeper, ICheapTextRunner llm, IConfiguration config,
         ILogger<WikiNightlyService> log, Composition.IFeatureFlagGate? flags = null,
         Composition.INotificationSender? notifications = null)
         : this(sessions, recalc, stage2,
             // actionKey — только константа места: внешнего ввода у ночи нет.
             (owner, chat, ct) => ingest.AnalyzeAsync(owner, chat, ct, LocalActionCatalog.WikiNightly),
-            llm, config, log, flags, clock: null, notifications: notifications)
+            llm, config, log, flags, clock: null, notifications: notifications, keeper: keeper)
     {
     }
 
     // Шов теста: разбор и часы подменяются (ограничения проверяются без настоящей модели, а окно —
     // без ожидания ночи). В приложении сюда попадает только цепочка из публичного конструктора.
-    // notifications — после clock: существующие вызовы шва (позиционные) не сдвигаются.
+    // notifications и keeper — после clock: существующие вызовы шва (позиционные) не сдвигаются.
+    // keeper == null (тест без шва заведения) — ночь не заводит вики и берёт только заведённых.
     internal WikiNightlyService(ISessionDirectory sessions, WikiChatRecalc recalc, WikiChatStage2 stage2,
         Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> analyze,
         ICheapTextRunner llm, IConfiguration config, ILogger<WikiNightlyService> log,
         Composition.IFeatureFlagGate? flags, Func<DateTimeOffset>? clock,
-        Composition.INotificationSender? notifications = null)
+        Composition.INotificationSender? notifications = null, WikiKeeper? keeper = null)
     {
+        _keeper = keeper;
         _sessions = sessions;
         _recalc = recalc;
         _stage2 = stage2;
@@ -197,7 +226,9 @@ public sealed class WikiNightlyService : BackgroundService
         }
     }
 
-    // Владельцы с заведённой вики: подкаталоги data/wiki/ с pages/_schema.md (как у линта).
+    // Владельцы: подкаталоги data/wiki/ с pages/_schema.md (как у линта) ИЛИ с валидными настройками
+    // и включённым тумблером ночи — вики такого владельца ночь заведёт сама (RunOwnerAsync). Чтение
+    // настроек ничего не пишет.
     private List<string> EnumerateWikiOwners()
     {
         var wikiRoot = Path.Combine(_dataDir, WikiPaths.DirName);
@@ -206,7 +237,8 @@ public sealed class WikiNightlyService : BackgroundService
         {
             return Directory.EnumerateDirectories(wikiRoot)
                 .Select(d => Path.GetFileName(d))
-                .Where(id => !string.IsNullOrWhiteSpace(id) && WikiPaths.IsInitialized(_dataDir, id))
+                .Where(id => !string.IsNullOrWhiteSpace(id)
+                    && (WikiPaths.IsInitialized(_dataDir, id) || WantsAutoInit(id)))
                 .OrderBy(id => id, StringComparer.Ordinal)
                 .ToList();
         }
@@ -214,6 +246,14 @@ public sealed class WikiNightlyService : BackgroundService
         {
             return [];
         }
+    }
+
+    // Незаведённый владелец с включённой ночью: настройки читаются и валидны, Enabled=true.
+    private bool WantsAutoInit(string ownerId)
+    {
+        if (_keeper is null) return false;
+        var (settings, invalid) = WikiSettingsStore.Read(WikiPaths.Root(_dataDir, ownerId));
+        return !invalid && settings.NightlyOrDefaults().Enabled;
     }
 
     private async Task RunOwnerGuardedAsync(string ownerId, DateTimeOffset now, CancellationToken ct)
@@ -237,6 +277,80 @@ public sealed class WikiNightlyService : BackgroundService
         catch { /* см. LogSafe */ }
     }
 
+    // ─── Ручной запуск (WN-5) ────────────────────────────────────────────────
+
+    /// <summary>Исход запроса ручного прохода (WN-5): Started — проход начат; LlmWikiOff — функция
+    /// выключена; Disabled — тумблер ночи выключен; Invalid — настройки нечитаемы; AlreadyRunning —
+    /// этот владелец уже проходит (тот же замок, что у ночного тика).</summary>
+    public enum ManualStart { Started, LlmWikiOff, Disabled, Invalid, AlreadyRunning }
+
+    // CTS ручных проходов: они живут вне ExecuteAsync — StopAsync службы гасит их; проход сам ловит
+    // своё отключение и снимает замок в finally.
+    private readonly ConcurrentDictionary<CancellationTokenSource, byte> _manualStops = new();
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        foreach (var cts in _manualStops.Keys)
+        {
+            try { cts.Cancel(); } catch (ObjectDisposedException) { /* проход уже закончился */ }
+        }
+        await base.StopAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Идёт ли проход этой вики — флаг, общий на процесс (тот же ключ, что у замка
+    /// службы): настройки читают его, чтобы показать состояние кнопки «Разобрать сейчас».</summary>
+    public static bool IsRunning(string root) => Running.ContainsKey(root);
+
+    /// <summary>Ручной запуск ночного разбора (кнопка «Разобрать сейчас», WN-5): тот же
+    /// RunOwnerPassAsync, что и у ночного тика, но окно не проверяется и отметка «за дату уже
+    /// пройдено» не мешает. Флаг и тумблер проверяются до замка: причина отказа называется, не
+    /// трогая его; замок берётся синхронно, до возврата: по ответу вызывающий знает наверняка,
+    /// начал он проход или владелец уже занят. Дата ручного прохода — сегодняшняя (окна нет,
+    /// дата которого была бы началом прохода). Проход — Task.Run со своим CTS (гасится StopAsync),
+    /// всё под catch: наружу вызывающему исключение не выходит; finally снимает замок.</summary>
+    public ManualStart TryStartManual(string ownerId) => StartManual(ownerId, out _);
+
+    // Перегрузка для теста: отдаёт Task прохода — тест ждёт его завершения и проверяет снятие
+    // замка без настоящей модели.
+    internal ManualStart TryStartManual(string ownerId, out Task pass) => StartManual(ownerId, out pass);
+
+    private ManualStart StartManual(string ownerId, out Task pass)
+    {
+        pass = Task.CompletedTask;
+        // Порядок отказов — как у тика: сначала флаг, потом тумблер, потом нечитаемые настройки —
+        // и всё до замка: отказ не должен выглядеть как «уже занято».
+        if (_flags?.IsEnabled(ownerId, FeatureFlagKeys.LlmWiki) != true) return ManualStart.LlmWikiOff;
+        var root = WikiPaths.Root(_dataDir, ownerId);
+        var (settings, invalid) = WikiSettingsStore.Read(root);
+        if (invalid) return ManualStart.Invalid;
+        if (!settings.NightlyOrDefaults().Enabled) return ManualStart.Disabled;
+        if (!Running.TryAdd(root, 0)) return ManualStart.AlreadyRunning; // этот владелец уже проходит
+
+        var date = DateOnly.FromDateTime(_clock().Date);
+        var initialized = WikiPaths.IsInitialized(_dataDir, ownerId);
+        var cts = new CancellationTokenSource();
+        _manualStops[cts] = 0;
+        pass = Task.Run(async () =>
+        {
+            try
+            {
+                await RunOwnerPassAsync(ownerId, root, date, initialized, manual: true, cts.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Ручной проход — не исключение вызывающему: 202 уже дан, исход и сбой — в журнале.
+                LogSafe(ex, "Ручной ночной разбор вики {Owner}", ownerId);
+            }
+            finally
+            {
+                Running.TryRemove(root, out _);
+                _manualStops.TryRemove(cts, out _);
+                cts.Dispose();
+            }
+        });
+        return ManualStart.Started;
+    }
+
     // ─── Проход владельца ─────────────────────────────────────────────────────
 
     private async Task RunOwnerAsync(string ownerId, DateTimeOffset now, CancellationToken ct)
@@ -246,8 +360,11 @@ public sealed class WikiNightlyService : BackgroundService
 
         var root = WikiPaths.Root(_dataDir, ownerId);
         var (settings, invalid) = WikiSettingsStore.Read(root);
+        var initialized = WikiPaths.IsInitialized(_dataDir, ownerId);
         if (invalid)
         {
+            // У незаведённой вики сигнал создал бы pages/ мимо EnsureInitializedAsync: пропуск без записи.
+            if (!initialized) return;
             // Нечитаемый файл — умолчания (ночь выключена) и строка в _health.md тем же сигналом,
             // что у здоровья классов; разбора нет.
             var today = DateOnly.FromDateTime(now.Date);
@@ -259,37 +376,67 @@ public sealed class WikiNightlyService : BackgroundService
         var cfg = settings.NightlyOrDefaults();
         if (!cfg.Enabled) return;
         if (!InWindow(now.Hour, cfg.WindowStartHour, cfg.WindowEndHour)) return;
+        if (!initialized && _keeper is null) return;
 
         var date = WindowDate(now, cfg.WindowStartHour, cfg.WindowEndHour);
         var key = root;
         if (!Running.TryAdd(key, 0)) return; // этого владельца уже проходит другой тик
         try
         {
-            var last = ReadLast(root);
-            if (last is not null && last.Date == FormatDate(date) && last.Outcome != OutcomeError)
-                return; // эта ночь уже пройдена (в том числе до рестарта)
-
-            // Прочитанный до прохода итог этого же дня — error: о неудаче ночи владельцу уже
-            // сказано. Проход повторяется (error дату не закрывает), но то же предупреждение
-            // второй раз за дату не отправляется.
-            var errorAlreadyNotified = last is not null && last.Date == FormatDate(date) && last.Outcome == OutcomeError;
-
-            var result = await RunPassAsync(ownerId, root, date, ct);
-            // Дата прохода — ПОСЛЕ прохода. Сбой записи итога не отменяет проход (его разборы
-            // уже в сторах): следующий тик найдёт курсоры на концах и не разберёт ничего лишнего.
-            try { WriteLast(root, result); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                LogSafe(ex, "Итог ночного разбора {Owner} не записан", ownerId);
-            }
-            // Уведомление — ПОСЛЕ записи итога: даже если доставка откажет, итог уже на диске
-            // и в следующем тике читается настройками. Сбой отправителя остаёт в TryNotifyAsync.
-            // Молчим только о повторном error той же даты; успех после error и любой иной исход — сообщаем.
-            if (!(errorAlreadyNotified && result.Outcome == OutcomeError)) await TryNotifyAsync(ownerId, result);
+            await RunOwnerPassAsync(ownerId, root, date, initialized, manual: false, ct);
         }
         finally
         {
             Running.TryRemove(key, out _);
+        }
+    }
+
+    // Тело прохода под замком владельца (WN-5): общее у ночного тика и ручного запуска.
+    // Ручной не встречает отметку «за дату уже пройдено» — человек нажал кнопку, проход состоится.
+    // Тик пропускается, если итог той же даты не error и не ручной: ручной проход дату НЕ закрывает,
+    // ночной тик той же даты проходит ночь заново.
+    private async Task RunOwnerPassAsync(string ownerId, string root, DateOnly date, bool initialized, bool manual, CancellationToken ct)
+    {
+        var last = ReadLast(root);
+        if (!manual && last is not null && last.Date == FormatDate(date) && last.Outcome != OutcomeError && !last.Manual)
+            return; // эта ночь уже пройдена (в том числе до рестарта)
+
+        // Прочитанный до прохода итог этого же дня — error: о неудаче ночи владельцу уже
+        // сказано. Проход повторяется (error дату не закрывает), но то же предупреждение
+        // второй раз за дату не отправляется.
+        var errorAlreadyNotified = last is not null && last.Date == FormatDate(date) && last.Outcome == OutcomeError;
+
+        NightResult result;
+        if (!initialized && !await TryEnsureInitializedAsync(ownerId))
+            result = new NightResult(FormatDate(date), 0, 0, 0, 0, 0, OutcomeError, Manual: manual);
+        else
+            result = await RunPassAsync(ownerId, root, date, manual, ct);
+        // Дата прохода — ПОСЛЕ прохода. Сбой записи итога не отменяет проход (его разборы
+        // уже в сторах): следующий тик найдёт курсоры на концах и не разберёт ничего лишнего.
+        try { WriteLast(root, result); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            LogSafe(ex, "Итог ночного разбора {Owner} не записан", ownerId);
+        }
+        // Уведомление — ПОСЛЕ записи итога: даже если доставка откажет, итог уже на диске
+        // и в следующем тике читается настройками. Сбой отправителя остаёт в TryNotifyAsync.
+        // Молчим только о повторном error той же даты; успех после error и любой иной исход — сообщаем.
+        if (!(errorAlreadyNotified && result.Outcome == OutcomeError)) await TryNotifyAsync(ownerId, result);
+    }
+
+    // Единственная точка, где ночь пишет в незаведённую вики: идемпотентный EnsureInitializedAsync
+    // (под замком владельца, с перепроверкой). Сбой — исход error: дату не закрывает, владелец уведомлён.
+    private async Task<bool> TryEnsureInitializedAsync(string ownerId)
+    {
+        try
+        {
+            await _keeper!.EnsureInitializedAsync(ownerId).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            LogSafe(ex, "Ночной разбор {Owner}: вики не заведена", ownerId);
+            return false;
         }
     }
 
@@ -310,11 +457,12 @@ public sealed class WikiNightlyService : BackgroundService
 
     private sealed record Candidate(Session Session, WikiChatTriageEntry? Entry, bool Important, string Home);
 
-    private async Task<NightResult> RunPassAsync(string ownerId, string root, DateOnly date, CancellationToken ct)
+    private async Task<NightResult> RunPassAsync(string ownerId, string root, DateOnly date, bool manual, CancellationToken ct)
     {
-        int selected = 0, analyzed = 0, applied = 0, toInbox = 0, packagesNight = 0, overrodeHuman = 0;
+        int selected = 0, analyzed = 0, applied = 0, toInbox = 0, packagesNight = 0, overrodeHuman = 0, rejected = 0;
+        string? firstRejectReason = null;
         var disputedPages = new HashSet<string>(StringComparer.Ordinal);
-        long est = 0;
+        long est = 0, inputTokens = 0;
         var outcome = OutcomeCompleted;
         try
         {
@@ -338,7 +486,7 @@ public sealed class WikiNightlyService : BackgroundService
             {
                 ct.ThrowIfCancellationRequested();
                 // Лимит пакетов за ночь: при остатке 0 чат не начинается.
-                var (stop, cfgNow) = CheckStop(ownerId, root, date);
+                var (stop, cfgNow) = CheckStop(ownerId, root, date, manual);
                 if (stop is not null) { outcome = stop; break; }
                 if (packagesNight >= cfgNow!.MaxPackagesPerNight) { outcome = OutcomeBudget; break; }
 
@@ -366,7 +514,14 @@ public sealed class WikiNightlyService : BackgroundService
                     {
                         var judged = await _stage2.JudgeAsync(ownerId, c.Session.Id, ct);
                         if (judged.Outcome != WikiChatStage2.Outcome.NotApplicable)
+                        {
                             est += (WikiChatStage2.MaxInputChars + WikiChatStage2.PromptHeader.Length) / 4;
+                            // Фактический вход ступени 2 (WC-4c): метрики того же ответа модели,
+                            // по которому вынесен вердикт. Считается по факту вызова: отказ
+                            // ступени 2 понесённого расхода не отменяет (тот же смысл, что у
+                            // ChatResult). NotApplicable — модель не звалась, расхода нет.
+                            inputTokens += judged.InputTokens;
+                        }
                         // Отказ ступени 2 → серая зона: чат отложен до следующей ночи.
                         if (judged.Outcome != WikiChatStage2.Outcome.Judged
                             || judged.Zone != WikiChatScorer.ZoneTriage) continue;
@@ -395,8 +550,22 @@ public sealed class WikiNightlyService : BackgroundService
                     continue;
                 }
                 analyzed++;
+                // Фактический вход (WC-4b): сумма по всем разобранным чатам независимо от исхода —
+                // отказанный план понесённый расход не отменяет (тот же смысл, что у ChatResult).
+                // Чат, упавший исключением выше, до analyzed++ не доходит: его токенов нет.
+                inputTokens += r.InputTokens;
+                // Отказанные разборы (WN-2): считаются и называются в журнале — без них ночь из
+                // 100 отказов выглядела completed и не оставила ни строки (отчёт 79e98305, Ш2).
+                if (r.Outcome == WikiChatIngestService.OutcomeRejected)
+                {
+                    rejected++;
+                    firstRejectReason ??= r.Reason;
+                    LogInfoSafe("Ночной разбор {Owner}: чат {Chat} отказан: {Reason}", ownerId, c.Session.Id, r.Reason);
+                }
                 var made = r.Outcome switch
                 {
+                    // Частичный исход (Partial, WC-3) — тоже applied: его применённые пакеты
+                    // считаются здесь же, отказ позднего окна их не перечёркивает.
                     WikiChatIngestService.OutcomeApplied => r.PackageIds.Count,
                     WikiChatIngestService.OutcomeAwaitingHuman => 1, // число неизвестно: нижняя граница
                     _ => 0,
@@ -425,39 +594,58 @@ public sealed class WikiNightlyService : BackgroundService
             LogSafe(ex, "Ночной разбор {Owner}: проход прерван", ownerId);
             outcome = OutcomeError;
         }
+        // Инвариант «нулевой вход при всех отказах ≠ completed» (WN-2): когда каждый состоявшийся
+        // разбор отказан и ни один токен не дошёл до модели, ночь не «завершена» — она не удалась:
+        // error дату не закрывает, следующий тик окна пробует снова (повтор и уведомление — выше,
+        // их не меняем). Ветки budget/open_limit/window_closed/disabled_midway сюда не доходят:
+        // их итог назван своей причиной. Сбой разбора исключением в rejected не идёт (catch выше
+        // analyzed++) и инварианту не мешает: без отказа он не был бы и разобранным.
+        if (outcome == OutcomeCompleted && analyzed > 0 && rejected == analyzed && inputTokens == 0)
+        {
+            LogInfoSafe("Ночной разбор {Owner}: локальная модель не ответила — отказаны все {Analyzed} чатов с нулевым входом",
+                ownerId, analyzed);
+            outcome = OutcomeError;
+        }
         return Result(outcome);
 
         NightResult Result(string o) => new(FormatDate(date), selected, analyzed, applied, toInbox, est, o,
-            overrodeHuman, disputedPages.Count);
+            overrodeHuman, disputedPages.Count, inputTokens, rejected, firstRejectReason, manual);
     }
 
     // Что мешает продолжать ПЕРЕД чатом: тумблер/флаг сняли (disabled_midway), окно закрылось
     // (window_closed), модель недоступна (error — облако молча не подставляется), упор в лимит
     // открытых пакетов (open_limit). Настройки перечитываются каждый раз: PUT посреди ночи виден
-    // следующему чату.
-    private (string? Stop, WikiSettingsStore.NightlyConfig? Cfg) CheckStop(string ownerId, string root, DateOnly date)
+    // следующему чату. При ручном проходе (WN-5) окно не проверяется вовсе: человек запустил
+    // разбор вне окна — оно ему не преграда; флаг, тумблер, маршрут и open_limit — как у тика.
+    private (string? Stop, WikiSettingsStore.NightlyConfig? Cfg) CheckStop(string ownerId, string root, DateOnly date, bool manual)
     {
         if (_flags?.IsEnabled(ownerId, FeatureFlagKeys.LlmWiki) != true) return (OutcomeDisabledMidway, null);
         var cfg = WikiSettingsStore.Read(root).Settings.NightlyOrDefaults();
         if (!cfg.Enabled) return (OutcomeDisabledMidway, null);
-        var now = _clock();
-        if (!InWindow(now.Hour, cfg.WindowStartHour, cfg.WindowEndHour)
-            || WindowDate(now, cfg.WindowStartHour, cfg.WindowEndHour) != date) return (OutcomeWindowClosed, null);
+        if (!manual)
+        {
+            var now = _clock();
+            if (!InWindow(now.Hour, cfg.WindowStartHour, cfg.WindowEndHour)
+                || WindowDate(now, cfg.WindowStartHour, cfg.WindowEndHour) != date) return (OutcomeWindowClosed, null);
+        }
         if (!_llm.HasRoute(LocalActionCatalog.WikiNightly)) return (OutcomeError, null);
         if (WikiPackageStore.CountOpen(root) >= WikiPackage.MaxOpenPackages) return (OutcomeOpenLimit, null);
         return (null, cfg);
     }
 
     // Очередь прохода: чаты владельца, которые ночь вообще может взять. Чат исполнения задач,
-    // чат с пометкой «не разбирать» и личный раздел отсекаются здесь (skip побеждает балл);
-    // берутся «важные» (минуя ступени 1–2), зона triage и серые (их судит ступень 2 на подходе
-    // очереди). Порядок: «важные», затем по UpdatedAt убыв.
+    // чат с пометкой «не разбирать», приватный чат и личный раздел отсекаются здесь
+    // (skip побеждает балл); берутся «важные» (минуя ступени 1–2), зона triage и серые
+    // (их судит ступень 2 на подходе очереди). Порядок: «важные», затем по UpdatedAt убыв.
     private List<Candidate> BuildQueue(string ownerId, IReadOnlyDictionary<string, WikiChatTriageEntry> entries)
     {
         var result = new List<Candidate>();
         foreach (var s in _sessions.GetAll().Where(x => _sessions.ResolveOwnerId(x) == ownerId))
         {
-            if (s.TaskExecution || s.WikiMark == WikiMarks.Skip) continue;
+            // Приватный чат (FIN3-3, инвариант в шапке): PrivateToUserId != null — виден только
+            // автору; чат участника общего проекта резолвится на владельца, но в его очередь
+            // не входит ни под каким баллом (тот же фильтр, что у автообучения памяти).
+            if (s.TaskExecution || s.WikiMark == WikiMarks.Skip || s.PrivateToUserId is not null) continue;
             var home = WikiChatIngestService.HomeOf(s);
             if (home == WikiSections.Personal) continue;
             entries.TryGetValue(s.Id, out var e);

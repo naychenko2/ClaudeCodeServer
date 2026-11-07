@@ -17,7 +17,7 @@ using SkiaSharp;
 namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 
 // «Найти лица на версии» (ADR-028, этап 2): POST .../threads/{threadId}/versions/{versionId}/faces.
-// Флаг character-face-swap гейтит ручку (выключен — 404 feature_disabled), 200 — список лиц + facesKey,
+// 200 — список лиц + facesKey,
 // повторный запрос на те же байты берётся из кэша (детектор один раз), Busy — 503, Error — 409, оба не кэшируются,
 // версии нет — 404 version_not_found, чужая нить — 404 thread_not_found, личная область — 404 (маршрута нет).
 [Trait("Category", "Host")]
@@ -110,9 +110,6 @@ public class FacesEndpointTests : IClassFixture<FacesEndpointTests.Host>, IDispo
     private string Threads(string sessionId) => $"/api/projects/{_projectId}/image-editor/sessions/{sessionId}/threads";
     private long Revision(string chatId) => Store.Get(_ownerId, chatId).Revision;
 
-    private void Flag(bool on) =>
-        _factory.Services.GetRequiredService<UserStore>().SetFeatureFlag(_ownerId, FeatureFlagKeys.CharacterFaceSwap, on);
-
     private static async Task<JsonElement> Json(HttpResponseMessage resp) =>
         JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
 
@@ -133,28 +130,12 @@ public class FacesEndpointTests : IClassFixture<FacesEndpointTests.Host>, IDispo
     private Task<HttpResponseMessage> Faces(string chatId, string threadId, string versionId) =>
         _client.PostAsync($"{Threads(chatId)}/{threadId}/versions/{versionId}/faces", null!);
 
-    // Флаг выключен — 404 feature_disabled (ручки нет, как у DossiersController)
+    // 200 по контракту: facesKey, width, height, faces (n с 1, bbox, score, small)
     [Fact]
-    public async Task Флаг_выключен_feature_disabled()
+    public async Task Ответ_200_по_контракту()
     {
         var chat = await Chat();
         var (threadId, originId) = await OpenThread(chat.Id, "images/hero.png");
-        Flag(false);
-
-        var resp = await Faces(chat.Id, threadId, originId);
-
-        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
-        (await Code(resp)).Should().Be("feature_disabled");
-        _media.DetectCalls.Should().Be(0, "флаг выключен — детектор не запускался");
-    }
-
-    // Флаг включён — 200 по контракту: facesKey, width, height, faces (n с 1, bbox, score, small)
-    [Fact]
-    public async Task Флаг_включен_200_по_контракту()
-    {
-        var chat = await Chat();
-        var (threadId, originId) = await OpenThread(chat.Id, "images/hero.png");
-        Flag(true);
 
         var resp = await Faces(chat.Id, threadId, originId);
 
@@ -176,7 +157,6 @@ public class FacesEndpointTests : IClassFixture<FacesEndpointTests.Host>, IDispo
     {
         var chat = await Chat();
         var (threadId, originId) = await OpenThread(chat.Id, "images/hero.png");
-        Flag(true);
 
         var first = await Faces(chat.Id, threadId, originId);
         var firstKey = (await Json(first)).GetProperty("facesKey").GetString()!;
@@ -194,7 +174,6 @@ public class FacesEndpointTests : IClassFixture<FacesEndpointTests.Host>, IDispo
         var chat = await Chat();
         var (t1, o1) = await OpenThread(chat.Id, "images/hero.png");
         var (t2, o2) = await OpenThread(chat.Id, "images/other.png");
-        Flag(true);
 
         var k1 = (await Json(await Faces(chat.Id, t1, o1))).GetProperty("facesKey").GetString()!;
         var k2 = (await Json(await Faces(chat.Id, t2, o2))).GetProperty("facesKey").GetString()!;
@@ -209,7 +188,6 @@ public class FacesEndpointTests : IClassFixture<FacesEndpointTests.Host>, IDispo
     {
         var chat = await Chat();
         var (threadId, originId) = await OpenThread(chat.Id, "images/hero.png");
-        Flag(true);
         _media.Result = _ => new LocalFaceDetectResult(0, 0, [], null, true);
 
         var resp = await Faces(chat.Id, threadId, originId);
@@ -226,7 +204,6 @@ public class FacesEndpointTests : IClassFixture<FacesEndpointTests.Host>, IDispo
     {
         var chat = await Chat();
         var (threadId, originId) = await OpenThread(chat.Id, "images/hero.png");
-        Flag(true);
         _media.Result = _ => new LocalFaceDetectResult(0, 0, [], "Сбой детекции");
 
         var resp = await Faces(chat.Id, threadId, originId);
@@ -243,7 +220,6 @@ public class FacesEndpointTests : IClassFixture<FacesEndpointTests.Host>, IDispo
     {
         var chat = await Chat();
         var (threadId, _) = await OpenThread(chat.Id, "images/hero.png");
-        Flag(true);
 
         var resp = await Faces(chat.Id, threadId, "нет-такой");
 
@@ -258,7 +234,6 @@ public class FacesEndpointTests : IClassFixture<FacesEndpointTests.Host>, IDispo
         var chat = await Chat();
         var other = await Chat();
         var (foreignThread, _) = await OpenThread(other.Id, "images/hero.png");
-        Flag(true);
 
         var resp = await Faces(chat.Id, foreignThread, ImageThreadVersion.OriginId);
 
@@ -275,7 +250,6 @@ public class FacesEndpointTests : IClassFixture<FacesEndpointTests.Host>, IDispo
             new { draftFolder = "", revision = 0 });
         resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
         var threadId = (await Json(resp)).GetProperty("focus").GetString()!;
-        Flag(true);
 
         var faces = await _client.PostAsync($"/api/image-editor/chats/{chat.Id}/threads/{threadId}/versions/{ImageThreadVersion.OriginId}/faces", null!);
 

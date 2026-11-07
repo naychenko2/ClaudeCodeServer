@@ -61,25 +61,20 @@ describe('pickBadge: пометка по pick', () => {
 describe('stripVisible: видимость блока', () => {
   const base = { versionId: 'v1', cropNote: null as string | null, character };
 
-  it('флаг выключен — блока нет, даже с персонажем', () => {
-    expect(stripVisible({ ...base, smart: false })).toBe(false);
-    // Мутация: smart не участвовать в решении — тест краснеет
-  });
-
-  it('флаг включён, персонаж есть — блок есть', () => {
-    expect(stripVisible({ ...base, smart: true })).toBe(true);
+  it('персонаж есть — блок есть', () => {
+    expect(stripVisible(base)).toBe(true);
   });
 
   it('исходник (ORIGIN) — блока нет', () => {
-    expect(stripVisible({ ...base, smart: true, versionId: 'origin' })).toBe(false);
+    expect(stripVisible({ ...base, versionId: 'origin' })).toBe(false);
   });
 
   it('обрезка без ИИ (cropNote) — блока нет', () => {
-    expect(stripVisible({ ...base, smart: true, cropNote: '800×600 · 4:3 · обрезано без ИИ' })).toBe(false);
+    expect(stripVisible({ ...base, cropNote: '800×600 · 4:3 · обрезано без ИИ' })).toBe(false);
   });
 
   it('персонажа нет — блока нет', () => {
-    expect(stripVisible({ ...base, smart: true, character: null })).toBe(false);
+    expect(stripVisible({ ...base, character: null })).toBe(false);
   });
 });
 

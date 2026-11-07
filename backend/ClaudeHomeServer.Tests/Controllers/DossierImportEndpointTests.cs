@@ -86,11 +86,6 @@ public class DossierImportEndpointTests : IClassFixture<TestWebApplicationFactor
     [Fact]
     public async Task Импорт_ДобавляетЗаписи_Идемпотентен_ИОтдаётПроисхождение()
     {
-        // Флаг выставляем явно (состояние per-user живёт в общей фабрике класса)
-        (await _client.PutAsJsonAsync(
-            $"/api/feature-flags/{FeatureFlagKeys.ChangeDossiersRecall}", new { enabled = true }))
-            .EnsureSuccessStatusCode();
-
         var projectId = await CreateGitProjectAsync();
 
         // Первый вызов: запись добавлена с признаком происхождения
@@ -125,10 +120,6 @@ public class DossierImportEndpointTests : IClassFixture<TestWebApplicationFactor
     [Fact]
     public async Task БезВетки_ЯвныйNoBranch()
     {
-        (await _client.PutAsJsonAsync(
-            $"/api/feature-flags/{FeatureFlagKeys.ChangeDossiersRecall}", new { enabled = true }))
-            .EnsureSuccessStatusCode();
-
         var dir = Path.Combine(_factory.TempDir, "dossier_import_nobranch_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         var git = new GitService(TestLauncherFactory.Instance);
@@ -157,10 +148,6 @@ public class DossierImportEndpointTests : IClassFixture<TestWebApplicationFactor
     [Fact]
     public async Task ExportStatus_ОтражаетНаличиеВеткиПаспортов()
     {
-        (await _client.PutAsJsonAsync(
-            $"/api/feature-flags/{FeatureFlagKeys.ChangeDossiersRecall}", new { enabled = true }))
-            .EnsureSuccessStatusCode();
-
         // Репозиторий с веткой: фикстура уже записала refs/heads/ccs/dossiers/v1
         var withBranch = await ExportStatusAsync(await CreateGitProjectAsync());
         withBranch.GetProperty("isGitRepo").GetBoolean().Should().BeTrue();
@@ -188,10 +175,6 @@ public class DossierImportEndpointTests : IClassFixture<TestWebApplicationFactor
     [Fact]
     public async Task РучнаяВыгрузкаЗатемТикАвтоимпорта_НичегоНеИмпортирует()
     {
-        (await _client.PutAsJsonAsync(
-            $"/api/feature-flags/{FeatureFlagKeys.ChangeDossiersRecall}", new { enabled = true }))
-            .EnsureSuccessStatusCode();
-
         // Репозиторий без ветки паспортов: её создаст сама ручная выгрузка
         var dir = Path.Combine(_factory.TempDir, "dossier_export_loop_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
@@ -239,8 +222,7 @@ public class DossierImportEndpointTests : IClassFixture<TestWebApplicationFactor
             sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierStore>(),
             sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierCaptureState>(),
             sp.GetRequiredService<ClaudeHomeServer.Services.Git.IGitRefSnapshotStore>(),
-            sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.InstanceSecretsProvider>(),
-            sp.GetRequiredService<ClaudeHomeServer.Services.Composition.IFeatureFlagGate>())
+            sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.InstanceSecretsProvider>())
             .TickAsync();
 
         var payload = JsonSerializer.Deserialize<JsonElement>(

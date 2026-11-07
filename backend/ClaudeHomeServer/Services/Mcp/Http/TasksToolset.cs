@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
@@ -50,6 +51,14 @@ public sealed class TasksToolset(
     // Подсистема Notes отключаемая: null — обратная запись в заметку-источник тихо
     // пропускается (см. использование ниже, паритет с TasksController).
     ClaudeHomeServer.Services.Spheres.ISphereDirectory spheres,
+    ITurnFrameSource frames,
+    // S2b-2b (назначение человека-исполнителя по username): UserStore — та же точка
+    // резолва username→id, что у приглашения участника (ProjectMembershipService);
+    // IProjectAccess — единственная точка решения о членстве и роли, та же, что у
+    // REST-двери TasksController.Update: две двери не должны решать по-разному
+    UserStore users,
+    IProjectAccess access,
+    IActorRightGate actorGate,
     INoteTaskSync? noteSync = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/tasks/{sessionId}. Константа —
@@ -101,6 +110,21 @@ public sealed class TasksToolset(
         var projectId = session.ProjectId;
         var selfPersonaId = session.PersonaId;
         var extraScopes = bindings.BuildExternalTaskScopes(context.OwnerId, persona);
+        // Узкая рамка хода (общий проект, S2a-3a): только задачи проекта чата-вызывателя. Кросс-проектные
+        // привязки персоны отбрасываем (зона = один проект), scope=all, список проектов и поиск по
+        // всем задачам закрыты. Вердикт только читается; состав tools/list от него не зависит.
+        var frame = frames.Frame(context.CallerSessionId, context.OwnerId);
+        var narrow = frame == TurnFrameKind.Narrow;
+        if (narrow)
+        {
+            if (NarrowDenied(tool, arguments, projectId)) return Deny(NarrowText);
+            extraScopes = [];
+        }
+        // Право актора хода (S2c-6): tasks_* агента редактора открыты явной строкой таблицы (Q1),
+        // остальное — default-deny по актору реестра хода
+        if (actorGate.Denied(ActorToolRights.Tasks, tool, context.CallerSessionId, context.OwnerId, projectId)
+            is { } actorDenied)
+            return Deny(actorDenied);
         var allowed = AllowedProjectIds(projectId, extraScopes);
         var extraReadOnly = extraScopes.Where(s => s.ReadOnly).Select(s => s.ProjectId)
             .ToHashSet(StringComparer.Ordinal);
@@ -139,7 +163,7 @@ public sealed class TasksToolset(
                     return BriefList(all.Where(t => t.ProjectId == explicitProject));
                 }
                 if (StringArg(arguments, "scope") == "all")
-                    return BriefList(all.Where(t => InScope(projectId, allowed, t)));
+                    return BriefList(all.Where(t => InScope(projectId, allowed, t, narrow)));
                 // scope=context (дефолт): проект чата, либо личные задачи владельца
                 var data = projectId is not null
                     ? all.Where(t => t.ProjectId == projectId)
@@ -156,14 +180,16 @@ public sealed class TasksToolset(
                         t.Title.Contains(q, StringComparison.OrdinalIgnoreCase)
                         || t.Description.Contains(q, StringComparison.OrdinalIgnoreCase)
                         || t.Labels.Any(l => l.Contains(q, StringComparison.OrdinalIgnoreCase)));
-                return Json(all.Where(t => InScope(projectId, allowed, t)).Select(Brief).ToList());
+                return Json(all.Where(t => InScope(projectId, allowed, t, narrow)).Select(Brief).ToList());
             }
 
             case "tasks_get":
             {
                 var id = StringArg(arguments, "id");
-                var (task, candidates) = GetForRead(context.OwnerId, projectId, allowed, id);
-                if (task is not null) return TaskJson(task, context.OwnerId);
+                var (task, candidates) = GetForRead(context.OwnerId, projectId, allowed, id, narrow);
+                // S2c-9: актор-участник — та же проекция TaskView, что в REST (одна точка правды).
+                if (task is not null)
+                    return TaskJson(ForCaller(task, session, context.OwnerId), context.OwnerId);
                 // Неоднозначный префикс: краткий список кандидатов (id + title, до 5), чтобы модель выбрала
                 if (candidates is { Count: > 0 })
                     return Deny($"Несколько задач начинаются с «{id}» — уточните id: " +
@@ -194,6 +220,11 @@ public sealed class TasksToolset(
                 var modelTier = StringArg(arguments, "modelTier");
                 if (modelTier.Length > 0 && !ModelTiers.IsValidWireValue(modelTier))
                     return Deny(ModelTiers.WireError);
+
+                // Приватный чат не привязывается к фиче (S2d-7b-2)
+                if (FeatureChatDoor.DenyPrivate(session, FeatureChatDoor.CreateTarget(
+                        OptionalArg(arguments, "featureId"), OptionalArg(arguments, "role"))) is { } privateChat)
+                    return Deny(privateChat);
 
                 // Чат, ведущий фичу, не заводит задачи чужой фичи (правило FeatureChatBinding; текст
                 // отказа общий с REST)
@@ -278,8 +309,17 @@ public sealed class TasksToolset(
                     Lane: OptionalArg(arguments, "lane"),
                     ReviewOf: LabelsArg(arguments, "reviewOf"),
                     PlanSteps: planSteps,
+                    // Создатель — актор хода-создателя (редактор общего проекта и т.п.); актор
+                    // неизвестен — ход шёл с правами арендатора, значит им и создана (F-9)
+                    CreatedByActorUserId: sessions.GetTurnActor(session.Id, context.OwnerId) ?? context.OwnerId,
                     ReportToSessionId: InheritedReportTarget(session.Id, context.OwnerId),
                     Acceptance: AcceptanceArg(arguments));
+                // Фичевые поля при создании — тот же предикат, что на дверях правки (F2-M2,
+                // возврат финала db216f32): FeatureOwnerGate, по актору идущего хода — агент
+                // редактора не может больше человека-редактора. Отказ до первой мутации.
+                if (FeatureOwnerGate.DeniedForCreate(access, TurnActorId(session.Id, context.OwnerId),
+                        context.OwnerId, targetProjectId, req) is { } featureDenied)
+                    return Deny($"{featureDenied} ({FeatureOwnerGate.ErrorCode})");
                 TaskItem created;
                 try
                 {
@@ -291,8 +331,8 @@ public sealed class TasksToolset(
                     // — тот же текст, что в REST-контроллере, в Deny пробрасываем как есть
                     return Deny(ex.Message);
                 }
-                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("created", created));
-                return Json(created);
+                await broadcaster.ToTaskBoard(context.OwnerId, created.ProjectId, new TaskChangedMessage("created", created));
+                return Json(ForCaller(created, session, context.OwnerId));
             }
 
             case "tasks_update":
@@ -300,10 +340,14 @@ public sealed class TasksToolset(
                 var id = StringArg(arguments, "id");
                 if (tasks.GetById(id) is not { OwnerId: var taskOwner } existing || taskOwner != context.OwnerId)
                     return Deny($"Задача {id} не найдена.");
-                var denied = TaskDenied(projectId, allowed, existing);
+                var denied = TaskDenied(projectId, allowed, existing, narrow);
                 if (denied is not null) return Deny(denied);
 
                 // Смена фичи задачи (featureId или превращение в эпик ролью) — та же дверь, что у создания
+                if (FeatureChatDoor.DenyPrivate(session, FeatureChatDoor.UpdateTarget(existing,
+                        arguments.ContainsKey("featureId") ? StringArg(arguments, "featureId") : null,
+                        arguments.ContainsKey("role") ? StringArg(arguments, "role") : null)) is { } privateChat)
+                    return Deny(privateChat);
                 if (FeatureChatDoor.DenyReason(tasks, FeatureChatDoor.Snapshot(sessions, context.OwnerId),
                         context.OwnerId, session.Id, FeatureChatDoor.UpdateTarget(existing,
                             arguments.ContainsKey("featureId") ? StringArg(arguments, "featureId") : null,
@@ -390,6 +434,46 @@ public sealed class TasksToolset(
                         AssignedPersonaScopes(context.OwnerId, personaId), spheres) is { } personaError)
                     return Deny(personaError);
 
+                // Человек-исполнитель (S2b-2b): «me»/«claude» — прежний путь (enum), но они
+                // сняют прежнего исполнителя-участника, а не оставят его в записи (M1 ревью
+                // e9f308b0): без AssigneeUserId блок TaskManager «if (req.AssigneeUserId is
+                // not null)» не срабатывает, участник остаётся, а ResolveMeUserId после
+                // «участник → me» вернул бы участника, а не владельца.
+                // Любое другое непустое значение assignee — username участника проекта задачи:
+                // резолв только среди участников (владелец + члены — та же точка доступа, что
+                // у REST-двери), иначе отказ тем же типом и тем же словарём кодов TaskManager
+                // (своих строк кодов здесь не заводим). Персонную задачу отклоняет сам
+                // TaskManager (person_task_not_assignable) — здесь её не предугадываем.
+                // Отказ — до первой мутации: при отказе запись не меняется.
+                var assigneeEnum = ParseEnum<TaskItemAssignee>(arguments, "assignee");
+                string? assigneeUserId = null;
+                if (assigneeEnum is null && arguments.ContainsKey("assignee"))
+                {
+                    var assigneeName = StringArg(arguments, "assignee").Trim();
+                    if (assigneeName.Length > 0)
+                    {
+                        var (assigneeId, assigneeDenied) = ResolveAssigneeUsername(
+                            targetProjectId, context.OwnerId, assigneeName);
+                        if (assigneeDenied is not null) return Deny(AssigneeDeniedText(assigneeDenied));
+                        assigneeUserId = assigneeId;
+                    }
+                }
+                else if (assigneeEnum == TaskItemAssignee.Me)
+                {
+                    // «me» = исполнитель — владелец: id владельца проекта задачи TaskManager
+                    // трактует как снятие (AssigneeUserId=null, Assignee=Me) — тот же смысл,
+                    // что у REST-двери (TasksController: «id владельца — не отказ, поле
+                    // сбрасывается»). Без смены проекта targetProject — проект задачи, поэтому
+                    // id совпадает с тем, чем TaskManager меряет «на владельца» (tenantOwnerId).
+                    assigneeUserId = targetProject?.OwnerId ?? context.OwnerId;
+                }
+                else if (assigneeEnum == TaskItemAssignee.Claude)
+                {
+                    // «claude» — человека-исполнителя нет: "" снимает поле (та же семантика
+                    // строковых полей UpdateTaskRequest, что у personaId/labels выше).
+                    assigneeUserId = "";
+                }
+
                 // Дефект: вердикт. VerifiedAt/PersonaId подставляет сервер из сессии вызова —
                 // хвост-сессия уже изолирована по владельцу, её PersonaId даёт автора вердикта.
                 // null-сессия/персона (чат без персоны) → проверка человеком (PersonaId == null).
@@ -423,7 +507,11 @@ public sealed class TasksToolset(
                     DueDate: arguments.ContainsKey("dueDate") ? StringArg(arguments, "dueDate") : null,
                     DueTime: arguments.ContainsKey("dueTime") ? StringArg(arguments, "dueTime") : null,
                     ReminderMinutes: NullableIntArg(arguments, "reminderMinutes"),
-                    Assignee: ParseEnum<TaskItemAssignee>(arguments, "assignee"),
+                    Assignee: assigneeEnum,
+                    // id участника из резолва username, id владельца для «me», "" для «claude»
+                    // (null = не менять, как у других полей): применение — в TaskManager, там
+                    // же «на владельца» и "" равны «снять» — прежний участник не остаётся в записи
+                    AssigneeUserId: assigneeUserId,
                     Recurrence: arguments.ContainsKey("recurrence") ? RecurrenceArg(arguments) : null,
                     PersonaId: arguments.ContainsKey("personaId") ? personaId : null,
                     ResultMarkdown: arguments.ContainsKey("resultMarkdown") ? StringArg(arguments, "resultMarkdown") : null,
@@ -454,6 +542,12 @@ public sealed class TasksToolset(
                     Acceptance: AcceptanceArg(arguments),
                     Evidence: EvidenceArg(arguments),
                     PlanSteps: planSteps);
+                // Фичевые поля и жизнь фичи — только владельцу проекта (возврат ревью R-F2-T1):
+                // тот же предикат, что на REST PUT (FeatureOwnerGate), по актору идущего хода —
+                // агент редактора не может больше человека-редактора. Отказ до первой мутации.
+                if (FeatureOwnerGate.Denied(access, TurnActorId(session.Id, context.OwnerId), existing, req)
+                    is { } featureDenied)
+                    return Deny($"{featureDenied} ({FeatureOwnerGate.ErrorCode})");
                 TaskItem updated;
                 try
                 {
@@ -469,8 +563,17 @@ public sealed class TasksToolset(
                     bool denyFeature = DenyFeatureClose(session, context.OwnerId);
                     updated = tasks.Update(id, req, effectiveColumn, isAgentCall: true,
                         callerIsExecutor: session.TaskId == id,
-                        denyFeatureClose: denyFeature, denyFeatureReopen: denyFeature)
+                        denyFeatureClose: denyFeature, denyFeatureReopen: denyFeature,
+                        // Арендатор проекта задачи — из проекта (тот же источник, что у REST PUT):
+                        // «назначение на владельца» и ключ записи меряются им, а не OwnerId записи
+                        tenantOwnerId: targetProject?.OwnerId)
                         ?? throw new InvalidOperationException($"Задача {id} не найдена");
+                }
+                catch (TaskManager.TaskAssigneeDeniedException ex)
+                {
+                    // Отказ TaskManager назначить человека (персонная задача): тип и словарь
+                    // кодов — его; к тексту добавляю код ветки, чтобы вызывающий различал отказы
+                    return Deny(AssigneeDeniedText(ex));
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -492,14 +595,14 @@ public sealed class TasksToolset(
                         run is null ? "" : FeatureBrief.ActiveStageOf(run),
                         run is null ? "" : FeatureBrief.KindAtWriteOf(run), featureEstimateArg) ?? updated;
                 }
-                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updated));
+                await broadcaster.ToTaskBoard(context.OwnerId, updated.ProjectId, new TaskChangedMessage("updated", updated));
 
                 // Завершение регулярной задачи → следующий экземпляр серии (тот же путь, что REST)
                 if (!wasDone && updated.Status == TaskItemStatus.Done && updated.Recurrence is not null)
                 {
                     var next = tasks.SpawnNextOccurrence(updated);
                     if (next is not null)
-                        await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("created", next));
+                        await broadcaster.ToTaskBoard(context.OwnerId, next.ProjectId, new TaskChangedMessage("created", next));
                 }
                 // Обратная запись в заметку-источник: смена done-состояния ставит/снимает галочку
                 if (wasDone != (updated.Status == TaskItemStatus.Done))
@@ -512,13 +615,13 @@ public sealed class TasksToolset(
                 // которого не было.
                 FireResolveBlockerByTask(updated, session.Id,
                     "штаб переписал задачу — блокер снят");
-                return Json(updated);
+                return Json(ForCaller(updated, session, context.OwnerId));
             }
 
             case "tasks_complete":
             {
                 var id = StringArg(arguments, "id");
-                if (GetAccessible(context.OwnerId, projectId, allowed, id) is not { } task)
+                if (GetAccessible(context.OwnerId, projectId, allowed, id, narrow) is not { } task)
                     return Deny($"Задача {id} не найдена или недоступна в этом контексте.");
                 // Дефект: вердикт/исход. Автор вердикта берётся из сессии вызова (заголовок
                 // X-Caller-Session-Id на REST-пути, хвост-сессия здесь); null PersonaId у чата
@@ -536,17 +639,25 @@ public sealed class TasksToolset(
                 // не получает Outcome ни при каком раскладе.
                 var outcomeArg = task.Kind == TaskKind.Defect ? OutcomeArg(arguments) : null;
                 var wasDone = task.Status == TaskItemStatus.Done;
+                var completeReq = new UpdateTaskRequest(
+                    Status: TaskItemStatus.Done,
+                    ResultMarkdown: arguments.ContainsKey("resultMarkdown") ? StringArg(arguments, "resultMarkdown") : null,
+                    LinkedFiles: arguments.ContainsKey("linkedFiles") ? LabelsArg(arguments, "linkedFiles") : null,
+                    Verification: verificationEffective,
+                    Outcome: outcomeArg,
+                    // Свидетельства по критериям приёмки; отказ гейта — Deny с перечнем незакрытых
+                    Evidence: EvidenceArg(arguments));
+                // Фичевые поля и жизнь фичи — только владельцу проекта (возврат ревью R-F2-T1):
+                // тот же предикат, что у tasks_update и REST PUT, по актору идущего хода:
+                // закрыть эпик фичи агентом редактора — тот же отказ, что человеку-редактору.
+                // Отказ до первой мутации, задача цела.
+                if (FeatureOwnerGate.Denied(access, TurnActorId(session.Id, context.OwnerId), task, completeReq)
+                    is { } featureDenied)
+                    return Deny($"{featureDenied} ({FeatureOwnerGate.ErrorCode})");
                 TaskItem updated;
                 try
                 {
-                    updated = tasks.Update(id, new UpdateTaskRequest(
-                        Status: TaskItemStatus.Done,
-                        ResultMarkdown: arguments.ContainsKey("resultMarkdown") ? StringArg(arguments, "resultMarkdown") : null,
-                        LinkedFiles: arguments.ContainsKey("linkedFiles") ? LabelsArg(arguments, "linkedFiles") : null,
-                        Verification: verificationEffective,
-                        Outcome: outcomeArg,
-                        // Свидетельства по критериям приёмки; отказ гейта — Deny с перечнем незакрытых
-                        Evidence: EvidenceArg(arguments)),
+                    updated = tasks.Update(id, completeReq,
                         // Агентский путь (MCP): защита от затирания снятой задачи —
                         // tasks_complete на снятой задаче вернёт 400 вместо молчаливого 200 OK
                         isAgentCall: true,
@@ -561,10 +672,10 @@ public sealed class TasksToolset(
                     // же ловит и наш «не найдена» с подставленным id (см. ?? throw выше)
                     return Deny(ex.Message);
                 }
-                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updated));
+                await broadcaster.ToTaskBoard(context.OwnerId, updated.ProjectId, new TaskChangedMessage("updated", updated));
                 if (!wasDone && updated.Recurrence is not null
                     && tasks.SpawnNextOccurrence(updated) is { } next)
-                    await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("created", next));
+                    await broadcaster.ToTaskBoard(context.OwnerId, next.ProjectId, new TaskChangedMessage("created", next));
                 if (wasDone != (updated.Status == TaskItemStatus.Done))
                     await (noteSync?.SyncTaskToNoteAsync(context.OwnerId, updated) ?? Task.CompletedTask);
                 // Волна 1 team-blocker-honest: задача-блокер закрыта координатором — гасим
@@ -573,7 +684,7 @@ public sealed class TasksToolset(
                 // гасит карточку «штаб закрыл задачу», приписанного действия нет
                 FireResolveBlockerByTask(updated, session.Id,
                     "штаб закрыл задачу — блокер снят");
-                return CompleteResponse(updated);
+                return CompleteResponse(ForCaller(updated, session, context.OwnerId));
             }
 
             case "tasks_run_executor":
@@ -603,11 +714,16 @@ public sealed class TasksToolset(
                 // Скоуп задачи: исполнитель стартует в рабочем каталоге её проекта — задача
                 // чужого (непривязанного) проекта запускаться не должна, как её не пустил бы
                 // tasks_update (усилитель блокера 2.1: у stdio этой проверки не было вовсе)
-                var scopeDenied = TaskDenied(projectId, allowed, task);
+                var scopeDenied = TaskDenied(projectId, allowed, task, narrow);
                 if (scopeDenied is not null)
                 {
                     DelegatedTurnGate.Refund(sessions, session.Id, context.OwnerId, gate);
                     return Deny(scopeDenied);
+                }
+                if (FeatureChatDoor.DenyPrivate(session, FeatureChatDoor.TargetFeature(task)) is { } privateChat)
+                {
+                    DelegatedTurnGate.Refund(sessions, session.Id, context.OwnerId, gate);
+                    return Deny(privateChat);
                 }
                 // Чат, ведущий фичу, не запускает исполнителя задачи чужой фичи
                 if (FeatureChatDoor.DenyReason(tasks, FeatureChatDoor.Snapshot(sessions, context.OwnerId),
@@ -622,19 +738,23 @@ public sealed class TasksToolset(
                     // в чат-создатель карточки; запись делает сам запуск после захвата claim'а —
                     // отказ («уже работает сессия») адресата не меняет
                     var executed = await executor.ExecuteAsync(task, auto: false,
-                        new ExecutorLauncher(session.Id, session.PersonaId));
+                        new ExecutorLauncher(session.Id, session.PersonaId),
+                        sessions.GetTurnActor(session.Id, context.OwnerId));
                     // Волна 1 team-blocker-honest: координатор перезапустил исполнителя по
                     // задаче-блокеру — гасим блокер по факту, стадия возвращается в работу.
                     // S2 (фикс-волна): caller == SourceSessionId — иначе запуск из чата
                     // исполнителя гасит карточку «штаб перезапустил исполнителя»
                     FireResolveBlockerByTask(task, session.Id,
                         "штаб перезапустил исполнителя — блокер снят");
+                    // S2d-4b2: чат исполнителя — через ту же маску, что карточка задачи
+                    var executedView = ForCaller(executed, session, context.OwnerId);
                     return Json(new
                     {
                         id = executed.Id,
                         title = executed.Title,
                         status = executed.Status,
-                        executorSessionId = executed.LinkedSessionId,
+                        executorSessionId = executedView.LinkedSessionId,
+                        executorChat = executedView.LinkedChat,
                         deviceWaitReason = executed.DeviceWaitReason,
                         // Устройство локального проекта офлайн (ADR-016, план §5): запуска не было
                         note = executed.DeviceWaitSince is not null
@@ -659,13 +779,23 @@ public sealed class TasksToolset(
             case "tasks_delete":
             {
                 var id = StringArg(arguments, "id");
-                if (GetAccessible(context.OwnerId, projectId, allowed, id) is not { } task)
+                if (GetAccessible(context.OwnerId, projectId, allowed, id, narrow) is not { } task)
                     return Deny($"Задача {id} не найдена или недоступна в этом контексте.");
+                // Право удаления (F2-T1) — тот же, что у REST DELETE: автор задачи или её
+                // владелец. Агент участника пишет под токеном арендатора, поэтому авторство
+                // меряется по АКТОРУ хода (единый источник — реестр SessionManager), а не по
+                // токену: иначе агент редактора удалял бы чужие задачи шире, чем человеку-
+                // редактору (правило «агент не больше человека»). Актор совпадает с арендатором
+                // или неизвестен — права арендатора, как раньше (тот же fail-closed, что у
+                // гейта актора S2c-6). Отказ — тем же машинным кодом, что REST-ответ.
+                var actor = TurnActorId(session.Id, context.OwnerId);
+                if (actor != context.OwnerId && task.CreatedByUserId != actor)
+                    return Deny($"{TaskAuthorGate.DeniedText} ({TaskAuthorGate.ErrorCode})");
                 // W4-HOLD-N (хвост R-N п.3): та же страховка, что у REST-удаления: MCP-путь
                 // её обходил — удалённый на паузе эпик/шаг оставлял чат «вечным».
                 executor.RestoreFrozenChatsBeforeDelete(task);
                 tasks.Delete(id);
-                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("deleted", task));
+                await broadcaster.ToTaskBoard(context.OwnerId, task.ProjectId, new TaskChangedMessage("deleted", task));
                 return Text($"Задача {id} удалена.");
             }
 
@@ -673,7 +803,7 @@ public sealed class TasksToolset(
             {
                 // Подзадачи обновляются списком целиком: читаем, добавляем, сохраняем
                 var taskId = StringArg(arguments, "taskId");
-                if (GetAccessible(context.OwnerId, projectId, allowed, taskId) is not { } task)
+                if (GetAccessible(context.OwnerId, projectId, allowed, taskId, narrow) is not { } task)
                     return Deny($"Задача {taskId} не найдена или недоступна в этом контексте.");
                 var subtasks = task.Subtasks
                     .Select(s => new UpdateSubtaskRequest(s.Id, s.Title, s.IsDone)).ToList();
@@ -691,14 +821,14 @@ public sealed class TasksToolset(
                     return Deny(ex.Message);
                 }
                 if (updated is null) return Deny($"Задача {taskId} не найдена.");
-                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updated));
-                return Json(updated);
+                await broadcaster.ToTaskBoard(context.OwnerId, updated.ProjectId, new TaskChangedMessage("updated", updated));
+                return Json(ForCaller(updated, session, context.OwnerId));
             }
 
             case "tasks_toggle_subtask":
             {
                 var taskId = StringArg(arguments, "taskId");
-                if (GetAccessible(context.OwnerId, projectId, allowed, taskId) is not { } task)
+                if (GetAccessible(context.OwnerId, projectId, allowed, taskId, narrow) is not { } task)
                     return Deny($"Задача {taskId} не найдена или недоступна в этом контексте.");
                 var subtaskId = StringArg(arguments, "subtaskId");
                 var subtaskTitle = StringArg(arguments, "subtaskTitle");
@@ -721,8 +851,8 @@ public sealed class TasksToolset(
                     return Deny(ex.Message);
                 }
                 if (updated is null) return Deny($"Задача {taskId} не найдена.");
-                await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updated));
-                return Json(updated);
+                await broadcaster.ToTaskBoard(context.OwnerId, updated.ProjectId, new TaskChangedMessage("updated", updated));
+                return Json(ForCaller(updated, session, context.OwnerId));
             }
 
             case "tasks_find_duplicate":
@@ -818,6 +948,19 @@ public sealed class TasksToolset(
         string ownerId, string personaId) =>
         personas.Get(personaId, ownerId) is { } p ? bindings.BuildExternalTaskScopes(ownerId, p) : [];
 
+    private const string NarrowText =
+        "Недоступно в общем проекте: задачи доступны только из проекта этого чата.";
+
+    // Отказ узкой рамки. Чат вне проекта (личные задачи владельца), список проектов, поиск по всем
+    // задачам, scope=all и чужой projectId закрыты; текст фиксированный, без id из аргументов.
+    private static bool NarrowDenied(string tool, JsonObject arguments, string? projectId) =>
+        projectId is null
+        || tool is "tasks_list_projects" or "tasks_search"
+        || (tool == "tasks_list" && StringArg(arguments, "scope") == "all")
+        // ContainsKey, а не проверка на null: явный "projectId": null и пустая строка в update значат
+        // «сделать личной» (StringArg отдаёт ""), и рамку не проходят
+        || (arguments.ContainsKey("projectId") && StringArg(arguments, "projectId") != projectId);
+
     private static IReadOnlyCollection<string> AllowedProjectIds(string? projectId,
         IReadOnlyList<(string ProjectId, bool ReadOnly)> extraScopes)
     {
@@ -850,20 +993,52 @@ public sealed class TasksToolset(
             : null;
     }
 
+    // Резолв username → id человека-исполнителя (S2b-2b). Круг — участники проекта задачи:
+    // id владельца плюс строки Members, через IProjectAccess — ту же точку решения, что
+    // держит REST-дверь TasksController.Update: две двери на один вход отвечают одинаково
+    // (вне круга и для участника с выключенным флагом — тот же отказ). Личной задаче чужого
+    // круга нет: у неё нет проекта, чьим участником можно быть; её владелец — сам вызывающий,
+    // и его id дальше равен «снять» (TaskManager: id арендатора = сброс поля).
+    private (string? UserId, TaskManager.TaskAssigneeDeniedException? Denied) ResolveAssigneeUsername(
+        string? targetProjectId, string callerUserId, string username)
+    {
+        var user = users.FindByUsername(username);
+        if (user is null) return (null, NotMember());
+        if (targetProjectId is null)
+            return user.Id == callerUserId ? (user.Id, null) : (null, NotMember());
+        var scope = access.Resolve(user.Id, targetProjectId, ProjectRight.Read);
+        if (scope is null) return (null, NotMember());
+        if (scope.Role == ProjectRole.Reader)
+            return (null, new TaskManager.TaskAssigneeDeniedException(TaskManager.ReaderNotAssignableCode,
+                "Читателя назначить исполнителем нельзя: он только смотрит задачи"));
+        return (user.Id, null);
+
+        TaskManager.TaskAssigneeDeniedException NotMember() =>
+            new(TaskManager.AssigneeNotMemberCode,
+                $"«{username}» не участник проекта задачи: исполнителем можно назначить её владельца или участника");
+    }
+
+    // Текст отказа назначения: сообщение + машинный код из словаря TaskManager (тот же, что
+    // несёт ответ 400 REST-двери) — по коду вызывающий видит, какую ветку править
+    private static string AssigneeDeniedText(TaskManager.TaskAssigneeDeniedException ex) =>
+        $"{ex.Message} ({ex.Code})";
+
     // Задача видна в контексте: без проекта чата — весь воркспейс владельца; личные задачи
     // (без проекта) видны из любого чата; проектные — только из доступных проектов
-    private static bool InScope(string? projectId, IReadOnlyCollection<string> allowed, TaskItem t)
+    // В узкой рамке (общий проект) личные задачи арендатора/владельца вне рамки: у чата есть проект
+    private static bool InScope(string? projectId, IReadOnlyCollection<string> allowed, TaskItem t, bool narrow)
     {
         if (projectId is null) return true;
-        if (t.ProjectId is null) return true;
+        if (t.ProjectId is null) return !narrow;
         return allowed.Contains(t.ProjectId);
     }
 
     // Задача по id: владение + видимость в контексте (закрывает доступ к чужим проектам по id)
-    private TaskItem? GetAccessible(string ownerId, string? projectId, IReadOnlyCollection<string> allowed, string id)
+    private TaskItem? GetAccessible(string ownerId, string? projectId, IReadOnlyCollection<string> allowed, string id, bool narrow)
     {
         var task = tasks.GetById(id);
         if (task is null || task.OwnerId != ownerId) return null;
+        if (narrow && task.ProjectId is null) return null;
         if (projectId is not null && task.ProjectId is not null && !allowed.Contains(task.ProjectId)) return null;
         return task;
     }
@@ -874,13 +1049,13 @@ public sealed class TasksToolset(
     // Запись (update/complete/delete/сабтаски) идёт через GetAccessible — полным id: ошибка
     // в записи стоит дороже, чем в чтении, поэтому префикс туда не пускаем.
     private (TaskItem? Task, IReadOnlyList<TaskItem>? Candidates) GetForRead(
-        string ownerId, string? projectId, IReadOnlyCollection<string> allowed, string id)
+        string ownerId, string? projectId, IReadOnlyCollection<string> allowed, string id, bool narrow)
     {
-        if (GetAccessible(ownerId, projectId, allowed, id) is { } exact) return (exact, null);
+        if (GetAccessible(ownerId, projectId, allowed, id, narrow) is { } exact) return (exact, null);
         if (!LooksLikeIdPrefix(id)) return (null, null);
         // Того же владельца, видимые в контексте (InScope), id начинается с префикса (без учёта регистра)
         var candidates = tasks.GetByOwner(ownerId)
-            .Where(t => InScope(projectId, allowed, t) && t.Id.StartsWith(id, StringComparison.OrdinalIgnoreCase))
+            .Where(t => InScope(projectId, allowed, t, narrow) && t.Id.StartsWith(id, StringComparison.OrdinalIgnoreCase))
             .ToList();
         return candidates.Count switch
         {
@@ -895,13 +1070,23 @@ public sealed class TasksToolset(
         id.Length >= 8 && id.All(c =>
             c == '-' || (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'));
 
-    private static string? TaskDenied(string? projectId, IReadOnlyCollection<string> allowed, TaskItem task)
+    private static string? TaskDenied(string? projectId, IReadOnlyCollection<string> allowed, TaskItem task,
+        bool narrow)
     {
+        if (narrow && task.ProjectId is null) return NarrowText;
         if (projectId is null || task.ProjectId is null) return null;
         return allowed.Contains(task.ProjectId)
             ? null
             : $"Задача {task.Id} недоступна в этом контексте — она принадлежит другому проекту.";
     }
+
+    // Актор идущего хода чата-вызывателя (тот же реестр SessionManager, что читает гейт актора
+    // S2c-6): агент участника пишет под сервисным токеном арендатора, поэтому решение
+    // «владелец / не владелец» меряется актором хода, а не токеном — иначе агент редактора мог бы
+    // больше человека-редактора. Актор не назван (фон, внутренний ход без инициатора) — права
+    // арендатора, как в двери удаления (F2-T1): их уже держит гейт актора на составе инструментов.
+    private string TurnActorId(string sessionId, string tenantOwnerId) =>
+        sessions.GetTurnActor(sessionId, tenantOwnerId) ?? tenantOwnerId;
 
     // B4 (R-B4 минор 1): право на голос фичи — белый список видов связи {curator, orchestrator}
     // (ADR-031 §4), а не «не executor». «Не executor» молча дал бы право новому виду членства,
@@ -932,6 +1117,11 @@ public sealed class TasksToolset(
             source = source.Where(t => t.Priority == p);
         if (ParseEnum<TaskItemAssignee>(arguments, "assignee") is { } a)
             source = source.Where(t => t.Assignee == a);
+        // Фича: сам эпик (Id) и задачи с этим FeatureId. Работает поверх выборки владельца и
+        // InScope вызывающего — чужую фичу по её id не прочитать.
+        var featureId = StringArg(arguments, "featureId");
+        if (featureId.Length > 0)
+            source = source.Where(t => t.Id == featureId || t.FeatureId == featureId);
         return source;
     }
 
@@ -943,7 +1133,7 @@ public sealed class TasksToolset(
     // Потолок выдачи tasks_list после всех фильтров (≈ 100 КБ ответа вместо мегабайт).
     internal const int ListLimit = 300;
 
-    // Окно закрытых: действует, только если нет ни status, ни from/to; doneDays его переопределяет
+    // Окно закрытых: действует, только если нет ни status, ни featureId, ни from/to; doneDays его переопределяет
     // (0 — без закрытых, all — все закрытые). Граница полуоткрытая: CompletedAt >= now - N дней.
     private static IEnumerable<TaskItem> ApplyDoneWindow(IEnumerable<TaskItem> source, JsonObject arguments)
     {
@@ -955,7 +1145,7 @@ public sealed class TasksToolset(
             if (raw.Equals("all", StringComparison.OrdinalIgnoreCase)) return source;
             days = int.TryParse(raw, out var n) && n >= 0 ? n : DefaultDoneDays;
         }
-        else if (StringArg(arguments, "status").Length > 0
+        else if (StringArg(arguments, "status").Length > 0 || StringArg(arguments, "featureId").Length > 0
                  || StringArg(arguments, "from").Length > 0 || StringArg(arguments, "to").Length > 0)
             return source;
         else
@@ -1013,6 +1203,28 @@ public sealed class TasksToolset(
 
     private static McpToolCallResult Json<T>(T value) =>
         new(JsonSerializer.Serialize(value, JsonOpts));
+
+    // S2c-9 (доработка ревью): ответ любого инструмента, возвращающего карточку, проходит одну
+    // точку проекции: актор идущего хода не арендатор — вид участника (TaskView), как в REST и в
+    // tasks_get. Актор — из реестра хода (GetTurnActor), не из заголовка: токен арендатора, а ход
+    // принадлежит участнику; актор неизвестен (фон) — права арендатора (разрез §2). Проецируется
+    // только ответ: запись задачи и гейты инструментов здесь не меняются (гейт актора — S2c-6).
+    //
+    // S2d-4b2: плюс маска чужих приватных чатов задачи (ChatRefs.For, та же функция, что в REST) —
+    // для ВСЕХ ролей, включая арендатора. Зритель — актор хода; актор неизвестен — «не видит»
+    // (пустой id никому не даёт доступа, fail-closed), в отличие от прав на поля задачи выше.
+    private TaskItem ForCaller(TaskItem task, Session session, string ownerId) =>
+        ForActorMasked(task, ownerId, sessions.GetTurnActor(session.Id, ownerId), sessions, projects);
+
+    // internal — для юнит-теста без хоста.
+    internal static TaskItem ForActorMasked(TaskItem task, string ownerId, string? actor,
+        ISessionDirectory chats, IProjectManager projectCatalog)
+    {
+        var view = TaskView.ForActor(task, ownerId, actor);
+        // Маска правит копию, а не запись стора: ForActor арендатору отдаёт сам объект.
+        if (ReferenceEquals(view, task)) view = TaskView.CopyOf(task);
+        return TaskView.MaskForeignChats(view, chats, projectCatalog, ChatAudience.Viewer(actor ?? ""));
+    }
 
     // Ответ tasks_get: JSON задачи и — только у эпика фичи — дописанный блок «Сверка трекера».
     // Расхождения не пересчитываем: тот же проектор и та же функция, что у REST-страницы фичи
@@ -1279,7 +1491,7 @@ public sealed class TasksToolset(
                     ["doneDays"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = $"Окно закрытых задач по дате закрытия: число дней (0 — без закрытых) или all — все закрытые; по умолчанию {DefaultDoneDays}. Не действует при status и from/to. Потолок выдачи {ListLimit} записей (при обрезке первым элементом note); старое — doneDays=all, status=done или tasks_search.",
+                        ["description"] = $"Окно закрытых задач по дате закрытия: число дней (0 — без закрытых) или all — все закрытые; по умолчанию {DefaultDoneDays}. Не действует при status, featureId и from/to. Потолок выдачи {ListLimit} записей (при обрезке первым элементом note); старое — doneDays=all, status=done или tasks_search.",
                     },
                     ["scope"] = new JsonObject
                     {
@@ -1291,6 +1503,11 @@ public sealed class TasksToolset(
                     {
                         ["type"] = "string",
                         ["description"] = "Явный проект — переопределяет scope, только его задачи",
+                    },
+                    ["featureId"] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = "Id задачи-эпика фичи: только задачи этой фичи и сам эпик (окно doneDays не применяется)",
                     },
                 },
             });
@@ -1413,9 +1630,15 @@ public sealed class TasksToolset(
                     },
                     ["reminderMinutes"] = ReminderMinutesSchema(),
                     ["recurrence"] = RecurrenceSchema(),
+                    // S2b-2b: значением может быть username участника проекта задачи — фиксированного
+                    // enum здесь быть не может (списка username'ов в схеме нет); «me»/«claude» — прежние.
+                    // Описание короткое: tasks_update стоит у лимита суммы описаний параметров (1950,
+                    // McpToolsetStabilityTests); правила круга и отказы агент получает текстом отказа.
+                    // Парность со stdio-веткой держит TasksToolsetParityTests (index.js правится парой)
                     ["assignee"] = new JsonObject
                     {
-                        ["type"] = "string", ["enum"] = new JsonArray { "me", "claude" },
+                        ["type"] = "string",
+                        ["description"] = "me, claude или username участника",
                     },
                     ["personaId"] = PersonaIdSchema(),
                     ["modelTier"] = ModelTierSchema(),
@@ -1427,7 +1650,7 @@ public sealed class TasksToolset(
                     {
                         ["type"] = "array",
                         ["items"] = new JsonObject { ["type"] = "string" },
-                        ["description"] = "Метки (заменяют список целиком)",
+                        ["description"] = "Метки (заменяют целиком)",
                     },
                     ["columnId"] = ColumnIdSchema(),
                     ["executionExpiresAfterMinutes"] = ExecutionTtlSchema(),
@@ -1452,7 +1675,7 @@ public sealed class TasksToolset(
                     ["projectId"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Перенести в другой проект (см. tasks_list_projects) или \"\" — сделать личной",
+                        ["description"] = "В другой проект (tasks_list_projects); \"\" — личная",
                     },
                 },
             });

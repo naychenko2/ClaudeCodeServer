@@ -48,6 +48,39 @@ public class SpendMappingTests
         return Assert.Single(spend.Records);
     }
 
+    private sealed class Actors(string? actor) : ClaudeHomeServer.Services.Access.ITurnActorRegistry
+    {
+        public string? Actor(string sessionId, string ownerId) => actor;
+    }
+
+    private static SpendRecord RecordTurnWithActor(Session s, ResultMessage m, string? actor)
+    {
+        var spend = new RecordingSpend();
+        SpendMapping.RecordTurnSpend(spend, Providers(), _ => "owner-1", null, s, m, new Actors(actor));
+        return Assert.Single(spend.Records);
+    }
+
+    // S2a-6b: запись расхода хода несёт актора — того, кто подал ход (реестр читается в
+    // момент учёта). Ключ хранилища остаётся владельцем-арендатором: актор — разрез.
+    [Fact]
+    public void RecordTurnSpend_АкторХода_ПишетсяВЗапись()
+    {
+        var r = RecordTurnWithActor(Chat("claude", "opus"), Result(), actor: "u-2");
+        r.ActorUserId.Should().Be("u-2");
+        r.OwnerId.Should().Be("owner-1");
+    }
+
+    // Актор неизвестен (серверный/автоматический ход, реестр пуст) и реестра вовсе нет —
+    // запись без актора: срез чтения отнесёт её владельцу (тот же порядок, что у К4).
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void RecordTurnSpend_АктораНет_ЗаписьБезАктора(string? actor)
+    {
+        RecordTurnWithActor(Chat("claude", "opus"), Result(), actor).ActorUserId.Should().BeNull();
+        RecordTurn(Chat("claude", "opus"), Result()).ActorUserId.Should().BeNull();
+    }
+
     // Чат настроен Claude, ход через шлюз ушёл в minimax: запись обязана брать маршрут —
     // модель шлюза важнее отчёта CLI (сессия ротацию шлюза не видит).
     [Fact]

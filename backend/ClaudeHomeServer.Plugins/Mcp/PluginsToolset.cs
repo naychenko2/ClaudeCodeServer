@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using System.Threading;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Mcp.Http;
 using Microsoft.Extensions.Logging;
@@ -50,10 +51,17 @@ public sealed partial class PluginsToolset : IMcpParameterizedToolset, IMcpInstr
     // Необязательный параметр: без шва (тесты, выключенный адаптер) записи нет, ошибки нет.
     private readonly IChatFeed? _feed;
     private readonly ILogger<PluginsToolset>? _log;
+    // Вердикт рамки хода (S2a-3b, шов из спины ClaudeHomeServer.Services.Access).
+    // Обязательный параметр, как в четырёх мэйновых тулсетах (R-S2a-3b): прежний nullable
+    // означал fail-open — собранный без шва тулсет молча выключал узкую рамку. Стоит до
+    // опциональных зависимостей (требовательный параметр после опциональных в C# запрещён);
+    // тестовые фабрики передают стаб с широкой рамкой
+    private readonly ITurnFrameSource _frames;
 
     public PluginsToolset(
         IMcpSessionAccessor sessions,
         IProjectManager projects,
+        ITurnFrameSource frames,
         PluginDraftService? drafts = null,
         IFeatureFlagGate? flags = null,
         IConfiguration? config = null,
@@ -67,6 +75,7 @@ public sealed partial class PluginsToolset : IMcpParameterizedToolset, IMcpInstr
         _config = config;
         _feed = feed;
         _log = log;
+        _frames = frames;
     }
 
     public string Name => ServerName;
@@ -81,6 +90,17 @@ public sealed partial class PluginsToolset : IMcpParameterizedToolset, IMcpInstr
         // Хвост маршрута = id сессии; по ней — проект (для проверки локальности).
         if (!TryResolve(context, out var project, out var resolveError))
             return Deny(resolveError);
+
+        // Узкая рамка хода (общий проект, S2a-3b, решение 29.10): черновики плагинов живут в
+        // пространстве владельца (data/plugins/{owner}/_drafts), установка и выдача прав —
+        // только его решения (шаг 4.3). Весь сервер черновиков закрыт в общем чате всем,
+        // включая владельца. Отказ стоит ДО гейтов подсистемы и флагов: в общем проекте
+        // причина отказа — рамка, а не конфигурация аккаунта.
+        var frame = _frames.Frame(context.CallerSessionId, context.OwnerId);
+        if (frame == TurnFrameKind.Narrow)
+            return Deny(
+                "Плагины закрыты в общем проекте: черновики, установка и права плагина — "
+                + "личное пространство и решения владельца.");
 
         // Выключенная подсистема: сервер plugins всё равно в конфиге (тулсет зарегистрирован
         // неусловно), но PluginDraftService в контейнер не попал (_drafts = null) — отвечаем

@@ -46,8 +46,12 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // «Что выяснили» (утверждения, установленные этим разбором).
 //
 // Курсор (§12б этап 9): сдвигается на конец дельты только после применения или исхода
-// «нечего добавить»; любой сбой — курсор на месте. Сбой посреди окон: весь разбор
-// отказан, хроника не начата (половины хроники на диске не остаётся). «Нечего
+// «нечего добавить»; любой сбой — курсор на месте. Сбой посреди окон: если ничего ещё
+// не применено — весь разбор отказан, хроника не начата (половины хроники на диске не
+// остаётся). Если применено хотя бы одно окно — частичный исход (WC-3): applied с
+// признаком Partial и причиной отказанного окна, хроника по применённым, курсор на конце
+// последнего успешного окна — он не уходит назад и не прыгает за отказанное окно; отказ
+// позднего окна не перечёркивает применённое. «Нечего
 // добавить» — штатный исход (ADR-035:269): курсор сдвинут, zone=nothing_new с
 // причиной модели, nothingNewStreak+1 (счётчик понижения балла — его читает S6f),
 // хроника не создаётся. При частично применённом разборе (есть applied) исход —
@@ -95,11 +99,11 @@ public sealed class WikiChatIngestService
     public const string OutcomeUpToDate = "up_to_date";
 
     /// <summary>Машинные коды отказа (S7b0a): вызывающий различает отказы по коду, а не
-    /// подстрокой причины (текст причины — человеку и модели). not_found — чужой и
-    /// несуществующий чат неразличимы вызывающим: per-owner, без утечки существования
-    /// чужого. Остальные — ступень 0 и незаведённая вики. Кодов, не названных контрактом,
-    /// service не выдумывает: прочие отказы остаются без кода (вызывающий различает их
-    /// по исходу rejected).</summary>
+    /// подстрокой причины (текст причины — человеку и модели). not_found — чужой, приватный
+    /// (FIN3-3) и несуществующий чат неразличимы вызывающим: per-owner и приватность чата не
+    /// дают утечки существования. Остальные — ступень 0 и незаведённая вики. Кодов, не
+    /// названных контрактом, service не выдумывает: прочие отказы остаются без кода
+    /// (вызывающий различает их по исходу rejected).</summary>
     public const string CodeNotFound = "not_found";
     public const string CodeTaskExecution = "task_execution";
     public const string CodeMarkedSkip = "marked_skip";
@@ -116,10 +120,19 @@ public sealed class WikiChatIngestService
     /// причина модели) + id применённых пакетов (для applied) + машинный код отказа
     /// (S7b0a: только для состояний, названных REST-контрактом; null для прочих). OverrodeHuman —
     /// сколько формулировок человека ИИ заменил в этом разборе сам; DisputedPages — страницы, где он
-    /// сам отметил противоречие (ADR-038, предохранитель 6: идут в одну строку утреннего уведомления).</summary>
+    /// сам отметил противоречие (ADR-038, предохранитель 6: идут в одну строку утреннего уведомления).
+    /// Partial (WC-3): разбор применён частично — позднее окно отказано, применённое осталось;
+    /// тогда Reason — причина отказанного окна, а курсор — на конце последнего успешного окна.
+    /// InputTokens (WC-4a/WC-4c): полный вход (вместе с кэшем) всех ответивших вызовов модели этого
+    /// разбора по всем пройденным окнам — мера нагрузки на GPU локали, а не деньги: деньги из этого
+    /// поля не считать, стоимость облачного пути — OneShotUsage.CostUsd. Сумма — независимо от исхода
+    /// окна (отказанный план расход не отменяет) и независимо от исхода разбора; 0 — когда метрик не
+    /// было: модель ни разу не звалась (отказ ступеней до модели, «новых сообщений нет») либо движок
+    /// их не отдал.</summary>
     public readonly record struct ChatResult(
         string Outcome, string? Reason, IReadOnlyList<string> PackageIds, string? Code = null,
-        int OverrodeHuman = 0, IReadOnlyList<string>? DisputedPages = null);
+        int OverrodeHuman = 0, IReadOnlyList<string>? DisputedPages = null, bool Partial = false,
+        long InputTokens = 0);
 
     /// <summary>Последний исход разбора чата с временем окончания (S7b0a, чтение
     /// analyze-status и списка).</summary>
@@ -195,6 +208,13 @@ public sealed class WikiChatIngestService
         // нет; различить их может только владелец (он их и не различает).
         var session = _sessions.GetById(sessionId);
         if (session is null || _sessions.ResolveOwnerId(session) != ownerId)
+            return RefusedRecorded(CodeNotFound, "чат не существует");
+
+        // Приватный чат (FIN3-3) — то же слово «не существует»: приватный чат виден только
+        // автору, а этот разбор — машинный потребитель (кнопка, ночь, wiki_ingest), ему он
+        // не виден вовсе (образец — автообучение памяти, TeamMemoryAutolearnService). Отказ
+        // неотличим от несуществующего: приватность не выдавала бы существования чата.
+        if (session.PrivateToUserId is not null)
             return RefusedRecorded(CodeNotFound, "чат не существует");
 
         // Ступень 0 (ADR-035 §12а) — исключения кода до обращения к модели.
@@ -383,6 +403,24 @@ public sealed class WikiChatIngestService
         var applied = new List<(string PackageId, string CardTitle)>();
         var awaiting = 0;
         string? nothingReason = null;
+        // Частичный исход (WC-3): failedReason — причина отказанного окна (null — отказа
+        // не было), lastOkTo — конец последнего окна, завершившегося без отказа (1-индекс в
+        // истории): курсор частичного исхода встаёт на него, не назад и не за отказанное окно.
+        string? failedReason = null;
+        var lastOkTo = 0;
+        // Входные токены разбора (WC-4a): сумма по всем разобранным окнам, независимо от их
+        // исхода — окно, отказанное после ответившего вызова, расход тоже понесло.
+        long inputTokens = 0;
+
+        // Отказ окна: применённого ещё нет — отказ всего разбора (курсор на месте, хроника
+        // не начинается, как было). Есть применённое — частичный исход: запомнить причину,
+        // цикл дальше не идёт — отказ позднего окна не перечёркивает применённое (WC-3).
+        // Расход разобранных до отказа окон остаётся в исходе: он был (WC-4a).
+        ChatResult? WindowFailure(string reason)
+        {
+            if (applied.Count > 0) { failedReason = reason; return null; }
+            return Refused(null, reason, inputTokens);
+        }
 
         foreach (var window in windows)
         {
@@ -393,16 +431,27 @@ public sealed class WikiChatIngestService
             // проверяет он, здесь это не дублируется.
             var cap = await _capture.CaptureSession(ownerId, home, sessionId, from, to);
             if (!cap.Ok)
-                return Refused(null, $"захват источника m{from}-m{to} не удался: {cap.Reason}");
+            {
+                var refused = WindowFailure($"захват источника m{from}-m{to} не удался: {cap.Reason}");
+                if (refused.HasValue) return refused.Value;
+                break;
+            }
 
             var ing = await _ingest.IngestAsync(ownerId, new WikiIngestService.Request(
                 WikiGate.OriginSession, $"session:{sessionId}#m{from}-{to}",
                 cap.CardRelPath!, WindowText(window), home, null), actionKey: actionKey);
+            // Расход окна прибавляется до разбора его исхода: он не зависит от того, чем
+            // окно закончилось (applied, nothing_new, отказ после модели) (WC-4a).
+            inputTokens += ing.InputTokens;
             switch (ing.Outcome)
             {
                 case WikiIngestService.OutcomeApplied:
                     if (ing.PackageId is not { Length: > 0 } packageId)
-                        return Refused(null, $"исход «applied» окна m{from}-m{to} без id пакета");
+                    {
+                        var noId = WindowFailure($"исход «applied» окна m{from}-m{to} без id пакета");
+                        if (noId.HasValue) return noId.Value;
+                        break;
+                    }
                     // Заголовок карточки — имя её файла (WriteCard, S6h): цель сносок хроники.
                     applied.Add((packageId, Path.GetFileNameWithoutExtension(cap.CardRelPath!)));
                     break;
@@ -413,10 +462,15 @@ public sealed class WikiChatIngestService
                     nothingReason ??= ing.Reason;
                     break;
                 default:
-                    // Сбой любого окна — отказ всего разбора: курсор не двигается,
-                    // хроника не начинается («зависшей» половины хроники не остаётся).
-                    return Refused(null, $"разбор окна m{from}-m{to} не удался: {ing.Reason}");
+                    // Сбой любого окна — при пустом applied отказ всего разбора: курсор не
+                    // двигается, хроника не начинается («зависшей» половины хроники не
+                    // остаётся); при непустом — частичный исход (WindowFailure, WC-3).
+                    var failed = WindowFailure($"разбор окна m{from}-m{to} не удался: {ing.Reason}");
+                    if (failed.HasValue) return failed.Value;
+                    break;
             }
+            if (failedReason is not null) break; // частичный исход: последующие окна не разбираются
+            lastOkTo = to; // окно завершено без отказа: курсор частичного исхода может стоять на его конце
         }
 
         if (applied.Count == 0 && awaiting == 0)
@@ -427,8 +481,8 @@ public sealed class WikiChatIngestService
                 sessionId, history.Count, HashOfRecord(history[^1]),
                 ZoneNothingNew, nothingReason, (entry?.NothingNewStreak ?? 0) + 1, default));
             if (!up.Ok)
-                return Refused(null, $"исход разбора не записан: {up.Reason}");
-            return new ChatResult(OutcomeNothingNew, nothingReason, []);
+                return Refused(null, $"исход разбора не записан: {up.Reason}", inputTokens);
+            return new ChatResult(OutcomeNothingNew, nothingReason, [], InputTokens: inputTokens);
         }
 
         if (applied.Count == 0)
@@ -437,24 +491,29 @@ public sealed class WikiChatIngestService
             // (сдвиг только после применения или «нечего добавить»). Хроника тоже
             // не пишется: её утверждения — из применённых пакетов.
             return new ChatResult(OutcomeAwaitingHuman,
-                "в разборе есть спорные пакеты: их решает человек («Входящие»)", []);
+                "в разборе есть спорные пакеты: их решает человек («Входящие»)", [],
+                InputTokens: inputTokens);
         }
 
         var (chronicleOk, chronicleReason) = await AppendChronicleAsync(ownerId, home, session, sessionId, applied);
         if (!chronicleOk)
-            return Refused(null, chronicleReason ?? "хроника чата не записана");
+            return Refused(null, chronicleReason ?? "хроника чата не записана", inputTokens);
 
-        // Курсор после применения — на конец дельты, с хэшем последней записи.
+        // Курсор после применения — на конец дельты, с хэшем последней записи; при
+        // частичном исходе — на конце последнего успешного окна, с хэшем его записи (та же
+        // система, что history.Count/HashOfRecord(history[^1])): он не уходит назад и не
+        // прыгает за отказанное окно (WC-3).
         // Зона/причина исхода обнуляются: они принадлежат разбору и отражают его
         // последний исход — применённый разбор означает «новые утверждения были», и его
         // собственный устаревший nothing_new не переживает свой же исход (ревью S6f,
         // доработка 2). Streak обнулён: ряд «нечего добавить» прерван применённым
         // разбором.
+        var cursorTo = failedReason is null ? history.Count : lastOkTo;
         var upApplied = WikiChatTriageStore.Upsert(root, new WikiChatTriageEntry(
-            sessionId, history.Count, HashOfRecord(history[^1]),
+            sessionId, cursorTo, HashOfRecord(history[cursorTo - 1]),
             null, null, 0, default));
         if (!upApplied.Ok)
-            return Refused(null, $"курсор разбора не записан: {upApplied.Reason}");
+            return Refused(null, $"курсор разбора не записан: {upApplied.Reason}", inputTokens);
 
         var overrodeHuman = 0;
         var disputed = new List<string>();
@@ -469,8 +528,11 @@ public sealed class WikiChatIngestService
                 if (!disputed.Contains(page, StringComparer.Ordinal))
                     disputed.Add(page);
         }
-        return new ChatResult(OutcomeApplied, null, applied.Select(a => a.PackageId).ToList(),
-            OverrodeHuman: overrodeHuman, DisputedPages: disputed);
+        // Причина отказа позднего окна остаётся в результате (Partial): применённое не
+        // перечёркнуто, но вызывающий видит, что разбор оборвался (WC-3).
+        return new ChatResult(OutcomeApplied, failedReason, applied.Select(a => a.PackageId).ToList(),
+            OverrodeHuman: overrodeHuman, DisputedPages: disputed, Partial: failedReason is not null,
+            InputTokens: inputTokens);
     }
 
     // ── хроника чата ───────────────────────────────────────────────────────────────
@@ -715,5 +777,6 @@ public sealed class WikiChatIngestService
     private static bool IsSessionIdSafe(string sessionId) =>
         sessionId.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_');
 
-    private static ChatResult Refused(string? code, string reason) => new(OutcomeRejected, reason, [], code);
+    private static ChatResult Refused(string? code, string reason, long inputTokens = 0) =>
+        new(OutcomeRejected, reason, [], code, InputTokens: inputTokens);
 }

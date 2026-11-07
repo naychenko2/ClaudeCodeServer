@@ -56,6 +56,7 @@ public sealed class VideoEditJobService : IDisposable
     private readonly VideoContextLaunch? _context;
     private readonly ISpendCollector? _spend;
     private readonly ISessionBroadcaster? _broadcaster;
+    private readonly ISessionDirectory? _sessions;
     private readonly ILogger<VideoEditJobService> _log;
     private readonly TimeProvider _time;
     private readonly ConcurrentDictionary<string, Quote> _quotes = new();
@@ -77,8 +78,10 @@ public sealed class VideoEditJobService : IDisposable
         ISessionBroadcaster? broadcaster = null,
         TimeProvider? time = null,
         VideoFrameReader? frames = null,
-        VideoContextLaunch? context = null)
+        VideoContextLaunch? context = null,
+        ISessionDirectory? sessions = null)
     {
+        _sessions = sessions;
         _context = context;
         _engines = engines;
         _workspace = workspace;
@@ -151,7 +154,7 @@ public sealed class VideoEditJobService : IDisposable
     // ── Котировка ────────────────────────────────────────────────────────────────
 
     public async Task<VideoEditCallResult<VideoQuoteResponse>> QuoteAsync(
-        string ownerId, VideoEditScope scope, VideoQuoteRequest request, CancellationToken ct)
+        string ownerId, VideoEditScope scope, VideoQuoteRequest request, CancellationToken ct, string? actorId = null)
     {
         // Ревизия контекста: сцена и кадры берутся из стора, одноимённые поля запроса игнорируются
         VideoContextInputs? fromContext = null;
@@ -159,7 +162,7 @@ public sealed class VideoEditJobService : IDisposable
         {
             if (_context is null)
                 return Fail<VideoQuoteResponse>(VideoEditorErrors.ProviderUnavailable, VideoContextLaunch.UnavailableText);
-            var read = _context.Read(ownerId, scope, request.SessionId, revision);
+            var read = _context.Read(ownerId, scope, request.SessionId, revision, actorId);
             if (!read.Ok) return read.Fail<VideoQuoteResponse>();
             fromContext = VideoContextLaunch.Extract(read.State!);
             if (fromContext.SceneId is null)
@@ -305,7 +308,7 @@ public sealed class VideoEditJobService : IDisposable
     // ── Запуск ───────────────────────────────────────────────────────────────────
 
     public async Task<VideoEditCallResult<VideoJobCreated>> StartAsync(
-        string ownerId, VideoEditScope scope, VideoLaunchRequest input, CancellationToken ct)
+        string ownerId, VideoEditScope scope, VideoLaunchRequest input, CancellationToken ct, string? actorId = null)
     {
         if (!_quotes.TryGetValue(input.QuoteId, out var quote)
             || quote.OwnerId != ownerId || quote.ScopeKey != scope.Key || quote.ExpiresAt < Now())
@@ -317,10 +320,10 @@ public sealed class VideoEditJobService : IDisposable
         {
             if (_context is null)
                 return Fail<VideoJobCreated>(VideoEditorErrors.ProviderUnavailable, VideoContextLaunch.UnavailableText);
-            var read = _context.Read(ownerId, scope, input.SessionId, revision);
+            var read = _context.Read(ownerId, scope, input.SessionId, revision, actorId);
             if (!read.Ok) return read.Fail<VideoJobCreated>();
             if (quote.ContextRevision != revision)
-                return _context.Stale(ownerId, scope, input.SessionId).Fail<VideoJobCreated>();
+                return _context.Stale(ownerId, scope, input.SessionId, actorId).Fail<VideoJobCreated>();
             fromContext = VideoContextLaunch.Extract(read.State!);
             if (fromContext.SceneId is null)
                 return Fail<VideoJobCreated>(VideoEditorErrors.InvalidRequest, VideoContextLaunch.NotSceneText);
@@ -372,9 +375,9 @@ public sealed class VideoEditJobService : IDisposable
             return Fail<VideoJobCreated>(VideoEditorErrors.InvalidRequest, QuoteMismatchText);
 
         // Кадры читаются ДО слота и до денег: нет кадра — отказ без следа
-        var frameA = await _frames.ReadAsync(ownerId, scope, settings.FrameA, ct);
+        var frameA = await _frames.ReadAsync(ownerId, actorId, scope, settings.FrameA, ct);
         if (frameA.ErrorCode is not null) return Fail<VideoJobCreated>(frameA.ErrorCode, frameA.Error!);
-        var frameB = await _frames.ReadAsync(ownerId, scope, settings.FrameB, ct);
+        var frameB = await _frames.ReadAsync(ownerId, actorId, scope, settings.FrameB, ct);
         if (frameB.ErrorCode is not null) return Fail<VideoJobCreated>(frameB.ErrorCode, frameB.Error!);
 
         // Подрезка кадров под пропорции формата сцены — ДО модели, там же до слота и денег (ADR-025 §5): так local H3
@@ -546,7 +549,7 @@ public sealed class VideoEditJobService : IDisposable
         if (job is { ChatSessionId: { } sessionId, SceneId: { } sceneId })
             await _threads.OnFinishedAsync(job.OwnerId, job.Scope.Key, sessionId, sceneId, job.Id,
                 VideoEditJobStatus.Completed, variants, job.Inputs, partialError);
-        await Broadcast(job.OwnerId, new VideoEditCompletedMessage(job.Id, job.Scope.Key, job.SceneId ?? "",
+        await Broadcast(job.OwnerId, VideoEditScope.ProjectIdOf(job.Scope.Key), job.ChatSessionId, new VideoEditCompletedMessage(job.Id, job.Scope.Key, job.SceneId ?? "",
             [.. variants.Select(v => v.Variant)], job.Cost, partialError, job.Initiator) { SessionId = job.ChatSessionId ?? "" });
     }
 
@@ -582,7 +585,7 @@ public sealed class VideoEditJobService : IDisposable
         if (job is { ChatSessionId: { } sessionId, SceneId: { } sceneId })
             await _threads.OnFinishedAsync(job.OwnerId, job.Scope.Key, sessionId, sceneId, job.Id,
                 cancelled ? VideoEditJobStatus.Cancelled : VideoEditJobStatus.Failed, variants, job.Inputs, result.Error);
-        await Broadcast(job.OwnerId, new VideoEditFailedMessage(job.Id, job.Scope.Key, job.SceneId ?? "", charged, result.Error,
+        await Broadcast(job.OwnerId, VideoEditScope.ProjectIdOf(job.Scope.Key), job.ChatSessionId, new VideoEditFailedMessage(job.Id, job.Scope.Key, job.SceneId ?? "", charged, result.Error,
             retry, job.Initiator) { SessionId = job.ChatSessionId ?? "" });
     }
 
@@ -729,7 +732,7 @@ public sealed class VideoEditJobService : IDisposable
     // dryRun подрезки кадров A/B (ADR-025 §5): тот же расчёт, что у съёмки, ничего не пишет и не тратит. Пропорции —
     // из запроса, иначе из желания сцены или формата проекта; без них подрезать нечего — отказ с подсказкой
     public async Task<VideoEditCallResult<VideoFramesPreviewDto>> PreviewFramesAsync(string ownerId, VideoEditScope scope,
-        VideoFramesPreviewRequest request, CancellationToken ct)
+        VideoFramesPreviewRequest request, CancellationToken ct, string? actorId = null)
     {
         if (!_threads.OwnScene(ownerId, scope.Key, request.SessionId, request.SceneId))
             return Fail<VideoFramesPreviewDto>(VideoEditorErrors.SceneNotFound, "Сцена не найдена");
@@ -747,7 +750,7 @@ public sealed class VideoEditJobService : IDisposable
         var previews = new List<VideoFramePreviewDto?>();
         foreach (var frame in new[] { settings.FrameA, settings.FrameB })
         {
-            var read = await _frames.ReadAsync(ownerId, scope, frame, ct);
+            var read = await _frames.ReadAsync(ownerId, actorId, scope, frame, ct);
             if (read.ErrorCode is not null) return Fail<VideoFramesPreviewDto>(read.ErrorCode, read.Error!);
             if (read.Bytes is not { } bytes) { previews.Add(null); continue; }
             var (preview, code, error) = _frames.Preview(bytes, aspect, anchor);
@@ -896,7 +899,7 @@ public sealed class VideoEditJobService : IDisposable
                 else if (value.Stage != VideoStage.Queued && value.Stage != VideoStage.Running) job.UpscaleEtaSeconds = null;
                 if (value.RemoteId is { } remote) job.RemoteId = remote;
             }
-            _ = owner.Broadcast(job.OwnerId, new VideoEditProgressMessage(job.Id, job.Scope.Key, job.SceneId ?? "",
+            _ = owner.Broadcast(job.OwnerId, VideoEditScope.ProjectIdOf(job.Scope.Key), job.ChatSessionId, new VideoEditProgressMessage(job.Id, job.Scope.Key, job.SceneId ?? "",
                 StageName(value.Stage), value.QueuePosition, value.EtaSeconds, variant, job.Quote.Count, job.Initiator, value.Percent,
                 value.UpscaleEtaSeconds, Gpu: value.Gpu)
             { SessionId = job.ChatSessionId ?? "" });
@@ -911,12 +914,12 @@ public sealed class VideoEditJobService : IDisposable
         _ => VideoProgressStages.Queued,
     };
 
-    private async Task Broadcast(string ownerId, ServerMessage message)
+    private async Task Broadcast(string ownerId, string? projectId, string? chatSessionId, ServerMessage message)
     {
         if (_broadcaster is null) return;
         try
         {
-            await _broadcaster.ToOwner(ownerId, message);
+            await _broadcaster.ToChatAudience(_sessions, ownerId, projectId, chatSessionId, message);
         }
         catch (Exception ex)
         {

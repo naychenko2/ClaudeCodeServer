@@ -33,7 +33,6 @@ public sealed class ImageEditLaunchAssembler(
     ImageThreadService? threads = null,
     ImageEditSteps? steps = null,
     ImageContextLaunch? context = null,
-    IFeatureFlagGate? flags = null,
     CharacterSceneParser? sceneParser = null,
     CharacterPhotoLabeling? labeling = null,
     Faces.FaceDetectionCache? faces = null,
@@ -42,9 +41,9 @@ public sealed class ImageEditLaunchAssembler(
     public static readonly IReadOnlyList<string> AspectRatios = ["1:1", "16:9", "9:16"];
 
     public async Task<ImageEditCallResult<ImageEditJobCreatedDto>> LaunchAsync(
-        string ownerId, ImageEditScope scope, ImageEditLaunchRequest req, CancellationToken ct)
+        string ownerId, string? actorId, ImageEditScope scope, ImageEditLaunchRequest req, CancellationToken ct)
     {
-        var assembled = await AssembleAsync(ownerId, scope, req, ct);
+        var assembled = await AssembleAsync(ownerId, actorId, scope, req, ct);
         if (assembled.Value is not { } input)
             return assembled.Payload is { } payload
                 ? ImageEditCallResult<ImageEditJobCreatedDto>.Fail(
@@ -81,8 +80,9 @@ public sealed class ImageEditLaunchAssembler(
 
     // Вход задачи без запуска: всё проверено, байты прочитаны, нить своя или её нет. Диск проекта
     // (образцы путями, персонаж, путь исходника) — только у области проекта: у личной отказ до RootPath
+    // ownerId — арендатор (ключ хранилищ), actorId — вызывающий: по нему судится чужесть private-файлов
     public async Task<ImageEditCallResult<ImageEditJobInput>> AssembleAsync(
-        string ownerId, ImageEditScope scope, ImageEditLaunchRequest req, CancellationToken ct)
+        string ownerId, string? actorId, ImageEditScope scope, ImageEditLaunchRequest req, CancellationToken ct)
     {
         // Драйверов может не быть вовсе (не настроены или ещё не подключены) — это понятный
         // отказ, а не 500 и не 202 на задачу, которая никогда не начнётся
@@ -97,10 +97,10 @@ public sealed class ImageEditLaunchAssembler(
             return Invalid("Не указана котировка: сначала запросите цену");
         // Подстановка персонажа на лицо (ADR-028, этап 2): отдельный путь, контекст игнорируется
         if (req.FaceTarget is { } faceTarget)
-            return await AssembleFaceTargetAsync(ownerId, scope, req, faceTarget, ct);
+            return await AssembleFaceTargetAsync(ownerId, actorId, scope, req, faceTarget, ct);
         if (req.ContextRevision is { } revision)
         {
-            var applied = await ApplyContextAsync(ownerId, scope, req, revision, ct);
+            var applied = await ApplyContextAsync(ownerId, actorId, scope, req, revision, ct);
             if (applied.Value is not { } byContext)
                 return ImageEditCallResult<ImageEditJobInput>.Fail(applied.ErrorCode ?? ImageEditErrorCodes.InvalidRequest,
                     applied.Error ?? "Запрос не выполнен", applied.Payload!);
@@ -157,7 +157,7 @@ public sealed class ImageEditLaunchAssembler(
 
         foreach (var (path, role) in req.ReferencePaths)
         {
-            var read = await ReadProjectImageAsync(scope.Project!.RootPath, path, "Образец", ct);
+            var read = await ReadProjectImageAsync(actorId, scope.Project!.RootPath, path, "Образец", ct);
             if (read.Value is not { } image) return Fail<ImageEditJobInput>(read.ErrorCode, read.Error);
             references.Add(new ReferenceImage(image.Bytes, image.ContentType, role, Path.GetFileName(path)));
         }
@@ -174,12 +174,10 @@ public sealed class ImageEditLaunchAssembler(
             var found = CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, slug, maxPhotos, diverse: diverse);
             if (found is null) return Invalid("Персонаж не найден");
             labeling?.Enqueue(ownerId, scope.Project!.RootPath, slug);
-            // Явный список — только при включённом флаге; любое нарушение отказывает целиком
+            // Явный список: любое нарушение отказывает целиком
             if (req.CharacterPhotos is { } chosen)
             {
-                found = flags?.IsEnabled(ownerId, FeatureFlagKeys.CharacterSmartPhotos) == true
-                    ? CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, slug, maxPhotos, explicitPhotos: chosen)
-                    : null;
+                found = CharacterStore.ForRequest(scope.Project!.RootPath, ownerId, slug, maxPhotos, explicitPhotos: chosen);
                 if (found is null) return PhotosInvalid();
             }
             character = found.Ref;
@@ -191,7 +189,7 @@ public sealed class ImageEditLaunchAssembler(
         if (references.Count > limits.MaxReferences)
             return Invalid($"Образцов не больше {limits.MaxReferences}");
 
-        if (req.SourcePath is { Length: > 0 } sourcePath && ProjectLinkGuard.ResolveInside(scope.Project!.RootPath, sourcePath) is null)
+        if (req.SourcePath is { Length: > 0 } sourcePath && ProjectLinkGuard.ResolveInsideAs(scope.Project!.RootPath, sourcePath, actorId) is null)
             return Invalid("Исходник вне папки проекта или идёт через символическую ссылку");
 
         return ImageEditCallResult<ImageEditJobInput>.Ok(new ImageEditJobInput(
@@ -214,14 +212,13 @@ public sealed class ImageEditLaunchAssembler(
             CharacterPicker: picker));
     }
 
-    // Подбор фото персонажа под сюжет (ADR-027 §7) — только при включённом флаге владельца. Возвращает
+    // Подбор фото персонажа под сюжет (ADR-027 §7). Возвращает
     // делегат, который исполнитель зовёт в задаче перед драйвером: разбор сюжета не держит ответ «запустить».
     // Явный список — Pick=manual без подбора; пустой промпт или нет разбора — подбора нет, запись в запуск тоже
     // diverse — модель берёт фото как одного человека (Klein): набор ракурсов вместо подбора под сюжет
     private Func<int, CancellationToken, Task<CharacterPickOutcome>>? CharacterPicker(
         string ownerId, string root, string slug, ImageEditLaunchRequest req, int count, bool diverse)
     {
-        if (flags?.IsEnabled(ownerId, FeatureFlagKeys.CharacterSmartPhotos) != true) return null;
         if (req.CharacterPhotos is { } chosen)
             return (_, _) => Task.FromResult(new CharacterPickOutcome(null, new ImageThreadCharacter(slug, chosen, CharacterPhotoPick.Manual, null)));
         if (sceneParser is null || string.IsNullOrWhiteSpace(req.Prompt)) return null;
@@ -249,7 +246,7 @@ public sealed class ImageEditLaunchAssembler(
 
     // Входы запуска — из стора контекста по ревизии клиента; поля входов тела заменяются раскладкой
     private async Task<ImageEditCallResult<ImageEditLaunchRequest>> ApplyContextAsync(
-        string ownerId, ImageEditScope scope, ImageEditLaunchRequest req, long revision, CancellationToken ct)
+        string ownerId, string? actorId, ImageEditScope scope, ImageEditLaunchRequest req, long revision, CancellationToken ct)
     {
         static ImageEditCallResult<ImageEditLaunchRequest> Refuse(string? code, string? error, object? payload) =>
             payload is null
@@ -274,9 +271,9 @@ public sealed class ImageEditLaunchAssembler(
         var version = inputs.VersionId is { } v ? thread.Version(v) : thread.CurrentVersion;
         if (version is null) return Refuse(ImageEditErrorCodes.VersionNotFound, "Версии нет в этой картинке", null);
 
-        var source = await context.ReadVersionAsync(ownerId, scope, thread, version, ct);
+        var source = await context.ReadVersionAsync(ownerId, actorId, scope, thread, version, ct);
         if (source.ErrorCode is not null) return Refuse(source.ErrorCode, source.Error, null);
-        var samples = await context.LoadSamplesAsync(ownerId, scope, sessionId, inputs, ct);
+        var samples = await context.LoadSamplesAsync(ownerId, actorId, scope, sessionId, inputs, ct);
         if (samples.Value is not { } loaded) return Refuse(samples.ErrorCode, samples.Error, null);
 
         return ImageEditCallResult<ImageEditLaunchRequest>.Ok(req with
@@ -294,16 +291,12 @@ public sealed class ImageEditLaunchAssembler(
 
     // Подстановка персонажа на лицо (ADR-028, этап 3): контекст чата игнорируется целиком,
     // образцы — только персонаж, маска строится сервером по bbox детектора.
-    // Порядок: a. флаг → b. личная область/входы → c. версия → d. детекция/facesKey →
+    // Порядок: b. личная область/входы → c. версия → d. детекция/facesKey →
     // e. промпт → f. проходы (одна детекция, N масок/кропов, по возрастанию номера лица) →
     // g. входы (N = 1 — старые поля, N > 1 — FacePasses: цепочка проходов в задаче)
     private async Task<ImageEditCallResult<ImageEditJobInput>> AssembleFaceTargetAsync(
-        string ownerId, ImageEditScope scope, ImageEditLaunchRequest req, FaceTarget faceTarget, CancellationToken ct)
+        string ownerId, string? actorId, ImageEditScope scope, ImageEditLaunchRequest req, FaceTarget faceTarget, CancellationToken ct)
     {
-        // a. Флаг выключен — как в 7a
-        if (flags?.IsEnabled(ownerId, FeatureFlagKeys.CharacterFaceSwap) != true)
-            return Fail<ImageEditJobInput>(ImageEditErrorCodes.FeatureDisabled, "Подстановка персонажа на лицо выключена");
-
         // b. Личная область, входы
         if (scope.Project is null)
             return Invalid("Подстановка персонажа на лицо — только в проекте");
@@ -341,7 +334,7 @@ public sealed class ImageEditLaunchAssembler(
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.VersionNotFound, "Версии нет в этой картинке");
 
         // Байты версии: шаг версии, иначе файл проекта
-        var sourceBytes = await VersionBytesAsync(ownerId, scope, thread, version, ct);
+        var sourceBytes = await VersionBytesAsync(ownerId, actorId, scope, thread, version, ct);
         if (sourceBytes is null)
             return Fail<ImageEditJobInput>(ImageEditErrorCodes.VersionNotFound, "У версии ещё нет изображения");
 
@@ -441,14 +434,14 @@ public sealed class ImageEditLaunchAssembler(
     }
 
     // Байты версии: текущий шаг (рабочая папка), у исходника — файл проекта. null — картинки нет
-    private async Task<byte[]?> VersionBytesAsync(string ownerId, ImageEditScope scope, ImageThread thread,
+    private async Task<byte[]?> VersionBytesAsync(string ownerId, string? actorId, ImageEditScope scope, ImageThread thread,
         ImageThreadVersion version, CancellationToken ct)
     {
         if (thread.ImageStepOf(version) is { Length: > 0 } stepId && steps?.Open(ownerId, scope.Key, stepId) is { } found)
             return found.Image.Bytes;
         if (thread.File is { Length: > 0 } file && scope.Project is { } project)
         {
-            var read = await ReadProjectImageAsync(project.RootPath, file, "Версия", ct);
+            var read = await ReadProjectImageAsync(actorId, project.RootPath, file, "Версия", ct);
             return read.Value?.Bytes;
         }
         return null;
@@ -485,9 +478,11 @@ public sealed class ImageEditLaunchAssembler(
     // у агента): строго внутри корня, не через символическую ссылку, в пределах лимита.
     // what — чем картинка служит, для текста отказа («Образец», «Файл картинки»)
     public static async Task<ImageEditCallResult<ImageBytes>> ReadProjectImageAsync(
-        string projectRoot, string path, string what, CancellationToken ct)
+        string? actorId, string projectRoot, string path, string what, CancellationToken ct)
     {
-        var full = ProjectLinkGuard.ResolveInside(projectRoot, path);
+        // actorId — вызывающий, не арендатор. Чужое private (.cc-attachments/private/{X}) отдаёт тот же отказ,
+        // что и «вне проекта»: наличие не раскрываем; актор неизвестен (null) — чужим считается любое private
+        var full = ProjectLinkGuard.ResolveInsideAs(projectRoot, path, actorId);
         if (full is null)
             return Fail<ImageBytes>(ImageEditErrorCodes.InvalidRequest,
                 $"{what} вне папки проекта или идёт через символическую ссылку");

@@ -170,6 +170,12 @@ export type WikiErrorCode =
   // не тронут; отказ записи файла — 500 с кодом, а не 500 без тела (WikiSettingsController.cs:160-170)
   | 'wiki_nightly'
   | 'wiki_settings_write_failed'
+  // Ручной запуск ночного разбора (WN-5, POST /api/wiki/settings/nightly/run): ночь выключена,
+  // этот владелец уже проходит, настройки нечитаемы (WikiSettingsController.cs:84-87, 237-251);
+  // «функция выключена» — уже известный wiki_llm_wiki_off, отдельного кода нет
+  | 'wiki_nightly_running'
+  | 'wiki_nightly_disabled'
+  | 'wiki_settings_invalid'
   // Правка страницы человеком (F4a, ADR-038): файл правили ещё раз / единые «Заметки и Вики»
   // выключены / гейт записи отказал по существу (violations, issues)
   | 'wiki_page_changed'
@@ -195,6 +201,7 @@ const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'not_found', 'task_execution', 'marked_skip', 'personal_section', 'wiki_not_initialized',
   'packages_limit', 'wiki_note_id', 'wiki_triage_invalid',
   'wiki_nightly', 'wiki_settings_write_failed',
+  'wiki_nightly_running', 'wiki_nightly_disabled', 'wiki_settings_invalid',
   'wiki_page_changed', 'wiki_unified_off', 'wiki_edit_invalid',
   'wiki_note_transferred', 'wiki_transfer_target',
 ]);
@@ -772,7 +779,9 @@ function analyzeOk(body: unknown): WikiChatAnalyzeOk | null {
 // «Разобрать этот чат сейчас» (S7b0a): единственный запрос, доходящий до модели. 200 и 202 —
 // для request() оба успешные тела (offline.ts:1649), различаем по форме: у 200 всегда есть
 // строковый outcome, у 202 — только running:true. Отказы: 404 not_found, 409 task_execution |
-// marked_skip | personal_section | wiki_not_initialized — WikiError с кодом.
+// marked_skip | personal_section — WikiError с кодом. С LI-2 analyze сам заводит вики владельца
+// (WikiChatsController.cs:276): 409 wiki_not_initialized из этой ручки больше не приходит;
+// код остаётся в типах — это ответ сервисного слоя (гейт WikiChatIngestService.cs:346, MCP).
 export async function analyzeWikiChat(sessionId: string): Promise<WikiChatAnalyzeResult> {
   const body = await wikiHttp<unknown>(
     `/wiki/chats/${encodeURIComponent(sessionId)}/analyze`, { method: 'POST' });
@@ -814,8 +823,10 @@ export interface WikiNoteIngestDto {
 
 // «Разобрать заметку в базу» (S7b0b): target — явный «common» для источника вне проекта
 // (ADR-036, решение 3), его проверяет захват. Отказы: 400 wiki_note_id (нет id),
-// 409 wiki_not_initialized | packages_limit (до захвата), 404 not_found (заметка не стала
-// источником: чужая, нет такой).
+// 409 packages_limit (до захвата), 404 not_found (заметка не стала источником: чужая, нет
+// такой). С LI-2 ручка сама заводит вики владельца (WikiController.cs:474): 409
+// wiki_not_initialized из неё больше не приходит; код остаётся в типах — ответ сервисного
+// слоя (гейт WikiIngestService.cs:214, MCP).
 export async function ingestWikiNote(noteId: string, target?: string | null): Promise<WikiNoteIngestDto> {
   const res = await wikiHttp<{ outcome?: unknown; packageId?: unknown; reason?: unknown }>(
     '/wiki/ingest/note',
@@ -918,6 +929,11 @@ export interface WikiLastNight {
   toInbox: number;
   estTokens: number;
   outcome: WikiNightlyOutcome;
+  // Отвергнутые пакеты и отметка ручного прохода (WN-2/WN-5: Rejected/Manual в итоге ночи,
+  // сериализация — WikiSettingsController.cs:319-321, 358-362). Поля опциональны: старый бэк
+  // без них — не ошибка, отсутствие читается как есть (тот же приём, что отсутствующий lastNight)
+  rejected?: number;
+  manual?: boolean;
 }
 
 // Класс правок «origin×op» (ключ — форма бэкового WikiPackage.ClassKey, без пробелов) с
@@ -945,6 +961,11 @@ export interface WikiSettingsSnapshot {
   classes: WikiApplyClassDto[];
   nightly: WikiNightlySettings;
   lastNight: WikiLastNight | null;
+  // Идёт ли сейчас ночной проход этого владельца (WN-5: NightlyRunning в GET,
+  // WikiSettingsController.cs:267-269, 339). Состояние процесса, не файла: PUT его не несёт
+  // («никакой записи настроек действие не делает», :235) и сохраняет прочитанное, как lastNight;
+  // ручной запуск ставит его оптимистично и снимает по ответу опроса (WN-6a)
+  nightlyRunning: boolean;
 }
 
 let _settings: WikiSettingsSnapshot | null = null;
@@ -966,6 +987,11 @@ function readLastNight(body: unknown): WikiLastNight | null {
     ? b.lastNight as WikiLastNight
     : null;
 }
+
+// NightlyRunning (WN-5): бэк несёт его в GET всегда; старый бэк без поля — «не идёт»
+// (отсутствие поля — отрицательное значение, не ошибка: тот же приём, что отсутствующий lastNight)
+const readNightlyRunning = (body: unknown): boolean =>
+  (body as { nightlyRunning?: unknown } | null)?.nightlyRunning === true;
 
 const numOr0 = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 const strOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null);
@@ -1047,7 +1073,7 @@ async function fetchWikiSettings(gen: number, owner: string | null): Promise<Wik
   const body = await wikiHttp<unknown>('/wiki/settings');
   const nightly = readNightly(body);
   if (!nightly) throw new WikiError(0, null, 'неожиданный ответ настроек вики');
-  const snap: WikiSettingsSnapshot = { ...readApplyPart(body), nightly, lastNight: readLastNight(body) };
+  const snap: WikiSettingsSnapshot = { ...readApplyPart(body), nightly, lastNight: readLastNight(body), nightlyRunning: readNightlyRunning(body) };
   // Устаревший ответ или ответ чужого владельца в снимок не пишется (M1/M2)
   if (gen === _settingsGen && owner === readStoredUserId()) {
     _settings = snap;
@@ -1110,6 +1136,9 @@ export async function putWikiNightly(patch: WikiNightlyPatch): Promise<WikiPutNi
     // lastNight — только из GET (N7c): ответ PUT его не несёт, и молча обнулять прочитанное
     // нечем — поле сохраняется от последнего чтения
     lastNight: readLastNight(body) ?? prev?.lastNight ?? null,
+    // то же с состоянием прогона (WN-5): PUT его не несёт — сохраняется от последнего чтения
+    // или оптимистичной записи ручного запуска, а не обнуляется
+    nightlyRunning: prev?.nightlyRunning ?? false,
   };
   // Устаревший ответ или ответ прежнего владельца в снимок не пишется (M1/M2);
   // вызывающий свой ответ получает как есть.
@@ -1118,6 +1147,94 @@ export async function putWikiNightly(patch: WikiNightlyPatch): Promise<WikiPutNi
     emit();
   }
   return { ok: true, snapshot: snap };
+}
+
+// ─── «Разобрать сейчас»: ручной запуск прохода и опрос до его конца (WN-6a) ───
+// POST /api/wiki/settings/nightly/run (WikiSettingsController.cs:237-251): 202 {started:true} —
+// проход начат; 409 — по причине отказа (wiki_llm_wiki_off / wiki_nightly_disabled /
+// wiki_nightly_running / wiki_settings_invalid). Результат, а не исключение (образец
+// putWikiNightly): вызывающий называет причину по `code`; сетевой сбой — {ok:false, code:null}
+// (это не отказ контракта, но и кнопки не обёртываются в try/catch — позиция та же, что у
+// toWikiError). 409 «уже идёт» — то же состояние, что 202: проход идёт, его и опрашиваем.
+//
+// О конце прохода бэк не сообщает (202 — только начало, работа в фоне службы): фронт опрашивает
+// GET /wiki/settings раз в 5 с, пока тот отвечает nightlyRunning=true; последний ответ — он и
+// финальный снимок со свежим lastNight. До первого ответа «идёт» показывает оптимистичная
+// запись в существующий снимок; снимка ещё нет — состояние принесёт первый опрос.
+
+export type WikiRunNightlyResult =
+  | { ok: true }
+  | { ok: false; code: WikiErrorCode | null };
+
+const NIGHTLY_POLL_MS = 5000;
+
+// Полёт запуска: второй вызов, пока первый в сети, делит его результат — ровно один POST
+// (тот же слот-приём, что у loadWikiSettings; замок бэка второй раз не проверяется).
+// Опрос — один на стор: цепочка одного таймера, привязанная к владельцу, начавшему запуск;
+// повторный старт (в т.ч. по 409 «уже идёт») второй цепочки не заводит.
+let _nightlyRunReq: Promise<WikiRunNightlyResult> | null = null;
+let _nightlyPoll: { owner: string | null; timer: ReturnType<typeof setTimeout> | null } | null = null;
+
+export function runWikiNightlyNow(): Promise<WikiRunNightlyResult> {
+  if (_nightlyRunReq) return _nightlyRunReq;
+  const req = doRunWikiNightly().finally(() => { if (_nightlyRunReq === req) _nightlyRunReq = null; });
+  _nightlyRunReq = req;
+  return req;
+}
+
+async function doRunWikiNightly(): Promise<WikiRunNightlyResult> {
+  const owner = readStoredUserId();
+  try {
+    await wikiHttp<unknown>('/wiki/settings/nightly/run', { method: 'POST' });
+  } catch (e) {
+    const we = toWikiError(e);
+    if (we?.code !== 'wiki_nightly_running') return { ok: false, code: we?.code ?? null };
+    // «разбор этой вики уже идёт» — не отказ действия: состояние то же, что после 202
+  }
+  if (owner !== readStoredUserId()) return { ok: true }; // смена аккаунта в полёте: проход её, стор уже чужой (M2)
+  ++_settingsGen; // чтения, начатые до запуска, устарели: их ответы не затерят состояние прохода
+  if (_settings) {
+    _settings = { ..._settings, nightlyRunning: true }; // оптимистично, как тумблер ночи
+    emit();
+  }
+  startNightlyPolling(owner);
+  return { ok: true };
+}
+
+function startNightlyPolling(owner: string | null): void {
+  if (_nightlyPoll) return;
+  _nightlyPoll = { owner, timer: null };
+  scheduleNightlyPoll();
+}
+
+function scheduleNightlyPoll(): void {
+  const poll = _nightlyPoll;
+  if (!poll) return;
+  poll.timer = setTimeout(() => { void tickNightlyPoll(); }, NIGHTLY_POLL_MS);
+}
+
+async function tickNightlyPoll(): Promise<void> {
+  const poll = _nightlyPoll;
+  if (!poll) return;
+  poll.timer = null;
+  // Смена владельца: опрос встаёт без нового запроса — читать чужой проход в чужой стор нечем (M2)
+  if (poll.owner !== readStoredUserId()) { _nightlyPoll = null; return; }
+  let snap: WikiSettingsSnapshot;
+  try {
+    // Обычная loadWikiSettings: медленный висящий GET делится, а не повторяется
+    snap = await loadWikiSettings();
+  } catch {
+    // Сбой чтения: проход мог и не кончаться — одиночный сбой опрос не останавливает,
+    // на следующем интервале спросим снова (состояние поправит успешный ответ)
+    if (_nightlyPoll === poll) scheduleNightlyPoll();
+    return;
+  }
+  if (_nightlyPoll !== poll) return; // опрос сняли во время запроса (смена владельца, тестовый шов)
+  if (poll.owner !== readStoredUserId()) { _nightlyPoll = null; return; }
+  if (snap.nightlyRunning) { scheduleNightlyPoll(); return; }
+  // Последний GET сказал «не идёт»: он и есть финальный снимок со свежим lastNight —
+  // его уже записал fetchWikiSettings. Опрос встаёт.
+  _nightlyPoll = null;
 }
 
 // ─── «Применение»: общий выключатель и возврат класса (S7d-1) ───
@@ -1168,6 +1285,7 @@ async function putApplySettings(
     classes: mergeClassStats(apply.classes, prev?.classes),
     nightly,
     lastNight: prev?.lastNight ?? null, // PUT итога не несёт (N7c) — сохраняется от последнего GET
+    nightlyRunning: prev?.nightlyRunning ?? false, // PUT состояния прогона не несёт (WN-5) — той же мерой
   };
   if (gen === _settingsGen && owner === readStoredUserId()) {
     _settings = snap;
@@ -1331,6 +1449,10 @@ export const __test = {
     _settingsGen = 0;
     _settingsReq = null;
     _catalogGen.clear();
+    // Полёт ручного запуска и цепочка опроса — тоже состояние стора: тест не наследует их
+    if (_nightlyPoll?.timer) clearTimeout(_nightlyPoll.timer);
+    _nightlyPoll = null;
+    _nightlyRunReq = null;
   },
   // Тестовый шов: подписка экрана на страницу. Открытой страницу делает счётчик, который
   // экран поднимает через useWikiPage, — те же операции retainOpenPage/releaseOpenPage;
@@ -1484,6 +1606,9 @@ export type WikiOverrodeKind = 'replaced' | 'disputed';
 export interface WikiJournalEntryOverrideDto extends WikiJournalEntryDto {
   overrodeHuman?: boolean;
   overrodeKind?: WikiOverrodeKind | null;
+  // Страница, где ИИ заменил утверждение (null/нет — берётся pages[0]); true — человек уже вернул свою
+  overridePageKey?: string | null;
+  overrideReverted?: boolean;
 }
 
 // Отказы «Вернуть мою» читаются по тем же кодам WikiError, что у правки: 409 wiki_page_changed
@@ -1578,10 +1703,13 @@ export async function restoreWikiPage(
 // wiki_transfer_target). section/page ответа — ключи созданной страницы в той же форме, что
 // ключ раздела дерева и ключ страницы каталога, — экран открывает их requestOpenWikiPage (OPEN-1).
 // Отказы — WikiError с кодом: 404 not_found (заметки нет или чужая), 409 wiki_unified_off |
-// wiki_not_initialized | wiki_note_transferred (уже перенесена) | wiki_page_changed (имя занято:
-// «переименуйте заметку и повторите»), 400 wiki_edit_invalid (.violations/.issues) | wiki_note_id;
-// сервисному токену 403 — до ветки переноса. Повтор переноса доводит несделанную замену:
-// занятая страница этого же переноса узнаётся на бэке (WikiNoteTransfer.IsPageOfThisTransfer).
+// wiki_note_transferred (уже перенесена) | wiki_page_changed (имя занято: «переименуйте
+// заметку и повторите»), 400 wiki_edit_invalid (.violations/.issues) | wiki_note_id;
+// сервисному токену 403 — до ветки переноса. С LI-2 ручка сама заводит вики владельца
+// (WikiController.cs:498): 409 wiki_not_initialized из неё больше не приходит; код остаётся
+// в типах — ответ второй линии защиты (гейт WikiApplyService.cs:194, за которым страница).
+// Повтор переноса доводит несделанную замену: занятая страница этого же переноса узнаётся
+// на бэке (WikiNoteTransfer.IsPageOfThisTransfer).
 
 export interface WikiNoteTransferDto {
   section: string;
@@ -1614,8 +1742,8 @@ export async function transferWikiNote(noteId: string): Promise<WikiNoteTransfer
 // непосредственно перед запросом — единственный источник хэша на этом экране. Между чтением
 // и применением файл мог быть правлен ещё раз — это ровно 409 wiki_page_changed, бэк ничего
 // не пишет. Ответы как у edit: 200 applied/unchanged; 409 wiki_page_changed (файл правили
-// ещё раз), 409 wiki_drift (дрейф других страниц раздела), 409 wiki_unified_off (любой из
-// флагов выключен — UnifiedOffRefusal до ветки), 400 wiki_edit_invalid (.violations/.issues),
+// ещё раз), 409 wiki_drift (дрейф других страниц раздела), 409 wiki_unified_off (флаг
+// llm-wiki выключен — UnifiedOffRefusal до ветки), 400 wiki_edit_invalid (.violations/.issues),
 // 400 wiki_adopt_mode. Чистый транспорт (тот же порядок, что analyzeWikiChat/transferWikiNote):
 // состояния стора не трогает, ничего не перечитывает — перечитку здоровья и отбивку ответа
 // по пути страницы делает вызывающий.

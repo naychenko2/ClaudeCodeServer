@@ -9,7 +9,6 @@ import { buildNavMarks } from '../../lib/featureNavMarks';
 import { getBackNav, clearBackNav, registerFeaturePage, recordFeatureReturn } from '../../lib/featureBackNav';
 import { useFeaturesIndex } from '../../lib/featuresIndex';
 import { api } from '../../lib/api';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { featureStatusTag, featureDisplayState } from '../../lib/chatGroups';
 import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
@@ -129,8 +128,7 @@ function FeatureBriefWithNames(props: Omit<FeatureBriefBlockProps, 'nameOf' | 'g
 export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = false, onBack, onOpenFile }: FeaturePageProps) {
   // Данные страницы (run + events) — из стора; здесь для фолбэка заголовка и 404/503.
   const page = useFeaturePage(featureId);
-  const featuresOn = useFeature(FLAGS.featuresOverview);
-  const index = useFeaturesIndex(projectId, featuresOn);
+  const index = useFeaturesIndex(projectId);
   const feature = index.features.find(f => f.featureId === featureId) ?? null;
   // «Открыть ключевой чат» (общее пустое «Материалы»): тот же переход, что в шапке.
   const keyChat = feature?.keySessionId ?? null;

@@ -137,4 +137,59 @@ public class TaskManagerPregateTests : IDisposable
         _sut.RecordPregate(task.Id, Sha2, false, "x", "build")!.RedStreak.Should().Be(1);
     }
 
+    // «Нечего проверять» — нейтральный исход: не красный, в серию и эскалацию не входит
+    [Fact]
+    public void НечегоПроверять_НеКрасный_ИсходНейтральный_БезДоклада()
+    {
+        var task = Step();
+        var escalations = new List<string>();
+        _sut.PregateEscalated += (_, text) => escalations.Add(text);
+
+        var first = _sut.RecordPregate(task.Id, Sha1, false, "NotRun", null, nothingApplicable: true)!;
+        var second = _sut.RecordPregate(task.Id, Sha2, false, "NotRun", null, nothingApplicable: true)!;
+
+        first.Outcome.Should().Be(PregateRecord.OutcomeNeutral);
+        second.Outcome.Should().Be(PregateRecord.OutcomeNeutral);
+        second.RedStreak.Should().Be(0, "два «нечего проверять» подряд — не серия красных");
+        escalations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void НечегоПроверятьМеждуКрасными_СериюНеНаращиваетИНеОбнуляет()
+    {
+        var task = Step();
+        var escalations = new List<string>();
+        _sut.PregateEscalated += (_, text) => escalations.Add(text);
+
+        _sut.RecordPregate(task.Id, Sha1, false, "x", "build");
+        var neutral = _sut.RecordPregate(task.Id, Sha2, false, "NotRun", null, nothingApplicable: true)!;
+        neutral.RedStreak.Should().Be(1, "серия прошлого красного переносится как была");
+        escalations.Should().BeEmpty("нейтральный исход доклада не поднимает");
+
+        _sut.RecordPregate(task.Id, Sha2, false, "x", "build")!.RedStreak.Should().Be(2);
+        escalations.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void Исход_ЗелёныйКрасныйНейтральный()
+    {
+        new PregateRecord("s", true, "", DateTime.UtcNow).Outcome.Should().Be(PregateRecord.OutcomeGreen);
+        new PregateRecord("s", false, "x", DateTime.UtcNow, 1, "build").Outcome.Should().Be(PregateRecord.OutcomeRed);
+        new PregateRecord("s", false, "", DateTime.UtcNow, NothingApplicable: true).Outcome
+            .Should().Be(PregateRecord.OutcomeNeutral);
+    }
+
+    [Fact]
+    public void Исход_ЕдетВJson_ИСтарыйJsonЧитается()
+    {
+        var record = new PregateRecord("s", false, "", DateTime.UtcNow, NothingApplicable: true);
+        var json = System.Text.Json.JsonSerializer.Serialize(record);
+        json.Should().Contain("\"Outcome\":\"neutral\"");
+
+        // Запись старого формата (без Outcome) и запись с Outcome читаются одинаково
+        var old = System.Text.Json.JsonSerializer.Deserialize<PregateRecord>(
+            "{\"Sha\":\"s\",\"Green\":false,\"Summary\":\"\",\"At\":\"2026-11-07T00:00:00Z\",\"NothingApplicable\":true}")!;
+        old.Outcome.Should().Be(PregateRecord.OutcomeNeutral);
+        System.Text.Json.JsonSerializer.Deserialize<PregateRecord>(json)!.Should().Be(record);
+    }
 }

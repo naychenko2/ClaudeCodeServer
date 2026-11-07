@@ -28,8 +28,11 @@ public interface IArchitectureAgentLauncher
     // Создаёт задачу персоне-архитектору проекта (Specialty == Planner с доступом к
     // arch_* на запись; нет — без персоны) и запускает исполнителя. ct запуск не отменяет:
     // созданную задачу бросать на полпути нельзя (см. реализацию).
+    // createdByUserId — человек, нажавший «Собрать»: создатель задачи, чей актор унаследует
+    // автозапуск исполнителя (F-9); null — вызов без человека.
     Task<ArchitectureAgentLaunch> LaunchAsync(
-        string projectId, string ownerId, ArchitectureAgentBrief brief, CancellationToken ct);
+        string projectId, string ownerId, ArchitectureAgentBrief brief, CancellationToken ct,
+        string? createdByUserId);
 
     // Read-only проверка ДО прохода 1: id незавершённой задачи агентной сборки проекта или
     // null. Главная проверка — всё равно под замком в LaunchAsync (между ними окно гонки).

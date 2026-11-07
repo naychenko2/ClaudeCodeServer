@@ -2,8 +2,9 @@
 // источникам, пунктир — граница детального окна) + карточки-топы разрезов.
 // Любой клик проваливает в «Анализ» с применённым контекстом.
 import type { ReactNode } from 'react';
+import { Lock } from 'lucide-react';
 import type { SpendCardRow, SpendOverviewResponse, SpendTurnDto } from '../../types';
-import { C, FONT, R, SHADOW, SP } from 'aihome_shell/kit';
+import { C, FONT, FS, R, SHADOW, SP } from 'aihome_shell/kit';
 import {
   DIM_LABELS, SPEND_TIERS, TIER_KEYS, dayColumn, fmtDate, fmtRub, fmtTok, fmtTime, genUnit, genUnitLong,
   isGenSource, nodeName, rowBarColor, sourceColor, sourceLabel,
@@ -50,11 +51,12 @@ function Card({ title, more, onMore, col, isMobile, isTablet, children }: {
 }
 
 // Строка топа: ранг, иконка, имя, полоса-доля, значение
-function TopRow({ rank, icon, name, meta, share, value, valueColor, barColor, isTablet, onClick }: {
-  rank: number; icon: ReactNode; name: string; meta?: string | null; share: number;
+function TopRow({ rank, icon, name, meta, sub, share, value, valueColor, barColor, isTablet, onClick }: {
+  rank: number; icon: ReactNode; name: string; meta?: string | null; sub?: ReactNode; share: number;
   value: string; valueColor: string; barColor: string; isTablet?: boolean; onClick: () => void;
 }) {
   return (
+    <>
     <div
       onClick={onClick}
       style={{ display: 'flex', alignItems: 'center', gap: 8, padding: isTablet ? `${SP.md}px ${SP.xs}px` : '6px 4px', borderRadius: R.md, cursor: 'pointer' }}
@@ -74,6 +76,10 @@ function TopRow({ rank, icon, name, meta, share, value, valueColor, barColor, is
         {value}
       </span>
     </div>
+    {sub && (
+      <div style={{ paddingLeft: 36, marginTop: -2, marginBottom: 4, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans }}>{sub}</div>
+    )}
+    </>
   );
 }
 
@@ -108,6 +114,9 @@ function topCard(opts: {
             icon={nodeIcon(opts.dim, name, r.meta, opts.dim === 'source' ? sourceColor(r.key) : undefined)}
             name={opts.dim === 'source' ? sourceLabel(r.key) : name}
             meta={opts.dim === 'chat' ? (r.meta === 'task' ? 'задача' : null) : null}
+            sub={opts.dim === 'user' && r.privateChats ? (
+              <><Lock size={FS.xs} style={{ verticalAlign: -1, marginRight: 4 }} />{`из них приватные чаты (${r.privateChats.count}) — ${fmtTok(r.privateChats.tokens)}`}</>
+            ) : null}
             share={genOnly || isGen ? 0 : r.tokens.total / max}
             value={genOnly || isGen
               ? `${r.falGenerations} ${opts.dim === 'source' ? genUnit(r.key) : 'ген.'}`
@@ -327,7 +336,7 @@ export function SpendOverview({ data, showUsers, isMobile, isTablet = false, emp
         </div>
       </div>
 
-      {showUsers && t('user', DIM_LABELS.user + 'и', data.cards.users, 4)}
+      {showUsers && t('user', data.allUsers ? DIM_LABELS.user + 'и' : 'Участники', data.cards.users, 4)}
       {t('project', data.allUsers ? 'Проекты' : 'Мои проекты', data.cards.projects, 4)}
       {t('model', data.allUsers ? 'Модели' : 'Мои модели', data.cards.models, 4)}
       {!showUsers && t('source', 'Источники', data.cards.sources, 4)}

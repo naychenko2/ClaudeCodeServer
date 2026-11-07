@@ -5,7 +5,8 @@ using ClaudeHomeServer.Services.VideoEditor.Contracts;
 namespace ClaudeHomeServer.Services.VideoEditor.Jobs;
 
 // Читает кадры сцены в байты для драйвера (драйвер диска проекта не касается). Кадр-файл — только из
-// проекта и только через ProjectLinkGuard (символическая ссылка наружу — отказ); у личной области проекта
+// проекта и только через ProjectLinkGuard.ResolveInsideAs (ссылка наружу и чужое private участника — тот же
+// отказ, что «вне проекта»: наличие не раскрываем); у личной области проекта
 // нет — отказ ДО диска. Кадр из «Картинок» (image) берётся ТОЛЬКО швом IImageFrameSource: хранилища нитей
 // картинок модуль не читает. Нет шва (редактор картинок выключен) или версии нет — frame_unavailable.
 public sealed class VideoFrameReader(IImageFrameSource? images = null, VideoEditWorkspace? workspace = null,
@@ -74,16 +75,16 @@ public sealed class VideoFrameReader(IImageFrameSource? images = null, VideoEdit
         return $"{w / a}:{h / a}";
     }
 
-    public async Task<Frame> ReadAsync(string ownerId, VideoEditScope scope, FrameRef? frame, CancellationToken ct)
+    public async Task<Frame> ReadAsync(string ownerId, string? actorId, VideoEditScope scope, FrameRef? frame, CancellationToken ct)
     {
         if (frame is null) return Frame.None;
-        if (frame.Kind == FrameRef.KindImage) return await ReadImageAsync(ownerId, frame, ct);
+        if (frame.Kind == FrameRef.KindImage) return await ReadImageAsync(ownerId, actorId, frame, ct);
         if (frame.Kind != FrameRef.KindFile || string.IsNullOrWhiteSpace(frame.Path))
             return Frame.Fail("Неизвестный вид кадра");
         if (scope.Project is not { } project)
             return await ReadPersonalFileAsync(ownerId, frame.Path, ct);
 
-        if (ProjectLinkGuard.ResolveInside(project.RootPath, frame.Path) is not { } full || !File.Exists(full))
+        if (ProjectLinkGuard.ResolveInsideAs(project.RootPath, frame.Path, actorId) is not { } full || !File.Exists(full))
             return Frame.Fail($"Кадр «{frame.Path}» не найден в проекте");
         var contentType = ContentTypeOf(full);
         if (contentType is null) return Frame.Fail($"Кадр «{frame.Path}» — не png, jpg или webp");
@@ -102,12 +103,12 @@ public sealed class VideoFrameReader(IImageFrameSource? images = null, VideoEdit
         return new Frame(new VideoFrameBytes(await File.ReadAllBytesAsync(full, ct), contentType), null, null);
     }
 
-    private async Task<Frame> ReadImageAsync(string ownerId, FrameRef frame, CancellationToken ct)
+    private async Task<Frame> ReadImageAsync(string ownerId, string? actorId, FrameRef frame, CancellationToken ct)
     {
         if (images is null) return Frame.Fail("Редактор картинок выключен: кадр из «Картинок» недоступен, выберите кадр-файл проекта");
         if (string.IsNullOrWhiteSpace(frame.ThreadId) || string.IsNullOrWhiteSpace(frame.VersionId))
             return Frame.Fail("У кадра из «Картинок» не указаны нить и версия");
-        if (await images.GetAsync(ownerId, frame.ThreadId, frame.VersionId, ct) is not { } image)
+        if (await images.GetAsync(ownerId, actorId, frame.ThreadId, frame.VersionId, ct) is not { } image)
             return Frame.Fail("Кадр из «Картинок» не найден: нить или версия удалены, либо у картинки ещё нет изображения");
         if (image.Bytes.LongLength > MaxFrameBytes) return Frame.Fail("Кадр из «Картинок» больше 20 МБ");
         return new Frame(new VideoFrameBytes(image.Bytes, image.ContentType), null, null);

@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Заметки + Вики: панели вики на общем механизме зон · v1.3 · макет</title>
+<!--
+  Макет к записке notes-wiki-panels-v1-proposal.md. Код продукта не правится.
+  Привязка: featureId 05c5938f-98ae-4726-884f-d7140c91b937 (эпик «Заметки+Вики: один раздел, который ведут человек и ИИ вместе»),
+  задача дизайна 2ec74a91 («Панели вики: макет»). stepRef появится, когда Егор нарежет шаги по разрезу Александра
+  («Единый механизм панелей для вики: разрез»).
+  Главная мысль: у вики нет своей рельсы и своей панели. «Входящие / Журнал / Здоровье / Настройки» — четыре обычные
+  панели правой зоны того же стора notesPanels, где слева уже живут «Заметки» и «Граф». Рельса — PanelRail, карточка —
+  PanelShell, ширина — сплиттер зоны, несколько панелей — колонки «по две», «Одна панель» и «Свернуть все» — ящик «…».
+  v1.1 (04.11) — по разрезу Александра (задача ac431663): раздел — бейдж шапки (только показ, выбирается в дереве),
+  вход в вики — переключатель «Заметки | Вики» в панели «Заметки», на 360 — прежние шторки WikiDrawer,
+  кнопка шапки «Проверить сейчас» на 360 дублируется в теле, точка «Журнала» — тон info.
+  v1.2 (04.11) — по решению Андрея (задача 5c39afdd): на десктопе одно дерево без режимов. Переключателя «Заметки | Вики»
+  нет, вход в вики — первая строка дерева «Вики»; центр следует за выбором в дереве. Пустая вики — «Вики пока пустая»
+  без кнопки: вики заводится сама. На 360 переключатель «Заметки | Вики | Граф» остаётся (дерево там в шторке).
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--c-*). ===== */
+:root, [data-theme="light"] {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-overlay:rgba(23,19,15,.42);
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-modal:0 24px 60px rgba(23,19,15,.40);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-overlay:rgba(0,0,0,.62);
+  --c-success:#7CB86A; --c-success-bg:#232E20;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-modal:0 28px 70px rgba(0,0,0,.65);
+}
+/* Шкалы (design.ts): FS xxs10 xs11 sm12 base13 md14 lg16 xl18 h2 22 · SP 2/4/8/12/16/24/32 ·
+   R sm6 md8 lg10 xl12 xxl14 sheet22 · ISLAND gap8 pad16 headerH40 radius14 · RAIL_W40 RAIL_GAP8 */
+* { box-sizing: border-box; }
+body { margin: 0; font-family: "Hanken Grotesk", system-ui, sans-serif; background: var(--c-bg-main); color: var(--c-text-primary); }
+.serif { font-family: "PT Serif", Georgia, serif; }
+.mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+svg.i { fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; display: block; }
+
+/* ===== Страница макета ===== */
+.doc { max-width: 1360px; margin: 0 auto; padding: 24px 16px 64px; }
+.doc h1 { font-size: 22px; color: var(--c-text-heading); margin: 0 0 6px; }
+.doc h2 { font-size: 18px; color: var(--c-text-heading); margin: 40px 0 6px; }
+.doc .lead { font-size: 14px; color: var(--c-text-secondary); line-height: 1.6; max-width: 900px; margin: 0; }
+.toolbar { position: sticky; top: 0; z-index: 50; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  padding: 10px 0; background: var(--c-bg-main); border-bottom: 1px solid var(--c-border); margin: 16px 0 8px; }
+.seg { display: inline-flex; background: var(--c-bg-inset); border-radius: 9px; padding: 2px; }
+.seg button { border: 0; background: transparent; color: var(--c-text-secondary); font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 8px; cursor: pointer; min-height: 32px; }
+.seg button[aria-pressed="true"] { background: var(--c-bg-white); color: var(--c-text-heading); box-shadow: var(--shadow-island); }
+.frame-card { margin: 20px 0 8px; }
+.frame-cap { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-bottom: 8px; }
+.tag { font-family: "JetBrains Mono", monospace; font-size: 11px; padding: 2px 7px; border-radius: 6px; background: var(--c-accent-light); color: var(--c-accent); font-weight: 600; }
+.frame-cap b { font-size: 14px; color: var(--c-text-heading); }
+.frame-cap span.note { font-size: 13px; color: var(--c-text-secondary); line-height: 1.5; flex-basis: 100%; }
+.pair { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+.desk-scale { overflow: hidden; border-radius: 10px; border: 1px solid var(--c-border); }
+.desk-scale > .desk { zoom: var(--z, .7); }
+.mob-row { display: flex; gap: 20px; flex-wrap: wrap; }
+
+/* ===== Экран ===== */
+.desk { width: 1280px; height: 760px; background: var(--c-bg-main); color: var(--c-text-primary); display: flex; flex-direction: column; position: relative; overflow: hidden; }
+.mob { width: 360px; height: 740px; background: var(--c-bg-main); color: var(--c-text-primary); display: flex; flex-direction: column; position: relative; overflow: hidden; border-radius: 22px; border: 1px solid var(--c-border); }
+.hub { height: 48px; flex-shrink: 0; display: flex; align-items: center; gap: 4px; padding: 0 16px; }
+.hub .logo { width: 24px; height: 24px; border-radius: 8px; background: var(--c-accent); margin-right: 12px; }
+.hub .t { font-size: 13px; color: var(--c-text-secondary); padding: 6px 10px; border-radius: 8px; }
+.hub .t.on { color: var(--c-text-heading); background: var(--c-bg-white); box-shadow: var(--shadow-island); font-weight: 600; }
+.body { flex: 1; min-height: 0; display: flex; padding: 8px 0 16px; }
+
+/* Рельса — RailCapsule + RailHat + RailIconButton (IconButton md 32) */
+.rail { width: 40px; flex-shrink: 0; align-self: flex-start; display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 4px 0; background: var(--c-bg-main); border-top: 1px solid var(--c-border); border-bottom: 1px solid var(--c-border); box-shadow: var(--shadow-island); position: relative; }
+.rail.left { border-right: 1px solid var(--c-border); border-radius: 0 14px 14px 0; }
+.rail.right { border-left: 1px solid var(--c-border); border-radius: 14px 0 0 14px; }
+.hat { height: 7px; font-size: 7px; line-height: 7px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: var(--c-text-muted); display: flex; align-items: center; gap: 2px; }
+.hat.hover { color: var(--c-accent); }
+.rbtn { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--c-text-secondary); position: relative; }
+.rbtn.on { background: var(--c-accent-muted); color: var(--c-accent); }
+.rbtn.hover { background: var(--c-bg-selected); color: var(--c-text-heading); }
+.rbtn.on.hover { background: var(--c-accent-muted); color: var(--c-accent); }
+.rsep { width: 20px; height: 1px; background: var(--c-border); margin: 1px 0 2px; }
+.cbadge { position: absolute; top: -3px; right: -5px; min-width: 14px; height: 14px; border-radius: 999px; padding: 0 3px; font-size: 9px; font-weight: 700; line-height: 14px; text-align: center; background: var(--c-accent); color: var(--c-on-accent); }
+.cbadge.warning { background: var(--c-warning); }
+.cbadge.muted { background: var(--c-text-muted); }
+.rdot { position: absolute; top: -3px; right: -4px; width: 8px; height: 8px; border-radius: 50%; background: var(--c-info); box-shadow: 0 0 0 2px var(--c-bg-main); }
+.flyout { position: absolute; z-index: 5; right: 46px; white-space: nowrap; background: var(--c-bg-card); border: 1px solid var(--c-border); box-shadow: var(--shadow-dropdown); border-radius: 8px; padding: 6px 8px; font-size: 12px; color: var(--c-text-heading); display: flex; align-items: center; gap: 8px; }
+.flyout .sub { color: var(--c-text-secondary); font-size: 11px; display: flex; align-items: center; gap: 4px; }
+.flyout .ib { width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: var(--c-text-secondary); }
+
+/* Остров-панель — PanelShell: Island + IslandHeader 40 + контент bgWhite */
+.island { background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: 14px; box-shadow: var(--shadow-island); display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+.island.hl { border-color: var(--c-accent); box-shadow: var(--shadow-island), var(--shadow-focus); }
+.ihead { height: 40px; flex-shrink: 0; display: flex; align-items: center; gap: 7px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--c-border); background: var(--c-bg-main); color: var(--c-text-secondary); }
+.ihead .ti { flex-shrink: 0; font-size: 13px; font-weight: 600; color: var(--c-text-heading); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ihead .sp { flex: 1; min-width: 4px; }
+.ihead .hicon { width: 15px; height: 15px; display: flex; align-items: center; justify-content: center; position: relative; }
+.ihead .hicon .swap { position: absolute; width: 24px; height: 24px; border-radius: 6px; background: var(--c-bg-selected); color: var(--c-text-heading); display: flex; align-items: center; justify-content: center; }
+.ib24 { width: 24px; height: 24px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: var(--c-text-secondary); }
+.ib40 { width: 40px; height: 40px; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--c-text-secondary); position: relative; }
+.ib40.on { background: var(--c-accent-muted); color: var(--c-accent); }
+/* Бейдж шапки — IslandHeader badge: FONT.mono 10.5/600, padding 2×7, R.sm, C.textSecondary на ISLAND.headerBg */
+.hbadge { flex-shrink: 1; min-width: 0; font-family: "JetBrains Mono", monospace; font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 6px; color: var(--c-text-secondary); background: var(--c-bg-inset); white-space: nowrap; max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
+/* Закреплённый слот (PanelHeaderSlot pinned): главное действие, в покое opacity .55 */
+.pinned { display: flex; align-items: center; opacity: .55; }
+.pinned.vis { opacity: 1; }
+.btn.sm { height: 26px; padding: 0 8px; font-size: 12px; }
+/* Шторка 360 — WikiDrawer (как есть): справа, min(330px, 92vw), левые углы R.sheet, SHADOW.dropdown */
+.wdrawer { position: absolute; z-index: 11; top: 0; bottom: 0; right: 0; width: min(330px, 92vw); background: var(--c-bg-white); border-radius: 22px 0 0 22px; box-shadow: var(--shadow-dropdown); display: flex; flex-direction: column; overflow: hidden; }
+.phead { min-height: 48px; display: flex; align-items: center; gap: 4px; padding: 0 4px 0 12px; border-bottom: 1px solid var(--c-border); }
+.phead .ti { flex: 1; font-size: 13px; font-weight: 600; color: var(--c-text-heading); }
+.pswitch { display: flex; justify-content: center; padding: 4px; border-bottom: 1px solid var(--c-border); }
+.pswitch .pills { flex: 1; }
+.pswitch .pills > span { display: flex; align-items: center; justify-content: center; height: 40px; position: relative; }
+.secline { display: flex; align-items: center; gap: 6px; padding: 8px 12px; font-size: 12px; color: var(--c-text-secondary); border-bottom: 1px solid var(--c-border-light); }
+.bodyact { padding: 10px 12px; border-bottom: 1px solid var(--c-border-light); display: flex; flex-direction: column; gap: 6px; }
+.bodyact .btn { width: 100%; justify-content: center; }
+.mtool { display: flex; align-items: center; padding: 0 12px 6px; }
+.mtool .sp { flex: 1; }
+.ldot { position: absolute; top: 4px; right: 4px; width: 7px; height: 7px; border-radius: 50%; background: var(--c-info); }
+.ibody { flex: 1; min-height: 0; background: var(--c-bg-white); overflow: hidden; display: flex; flex-direction: column; }
+.ibody.short { flex: 0 1 auto; }
+
+/* Сплиттеры — IslandSplitter: невидимые в покое, акцентная ручка 4×34 по наведению */
+.vsplit { width: 8px; flex-shrink: 0; position: relative; }
+.vsplit.on::after { content: ""; position: absolute; left: 2px; top: 50%; width: 4px; height: 34px; margin-top: -17px; border-radius: 3px; background: var(--c-accent); }
+.hsplit { height: 8px; flex-shrink: 0; position: relative; }
+.hsplit.on::after { content: ""; position: absolute; top: 2px; left: 50%; height: 4px; width: 34px; margin-left: -17px; border-radius: 3px; background: var(--c-accent); }
+.wtip { position: absolute; z-index: 5; top: calc(50% + 24px); left: -42px; background: var(--c-bg-card); border: 1px solid var(--c-border); box-shadow: var(--shadow-dropdown); border-radius: 6px; padding: 3px 6px; font-size: 11px; color: var(--c-text-secondary); white-space: nowrap; }
+
+/* Содержимое */
+.field { height: 32px; border-radius: 8px; border: 1px solid var(--c-border); background: var(--c-bg-white); display: flex; align-items: center; gap: 6px; padding: 0 8px; color: var(--c-text-muted); font-size: 13px; }
+.tree { padding: 6px 6px 12px; font-size: 13px; }
+.trow { display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 6px; border-radius: 8px; color: var(--c-text-primary); white-space: nowrap; overflow: hidden; }
+.trow .ic { color: var(--c-text-muted); }
+.trow.sel { background: var(--c-accent-muted); color: var(--c-text-heading); font-weight: 600; }
+.trow.root { color: var(--c-text-heading); font-weight: 600; }
+.trow .meta { margin-left: auto; font-size: 11px; color: var(--c-text-muted); font-weight: 400; }
+.trow .pill { margin-left: auto; font-size: 10px; padding: 1px 6px; border-radius: 6px; background: var(--c-warning-bg); color: var(--c-warning-text); font-weight: 600; }
+/* v1.3: единое дерево как в WikiUnifiedTree — значок происхождения (OriginGlyph 18×18, R.sm, иконка 10),
+   узел раздела (FS.sm 600 C.textSecondary, счётчик FONT.mono FS.xs C.textMuted), строка 30 (на 360 — 44)
+   с отступом SP.xl, выбранная — C.bgSelected + 600; фильтр-чипы (Chip toggle) с прокруткой вбок; легенда снизу */
+.og { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 6px; flex-shrink: 0; }
+.og.note { color: var(--c-text-muted); }
+.og.ai { color: var(--c-info); background: var(--c-info-bg); }
+.og.me { color: var(--c-text-secondary); background: var(--c-bg-selected); }
+.og.mix { color: var(--c-info); background: linear-gradient(135deg, var(--c-info-bg) 50%, var(--c-bg-selected) 50%); }
+.ufilter { display: flex; gap: 4px; padding: 8px; overflow: hidden; flex-shrink: 0; border-bottom: 1px solid var(--c-border); }
+.ufilter .chip { flex-shrink: 0; gap: 4px; padding: 0 8px 0 4px; }
+.ufilter .chip:first-child { padding-left: 9px; }
+.ufilter .chip .og { width: 16px; height: 16px; }
+.uerr { display: flex; align-items: center; gap: 8px; padding: 8px; font-size: 12px; color: var(--c-danger); border-bottom: 1px solid var(--c-border-light); }
+.btn.ghost { border-color: transparent; background: transparent; color: var(--c-text-primary); height: 26px; }
+.tree .tnode { display: flex; align-items: center; gap: 4px; height: 30px; padding: 0 8px 0 4px; font-size: 12px; font-weight: 600; color: var(--c-text-secondary); white-space: nowrap; }
+.tree .tnode .ic { color: var(--c-text-muted); display: flex; }
+.tree .tnode > svg { color: var(--c-text-muted); }
+.tree .tnode .cnt { margin-left: auto; font-family: "JetBrains Mono", monospace; font-size: 11px; font-weight: 400; color: var(--c-text-muted); }
+.tree .titem { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 8px 0 24px; border-radius: 8px; color: var(--c-text-primary); white-space: nowrap; }
+.tree .titem.sel { background: var(--c-bg-selected); color: var(--c-text-heading); font-weight: 600; }
+.lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ulegend { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; font-size: 11px; color: var(--c-text-muted); border-top: 1px solid var(--c-border); margin-top: auto; }
+.ulegend span { display: inline-flex; align-items: center; gap: 4px; }
+.ulegend .og { width: 16px; height: 16px; }
+.mob .tree .tnode, .mob .tree .titem { height: 44px; }
+.mob .ufilter .chip { height: 40px; }
+.mob .btn.ghost { height: 40px; }
+.ldrawer { position: absolute; z-index: 11; top: 0; bottom: 0; left: 0; width: min(330px, 92vw); background: var(--c-bg-white); border-radius: 0 22px 22px 0; box-shadow: var(--shadow-dropdown); display: flex; flex-direction: column; overflow: hidden; }
+.tsec { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--c-text-muted); padding: 10px 6px 4px; font-weight: 600; }
+.list { padding: 4px 0; }
+.li { padding: 9px 12px; border-bottom: 1px solid var(--c-border-light); font-size: 12px; line-height: 1.45; }
+.li .h { display: flex; gap: 6px; align-items: center; color: var(--c-text-heading); font-weight: 600; font-size: 13px; }
+.li .s { color: var(--c-text-secondary); margin-top: 2px; }
+.li .acts { display: flex; gap: 6px; margin-top: 6px; }
+.btn { white-space: nowrap; height: 28px; padding: 0 10px; border-radius: 8px; font: inherit; font-size: 12px; font-weight: 600; display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--c-border); background: var(--c-bg-white); color: var(--c-text-primary); }
+.btn.primary { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-on-accent); }
+.btn.lg { height: 40px; padding: 0 16px; font-size: 14px; border-radius: 12px; }
+.mob .btn { height: 40px; padding: 0 14px; font-size: 13px; }
+.chiprow { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 10px 9px; border-bottom: 1px solid var(--c-border); background: var(--c-bg-panel); }
+.chip { height: 24px; padding: 0 9px; border-radius: 999px; border: 1px solid var(--c-border); font-size: 11px; display: inline-flex; align-items: center; color: var(--c-text-secondary); background: var(--c-bg-white); }
+.chip.on { background: var(--c-accent-muted); border-color: var(--c-accent-muted); color: var(--c-accent); font-weight: 600; }
+.mob .chip { height: 40px; font-size: 12px; }
+.jtime { font-family: "JetBrains Mono", monospace; font-size: 10.5px; color: var(--c-text-muted); }
+.dotinfo { width: 7px; height: 7px; border-radius: 50%; background: var(--c-info); flex-shrink: 0; }
+.dotwarn { width: 7px; height: 7px; border-radius: 50%; background: var(--c-warning); flex-shrink: 0; }
+.dotok { width: 7px; height: 7px; border-radius: 50%; background: var(--c-success); flex-shrink: 0; }
+.setrow { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--c-border-light); font-size: 13px; }
+.setrow .d { font-size: 11px; color: var(--c-text-secondary); margin-top: 2px; }
+.tog { width: 32px; height: 18px; border-radius: 999px; background: var(--c-border); position: relative; flex-shrink: 0; margin-left: auto; }
+.tog::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--c-bg-white); }
+.tog.on { background: var(--c-accent); }
+.tog.on::after { left: 16px; }
+.empty { padding: 28px 18px; text-align: center; color: var(--c-text-secondary); font-size: 13px; line-height: 1.5; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.empty .et { font-size: 14px; color: var(--c-text-heading); font-weight: 600; }
+.empty .eic { color: var(--c-text-muted); }
+.skel { height: 12px; border-radius: 6px; background: var(--c-bg-selected); margin: 10px 12px; }
+.skel.w60 { width: 60%; } .skel.w80 { width: 80%; } .skel.w40 { width: 40%; }
+.notice { margin: 10px; padding: 10px 12px; border-radius: 8px; background: var(--c-danger-bg); border: 1px solid var(--c-danger-border); color: var(--c-danger); font-size: 12px; line-height: 1.45; display: flex; gap: 8px; align-items: flex-start; }
+.notice .txt { color: var(--c-text-primary); }
+.notice b { color: var(--c-danger); }
+
+/* Центр */
+.center { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 0 12px; }
+.hero { padding: 18px 8px 12px; }
+.hero .crumb { font-size: 12px; color: var(--c-text-muted); display: flex; gap: 6px; align-items: center; }
+.hero h3 { margin: 6px 0 0; font-family: "PT Serif", Georgia, serif; font-size: 28px; color: var(--c-text-heading); font-weight: 700; }
+.doccard { flex: 1; min-height: 0; background: var(--c-bg-white); border: 1px solid var(--c-border-light); border-radius: 14px; box-shadow: var(--shadow-island); padding: 18px 22px; font-size: 14px; line-height: 1.7; color: var(--c-text-primary); overflow: hidden; }
+.doccard h4 { font-family: "PT Serif", Georgia, serif; font-size: 18px; margin: 14px 0 4px; color: var(--c-text-heading); }
+.doccard p { margin: 0 0 10px; }
+.repl { background: var(--c-info-bg); border-radius: 4px; padding: 0 3px; }
+.initbox { flex: 1; display: flex; align-items: center; justify-content: center; }
+.initcard { max-width: 460px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.initcard .t { font-family: "PT Serif", Georgia, serif; font-size: 22px; color: var(--c-text-heading); font-weight: 700; }
+.initcard .s { font-size: 14px; line-height: 1.6; color: var(--c-text-secondary); }
+.initicon { width: 56px; height: 56px; border-radius: 14px; background: var(--c-accent-light); color: var(--c-accent); display: flex; align-items: center; justify-content: center; }
+
+/* Ящик «…» */
+.menu { position: absolute; z-index: 6; width: 230px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 10px; box-shadow: var(--shadow-dropdown); padding: 5px; font-size: 13px; }
+.mi { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px; border-radius: 8px; color: var(--c-text-primary); }
+.mi.on { background: var(--c-bg-selected); }
+.mi .chk { margin-left: auto; color: var(--c-accent); }
+.mfoot { margin: 5px -5px -5px; padding: 4px; background: var(--c-bg-main); border-top: 1px solid var(--c-border-light); border-radius: 0 0 10px 10px; }
+.mhint { font-size: 11px; color: var(--c-text-muted); padding: 4px 8px 6px; line-height: 1.4; }
+.mlabel { font-size: 10px; text-transform: uppercase; letter-spacing: .04em; color: var(--c-text-muted); padding: 6px 8px 2px; font-weight: 600; }
+
+/* Мобильный */
+.mtop { display: flex; align-items: center; gap: 8px; padding: 4px 12px 8px; }
+.pills { flex: 1; display: flex; background: var(--c-bg-inset); border-radius: 9px; padding: 2px; }
+.pills > span { flex: 1; text-align: center; height: 36px; line-height: 36px; font-size: 13px; color: var(--c-text-secondary); border-radius: 8px; }
+.pills > span.on { background: var(--c-bg-white); color: var(--c-text-heading); font-weight: 600; box-shadow: var(--shadow-island); }
+.mcontent { flex: 1; min-height: 0; padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+.overlay { position: absolute; inset: 0; background: var(--c-overlay); z-index: 10; }
+.drawer { position: absolute; z-index: 11; top: 8px; bottom: 8px; right: 8px; width: min(85vw, 306px); display: flex; flex-direction: column; gap: 8px; }
+.drawer.short { bottom: auto; }
+.mstrip { display: flex; gap: 4px; padding: 4px; background: var(--c-bg-main); border: 1px solid var(--c-border); border-radius: 14px; box-shadow: var(--shadow-modal); align-items: center; }
+.mstrip .lbl { font-size: 7px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: var(--c-text-muted); writing-mode: vertical-rl; transform: rotate(180deg); padding: 0 2px; }
+.mstrip .sp { flex: 1; }
+.drawer .island { box-shadow: var(--shadow-modal); }
+.ann { position: absolute; z-index: 20; font-size: 11px; line-height: 1.35; background: var(--c-text-heading); color: var(--c-bg-main); padding: 4px 7px; border-radius: 6px; max-width: 220px; pointer-events: none; }
+.ann::before { content: attr(data-n); font-weight: 700; margin-right: 4px; color: var(--c-accent); }
+</style>
+</head>
+<body>
+<div class="doc">
+  <h1>Заметки + Вики · панели вики на общем механизме зон · v1.3</h1>
+  <p class="lead">Сейчас у вики своя рельса внутри центра: 44 px, панель 340 px, одна за раз, шапка 48 px с крупным крестиком. Рядом, в той же странице, слева уже стоит настоящая рельса зон («Заметки», «Граф»), и они выглядят как два разных продукта. Предложение: вики не рисует ничего своего. Четыре раздела — обычные панели правой зоны того же <span class="mono">notesPanels</span>. Рельса, шапка, ширина, колонки, «Одна панель», «Свернуть все» — всё то же, что в режиме проекта. Нового в макете нет: раздел вики показан штатным бейджем шапки. <b>v1.1</b> — по разрезу Александра. <b>v1.2</b> — одно дерево без режимов. <b>v1.3</b> — дерево нарисовано как в коде (<span class='mono'>WikiUnifiedTree</span>): узлы-разделы, в каждом вперемешку заметки и страницы вики со значком происхождения, над деревом фильтр «кто написал»; строки «Вики · N разделов» и группы «Заметки» больше нет.</p>
+
+  <div class="toolbar">
+    <span style="font-size:13px;color:var(--c-text-secondary)">Тема:</span>
+    <div class="seg" id="themeSeg">
+      <button data-v="light" aria-pressed="true">Светлая</button>
+      <button data-v="dark" aria-pressed="false">Тёмная</button>
+      <button data-v="both" aria-pressed="false">Обе рядом</button>
+    </div>
+    <span style="font-size:13px;color:var(--c-text-secondary);margin-left:12px">Масштаб десктопа:</span>
+    <div class="seg" id="zoomSeg">
+      <button data-v="fit" aria-pressed="true">По ширине</button>
+      <button data-v="1" aria-pressed="false">100 %</button>
+    </div>
+  </div>
+
+  <h2>Десктоп · 1280</h2>
+  <p class="lead">Слева — зона «Заметки» (рельса с ярлыком «ЗАМЕТКИ», единое дерево в панели). Справа — зона с ярлыком «ВИКИ». Числа в кружках — номера пояснений в записке.</p>
+  <div id="desk"></div>
+
+  <h2>Мобильный · 360</h2>
+  <p class="lead">На 360 механизм зон в хаб-разделах не рисуется, поэтому остаются нынешние шторки WikiDrawer: одна панель за раз, переключатель разделов иконками. Меняется только одно: кнопки шапки панели дублируются в теле. Все цели касания — 40 px.</p>
+  <div id="mob"></div>
+</div>
+
+<script>
+// ===== Иконки (контуры lucide, viewBox 24) =====
+const P = {
+  notebook: '<path d="M13.4 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7.4"/><path d="M2 6h4M2 10h4M2 14h4M2 18h4"/><path d="M21.4 5.6a2.1 2.1 0 1 0-3-3L12 9v3h3z"/>',
+  network: '<rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"/>',
+  inbox: '<path d="M12 17V3M6 11l6 6 6-6M19 21H5"/>',
+  journal: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/>',
+  health: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+  book: '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2zM22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
+  right: '<path d="m9 18 6-6-6-6"/>',
+  chevsR: '<path d="m6 17 5-5-5-5M13 17l5-5-5-5"/>',
+  chevsL: '<path d="m11 17-5-5 5-5M18 17l-5-5 5-5"/>',
+  filter: '<path d="M3 6h18M7 12h10M10 18h4"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>',
+  folder: '<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>',
+  file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4M10 9H8M16 13H8M16 17H8"/>',
+  panelR: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/>',
+  link: '<path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 1 1 0 10h-2M8 12h8"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4M12 17h.01"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  cols: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M12 3v18"/>',
+  square: '<rect width="18" height="18" x="3" y="3" rx="2"/>',
+  plus: '<path d="M5 12h14M12 5v14"/>',
+  eyeOff: '<path d="M10.7 5.1A10.7 10.7 0 0 1 22 12a13 13 0 0 1-1.7 2.7M14.1 14.2a3 3 0 0 1-4.2-4.2M17.5 17.5A10.7 10.7 0 0 1 2 12a13.2 13.2 0 0 1 4.4-5.4M2 2l20 20"/>',
+  arrowL: '<path d="M3 19V5M13 6l-6 6 6 6M7 12h14"/>',
+  back: '<path d="m15 18-6-6 6-6"/>',
+  sparkles: '<path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0l1.58 6.14a2 2 0 0 0 1.44 1.44l6.14 1.58a.5.5 0 0 1 0 .96l-6.14 1.58a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/>',
+  pen: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  globe: '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20M2 12h20"/>',
+  lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+};
+const ic = (n, s = 17) => `<svg class="i" width="${s}" height="${s}" viewBox="0 0 24 24">${P[n]}</svg>`;
+
+// ===== Справочник панелей вики =====
+const WIKI = {
+  inbox:    { title: 'Входящие',  icon: 'inbox',    badge: { v: 3 } },
+  journal:  { title: 'Журнал',    icon: 'journal',  dot: true },
+  health:   { title: 'Здоровье',  icon: 'health',   badge: { v: 2, tone: 'warning' } },
+  settings: { title: 'Настройки', icon: 'settings' },
+};
+const ORDER = ['inbox', 'journal', 'health', 'settings'];
+
+// ===== Рельса =====
+function railBtn(name, { on, hover, badge, dot, closing } = {}) {
+  const icon = closing ? 'x' : name;
+  const b = badge && !closing ? `<span class="cbadge ${badge.tone || ''}">${badge.v}</span>` : '';
+  const d = dot && !badge && !closing ? '<span class="rdot"></span>' : '';
+  return `<div class="rbtn ${on ? 'on' : ''} ${hover ? 'hover' : ''}">${ic(icon)}${b}${d}</div>`;
+}
+function rightRail(open, o = {}) {
+  const items = ORDER.map(k => {
+    const w = WIKI[k];
+    const on = open.includes(k) && !o.collapsed;
+    const hov = o.hoverKey === k;
+    return railBtn(w.icon, { on, hover: hov, badge: o.quiet ? null : w.badge, dot: !o.quiet && w.dot, closing: hov && on });
+  }).join('');
+  const hatHover = o.hatHover;
+  return `<div class="rail right" style="${o.style || ''}">
+    <div class="hat ${hatHover ? 'hover' : ''}">${hatHover ? ic(o.collapsed ? 'chevsL' : 'chevsR', 9) : ''}Вики</div>
+    ${items}
+    <div class="rsep"></div>
+    ${railBtn('more', { on: o.menu })}
+    ${o.extra || ''}
+  </div>`;
+}
+function leftRail(o = {}) {
+  return `<div class="rail left">
+    <div class="hat">Заметки</div>
+    ${railBtn('notebook', { on: o.list !== false })}
+    ${railBtn('network', {})}
+  </div>`;
+}
+
+// ===== Шапка панели (PanelShell → IslandHeader) =====
+function head(k, o = {}) {
+  const w = WIKI[k];
+  const hov = o.hover;           // курсор на карточке: контролы проявились
+  const iconSwap = o.iconHover;  // курсор на шапке: иконка стала «Скрыть панель»
+  const badge = o.noChip ? '' : `<span class="hbadge" title="Раздел вики: ${o.section || 'AI Home'}">${o.section || 'AI Home'}</span>`;
+  const pinned = k === 'health' && !o.noChip
+    ? `<span class="pinned ${hov ? 'vis' : ''}"><span class="btn sm" title="Выполнить проверку вики сейчас">${ic('refresh', 13)}Проверить сейчас</span></span>` : '';
+  return `<div class="ihead">
+    <span class="hicon">${ic(w.icon, 15)}${iconSwap ? `<span class="swap" title="Скрыть панель">${ic('x', 14)}</span>` : ''}</span>
+    <span class="ti">${w.title}</span>
+    ${badge}
+    <span class="sp"></span>
+    ${pinned}
+  </div>`;
+}
+
+// ===== Тела панелей =====
+function body(k, state = 'ok', mobile = false) {
+  if (state === 'loading') return `<div class="ibody"><div class="skel w60"></div><div class="skel w80"></div><div class="skel w40"></div><div class="skel w80"></div><div class="skel w60"></div></div>`;
+  if (state === 'error') return `<div class="ibody short"><div class="notice">${ic('alert', 15)}<div><b>Журнал не загрузился</b><div class="txt">Сервер вики не ответил. Остальная вики работает — повторите через минуту.</div><div style="margin-top:8px"><span class="btn">${ic('refresh', 13)}Повторить</span></div></div></div></div>`;
+  if (state === 'empty-wiki') return `<div class="ibody short"><div class="empty"><span class="eic">${ic(WIKI[k].icon, 22)}</span><span class="et">Здесь появятся предложения</span>Когда вики начнёт вестись, сюда попадёт то, что ИИ не смог применить сам.</div></div>`;
+  if (state === 'empty') return `<div class="ibody short"><div class="empty"><span class="eic">${ic('check', 22)}</span><span class="et">Разобрано</span>Всё, что ИИ предлагал по разделу «AI Home», применено или отклонено.</div></div>`;
+  if (k === 'inbox') return `<div class="ibody"><div class="list">
+      ${[['Противоречие в «Архитектура панелей»', 'ИИ нашёл два утверждения о ширине панели: 340 и 360 px. Какое верное?'],
+         ['Новая страница из чата 03.11', '«Разрез механизма панелей» — создать в разделе AI Home?'],
+         ['Устаревшая ссылка', '[[Рельса вики]] больше не существует — убрать или заменить?']]
+        .map(([h, s]) => `<div class="li"><div class="h">${h}</div><div class="s">${s}</div><div class="acts"><span class="btn primary">Применить</span><span class="btn">Отклонить</span></div></div>`).join('')}
+    </div></div>`;
+  if (k === 'journal') return `<div class="ibody">
+      <div class="chiprow"><span class="chip">ИИ поменял моё · 1</span></div>
+      <div class="list">
+      ${[['10:42', 'ИИ заменил вашу формулировку', '«Хроника решений» · ширина панели', true],
+         ['10:40', 'Добавлено из чата «Панели вики»', '«Архитектура панелей»', false],
+         ['вчера', 'Вы поправили страницу', '«Хроника решений»', false],
+         ['вчера', 'Ночной разбор: 4 факта', 'раздел AI Home', false]]
+        .map(([t, h, s, r]) => `<div class="li"><div class="h">${r ? '<span class="dotinfo"></span>' : ''}${h}<span class="jtime" style="margin-left:auto">${t}</span></div><div class="s">${s}${r ? ' · <span style="color:var(--c-accent)">Вернуть мою</span>' : ''}</div></div>`).join('')}
+      </div></div>`;
+  if (k === 'health') return `<div class="ibody">${mobile ? `<div class="bodyact"><span class="btn">${ic('refresh', 14)}Проверить сейчас</span><span style="font-size:11px;color:var(--c-text-muted)">Проверяет всю вики, займёт около минуты</span></div>` : ''}<div class="list">
+      ${[['dotwarn', 'Две страницы без ссылок', 'Никто на них не ссылается'], ['dotwarn', 'Противоречие не разобрано', 'Ждёт во «Входящих»'], ['dotok', 'Ссылки целы', '128 из 128'], ['dotok', 'Индекс свежий', 'обновлён 10:40']]
+        .map(([d, h, s]) => `<div class="li"><div class="h"><span class="${d}"></span>${h}</div><div class="s">${s}</div></div>`).join('')}
+    </div></div>`;
+  return `<div class="ibody">
+      ${[['Ночной разбор чатов', 'Раз в сутки ИИ разбирает чаты проекта', true], ['ИИ правит мои формулировки', 'С меткой «заменил вашу» и «Вернуть мою»', true], ['Спрашивать перед новой страницей', 'Иначе — сразу создаёт и пишет в «Журнал»', false]]
+        .map(([h, d, on]) => `<div class="setrow"><div><div>${h}</div><div class="d">${d}</div></div><span class="tog ${on ? 'on' : ''}"></span></div>`).join('')}
+    </div>`;
+}
+
+function panel(k, o = {}) {
+  return `<div class="island ${o.hl ? 'hl' : ''}" style="${o.style || ''}">${head(k, o)}${body(k, o.state, o.mobile)}</div>`;
+}
+
+// ===== Левая панель «Заметки»: единое дерево (как WikiUnifiedTree) =====
+// v1.3: одно дерево. Узлы — разделы (проекты, «Общее», «Личное», «Другие заметки»), внутри
+// вперемешку заметки и страницы вики, у каждой строки значок происхождения (OriginGlyph).
+// Над деревом — фильтр «кто написал», внизу — легенда. Строки «Вики · N разделов» нет.
+const OG_ICON = { note: 'file', ai: 'sparkles', me: 'pen', mix: 'users' };
+const OG_TITLE = { note: 'Заметка', ai: 'Ведёт ИИ', me: 'Написали вы', mix: 'Ведёте вместе с ИИ' };
+const og = o => `<span class="og ${o}" title="${OG_TITLE[o]}" role="img" aria-label="${OG_TITLE[o]}">${ic(OG_ICON[o], 10)}</span>`;
+// Данные дерева: kind узла даёт иконку (project — Folder, common — Globe, personal — Lock, other — Folder)
+const TREE = [
+  { key: 'aihome', label: 'AI Home', kind: 'project', items: [
+    ['p:arch', 'Архитектура панелей', 'ai'], ['p:chron', 'Хроника решений', 'mix'], ['n:call', 'Созвон с Сашей 03.11', 'note'],
+    ['p:cut', 'Разрез механизма панелей', 'me'], ['n:rev', 'Вопросы к ревью', 'note']] },
+  { key: 'home', label: 'Дом и семья', kind: 'project', items: [['p:budget', 'Бюджет на зиму', 'ai'], ['n:repair', 'Ремонт кухни', 'note'], ['p:docs', 'Документы детей', 'mix']] },
+  { key: 'travel', label: 'Путешествия', kind: 'project', items: [['p:geo', 'Грузия весной', 'ai'], ['n:pack', 'Что взять в поход', 'note']] },
+  { key: 'common', label: 'Общее', kind: 'common', items: [['p:how', 'Как я веду заметки', 'me'], ['p:gloss', 'Глоссарий', 'ai']] },
+  { key: 'personal', label: 'Личное', kind: 'personal', items: [
+    ['n:ideas', 'Идеи на ноябрь', 'note'], ['n:read', 'Список чтения', 'note'], ['p:sleep', 'Здоровье и сон', 'ai']] },
+  { key: 'other', label: 'Другие заметки', kind: 'other', items: [['n:mail', 'Черновик письма', 'note'], ['n:old', 'Старые выписки', 'note']] },
+];
+const FILTERS = [['all', 'Все', null], ['note', 'Заметки', 'note'], ['ai', 'ИИ', 'ai'], ['mix', 'Вместе', 'mix'], ['me', 'Мои', 'me']];
+const NODE_IC = { project: 'folder', common: 'globe', personal: 'lock', other: 'folder' };
+
+// o.sel — id выбранной строки; o.open — раскрытые узлы; o.filter — фильтр; o.emptyWiki — вики без страниц;
+// o.error — строка ошибки каталогов; o.mobile — шторка 360 (строки 44, чипы 40)
+function treeBody(o = {}) {
+  const filter = o.filter || 'all';
+  const data = TREE.map(g => ({ ...g, items: o.emptyWiki ? g.items.filter(i => i[2] === 'note') : g.items }))
+    .filter(g => g.kind !== 'other' || g.items.length);
+  const all = data.flatMap(g => g.items);
+  const cnt = k => k === 'all' ? all.length : all.filter(i => i[2] === k).length;
+  const shown = filter === 'all' ? data : data.map(g => ({ ...g, items: g.items.filter(i => i[2] === filter) })).filter(g => g.items.length);
+  const open = o.open || ['aihome', 'personal'];
+  const searching = filter !== 'all';
+  const chips = FILTERS.map(([k, l, g]) => `<span class="chip ${filter === k ? 'on' : ''}">${g ? og(g) : ''}${l} ${cnt(k)}</span>`).join('');
+  const rows = shown.map(g => {
+    const isOpen = searching || open.includes(g.key);
+    return `<div class="tnode">${ic(isOpen ? 'down' : 'right', 12)}<span class="ic">${ic(NODE_IC[g.kind], 12)}</span><span class="lbl">${g.label}</span><span class="cnt">${g.items.length}</span></div>
+      ${isOpen ? g.items.map(([id, t, k]) => `<div class="titem ${o.sel === id ? 'sel' : ''}">${og(k)}<span class="lbl">${t}</span></div>`).join('') : ''}`;
+  }).join('');
+  return `<div class="ufilter" role="group" aria-label="Кто написал">${chips}</div>
+    ${o.error ? `<div class="uerr"><span style="flex:1;min-width:0">Не удалось загрузить вики</span><span class="btn ghost">Повторить</span></div>` : ''}
+    <div class="tree">${rows}</div>
+    <div class="ulegend">${['note', 'ai', 'mix', 'me'].map(k => `<span>${og(k)}${{ note: 'заметка', ai: 'ИИ', mix: 'вместе', me: 'вы' }[k]}</span>`).join('')}</div>`;
+}
+function tree(o = {}) {
+  return `<div class="island" style="width:280px;flex-shrink:0">
+    <div class="ihead"><span class="hicon">${ic('notebook', 15)}</span><span class="ti">Заметки</span><span class="sp"></span></div>
+    <div class="ibody">
+      <div style="padding:8px 8px 0"><div class="field">${ic('search', 14)}Поиск по заметкам и вики</div></div>
+      ${treeBody(o)}
+    </div>
+  </div>`;
+}
+
+// ===== Центр =====
+// Пустая вики (тексты LI-3): кнопки нет — вики заводится сама; вторая строка — по состоянию ночного разбора.
+const EMPTY_WIKI = `<div class="initbox"><div class="initcard">
+      <div class="initicon">${ic('book', 28)}</div>
+      <div class="t">Вики пока пустая</div>
+      <div class="s">Она наполнится сама, когда вы разберёте чат или перенесёте заметку.</div>
+      <div class="s" style="font-size:13px;color:var(--c-text-muted)">Ночной разбор включён — первые страницы появятся после ночи.</div>
+    </div></div>`;
+function center(kind) {
+  if (kind === 'other') return `<div class="center"><div class="hero"><div class="crumb">${og('note')}Другие заметки</div><h3>Черновик письма</h3></div>
+    <div class="doccard"><p>Заметка лежит в папке, у которой нет раздела вики, поэтому в дереве она в узле «Другие заметки». Панели справа продолжают показывать последний настоящий раздел.</p></div></div>`;
+  if (kind === 'note') return `<div class="center"><div class="hero"><div class="crumb">${og('note')}Личное</div><h3>Идеи на ноябрь</h3></div>
+    <div class="doccard"><p>Довести вики до состояния, когда она ведётся сама: ночной разбор, «Входящие» раз в день, правка только там, где ИИ сомневается.</p>
+    <h4>Что посмотреть</h4><p>Как ИИ разбирает чаты проекта и сколько из этого попадает во «Входящие». Если больше пяти в день — подкрутить порог уверенности.</p></div></div>`;
+  if (kind === 'wiki') return `<div class="center"><div class="hero"><div class="crumb">${og('mix')}AI Home</div><h3>Хроника решений</h3></div>
+    <div class="doccard"><h4 style="margin-top:0">Панели</h4><p>Все боковые панели продукта живут на одном механизме зон: рельса у края окна, карточки колонками, ширина <span class="repl">от 280 до 560 px</span>.</p>
+    <p>Вики не заводит своей рельсы: её разделы — обычные панели правой зоны раздела «Заметки».</p><h4>Почему так</h4><p>Два разных вида панелей на одном экране читаются как два разных продукта.</p></div></div>`;
+  if (kind === 'ai') return `<div class="center"><div class="hero"><div class="crumb">${og('ai')}Дом и семья</div><h3>Бюджет на зиму</h3></div>
+    <div class="doccard"><p>Страницу ведёт ИИ по чатам проекта «Дом и семья»: отопление, зимняя резина, подарки к Новому году.</p><h4>Что изменилось</h4><p>Вчера ночной разбор добавил строку про счёт за газ.</p></div></div>`;
+  return `<div class="center">${EMPTY_WIKI}</div>`;
+}
+
+// ===== Десктопный кадр =====
+// cols: массив колонок, колонка — массив { k, ...опции панели }; widths — ширины колонок
+function desk({ centerKind = 'note', section = 'AI Home', cols = [], widths = [340, 300], rail = {}, splitHover = false, rowSplitHover = false, ann = '', treeOpts = {}, menu = '' }) {
+  const open = cols.flat().map(p => p.k);
+  const zone = cols.length && !rail.collapsed ? `
+    <div class="vsplit ${splitHover ? 'on' : ''}">${splitHover ? '<span class="wtip">340 px</span>' : ''}</div>
+    ${cols.map((col, ci) => `
+      ${ci > 0 ? '<div class="vsplit"></div>' : ''}
+      <div style="width:${widths[ci]}px;flex-shrink:0;display:flex;flex-direction:column;min-height:0">
+        ${col.map((p, ri) => `${ri > 0 ? `<div class="hsplit ${rowSplitHover ? 'on' : ''}"></div>` : ''}${panel(p.k, { section, ...p, style: `flex:${col.length > 1 || p.fill ? '1 1 0' : '0 1 auto'};${p.style || ''}` })}`).join('')}
+      </div>`).join('')}
+    <div style="width:8px;flex-shrink:0"></div>` : '<div style="width:8px;flex-shrink:0"></div>';
+  return `<div class="desk">
+    <div class="hub"><span class="logo"></span><span class="t">Чаты</span><span class="t on">Заметки</span><span class="t">Знания</span><span class="t">Персоны</span><span class="t">Задачи</span></div>
+    <div class="body">
+      ${leftRail()}<div style="width:8px"></div>${tree(treeOpts)}
+      ${center(centerKind)}
+      ${zone}
+      ${rightRail(open, rail)}
+      ${menu}
+      ${ann}
+    </div>
+  </div>`;
+}
+const A = (n, x, y, t) => `<div class="ann" data-n="${n}" style="left:${x}px;top:${y}px">${t}</div>`;
+
+const DESK = [
+  { tag: 'desk-one', title: 'Одна панель · выбрана заметка из «Личного»', note: 'Одно дерево: узлы-разделы, внутри вперемешку заметки и страницы вики, у каждой строки значок происхождения. Над деревом — фильтр «кто написал», внизу — легенда. Выбрана заметка «Идеи на ноябрь» в узле «Личное» — в центре заметка, бейдж шапки «Личное»: раздел узла выбранной строки. Курсор на кнопке рельсы — крестик и плашка «Скрыть «Журнал»».',
+    cfg: { centerKind: 'note', section: 'Личное', treeOpts: { sel: 'n:ideas' }, cols: [[{ k: 'journal' }]], rail: { hoverKey: 'journal', extra: `<div class="flyout" style="top:62px">Скрыть «Журнал»<span class="sub"><span class="dotinfo"></span>ИИ заменил вашу формулировку</span><span class="ib" title="Убрать кнопку в «Ещё»">${ic('eyeOff', 14)}</span></div>` },
+      ann: A(1, 1000, 400, 'Бейдж шапки — раздел узла выбранной строки (здесь «Личное»); один на все панели') + A(2, 1010, 250, 'Точка рельсы тоном info — ИИ заменил вашу формулировку') + A(6, 360, 470, 'Одно дерево: заметки и страницы в одном узле, различает значок') } },
+  { tag: 'desk-hover', title: 'Курсор на панели · выбрана страница вики', note: 'Выбрана страница «Хроника решений» (ведёте вместе с ИИ) в узле «AI Home» — в центре страница, бейдж «AI Home». У «Здоровья» единственная кнопка шапки во всей вики — «Проверить сейчас» в закреплённом слоте. Курсор на шапке: иконка панели стала «Скрыть панель». Ручка ширины — IslandSplitter, 280–560 px.',
+    cfg: { centerKind: 'wiki', treeOpts: { sel: 'p:chron' }, splitHover: true, cols: [[{ k: 'health', hover: true, iconHover: true }]],
+      ann: A(3, 838, 360, 'Тянуть — ширина колонки, двойной клик — 340 px') } },
+  { tag: 'desk-two-stack', title: 'Две панели стопкой · фильтр «ИИ»', note: 'Фильтр «ИИ» оставил только страницы, которые ведёт ИИ; узлы без совпадений скрыты, остальные раскрыты сами — свёрнутый узел спрятал бы найденное. Выбрана «Бюджет на зиму» из «Дом и семья» — бейджи обеих панелей «Дом и семья». Панели по две в колонке, высоты делит хендл.',
+    cfg: { centerKind: 'ai', section: 'Дом и семья', treeOpts: { sel: 'p:budget', filter: 'ai' }, rowSplitHover: true, cols: [[{ k: 'inbox' }, { k: 'journal' }]],
+      ann: A(4, 880, 352, 'Хендл высоты: обе ≥ 120 px') + A(7, 360, 520, 'Фильтр «кто написал» — Chip toggle с числом, лента прокручивается вбок') } },
+  { tag: 'desk-other', title: 'Заметка из «Других заметок» · бейдж не меняется', note: 'Заметка без раздела вики лежит в узле «Другие заметки». Раздела у неё нет, поэтому бейдж панелей держит последний настоящий раздел — «AI Home», откуда человек пришёл. Панели не пустеют и не прыгают.',
+    cfg: { centerKind: 'other', treeOpts: { sel: 'n:mail', open: ['aihome', 'other'] }, cols: [[{ k: 'inbox' }]],
+      ann: A(8, 1000, 140, '«Другие заметки» — не раздел: бейдж остаётся прежним') } },
+  { tag: 'desk-two-cols', title: 'Три панели · вторая колонка', note: 'Третья панель в колонку не влезла (порог деления 260 px) и встала новой колонкой к центру — так же, как в проекте. В колонке 300 px бейдж «Здоровья» сжат многоточием первым.',
+    cfg: { centerKind: 'wiki', treeOpts: { sel: 'p:chron' }, cols: [[{ k: 'health', fill: true }], [{ k: 'inbox' }, { k: 'journal' }]], widths: [300, 320] } },
+  { tag: 'desk-menu', title: 'Ящик «…» · свернуть и «Одна панель»', note: 'Сворачивание и «Одна панель» — в ящике рельсы, как в проекте. Отдельных кнопок «закрепить/развернуть» у панелей вики нет — их нет и у панелей проекта.',
+    cfg: { centerKind: 'note', section: 'Личное', treeOpts: { sel: 'n:ideas' }, cols: [[{ k: 'inbox' }]], rail: { menu: true },
+      menu: `<div class="menu" style="right:48px;top:200px">
+        <div class="mhint">Перетащите сюда кнопки панелей, которыми пользуетесь редко</div>
+        <div class="mfoot"><div class="mi">${ic('chevsR', 15)}Свернуть все панели</div><div class="mi">${ic('square', 15)}Одна панель</div></div></div>` } },
+  { tag: 'desk-collapsed', title: 'Свёрнуто · рельса остаётся', note: 'Клик по ярлыку «ВИКИ» убирает все панели зоны, набор запоминается; повторный клик возвращает. Кнопки не подсвечены, числа и точка на месте.',
+    cfg: { centerKind: 'wiki', treeOpts: { sel: 'p:chron' }, cols: [[{ k: 'inbox' }, { k: 'journal' }]], rail: { collapsed: true, hatHover: true } } },
+  { tag: 'desk-empty-wiki', title: 'Пустая вики · ничего не выбрано', note: 'Страниц вики ещё нет: в дереве те же узлы, в них только заметки; чипы «ИИ», «Вместе», «Мои» показывают 0. Отдельной строки «Вики · не начата» нет. Пока в дереве ничего не выбрано, центр говорит «Вики пока пустая» без кнопки — вики заведётся сама. Рельса на месте, без чисел; бейджа раздела нет.',
+    cfg: { centerKind: 'init', treeOpts: { emptyWiki: true, open: ['aihome', 'personal', 'other'] }, cols: [[{ k: 'inbox', state: 'empty-wiki', noChip: true }]], rail: { quiet: true },
+      ann: A(5, 360, 640, 'Вики пустая — видно по нулям фильтра и по центру; строки «Вики» в дереве нет') } },
+  { tag: 'desk-loading-error', title: 'Загрузка и ошибка', note: 'Каталоги вики не загрузились: под фильтром строка «Не удалось загрузить вики» с «Повторить» (ghost), заметки в дереве на месте. Панели: скелет в одной, Notice danger с «Повторить» в другой; центр живёт дальше.',
+    cfg: { centerKind: 'note', section: 'Личное', treeOpts: { sel: 'n:ideas', error: true, emptyWiki: true }, cols: [[{ k: 'inbox', state: 'loading' }, { k: 'journal', state: 'error' }]] } },
+];
+
+// ===== Мобильный кадр: WikiTab на 360 + WikiDrawer (как есть) =====
+function mob({ mode = 'wiki', drawer = null, dot = true, emptyWiki = false, tab = 'journal', state = 'ok', tree = null, section = 'AI Home' }) {
+  const content = emptyWiki
+    ? EMPTY_WIKI
+    : `<div class="doccard" style="padding:14px 16px;font-size:14px"><div style="font-size:12px;color:var(--c-text-muted);display:flex;gap:6px;align-items:center">${og('mix')}AI Home</div><h3 class="serif" style="font-size:22px;margin:4px 0 8px;color:var(--c-text-heading)">Хроника решений</h3><p>Все боковые панели продукта живут на одном механизме зон: ширина <span class="repl">от 280 до 560 px</span>.</p><p>Вики не заводит своей рельсы.</p></div>`;
+  let dr = '';
+  if (drawer) {
+    const w = WIKI[tab];
+    dr = `<div class="overlay"></div><div class="wdrawer">
+      <div class="phead"><span class="ti">${w.title}</span><span class="ib40" title="Закрыть">${ic('x', 16)}</span></div>
+      <div class="pswitch"><div class="pills">${ORDER.map(k => `<span class="${k === tab ? 'on' : ''}" title="${WIKI[k].title}">${ic(WIKI[k].icon, 16)}${WIKI[k].dot ? '<span class="ldot"></span>' : ''}</span>`).join('')}</div></div>
+      ${emptyWiki ? '' : `<div class="secline">${ic('folder', 13)}Раздел: <b style="color:var(--c-text-heading)">${section}</b></div>`}
+      ${body(tab, state, true)}
+    </div>`;
+  }
+  // Шторка «Дерево разделов» (WikiTab drawerTree): то же единое дерево, что левая зона десктопа
+  if (tree) {
+    dr = `<div class="overlay"></div><div class="ldrawer">
+      <div class="phead"><span class="ti">Заметки и вики</span><span class="ib40" title="Закрыть">${ic('x', 16)}</span></div>
+      <div style="padding:8px 8px 0"><div class="field" style="height:40px">${ic('search', 14)}Поиск по заметкам и вики</div></div>
+      <div style="flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden">${treeBody({ ...tree, mobile: true })}</div>
+    </div>`;
+  }
+  return `<div class="mob">
+    <div class="hub" style="padding:0 12px"><span class="logo"></span><span style="font-size:15px;font-weight:600;color:var(--c-text-heading)">Заметки</span></div>
+    <div class="mtop"><div class="pills"><span>Заметки</span><span class="on">Вики</span><span>Граф</span></div></div>
+    <div class="mtool"><span class="ib40 ${tree ? 'on' : ''}" title="Дерево разделов">${ic('folder', 18)}</span><span class="sp"></span>
+      <span class="ib40 ${drawer ? 'on' : ''}" title="Входящие, журнал, здоровье, настройки">${ic('panelR', 18)}${dot ? '<span class="ldot" style="top:6px;right:6px"></span>' : ''}</span></div>
+    <div class="mcontent">${content}</div>
+    ${dr}
+  </div>`;
+}
+const MOB = [
+  { tag: 'mob-closed', title: 'Вики · шторки закрыты', note: 'На 360 переключатель «Заметки | Вики | Граф» остаётся: дерево здесь в шторке, и без переключателя до него не добраться. Слева кнопка «Дерево разделов», справа «Входящие, журнал, здоровье, настройки» с точкой info. Обе 40×40.', cfg: {} },
+  { tag: 'mob-tree', title: 'Шторка дерева · одно дерево', note: 'Кнопка «Дерево разделов» открывает слева то же единое дерево, что на десктопе: узлы-разделы, в них вперемешку заметки и страницы, значки происхождения, фильтр сверху, легенда снизу. Строки 44 px, чипы 40 px. Строки «Вики · N разделов» нет и здесь.', cfg: { tree: { sel: 'p:chron' } } },
+  { tag: 'mob-tree-filter', title: 'Шторка дерева · фильтр «Вместе»', note: 'Фильтр оставил страницы, которые ведёте вместе с ИИ; узлы раскрыты сами. Лента чипов прокручивается вбок — «Мои» за краем.', cfg: { tree: { sel: 'p:chron', filter: 'mix' } } },
+  { tag: 'mob-journal', title: 'Шторка · «Журнал»', note: 'WikiDrawer справа: шапка с крестиком 40, переключатель разделов панели иконками, строка «Раздел: …» по тому же правилу, что бейдж на десктопе, тело. Одна панель за раз.', cfg: { drawer: true, tab: 'journal' } },
+  { tag: 'mob-health', title: 'Шторка · «Здоровье»: кнопка шапки в теле', note: 'В шторке нет шапки PanelShell, и PanelHeaderSlot молчит. «Проверить сейчас» рисуется первой строкой тела во всю ширину, 40 px.', cfg: { drawer: true, tab: 'health' } },
+  { tag: 'mob-empty-wiki', title: 'Пустая вики', note: '«Вики пока пустая» без кнопки, те же тексты, что на десктопе; кнопка шторки на месте, без точки. В дереве — только заметки, чипы ИИ/Вместе/Мои с нулём.', cfg: { emptyWiki: true, dot: false } },
+  { tag: 'mob-error', title: 'Ошибка в шторке', note: 'То же тело, что на десктопе: Notice danger с «Повторить» (40 px).', cfg: { drawer: true, tab: 'journal', state: 'error' } },
+];
+
+// ===== Отрисовка =====
+let theme = 'light', zoomMode = 'fit';
+function render() {
+  const themes = theme === 'both' ? ['light', 'dark'] : [theme];
+  document.documentElement.setAttribute('data-theme', theme === 'dark' ? 'dark' : 'light');
+  const cap = s => `<div class="frame-cap"><span class="tag">${s.tag}</span><b>${s.title}</b><span class="note">${s.note}</span></div>`;
+  document.getElementById('desk').innerHTML = DESK.map(s => `<div class="frame-card" data-state="${s.tag}">${cap(s)}
+      ${themes.map(t => `<div class="desk-scale" data-theme="${t}" style="margin-bottom:12px">${desk(s.cfg)}</div>`).join('')}</div>`).join('');
+  document.getElementById('mob').innerHTML = `<div class="mob-row">${MOB.map(s => `<div class="frame-card" data-state="${s.tag}" style="width:${themes.length * 376}px;max-width:100%">${cap(s)}
+      <div class="pair">${themes.map(t => `<div data-theme="${t}">${mob(s.cfg)}</div>`).join('')}</div></div>`).join('')}</div>`;
+  fit();
+}
+function fit() {
+  const w = document.querySelector('.doc').clientWidth - 34;
+  const z = zoomMode === 'fit' ? Math.min(1, w / 1280) : 1;
+  document.querySelectorAll('.desk-scale').forEach(el => { el.style.setProperty('--z', z); el.style.overflowX = z < 1 ? 'hidden' : 'auto'; });
+}
+function seg(id, cb) {
+  const root = document.getElementById(id);
+  root.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    root.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === b ? 'true' : 'false'));
+    cb(b.dataset.v);
+  });
+}
+seg('themeSeg', v => { theme = v; render(); });
+seg('zoomSeg', v => { zoomMode = v; fit(); });
+window.addEventListener('resize', fit);
+render();
+</script>
+</body>
+</html>

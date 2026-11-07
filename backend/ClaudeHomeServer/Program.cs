@@ -284,12 +284,14 @@ using (var dynamicModuleLogFactory = LoggerFactory.Create(logging => logging
             dynamicModuleStore.RecordActive((ClaudeHomeServer.Services.Composition.IAppSubsystem)Activator.CreateInstance(implType)!);
     }
     // Задизейбленные модули (Enabled=false): RecordDisabled, чтобы админский
-    // экран показывал «выключено намеренно», а не «забыли подключить».
+    // экран показывал «выключено намеренно», а не «забыли подключить». Имя и описание строки
+    // берутся из класса модуля (ModuleLoader.DescribeDisabled — метаданные без Register):
+    // строка выключенного модуля обязана называться так же, как строка рабочего, а человеческое
+    // имя раздела знает только класс. Из дескриптора реестра (DisabledModuleStub) — только когда
+    // класса нет в развертке.
     foreach (var desc in dynamicModuleRegistry.All.Where(m => !m.Enabled))
     {
-        // Ключ модуля = key в конфиге; для RecordDisabled нужен IAppSubsystem-инстанс,
-        // но dll не загружена — создаём lightweight-заглушку, несущую Key/Title/Description.
-        dynamicModuleStore.RecordDisabled(new DisabledModuleStub(desc));
+        dynamicModuleStore.RecordDisabled(dynamicModuleLoader.DescribeDisabled(desc) ?? new DisabledModuleStub(desc));
     }
     // Третий сценарий отключения: `DynamicModules:N:Enabled=true` (ModuleLoader грузит dll)
     // + `Subsystems:{key}:Enabled=false` (ModuleLoader возвращает null до загрузки — рубильник
@@ -303,7 +305,7 @@ using (var dynamicModuleLogFactory = LoggerFactory.Create(logging => logging
     // подсистемы. Пересечение пусто.
     foreach (var desc in dynamicModuleRegistry.SubsystemGatedOff(builder.Configuration))
     {
-        dynamicModuleStore.RecordDisabled(new DisabledModuleStub(desc));
+        dynamicModuleStore.RecordDisabled(dynamicModuleLoader.DescribeDisabled(desc) ?? new DisabledModuleStub(desc));
     }
 }
 
@@ -1522,8 +1524,10 @@ if (instanceLock is not null)
 
 public partial class Program { }
 
-// Lightweight-заглушка для динамических модулей с Enabled=false: несёт Key/Title
-// без загрузки сборки, чтобы SubsystemStateStore показывал «выключено намеренно».
+// Фолбэк снимка для выключенного динамического модуля, когда его класс недоступен в развертке
+// (нет dll): несёт Key/Title из дескриптора реестра без загрузки сборки, чтобы SubsystemStateStore
+// показывал «выключено намеренно». Когда класс на месте, имя читается из него
+// (ModuleLoader.DescribeDisabled) — человеческое имя и описание раздела знает только класс.
 sealed class DisabledModuleStub(ClaudeHomeServer.Services.Composition.ModuleDescriptor desc)
     : ClaudeHomeServer.Services.Composition.IAppSubsystem
 {

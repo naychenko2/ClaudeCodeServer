@@ -121,9 +121,11 @@ public sealed class SubsystemUsageAttribution
 
 // Мидлвар учёта обращений: после UseRouting у конечной точки видно действие контроллера.
 // Считаем ПОСЛЕ next — по итоговому статусу: 401/403/404 (до обработчика запрос не дошёл или маршрут не найден) не в счёт.
-// SignalR-хаб и ручки ядра неатрибутируемы и не считаются. MCP — по сегменту /mcp/{name}.
+// SignalR-хаб и ручки ядра неатрибутируемы и не считаются. MCP — по сегменту mcp в любой
+// позиции пути: прямой /mcp/{name} и через шлюз ходов /gw/t/{turnId}/mcp/{name}.
 public sealed class SubsystemUsageMiddleware(
-    RequestDelegate next, SubsystemUsageAttribution attribution, SubsystemUsageStore store)
+    RequestDelegate next, SubsystemUsageAttribution attribution, SubsystemUsageStore store,
+    ILogger<SubsystemUsageMiddleware> log)
 {
     public async Task InvokeAsync(HttpContext ctx)
     {
@@ -138,18 +140,25 @@ public sealed class SubsystemUsageMiddleware(
             var key = Resolve(ctx);
             if (key is not null) store.Hit(key, DateTimeOffset.UtcNow);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             // Счётчик — наблюдение, а не часть запроса: сбой атрибуции не должен ломать ответ.
+            // Но и молча теряться не должен: без лога отказ счётчика не виден нигде (R-S1b, п.6).
+            log.LogWarning(ex, "Сбой атрибуции обращения к подсистеме: {Path}", ctx.Request.Path);
         }
     }
 
     private string? Resolve(HttpContext ctx)
     {
-        if (ctx.Request.Path.StartsWithSegments("/mcp", out var rest))
+        // Сегмент mcp ищется в любой позиции пути: вызовы через шлюз ходов /gw/t/{turnId}/mcp/{name}
+        // относятся к тому же тулсету, что и прямые /mcp/{name} (R-S1b, п.7). Сравнение сегмента
+        // регистронезависимо, как прежний StartsWithSegments: /MCP/{name} атрибутировался и раньше.
+        var segments = ctx.Request.Path.Value?.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments is not null)
         {
-            var name = rest.Value?.Split('/', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-            return name is null ? null : attribution.KeyOfMcp(name);
+            var mcpIndex = Array.FindIndex(segments, s => s.Equals("mcp", StringComparison.OrdinalIgnoreCase));
+            if (mcpIndex >= 0 && mcpIndex + 1 < segments.Length)
+                return attribution.KeyOfMcp(segments[mcpIndex + 1]);
         }
 
         var action = ctx.GetEndpoint()?.Metadata.GetMetadata<ControllerActionDescriptor>();

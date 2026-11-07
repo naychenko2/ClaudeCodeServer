@@ -5,10 +5,14 @@ using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Composition;
 
@@ -303,5 +307,138 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
         public string Key => "stub";
         public string Title => "Заглушка";
         public void Register(IServiceCollection services, IConfiguration config) { }
+    }
+
+    // ─── Хвост R-S1b (п.3, п.6, п.7): гарантированный сброс, лог сбоя атрибуции, MCP через /gw ───
+
+    private static Dictionary<string, string?> DataDirConfig(string dir) =>
+        new() { ["DataPath"] = Path.Combine(dir, "projects.json") };
+
+    [Fact]
+    public async Task ОтменённыйТокенОстановки_ФинальныйСбросВсёРавноПишетФайл()
+    {
+        // п.3: остановка с отменённым токеном — файл обязан быть записан. Финальный Flush
+        // в finally не зависит от поведения base.StopAsync: в прежней реализации .NET
+        // (Task.WhenAny + Task.Delay(∞, token)) отменённый токен давал OperationCanceledException
+        // и последний сброс терялся; в net10 base не ретраит (WaitAsync + SuppressThrowing —
+        // source release/10.0, подтверждено прогоном), но и другой его отказ не смеет снять сброс.
+        var dir = Path.Combine(Path.GetTempPath(), "subsys-flush-" + Guid.NewGuid().ToString("N"));
+        var store = new SubsystemUsageStore(["notes"]);
+        store.Hit("notes", DateTimeOffset.UtcNow);
+        var service = new SubsystemUsageFlushService(
+            store, new ConfigurationBuilder().AddInMemoryCollection(DataDirConfig(dir)).Build(),
+            NullLogger<SubsystemUsageFlushService>.Instance);
+        await service.StartAsync(CancellationToken.None);
+
+        try
+        {
+            var cts = new CancellationTokenSource();
+            cts.Cancel();
+            await service.StopAsync(cts.Token);
+
+            var file = Path.Combine(dir, SubsystemUsageFlushService.FileName);
+            File.Exists(file).Should().BeTrue("последний сброс пишется при остановке с отменённым токеном");
+            JsonNode.Parse(File.ReadAllText(file))!["entries"]!.AsArray()
+                .Single(e => e!["key"]!.GetValue<string>() == "notes")!["counts"]!.AsArray()
+                .Sum(c => c!.GetValue<int>()).Should().Be(1);
+        }
+        finally
+        {
+            service.Dispose();
+            // каталога может не быть: его создаёт Save() — без финального сброса он не создан,
+            // и падать должен именно тест, а не его уборка
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    // Сток записей лога для проверки самого факта записи (у TestServer нет консольного вывода)
+    private sealed class CapturingLog<T> : ILogger<T>
+    {
+        public List<string> Lines { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => Lines.Add(formatter(state, exception));
+    }
+
+    // Эндпоинт мидлвар читает через IEndpointFeature (GetEndpoint в ASP.NET Core 3+
+    // не смотрит на legacy IRoutingFeature) — его и выставляем
+    private sealed class TestEndpointFeature : IEndpointFeature
+    {
+        public Endpoint? Endpoint { get; set; }
+    }
+
+    // п.6: сбой атрибуции не ломает ответ (200 остаётся) и пишется в лог — раньше молча терялся.
+    // Сбой синтетический: дескриптор с null MethodInfo — KeyOfAction падает в NRE; предмет
+    // проверки — поведение мидлвара, а не форма отказа.
+    [Fact]
+    public async Task СбойАтрибуцииПишетсяВЛог_ОтветНеЛомается()
+    {
+        var state = new SubsystemStateStore();
+        state.RecordActive(new NotesStubSubsystem());
+        var attribution = new SubsystemUsageAttribution(state, []);
+        var store = new SubsystemUsageStore(attribution.ObservableKeys);
+        var log = new CapturingLog<SubsystemUsageMiddleware>();
+        var middleware = new SubsystemUsageMiddleware(
+            static ctx => { ctx.Response.StatusCode = StatusCodes.Status200OK; return Task.CompletedTask; },
+            attribution, store, log);
+
+        var ctx = new DefaultHttpContext();
+        ctx.Request.Path = "/api/notes";
+        ctx.Features.Set<IEndpointFeature>(new TestEndpointFeature
+        {
+            Endpoint = new Endpoint(null,
+                new EndpointMetadataCollection(new ControllerActionDescriptor { MethodInfo = null! }), "test"),
+        });
+
+        await middleware.InvokeAsync(ctx);
+
+        ctx.Response.StatusCode.Should().Be(StatusCodes.Status200OK);
+        log.Lines.Should().Contain(l => l.Contains("Сбой атрибуции"));
+    }
+
+    // п.7: путь шлюза ходов /gw/t/{turnId}/mcp/{name}/{хвост} приписывается тому же ключу,
+    // что и прямой /mcp/{name}/{хвост}: эндпоинт шлюза — минимальный (app.Map), без
+    // ControllerActionDescriptor, поэтому для него решает только сегмент mcp.
+    [Fact]
+    public async Task ШлюзХодовMcp_ПриписываетсяКлючуТулсета()
+    {
+        var state = new SubsystemStateStore();
+        state.RecordActive(new NotesStubSubsystem());
+        var attribution = new SubsystemUsageAttribution(state, [new NotesToolsetStub()]);
+        var store = new SubsystemUsageStore(attribution.ObservableKeys);
+        var middleware = new SubsystemUsageMiddleware(
+            static ctx => { ctx.Response.StatusCode = StatusCodes.Status200OK; return Task.CompletedTask; },
+            attribution, store, NullLogger<SubsystemUsageMiddleware>.Instance);
+
+        var now = DateTimeOffset.UtcNow;
+
+        var viaGateway = new DefaultHttpContext();
+        viaGateway.Request.Path = "/gw/t/" + Guid.NewGuid().ToString("N") + "/mcp/notes/" + Guid.NewGuid().ToString("N");
+        await middleware.InvokeAsync(viaGateway);
+        store.Snapshot(now).Single(e => e.Key == "notes").Last24h.Should().Be(1);
+
+        // прямая ручка — тот же ключ (прежнее поведение сохранено), в том числе в другом регистре:
+        // StartsWithSegments был регистронезависим — сегментный поиск обязан быть таким же
+        var direct = new DefaultHttpContext();
+        direct.Request.Path = "/MCP/notes/" + Guid.NewGuid().ToString("N");
+        await middleware.InvokeAsync(direct);
+        store.Snapshot(now).Single(e => e.Key == "notes").Last24h.Should().Be(2);
+    }
+
+    private sealed class NotesStubSubsystem : IAppSubsystem
+    {
+        public string Key => "notes";
+        public string Title => "Заглушка";
+        public void Register(IServiceCollection services, IConfiguration config) { }
+    }
+
+    [SubsystemUsage("notes")]
+    private sealed class NotesToolsetStub : IMcpToolset
+    {
+        public string Name => "notes";
+        public string Version => "test";
+        public Task<McpToolCallResult> CallAsync(string tool, JsonObject arguments, McpToolCallContext context,
+            CancellationToken ct) => Task.FromResult(new McpToolCallResult(""));
     }
 }

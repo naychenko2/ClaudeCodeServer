@@ -35,10 +35,14 @@ public sealed class SubsystemUsageFlushService(
         catch (OperationCanceledException) { /* штатная остановка */ }
     }
 
+    // Финальный Flush — в finally: любой отказ base.StopAsync не смеет снять последний сброс
+    // (данные за последние 5 минут). В прежних реализациях .NET отменённый токен давал
+    // OperationCanceledException именно здесь; net10 base не ретраит, но полагаться на это
+    // нечем (R-S1b, п.3). Исключение base наружу не гасится — вызывающий видит его, как раньше.
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
-        await base.StopAsync(cancellationToken);
-        Flush();
+        try { await base.StopAsync(cancellationToken); }
+        finally { Flush(); }
     }
 
     private void Flush()

@@ -23,8 +23,13 @@ namespace ClaudeHomeServer.Services.Sessions;
 // ModulesMcpContexts отдельно: с ними здесь было бы двенадцать, а новая зависимость —
 // сигнал резать класс, а не поднимать лимит (S3-0 §2).
 // Класс public ТОЛЬКО потому, что он параметр публичного конструктора SessionManager (CS0051) и DI нужен
-// публичный конструктор; обход фасада закрывает сторож формы ядра (правило 4: на типы Services.Sessions
-// ссылаются лишь SessionManager, сами Services.Sessions и тесты).
+// публичный конструктор. Обход фасада к типам Services.Sessions закрывает сторож формы ядра (правило 4),
+// но он смотрит только на ссылки с Namespace Services.Sessions (SessionCoreShapeGuardTests,
+// Rule4OnlyFacadeReferences): alias выше ведёт к вложенному типу фасада SessionManager.WorkspaceMcpPlan
+// с Namespace ClaudeHomeServer.Services — правило 4 такой ссылки не видит.
+// Сохранение типа плана вложенным в фасад — осознанное решение (план — часть контракта фасада,
+// см. комментарий у alias), а не пропуск сторожа; расширять правило 4 на этот случай — решение
+// постановщика, не исполнителя.
 public sealed class ExternalMcpContexts
 {
     private readonly SessionStore _store;

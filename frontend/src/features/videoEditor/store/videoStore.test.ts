@@ -24,7 +24,7 @@ import { startSceneSave } from '../feed/SceneCard';
 import { saveScene, selectFilmByHuman, selectSceneByHuman } from '../scene/actions';
 import {
   __applyThreads, __resetVideoStore, __setFilm, clearAgentFrame, ensureVideoThreads, getAgentFrames, getFailure, getFilm, getFocusedScene, getJobsOf, handleEvent, mutate,
-  patchFilm, sceneDraftKey, VIDEO_PANEL, loadFilm, jobFraction,
+  patchFilm, sceneDraftKey, loadFilm, jobFraction,
 } from './videoStore';
 
 const reveals = () => dispatched.filter(d => d.type === REVEAL_PANEL_EVENT).map(d => d.detail);
@@ -135,7 +135,7 @@ describe('клик по карточке: панель следует за вы�
   it('открытая панель переключается на «Сцену» с ключом элемента', async () => {
     __applyThreads('c1', 'p1', threads(1, [scene('s1'), scene('s2')], { sceneId: 's1' }));
     vi.spyOn(videoApi, 'focus').mockResolvedValue(threads(2, [scene('s1'), scene('s2')], { sceneId: 's2' }));
-    holdGenPanelOpen(VIDEO_PANEL, 'column');
+    holdGenPanelOpen('chatContext', 'column');
     await selectSceneByHuman('p1', 'c1', 's2');
     expect(reveals()).toEqual([{ key: 'chatContext', tab: 'scene', sessionId: 'c1', target: sceneDraftKey('s2') }]);
   });
@@ -151,7 +151,7 @@ describe('клик по карточке: панель следует за вы�
   it('строка «Фильм собран» уводит на вкладку «Фильм»', async () => {
     __applyThreads('c1', 'p1', threads(1, [scene('s1')], {}));
     vi.spyOn(videoApi, 'focus').mockResolvedValue(threads(2, [scene('s1')], { filmPath: FILM_PATH }));
-    holdGenPanelOpen('images', 'column');
+    holdGenPanelOpen('chatContext', 'column');
     await selectFilmByHuman('p1', 'c1', FILM_PATH);
     expect(reveals()).toEqual([{ key: 'chatContext', tab: 'film', sessionId: 'c1', target: FILM_PATH }]);
   });

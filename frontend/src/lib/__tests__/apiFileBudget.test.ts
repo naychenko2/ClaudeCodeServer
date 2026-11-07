@@ -15,6 +15,8 @@ import { FROZEN_TYPES_INDEX_DECLARATIONS } from './typesIndexExports';
 // не держатся; НОВОЕ объявление — красное. При переносе домена (шаги P10…P14)
 // убери имена из typesIndexExports.ts — список обязан соответствовать фактическим
 // объявлениям файла.
+// Если список краснеет после мержа master: порядок сверки и то, кто добавляет
+// новые имена, — в шапке typesIndexExports.ts; расхождение не правится руками.
 const MAX_API_LINES = 175;
 
 const lines = (rel: string) => readFileSync(resolve(__dirname, rel), 'utf-8').split('\n').length - 1;

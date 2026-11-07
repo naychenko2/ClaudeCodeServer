@@ -658,10 +658,19 @@ public sealed class TurnCompletion : ITurnMessageSink
                 }
             }
 
-            if (msg is ResultMessage or ErrorMessage && entry.LoopTurnInFlight)
+            if (msg is ResultMessage or ErrorMessage)
             {
-                entry.LoopTurnInFlight = false;
-                if (entry.Info.WorkLoop is not null)
+                // (S3-7d) Маркер читается и гасится под PendingLock — тем же замком, что гейт
+                // разбора очереди и все остальные записи маркера: флаг не читается рваным
+                // состоянием параллельным разбором. Планирование продолжения — вне замка:
+                // Task.Run не ставят в критический участок.
+                bool loopTurnWasInFlight;
+                lock (entry.PendingLock)
+                {
+                    loopTurnWasInFlight = entry.LoopTurnInFlight;
+                    if (loopTurnWasInFlight) entry.LoopTurnInFlight = false;
+                }
+                if (loopTurnWasInFlight && entry.Info.WorkLoop is not null)
                     _ = Task.Run(async () =>
                     {
                         try { await _workLoop.Value.ContinueWorkLoopAsync(sessionId); }

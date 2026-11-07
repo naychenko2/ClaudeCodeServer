@@ -302,6 +302,85 @@ public class SessionManagerWorkLoopTests : SessionManagerTestBase
             "сообщение осталось в очереди до конца continuation-итерации");
     }
 
+    // Тест-сторож вердикта R-S3-7c (S3-7d): регрессию «снятие маркера при сбое отправки» не ловил
+    // ничего — мутация «убрать снятие в catch'е ContinueWorkLoopAsync» давала зелёный прогон.
+    // Сценарий: активный цикл хода, отправка директивы продолжения падает. Ожидаемое: маркер
+    // погашен (иначе цикл висел бы на мёртвой итерации, а drain вечно уступал бы на гейте) и
+    // следующий ход проходит.
+    [Fact]
+    public async Task ContinueWorkLoop_СбойОтправкиДирективы_МаркерСнят_СледующаяДоставкаПроходит()
+    {
+        var session = await MkBusySessionAsync("loop-sendfail", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        // Первая отправка (директива) падает; последующие — обычные: модель «CLI ожил» после сбоя.
+        var sendAttempts = 0;
+        adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()))
+            .Returns<string, IReadOnlyList<string>, int, bool, string?>((_, _, _, _, _) =>
+                ++sendAttempts == 1
+                    ? Task.FromException(new InvalidOperationException("CLI недоступен"))
+                    : Task.CompletedTask);
+        SetProcess(entry, adapter.Object);
+        SetLoopTurnInFlight(entry, true); // ход-итерация в полёте
+
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        // Ждём именно попытки отправки (она бросает), а не транзитного свободного маркера между
+        // снятием по result (:661-блок) и подъёмом в начале ContinueWorkLoopAsync: без этого
+        // проверка прошла бы и на мутации.
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+        await WaitForConditionAsync(() => !GetLoopTurnInFlight(entry), TimeSpan.FromSeconds(2));
+        GetLoopTurnInFlight(entry).Should().BeFalse(
+            "не состоявшийся ход не оставляет маркера: result по нему не придёт, снятие — обязанность catch'а");
+
+        // «Следующий ход проходит»: стоящее в очереди сообщение доставляется обычным drain'ом.
+        EnqueueUser(entry, "следующая вводная");
+        await (Task)InvokePrivate("DrainNextPendingAsync", session.Id)!;
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("следующая вводная")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once(),
+            "после неудачной отправки директивы следующий ход цикла проходит");
+        _sut.GetPending(session.Id).Should().BeEmpty();
+    }
+
+    // Тест-сторож вердикта R-S3-7c (S3-7d), вторая точка того же класса: доставка сообщения
+    // из очереди при активном цикле. Drain взводит маркер вместе с изъятием; если ход не
+    // стартовал (отправка упала), result не придёт — снятие в catch'е DeliverPendingAsync
+    // обязано погасить маркер, иначе следующему сообщению не пройти гейта.
+    [Fact]
+    public async Task DeliverPending_СбойДоставкиПриАктивномЦикле_МаркерСнят_СледующееСообщениеДоставляется()
+    {
+        var session = await MkBusySessionAsync("deliver-sendfail", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        var sendAttempts = 0;
+        adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()))
+            .Returns<string, IReadOnlyList<string>, int, bool, string?>((_, _, _, _, _) =>
+                ++sendAttempts == 1
+                    ? Task.FromException(new InvalidOperationException("CLI недоступен"))
+                    : Task.CompletedTask);
+        SetProcess(entry, adapter.Object);
+
+        // Первая доставка: drain изымает сообщение и взводит маркер, отправка падает.
+        EnqueueUser(entry, "первая вводная");
+        await (Task)InvokePrivate("DrainNextPendingAsync", session.Id)!;
+        GetLoopTurnInFlight(entry).Should().BeFalse(
+            "доставка, не поднявшая хода, гасит маркер: result по такому ходу не придёт");
+
+        // Следующее сообщение не блокируется висящим маркером.
+        EnqueueUser(entry, "вторая вводная");
+        await (Task)InvokePrivate("DrainNextPendingAsync", session.Id)!;
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("вторая вводная")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once(),
+            "неудачная доставка не блокирует следующую");
+        _sut.GetPending(session.Id).Should().BeEmpty();
+    }
+
     // Minor 5: выключение цикла разбирает агентские сообщения, скопившиеся за время цикла
     // (они ждали конца ВСЕГО цикла), — не дожидаясь следующего пользовательского хода.
     [Fact]
@@ -732,6 +811,38 @@ public class SessionManagerWorkLoopTests : SessionManagerTestBase
         adapter.Verify(a => a.SendMessageAsync(
             It.Is<string>(t => t.Contains("ТИК ОЖИДАНИЯ") && t.Contains("1/5")),
             It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+    }
+
+    // Тест-сторож S3-7d (c4): на пути тика ожидания маркер итерации поднимает единственный
+    // состав хода — BuildCliTurnText (под PendingLock); сам тик маркера не взводил и раньше
+    // (см. комментарий в TickWaitingLoopsAsync). Убрать подъём в BuildCliTurnText — этот тест
+    // краснеет: ход-тик ушёл бы в процесс без маркера цикла, и параллельный разбор очереди
+    // не уступил бы ему гейта.
+    [Fact]
+    public async Task TickWaitingLoops_СоставХодаВзводитМаркерИтерации()
+    {
+        var session = await MkBusySessionAsync("loop-tick-marker", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false); // тик требует свободный чат (см. тест выше)
+        SetProcess(entry, adapter.Object);
+        var loop0 = _sut.GetById(session.Id)!.WorkLoop!;
+        loop0.Phase = "waiting";
+        loop0.WaitingReason = "ответа с чужой сессии";
+        loop0.WaitingSince = DateTime.UtcNow;
+        loop0.WaitingTicks = 0;
+        session.Status = SessionStatus.Active;
+        SetLoopTurnInFlight(entry, false);
+        SetWaitingTickInterval(TimeSpan.Zero);
+        SetMaxWaitingTicks(5);
+        BackdateWaitingSince(session.Id, TimeSpan.FromMinutes(10));
+
+        await _sut.TickWaitingLoopsAsync();
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+
+        GetLoopTurnInFlight(entry).Should().BeTrue(
+            "ход-тик нёс протокол цикла: маркер взведён составом хода (BuildCliTurnText)");
     }
 
     [Fact]

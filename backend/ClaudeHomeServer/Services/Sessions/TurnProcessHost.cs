@@ -382,7 +382,10 @@ public sealed class TurnProcessHost
                 entry.Info.WorkLoop = null;
                 // Прерванный ход result не пришлёт — погасим маркер итерации, иначе он
                 // повис бы и заблокировал разбор очереди по концу следующего хода.
-                entry.LoopTurnInFlight = false;
+                // (S3-7d) Под PendingLock — тем же замком, что гейт drain'а: «Стоп» снят
+                // синхронно ровно для того, чтобы exited прерванного хода начал разбор —
+                // снятие обязано быть атомарно относительно него.
+                lock (entry.PendingLock) entry.LoopTurnInFlight = false;
                 _store.SaveSessions();
                 _ = BroadcastWorkLoopAsync(sessionId, entry);
             }

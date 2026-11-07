@@ -120,6 +120,8 @@ internal sealed class SessionEntry
     // после механики доживания exited приходит лишь со смертью прогона (до 30 мин
     // при живых фоновых агентах). Чужие ходы (REST-канал агентов, /compact,
     // ходы-продолжения CLI) протокола не несут и цикл не двигают.
+    // (S3-7d) Все записи маркера — под entry.PendingLock, тем же замком, под которым его
+    // читают в решающих гейтах (разбор очереди, начало ContinueWorkLoopAsync).
     public volatile bool LoopTurnInFlight;
     // Момент, когда result/error хода перевёл статус в Active (ход завершён, ждём exited для
     // финального Finished). Источник «зависшей» Active: exited приходит лишь со смертью

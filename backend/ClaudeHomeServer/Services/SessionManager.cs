@@ -2061,11 +2061,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         {
             entry.Info.WorkLoop = newLoop;
             entry.LoopTurnText.Clear();
-            // При выключении гасим маркер итерации: висящий LoopTurnInFlight заблокировал бы
-            // разбор очереди по концу следующего хода (гейт !LoopTurnInFlight).
-            if (newLoop is null)
-                entry.LoopTurnInFlight = false;
         }
+        // При выключении гасим маркер итерации: висящий LoopTurnInFlight заблокировал бы
+        // разбор очереди по концу следующего хода (гейт !LoopTurnInFlight).
+        // (S3-7d) Под PendingLock — тем же замком, что гейт разбора очереди: раньше снятие было
+        // под LoopTurnLock, т.е. под другим замком относительно читателя маркера, и состояние
+        // маркера не было атомарно относительно drain'а. Присвоение WorkLoop и очистка буфера
+        // остаются под LoopTurnLock (см. комментарий выше). Промежуточное состояние «цикл снят,
+        // маркер ещё взведён» безвредно: маркер читают только там, где активен цикл.
+        if (newLoop is null)
+            lock (entry.PendingLock) entry.LoopTurnInFlight = false;
         SaveSessions();
         await BroadcastWorkLoopAsync(sessionId, entry);
 
@@ -3539,7 +3544,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
             // Тик НЕ тратит Iteration — только WaitingTicks. Директива уходит системной:
             // координатор увидит подсказку и сам решит, выводить ли `<waiting>` снова.
-            // BuildCliTurnText взводит LoopTurnInFlight (под LoopTurnLock), а ContinueWorkLoopAsync
+            // BuildCliTurnText взводит LoopTurnInFlight (под PendingLock — тем же замком, что
+            // и гейт разбора очереди), а ContinueWorkLoopAsync
             // по result хода-тика проверит, остался ли маркер, и вернёт фазу.
             _log.LogInformation("Цикл {Session}: тик ожидания {Ticks}/{Max} (причина: {Reason})",
                 sessionId, loop.WaitingTicks, _maxWaitingTicks, loop.WaitingReason);

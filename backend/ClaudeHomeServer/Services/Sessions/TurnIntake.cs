@@ -582,7 +582,12 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
             // Буфер LoopTurnText здесь НЕ чистим: ход ставится в очередь, а стримящийся
             // сейчас ход ещё копит текст — очистка на постановке стирала бы его маркер.
             // Буфер потребляет и чистит ContinueWorkLoopAsync по result хода.
-            entry.LoopTurnInFlight = true;
+            // (S3-7d) Маркер взводится под PendingLock — тем же замком, что гейт разбора очереди
+            // (DrainNextPendingAsync) и все остальные записи маркера: состояние маркера атомарно
+            // относительно операций над очередью. На путях продолжения и drain он уже взведён
+            // (:3282 / изъятие+подъём в drain) — здесь идемпотентен; на пути тика ожидания и
+            // добивания сабагента это единственная точка подъёма.
+            lock (entry.PendingLock) entry.LoopTurnInFlight = true;
             // Верификационный ход идёт со своей директивой — рабочий протокол не дописываем
             if (loop.Phase != "verifying")
                 result += "\n\n" + OmoPrompts.WorkLoopTurn(loop.Promise);
@@ -798,7 +803,9 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         }
         // Прерванный ход result не пришлёт — погасим маркер итерации цикла, иначе он
         // заблокирует разбор очереди (drain уступает, пока LoopTurnInFlight).
-        entry.LoopTurnInFlight = false;
+        // (S3-7d) Под PendingLock — тем же замком, что гейт drain'а: снятие атомарно относительно
+        // последующего разбора, цель которого и есть доставить ждущее сообщение сейчас.
+        lock (entry.PendingLock) entry.LoopTurnInFlight = false;
         entry.DrainOnExitedRun = entry.RunId;
         _log.LogInformation("Interrupt адаптера {Session}: callsite={Callsite}", sessionId, callsite);
         entry.Process?.Interrupt();
@@ -1043,9 +1050,12 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         {
             // Ход не стартовал. При активном цикле drain выставил LoopTurnInFlight до отправки —
             // гасим, иначе цикл завис бы на мёртвой итерации (тот же финализирующий путь, что в
-            // catch ниже). После отзыва цикла уже нет (StopChatsOfRevokedMember его снимает),
-            // поэтому ветка доходит только до общего пути.
-            if (entry.Info.WorkLoop is not null) entry.LoopTurnInFlight = false;
+            // catch ниже — тоже под PendingLock). После отзыва цикла уже нет: StopChatsOfRevokedMember
+            // снимает его через InterruptCore, который гасит и маркер, — гард не срабатывает и ветка
+            // доходит только до общего пути (зафиксировано тестом
+            // ОтзывВОкнеДоставки_АктивныйЦиклИМаркерСнятыСтопом_ХодСиротаНеПоднят).
+            if (entry.Info.WorkLoop is not null)
+                lock (entry.PendingLock) entry.LoopTurnInFlight = false;
             return false;
         }
 

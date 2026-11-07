@@ -80,6 +80,12 @@ public sealed class TurnProcessHost
     private static long _runSeq;
     internal static long NextRunId() => Interlocked.Increment(ref _runSeq);
 
+    // Авто-фейловер пула подписок перед ходом (подготовка к S3-7, вердикт архитектора 07.11):
+    // тело — в CliRoute («тихий failover — вопрос пула и профиля»), а приём хода не получает
+    // одиннадцатую зависимость маршрут: он доходит до него через этот хост, у которого
+    // маршрут уже есть. Делегация ровно та же, что у фасадной обёртки SessionManager.
+    internal void TryPoolFailover(string sessionId, SessionEntry entry) => _route.TryPoolFailover(sessionId, entry);
+
     // --- Старт и переподключение процесса ---
 
     // Начало нового процесса сессии (тело переехало из StartNewSessionAsync).

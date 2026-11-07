@@ -1227,8 +1227,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
     // Авто-фейловер пула подписок: аккаунт чата исчерпан, а в пуле есть здоровая
     // альтернатива — тихо перевозим транскрипт в её профиль и меняем Session.Provider.
-    // Тело переехало в CliRoute (S3-2): весь оно про профиль CLI и перенос транскрипта.
-    private void TryPoolFailover(string sessionId, SessionEntry entry) => _route.TryPoolFailover(sessionId, entry);
+    // Тело — в CliRoute (S3-2); делегирует хост процесса (подготовка к S3-7): приём хода
+    // дойдёт до него через хост, а не через маршрут напрямую.
+    private void TryPoolFailover(string sessionId, SessionEntry entry) => _process.TryPoolFailover(sessionId, entry);
 
     // Карточка «Продолжить на …»: чат родного Claude упёрся в лимит, внутри пула
     // автофейловер (TryPoolFailover) не переключил. Предлагаем варианты: здоровые

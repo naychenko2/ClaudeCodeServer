@@ -96,9 +96,14 @@ public class FalAccumulatorRaceRegressionTests : IDisposable
         var csid = session.ClaudeSessionId!;
         ClearAccumulator(session.Id);
 
-        var sem = (SemaphoreSlim)typeof(SessionManager)
-            .GetField("_falPersistLock", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+        // Лок внеходовых записей переехал в роль SessionHistory (S3-2) вместе с механикой
+        // истории: достём его через поле фасада, сам семафор — тот же единственный на процесс.
+        var historyRole = typeof(SessionManager)
+            .GetField("_sessionHistory", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
             .GetValue(_sessions)!;
+        var sem = (SemaphoreSlim)typeof(ClaudeHomeServer.Services.Sessions.SessionHistory)
+            .GetField("_falPersistLock", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(historyRole)!;
 
         // Имитируем «уже идёт EnsureAccumulatorAsync»: держим _falPersistLock снаружи.
         // С фиксом волны 3 PublishFalCostAsync читает entry.Accumulator только ПОД локом,

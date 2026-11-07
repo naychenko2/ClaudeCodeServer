@@ -29,7 +29,9 @@ public class LauncherProjectContextGuardTests(ITestOutputHelper output)
         ["ClaudeHomeServer.Controllers.HostFilesController.GetContent"] = (1, "файл хоста по пути владельца, вне проекта"),
         ["ClaudeHomeServer.Services.SessionManager.ResolveTasksApiUrl"] = (1,
             "адрес MCP для среды владельца; у раннера устройства адрес переписывается на сайдкар"),
-        ["ClaudeHomeServer.Services.SessionManager.CwdForOwner"] = (1,
+        // Тело CwdForOwner переехало в роль CliRoute (S3-2): в фасаде осталась обёртка,
+        // вызов ForOwner — теперь здесь.
+        ["ClaudeHomeServer.Services.Sessions.CliRoute.CwdForOwner"] = (1,
             "путь транскрипта в серверном профиле CLI; у локального проекта транскрипт на устройстве"),
         ["ClaudeHomeServer.Services.SessionManager.StartNewSessionAsync"] = (1, "ветка чата вне проекта"),
         ["ClaudeHomeServer.Services.SessionManager.EnsureProcessCoreAsync"] = (1, "ветка чата вне проекта"),

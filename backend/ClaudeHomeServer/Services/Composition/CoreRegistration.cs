@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Services.Auth;
 using ClaudeHomeServer.Services.Composition.Llm;
+using ClaudeHomeServer.Services.Files;
 using ClaudeHomeServer.Services.Git;
 
 namespace ClaudeHomeServer.Services.Composition;
@@ -17,9 +18,11 @@ namespace ClaudeHomeServer.Services.Composition;
 // Program.cs: форвардер без своего корня читается потерянно. Швы ЧИСТЫХ корней
 // (корень в другой вертикали или в другом ряду) — в `CoreSeamsGlue.cs`.
 //
-// Ядро сессий и чатов отсюда заберёт S3 в `Services/Sessions/SessionCoreRegistration.cs`
-// (тот же приём, что с `AddChatContext` в Core). Порядок и состав регистраций — ровно
-// те, что были в Program.cs: relative порядок хостед-сервисов сохранён.
+// Ядро сессий и чатов здесь (постановка S6-2: при невлитом S3-1 ядро сессий стоит здесь, а не
+// в Program.cs; план S3 — отнести его в `Services/Sessions/SessionCoreRegistration.cs`, тот
+// же приём, что с `AddChatContext` в Core). Порядок и состав регистраций — ровно те, что были
+// в Program.cs: относительный порядок ядра и ядра сессий сохранён, ни одна перенесённая
+// регистрация не IHostedService — очередь старта хостед-сервисов не затронута.
 public static class CoreRegistration
 {
     public static IServiceCollection AddCore(this IServiceCollection services, IConfiguration config)
@@ -179,6 +182,42 @@ public static class CoreRegistration
         // пишет ProjectEventTypes.NoteChanged при мутациях заметок). Полный сервис в Main,
         // Notes видит только Append.
         services.AddSingleton<IProjectEventLogService>(sp => sp.GetRequiredService<ProjectEventLogService>());
+
+        // ─── Ядро сессий и файлов чата (до S3) ───
+        // Перенесено из Program.cs (S6-2): порядок этих регистраций относительно себя и
+        // относительно ядра выше — ровно тот, что был в Program.cs; ни одна из них не
+        // IHostedService — очередь старта хостед-сервисов не затронута.
+        // Сводка карточки архива (место chat-digest). Живёт в спине, а не в вертикали Llm:
+        // читает историю чата и заметку-итог, пишет сводку в сессию, а модель ей нужна лишь как
+        // генератор текста через ICheapTextRunner (см. шапку файла).
+        services.AddSingleton<ChatDigestService>();
+        services.AddSingleton<FileService>();
+        // Шов файлов проекта (ADR-016): async и с ключом «проект», guard файловой группы внутри.
+        services.AddSingleton<IProjectFiles, ProjectFiles>();
+        // Резолв контекста чата (фича chat-context): признак «не найден» считает одна точка
+        // для REST фронта и MCP-тула context_list
+        services.AddSingleton<SessionContextResolver>();
+        // Применение пресета каркаса знакомства v2: только добавляет поверх живой папки,
+        // отчёт по каждому шагу; зависимости-синглтоны, сам тоже stateless-синглтон
+        services.AddSingleton<ProjectPresetService>();
+        services.AddSingleton<UnifiedSearchService>();
+        services.AddSingleton<SyncService>();
+        services.AddSingleton<FileWatcherService>();
+        // Шина событий хода (ADR-013): один экземпляр на инстанс, изоляция владельцев — через
+        // TurnContext события. На этапе 0 подписчиков нет; этап 2 — реестр секций промпта
+        // (6 провайдеров + DossierTrailerHint) подключается к шине через SessionManager.
+        services.AddSingleton<ClaudeHomeServer.Services.Turn.ITurnEventBus,
+            ClaudeHomeServer.Services.Turn.TurnEventBus>();
+        // Хаб событий между редакторами (ADR-022 §3): «в Картинках/Звуке появилась версия» → «Видео». In-memory,
+        // один на инстанс; сами редакторы друг о друге не знают
+        services.AddSingleton<ClaudeHomeServer.Services.Media.IMediaEvents, ClaudeHomeServer.Services.Media.MediaEventHub>();
+        services.AddSingleton<SessionManager>();
+        // Обратный индекс «файл → какие ещё чаты его меняли» (панель «Изменения») — см. GetForProjectAsync
+        services.AddSingleton<ProjectFileSessionsIndex>();
+        // Кэш отпечатков префиксов истории (Перф-3 B8): SHA-256 2,5 МБ-истории не пересчитывается
+        // на каждый запрос с курсором, а берётся по (csid, версия истории)
+        services.AddSingleton<PrefixFingerprintCache>();
+        services.AddSingleton<ModelCatalogService>();
         return services;
     }
 }

@@ -22,9 +22,9 @@ public static class CoreSeamsGlue
         // Секция DifyOptions + KnowledgeService + ProjectKnowledgeSyncService (singleton + hosted
         // мост ProjectKnowledgeTurnSync) + UserKnowledgeCascade + IKnowledgeAlertNotifier +
         // KnowledgeIndexReconciler (singleton + hosted) — DI в подсистеме `KnowledgeSubsystem`
-        // (волна 3, шаг 3). Миграция `WorkspaceKnowledgeStore.MigrateFromProjects` тоже
-        // остаётся отдельным пост-билд блоком (ниже по Program.cs) — см. ограничения в
-        // шапке KnowledgeSubsystem.cs.
+        // (волна 3, шаг 3). Миграция `WorkspaceKnowledgeStore.MigrateFromProjects` — отдельный
+        // блок стартового ряда после Build(): `Composition/StartupWarmup.cs` — см. ограничения
+        // в шапке KnowledgeSubsystem.cs.
         // Участники реконсайлера error-документов Dify: пять владельцев локальных сторов
         // «запись → {DocId, Hash}» (форвард на существующие singleton'ы, не новые экземпляры).
         // Остаются в композиционном корне сознательно — кросс-вертикальный клей, не собственность

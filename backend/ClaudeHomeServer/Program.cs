@@ -34,7 +34,6 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.StaticFiles;
 using Yarp.ReverseProxy.Forwarder;
-using ClaudeHomeServer.Services.Files;
 
 JwtSecurityTokenHandler.DefaultMapInboundClaims = false;
 
@@ -351,7 +350,9 @@ builder.Services.AddObservability(builder.Configuration);
 
 // Ядро композиции (S6-2): вход и пользователи, среда исполнения процессов, реестр
 // проектов, сферы и журнал событий проекта, сервисы расхода и медиа-журнала, швы рядом
-// со своими корнями — в `Composition/CoreRegistration.cs`. Порядок тот же, что был здесь.
+// со своими корнями, а также ядро сессий и файлов чата (до S3) — в
+// `Composition/CoreRegistration.cs`. Относительный порядок ядра и ядра сессий — тот же,
+// что был здесь.
 builder.Services.AddCore(builder.Configuration);
 // Персона: стор, миниатюры аватара, промпт, привязки, черновик, провижн авто-ассистента,
 // шаблоны прав специальности, файловые сабагенты и миграции персон — в
@@ -375,31 +376,23 @@ builder.Services.AddGatedHostedService<ClaudeModelFamilyMigration>(builder.Confi
 // Чаты картинки v2 уходят в архив (ADR-019, решение 2): идемпотентно по маркеру
 // SessionImageChat.MigratedAt, поэтому и восстановленный старый бэкап мигрирует при старте
 builder.Services.AddGatedHostedService<ImageChatV3Migration>(builder.Configuration);
-// Сводка карточки архива чата (место chat-digest). Живёт в спине, а не в вертикали Llm:
-// читает историю чата и заметку-итог, пишет сводку в сессию, а модель ей нужна лишь как
-// генератор текста через ICheapTextRunner (см. шапку файла).
-builder.Services.AddSingleton<ChatDigestService>();
+// Ядро сессий и файлов чата (ChatDigestService, FileService/ProjectFiles, SessionContextResolver,
+// ProjectPresetService, UnifiedSearchService, SyncService/FileWatcherService, ITurnEventBus,
+// MediaEventHub, SessionManager, ProjectFileSessionsIndex, PrefixFingerprintCache,
+// ModelCatalogService) — в `Composition/CoreRegistration.cs` (S6-2; до S3, см. его шапку).
 // TaskManager/TaskAiService/BoardService/DailyBriefingService/TaskSchedulerService
 // — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
-builder.Services.AddSingleton<FileService>();
-// Шов файлов проекта (ADR-016): async и с ключом «проект», guard файловой группы внутри.
-builder.Services.AddSingleton<IProjectFiles, ProjectFiles>();
-// Резолв контекста чата (фича chat-context): признак «не найден» считает одна точка
-// для REST фронта и MCP-тула context_list
-builder.Services.AddSingleton<SessionContextResolver>();
 // Документация проекта (README + docs/) для панели «Доки»: индекс, связи, поиск, макеты,
 // карта проекта и документо-ИИ — все регистрации этой вертикали живут в самой сборке
 // Docs (`DocsRegistration.AddDocs`, S6-2): ни один из её типов не нужен вне панели.
 builder.Services.AddDocs();
-// Применение пресета каркаса знакомства v2: только добавляет поверх живой папки,
-// отчёт по каждому шагу; зависимости-синглтоны, сам тоже stateless-синглтон
-builder.Services.AddSingleton<ProjectPresetService>();
+// ProjectPresetService и UnifiedSearchService — в `Composition/CoreRegistration.cs`
+// (ядро сессий, указатель выше).
 // Подсистема Git: GitService/GitServerService/GitAiService регистрируются в
 // `ClaudeHomeServer.Git/Services/Git/GitSubsystem.cs` — вертикаль вынесена в отдельную
 // сборку (Этап 3, 2026-09-08), сюда её приносит ProjectReference Main→Git. Реакторы
 // GitAutoCommitService/CommitAttributionService — общая композиция спины, см. блок
-// рядом с FileWatcherService (Этап 3, уборка Git).
-builder.Services.AddSingleton<UnifiedSearchService>();
+// ниже (Этап 3, уборка Git).
 // Аналитика расхода токенов (Spend Analytics v2) — DI в подсистеме `SpendSubsystem`.
 // Модельный слой (OneShotClaudeRunner / OllamaClient / LlamaServerClient / CloudCheapClient /
 // LocalActionRouter / ModelAssignmentResolver / CheapTextRunner / LocalActionOverridesStore /
@@ -415,8 +408,8 @@ builder.Services.AddSingleton<UnifiedSearchService>();
 // за её пределами его никто не резолвит.
 // One-shot ответы персон от их лица (persona_ask из MCP персон)
 builder.Services.AddSingleton<PersonaAskService>();
-builder.Services.AddSingleton<SyncService>();
-builder.Services.AddSingleton<FileWatcherService>();
+// SyncService и FileWatcherService — в `Composition/CoreRegistration.cs` (ядро сессий,
+// указатель выше).
 // Реактор авто-commit (Project.GitAutoCommit после каждого хода Claude). Живёт в
 // корне Services, не в Git-вертикали — это «реакция на ход» по прецеденту
 // PersonaMemoryAutolearnService. Здесь, а не в GitSubsystem, потому что регистрации
@@ -428,11 +421,17 @@ builder.Services.AddGatedHostedService<GitAutoCommitService>(builder.Configurati
 builder.Services.AddSingleton<CommitAttributionService>();
 builder.Services.AddSingleton<ConnectionDiagnostics>();
 builder.Services.AddSingleton<ChatHistoryService>();
+// Диагностика промпта панели сообщений: снимок промпта хода пишет SessionManager по шине
+// (PromptAssembled, см. его подписку на шину), читает — панель сообщений
+// (SessionMessagesController); разбор — on-demand вызов дешёвого исполнителя через
+// ICheapTextRunner (Llm — через Core-шов; приватность разбора — в шапке файла). Не вертикаль:
+// своей области и интерфейсов нет, потребители — панель сообщений и сам ход. Остаются здесь,
+// рядом с другими сервисами панели сообщений.
 builder.Services.AddSingleton<PromptSnapshotStore>();
 builder.Services.AddSingleton<PromptAuditService>();
 // WorkspaceKnowledgeStore — DI в подсистеме `KnowledgeSubsystem`
-// (волна 3, шаг 3): миграция из старых Project-записей — отдельный блок
-// PostConfigure ниже (см. ограничения в шапке KnowledgeSubsystem.cs).
+// (волна 3, шаг 3): миграция из старых Project-записей — отдельный блок стартового
+// ряда после Build(): `Composition/StartupWarmup.cs` (см. ограничения в шапке KnowledgeSubsystem.cs).
 builder.Services.AddSingleton<FalCostService>();
 builder.Services.AddSingleton<FalAccountService>();
 builder.Services.AddSingleton<GlifAccountService>();
@@ -447,14 +446,8 @@ builder.Services.AddSingleton<GlifAccountService>();
 // несколькими вертикалями, поэтому он держится в композиции, а не в чужой подсистеме.
 builder.Services.AddProductiveMcpServers(builder.Configuration);
 // BoardService — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
-// Шина событий хода (ADR-013): один экземпляр на инстанс, изоляция владельцев — через
-// TurnContext события. На этапе 0 подписчиков нет; этап 2 — реестр секций промпта
-// (6 провайдеров + DossierTrailerHint) подключается к шине через SessionManager.
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Turn.ITurnEventBus,
-    ClaudeHomeServer.Services.Turn.TurnEventBus>();
-// Хаб событий между редакторами (ADR-022 §3): «в Картинках/Звуке появилась версия» → «Видео». In-memory,
-// один на инстанс; сами редакторы друг о друге не знают
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Media.IMediaEvents, ClaudeHomeServer.Services.Media.MediaEventHub>();
+// Шина событий хода (ITurnEventBus) и хаб редакторов (IMediaEvents/MediaEventHub) —
+// в `Composition/CoreRegistration.cs` (ядро сессий, указатель выше).
 // Этап 2: контрибьюторы секций системного промпта (этап 2 плана «Шина событий хода»).
 // Каждый контрибьютор несёт Order/Key/Group и два метода: IsEnabled (гейт по
 // per-session условиям — без него регрессия golden-фикстуры 4) и BuildAsync (исключения
@@ -467,7 +460,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Media.IMediaEvents, Clau
 // `AddSubsystems` не зовёт `NotesSubsystem.Register`, и контрибьютор не регистрируется вовсе —
 // ни предикат на регистрации, ни пост-хок удаление дескрипторов здесь больше не нужны.
 builder.Services.AddPromptSectionContributors();
-builder.Services.AddSingleton<SessionManager>();
+// SessionManager — в `Composition/CoreRegistration.cs` (ядро сессий, указатель выше).
 // Серверные сторожа чатов: стор + цикл опроса. Запуск poll-команд — через
 // ILauncherFactory (среда владельца); цикл — hosted, в Testing-среде не поднимается
 // (см. AddHosted), юниты гоняют TickAsync напрямую
@@ -483,12 +476,8 @@ builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Watchdog.Watchd
 // Changed стора живёт в конструкторе — слушатель обязан существовать к первым постановкам;
 // прогрев ниже делает подписку независимой от hosted-цикла
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Watchdog.WatchdogNotifier>();
-// Обратный индекс «файл → какие ещё чаты его меняли» (панель «Изменения») — см. GetForProjectAsync
-builder.Services.AddSingleton<ProjectFileSessionsIndex>();
-// Кэш отпечатков префиксов истории (Перф-3 B8): SHA-256 2,5 МБ-истории не пересчитывается
-// на каждый запрос с курсором, а берётся по (csid, версия истории)
-builder.Services.AddSingleton<PrefixFingerprintCache>();
-builder.Services.AddSingleton<ModelCatalogService>();
+// ProjectFileSessionsIndex, PrefixFingerprintCache, ModelCatalogService —
+// в `Composition/CoreRegistration.cs` (ядро сессий, указатель выше).
 // Уведомления и push-доставка — в `Composition/NotificationsRegistration.cs` (S6-2):
 // их пишут задачи, знания, бэкап и выкатка, а доставка одна на инстанс.
 builder.Services.AddNotifications();

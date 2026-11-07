@@ -32,7 +32,8 @@ const backendRoot = resolve(here, '../../../../backend');
 const authControllerCs = resolve(backendRoot, 'ClaudeHomeServer/Controllers/AuthController.cs');
 const subsystemsControllerCs = resolve(backendRoot, 'ClaudeHomeServer/Controllers/SubsystemsController.cs');
 const appSubsystemCs = resolve(backendRoot, 'ClaudeHomeServer.Core/Services/Composition/IAppSubsystem.cs');
-const meTypeTs = resolve(here, '../../types/index.ts');
+// Тип Me живёт в домене «Аккаунт» (шаг P12 линии разноса types/index.ts); сторож ходит за типом.
+const meTypeTs = resolve(here, '../../features/account/types.ts');
 const subsystemsApiTs = resolve(here, '../../api/subsystems.ts');
 const subsystemsPageTsx = resolve(here, '../../pages/SubsystemsPage.tsx');
 
@@ -58,7 +59,7 @@ function subsystemsAssignmentLine(src: string): string {
 // контрактное поле, не про полный парсер TS.
 function subsystemsTypeLine(src: string): string {
   const match = src.match(/subsystems\?:\s*([^\n;]+)/);
-  expect(match, 'types/index.ts: ожидалось поле `subsystems?: ...` в Me').not.toBeNull();
+  expect(match, 'features/account/types.ts: ожидалось поле `subsystems?: ...` в Me').not.toBeNull();
   return (match?.[1] ?? '').trim();
 }
 
@@ -98,11 +99,11 @@ describe('контракт subsystems фронт/бэк: /api/auth/me', () => {
     ).toBe(true);
   });
 
-  it('Me.subsystems в types/index.ts — string[] (не Record)', () => {
+  it('Me.subsystems в features/account/types.ts — string[] (не Record)', () => {
     const src = readFile(meTypeTs);
     const decl = subsystemsTypeLine(src);
     expect(decl,
-      'types/index.ts: ожидалось `subsystems?: string[]` (или эквивалент `Array<string>` / `readonly string[]`).'
+      'features/account/types.ts: ожидалось `subsystems?: string[]` (или эквивалент `Array<string>` / `readonly string[]`).'
     ).toMatch(/^(string\[\]|Array<string>|readonly\s+string\[\])$/);
   });
 

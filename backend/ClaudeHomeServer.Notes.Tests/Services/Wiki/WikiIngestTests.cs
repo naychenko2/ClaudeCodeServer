@@ -32,8 +32,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // выключатель, выключенные классы) читаются в бою и решают «само / Входящие»; битый
 // settings.json — умолчания, не падение разбора. Плюс WN-3 (дыра WC-2): отказ
 // «нечего добавить» / пустой план в разделе без страниц знаний — ровно один повтор
-// прохода B с прямой причиной; второй отказ — прежний nothing_new; в непустом разделе
-// повтор не зовётся.
+// прохода B с прямой причиной; второй отказ модели — прежний nothing_new; сбой самого
+// повтора (упал или дал пустой ответ) — rejected с причиной сбоя, а не nothing_new;
+// в непустом разделе повтор не зовётся.
 public class WikiIngestTests : IDisposable
 {
     private const string User = "u1";
@@ -286,6 +287,48 @@ public class WikiIngestTests : IDisposable
         res.Outcome.Should().Be(WikiIngestService.OutcomeNothingNew);
         res.Reason.Should().Be("не о чём писать", "прежний исход: причина первого отказа модели");
         llm.Calls.Should().HaveCount(3, "A, B, повтор — больше никого");
+        PackagesOnDisk().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WN3_ПустойРаздел_ПовторУпал_ОтказСПричинойСбояANeNothingNew()
+    {
+        // Доработка ревью WN-3 (major): сбой повторного вызова — не отказ модели (её не
+        // звали ни разу), поэтому исход — rejected с причиной сбоя (тот же инвариант WN-4),
+        // а не nothing_new с причиной ПЕРВОГО отказа: иначе «движок занят» читается ночным
+        // путём как «нечего добавить», lastOkTo двигается и окно чата теряется при
+        // completed ночи.
+        Write(User, EmptySection, EmptyCardPath, CardFile);
+        var llm = new FakeLlm(claims: ClaimsJson, plan: NothingJson, emptySection: CreatePlanJson)
+        {
+            Throw = pass => pass == "E"
+                ? new LocalEngineSlotRefusalException("local-qwen", LocalTurnRefusal.QueueFull, 4, 4)
+                : null,
+        };
+
+        var res = await Sut(llm).IngestAsync(User, Req(home: EmptySection, card: EmptyCardPath));
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected, "сбой вызова — отказ разбора, не штатный исход");
+        res.Reason.Should().Contain("занят").And.Contain("слота не дождались")
+            .And.NotContain("не о чём писать", "причина первого отказа не подменяет причину сбоя");
+        llm.Calls.Should().HaveCount(3, "A, B, повтор — ремонта после сбоя вызова нет");
+        PackagesOnDisk().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WN3_ПустойРаздел_ПовторДалПустойОтвет_ОтказСПричинойСбоя()
+    {
+        // Тот же инвариант на другом сбое повтора: модель вернула пустой ответ — это тоже
+        // сбой вызова (CallModelAsync называет его отдельно), а не решение «нечего
+        // добавить»: исход rejected с этой причиной, не nothing_new.
+        Write(User, EmptySection, EmptyCardPath, CardFile);
+        var llm = new FakeLlm(claims: ClaimsJson, plan: NothingJson, emptySection: "");
+
+        var res = await Sut(llm).IngestAsync(User, Req(home: EmptySection, card: EmptyCardPath));
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected, res.Reason);
+        res.Reason.Should().Contain("пустой ответ").And.NotContain("не о чём писать");
+        llm.Calls.Should().HaveCount(3, "A, B, повтор — дальше отказа вызова не идут");
         PackagesOnDisk().Should().BeEmpty();
     }
 
@@ -775,6 +818,12 @@ public class WikiIngestTests : IDisposable
         private readonly Dictionary<string, Queue<string>> _answers = new();
         private readonly bool _nightly;
 
+        // «Движок не принял вызов» по проходу (тот же приём, что у фейка ночи): возврат
+        // исключением вместо ответа — как ждущий слот путь TrackedLocalLlmClient
+        // (LocalEngineSlotRefusalException). Здесь ключ — проход, а не actionKey: все
+        // вызовы разбора идут одним местом, различить их можно только по промпту.
+        public Func<string, Exception?>? Throw;
+
         public FakeLlm(string claims, string plan, string? repair = null, string? emptySection = null,
             bool nightly = false)
         {
@@ -830,6 +879,10 @@ public class WikiIngestTests : IDisposable
             Calls.Add((actionKey, prompt, pass));
             actionKey.Should().Be(_nightly ? LocalActionCatalog.WikiNightly : LocalActionCatalog.WikiIngest,
                 "место разбора — то, что назвал вызывающий");
+            // Вызов зарегистрирован и упал: сбой после того, как вызывающий позвал, — так же,
+            // как в живом пути (слот не выдан → исключения до вызова не доходят).
+            if (Throw?.Invoke(pass) is { } ex)
+                throw ex;
             var queue = _answers.TryGetValue(pass, out var q) ? q : null;
             return queue is { Count: > 0 } ? queue.Dequeue() : "нет ответа для прохода " + pass;
         }

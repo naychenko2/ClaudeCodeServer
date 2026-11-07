@@ -15,9 +15,10 @@ namespace ClaudeHomeServer.Services.Sessions;
 // SessionHistory.WithFalPersistLockAsync — тот же лок, что у остальных внеходовых записей
 // (иначе публикация цены и оживление аккумулятора теряли бы друг друга).
 // FalCostService.OnCostResolved = PublishFalCostAsync переехал сюда же.
-// Зависимостей семь (falCost, glif, spend, limitRecorder, history, chatHistory, store):
-// в таблице S3-0 было шесть — SaveSnapshotAsync аккумулятора через ChatHistoryService в ней
-// не досчитан. Класс public
+// Зависимостей девять (falCost, glif, spend, limitRecorder, history, chatHistory, store,
+// llmProviders): в таблице S3-0 было шесть — SaveSnapshotAsync аккумулятора через
+// ChatHistoryService в ней не досчитан; llmProviders добавлен в S3-6 — запись расхода хода
+// (RecordTurnSpend) переехала сюда вместе с телом конца хода. Класс public
 // ТОЛЬКО потому, что он параметр публичного конструктора SessionManager (CS0051) и DI нужен
 // публичный конструктор; обход фасада закрывает сторож формы ядра (правило 4).
 public sealed class TurnCostLedger
@@ -32,6 +33,10 @@ public sealed class TurnCostLedger
     // аналитика) остаётся в роли, а диск — за спинкой.
     private readonly ChatHistoryService _chatHistory;
     private readonly SessionStore _store;
+    // Реестр провайдеров — для записи расхода хода (S3-6): ResolveModelOrDefault и различение
+    // локального провайдера нужны RecordTurnSpend, а не только слою Llm. С ним зависимостей
+    // девять (потолок 10).
+    private readonly LlmProviderRegistry _llmProviders;
     private readonly ILogger<TurnCostLedger> _log;
 
     public TurnCostLedger(
@@ -42,6 +47,7 @@ public sealed class TurnCostLedger
         SessionHistory history,
         ChatHistoryService chatHistory,
         SessionStore store,
+        LlmProviderRegistry llmProviders,
         ILogger<TurnCostLedger> log)
     {
         _falCost = falCost;
@@ -51,6 +57,7 @@ public sealed class TurnCostLedger
         _history = history;
         _chatHistory = chatHistory;
         _store = store;
+        _llmProviders = llmProviders;
         _log = log;
         // Найденную стоимость fal.ai публикуем в SignalR + историю
         _falCost.OnCostResolved = PublishFalCostAsync;
@@ -60,6 +67,17 @@ public sealed class TurnCostLedger
     // рекордер не держит (оно в UsageService и ClaudeSubscriptionPool), поэтому свой экземляр
     // здесь — не второй счётчик.
     internal SubscriptionLimitRecorder LimitRecorder => _limitRecorder;
+
+    // Запись расхода штатного хода в аналитику (Spend Analytics): сам код — в SpendMapping,
+    // сюда переехал вызов вместе с телом конца хода (S3-6): обе стороны записи (ISpendCollector
+    // и LlmProviderRegistry) уже здесь, а реестр актора — стор (GetTurnActor: актор жив,
+    // пока мы в разборе сообщения, — урок R-S2a-6c).
+    internal void RecordTurnSpend(Session? s, ResultMessage m) =>
+        SpendMapping.RecordTurnSpend(_spend, _llmProviders, _store.ResolveOwnerId, _log, s, m, _store);
+
+    // Запись расхода Higgsfield-генерации по tool_use того же хода.
+    internal void RecordHiggsfieldGeneration(Session s) =>
+        SpendMapping.RecordHiggsfieldGeneration(_spend, _store.ResolveOwnerId, _log, s);
 
     // Ставит результат генерации fal.ai на отслеживание стоимости (опрос billing-events — в фоне).
     internal void TryTrackFalCost(string sessionId, string content)

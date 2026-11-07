@@ -4,6 +4,7 @@ using System.Text.Json;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Llm.Claude;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -362,19 +363,23 @@ public class ClaudeRuntimeSettingsTests : IClassFixture<ClaudeRuntimeSettingsTes
         finally { try { Directory.Delete(temp, true); } catch { } }
     }
 
-    // Н5: data-корень SessionManager берёт резолвным GetFullPath (тот же приём, что Program.cs
-    // и NotesService) — иначе относительный DataPath отдал бы в правило относительный корень,
-    // а «//…» в синтаксисе правил CLI значит абсолютный путь. Идём через реальный DI-граф
-    // класса-фикстуры Hosts (тот же приём, что LlmSubsystemDiCycleTests): относительный
-    // DataPath задан в её конструкторе, каталог создан под cwd процесса — резолвится в него.
+    // Н5: data-корень берётся резолвным GetFullPath (тот же приём, что Program.cs и
+    // NotesService) — иначе относительный DataPath отдал бы в правило относительный корень,
+    // а «//…» в синтаксисе правил CLI значит абсолютный путь. С S3-5 корень контекста
+    // живёт в TurnLaunchContextFactory (её держит TurnProcessHost): читаем его там —
+    // фасад _dataDir не держит. Идём через реальный DI-граф класса-фикстуры Hosts
+    // (тот же приём, что LlmSubsystemDiCycleTests): относительный DataPath задан в её
+    // конструкторе, каталог создан под cwd процесса — резолвится в него.
     [Fact]
     public void ОтносительныйDataPath_ДаётАбсолютныйКореньВDenyПравиле()
     {
-        var sessions = _hosts.Services.GetRequiredService<SessionManager>();
-
-        var dataDir = (string)typeof(SessionManager)
-            .GetField("_dataDir", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .GetValue(sessions)!;
+        var host = _hosts.Services.GetRequiredService<TurnProcessHost>();
+        var factory = typeof(TurnProcessHost)
+            .GetField("_factory", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(host)!;
+        var dataDir = (string)typeof(TurnLaunchContextFactory)
+            .GetProperty("DataDir", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(factory)!;
         Path.IsPathRooted(dataDir).Should().BeTrue(
             "корень deny-правила резолвится из относительного DataPath: GetFullPath");
 

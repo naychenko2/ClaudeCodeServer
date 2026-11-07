@@ -46,6 +46,8 @@ public static class SessionCoreRegistration
             sp.GetRequiredService<ILogger<SessionHistory>>()));
         // ISpendCollector опционален (Spend-подсистема может не быть): та же семантика, что у
         // параметра SessionManager — без него аналитика расхода просто не пишется.
+        // LlmProviderRegistry — с S3-6: запись расхода хода (RecordTurnSpend) переехала в
+        // журнал цен вместе с телом конца хода TurnCompletion.
         services.AddSingleton(sp => new TurnCostLedger(
             sp.GetRequiredService<FalCostService>(),
             sp.GetRequiredService<GlifAccountService>(),
@@ -54,6 +56,7 @@ public static class SessionCoreRegistration
             sp.GetRequiredService<SessionHistory>(),
             sp.GetRequiredService<ChatHistoryService>(),
             sp.GetRequiredService<SessionStore>(),
+            sp.GetRequiredService<LlmProviderRegistry>(),
             sp.GetRequiredService<ILogger<TurnCostLedger>>()));
         services.AddSingleton(sp => new PendingQueueService(
             sp.GetRequiredService<SessionStore>(),
@@ -214,11 +217,25 @@ public static class SessionCoreRegistration
             sp.GetRequiredService<Lazy<ITurnStarter>>(),
             sp.GetServices<ClaudeHomeServer.Services.Turn.IPromptSectionContributor>()));
 
-        // --- Процесс CLI и жизненный цикл чата (S3-5) ---
-        // Шов «сообщения процесса → разбор ленты»: ленивый на синглтон SessionManager —
-        // пока его держит фасад. S3-6 переносит владельца: меняется ровно эта строка и одна
-        // строка запасной сборки в конструкторе SessionManager (GetRequiredService → роль).
-        services.AddSingleton(sp => new Lazy<ITurnMessageSink>(() => sp.GetRequiredService<SessionManager>()));
+        // --- Конец хода (S3-6) ---
+        // Разбор сообщений адаптера: аккумулятор, статусы, гейты прогона, запуск очереди и
+        // цикла, фолбэк хода (ErrorMessage без последующего result → Status=Error). Очередь
+        // рассылки переезжает с тем же ключом сериализации — по id сессии (entry.Pipeline),
+        // а не по экземпляру класса.
+        services.AddSingleton(sp => new TurnCompletion(
+            sp.GetRequiredService<SessionStore>(),
+            sp.GetRequiredService<ChatHistoryService>(),
+            sp.GetRequiredService<CliRoute>(),
+            sp.GetRequiredService<ChatWorktree>(),
+            sp.GetRequiredService<ProviderMigration>(),
+            sp.GetRequiredService<TurnCostLedger>(),
+            sp.GetRequiredService<Lazy<ITurnStarter>>(),
+            sp.GetRequiredService<Lazy<ITeamNotifier>>(),
+            sp.GetRequiredService<ILogger<TurnCompletion>>()));
+        // Шов «сообщения процесса → разбор ленты»: ленивый на TurnCompletion — с S3-6 его
+        // владелец не фасад. Меняется ровно эта строка и одна строка запасной сборки в
+        // конструкторе SessionManager (S3-5 → S3-6).
+        services.AddSingleton(sp => new Lazy<ITurnMessageSink>(() => sp.GetRequiredService<TurnCompletion>()));
         // Хост процесса CLI: старт/переподключение, «Стоп», ответы на карточки, ожидание
         // устройства. Фабрика контекста — internal-тип (её сигнатура держит internal-шов
         // ITurnMessageSink с internal TurnAccumulator), отдельным синглтоном она не становится:

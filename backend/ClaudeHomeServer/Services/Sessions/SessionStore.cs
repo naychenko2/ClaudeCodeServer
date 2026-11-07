@@ -26,7 +26,7 @@ internal readonly record struct SessionLoadResult(
 // Класс public ТОЛЬКО потому, что он параметр публичного конструктора SessionManager (CS0051) и
 // DI нужен публичный конструктор; обход фасада закрывает сторож формы ядра (правило 4:
 // на типы Services.Sessions ссылаются лишь SessionManager, сами Services.Sessions и тесты).
-public sealed class SessionStore : ITeamRunState, Access.ITurnFrameSource
+public sealed class SessionStore : ITeamRunState, Access.ITurnFrameSource, Access.ITurnActorRegistry
 {
     // Реестр сессий: одна точка правды на процесс (синглтон в DI). SessionManager держит ссылку
     // на этот же словарь в своём поле _sessions — тесты читают его рефлексией.
@@ -762,6 +762,11 @@ public sealed class SessionStore : ITeamRunState, Access.ITurnFrameSource
             entry.RunActor = NarrowerActor(prev, effective, tenant);
         }
     }
+
+    // Реестр актора хода (S2a-6b): с S3-6 запись расхода вызывает его через этот шов
+    // (TurnCostLedger.RecordTurnSpend → _store как ITurnActorRegistry) — раньше реестр
+    // передавался как сам SessionManager. Тело то же, что у фасадной реализации.
+    string? Access.ITurnActorRegistry.Actor(string sessionId, string ownerId) => GetTurnActor(sessionId, ownerId);
 
     // Актор хода чата: владение — через GetOwned (как у GetActiveTurnDelegation). null — неизвестен.
     public string? GetTurnActor(string sessionId, string ownerId)

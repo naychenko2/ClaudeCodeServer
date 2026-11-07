@@ -39,14 +39,16 @@ public class LocalLlmClientBoundaryTests
     public LocalLlmClientBoundaryTests(ITestOutputHelper output) => _out = output;
 
     // Легитимные прямые потребители ILocalLlmClient — allow-list точечных имён.
-    // SessionManager держит клиента ради голосового хода (RunLocalVoiceTurnAsync):
-    // это собственный путь мимо CheapTextRunner, у него собственный стриминг и
-    // своя логика прерывания. Никаких других легитимных потребителей быть не
-    // должно: все текстовые места идут через ICheapTextRunner, прогрев — через
+    // Голосовой ход (RunLocalVoiceTurnAsync) с S3-6 живёт в LocalVoiceTurn: это
+    // собственный путь мимо CheapTextRunner, у него собственный стриминг и своя
+    // логика прерывания; фасад держит ссылку на него же (параметр конструктора
+    // LocalVoiceTurn — тот же голосовой ход). Никаких других легитимных потребителей
+    // быть не должно: все текстовые места идут через ICheapTextRunner, прогрев — через
     // IHostedService в подсистеме Llm, настройки читает LocalActionRouter.
     private static readonly string[] AllowedOwners =
     [
         "ClaudeHomeServer.Services.SessionManager",
+        "ClaudeHomeServer.Services.Sessions.LocalVoiceTurn",
     ];
 
     [Fact]

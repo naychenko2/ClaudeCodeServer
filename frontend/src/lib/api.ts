@@ -72,22 +72,8 @@ export function setStoredToken(token: string) {
   writeStoredToken(token);
 }
 
-// Резюме фичи (W5-F2, «Точка 6 · резюме»): результат модельного анализа хронологии.
-// text — markdown с разделами «Сделано», «Где застряло», «Дальше» (или голые пункты
-// без заголовков — пока так просит промпт feature-summary); model=null — локальная
-// модель; cached — результат взят из кэша бэка, без нового прогона. Ошибки: 502 —
-// модель не ответила (причина в error), 503 — подсистема выключена, 404 — фичи нет.
-export interface FeatureSummaryResult {
-  text: string;
-  generatedAt: string;
-  model: string | null;
-  cached: boolean;
-  usage?: unknown;
-  // Число событий хронологии, на которых построено резюме (W4-ANB): для шапки
-  // «по N событиям» (бейдж устаревания — без числа). Бэк отдаёт всегда; optional —
-  // защита от ответов старой версии сервера.
-  eventCount?: number;
-}
+// Резюме фичи (W5-F2): тип живёт в features/tasks/types.ts (домен «Задачи»), здесь — реэкспорт
+export type { FeatureSummaryResult } from '../features/tasks/types';
 
 // Projects
 export const api = {

@@ -1,9 +1,9 @@
 // Методы REST «Задач» и доски агентов (диспетчерская). lib/api.ts подмешивает их
 // в объект api spread'ом (адреса api.tasks.* и api.board.* остаются прежними для
-// потребителей); Task/Board* типы — в types/index.ts, FeatureSummaryResult остаётся
-// в lib/api (type-only импорт, цикла рантайма нет).
+// потребителей); Task/Board* типы — в types/index.ts, FeatureSummaryResult — в
+// ./types (type-only импорт, цикла рантайма нет).
 import { request } from '../../lib/offline';
-import type { FeatureSummaryResult } from '../../lib/api';
+import type { FeatureSummaryResult } from './types';
 import type { BoardItem, CreateTaskDto, Task, UpdateTaskDto } from '../../types';
 import type { FeatureRun } from '../../types/featureRun';
 import type { FeaturesIndex, FeaturePage } from '../../types/featureIndex';

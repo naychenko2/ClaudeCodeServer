@@ -2,6 +2,7 @@ import type { Mode } from '../lib/modes';
 import type { PromptCacheWire } from '../lib/promptCache';
 import type { RecallItem } from '../features/personas/types';
 import type { SessionTeamImplement, TeamEscalation, TeamEscalationAction, TeamEscalationKind, TeamImplementBudget, TeamImplementStage, TeamPlan, TeamWaveLiveness } from '../features/team/types';
+import type { BoardColumn } from '../features/tasks/types';
 export type { Mode };
 
 export interface PermissionRule {
@@ -237,15 +238,6 @@ export interface ProjectIcon {
   glyph?: { name?: string | null } | null;
   // Имя файла загруженной картинки — оно же cache-buster у api.projects.iconImageUrl
   imageFile?: string | null;
-}
-
-// Колонка Kanban-доски проекта. category — семантическая категория статуса
-// (за ней recurrence/календарь/Claude/MCP); несколько колонок могут делить категорию.
-export interface BoardColumn {
-  id: string;
-  name: string;
-  category: TaskStatus;   // 'todo' | 'inProgress' | 'done'
-  color?: string;
 }
 
 // Code Graph — логическая карта типов проекта и рёбер между ними
@@ -2040,3 +2032,5 @@ export type * from '../features/desktop/types';
 export type * from '../features/plan/types';
 
 export type * from '../features/mapHygiene/types';
+
+export type * from '../features/tasks/types';

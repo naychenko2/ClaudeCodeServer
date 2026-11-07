@@ -29,8 +29,10 @@ public class FalCostService : IFalRequestCost
     // Один опрос на request_id: кто первым пришёл — тот его начал, остальные ждут тот же task.
     // Путь чата (Track) и шов (ResolveUsdAsync) делят один сетевой цикл: если чат уже опрашивает
     // этот request_id, потребитель берёт тот же результат, не начиная второй 77-секундный опрос.
-    // На гонке GetOrAdd может вызвать фабрику больше одного раза — дубль опроса идемпотентен
-    // (тот же request_id), лишь тратит лишний запрос; результат всегда из сохранённого task.
+    // В кэше живёт НАЧАТЫЙ или УСПЕШНЫЙ опрос. «Цены нет за окно» — не факт о биллинге: событие
+    // у fal может появиться позже окна (дефект 8f6f9e06), поэтому пустой результат из кэша
+    // убирается и следующий запрос по тому же request_id идёт в сеть заново. Дедуп параллельных
+    // опросов это не трогает: пока task не завершён, запись на месте и все приходят к нему.
     private readonly ConcurrentDictionary<string, Task<FalCostMessage?>> _pollings = new();
 
     // Публикация найденной стоимости (broadcast в SignalR + запись в историю). Ставит SessionManager.
@@ -62,7 +64,8 @@ public class FalCostService : IFalRequestCost
     // Реализация шва IFalRequestCost: фактическая цена по request_id либо null — когда
     // биллинга ещё нет. Без исключений: отсутствие цены — штатный исход, не ошибка.
     // Дедуп _seen здесь не участвует: он про однократную публикацию в чат, а не про вопрос.
-    // Сам опрос общий: повторный запрос той же цены берётся из начатого task, не идя в сеть.
+    // Опрос общий: повторный запрос цены берётся из начатого или уже успешного опроса, не идя
+    // в сеть; после пустого — начинается новый (дефект 8f6f9e06).
     public async Task<double?> ResolveUsdAsync(string requestId, CancellationToken ct)
     {
         if (!Enabled || string.IsNullOrWhiteSpace(requestId)) return null;
@@ -71,13 +74,39 @@ public class FalCostService : IFalRequestCost
     }
 
     // Начать опрос по request_id или вернуть уже начатый — единственная точка входа в цикл.
-    // Помета (отложенный риск из ревью d524e017): ct первого вызывающего решает судьбу общего
-    // опроса — придёт первым с реальным ct и отменится, null останется в кэше за всех.
-    // На всех текущих путях ct = CancellationToken.None (Track, ImageGenerationService,
-    // ImageEditJobService); если на каком-то пути появится реальный ct — общий опрос надо
-    // начинать без него.
-    private Task<FalCostMessage?> GetOrStartPolling(string requestId, CancellationToken ct) =>
-        _pollings.GetOrAdd(requestId, _ => PollForCostAsync(requestId, ct));
+    // GetOrAdd значением, не фабрикой: на гонке лишнего опроса не возникает вовсе — фабрику
+    // вызвал бы каждый проигравший.
+    private Task<FalCostMessage?> GetOrStartPolling(string requestId, CancellationToken ct)
+    {
+        var tcs = new TaskCompletionSource<FalCostMessage?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var own = tcs.Task;
+        var existing = _pollings.GetOrAdd(requestId, own);
+        if (!ReferenceEquals(existing, own)) return existing; // опрос уже начат кем-то — берём его результат
+        _ = FinishPollingAsync(requestId, tcs, ct);
+        return own;
+    }
+
+    // Завершить свой опрос: найденную цену оставить в кэше (повторные запросы берут её, не идя
+    // в сеть), пустой результат — убрать: «за окно не пришли» не решает за будущие запросы,
+    // что цены нет вообще. Свой ct решает судьбу только этого общего опроса — следующим
+    // запросам путь он не перекрывает.
+    private async Task FinishPollingAsync(string requestId, TaskCompletionSource<FalCostMessage?> tcs, CancellationToken ct)
+    {
+        FalCostMessage? cost;
+        try
+        {
+            cost = await PollForCostAsync(requestId, ct);
+        }
+        catch (Exception ex)
+        {
+            // Страховка: цикл опроса глотает свои сбои сам, но незавершённым task оставить
+            // подписчиков нельзя — они ждут результат, а не вечное ожидание.
+            Console.Error.WriteLine($"[FalCost] Опрос billing-events ({requestId}) дал неожиданное исключение: {ex.Message}");
+            cost = null;
+        }
+        if (cost is null) _pollings.TryRemove(requestId, out _);
+        tcs.TrySetResult(cost);
+    }
 
     // Единый цикл опроса billing-events (бэкофф → FetchCostAsync по request_id). Начинает его
     // только GetOrStartPolling — путь чата и потребители шва ждут результат одного task.

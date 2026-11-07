@@ -10,6 +10,10 @@ namespace ClaudeHomeServer.Tests.Services;
 // Контракт шва IFalRequestCost (дефект 22068e9d, шаг S-SPEND-1): ResolveUsdAsync по
 // request_id возвращает фактическую цену (USD) либо null, когда биллинга ещё нет —
 // без исключения: «цены нет» штатный исход, не ошибка.
+// Кэш общего опроса (51a805e56): держится начатый или успешный опрос — параллельные
+// запросы одного request_id делят один сетевой цикл. Пустой результат НЕ кэшируется
+// (дефект 8f6f9e06): «за окно не пришли» не решает за будущие запросы, и поздний биллинг
+// догоняется следующим запросом.
 // Бэкофф цикла сжимается до [0] через internal-init FalCostService при создании:
 // цикл проверяется без реальных 77с ожидания; производственный дефолт [2,5,10,20,40]
 // тестом не меняется и после создания не сдвигается.
@@ -57,6 +61,41 @@ public class FalCostResolveTests
                     {"billing_events":[{"request_id":"req-cache","endpoint_id":"fal-ai/flux/schnell","cost_estimate_nano_usd":123000000}]}
                     """),
             });
+        }
+    }
+
+    // Заглушка «поздний биллинг»: первые misses запросов — 404 (события ещё нет), дальше — цена.
+    private sealed class LateBillingHandler(int misses, string requestId, long nanoUsd) : HttpMessageHandler
+    {
+        private int _calls;
+
+        public int Calls => _calls;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            _calls++;
+            if (_calls <= misses) return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent($$"""
+                    {"billing_events":[{"request_id":"{{requestId}}","endpoint_id":"fal-ai/flux/schnell","cost_estimate_nano_usd":{{nanoUsd}}}]}
+                    """),
+            });
+        }
+    }
+
+    // Заглушка «опрос ещё идёт»: висит на gate до разрешения, затем 404 — цены нет.
+    private sealed class Gated404Handler(TaskCompletionSource<bool> gate) : HttpMessageHandler
+    {
+        private int _calls;
+
+        public int Calls => _calls;
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            _calls++;
+            await gate.Task;
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
         }
     }
 
@@ -191,5 +230,39 @@ public class FalCostResolveTests
         var msg = await published.Task.WaitAsync(TimeSpan.FromSeconds(5));
         msg.CostUsd.Should().Be(0.123, "чат получил ту же цену из общего опроса");
         handler.Calls.Should().Be(1, "опрос чата и потребитель делят один task: второго сетевого цикла нет");
+    }
+
+    [Fact]
+    public async Task ResolveUsdAsync_ПослеИсчерпанногоОкна_ПозднийБиллингДогоняетсяВторымЗапросом()
+    {
+        // Дефект 8f6f9e06: первый опрос исчерпал окно (цена ещё не пришла). Его null не имеет
+        // права решать за все будущие запросы — событие биллинга у fal могло появиться позже окна.
+        var handler = new LateBillingHandler(1, "req-late", 123000000);
+        var svc = MakeService(handler);
+
+        var first = await svc.ResolveUsdAsync("req-late", CancellationToken.None);
+        var second = await svc.ResolveUsdAsync("req-late", CancellationToken.None);
+
+        first.Should().BeNull("окно опроса исчерпано — цены ещё нет");
+        second.Should().Be(0.123, "пустой результат не кэшируется: поздний биллинг догоняется");
+        handler.Calls.Should().Be(2, "второй запрос по тому же request_id пошёл в billing-events заново");
+    }
+
+    [Fact]
+    public async Task ResolveUsdAsync_ПокаОпросИдёт_ВторойЗапросЖдётЕгоАНеНачинаетСвой()
+    {
+        // Дедуп параллельных опросов новый порядок не трогает: пока общий task не завершён,
+        // второй потребитель приходит к нему. Здесь общий опрос кончается null — и он один.
+        var gate = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new Gated404Handler(gate);
+        var svc = MakeService(handler);
+
+        var first = svc.ResolveUsdAsync("req-gate", CancellationToken.None);
+        var second = svc.ResolveUsdAsync("req-gate", CancellationToken.None);
+        gate.TrySetResult(true);
+
+        (await first).Should().BeNull();
+        (await second).Should().BeNull();
+        handler.Calls.Should().Be(1, "оба запроса ждали одного сетевого цикла, а не начали по своему");
     }
 }

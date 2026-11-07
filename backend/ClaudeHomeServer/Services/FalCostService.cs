@@ -79,14 +79,14 @@ public class FalCostService : IFalRequestCost
     {
         // Окно времени запроса: без start API отдаёт только последние 24 ч (доки fal: start по
         // умолчанию = −24ч) — генерации старше суток не находились никогда (дефект S-SPEND-4).
-        var startParam = BuildStartParam(ResolveGenerationMs(finishedAtMs, requestId));
+        var (startParam, endParam) = BuildWindowParams(ResolveGenerationMs(finishedAtMs, requestId));
         for (var attempt = 0; attempt < BackoffSeconds.Length; attempt++)
         {
             FalCostMessage? cost;
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(BackoffSeconds[attempt]), ct);
-                cost = await FetchCostAsync(requestId, startParam, ct);
+                cost = await FetchCostAsync(requestId, startParam, endParam, ct);
             }
             // Отмена вызывающего и таймаут транспорта — разные исходы (тот же приём, что в
             // McpProbeService/McpOAuthService): таймаут HttpClient бросает TaskCanceledException
@@ -152,14 +152,30 @@ public class FalCostService : IFalRequestCost
         return ms >= minMs && ms <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 86_400_000 ? ms : null;
     }
 
-    // start окна запроса: время генерации − запас, ISO 8601 UTC (format доков fal).
-    // end не передаём: дефолт API — его «сейчас», по часам fal (наш ход часов не сужает окно).
-    private static string? BuildStartParam(long? generationMs) => generationMs is null
-        ? null
-        : Uri.EscapeDataString(DateTimeOffset.FromUnixTimeMilliseconds(generationMs.Value - StartMarginMs)
-            .ToString("yyyy-MM-ddTHH:mm:ss'Z'", CultureInfo.InvariantCulture));
+    // Верх границы окна: 89 дней — под лимитом fal (90 дней на запрос) с запасом на ход часов.
+    private const long MaxWindowMs = 89L * 86_400_000;
 
-    private async Task<FalCostMessage?> FetchCostAsync(string requestId, string? startParam, CancellationToken ct)
+    // Окно запроса: start = время генерации − запас; end — ЯВНЫЙ (вердикт ревью R-S-SPEND-4):
+    // без end дефолт API — его «сейчас», и для генерации старше ~90 дней диапазон
+    // [ген − 1ч, сейчас) превышает лимит fal: запрос отвергается валидацией, каждая попытка
+    // цикла повторяет тот же отвергнутый запрос — цена старых генераций не находится никогда.
+    // end = min(сейчас, start + 89 дней): для свежей генерации окно то же, что был дефолт;
+    // для старой — срезается до 89 дней и всё равно содержит событие (его timestamp —
+    // момент запроса, начало окна). Инвариант: для генерации старше 24 ч запрос к fal
+    // содержит событие биллинга этой генерации. Нет времени генерации — окна нет (прежнее
+    // поведение: дефолт API −24ч достаточен для свежей генерации).
+    private static (string? Start, string? End) BuildWindowParams(long? generationMs)
+    {
+        if (generationMs is null) return (null, null);
+        var startMs = generationMs.Value - StartMarginMs;
+        var endMs = Math.Min(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), startMs + MaxWindowMs);
+        return (FormatUtc(startMs), FormatUtc(endMs));
+    }
+
+    private static string FormatUtc(long unixMs) => Uri.EscapeDataString(
+        DateTimeOffset.FromUnixTimeMilliseconds(unixMs).ToString("yyyy-MM-ddTHH:mm:ss'Z'", CultureInfo.InvariantCulture));
+
+    private async Task<FalCostMessage?> FetchCostAsync(string requestId, string? startParam, string? endParam, CancellationToken ct)
     {
         // Троттлинг (MinRequestIntervalMs): однослотовый гейт + минимальный интервал между
         // стартами запросов. Очередь живёт под ct: отмена вызывающего в очереди — штатный выход.
@@ -173,7 +189,8 @@ public class FalCostService : IFalRequestCost
 
             var client = _httpFactory.CreateClient("fal");
             var url = $"{_billingEventsUrl}?request_id={Uri.EscapeDataString(requestId)}"
-                + (startParam is null ? "" : $"&start={startParam}");
+                + (startParam is null ? "" : $"&start={startParam}")
+                + (endParam is null ? "" : $"&end={endParam}");
             using var req = new HttpRequestMessage(HttpMethod.Get, url);
             req.Headers.Authorization = new AuthenticationHeaderValue("Key", _apiKey);
 

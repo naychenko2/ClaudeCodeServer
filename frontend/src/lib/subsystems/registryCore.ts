@@ -284,12 +284,10 @@ export interface WorkspacePanelDefApi {
 // неизвестный ключ пропускается. tab — вкладка, которую панель покажет сама: хост её
 // не разбирает, панель слушает то же событие. sessionId — чат, ради которого просят показ
 // (автооткрытие по выбору картинки): телефонная шторка ждёт полосу именно этого чата.
-// follow — панель следует за выбором человека (клик по карточке): открытая панель
-// генерации уступает место запрошенной в том же виде, peek — шторка была опущена.
-// target — ключ выбранного элемента.
+// peek — шторка была опущена. target — ключ выбранного элемента.
 export const REVEAL_PANEL_EVENT = 'cc-reveal-panel';
 export interface RevealPanelDetail {
-  key: string; tab?: string; sessionId?: string; target?: string; follow?: boolean; peek?: boolean;
+  key: string; tab?: string; sessionId?: string; target?: string; peek?: boolean;
 }
 // ifOpen — показать, только если панель генерации уже открыта: закрытую выбор не открывает
 export interface RevealPanelOptions {
@@ -308,7 +306,6 @@ export function revealWorkspacePanel(requested: string, tab?: string, opts: Reve
   if (opts.ifOpen) {
     const open = openGenPanel();
     if (!open) return false;
-    detail.follow = true;
     if (open.view === 'peek') detail.peek = true;
   }
   noteReveal(key, !!detail.peek);

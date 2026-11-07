@@ -27,8 +27,7 @@ import { useVideoCenter, useVideoCenterSplit, useVideoPlaying, VIDEO_PANEL_EVENT
 import { useCenterSplit } from '../hooks/useCenterSplit';
 import { IslandSplitter } from '../components/ui/IslandSplitter';
 import { useSessionPanels } from './workspace/useSessionPanels';
-import { chatPanels, openKeysOf } from './workspace/panelStackState';
-import { followHost } from '../lib/genPanelFollow';
+import { chatPanels } from './workspace/panelStackState';
 import { CHAT_KEYS, CHAT_RIGHT_KEYS, chatPanelDefAllowed, keyAllowed, type PanelKey } from './workspace/panelCatalog';
 import { ContextPanelHost } from '../components/generation/ContextPanelHost';
 import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot } from '../lib/subsystems/registry';
@@ -331,9 +330,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // При выходе/unmount флаг снимается — на мобильной ветке compact передаётся
   // безусловно, и isTablet там всегда false, так что эксклюзив десктопной веткой
   // не поднимается впустую.
-  const { setExclusive, markActive, closeCompactStack, reveal, close: closePanelKey, replaceWith, zones: chatZones } = chatPanels.use();
-  const chatOpenKeys = useRef<string[]>([]);
-  chatOpenKeys.current = openKeysOf(chatZones);
+  const { setExclusive, markActive, closeCompactStack, reveal, close: closePanelKey } = chatPanels.use();
   // Панели подсистем в правой зоне личного чата (слот workspace-panel-def): проекта
   // здесь нет, поэтому projectId = null — проектные вклады («Персонажи») отказываются
   // сами. «Локальные модели» — сервер, а не проект: ключ живёт в chatRight, но в
@@ -367,14 +364,11 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
       const key = d?.key as PanelKey | undefined;
       if (!key || !keyAllowed(key, chatRight)) return;
       if (isGenPanelKey(key)) setGenZoneFor(activeId);
-      // Клик по карточке (follow) встаёт на место открытой соперницы — вид панели не меняется
-      const host = d?.follow ? followHost(chatOpenKeys.current, key) : null;
-      if (host && keyAllowed(host as PanelKey, chatRight)) replaceWith(key, host as PanelKey);
-      else reveal(key);
+      reveal(key);
     };
     window.addEventListener(REVEAL_PANEL_EVENT, onReveal);
     return () => window.removeEventListener(REVEAL_PANEL_EVENT, onReveal);
-  }, [reveal, replaceWith, activeId, chatRight]);
+  }, [reveal, activeId, chatRight]);
 
   useEffect(() => {
     setExclusive(isTablet);

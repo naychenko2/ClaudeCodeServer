@@ -83,8 +83,7 @@ import { useProjectServices } from '../hooks/useProjectServices';
 import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
 import { DocsPanel } from './workspace/DocsPanel';
 import { DossierHistoryPanel } from './workspace/DossierHistoryPanel';
-import { openKeysOf, wsPanels } from './workspace/panelStackState';
-import { followHost } from '../lib/genPanelFollow';
+import { wsPanels } from './workspace/panelStackState';
 import { CodeGraphPanel } from '../features/codegraph/CodeGraphPanel';
 import { SkillsPanel } from '../components/SkillsPanel';
 import { CodeGraphDocument } from '../features/codegraph/CodeGraphDocument';
@@ -566,12 +565,9 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // «История решений»: реветь панель по клику на файл в файловом менеджере — той
   // же точкой входа, что «Открыть изменения» у ProjectGitBar и тумблер «Оглавление»
   // у FileViewer (правим раскладку напрямую через стор зон)
-  const { reveal: revealPanelKey, close: closePanelKey, replaceWith: replacePanelKey, zones: wsZones } = wsPanels.use();
-  const wsOpenKeys = useRef<string[]>([]);
-  wsOpenKeys.current = openKeysOf(wsZones);
+  const { reveal: revealPanelKey, close: closePanelKey } = wsPanels.use();
   // Показ панели по просьбе подсистемы (пунктирный чип «Персонаж» в полосе «Картинки»,
   // автооткрытие панели генерации). Вкладку detail.tab панель разбирает сама.
-  // Клик по карточке (follow) встаёт на место открытой соперницы — вид панели не меняется
   useEffect(() => {
     const onReveal = (e: Event) => {
       const d = (e as CustomEvent<Partial<RevealPanelDetail>>).detail;
@@ -580,13 +576,11 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
       // обработчик не строит своих копий набора на каждый событие и не может
       // разойтись с тем, что рельса показывает в этот же момент (R-S2b-2c, п. 3).
       if (!key || !keyAllowed(key, wsAllowedKeys)) return;
-      const host = d?.follow ? followHost(wsOpenKeys.current, key) : null;
-      if (host && keyAllowed(host as PanelKey, wsAllowedKeys)) replacePanelKey(key, host as PanelKey);
-      else revealPanelKey(key);
+      revealPanelKey(key);
     };
     window.addEventListener(REVEAL_PANEL_EVENT, onReveal);
     return () => window.removeEventListener(REVEAL_PANEL_EVENT, onReveal);
-  }, [revealPanelKey, replacePanelKey, wsAllowedKeys]);
+  }, [revealPanelKey, wsAllowedKeys]);
   // Режим просмотра файла — из ГЛОБАЛЬНОГО предпочтения (одно на все проекты), а не
   // из per-project стора: тумблер в шапке файла пишет предпочтение, точки открытия
   // его читают. См. loadFileFullscreenPref в lib/workspaceState.

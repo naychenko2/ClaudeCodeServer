@@ -9,7 +9,7 @@ vi.stubGlobal('window', { dispatchEvent: (e: Event) => { dispatched.push({ type:
 const { REVEAL_PANEL_EVENT } = await import('./subsystems/registryCore');
 const { __resetGenPanelOpen, followPeeked, holdGenPanelOpen, openGenPanel } = await import('./genPanelOpen');
 const {
-  followHost, followSelection, isCardPick,
+  followSelection, isCardPick,
 } = await import('./genPanelFollow');
 
 const reveals = () => dispatched.filter(d => d.type === REVEAL_PANEL_EVENT).map(d => d.detail);
@@ -28,7 +28,7 @@ describe('правило 1: клик по карточке', () => {
   it('открытая колонка получает повторный показ с target — выбранным элементом', () => {
     const off = holdGenPanelOpen('chatContext', 'column');
     expect(followSelection('chatContext', 's1', 'image:t1')).toBe(true);
-    expect(reveals()).toEqual([{ key: 'chatContext', tab: 'settings', sessionId: 's1', target: 'image:t1', follow: true }]);
+    expect(reveals()).toEqual([{ key: 'chatContext', tab: 'settings', sessionId: 's1', target: 'image:t1' }]);
     off();
     expect(openGenPanel()).toBeNull();
   });
@@ -36,7 +36,7 @@ describe('правило 1: клик по карточке', () => {
   it('опущенная шторка не поднимается: новая шторка рождается опущенной', () => {
     holdGenPanelOpen('chatContext', 'peek');
     followSelection('chatContext', 's1', 'sound:t1');
-    expect(reveals()).toEqual([expect.objectContaining({ key: 'chatContext', follow: true, peek: true })]);
+    expect(reveals()).toEqual([expect.objectContaining({ key: 'chatContext', peek: true })]);
     expect(followPeeked('chatContext')).toBe(true);
     expect(followPeeked('files')).toBe(false);
   });
@@ -52,12 +52,6 @@ describe('правило 1: клик по карточке', () => {
     holdGenPanelOpen('voices', 'column');
     offOld();
     expect(openGenPanel()).toEqual({ key: 'voices', view: 'column' });
-  });
-
-  it('панель генерации одна — заменять некого; «Файлы» и уже открытая не трогаются', () => {
-    expect(followHost(['files', 'chatContext'], 'chatContext')).toBeNull();
-    expect(followHost(['files'], 'chatContext')).toBeNull();
-    expect(followHost(['chatContext'], 'files')).toBeNull();
   });
 
   it('клик по кнопке карточки — не выбор, по самой карточке — выбор', () => {

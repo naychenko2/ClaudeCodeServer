@@ -137,7 +137,7 @@ describe('клик по карточке: панель следует за вы�
     vi.spyOn(videoApi, 'focus').mockResolvedValue(threads(2, [scene('s1'), scene('s2')], { sceneId: 's2' }));
     holdGenPanelOpen(VIDEO_PANEL, 'column');
     await selectSceneByHuman('p1', 'c1', 's2');
-    expect(reveals()).toEqual([{ key: 'chatContext', tab: 'scene', sessionId: 'c1', target: sceneDraftKey('s2'), follow: true }]);
+    expect(reveals()).toEqual([{ key: 'chatContext', tab: 'scene', sessionId: 'c1', target: sceneDraftKey('s2') }]);
   });
 
   it('закрытая панель не открывается — выбор просто запомнен', async () => {
@@ -153,7 +153,7 @@ describe('клик по карточке: панель следует за вы�
     vi.spyOn(videoApi, 'focus').mockResolvedValue(threads(2, [scene('s1')], { filmPath: FILM_PATH }));
     holdGenPanelOpen('images', 'column');
     await selectFilmByHuman('p1', 'c1', FILM_PATH);
-    expect(reveals()).toEqual([{ key: 'chatContext', tab: 'film', sessionId: 'c1', target: FILM_PATH, follow: true }]);
+    expect(reveals()).toEqual([{ key: 'chatContext', tab: 'film', sessionId: 'c1', target: FILM_PATH }]);
   });
 });
 

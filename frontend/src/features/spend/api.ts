@@ -1,5 +1,5 @@
 import { request } from '../../lib/offline';
-import type { ModelUnavailableMark, SpendBadgeResponse, SpendOverviewResponse, SpendPivotResponse, SpendTaskPromptResponse, SpendTurnDetailResponse, SpendTurnsResponse, SpendWidgetResponse, UsageResponse } from '../../types';
+import type { ModelUnavailableMark, SpendBadgeResponse, SpendOverviewResponse, SpendPivotResponse, SpendTaskPromptResponse, SpendTurnDetailResponse, SpendTurnsResponse, SpendWidgetResponse, UsageResponse } from './types';
 
 // Методы REST расхода токенов и лимитов подписок; lib/api.ts подмешивает их в объект api
 // spread'ом (адреса api.usage / api.spend остаются прежними).

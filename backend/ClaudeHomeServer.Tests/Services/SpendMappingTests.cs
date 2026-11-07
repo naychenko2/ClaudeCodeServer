@@ -161,3 +161,72 @@ public class SpendMappingTests
         SpendCostTiers.Of(r.Source, r.Provider, r.Model).Should().Be(SpendCostTiers.Expensive);
     }
 }
+
+// S-SPEND-3 (дефект f7e8c46d): выдержка request_id из tool_result внешнего MCP mcp.fal.ai.
+// Когда результат содержит блок изображения, Claude CLI заменяет его маркером
+// "[Image: source: …webp]" — контент перестаёт быть одним JSON-объектом, и прежний разбор
+// (JsonDocument целиком) молча давал null: такие вызовы не учитывались вовсе (эмпирика
+// 29.09–01.11: 4 запроса с маркером пропущены, fal_cost только у чистых JSON).
+public class SpendMappingFalRequestIdTests
+{
+    private const string Rid = "01a19694-7252-73d0-ac86-2fc2bfe3f09d";
+
+    // run_model без блока картинки: чистый JSON (этот путь учитывался и раньше).
+    private static string CleanJson() =>
+        $$"""
+        {"request_id":"{{Rid}}","status":"COMPLETED","response_url":"https://queue.fal.run/fal-ai/flux/requests/{{Rid}}","images":[{"url":"https://fal.media/files/puma/x1.webp","mime_type":"image/webp"}]}
+        """;
+
+    // Тот же вызов с картинкой, образец формы из наблюдения разведки: JSON плюс маркер
+    // строкой ниже.
+    private static string MarkerAfterJson() =>
+        $$"""
+        {"request_id":"{{Rid}}","status":"COMPLETED","images":[{"url":"https://fal.media/files/puma/x1.webp","mime_type":"image/webp"}]}
+        [Image: source: /tmp/claude-1000/mcp-images/8f2c1a.webp]
+        """;
+
+    // Маркер встал внутрь объекта (на место значения) — JSON рвётся в середине; fal-домен
+    // остаётся в самом маркере (наблюдение разведки: source у маркера — URL .webp).
+    private static string MarkerInsideJson() =>
+        $$"""
+        {"request_id":"{{Rid}}","status":"COMPLETED","images":[[Image: source: https://fal.media/files/puma/x1.webp]]}
+        """;
+
+    // Контент с маркером — прежний пропуск, теперь тот же id, что у чистого JSON.
+    [Theory]
+    [InlineData(false)] // маркер строкой после JSON
+    [InlineData(true)]  // маркер внутри JSON
+    public void TryExtractFalRequestId_КонтентСМаркеромИзображения_ДаётId(bool markerInside)
+    {
+        var content = markerInside ? MarkerInsideJson() : MarkerAfterJson();
+        SpendMapping.TryExtractFalRequestId(content).Should().Be(Rid);
+    }
+
+    // Обратная совместимость: чистый JSON разбирается как раньше — тем же id.
+    [Fact]
+    public void TryExtractFalRequestId_ЧистыйJSON_ТотЖеId() =>
+        SpendMapping.TryExtractFalRequestId(CleanJson()).Should().Be(Rid);
+
+    // Цельный JSON-объект без top-level request_id — поведение прежнее: null (вложенный id
+    // цельного объекта не выдерживаем, правка касалась только нецельного контента).
+    [Fact]
+    public void TryExtractFalRequestId_ЦельныйJSONБезTopLevelRequestId_Null() =>
+        SpendMapping.TryExtractFalRequestId(
+            $$"""{"data":{"request_id":"{{Rid}}"},"status_url":"https://queue.fal.run/fal-ai/flux/requests/{{Rid}}"}""").Should().BeNull();
+
+    // Guard по fal-домену остался: чужой результат со своим request_id (без fal-домена) — null.
+    [Theory]
+    [InlineData("""{"request_id":"deadbeef-0000-0000-0000-000000000000","image_url":"https://cdn.example.com/x.webp"}""")]
+    [InlineData("request_id: deadbeef-0000-0000-0000-000000000000\nresult: https://cdn.example.com/x.webp")]
+    public void TryExtractFalRequestId_БезFalДомена_Null(string content) =>
+        SpendMapping.TryExtractFalRequestId(content).Should().BeNull();
+
+    // Fal-домен есть, request_id нет (или не строка) — тихо null, без исключения.
+    [Theory]
+    [InlineData("""{"status":"COMPLETED","response_url":"https://queue.fal.run/fal-ai/flux/requests/unknown"}""")]
+    [InlineData("""{"request_id":null,"image_url":"https://fal.media/files/puma/x1.webp"}""")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void TryExtractFalRequestId_FalДоменБезId_ИлиПусто_Null(string? content) =>
+        SpendMapping.TryExtractFalRequestId(content!).Should().BeNull();
+}

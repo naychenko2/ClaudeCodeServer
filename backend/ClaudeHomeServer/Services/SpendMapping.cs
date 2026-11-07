@@ -1,5 +1,6 @@
 using System.Threading;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
@@ -22,10 +23,23 @@ internal static class SpendMapping
     private static int _falSpendWarned;
     private static int _glifSpendWarned;
 
+    // request_id внутри текста: для результата, который перестал быть одним JSON. По наблюдению
+    // разведки (f7e8c46d), tool_result внешнего MCP mcp.fal.ai с блоком картинки Claude CLI
+    // отдаёт с маркером "[Image: source: …webp]" вместо этого блока — после этого JSON целиком
+    // не парсится, и такие вызовы не учитывались вовсе (эмпирика 29.09–01.11: 4 пропущенных).
+    // Символы id ограничены [A-Za-z0-9_-] и длиной 64 — чтобы не выхватить длинное поле чужого
+    // формата; форма id'а fal (UUID) в этот набор входит.
+    private static readonly Regex FalRequestIdInText = new(
+        @"""request_id""\s*:\s*""([0-9A-Za-z_-]{1,64})""",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
     // Извлекает request_id из результата вызова, если это генерация fal.ai. Признак fal —
-    // наличие request_id И fal-домена где-либо в ответе. Покрывает обе формы результата:
+    // наличие fal-домена где-либо в ответе. Покрывает обе формы результата:
     //  • run_model/submit_job: fal.run в *_url (status_url/response_url/cancel_url);
     //  • get_job_result (видео/аудио): *_url нет, но fal.media в URL медиа.
+    // Форма контента — любая: цельный JSON-объект (старый путь, top-level request_id) или
+    // текст, где JSON испорчен маркером изображения (поиск первого request_id). Ничего не
+    // найдено — null тихо, без исключения: это не fal-результат.
     public static string? TryExtractFalRequestId(string content)
     {
         if (string.IsNullOrEmpty(content)) return null;
@@ -34,12 +48,18 @@ internal static class SpendMapping
         {
             using var doc = JsonDocument.Parse(content);
             var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return null;
-            if (root.TryGetProperty("request_id", out var rid) && rid.ValueKind == JsonValueKind.String)
-                return rid.GetString();
-            return null;
+            // Цельный JSON-объект — поведение прежнее: только top-level request_id (обратная
+            // совместимость; вложенный id в цельном JSON не выдерживаем, как и раньше).
+            if (root.ValueKind == JsonValueKind.Object)
+                return root.TryGetProperty("request_id", out var rid) && rid.ValueKind == JsonValueKind.String
+                    ? rid.GetString()
+                    : null;
         }
-        catch { return null; } // не JSON / не наш формат — это не fal-результат
+        catch { /* не JSON целиком — tool_result с маркером [Image: …], читаем по тексту ниже */ }
+        // Нецельный контент: первое вхождение request_id в тексте (маркер — блок картинки этого
+        // же вызова, отдельного запроса в тексте нет).
+        var match = FalRequestIdInText.Match(content);
+        return match.Success ? match.Groups[1].Value : null;
     }
 
     // Запись расхода штатного хода в аналитику (Spend Analytics): разрезы — из фактического

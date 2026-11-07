@@ -692,9 +692,11 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // опциональные параметры, что были у фасада), резолв владельца — через стор, синтез
         // ответа — через конец хода. Без router/ollama ShouldRunLocalVoice даёт false —
         // разговор идёт через CLI, как раньше. С S3-7 экземляр общий с ядром приёма: в DI —
-        // тот же синглтон AddSessionCore, без DI — одна сборка здесь, отдаётся ядру; два
-        // экземпляра дали бы два состояния голосовой ветки.
-        _voice = services?.GetRequiredService<Sessions.LocalVoiceTurn>()
+        // тот же синглтон AddSessionCore, в частичном контейтере (тесты с services без
+        // AddSessionCore) и без DI — одна сборка здесь, отдаётся ядру ниже; два экземпляра
+        // дали бы два состояния голосовой ветки. GetService, не GetRequiredService:
+        // частичный контейнер не обязан держать эту роль (тот же приём, что у ReviewTreePool).
+        _voice = services?.GetService<Sessions.LocalVoiceTurn>()
             ?? new Sessions.LocalVoiceTurn(_router, _ollama, _personas, _store, _completion);
 
         // Контекст запуска (S3-4): адрес и токен MCP, встроенные продуктовые серверы, слой

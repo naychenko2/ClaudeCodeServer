@@ -1599,6 +1599,21 @@ async function evictChatClassOnce(owner: string, known?: { key: string; savedAt:
 // и это верно: версии, по которой можно сохранить по If-Match, без сервера нет.
 export interface EtagRef { etag?: string }
 
+// Конфликт сохранения файла (S2c-F2a, К8): 409 с телом {code:'file_changed', …} на
+// PUT files/content с If-Match. Поля — тело 409 как есть: актуальное состояние файла на
+// момент отказа. author и source бэк заполняет с S3-3/S2d-4, сейчас всегда null.
+export interface FileConflictAuthor { userId?: string; displayName?: string }
+// Форма ChatRef (К5) во фронте; в коде бэка её ещё нет (S2d-4), сейчас сервер шлёт null.
+export interface FileConflictSource { chatTitle?: string; private?: boolean }
+
+// Тело 409 конфликта сохранения (К8): актуальное состояние на момент отказа
+export interface ConflictBody { sha256?: string | null; content?: string | null; author?: FileConflictAuthor | null; changedAt?: string | null; source?: FileConflictSource | null }
+// Тело конфликта, если ошибка — 409 с этим code; иначе null (вызывающий пробрасывает ошибку дальше)
+export function conflictBodyOf(e: unknown, code: string): ConflictBody | null {
+  const err = e as { status?: number; body?: ConflictBody & { code?: string } } | null;
+  return err?.status === 409 && err.body?.code === code ? err.body : null;
+}
+
 // onBytes — необязательный колбэк веса ответа. Мера одна на обеих ветках: онлайн —
 // длина текста ответа (то же число, что пишется в bytes пассивной записи), офлайн-фолбэк —
 // bytes сохранённой записи (запись без этого поля — без веса, колбэк не зовётся).

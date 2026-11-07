@@ -2,12 +2,10 @@
 // настроек и слотов моделей. lib/api.ts подмешивает это в объект api spread'ом
 // (адреса api.auth.* / api.push.* / api.users.* / api.settings.* / api.meModelTiers.* /
 // api.adminUserModelTiers.* остаются прежними для всех потребителей).
-// Типы ответов Me/UserProfile/AppSettings — DTO бэкенда, живут в ../../types;
-// ModelTiers — в ./types.ts.
+// Типы ответов Me/UserProfile/AppSettings и ModelTiers — в ./types.ts.
 
 import { request } from '../../lib/offline';
-import type { Me, UserProfile, AppSettings } from '../../types';
-import type { ModelTiers } from './types';
+import type { Me, UserProfile, AppSettings, ModelTiers } from './types';
 
 export const accountApi = {
   auth: {

@@ -276,7 +276,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     ///
     /// Два исключения, оба объявлены в коде: строки ядра (<see cref="SubsystemStateStore.IsCoreKey"/>;
     /// <see cref="SubsystemStateStore.ActiveKeys"/> не отдаёт их фронту — ядро на фронте не гейтится,
-    /// IAppSubsystem.cs:157-158) и тестовые заглушки из точного списка <see cref="TestStubKeys"/>
+    /// отсечка — фильтр `!IsCoreKey` в теле ActiveKeys, IAppSubsystem.cs) и тестовые заглушки из точного списка <see cref="TestStubKeys"/>
     /// (<c>__stub</c> — PoC-модуль appsettings.Testing.json для StubModuleEndpointTests, не подсистема
     /// пользователя). Список, а не префикс <c>__</c> (п. 2 хвоста R-S2b-2a): пользовательская вертикаль
     /// с <c>__</c>-префиксом не должна молча выпасть из проверки. Новая строка ядра или новый

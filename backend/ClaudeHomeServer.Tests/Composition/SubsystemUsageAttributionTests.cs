@@ -441,4 +441,102 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
         public Task<McpToolCallResult> CallAsync(string tool, JsonObject arguments, McpToolCallContext context,
             CancellationToken ct) => Task.FromResult(new McpToolCallResult(""));
     }
+
+    // ─── Хвост R-S1b (m1): 403/404 от живого контроллера — состоявшееся обращение ───
+
+    // Контроллер, который отвечает 404/403 по своему делу («заметка не найдена»). Живёт в
+    // тест-сборке, а она для этой атрибуции — домашняя сборка вертикали «notes»
+    // (NotesStubSubsystem выше), поэтому эндпоинт с таким действием относится к «notes».
+    private sealed class NotesLikeController
+    {
+        public Task Get() => Task.CompletedTask;
+    }
+
+    private static SubsystemUsageMiddleware MiddlewareWithStatus(
+        SubsystemUsageAttribution attribution, SubsystemUsageStore store, int status) =>
+        new(ctx => { ctx.Response.StatusCode = status; return Task.CompletedTask; },
+            attribution, store, NullLogger<SubsystemUsageMiddleware>.Instance);
+
+    // Граница мидлвара по признаку ctx.GetEndpoint(): 404 и 403 смонтированного эндпоинта —
+    // ответ самого обработчика вертикали, они считаются; 404 без эндпоинта (маршрут снят
+    // гейтом подсистемы) — обращения не было. 401 — отказ аутентификации ДО обработчика:
+    // в боевой сборке UseRouting стоит раньше UseAuthentication (Program.cs:1036, 1073),
+    // поэтому эндпоинт при 401 смонтирован всегда и он ничего не значит — не считается.
+    [Fact]
+    public async Task ОтказСЭндпоинтомСчитается_БезЭндпоинтаИ401Никогда()
+    {
+        var state = new SubsystemStateStore();
+        state.RecordActive(new NotesStubSubsystem());
+        var attribution = new SubsystemUsageAttribution(state, []);
+        var store = new SubsystemUsageStore(attribution.ObservableKeys);
+        var now = DateTimeOffset.UtcNow;
+
+        var cases = new (int Status, bool HasEndpoint, int Expect)[]
+        {
+            (StatusCodes.Status404NotFound, true, 1), // «заметка не найдена» живым контроллером
+            (StatusCodes.Status403Forbidden, true, 2), // «доступа нет» живым контроллером
+            (StatusCodes.Status404NotFound, false, 2), // маршрут снят гейтом: эндпоинта нет
+            (StatusCodes.Status401Unauthorized, true, 2), // отказ аутентификации до обработчика
+        };
+
+        foreach (var (status, hasEndpoint, expect) in cases)
+        {
+            var ctx = new DefaultHttpContext();
+            ctx.Request.Path = "/api/notes/" + Guid.NewGuid().ToString("N");
+            if (hasEndpoint)
+                ctx.Features.Set<IEndpointFeature>(new TestEndpointFeature
+                {
+                    Endpoint = new Endpoint(null, new EndpointMetadataCollection(
+                        DescriptorOf(typeof(NotesLikeController), nameof(NotesLikeController.Get))), "test"),
+                });
+
+            await MiddlewareWithStatus(attribution, store, status).InvokeAsync(ctx);
+
+            store.Snapshot(now).Sum(e => e.Last24h).Should().Be(expect,
+                $"статус {status}, эндпоинт {(hasEndpoint ? "смонтирован" : "снят гейтом")}");
+        }
+    }
+
+    // Тот же признак на живом хосте: 404 от самого контроллера вертикали («нет такой заметки»)
+    // — состоявшееся обращение; раньше оно не попадало в счёт нигде, т.е. счёт занижался ровно
+    // на самых частых запросах (m1).
+    [Fact]
+    public async Task КонтроллерВертикалиОтветил404_СчитаетсяОбращением()
+    {
+        using var client = _factory.CreateAuthenticatedClient();
+        var before = HitsOf(StoreOf(_factory), "notes");
+
+        var resp = await client.GetAsync("/api/notes/resolve?name=" + Guid.NewGuid().ToString("N"));
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+        HitsOf(StoreOf(_factory), "notes").Should().Be(before + 1);
+    }
+
+    // ─── Хвост R-S1b (m4): порядок «Load до первого Hit по ключу» ───
+
+    // Первый после рестарта запрос обязан идти к самой вертикале, а не к админской ручке ядра:
+    // тогда первый Hit по ключу случается ПОСЛЕ загрузки её состояния с диска и накопляется
+    // на него. Мутация «убрать store.Load из SubsystemUsageFlushService.StartAsync» краснит
+    // ровно этот тест: без Load счёт начался бы с 1 вместо 3.
+    [Fact]
+    public async Task Рестарт_ПервыйHitПоКлючуИдётПоверхПрочитанногоСДиска()
+    {
+        using var a = Hosts.Fresh();
+        using var clientA = a.CreateAuthenticatedClient();
+
+        for (var i = 0; i < 2; i++)
+            (await clientA.GetAsync("/api/notes")).StatusCode.Should().Be(HttpStatusCode.OK);
+        HitsOf(StoreOf(a), "notes").Should().Be(2);
+
+        var flush = a.Services.GetServices<IHostedService>().OfType<SubsystemUsageFlushService>().Single();
+        await flush.StopAsync(CancellationToken.None);
+        File.Exists(Path.Combine(a.TempDir, SubsystemUsageFlushService.FileName)).Should().BeTrue();
+
+        using var b = a.RestartOnSameData();
+        using var clientB = b.CreateAuthenticatedClient();
+
+        (await clientB.GetAsync("/api/notes")).StatusCode.Should().Be(HttpStatusCode.OK);
+        HitsOf(StoreOf(b), "notes").Should().Be(3,
+            "первый Hit по ключу обязан идти поверх состояния, прочитанного с диска на старте");
+    }
 }

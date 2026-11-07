@@ -19,15 +19,19 @@ public sealed class SubsystemUsageAttribute(string key) : Attribute
 
 // Атрибуция обращений: тип обработчика (контроллер или тулсет) → ключ подсистемы.
 // Сначала явный [SubsystemUsage]; иначе — карта «сборка → ключ» для обработчиков, лежащих
-// в сборке самой вертикали (там самый длинный префикс namespace). Сборки Main и Core
-// ядром не считаются: без атрибута обращение неатрибутируемо.
+// в сборке самой вертикали: она однозначна ровно тогда, когда подсистема в ней одна
+// (по факту — одна подсистема на сборку). По namespace относить нельзя: namespace подсистемы
+// ClaudeHomeServer.Services.X не является префиксом namespace её контроллера
+// ClaudeHomeServer.X.Controllers — несколько подсистем в одной сборке атрибутуются только
+// явно (R-S1b, m2). Сборки Main и Core ядром не считаются: без атрибута обращение
+// неатрибутируемо.
 // Ключи атрибутов не из числа активных подсистем (выключена или не загружена) игнорируются.
 public sealed class SubsystemUsageAttribution
 {
     private static readonly Assembly[] CoreAssemblies =
         [typeof(SubsystemUsageAttribution).Assembly, typeof(SubsystemUsageStore).Assembly];
 
-    private readonly Dictionary<Assembly, List<(string Key, string Namespace)>> _byAssembly = new();
+    private readonly Dictionary<Assembly, List<string>> _byAssembly = new();
     private readonly Dictionary<string, string> _mcpKeys = new(StringComparer.Ordinal);
     private readonly HashSet<string> _activeKeys;
     private readonly HashSet<string> _observable = new(StringComparer.Ordinal);
@@ -41,7 +45,7 @@ public sealed class SubsystemUsageAttribution
             if (Array.IndexOf(CoreAssemblies, type.Assembly) >= 0) continue;
             if (!_byAssembly.TryGetValue(type.Assembly, out var list))
                 _byAssembly[type.Assembly] = list = [];
-            list.Add((key, type.Namespace ?? ""));
+            list.Add(key);
             _observable.Add(key);
         }
 
@@ -88,19 +92,15 @@ public sealed class SubsystemUsageAttribution
         var explicitKey = handler.GetCustomAttribute<SubsystemUsageAttribute>()?.Key;
         if (explicitKey is not null) return _activeKeys.Contains(explicitKey) ? explicitKey : null;
 
-        if (!_byAssembly.TryGetValue(handler.Assembly, out var list)) return null;
-        if (list.Count == 1) return list[0].Key;
-
-        var ns = handler.Namespace ?? "";
-        string? best = null;
-        var bestLen = -1;
-        foreach (var (key, prefix) in list)
-        {
-            var matches = ns.Equals(prefix, StringComparison.Ordinal)
-                || ns.StartsWith(prefix + ".", StringComparison.Ordinal);
-            if (matches && prefix.Length > bestLen) { best = key; bestLen = prefix.Length; }
-        }
-        return best;
+        // Своя сборка вертикали: относится ровно тогда, когда подсистема в ней одна.
+        // Несколько подсистем в одной сборке по сборке не отнести: прежняя ветка «самого
+        // длинного префикса namespace» не срабатывала никогда — namespace подсистемы
+        // (ClaudeHomeServer.Services.X) не является префиксом namespace её контроллера
+        // (ClaudeHomeServer.X.Controllers) и давала бы null для обеих; такой случай
+        // требует явного атрибута на контроллере/тулсете (R-S1b, m2).
+        return _byAssembly.TryGetValue(handler.Assembly, out var list) && list.Count == 1
+            ? list[0]
+            : null;
     }
 
     // Ключ по ЭНДПОИНТУ: методовой атрибут приоритетнее классового (смешанная ручка
@@ -120,7 +120,12 @@ public sealed class SubsystemUsageAttribution
 }
 
 // Мидлвар учёта обращений: после UseRouting у конечной точки видно действие контроллера.
-// Считаем ПОСЛЕ next — по итоговому статусу: 401/403/404 (до обработчика запрос не дошёл или маршрут не найден) не в счёт.
+// Считаем ПОСЛЕ next — по итоговому статусу И по смонтированному эндпоинту:
+// 401 — отказ аутентификации ДО обработчика (UseAuthentication стоит после UseRouting,
+// эндпоинт к этому моменту уже смонтирован): обращения к подсистеме не было — не в счёт
+// при любом эндпоинте. 403/404 — по источнику: без эндпоинта маршрута нет (его снял гейт
+// подсистемы или его нет вовсе) — обращения не было; с эндпоинтом ответил сам обработчик
+// вертикали («заметка не найдена», «доступа нет») — это состоявшееся обращение (R-S1b, m1).
 // SignalR-хаб и ручки ядра неатрибутируемы и не считаются. MCP — по сегменту mcp в любой
 // позиции пути: прямой /mcp/{name} и через шлюз ходов /gw/t/{turnId}/mcp/{name}.
 public sealed class SubsystemUsageMiddleware(
@@ -132,12 +137,15 @@ public sealed class SubsystemUsageMiddleware(
         await next(ctx);
 
         var status = ctx.Response.StatusCode;
-        if (status is StatusCodes.Status401Unauthorized or StatusCodes.Status403Forbidden
-            or StatusCodes.Status404NotFound) return;
+        if (status == StatusCodes.Status401Unauthorized) return;
+
+        var endpoint = ctx.GetEndpoint();
+        if (endpoint is null
+            && status is StatusCodes.Status403Forbidden or StatusCodes.Status404NotFound) return;
 
         try
         {
-            var key = Resolve(ctx);
+            var key = Resolve(ctx, endpoint);
             if (key is not null) store.Hit(key, DateTimeOffset.UtcNow);
         }
         catch (Exception ex)
@@ -148,7 +156,7 @@ public sealed class SubsystemUsageMiddleware(
         }
     }
 
-    private string? Resolve(HttpContext ctx)
+    private string? Resolve(HttpContext ctx, Endpoint? endpoint)
     {
         // Сегмент mcp ищется в любой позиции пути: вызовы через шлюз ходов /gw/t/{turnId}/mcp/{name}
         // относятся к тому же тулсету, что и прямые /mcp/{name} (R-S1b, п.7). Сравнение сегмента
@@ -161,7 +169,7 @@ public sealed class SubsystemUsageMiddleware(
                 return attribution.KeyOfMcp(segments[mcpIndex + 1]);
         }
 
-        var action = ctx.GetEndpoint()?.Metadata.GetMetadata<ControllerActionDescriptor>();
+        var action = endpoint?.Metadata.GetMetadata<ControllerActionDescriptor>();
         return action is null ? null : attribution.KeyOfAction(action);
     }
 }

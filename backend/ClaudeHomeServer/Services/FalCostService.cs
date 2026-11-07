@@ -16,15 +16,22 @@ namespace ClaudeHomeServer.Services;
 public class FalCostService : IFalRequestCost
 {
     // Задержки между попытками (сек). Суммарно ~77с — обычно биллинг готов раньше.
-    // internal для тестов (InternalsVisibleTo): тесты ResolveUsdAsync сжимают бэкофф до [0] —
-    // цикл и его контракт проверяются без реальных 77с; производственный дефолт не меняется.
-    internal int[] BackoffSeconds = [2, 5, 10, 20, 40];
+    // internal init для тестов (InternalsVisibleTo): тесты ResolveUsdAsync сжимают бэкофф до [0]
+    // при создании — цикл и его контракт проверяются без реальных 77с; производственный дефолт
+    // [2, 5, 10, 20, 40] после создания рантайм-код не сдвигает.
+    internal int[] BackoffSeconds { get; init; } = [2, 5, 10, 20, 40];
 
     private readonly IHttpClientFactory _httpFactory;
     private readonly string? _apiKey;
     private readonly string _billingEventsUrl;
-    // Дедуп: один request_id приходит в run_model и в get_job_result — опрашиваем один раз
+    // Дедуп: один request_id приходит в run_model и в get_job_result — публикуем в чат один раз
     private readonly ConcurrentDictionary<string, byte> _seen = new();
+    // Один опрос на request_id: кто первым пришёл — тот его начал, остальные ждут тот же task.
+    // Путь чата (Track) и шов (ResolveUsdAsync) делят один сетевой цикл: если чат уже опрашивает
+    // этот request_id, потребитель берёт тот же результат, не начиная второй 77-секундный опрос.
+    // На гонке GetOrAdd может вызвать фабрику больше одного раза — дубль опроса идемпотентен
+    // (тот же request_id), лишь тратит лишний запрос; результат всегда из сохранённого task.
+    private readonly ConcurrentDictionary<string, Task<FalCostMessage?>> _pollings = new();
 
     // Публикация найденной стоимости (broadcast в SignalR + запись в историю). Ставит SessionManager.
     public Func<string, FalCostMessage, Task>? OnCostResolved { get; set; }
@@ -46,21 +53,34 @@ public class FalCostService : IFalRequestCost
     {
         if (!Enabled || string.IsNullOrWhiteSpace(requestId)) return;
         if (!_seen.TryAdd(requestId, 0)) return;
-        _ = PollAsync(sessionId, requestId);
+        // Начинаем опрос (или берём уже начатый потребителем через шов); публикация
+        // в чат — один раз, по дедупу _seen.
+        var poll = GetOrStartPolling(requestId, CancellationToken.None);
+        _ = PublishAsync(sessionId, requestId, poll);
     }
 
     // Реализация шва IFalRequestCost: фактическая цена по request_id либо null — когда
     // биллинга ещё нет. Без исключений: отсутствие цены — штатный исход, не ошибка.
     // Дедуп _seen здесь не участвует: он про однократную публикацию в чат, а не про вопрос.
+    // Сам опрос общий: повторный запрос той же цены берётся из начатого task, не идя в сеть.
     public async Task<double?> ResolveUsdAsync(string requestId, CancellationToken ct)
     {
         if (!Enabled || string.IsNullOrWhiteSpace(requestId)) return null;
-        var cost = await PollForCostAsync(requestId, ct);
+        var cost = await GetOrStartPolling(requestId, ct);
         return cost?.CostUsd;
     }
 
-    // Единый цикл опроса billing-events (бэкофф → FetchCostAsync по request_id). Зовут его
-    // и ResolveUsdAsync (шов), и PollAsync (путь чата с публикацией) — цикл один.
+    // Начать опрос по request_id или вернуть уже начатый — единственная точка входа в цикл.
+    // Помета (отложенный риск из ревью d524e017): ct первого вызывающего решает судьбу общего
+    // опроса — придёт первым с реальным ct и отменится, null останется в кэше за всех.
+    // На всех текущих путях ct = CancellationToken.None (Track, ImageGenerationService,
+    // ImageEditJobService); если на каком-то пути появится реальный ct — общий опрос надо
+    // начинать без него.
+    private Task<FalCostMessage?> GetOrStartPolling(string requestId, CancellationToken ct) =>
+        _pollings.GetOrAdd(requestId, _ => PollForCostAsync(requestId, ct));
+
+    // Единый цикл опроса billing-events (бэкофф → FetchCostAsync по request_id). Начинает его
+    // только GetOrStartPolling — путь чата и потребители шва ждут результат одного task.
     // Сбои опроса глотаются, как прежде: «цены нет» → null после исчерпанного окна.
     private async Task<FalCostMessage?> PollForCostAsync(string requestId, CancellationToken ct)
     {
@@ -89,9 +109,11 @@ public class FalCostService : IFalRequestCost
         return null; // окно опроса исчерпано — цены нет
     }
 
-    private async Task PollAsync(string sessionId, string requestId)
+    // Публикация найденной стоимости в чат: ждёт общий опрос, публикует один раз
+    // (однократность держит Track своим дедупом _seen до подписки на task).
+    private async Task PublishAsync(string sessionId, string requestId, Task<FalCostMessage?> poll)
     {
-        var cost = await PollForCostAsync(requestId, CancellationToken.None);
+        var cost = await poll;
         if (cost is null)
         {
             Console.Error.WriteLine($"[FalCost] Стоимость не появилась за отведённое время: {requestId}");

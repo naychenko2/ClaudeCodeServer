@@ -19,6 +19,7 @@ using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Mcp;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Services.ProjectServices;
+using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Terminal;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.TriggerSources;
@@ -641,7 +642,7 @@ builder.Services.AddSingleton<FalCostService>();
 // ТОТ ЖЕ экземпляр FalCostService (тот же приём, что ISpendCollector → SpendStore и
 // IHumanEditJournal → HumanEditCommitter), иначе опрос и потребители разъедутся по разным
 // клиентам и разным дедупам.
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.IFalRequestCost>(sp => sp.GetRequiredService<FalCostService>());
+builder.Services.AddSingleton<IFalRequestCost>(sp => sp.GetRequiredService<FalCostService>());
 builder.Services.AddSingleton<FalAccountService>();
 builder.Services.AddSingleton<GlifAccountService>();
 // UsageService — DI в подсистеме `LlmSubsystem` (волна 4B, шаг 2: переезд подписок и

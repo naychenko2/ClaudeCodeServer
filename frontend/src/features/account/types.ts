@@ -1,6 +1,9 @@
 // Типы домена «Аккаунт» (методы — ./api.ts). Вынесены из lib/api.ts шагом S5-2
 // (refactor/opt-frontend-api); публичный адрес типов — через ре-экспорт lib/api.ts
 // (`export type *`), импорты потребителей не меняются.
+// У шести имён P12 (Me, AuthState, UserProfile, AppSettings, ClaudeBilling,
+// ModelTiers) и displayNameOf публичный адрес — также ре-экспорт types/index.ts
+// (`export type *` :1711, `displayNameOf` :1714), а не только lib/api.ts.
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
 // null = наследовать глобальный слот, string = override, "" = сброс к наследованию.
@@ -40,7 +43,7 @@ export interface Me {
   // Активные подсистемы: массив ключей реально зарегистрированных в процессе
   // (отдаётся `SubsystemStateStore.ActiveKeys()` бэка). В список попадают
   // подсистемы, прошедшие гейт `Subsystems:{Key}:Enabled=true` И зарегистрированные
-  // на старте; список короткий, детерминированный. Сторойной `Record` бэк НЕ
+  // на старте; список короткий, детерминированный. Стороной `Record` бэк НЕ
   // шлёт — `{ ...arr }` на фронте даёт числовые ключи '0','1'…, и гейт ломается.
   // Заполняется App.tsx через `setAllSubsystems(me.subsystems)` в lib/subsystems;
   // стор разворачивает массив в `Record<string, boolean>` внутри. Отдельные

@@ -1432,11 +1432,8 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public void InvalidateHandsSessions(string ownerId, string? projectId) =>
         _persona.InvalidateHandsSessions(ownerId, projectId);
     private void InvalidatePersonaSessions(string personaId) => _persona.InvalidatePersonaSessions(personaId);
-    private List<Persona> ResolveOtherPersonas(string ownerId, string? projectId, Session session, Persona? persona = null) =>
-        _persona.ResolveOtherPersonas(ownerId, projectId, session, persona);
-    private (List<Persona> Subagents, List<Persona> ViaAsk) SplitConsultants(
-        string ownerId, Session session, List<Persona> personas) =>
-        _persona.SplitConsultants(ownerId, session, personas);
+    // ResolveOtherPersonas/SplitConsultants сняты: их единственный вызывающий — Omc-блок
+    // BuildCliTurnText — переехал в PersonaLayerBuilder целиком (подготовка к S3-7).
     internal bool ConsultantsEnabled(string? ownerId, Session session, Persona? persona) =>
         _persona.ConsultantsEnabled(ownerId, session, persona);
     internal bool PersonasEnabled(string? ownerId, Session session, Persona? persona) =>
@@ -2065,14 +2062,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             result += "\n\n" + keywordHint;
 
         // Процессы oh-my-claudecode: советнические роли плагина замещаются
-        // персонами-сабагентами с подходящей специальностью (таблица соответствий)
-        if (OmcPersonaRouting.MentionsPluginCommand(text) && ResolveOwnerId(entry.Info) is { } ownerId)
-        {
-            var (subagents, _) = SplitConsultants(ownerId, entry.Info,
-                ResolveOtherPersonas(ownerId, entry.Info.ProjectId, entry.Info));
-            if (OmcPersonaRouting.BuildHint(subagents) is { } routingHint)
-                result += "\n\n" + routingHint;
-        }
+        // персонами-сабагентами с подходящей специальностью (таблица соответствий).
+        // Тело — в PersonaLayerBuilder (подготовка к S3-7): это его ResolveOtherPersonas/
+        // SplitConsultants, вызов через слой персоны.
+        if (_persona.BuildOmcRoleHint(text, entry.Info) is { } routingHint)
+            result += "\n\n" + routingHint;
 
         // Возврат на CLI после локальных голосовых ходов: транскрипт CLI реплик разговора
         // не знает, без сводки модель отвечала бы так, будто разговора не было. Берём

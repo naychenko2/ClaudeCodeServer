@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Services.Team;
 
@@ -290,6 +291,20 @@ public sealed class PersonaLayerBuilder
             AppendPersonaLines(sb, viaAsk, session.ProjectId);
         }
         return sb.ToString().TrimEnd();
+    }
+
+    // Процессы oh-my-claudecode: в тексте хода упомянута команда плагина — подсказка о замещении
+    // его советнических ролей персонами-сабагентами (подготовка к S3-7: тело блока переехано из
+    // BuildCliTurnText сюда — это ResolveOtherPersonas/SplitConsultants, форма та же, что у
+    // BuildMentionsHint). null — плагин не упомянут, владельца нет или замещать некем.
+    internal string? BuildOmcRoleHint(string text, Session session)
+    {
+        if (!OmcPersonaRouting.MentionsPluginCommand(text)) return null;
+        var ownerId = ResolveOwnerId(session);
+        if (ownerId is null) return null;
+        var (subagents, _) = SplitConsultants(ownerId, session,
+            ResolveOtherPersonas(ownerId, session.ProjectId, session));
+        return OmcPersonaRouting.BuildHint(subagents);
     }
 
     // currentProjectId — ProjectId сессии: персона Project-скоупа ДРУГОГО проекта (видна здесь

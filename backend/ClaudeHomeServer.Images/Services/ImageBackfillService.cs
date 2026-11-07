@@ -224,7 +224,12 @@ public sealed class ImageBackfillService(
         await _slots.WaitAsync(ct);
         try
         {
-            image = await images.GenerateAsync(request.Kind, prompt, ct);
+            // Трата догоняющей генерации — на владельца заявки (он в заявке с момента
+            // постановки, а Resolve снимает заявку, если персона ушла к другому владельцу, —
+            // чужому трата не уйдёт). Инициатор фоновой заявки не известен: сама заявка его
+            // пока не несёт (S-SPEND-8), выдумывать человека роутеру не передаём (S-SPEND-2c)
+            image = await images.GenerateAsync(request.Kind, prompt, ct,
+                ownerId: request.OwnerId, initiator: null);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

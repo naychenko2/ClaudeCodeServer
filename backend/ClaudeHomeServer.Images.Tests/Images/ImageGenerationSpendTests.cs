@@ -197,6 +197,38 @@ public class ImageGenerationSpendTests
         cost.Calls.Should().Be(0);
     }
 
+    // Инициатор записи совпадает с инициатором вызова (находка ревью R-S-SPEND-2):
+    // агентский путь (personas_generate_avatar из чата) доходит до RecordSpend и обязан
+    // быть записан как Agent, а не как Human.
+    [Fact]
+    public async Task ИнициаторАгента_ЗаписываетсяКакAgent()
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1");
+        var spend = new CapturingSpend();
+        var cost = new FakeCost(null);
+        var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, cost);
+
+        await service.GenerateManyAsync(Avatar, "кот", 1, CancellationToken.None, Owner, SpendInitiators.Agent);
+
+        var rec = spend.Records.Single();
+        rec.OwnerId.Should().Be(Owner);
+        rec.Initiator.Should().Be(SpendInitiators.Agent, "инициатор записи — тот, кто подал операцию");
+    }
+
+    // Фоновая очередь инициатора не называет (его принесёт сама заявка, S-SPEND-8):
+    // выдуманного человека в записи быть не должно.
+    [Fact]
+    public async Task ИнициаторНеНазван_ЗаписьБезИнициатора()
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1");
+        var spend = new CapturingSpend();
+        var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, new FakeCost(null));
+
+        await service.GenerateAsync(Avatar, "кот", CancellationToken.None, Owner, initiator: null);
+
+        spend.Records.Single().Initiator.Should().BeNull("неизвестный инициатор не выдумываем");
+    }
+
     [Fact]
     public async Task ПровайдерНеОтдалКартинок_ТратыНет()
     {

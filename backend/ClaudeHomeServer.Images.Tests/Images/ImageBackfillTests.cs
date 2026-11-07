@@ -54,14 +54,49 @@ public class ImageBackfillTests : IDisposable
     private ImageBackfillStore NewStore() => new(_config, NullLogger<ImageBackfillStore>.Instance);
 
     private ImageBackfillService Service(FakeGenerator generator, ImageBackfillStore? store = null)
+        => ServiceWithSpend(generator, null, store);
+
+    // Тот же сервис, но с коллектором трат: чтобы видеть, что и на кого записывает очередь
+    private ImageBackfillService ServiceWithSpend(FakeGenerator generator,
+        ClaudeHomeServer.Services.Spend.ISpendCollector? spend, ImageBackfillStore? store = null)
     {
         var settings = new ImageGenerationSettingsStore(_config);
-        var images = new ImageGenerationService([generator], settings);
+        var images = new ImageGenerationService([generator], settings, null, spend);
         return new ImageBackfillService(store ?? NewStore(), images, _personas, _personas,
             _broadcaster, new FakeLifetime(), NullLogger<ImageBackfillService>.Instance)
         {
             RetryDelay = TimeSpan.Zero,
         };
+    }
+
+    private sealed class CapturingSpend : ClaudeHomeServer.Services.Spend.ISpendCollector
+    {
+        private readonly List<SpendRecord> _records = [];
+        public IReadOnlyList<SpendRecord> Records { get { lock (_records) return [.. _records]; } }
+        public void Record(SpendRecord record) { lock (_records) _records.Add(record); }
+    }
+
+    // Трата догоняющей генерации (S-SPEND-2c): она пишется на владельца заявки — он известен
+    // с момента постановки, а Resolve снимает заявку, если персона ушла к другому владельцу
+    [Fact]
+    public async Task Прогон_пишет_трату_на_владельца_заявки()
+    {
+        var persona = NewPersona();
+        var generator = new FakeGenerator();
+        var spend = new CapturingSpend();
+        var service = ServiceWithSpend(generator, spend);
+        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар");
+
+        var summary = await service.RunAsync(_owner.Id);
+
+        Assert.Equal(1, summary.Generated);
+        // трата догоняющей генерации — на владельца заявки
+        var rec = Assert.Single(spend.Records);
+        Assert.Equal(_owner.Id, rec.OwnerId);
+        Assert.Equal(1, rec.Generations);
+        Assert.Equal(ImageGenerationService.SpendLabelPendingAmount, rec.Label);
+        // Инициатор фоновой заявки не известен: сама заявка его пока не несёт (S-SPEND-8)
+        Assert.Null(rec.Initiator);
     }
 
     [Fact]

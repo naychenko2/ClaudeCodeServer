@@ -72,8 +72,13 @@ public sealed class ImageGenerationService
     // ownerId — тот, на кого пишется трата (RecordSpend): вызывающий знает владельца всегда,
     // роутер — нет. Параметр стоит ПОСЛЕ ct, чтобы существующие вызовы с токеном не
     // сдвинулись. Без владельца трата не пишется: повесить её не на кого.
+    // initiator — кто подал операцию (SpendInitiators.*): его знает только точка входа
+    // (REST-контроллер — человек, MCP-тулсет — агент), роутер его не вычисляет и не подменяет
+    // (находка ревью R-S-SPEND-2). null — инициатор вызова не известен (фоновая очередь);
+    // выдумывать человека не будем: поле остаётся null, как у записей без инициатора.
     public async Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
-        string place, string prompt, int count, CancellationToken ct = default, string? ownerId = null)
+        string place, string prompt, int count, CancellationToken ct = default, string? ownerId = null,
+        string? initiator = SpendInitiators.Human)
     {
         var chain = Resolve(place);
         if (chain.Count == 0)
@@ -91,7 +96,7 @@ public sealed class ImageGenerationService
             // Трата — только за того, кто реально отдал картинки: пустой провайдер не стоил ничего
             if (images.Count > 0)
             {
-                RecordSpend(place, generator, model, images, ownerId);
+                RecordSpend(place, generator, model, images, ownerId, initiator);
                 return images;
             }
             if (i + 1 < chain.Count)
@@ -103,9 +108,10 @@ public sealed class ImageGenerationService
 
     // Одна картинка (первый вариант) — для мест, где выбора не предлагается
     public async Task<GeneratedImage?> GenerateAsync(
-        string place, string prompt, CancellationToken ct = default, string? ownerId = null)
+        string place, string prompt, CancellationToken ct = default, string? ownerId = null,
+        string? initiator = SpendInitiators.Human)
     {
-        var many = await GenerateManyAsync(place, prompt, 1, ct, ownerId);
+        var many = await GenerateManyAsync(place, prompt, 1, ct, ownerId, initiator);
         return many.Count > 0 ? many[0] : null;
     }
 
@@ -181,7 +187,7 @@ public sealed class ImageGenerationService
 
     private void RecordSpend(
         string place, IImageGenerator generator, string? model,
-        IReadOnlyList<GeneratedImage> images, string? ownerId)
+        IReadOnlyList<GeneratedImage> images, string? ownerId, string? initiator)
     {
         if (_spend is null)
         {
@@ -198,7 +204,7 @@ public sealed class ImageGenerationService
             return;
         }
 
-        WriteSpend(ownerId, generator.Key, model, amount: null, generations: images.Count);
+        WriteSpend(ownerId, generator.Key, model, amount: null, generations: images.Count, initiator);
 
         // Сумму догоняет только fal: в ответах glif (compose_project / get_job_status) нет
         // идентификатора, по которому его цена спрашивается — GlifJobParser берёт jobId, media
@@ -207,14 +213,14 @@ public sealed class ImageGenerationService
         var requestId = RequestIdOf(images);
         if (requestId is null || _falCost is null
             || !string.Equals(generator.Key, SpendSources.Fal, StringComparison.OrdinalIgnoreCase)) return;
-        _ = TopUpAmountAsync(ownerId, model, requestId);
+        _ = TopUpAmountAsync(ownerId, model, requestId, initiator);
     }
 
     // Фактическая цена по request_id — через существующий Core-шов IFalRequestCost
     // (тот же экземпляр FalCostService, что и у чата). Свой токен: token вызывающего к этому
     // моменту уже снят вместе с его запросом, а окно опроса ограничено самим FalCostService.
     // Цены нет — штатный исход: остаётся первая запись без суммы.
-    private async Task TopUpAmountAsync(string ownerId, string? model, string requestId)
+    private async Task TopUpAmountAsync(string ownerId, string? model, string requestId, string? initiator)
     {
         try
         {
@@ -225,7 +231,8 @@ public sealed class ImageGenerationService
                     requestId);
                 return;
             }
-            WriteSpend(ownerId, SpendSources.Fal, model, amount: usd, generations: 0);
+            // Догоняющая запись — про тот же вызов: инициатор у неё тот же, что у первой
+            WriteSpend(ownerId, SpendSources.Fal, model, amount: usd, generations: 0, initiator);
         }
         catch (Exception ex)
         {
@@ -233,7 +240,8 @@ public sealed class ImageGenerationService
         }
     }
 
-    private void WriteSpend(string ownerId, string providerKey, string? model, double? amount, int generations)
+    private void WriteSpend(string ownerId, string providerKey, string? model, double? amount, int generations,
+        string? initiator)
     {
         try
         {
@@ -253,10 +261,11 @@ public sealed class ImageGenerationService
                 Source = providerKey,
                 CostUsd = amount,
                 Generations = generations,
-                // Инициатор — человек: сегодня этот путь вызывает только генерация аватара
-                // по действию человека (PersonasCrudService). Фоновая очередь владельца не
-                // называет и до RecordSpend не доходит как трата.
-                Initiator = SpendInitiators.Human,
+                // Инициатор — тот, кто подал операцию, каким его назвала точка входа
+                // (находка ревью R-S-SPEND-2: агентский путь жив — personas_generate_avatar и
+                // personas_create с AutoAvatar из чата доходят ровно сюда через PersonasCrudService).
+                // null — инициатор не известен: фоновая очередь заявки его пока не несёт (S-SPEND-8).
+                Initiator = initiator,
                 Label = amount is null && generations > 0 ? SpendLabelPendingAmount : SpendLabel,
             });
         }

@@ -60,9 +60,12 @@ public sealed class PersonasCrudService(
     // --- Создание / правка / удаление / дефолт (тела POST/PUT/DELETE/make-default) ---
 
     // onAutoVoice — исход автоподбора голоса, если он запускался (MCP сообщает его модели);
-    // голос был задан явно (в т.ч. пустым объектом) — не вызывается
+    // голос был задан явно (в т.ч. пустым объектом) — не вызывается.
+    // initiator — кто подал создание: человек из формы или агент из чата (учёт траты аватара,
+    // S-SPEND-2c). Сервис его не вычисывает: у него два входа, REST и MCP, и называет его вызывающий
     public async Task<ActionResult<Persona>> CreateAsync(string userId, CreatePersonaRequest req,
-        string? callerSessionId, CancellationToken ct = default, Action<AutoVoiceResult>? onAutoVoice = null)
+        string? callerSessionId, CancellationToken ct = default, Action<AutoVoiceResult>? onAutoVoice = null,
+        string? initiator = SpendInitiators.Human)
     {
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest("Не задано имя персоны");
@@ -165,7 +168,7 @@ public sealed class PersonasCrudService(
         // аватар сам (напр. пакетное создание команды из ai/team); ручное создание
         // через форму/мастер этот параметр не шлёт — там инициалы или явный выбор
         if (req.AutoAvatar == true)
-            persona = await TryAutoGenerateAvatarAsync(userId, persona, req.AvatarPrompt);
+            persona = await TryAutoGenerateAvatarAsync(userId, persona, req.AvatarPrompt, initiator);
         // Голос: явный (непустой) — пишем как есть; явный пустой объект — «без голоса», не
         // подбираем; не передан — подбираем по характеру (best-effort). Последним шагом —
         // после всех прочих one-shot вызовов создания, так их порядок не меняется
@@ -524,7 +527,10 @@ public sealed class PersonasCrudService(
     // и модель выбирает роутер по настройке инстанса. Кандидаты сохраняются во временную
     // папку, аватар персоны НЕ меняется до выбора.
     // prompt пуст → строим фото-промпт из имени/описания персоны.
-    public async Task<ActionResult> GenerateAvatarAsync(string userId, string id, GenerateAvatarRequest req)
+    // initiator — кто подал операцию (SpendInitiators.*): REST из UI — человек, MCP-тулсет из
+    // чата — агент; трату роутер пишет с тем же инициатором, что назвал вызывающий (S-SPEND-2c)
+    public async Task<ActionResult> GenerateAvatarAsync(string userId, string id, GenerateAvatarRequest req,
+        string? initiator = SpendInitiators.Human)
     {
         var persona = personas.Get(id, userId);
         if (persona is null) return NotFound();
@@ -548,9 +554,10 @@ public sealed class PersonasCrudService(
             return BadRequest(new { error = ImageGenerationOffError, queued = canBackfill });
         }
 
-        // Трату генерации пишем на того, кто её попросил (учёт расхода, S-SPEND-2)
+        // Трату генерации пишем на того, кто её попросил, и с тем инициатором, который назвал
+        // вызывающий (учёт расхода, S-SPEND-2, S-SPEND-2c)
         var generated = await images.GenerateManyAsync(
-            Services.Images.ImagePlaces.PersonaAvatar, prompt, count, CancellationToken.None, userId);
+            Services.Images.ImagePlaces.PersonaAvatar, prompt, count, CancellationToken.None, userId, initiator);
         // Провайдер не отдал картинок (таймаут, отказ) — аватар тоже не теряем: заявка
         // догонит персону фоном. queued в ответе — чтобы фронт сказал человеку честное
         // «появится сам», а не «генератор не ответил, аватар остался прежним».
@@ -616,7 +623,10 @@ public sealed class PersonasCrudService(
     // quick-create одной персоны, пакетная команда из ai/team.
     // Не получилось (провайдера нет, отказ, сбой) — персона остаётся с инициалами, а аватар
     // догонит её из очереди, когда генерация заработает.
-    public async Task<Persona> TryAutoGenerateAvatarAsync(string userId, Persona persona, string? avatarPrompt)
+    // initiator — тот, кто подал создание персоны (через CreateAsync или quick-create из UI):
+    // человек или агент; дальше он идёт в запись траты роутера (S-SPEND-2c)
+    public async Task<Persona> TryAutoGenerateAvatarAsync(string userId, Persona persona, string? avatarPrompt,
+        string? initiator = SpendInitiators.Human)
     {
         var prompt = string.IsNullOrWhiteSpace(avatarPrompt)
             ? BuildAvatarPrompt(persona)
@@ -626,7 +636,7 @@ public sealed class PersonasCrudService(
         try
         {
             var generated = await images.GenerateManyAsync(
-                Services.Images.ImagePlaces.PersonaAvatar, prompt, 1, CancellationToken.None, userId);
+                Services.Images.ImagePlaces.PersonaAvatar, prompt, 1, CancellationToken.None, userId, initiator);
             if (generated.Count == 0) return EnqueueAvatarBackfill(userId, persona, prompt);
             var dir = Path.Combine(personas.AssetsDir, persona.Id);
             Directory.CreateDirectory(dir);

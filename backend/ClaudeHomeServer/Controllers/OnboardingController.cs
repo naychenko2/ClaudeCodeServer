@@ -343,7 +343,9 @@ public class OnboardingController(SessionManager sessions, UserStore users,
         if (!imageGen.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar)) return EnqueueAvatarBackfill(persona, prompt);
         try
         {
-            var images = await imageGen.GenerateManyAsync(Services.Images.ImagePlaces.PersonaAvatar, prompt, 1);
+            // Трата этой генерации — на владельца персоны: он известен под рукой (S-SPEND-2c)
+            var images = await imageGen.GenerateManyAsync(
+                Services.Images.ImagePlaces.PersonaAvatar, prompt, 1, ownerId: AvatarOwnerId(persona));
             if (images.Count == 0) return EnqueueAvatarBackfill(persona, prompt);
             var dir = Path.Combine(personas.AssetsDir, persona.Id);
             Directory.CreateDirectory(dir);
@@ -360,9 +362,15 @@ public class OnboardingController(SessionManager sessions, UserStore users,
     private Persona EnqueueAvatarBackfill(Persona persona, string prompt)
     {
         imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar,
-            persona.Id, string.IsNullOrEmpty(persona.OwnerId) ? UserId : persona.OwnerId, prompt);
+            persona.Id, AvatarOwnerId(persona), prompt);
         return persona;
     }
+
+    // Владелец аватара этой персоны — один на оба пути (генерация и заявка в очередь): у
+    // заготовки он всегда текущий пользователь, но форма берётся из persona.OwnerId:
+    // разнесённый владелец не должен молча менять адресата траты (S-SPEND-2c)
+    private string AvatarOwnerId(Persona persona) =>
+        string.IsNullOrEmpty(persona.OwnerId) ? UserId : persona.OwnerId;
 
     private static bool ValidColor(string? c) =>
         c is "yellow" or "orange" or "blue" or "green" or "purple" or "red" or "brown" or "cyan" or "pink";

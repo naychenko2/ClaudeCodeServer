@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 // и задирание потолка вручную. После выноса домена пересчитай число под фактическое —
 // вниз. Поднимать потолок нельзя: новый код пиши сразу в features/<домен>/api.ts и types.ts.
 const MAX_API_LINES = 175;
-const MAX_TYPES_LINES = 2036;
+const MAX_TYPES_LINES = 1990;
 
 const lines = (rel: string) => readFileSync(resolve(__dirname, rel), 'utf-8').split('\n').length - 1;
 

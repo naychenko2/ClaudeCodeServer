@@ -2,12 +2,17 @@
 // Yandex Cloud) и подключения Higgsfield. lib/api.ts подмешивает их в объект api
 // spread'ом (адреса api.fal.* / api.glif.* / api.yandex.* / api.higgsfield.*
 // остаются прежними для всех потребителей).
-// Типы ответов fal/glif/yandex — DTO бэкенда, живут в ../../types; пользовательский
-// и админский виды Higgsfield — в ./types.ts.
+// Типы ответов fal/glif/yandex — DTO бэкенда, и пользовательский с админским виды
+// Higgsfield — все в ./types.ts.
 
 import { request } from '../../lib/offline';
-import type { FalAccountResponse, GlifAccountResponse, YandexAccountResponse } from '../../types';
-import type { HiggsfieldStatus, HiggsfieldAdminStatus } from './types';
+import type {
+  FalAccountResponse,
+  GlifAccountResponse,
+  YandexAccountResponse,
+  HiggsfieldStatus,
+  HiggsfieldAdminStatus,
+} from './types';
 
 export const providerAccountsApi = {
   fal: {

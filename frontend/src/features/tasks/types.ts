@@ -27,3 +27,14 @@ export interface FeatureSummaryResult {
   // защита от ответов старой версии сервера.
   eventCount?: number;
 }
+
+// Форма ChatRef (бэк Models/ChatRef.cs, шаг S2d-4b, К5): ссылка на чат, связанный с задачей.
+// Видимый чат — id и название остаются в своих id-полях задачи (linkedSessionId и др.),
+// этой формы нет. Чужой приватный (не виден зрителю) — id-поле обнулено (null), рядом
+// стоит эта запись: sessionId нет, title — подпись вместо названия, private — признак.
+export interface ChatRef {
+  sessionId?: string | null;
+  title?: string | null;
+  private?: boolean;
+  authorUserId?: string | null;   // чей чат: id автора, не название и не id чата
+}

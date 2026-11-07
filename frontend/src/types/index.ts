@@ -2,8 +2,9 @@ import type { Mode } from '../lib/modes';
 import type { PromptCacheWire } from '../lib/promptCache';
 import type { RecallItem } from '../features/personas/types';
 import type { SessionTeamImplement, TeamEscalation, TeamEscalationAction, TeamEscalationKind, TeamImplementBudget, TeamImplementStage, TeamPlan, TeamWaveLiveness } from '../features/team/types';
-import type { BoardColumn } from '../features/tasks/types';
+import type { BoardColumn, ChatRef } from '../features/tasks/types';
 import type { ProviderFallbackOption } from '../features/spend/types';
+import type { ProjectMembersSummary, ProjectRoleView } from '../features/projects/types';
 export type { Mode };
 
 export interface PermissionRule {
@@ -1754,3 +1755,9 @@ export type * from '../features/account/types';
 
 // eslint-disable-next-line module/no-cross-feature-import -- значение, а не тип: `export type *` его не везёт, внешний импорт displayNameOf из types должен работать без правки потребителей
 export { displayNameOf } from '../features/account/types';
+
+// eslint-disable-next-line module/no-cross-feature-import -- types/index.ts ре-экспортирует доменные типы для совместимости внешних импортов (S5-P4); публичного index.ts у projects нет, баррел заведётся отдельно
+export type * from '../features/projects/types';
+
+// eslint-disable-next-line module/no-cross-feature-import -- значение, а не тип: `export type *` его не везёт, внешний импорт MEMBER_REFUSAL из types должен работать без правки потребителей
+export { MEMBER_REFUSAL } from '../features/projects/types';

@@ -1162,8 +1162,10 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
         session.Name = "обрезка сообщения";
 
-        typeof(SessionManager).GetField("_cheap", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .SetValue(_sut, new StubTitleCheapRunner(usesLocal: false, () => """{"title":"Уточнённый заголовок"}"""));
+        // Раннер подменяется у владельца метода (с S3-3 именование — в ChatNaming), иначе
+        // подменённое поле осталось бы у фасада и до роли не дошло бы.
+        var owner = OwnerOf("RefineChatTitleAsync");
+        SetPrivateField(owner, "_cheap", new StubTitleCheapRunner(usesLocal: false, () => """{"title":"Уточнённый заголовок"}"""));
 
         await (Task)InvokePrivate("RefineChatTitleAsync", session.Id, "первое сообщение чата",
             "обрезка сообщения", TestUserId)!;
@@ -1180,9 +1182,9 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
         session.Name = "обрезка сообщения";
 
-        typeof(SessionManager).GetField("_cheap", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .SetValue(_sut, new StubTitleCheapRunner(usesLocal: false,
-                () => throw new InvalidOperationException("исполнитель недоступен")));
+        var owner = OwnerOf("RefineChatTitleAsync");
+        SetPrivateField(owner, "_cheap", new StubTitleCheapRunner(usesLocal: false,
+            () => throw new InvalidOperationException("исполнитель недоступен")));
 
         await (Task)InvokePrivate("RefineChatTitleAsync", session.Id, "первое сообщение чата",
             "обрезка сообщения", TestUserId)!;

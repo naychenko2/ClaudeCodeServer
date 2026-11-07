@@ -110,12 +110,29 @@ public class PrivateChatBroadcastLeakTests : IDisposable
         }
     }
 
+    // S3-3: точки «архив» и «переименование» живут в ролях ядра (ChatSettings, ChatNaming).
+    // Метод ищется на фасаде, а если его там нет — на его полях-ролей: проверяется адресация
+    // события, а не то, в каком классе лежит тело.
     private static Task Invoke(SessionManager sut, string method, params object?[] args)
     {
-        var mi = typeof(SessionManager).GetMethod(method,
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
-            ?? throw new MissingMethodException(nameof(SessionManager), method);
-        return (Task)mi.Invoke(sut, args)!;
+        foreach (var target in CoreObjects(sut))
+        {
+            var mi = target.GetType().GetMethod(method,
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            if (mi is not null) return (Task)mi.Invoke(target, args)!;
+        }
+        throw new MissingMethodException(nameof(SessionManager), method);
+    }
+
+    private static IEnumerable<object> CoreObjects(SessionManager sut)
+    {
+        yield return sut;
+        foreach (var f in typeof(SessionManager).GetFields(
+                     System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic))
+        {
+            if (f.FieldType.Namespace != "ClaudeHomeServer.Services.Sessions") continue;
+            if (f.GetValue(sut) is { } role) yield return role;
+        }
     }
 
     private (SessionManager Sut, ProjectManager Projects) BuildSut()

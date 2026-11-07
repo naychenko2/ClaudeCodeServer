@@ -1297,11 +1297,34 @@ public abstract class SessionManagerTestBase : IDisposable
 
     // --- Per-persona рубильники MCP-серверов (Off-привязка type: tool, target: <ключ>) ---
 
+    // S3-3: часть приватных методов ядра живёт в ролях Services/Sessions (в фасаде остаются
+    // публичные обёртки). Белый тест зовёт метод и подменяет поле там, где оно объявлено, —
+    // поэтому владелец ищется среди фасада и его полей-ролей (тип из ClaudeHomeServer.Services.Sessions).
+    protected object OwnerOf(string name)
+    {
+        foreach (var target in CoreObjects())
+            if (target.GetType().GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance) is not null)
+                return target;
+        throw new MissingMethodException(typeof(SessionManager).FullName, name);
+    }
+
+    protected void SetPrivateField(object target, string name, object value) =>
+        target.GetType().GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(target, value);
+
+    private IEnumerable<object> CoreObjects()
+    {
+        yield return _sut;
+        foreach (var f in typeof(SessionManager).GetFields(BindingFlags.NonPublic | BindingFlags.Instance))
+        {
+            if (f.FieldType.Namespace != "ClaudeHomeServer.Services.Sessions") continue;
+            if (f.GetValue(_sut) is { } role) yield return role;
+        }
+    }
+
     protected object? InvokePrivate(string name, params object?[] args)
     {
-        var method = typeof(SessionManager).GetMethod(name,
-            BindingFlags.NonPublic | BindingFlags.Instance)!;
-        return method.Invoke(_sut, args);
+        var owner = OwnerOf(name);
+        return owner.GetType().GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(owner, args);
     }
 
     // Персона проекта + Off-привязки на перечисленные ключи (пусто — дефолтная персона)

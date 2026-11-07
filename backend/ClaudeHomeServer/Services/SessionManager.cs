@@ -3740,7 +3740,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 entry.Info.Name = title;
                 SaveSessions();
                 // Фоново уточняем заголовок локальной моделью (best-effort, не блокирует ход)
-                _ = RefineChatTitleAsync(sessionId, text, title, ResolveOwnerId(entry.Info));
+                _ = _naming.RefineChatTitleAsync(sessionId, text, title, ResolveOwnerId(entry.Info));
             }
         }
 
@@ -4168,7 +4168,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                 entry.Info.Name = title;
                 SaveSessions();
                 // Фоново уточняем заголовок локальной моделью (best-effort, не блокирует ход)
-                _ = RefineChatTitleAsync(sessionId, text, title, ResolveOwnerId(entry.Info));
+                _ = _naming.RefineChatTitleAsync(sessionId, text, title, ResolveOwnerId(entry.Info));
             }
         }
 
@@ -5095,8 +5095,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // на которое смотрит белый тест MakeChatTitle (SessionManagerTestBase, рефлексия).
     private static string MakeChatTitle(string text) => ChatNaming.MakeChatTitle(text);
 
-    private Task RefineChatTitleAsync(string sessionId, string firstMessage, string expectedTitle, string? ownerId)
-        => _naming.RefineChatTitleAsync(sessionId, firstMessage, expectedTitle, ownerId);
 
     // Именование чата (S3-3): явное переименование и значки тем — тела в ChatNaming;
     // здесь тонкие обёртки с прежними сигнатурами (их зовут контроллеры и тесты).

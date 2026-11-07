@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 // features/<домен>/ (docs/research/frontend-api-split-2026-11.md). Потолок только СНИЖАЕТСЯ:
 // после выноса домена пересчитай число под фактическое. Поднимать потолок нельзя —
 // новый код пиши сразу в features/<домен>/api.ts и types.ts.
-const MAX_API_LINES = 1558;
+const MAX_API_LINES = 1434;
 const MAX_TYPES_LINES = 2090;
 
 const lines = (rel: string) => readFileSync(resolve(__dirname, rel), 'utf-8').split('\n').length - 1;

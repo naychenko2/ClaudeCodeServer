@@ -1,6 +1,6 @@
 // Домен «История решений» (вынесено из lib/api.ts, docs/research/frontend-api-split-2026-11.md):
 // листинг досье, статус/запуск экспорта в ветку и импорт из неё. Тонкая обёртка над
-// живым REST; DTO-типы — types/index.ts (DossierEntry доедет в эту папку в S5-P3).
+// живым REST; DTO-типы — здесь, в types.ts этой папки (вынесены из types/index.ts в S5-P7).
 import { request } from '../../lib/offline';
 import type { DossierEntry } from '../../types';
 

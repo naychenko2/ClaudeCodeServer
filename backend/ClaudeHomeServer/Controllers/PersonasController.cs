@@ -201,9 +201,11 @@ public class PersonasController(
         return persona is null ? NotFound() : Ok(persona);
     }
 
+    // Путь формы — человеческий: инициатор траты аватара называет здесь, сам сервис его
+    // не вычисывает (S-SPEND-8)
     [HttpPost]
     public Task<ActionResult<Persona>> Create([FromBody] CreatePersonaRequest req) =>
-        _crud.CreateAsync(UserId, req, CallerSessionId());
+        _crud.CreateAsync(UserId, req, CallerSessionId(), SpendInitiators.Human);
 
     [HttpPut("{id}")]
     public Task<ActionResult<Persona>> Update(string id, [FromBody] UpdatePersonaRequest req) =>
@@ -278,9 +280,10 @@ public class PersonasController(
     // и модель выбирает роутер по настройке инстанса. Кандидаты сохраняются во временную
     // папку, аватар персоны НЕ меняется до выбора.
     // prompt пуст → строим фото-промпт из имени/описания персоны.
+    // Путь формы — человеческий: человек просит варианты сам (S-SPEND-8)
     [HttpPost("{id}/avatar/generate")]
     public Task<ActionResult> GenerateAvatar(string id, [FromBody] GenerateAvatarRequest req) =>
-        _crud.GenerateAvatarAsync(UserId, id, req);
+        _crud.GenerateAvatarAsync(UserId, id, req, SpendInitiators.Human);
 
     // Отдать кандидата аватара (превью в галерее выбора). access_token в query для <img>.
     [HttpGet("{id}/avatar/candidate/{file}")]
@@ -558,8 +561,9 @@ public class PersonasController(
             systemPrompt: null, model: null, effort: null, scope, req.ProjectId,
             color, draft.Greeting, memoryEnabled: true, tools: null, contract: contract);
 
-        // 3. Фото-аватар — автоматически (не критично: при сбое остаются инициалы)
-        persona = await _crud.TryAutoGenerateAvatarAsync(UserId, persona, draft.AvatarPrompt);
+        // 3. Фото-аватар — автоматически (не критично: при сбое остаются инициалы).
+        // Quick-create — действие человека из UI, инициатор траты — он (S-SPEND-8)
+        persona = await _crud.TryAutoGenerateAvatarAsync(UserId, persona, draft.AvatarPrompt, SpendInitiators.Human);
 
         // 3.5. Проектной персоне — дефолтные привязки к данным проекта (файлы/заметки/знания)
         persona = _bindings.SeedProjectDefaults(UserId, persona);

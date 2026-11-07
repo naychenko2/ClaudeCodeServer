@@ -135,6 +135,10 @@ internal static class SpendMapping
     // Аналитика расхода: генерация fal.ai — счётчик операций (токенов у fal нет),
     // фактическая стоимость про запас. Дедуп выше гарантирует одну запись на request_id.
     // Вызывается уже после снятия _falPersistLock — внешнего состояния не держит.
+    //
+    // Этот путь — агентский по построению: в mcp.fal.ai ходит сам CLI, через роутер
+    // картинок он не идёт. Инициатор — agent (S-SPEND-8): у агентской траты один признак,
+    // «null + SessionId» вторым способом сказать то же самое быть не должно.
     public static void RecordFalGeneration(
         ISpendCollector? spend,
         Func<Session, string?> resolveOwnerId,
@@ -163,12 +167,14 @@ internal static class SpendMapping
                 CostUsd = msg.CostUsd,
                 Generations = 1,
                 Label = msg.EndpointId,
+                Initiator = SpendInitiators.Agent,
             });
         }
         catch (Exception ex) { log?.LogWarning(ex, "spend: запись генерации fal не удалась"); }
     }
 
     // Аналитика: генерация glif — счётчик операций, кредиты про запас, стоимость USD неизвестна.
+    // Инициатор — agent: glif из хода зовёт CLI напрямую (тот же признак, что у fal, S-SPEND-8).
     public static void RecordGlifGeneration(
         ISpendCollector? spend,
         Func<Session, string?> resolveOwnerId,
@@ -197,6 +203,7 @@ internal static class SpendMapping
                 CostUsd = null,
                 Generations = 1,
                 Label = msg.OutputType,
+                Initiator = SpendInitiators.Agent,
             });
         }
         catch (Exception ex) { log?.LogWarning(ex, "spend: запись генерации glif не удалась"); }
@@ -209,6 +216,7 @@ internal static class SpendMapping
         toolName is not null && toolName.Contains("mcp__higgsfield__generate_");
 
     // Запись расхода Higgsfield-генерации: Generations=1, CostUsd=null (кредиты не пересчитываем).
+    // Инициатор — agent: инструмент зовёт CLI в ходе (тот же признак, что у fal/glif, S-SPEND-8).
     public static void RecordHiggsfieldGeneration(
         ISpendCollector? spend,
         Func<Session, string?> resolveOwnerId,
@@ -230,6 +238,7 @@ internal static class SpendMapping
                 CostUsd = null,
                 Generations = 1,
                 Label = "higgsfield-generation",
+                Initiator = SpendInitiators.Agent,
             });
         }
         catch (Exception ex) { log?.LogWarning(ex, "spend: запись генерации higgsfield не удалась"); }

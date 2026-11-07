@@ -104,7 +104,7 @@ public class ImageGenerationSpendTests
         var service = new ImageGenerationService([fal], Store(NewTempDir(), ("Images:Models:fal", "fal-ai/flux/dev")),
             null, spend, cost);
 
-        var images = await service.GenerateManyAsync(Avatar, "кот", 2, CancellationToken.None, Owner);
+        var images = await service.GenerateManyAsync(Avatar, "кот", 2, Owner, SpendInitiators.Human, CancellationToken.None);
 
         images.Should().HaveCount(2);
         await spend.WaitForSecond(Settle);
@@ -136,7 +136,7 @@ public class ImageGenerationSpendTests
         var cost = new FakeCost(0.01);
         var service = new ImageGenerationService([glif], Store(NewTempDir()), null, spend, cost);
 
-        await service.GenerateManyAsync(Avatar, "кот", 1, CancellationToken.None, Owner);
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None);
         await spend.WaitForSecond(TimeSpan.FromMilliseconds(300));
 
         var rec = spend.Records.Single();
@@ -157,7 +157,7 @@ public class ImageGenerationSpendTests
         // Порядок auto-выбора: glif → fal; glif отдал пусто — пошёл fal
         var service = new ImageGenerationService([fal, glif], Store(NewTempDir()), null, spend, cost);
 
-        await service.GenerateManyAsync(Avatar, "кот", 1, CancellationToken.None, Owner);
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None);
 
         spend.Records.Should().ContainSingle().Which.Source.Should().Be(SpendSources.Fal,
             "пустой провайдер ничего не стоил — трата за того, кто отдал картинки");
@@ -173,7 +173,7 @@ public class ImageGenerationSpendTests
         var cost = new FakeCost(null);
         var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, cost);
 
-        await service.GenerateManyAsync(Avatar, "кот", 1, CancellationToken.None, Owner);
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None);
 
         // Отсутствие цены — штатный исход: опрос был, догоняющей записи нет
         await cost.AskedOrTimeout;
@@ -190,7 +190,9 @@ public class ImageGenerationSpendTests
         var cost = new FakeCost(0.01);
         var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, cost);
 
-        var images = await service.GenerateManyAsync(Avatar, "кот", 1);
+        // Пустой владелец — осознанный выбор вызывающего (S-SPEND-8): параметр обязателен,
+        // пустую строку компилятор пропустит, но это уже не забытый аргумент
+        var images = await service.GenerateManyAsync(Avatar, "кот", 1, "", SpendInitiators.Human, CancellationToken.None);
 
         images.Should().HaveCount(1, "генерация без владельца работает как раньше");
         spend.Records.Should().BeEmpty("трату не на кого повесить — в «системную» не кладём");
@@ -208,15 +210,15 @@ public class ImageGenerationSpendTests
         var cost = new FakeCost(null);
         var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, cost);
 
-        await service.GenerateManyAsync(Avatar, "кот", 1, CancellationToken.None, Owner, SpendInitiators.Agent);
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Agent, CancellationToken.None);
 
         var rec = spend.Records.Single();
         rec.OwnerId.Should().Be(Owner);
         rec.Initiator.Should().Be(SpendInitiators.Agent, "инициатор записи — тот, кто подал операцию");
     }
 
-    // Фоновая очередь инициатора не называет (его принесёт сама заявка, S-SPEND-8):
-    // выдуманного человека в записи быть не должно.
+    // Вызывающий, который не назвал инициатора (пустая строка), не должен получать в записи
+    // выдуманного человека: поле остаётся null — «не размечено» (S-SPEND-8)
     [Fact]
     public async Task ИнициаторНеНазван_ЗаписьБезИнициатора()
     {
@@ -224,8 +226,9 @@ public class ImageGenerationSpendTests
         var spend = new CapturingSpend();
         var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, new FakeCost(null));
 
-        await service.GenerateAsync(Avatar, "кот", CancellationToken.None, Owner, initiator: null);
+        var images = await service.GenerateAsync(Avatar, "кот", Owner, "", ct: CancellationToken.None);
 
+        images.Should().NotBeNull("генерация от пустого инициатора не отказывается");
         spend.Records.Single().Initiator.Should().BeNull("неизвестный инициатор не выдумываем");
     }
 
@@ -237,7 +240,7 @@ public class ImageGenerationSpendTests
         var cost = new FakeCost(0.01);
         var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, cost);
 
-        Assert.Empty(await service.GenerateManyAsync(Avatar, "кот", 1, CancellationToken.None, Owner));
+        Assert.Empty(await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None));
 
         spend.Records.Should().BeEmpty();
         cost.Calls.Should().Be(0);

@@ -25,6 +25,13 @@ public sealed class ImageBackfillRequest
     public string OwnerId { get; set; } = "";
     // Промпт генерации от инициатора; пусто — соберём из имени сущности
     public string? Prompt { get; set; }
+    // Кто подал заявку (SpendInitiators.*): факт известен только в момент постановки, а
+    // догоняющая генерация идёт позже и в другом потоке — без этого поля он терялся
+    // (S-SPEND-8). null — заявка, поставленная до этого поля: читается как human (решение
+    // по шагу; раньше инициатор в очереди не сохранялся вовсе). Аддитивное поле: старый
+    // файл читается штатно, FormatVersion не двигается (ломающим было бы изменение
+    // существующих полей).
+    public string? Initiator { get; set; }
     // Сколько раз генерация уже проваливалась (пожизненно, а не в рамках прогона)
     public int Attempts { get; set; }
     public string? LastFailReason { get; set; }
@@ -82,8 +89,10 @@ public sealed class ImageBackfillStore
     /// <summary>
     /// Поставить заявку в очередь. Идемпотентно: повторная постановка на ту же сущность
     /// дубля не создаёт (обновляет промпт, если прислали новый). false — заявка уже была.
+    /// initiator — кто подал заявку (SpendInitiators.*): сохраняется в ней, чтобы догоняющая
+    /// генерация в другом потоке могла назвать инициатора своей траты (S-SPEND-8).
     /// </summary>
-    public bool Enqueue(string kind, string entityId, string ownerId, string? prompt)
+    public bool Enqueue(string kind, string entityId, string ownerId, string? prompt, string initiator)
     {
         if (!ImageBackfillKinds.IsKnown(kind)
             || string.IsNullOrWhiteSpace(entityId) || string.IsNullOrWhiteSpace(ownerId))
@@ -107,6 +116,9 @@ public sealed class ImageBackfillStore
                 EntityId = entityId,
                 OwnerId = ownerId,
                 Prompt = string.IsNullOrWhiteSpace(prompt) ? null : prompt.Trim(),
+                // Пустой инициатор не пишем: «не назван» и отсутствие поля — одно и то же,
+                // читается одинаково (human)
+                Initiator = string.IsNullOrWhiteSpace(initiator) ? null : initiator,
             }]);
             return true;
         }
@@ -154,6 +166,9 @@ public sealed class ImageBackfillStore
             EntityId = r.EntityId,
             OwnerId = r.OwnerId,
             Prompt = prompt,
+            // Инициатор переживает и повторные попытки, и смену промпта: он про заявку,
+            // а не про конкретную попытку (S-SPEND-8)
+            Initiator = r.Initiator,
             Attempts = attempts ?? r.Attempts,
             LastFailReason = failReason ?? r.LastFailReason,
             CreatedAt = r.CreatedAt,

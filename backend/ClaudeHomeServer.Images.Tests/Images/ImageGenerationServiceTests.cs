@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Images;
 using Microsoft.Extensions.Configuration;
 using Xunit;
@@ -7,9 +8,12 @@ namespace ClaudeHomeServer.Tests.Services;
 // Роутер генерации картинок: кто отработает запрос при auto/явном выборе, фолбэк
 // на второго провайдера, независимость мест друг от друга и поведение, когда не настроен
 // ни один провайдер.
+// Владелец и инициатор в этих тестах — обычные значения: они обязательны на входе роутера
+// (S-SPEND-8), а проверяется здесь маршрутизация, не учёт (коллектора нет вовсе).
 public class ImageGenerationServiceTests
 {
     private const string Avatar = ImagePlaces.PersonaAvatar;
+    private const string Owner = "u-1";
 
     // Драйвер-заглушка: считает вызовы и запоминает модель, с которой его позвали
     private sealed class FakeGenerator(string key, bool enabled, bool returnsImages = true) : IImageGenerator
@@ -57,7 +61,7 @@ public class ImageGenerationServiceTests
         Assert.True(service.EnabledFor(Avatar));
         Assert.Equal("fal", service.ActiveProviderFor(Avatar)?.Key);
 
-        var images = await service.GenerateManyAsync(Avatar, "кот", 1);
+        var images = await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human);
 
         Assert.Single(images);
         Assert.Equal(1, fal.Calls);
@@ -73,7 +77,7 @@ public class ImageGenerationServiceTests
         var service = new ImageGenerationService([fal, glif], Store(NewTempDir()));
 
         Assert.Equal("glif", service.ActiveProviderFor(Avatar)?.Key);
-        await service.GenerateManyAsync(Avatar, "кот", 1);
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human);
 
         Assert.Equal(1, glif.Calls);
         Assert.Equal(0, fal.Calls);
@@ -86,7 +90,7 @@ public class ImageGenerationServiceTests
         var fal = new FakeGenerator("fal", enabled: true);
         var service = new ImageGenerationService([fal, glif], Store(NewTempDir()));
 
-        var images = await service.GenerateManyAsync(Avatar, "кот", 2);
+        var images = await service.GenerateManyAsync(Avatar, "кот", 2, Owner, SpendInitiators.Human);
 
         Assert.Single(images);
         Assert.Equal(1, glif.Calls);
@@ -103,7 +107,7 @@ public class ImageGenerationServiceTests
 
         Assert.Equal("glif", service.ActiveProviderFor(Avatar)?.Key);
 
-        var images = await service.GenerateManyAsync(Avatar, "кот", 1);
+        var images = await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human);
 
         Assert.Empty(images);           // выбранный провайдер вернул пусто — молча на fal не уходим
         Assert.Equal(0, fal.Calls);
@@ -120,7 +124,7 @@ public class ImageGenerationServiceTests
             Store(NewTempDir(), ("Images:Provider", "glif")));
 
         Assert.False(service.EnabledFor(Avatar));
-        Assert.Empty(await service.GenerateManyAsync(Avatar, "кот", 1));
+        Assert.Empty(await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human));
         Assert.Equal(0, fal.Calls);
     }
 
@@ -134,7 +138,7 @@ public class ImageGenerationServiceTests
         Assert.False(service.AnyEnabled);
         Assert.False(service.EnabledFor(Avatar));
         Assert.Null(service.ActiveProviderFor(Avatar));
-        Assert.Empty(await service.GenerateManyAsync(Avatar, "кот", 1));
+        Assert.Empty(await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human));
     }
 
     [Fact]
@@ -144,7 +148,7 @@ public class ImageGenerationServiceTests
         var service = new ImageGenerationService([fal],
             Store(NewTempDir(), ("Images:Models:fal", "fal-ai/flux/dev")));
 
-        await service.GenerateManyAsync(Avatar, "кот", 1);
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human);
         Assert.Equal("fal-ai/flux/dev", fal.LastModel);
         Assert.Equal("fal-ai/flux/dev", service.ModelFor(Avatar, "fal"));
     }

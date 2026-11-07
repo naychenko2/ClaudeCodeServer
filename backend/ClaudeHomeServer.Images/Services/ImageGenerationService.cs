@@ -69,16 +69,18 @@ public sealed class ImageGenerationService
     // Модель, с которой провайдер пойдёт в этом месте (настройка → конфиг → дефолт драйвера = null)
     public string? ModelFor(string place, string providerKey) => _settings.ModelFor(place, providerKey);
 
-    // ownerId — тот, на кого пишется трата (RecordSpend): вызывающий знает владельца всегда,
-    // роутер — нет. Параметр стоит ПОСЛЕ ct, чтобы существующие вызовы с токеном не
-    // сдвинулись. Без владельца трата не пишется: повесить её не на кого.
-    // initiator — кто подал операцию (SpendInitiators.*): его знает только точка входа
-    // (REST-контроллер — человек, MCP-тулсет — агент), роутер его не вычисляет и не подменяет
-    // (находка ревью R-S-SPEND-2). null — инициатор вызова не известен (фоновая очередь);
-    // выдумывать человека не будем: поле остаётся null, как у записей без инициатора.
+    // ownerId и initiator — обязательные параметры ПЕРЕД ct (S-SPEND-8): их знает только
+    // вызывающий, и компилятор не даст забыть их оба. Пустая строка — осознанный выбор
+    // вызывающего («не знаю»), а не забытый аргумент: роутер пишет об этом в лог и
+    // генерацию не роняет (из-за учёта расхода нельзя отказать в аватаре).
+    // ownerId — тот, на кого пишется трата (RecordSpend): без владельца записи нет, чужому
+    // трата не приписывается.
+    // initiator — кто подал операцию (SpendInitiators.*): точка входа (REST — человек,
+    // MCP-тулсет — агент, фоновая заявка — сохранённый в ней), роутер его не вычисляет и
+    // не подменяет (находка ревью R-S-SPEND-2); пустой — записи остаётся null (не размечено).
     public async Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
-        string place, string prompt, int count, CancellationToken ct = default, string? ownerId = null,
-        string? initiator = SpendInitiators.Human)
+        string place, string prompt, int count, string ownerId, string initiator,
+        CancellationToken ct = default)
     {
         var chain = Resolve(place);
         if (chain.Count == 0)
@@ -108,10 +110,9 @@ public sealed class ImageGenerationService
 
     // Одна картинка (первый вариант) — для мест, где выбора не предлагается
     public async Task<GeneratedImage?> GenerateAsync(
-        string place, string prompt, CancellationToken ct = default, string? ownerId = null,
-        string? initiator = SpendInitiators.Human)
+        string place, string prompt, string ownerId, string initiator, CancellationToken ct = default)
     {
-        var many = await GenerateManyAsync(place, prompt, 1, ct, ownerId, initiator);
+        var many = await GenerateManyAsync(place, prompt, 1, ownerId, initiator, ct);
         return many.Count > 0 ? many[0] : null;
     }
 
@@ -187,7 +188,7 @@ public sealed class ImageGenerationService
 
     private void RecordSpend(
         string place, IImageGenerator generator, string? model,
-        IReadOnlyList<GeneratedImage> images, string? ownerId, string? initiator)
+        IReadOnlyList<GeneratedImage> images, string ownerId, string initiator)
     {
         if (_spend is null)
         {
@@ -197,14 +198,21 @@ public sealed class ImageGenerationService
         }
         if (string.IsNullOrWhiteSpace(ownerId))
         {
-            // Вызывающий, который ещё не назвал владельца (часть путей — следующий шаг):
-            // молча класть чужую трату в «системную» не будем — её потом не разделить.
+            // Вызывающий назвал пустого владельца: молча класть чужую трату в «системную»
+            // не будем — её потом не разделить. Генерация при этом остаётся удавшейся.
             _log?.LogWarning("Генерация картинок: вызывающий не назвал владельца, трата {Place} ({Provider}) не записана",
                 place, generator.Key);
             return;
         }
 
-        WriteSpend(ownerId, generator.Key, model, amount: null, generations: images.Count, initiator);
+        // Пустой инициатор — то же «не размечено», что и отсутствие поля: отдельного
+        // значения у пустой строки нет, иначе у одного факта стало бы два признака (S-SPEND-8)
+        var named = string.IsNullOrWhiteSpace(initiator) ? null : initiator;
+        if (named is null)
+            _log?.LogWarning("Генерация картинок: вызывающий не назвал инициатора, трата {Place} ({Provider}) записана без него",
+                place, generator.Key);
+
+        WriteSpend(ownerId, generator.Key, model, amount: null, generations: images.Count, named);
 
         // Сумму догоняет только fal: в ответах glif (compose_project / get_job_status) нет
         // идентификатора, по которому его цена спрашивается — GlifJobParser берёт jobId, media
@@ -261,10 +269,10 @@ public sealed class ImageGenerationService
                 Source = providerKey,
                 CostUsd = amount,
                 Generations = generations,
-                // Инициатор — тот, кто подал операцию, каким его назвала точка входа
-                // (находка ревью R-S-SPEND-2: агентский путь жив — personas_generate_avatar и
-                // personas_create с AutoAvatar из чата доходят ровно сюда через PersonasCrudService).
-                // null — инициатор не известен: фоновая очередь заявки его пока не несёт (S-SPEND-8).
+                // Инициатор — тот, кто подал операцию, каким его назвала точка входа:
+                // REST/онбординг — человек, MCP-тулсет — агент, фоновая заявка — тот, кто её
+                // поставил (значение сохранено в заявке, S-SPEND-8). Роутер его не вычисляет
+                // (находка ревью R-S-SPEND-2). null — вызывающий назвал пустого.
                 Initiator = initiator,
                 Label = amount is null && generations > 0 ? SpendLabelPendingAmount : SpendLabel,
             });

@@ -60,10 +60,12 @@ public sealed class ImageBackfillService(
     /// <summary>
     /// Поставить сущность в очередь на догоняющую генерацию. Зовут контроллеры, когда
     /// картинку сделать не удалось (генератор выключен или вернул отказ). Идемпотентно.
+    /// initiator — кто подал заявку (SpendInitiators.*): его знает вызывающий, он же и
+    /// доходит до фоновой траты через сохранённую заявку (S-SPEND-8).
     /// </summary>
-    public void Enqueue(string kind, string entityId, string ownerId, string? prompt = null)
+    public void Enqueue(string kind, string entityId, string ownerId, string? prompt, string initiator)
     {
-        if (store.Enqueue(kind, entityId, ownerId, prompt))
+        if (store.Enqueue(kind, entityId, ownerId, prompt, initiator))
             log.LogInformation("Картинка догонит позже: {Kind} {Entity} (владелец {Owner})",
                 kind, entityId, ownerId);
     }
@@ -217,6 +219,12 @@ public sealed class ImageBackfillService(
         return new ImageBackfillSummary(0, 0, 1);
     }
 
+    // Инициатор траты этой заявки — из самой заявки (S-SPEND-8). Пустой/отсутствующий —
+    // заявка поставлена до появления поля: читаем её как human, другой инициатор не
+    // выдумываем (фон — исполнитель чужого решения, а не инициатор).
+    private static string InitiatorOf(ImageBackfillRequest request) =>
+        string.IsNullOrWhiteSpace(request.Initiator) ? Models.SpendInitiators.Human : request.Initiator;
+
     // Одна попытка: null — успех, иначе причина отказа
     private async Task<string?> TryGenerateAsync(ImageBackfillRequest request, string prompt, CancellationToken ct)
     {
@@ -226,10 +234,10 @@ public sealed class ImageBackfillService(
         {
             // Трата догоняющей генерации — на владельца заявки (он в заявке с момента
             // постановки, а Resolve снимает заявку, если персона ушла к другому владельцу, —
-            // чужому трата не уйдёт). Инициатор фоновой заявки не известен: сама заявка его
-            // пока не несёт (S-SPEND-8), выдумывать человека роутеру не передаём (S-SPEND-2c)
-            image = await images.GenerateAsync(request.Kind, prompt, ct,
-                ownerId: request.OwnerId, initiator: null);
+            // чужому трата не уйдёт) и с инициатором той же заявки: он сохранён при её
+            // постановке (S-SPEND-8), роутер его не выдумывает
+            image = await images.GenerateAsync(request.Kind, prompt, request.OwnerId,
+                InitiatorOf(request), ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Images;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -105,7 +106,7 @@ public class ImageGenQueuedFlagTests : IClassFixture<SilentImageProviderFactory>
     {
         var images = _factory.Services.GetRequiredService<ImageGenerationService>();
 
-        var image = await images.GenerateAsync(ImagePlaces.PersonaAvatar, "аватар");
+        var image = await images.GenerateAsync(ImagePlaces.PersonaAvatar, "аватар", "u-any", SpendInitiators.Human);
 
         image.Should().BeNull();
     }

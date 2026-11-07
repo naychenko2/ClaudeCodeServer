@@ -97,8 +97,9 @@ public sealed class SpendRecord
     public long DurationMs { get; init; }
     // Подпись операции: ключ фонового действия (changelog, notes.tags…) или endpoint fal
     public string? Label { get; init; }
-    // Кто запустил трату в редакторе картинок (ADR-018 §2): SpendInitiators.*. null — трата
-    // не из редактора либо запись до этого поля. В дневные агрегаты не сворачивается.
+    // Кто запустил платную генерацию (редактор картинок, ADR-018 §2; роутер картинок и
+    // агентские генерации хода — S-SPEND-8): SpendInitiators.*. null — не размечено либо
+    // запись до этого поля. В дневные агрегаты не сворачивается.
     public string? Initiator { get; init; }
 
     [JsonIgnore]

@@ -230,3 +230,51 @@ public class SpendMappingFalRequestIdTests
     public void TryExtractFalRequestId_FalДоменБезId_ИлиПусто_Null(string? content) =>
         SpendMapping.TryExtractFalRequestId(content!).Should().BeNull();
 }
+
+// S-SPEND-8: генерации, которые зовёт сам CLI в ходе (внешний mcp.fal.ai, glif, higgsfield),
+// через роутер картинок не идут — но и у них один признак агентской траты: Initiator = agent.
+// «null + SessionId» — это второй способ сказать то же самое, и он не должен оставаться.
+public class SpendMappingAgentGenerationTests
+{
+    private sealed class RecordingSpend : ISpendCollector
+    {
+        public List<SpendRecord> Records { get; } = [];
+        public void Record(SpendRecord record) => Records.Add(record);
+    }
+
+    private static Session Chat() => new() { Id = "s-1", ProjectId = "p-1", Provider = "claude", Model = "opus" };
+
+    private static SpendRecord One(ISpendCollector spend) => Assert.Single(((RecordingSpend)spend).Records);
+
+    [Fact]
+    public void RecordFalGeneration_ИнициаторАгента()
+    {
+        var spend = new RecordingSpend();
+        SpendMapping.RecordFalGeneration(spend, _ => "owner-1", null, Chat(),
+            new FalCostMessage("req-1", "fal-ai/flux/dev", 0.0123));
+        var r = One(spend);
+        r.Source.Should().Be(SpendSources.Fal);
+        r.Initiator.Should().Be(SpendInitiators.Agent);
+    }
+
+    [Fact]
+    public void RecordGlifGeneration_ИнициаторАгента()
+    {
+        var spend = new RecordingSpend();
+        SpendMapping.RecordGlifGeneration(spend, _ => "owner-1", null, Chat(),
+            new GlifCostMessage("job-1", "image", 1, 3, "glif-image"));
+        var r = One(spend);
+        r.Source.Should().Be(SpendSources.Glif);
+        r.Initiator.Should().Be(SpendInitiators.Agent);
+    }
+
+    [Fact]
+    public void RecordHiggsfieldGeneration_ИнициаторАгента()
+    {
+        var spend = new RecordingSpend();
+        SpendMapping.RecordHiggsfieldGeneration(spend, _ => "owner-1", null, Chat());
+        var r = One(spend);
+        r.Source.Should().Be(SpendSources.Higgsfield);
+        r.Initiator.Should().Be(SpendInitiators.Agent);
+    }
+}

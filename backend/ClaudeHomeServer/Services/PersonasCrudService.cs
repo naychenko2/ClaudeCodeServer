@@ -62,10 +62,11 @@ public sealed class PersonasCrudService(
     // onAutoVoice — исход автоподбора голоса, если он запускался (MCP сообщает его модели);
     // голос был задан явно (в т.ч. пустым объектом) — не вызывается.
     // initiator — кто подал создание: человек из формы или агент из чата (учёт траты аватара,
-    // S-SPEND-2c). Сервис его не вычисывает: у него два входа, REST и MCP, и называет его вызывающий
+    // S-SPEND-2c). Сервис его не вычисывает: у него два входа, REST и MCP, и называет его
+    // вызывающий — параметр обязательный, чтобы «забыл» не читалось молча как человек (S-SPEND-8)
     public async Task<ActionResult<Persona>> CreateAsync(string userId, CreatePersonaRequest req,
-        string? callerSessionId, CancellationToken ct = default, Action<AutoVoiceResult>? onAutoVoice = null,
-        string? initiator = SpendInitiators.Human)
+        string? callerSessionId, string initiator, CancellationToken ct = default,
+        Action<AutoVoiceResult>? onAutoVoice = null)
     {
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest("Не задано имя персоны");
@@ -528,9 +529,10 @@ public sealed class PersonasCrudService(
     // папку, аватар персоны НЕ меняется до выбора.
     // prompt пуст → строим фото-промпт из имени/описания персоны.
     // initiator — кто подал операцию (SpendInitiators.*): REST из UI — человек, MCP-тулсет из
-    // чата — агент; трату роутер пишет с тем же инициатором, что назвал вызывающий (S-SPEND-2c)
+    // чата — агент; трату роутер пишет с тем же инициатором, что назвал вызывающий (S-SPEND-2c).
+    // Параметр обязательный: у метода ровно два входа, и каждый называет свой (S-SPEND-8)
     public async Task<ActionResult> GenerateAvatarAsync(string userId, string id, GenerateAvatarRequest req,
-        string? initiator = SpendInitiators.Human)
+        string initiator)
     {
         var persona = personas.Get(id, userId);
         if (persona is null) return NotFound();
@@ -550,20 +552,20 @@ public sealed class PersonasCrudService(
         // как только генерацию настроят
         if (!images.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar))
         {
-            if (canBackfill) imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar, id, userId, prompt);
+            if (canBackfill) imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar, id, userId, prompt, initiator);
             return BadRequest(new { error = ImageGenerationOffError, queued = canBackfill });
         }
 
         // Трату генерации пишем на того, кто её попросил, и с тем инициатором, который назвал
         // вызывающий (учёт расхода, S-SPEND-2, S-SPEND-2c)
         var generated = await images.GenerateManyAsync(
-            Services.Images.ImagePlaces.PersonaAvatar, prompt, count, CancellationToken.None, userId, initiator);
+            Services.Images.ImagePlaces.PersonaAvatar, prompt, count, userId, initiator, CancellationToken.None);
         // Провайдер не отдал картинок (таймаут, отказ) — аватар тоже не теряем: заявка
         // догонит персону фоном. queued в ответе — чтобы фронт сказал человеку честное
         // «появится сам», а не «генератор не ответил, аватар остался прежним».
         if (generated.Count == 0)
         {
-            if (canBackfill) imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar, id, userId, prompt);
+            if (canBackfill) imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar, id, userId, prompt, initiator);
             return StatusCode(502, new { error = "Не удалось сгенерировать изображение", queued = canBackfill });
         }
 
@@ -624,20 +626,21 @@ public sealed class PersonasCrudService(
     // Не получилось (провайдера нет, отказ, сбой) — персона остаётся с инициалами, а аватар
     // догонит её из очереди, когда генерация заработает.
     // initiator — тот, кто подал создание персоны (через CreateAsync или quick-create из UI):
-    // человек или агент; дальше он идёт в запись траты роутера (S-SPEND-2c)
+    // человек или агент; дальше он идёт и в запись траты роутера, и в заявку очереди
+    // (S-SPEND-2c, S-SPEND-8). Параметр обязательный: здесь он не вычисляется
     public async Task<Persona> TryAutoGenerateAvatarAsync(string userId, Persona persona, string? avatarPrompt,
-        string? initiator = SpendInitiators.Human)
+        string initiator)
     {
         var prompt = string.IsNullOrWhiteSpace(avatarPrompt)
             ? BuildAvatarPrompt(persona)
             : $"Photorealistic portrait photo. {avatarPrompt.Trim()}";
 
-        if (!images.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar)) return EnqueueAvatarBackfill(userId, persona, prompt);
+        if (!images.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar)) return EnqueueAvatarBackfill(userId, persona, prompt, initiator);
         try
         {
             var generated = await images.GenerateManyAsync(
-                Services.Images.ImagePlaces.PersonaAvatar, prompt, 1, CancellationToken.None, userId, initiator);
-            if (generated.Count == 0) return EnqueueAvatarBackfill(userId, persona, prompt);
+                Services.Images.ImagePlaces.PersonaAvatar, prompt, 1, userId, initiator, CancellationToken.None);
+            if (generated.Count == 0) return EnqueueAvatarBackfill(userId, persona, prompt, initiator);
             var dir = Path.Combine(personas.AssetsDir, persona.Id);
             Directory.CreateDirectory(dir);
             var fileName = $"avatar-{Guid.NewGuid():N}{ImageAssetHelper.ExtFor(generated[0].ContentType)}";
@@ -646,14 +649,16 @@ public sealed class PersonasCrudService(
         }
         catch
         {
-            return EnqueueAvatarBackfill(userId, persona, prompt);
+            return EnqueueAvatarBackfill(userId, persona, prompt, initiator);
         }
     }
 
-    private Persona EnqueueAvatarBackfill(string userId, Persona persona, string prompt)
+    // Инициатор сохраняется вместе с заявкой: догоняющая генерация идёт в другом потоке и
+    // сама решить его не может (S-SPEND-8)
+    private Persona EnqueueAvatarBackfill(string userId, Persona persona, string prompt, string initiator)
     {
         imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar,
-            persona.Id, string.IsNullOrEmpty(persona.OwnerId) ? userId : persona.OwnerId, prompt);
+            persona.Id, string.IsNullOrEmpty(persona.OwnerId) ? userId : persona.OwnerId, prompt, initiator);
         return persona;
     }
 

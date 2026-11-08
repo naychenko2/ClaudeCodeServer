@@ -1111,17 +1111,19 @@ export type * from '../features/mapHygiene/types';
 
 export type * from '../features/tasks/types';
 
-// eslint-disable-next-line module/no-cross-feature-import -- types/index.ts ре-экспортирует доменные типы для совместимости внешних импортов (шаг P12 линии разноса)
+// Директив module/no-cross-feature-import здесь нет: правило судит только фичи из
+// CROSS_FEATURE_IMPORT_ENABLED (eslint.config.js), а «account» и «projects» в него
+// ещё не включены. При их подключении эти ре-экспорты станут нарушениями; порядок
+// покрытия стартовых нарушений описан в комментарии к тому списку.
 export type * from '../features/account/types';
 
-// eslint-disable-next-line module/no-cross-feature-import -- значение, а не тип: `export type *` его не везёт, внешний импорт displayNameOf из types должен работать без правки потребителей
+// значение, а не тип: `export type *` его не везёт, внешний импорт displayNameOf из types должен работать без правки потребителей
 export { displayNameOf } from '../features/account/types';
 
-// eslint-disable-next-line module/no-cross-feature-import -- types/index.ts ре-экспортирует доменные типы для совместимости внешних импортов (S5-P4); публичного index.ts у projects нет, баррел заведётся отдельно
 export type * from '../features/projects/types';
 
-// eslint-disable-next-line module/no-cross-feature-import -- значение, а не тип: `export type *` его не везёт, внешний импорт MEMBER_REFUSAL из types должен работать без правки потребителей
+// значение, а не тип: `export type *` его не везёт, внешний импорт MEMBER_REFUSAL из types должен работать без правки потребителей
 export { MEMBER_REFUSAL } from '../features/projects/types';
 
-// eslint-disable-next-line module/no-cross-feature-import -- значение, а не тип: `export type *` его не везёт, внешний импорт ProjectFeature из types должен работать без правки потребителей
+// значение, а не тип: `export type *` его не везёт, внешний импорт ProjectFeature из types должен работать без правки потребителей
 export { ProjectFeature } from '../features/projects/types';

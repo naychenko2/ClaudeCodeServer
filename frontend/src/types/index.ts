@@ -740,7 +740,7 @@ export type ServerMessage = { sessionId: string } & (
   // time-to-first-token, оценка времени в очереди, доля prefix-кэша, число выданных токенов.
   | { type: 'local_model_turn_stats'; genTps?: number | null; prefillTps?: number | null; ttftMs?: number | null; queueMsApprox?: number | null; cacheHitPerc?: number | null; outTokens?: number | null; mainRequests?: number; subagentRequests?: number; compactionRequests?: number; auxiliaryRequests?: number; agentTypes?: string[] | null; compactionKind?: 'auto' | 'manual' | 'reactive' | null; toolCallLeakTail?: number; toolCallLeakWholeCall?: number }
   // Ход ждёт свободный слот локальной модели (гейт допуска, бэк 4683acb29). В отличие от
-  // local_model_live идёт БЕЗ : человек обязан видеть, что ход ждёт,
+  // local_model_live — независимо от включённости флага local-model-stats: человек обязан видеть, что ход ждёт,
   // а не «виснет молча». position — место в очереди (1-based), active/limit — «заняты N из M».
   // position=0 — ожидание кончилось (ход допущен/отказан/остановлен): строку снять.
   // Эфемерное: в историю не пишется, свою строку ленты снимает и на конце хода (редьюсер).

@@ -253,7 +253,10 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
           position: 'absolute', top: 'calc(100% + 6px)', right: 0,
           background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
           boxShadow: SHADOW.dropdown, zIndex: Z.dropdown,
-          minWidth: 190, overflow: 'hidden', padding: '4px 0',
+          minWidth: 190, padding: '4px 0',
+          // Меню длиннее экрана планшета в альбомной ориентации: без потолка и прокрутки
+          // нижние пункты («Вернуть голосовой ввод», «Выйти») уезжали за край недосягаемо
+          maxHeight: 'calc(100dvh - 80px)', overflowX: 'hidden', overflowY: 'auto',
         }}>
           <div style={{
             padding: '8px 14px 6px', fontSize: 12, color: C.textMuted,

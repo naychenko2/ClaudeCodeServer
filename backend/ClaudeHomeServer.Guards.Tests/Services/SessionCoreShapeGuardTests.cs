@@ -14,11 +14,21 @@ namespace ClaudeHomeServer.Tests.Services;
 /// <item>параметров ≤ 10 без <c>ILogger&lt;T&gt;</c> (новая зависимость — сигнал резать класс);</item>
 /// <item><c>Lazy&lt;T&gt;</c> только для пяти именованных разрывов циклов;</item>
 /// <item>на типы Services.Sessions ссылаются только SessionManager, сами Services.Sessions и тесты
-///   (default-deny: закрывает обход фасада — новые пути входа к per-owner изоляции);</item>
+///   (default-deny: закрывает обход фасада — новые пути входа к per-owner изоляции); allow-list
+///   рефереров опознаётся по полному имени (с пространством имён), а не по имени типа: одноимённый
+///   тип из чужого пространства имён — не регистрация, он обязан быть пойман;</item>
 /// <item><c>IServiceProvider</c> в конструкторе — только у поимённого allow-list (одна роль:
 ///   <c>BuiltinMcpContexts</c>; её ограничение на резолв — комментарий у поля и пункт ревью,
 ///   рефлексией оно не видно).</item>
 /// </list>
+/// Область правил — пространство имён <c>ClaudeHomeServer.Services.Sessions</c>: это соглашение, а не
+/// механика. Роли ядра сейчас лежат в нём, поэтому все пять правил их видят; роль, вынесенная в другое
+/// пространство имён, уходит из-под правил целиком (правила её не увидят, и правило 4 не пометит ссылок
+/// на неё). Вынос роли за пределы пространства имён — отдельный шаг с явным пере-решением по сторожу:
+/// расширять правила на <c>ClaudeHomeServer.Services</c> нельзя — под них попали бы фасад и штаб
+/// (конструктор фасада больше 30 параметров — правило 2 краснеет на нём сразу), а исключения для них
+/// были бы большим именем-списком — тем самым слабым местом, из которого исправлено правило 4;
+/// сторож по списку имён ролей — тоже опознавание по имени плюс не проверяется полнота самого списка.
 /// Правила — чистые функции над набором типов, поэтому «мутация сторожа» доказывается самопроверками
 /// на синтетических нарушителях: сторож, который не краснеет, ничего не охраняет.
 /// Сборку Main форс-загружаем, иначе сторож проходит вакуумно.
@@ -45,10 +55,14 @@ public class SessionCoreShapeGuardTests
         ["BuiltinMcpContexts"] = "резолвит лишь McpToolsetRegistry и IDeviceExecChannel (цикл через реестр тулсетов)",
     };
 
-    // Кто, кроме SessionManager и самих Services.Sessions, может ссылаться на типы ядра
+    // Кто, кроме SessionManager и самих Services.Sessions, может ссылаться на типы ядра.
+    // Ключ — полное имя типа (с пространством имён), не имя: опознавание по имени пропускало бы
+    // одноимённый тип из чужого пространства имён (самопроверка ниже краснеет на нём).
     private static readonly Dictionary<string, string> CoreReferrerAllowList = new()
     {
-        ["SessionCoreRegistration"] = "регистрация AddSessionCore в DI — единственная точка сборки ядра",
+        ["ClaudeHomeServer.Services.Composition.SessionCoreRegistration"] =
+            "регистрация AddSessionCore в DI — единственная точка сборки ядра; "
+            + "пространство имён Composition — по замыслу (комментарий у SessionCoreRegistration.cs:5)",
     };
 
     static SessionCoreShapeGuardTests()
@@ -131,7 +145,7 @@ public class SessionCoreShapeGuardTests
         while (root.DeclaringType is not null) root = root.DeclaringType;
         return root == typeof(SessionManager)
             || root.Namespace == CoreNamespace
-            || CoreReferrerAllowList.ContainsKey(root.Name);
+            || (root.FullName is not null && CoreReferrerAllowList.ContainsKey(root.FullName));
     }
 
     // ---- боевые проверки ----
@@ -257,4 +271,21 @@ public class SessionCoreShapeGuardTests
     [Fact]
     public void Самопроверка_правило4_краснеет_на_ссылке_постороннего_типа_на_стор() =>
         Rule4OnlyFacadeReferences([typeof(FakeReferrer)]).Should().ContainSingle();
+
+    [Fact]
+    public void Самопроверка_правило4_ловится_одноимённый_тип_из_чужого_пространства_имён()
+    {
+        // Allow-list опознаётся по полному имени: тип с именем допустимой регистрации,
+        // но в чужом пространстве имён — не регистрация, ссылка на ядро обязана быть помечена.
+        Rule4OnlyFacadeReferences([typeof(SessionCoreRegistration)]).Should().ContainSingle();
+    }
+}
+
+// Подставляемый тип самопроверки правила 4: одноимённый допустимой регистрации
+// SessionCoreRegistration, но в тестовом пространстве имён (не Composition).
+// При сверке по имени типа проходил бы мимо allow-list — при сверке по полному имени
+// обязан быть пойман. В боевой скан правила 4 не попадает: тот обходит только Main.
+internal sealed class SessionCoreRegistration
+{
+    public SessionStore? Store;
 }

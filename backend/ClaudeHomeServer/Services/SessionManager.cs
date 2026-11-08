@@ -318,6 +318,10 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private ITaskLookup? _taskLookup => _store.TaskLookup;
     // Тест-шов: подменить ITaskLookup. TaskManager в конструктор SessionManager не пробрасывают
     // (DI-цикл), поэтому юниты, которым нужен резолв задачи, подменяют lookup явно.
+    // Подмена идёт по стору, а не по фасаду: в DI-пути стор — синглтон (SessionCoreRegistration.cs:22),
+    // поэтому в Host-тесте подмена отравила бы общий стор на всё время жизни фабрики. Сегодня шов зовут
+    // только юниты и каждый SessionCoreTestHost.Build носит свой контейнер и свой стор
+    // (SessionCoreTestHost.cs:38) — риска нет; при появлении Host-тестов нужен сброс или изоляция стора.
     internal void SetTaskLookupForTests(ITaskLookup? lookup) => _store.TaskLookup = lookup;
 
     // Сжатие конструктора (S3-8c, решение (А) 08.11): роли ядра и живые зависимости фасада и

@@ -284,8 +284,10 @@ using (var dynamicModuleLogFactory = LoggerFactory.Create(logging => logging
 
 // Статические вертикали: их `[assembly: ApplicationPart("...")]` MSBuild дописывает
 // автоматически (см. блок выше). Гейт `Subsystems:{key}:Enabled` снимает DI-регистрацию
-// (Register не вызывается), но ApplicationPart остаётся в MVC-частях → роутер находит
-// контроллер, пытается его активировать без зависимостей → 500 вместо 404.
+// (Register не вызывается), но ApplicationPart остаётся в MVC-частях: маршруты на месте,
+// и отказ даёт сам контроллер, держущий гейт, — честный 503 с причиной
+// (сейчас — PluginsController; 500 на активации без зависимостей был состоянием
+// до nullable-волны, см. блок выше). У вертикали без контроллера HTTP-маршрутов нет вовсе.
 // Notes и Spend — динамические модули (сценарий Б): ApplicationPart подключает
 // ModuleLoader (выше), а не MSBuild-атрибут — M1-костыль (ручное снятие части
 // ClaudeHomeServer.Spend) снят после перехода на ReferenceOutputAssembly="false".

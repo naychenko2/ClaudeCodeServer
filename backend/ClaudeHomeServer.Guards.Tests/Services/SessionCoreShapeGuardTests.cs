@@ -23,6 +23,9 @@ namespace ClaudeHomeServer.Tests.Services;
 ///   <c>BuiltinMcpContexts</c>; её ограничение на резолв — комментарий у поля и пункт ревью,
 ///   рефлексией оно не видно).</item>
 /// </list>
+/// Плюс трипвайр по самому фасаду (хвост 1f7152c9, не правило над типами пространства имён):
+/// <c>SessionManager</c> не упоминает снятый Llm-контракт <c>ICheapTextRunner</c> — ни в какой
+/// форме (поле, параметр, свойство), см. <see cref="FacadeForbiddenLlm"/>.
 /// Область правил — пространство имён <c>ClaudeHomeServer.Services.Sessions</c>: это соглашение, а не
 /// механика. Роли ядра сейчас лежат в нём, поэтому все пять правил их видят; роль, вынесенная в другое
 /// пространство имён, уходит из-под правил целиком (правила её не увидят, и правило 4 не пометит ссылок
@@ -67,6 +70,15 @@ public class SessionCoreShapeGuardTests
     {
         ["BuiltinMcpContexts"] = "резолвит лишь McpToolsetRegistry и IDeviceExecChannel (цикл через реестр тулсетов)",
     };
+
+    // Трипвайр по фасаду (хвост 1f7152c9, находка ревью R-S3-8c): параметр `cheap` снят на S3-8c —
+    // уточнение заголовка живёт в ChatNaming, раннер он берёт из контейнера напрямую
+    // (SessionCoreRegistration.cs:116). Возврат зависимости к фасаду в ЛЮБОЙ форме (поле,
+    // параметр конструктора, публичный доступ) воспроизводит DI-цикл
+    // SessionManager → ChatNaming → SessionManager: в вариант с полем резолв RefineChatTitle
+    // повесил прогон на 9 минут (проба карточки). Сканер покрывает все три формы: IL тел
+    // плюс сигнатуры/поля (BoundaryIlScanner.CollectAllReferencedTypes).
+    private static readonly Type[] FacadeForbiddenLlm = [typeof(ClaudeHomeServer.Services.Llm.ICheapTextRunner)];
 
     // Кто, кроме SessionManager и самих Services.Sessions, может ссылаться на типы ядра.
     // Ключ — полное имя типа (с пространством имён), не имя: опознавание по имени пропускало бы
@@ -160,6 +172,16 @@ public class SessionCoreShapeGuardTests
         select $"{t.Name}: параметр «{p.Name}» — IServiceProvider (через провайдер роль обходит правила 1 и 2; "
             + "ленивый резолв описывается типом Lazy<T>)";
 
+    /// <summary>Трипвайр по фасаду: ни один из <paramref name="facades"/> не упоминает снятый
+    /// Llm-контракт — ни в какой форме (поле, параметр, свойство).</summary>
+    internal static IEnumerable<string> FacadeNoForbiddenLlm(IEnumerable<Type> facades) =>
+        from t in facades
+        let hit = BoundaryIlScanner.CollectAllReferencedTypes(t)
+            .FirstOrDefault(r => FacadeForbiddenLlm.Contains(r))
+        where hit is not null
+        select $"{t.Name} упоминает {hit.FullName}: зависимость снята на S3-8c, "
+            + "уточнение заголовка живёт в ChatNaming, раннер он берёт из контейнера напрямую";
+
     /// <summary>Правило 4: кто из <paramref name="referrers"/> ссылается на типы Services.Sessions.</summary>
     internal static IEnumerable<string> Rule4OnlyFacadeReferences(IEnumerable<Type> referrers)
     {
@@ -207,6 +229,10 @@ public class SessionCoreShapeGuardTests
     [Fact]
     public void Правило5_IServiceProvider_только_у_поимённого_allow_list() =>
         Rule5ServiceProviderOnlyAllowListed(CoreTypes()).Should().BeEmpty();
+
+    [Fact]
+    public void Фасад_не_тянет_обратно_ICheapTextRunner() =>
+        FacadeNoForbiddenLlm([typeof(SessionManager)]).Should().BeEmpty();
 
     [Fact]
     public void Правило4_на_типы_ядра_ссылаются_только_фасад_и_сами_Services_Sessions()
@@ -286,6 +312,22 @@ public class SessionCoreShapeGuardTests
 
     private sealed class FakeReferrer { public SessionStore? Store; }
 
+    // Три формы «возврата» из пробы 1f7152c9: поле, параметр конструктора, публичный доступ.
+    private sealed class FakeFacadeField
+    {
+        internal ClaudeHomeServer.Services.Llm.ICheapTextRunner? Cheap;
+    }
+
+    private sealed class FakeFacadeParam
+    {
+        public FakeFacadeParam(ClaudeHomeServer.Services.Llm.ICheapTextRunner? cheap) { }
+    }
+
+    private sealed class FakeFacadeProperty
+    {
+        public ClaudeHomeServer.Services.Llm.ICheapTextRunner? Cheap { get; }
+    }
+
     [Fact]
     public void Самопроверка_правило1_краснеет_на_SessionManager_в_конструкторе() =>
         Rule1NoSessionManagerParam([typeof(FakeTakesManager)]).Should().ContainSingle();
@@ -323,6 +365,19 @@ public class SessionCoreShapeGuardTests
         // Allow-list опознаётся по полному имени: тип с именем допустимой регистрации,
         // но в чужом пространстве имён — не регистрация, ссылка на ядро обязана быть помечена.
         Rule4OnlyFacadeReferences([typeof(SessionCoreRegistration)]).Should().ContainSingle();
+    }
+
+    [Fact]
+    public void Самопроверка_трипвайр_фасада_краснеет_на_поле_параметре_и_свойстве()
+    {
+        // Каждая форма возврата из пробы 1f7152c9 обязана краснеть отдельно: скан
+        // (BoundaryIlScanner) видит поле через сигнатуры, параметр — через сигнатуру
+        // конструктора, свойство — через его тип; ни одна не требует тел методов.
+        FacadeNoForbiddenLlm([typeof(FakeFacadeField)]).Should().ContainSingle();
+        FacadeNoForbiddenLlm([typeof(FakeFacadeParam)]).Should().ContainSingle();
+        FacadeNoForbiddenLlm([typeof(FakeFacadeProperty)]).Should().ContainSingle();
+        // Трипвайр не подменяет правило 1: чужой тип (SessionManager) он не ловит.
+        FacadeNoForbiddenLlm([typeof(FakeTakesManager)]).Should().BeEmpty();
     }
 }
 

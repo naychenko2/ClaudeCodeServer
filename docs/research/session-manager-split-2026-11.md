@@ -295,7 +295,12 @@ git grep -l 'SessionManager' 03d78e1aa -- backend | sed 's/^[^:]*://' \
 входят: статик не даёт параметра конструктора (тот же случай, что `FireAndForget` ниже). Ребра
 `Done → Host` из первой редакции нет: зависимость была фиктивной (§2). Ребра `Recovery → Host`
 нет совсем: `ReviveStuckSession`/`StopClosedExecutorProcess` — в хосте, хост восстановление не
-зовёт, а оборванный ход поднимается через `Lazy<ITurnStarter>` (§1, вердикт S3-5).
+зовёт, а оборванный ход поднимается через `Lazy<ITurnStarter>` (§1, вердикт S3-5). Правка по факту
+S3-7: ребра `Pass → Intake` (`Lazy<ITurnStarter>`) на схеме нет — точка с общего шва снята, добивание
+сабагента ход не стартует само (`TurnPassports.cs:34`). Вместо него у `TurnPassports` переходный
+шов к фасаду `Lazy<IWorkLoopContinuation>` (`TurnPassports.cs:48`); он не шестой постоянный шов
+плана: снимается вместе с выносом цикла «до готово» в `TurnContinuation` (`SessionCoreSeams.cs:53-54`)
+и в целевой граф не входит.
 
 ```mermaid
 flowchart BT
@@ -346,7 +351,6 @@ flowchart BT
   Factory -. "Lazy ITurnMessageSink" .-> Done
   Factory -. "Lazy ITurnStarter" .-> Intake
   Done -. "Lazy ITurnStarter" .-> Intake
-  Pass -. "Lazy ITurnStarter" .-> Intake
   Recovery -. "Lazy ITurnStarter" .-> Intake
   Migr -. "Lazy ITeamNotifier" .-> SM
   Done -. "Lazy ITeamNotifier" .-> SM

@@ -233,7 +233,7 @@ public class HiggsfieldFailureClassRegressionTests : IDisposable
                 ["ClaudeUserProfileDir"] = Path.Combine(_dir, "claude-profile"),
             }).Build();
 
-        var sessionManager = BuildSessionManager(config, out var projectManager);
+        (var sessionManager, var projectManager) = BuildSessionManager(config);
         var projectDir = Directory.CreateDirectory(
             Path.Combine(_dir, "proj-" + Guid.NewGuid().ToString("N")[..8])).FullName;
         var project = projectManager.Create("higgsfield-failclass", projectDir,
@@ -278,11 +278,13 @@ public class HiggsfieldFailureClassRegressionTests : IDisposable
     private McpToolCallContext AnyValidContext() =>
         new(TestUserId, CallerSessionId: null, RouteTail: _realSession.Id);
 
-    private static SessionManager BuildSessionManager(IConfiguration config, out ProjectManager projectManager)
+    // Возврат кортежем, а не `out`-параметром: `out` нельзя захватить в лямбде сборки
+    // ниже (CS1628) — из-за этого здесь жил алиас `var projects = projectManager` (снят).
+    private static (SessionManager, ProjectManager) BuildSessionManager(IConfiguration config)
     {
         var userStore = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var appSettings = new AppSettingsService(config);
-        projectManager = new ProjectManager(config, userStore, appSettings);
+        var projectManager = new ProjectManager(config, userStore, appSettings);
         var history = new ChatHistoryService(config);
 
         var broadcaster = new TestSessionBroadcaster();
@@ -309,10 +311,9 @@ public class HiggsfieldFailureClassRegressionTests : IDisposable
             notes: notesSvc, notesKb: notesKb);
         var sandbox = new SandboxManager(config, NullLogger<SandboxManager>.Instance);
 
-        var projects = projectManager;
-        return SessionCoreTestHost.Build(Path.GetDirectoryName(config["DataPath"])!, s =>
+        var sessionManager = SessionCoreTestHost.Build(Path.GetDirectoryName(config["DataPath"])!, s =>
         {
-            s.AddSingleton<global::ClaudeHomeServer.Services.ProjectManager>(projects);
+            s.AddSingleton<global::ClaudeHomeServer.Services.ProjectManager>(projectManager);
             s.AddSingleton<global::ClaudeHomeServer.Services.ChatHistoryService>(history);
             s.AddSingleton<global::Microsoft.Extensions.Configuration.IConfiguration>(config);
             s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(adapters);
@@ -332,6 +333,7 @@ public class HiggsfieldFailureClassRegressionTests : IDisposable
             s.AddSingleton<global::ClaudeHomeServer.Services.Execution.SandboxManager>(sandbox);
             s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(broadcaster);
         }).Manager;
+        return (sessionManager, projectManager);
     }
 
     private static void SetPrivate(object target, string fieldName, object value)

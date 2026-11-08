@@ -206,7 +206,7 @@ public class FalImageService : IImageGenerator
     // Идентикатор запроса — из заголовка x-fal-request-id: синхронный fal.run его в тело
     // не кладёт (тело — вывод модели, форма зависит от схемы), а фал отдаёт его заголовком
     // и тем же id ключуется billing-events (docs fal: «Request Headers», «Billing Events»).
-    // Существующий SpendMapping.TryExtractFalRequestId здесь неприменим: он разбирает ТЕЛО
+    // Существующий SpendMapping.TryExtractFalRequestIds здесь неприменим: он разбирает ТЕЛО
     // tool_result чата (JSON/текст с маркером изображения) и живёт в сборке Main, куда
     // вертикаль Images не ссылается. Своего разбора не заводим — поля читать не надо.
     private static string? ResponseRequestId(HttpResponseMessage resp) =>

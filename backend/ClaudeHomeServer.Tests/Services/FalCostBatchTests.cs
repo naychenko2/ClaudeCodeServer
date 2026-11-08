@@ -175,6 +175,29 @@ public class FalCostBatchTests
             rig.Usd[$"req-{i}"].Should().BeApproximately((i + 1) * 0.01, 1e-9, "сумма из событий именно этого id");
     }
 
+    // Пакетный tool_result (submit_jobs/wait_for_jobs, живая сверка 04f65504): все id из
+    // jobs[] доходят до публикации поштучно, каждый ровно один раз. Прежний разбор верхнего
+    // request_id не видел — ни один из N запросов пакета не попадал в учёт вовсе.
+    [Fact]
+    public async Task ПакетныйToolResult_КаждыйIdИзJobs_ПубликуетсяРовноОдинРаз()
+    {
+        var content = """{"status":"COMPLETED","jobs":[{"request_id":"req-0","status":"COMPLETED"},{"request_id":"req-1","status":"COMPLETED"}],"status_url":"https://queue.fal.run/fal-ai/flux/requests/req-0"}""";
+        var ids = SpendMapping.TryExtractFalRequestIds(content);
+        // Пакетный ответ даёт каждый id массива jobs[], порядок — как в массиве.
+        ids.Should().Equal("req-0", "req-1");
+
+        var handler = new BatchHandler((ids2, _, _) => Ok(ids2));
+        var rig = MakeRig(handler);
+        // Тот же цикл, что в TryTrackFalCost: каждый id своим Track'ом.
+        foreach (var id in ids) rig.Svc.Track("s-1", id, Nov1);
+
+        (await rig.WaitAsync(2)).Should().BeTrue("публикация на каждый запрос пакета");
+        rig.Published.Should().HaveCount(2, "число публикаций равно числу запросов в пакете");
+        rig.Published.Values.Should().OnlyContain(n => n == 1, "двойного учёта нет");
+        rig.Usd["req-0"].Should().BeApproximately(0.01, 1e-9, "цена события своего id");
+        rig.Usd["req-1"].Should().BeApproximately(0.02, 1e-9);
+    }
+
     [Fact]
     public async Task ОкноПачки_РазбросВремени200Дней_ВЛимитеИВремяКаждогоIdВнутриОкна()
     {

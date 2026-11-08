@@ -167,9 +167,15 @@ public class SpendMappingTests
 // "[Image: source: …webp]" — контент перестаёт быть одним JSON-объектом, и прежний разбор
 // (JsonDocument целиком) молча давал null: такие вызовы не учитывались вовсе (эмпирика
 // 29.09–01.11: 4 запроса с маркером пропущены, fal_cost только у чистых JSON).
+// Пакетные submit_jobs/wait_for_jobs (живая сверка 04f65504, 17 запросов на 1,1084 $):
+// верхнего request_id у них нет, id лежат в jobs[] — прежний разбор терял сразу все N
+// запросов одного вызова.
 public class SpendMappingFalRequestIdTests
 {
     private const string Rid = "01a19694-7252-73d0-ac86-2fc2bfe3f09d";
+    private const string RidA = "01a19694-7252-73d0-a000-000000000000000a";
+    private const string RidB = "01a19694-7252-73d1-b000-000000000000000b";
+    private const string RidC = "01a19694-7252-73d2-c000-000000000000000c";
 
     // run_model без блока картинки: чистый JSON (этот путь учитывался и раньше).
     private static string CleanJson() =>
@@ -192,43 +198,82 @@ public class SpendMappingFalRequestIdTests
         {"request_id":"{{Rid}}","status":"COMPLETED","images":[[Image: source: https://fal.media/files/puma/x1.webp]]}
         """;
 
+    // Форма ответа пакетных submit_jobs/wait_for_jobs: верхнего request_id нет, id — в jobs[].
+    private static string BatchJson(params string[] ids)
+    {
+        var jobs = string.Join(",", ids.Select(i =>
+            $$"""{"request_id":"{{i}}","status":"COMPLETED","response_url":"https://queue.fal.run/fal-ai/flux/requests/{{i}}"}"""));
+        return $$"""{"status":"COMPLETED","jobs":[{{jobs}}]}""";
+    }
+
     // Контент с маркером — прежний пропуск, теперь тот же id, что у чистого JSON.
     [Theory]
     [InlineData(false)] // маркер строкой после JSON
     [InlineData(true)]  // маркер внутри JSON
-    public void TryExtractFalRequestId_КонтентСМаркеромИзображения_ДаётId(bool markerInside)
+    public void TryExtractFalRequestIds_КонтентСМаркеромИзображения_ДаётId(bool markerInside)
     {
         var content = markerInside ? MarkerInsideJson() : MarkerAfterJson();
-        SpendMapping.TryExtractFalRequestId(content).Should().Be(Rid);
+        SpendMapping.TryExtractFalRequestIds(content).Should().Equal(Rid);
     }
 
-    // Обратная совместимость: чистый JSON разбирается как раньше — тем же id.
+    // Обратная совместимость: чистый JSON с top-level request_id разбирается как раньше —
+    // тем же id, одним элементом списка.
     [Fact]
-    public void TryExtractFalRequestId_ЧистыйJSON_ТотЖеId() =>
-        SpendMapping.TryExtractFalRequestId(CleanJson()).Should().Be(Rid);
+    public void TryExtractFalRequestIds_ЧистыйJSON_ТотЖеId() =>
+        SpendMapping.TryExtractFalRequestIds(CleanJson()).Should().Equal(Rid);
 
-    // Цельный JSON-объект без top-level request_id — поведение прежнее: null (вложенный id
-    // цельного объекта не выдерживаем, правка касалась только нецельного контента).
+    // Пакетный результат: каждый request_id из jobs[] — отдельный id учёта, в порядке
+    // массива. Один вызов submit_jobs больше не теряет все N запросов.
     [Fact]
-    public void TryExtractFalRequestId_ЦельныйJSONБезTopLevelRequestId_Null() =>
-        SpendMapping.TryExtractFalRequestId(
-            $$"""{"data":{"request_id":"{{Rid}}"},"status_url":"https://queue.fal.run/fal-ai/flux/requests/{{Rid}}"}""").Should().BeNull();
+    public void TryExtractFalRequestIds_ПакетJobs_КаждыйIdИзМассива()
+    {
+        var ids = SpendMapping.TryExtractFalRequestIds(BatchJson(RidA, RidB, RidC));
+        ids.Should().Equal(RidA, RidB, RidC);
+        ids.Should().HaveCount(3, "число id равно числу запросов в пакете");
+    }
 
-    // Guard по fal-домену остался: чужой результат со своим request_id (без fal-домена) — null.
+    // Id, названный и на верхнем уровне, и в jobs[] (одна и та же генерация в двух формах
+    // ответа), считается один раз: одному сетевому циклу — одна запись расхода.
+    [Fact]
+    public void TryExtractFalRequestIds_ВерхнийIdПовторёнВJobs_ОдинРаз()
+    {
+        var content = $$"""{"request_id":"{{RidA}}","status":"COMPLETED","response_url":"https://queue.fal.run/fal-ai/flux/requests/{{RidA}}","jobs":[{"request_id":"{{RidA}}","response_url":"https://queue.fal.run/fal-ai/flux/requests/{{RidA}}"},{"request_id":"{{RidB}}","response_url":"https://queue.fal.run/fal-ai/flux/requests/{{RidB}}"}]}""";
+        SpendMapping.TryExtractFalRequestIds(content).Should().Equal(RidA, RidB);
+    }
+
+    // Чужой вложенный id (не структурная форма fal: ни верхний, ни jobs[].request_id) —
+    // не берётся: прежний пропуск остаётся пропуском.
+    [Fact]
+    public void TryExtractFalRequestIds_ЦельныйJSONБезСтруктурныхId_Пусто() =>
+        SpendMapping.TryExtractFalRequestIds(
+            $$"""{"data":{"request_id":"{{Rid}}"},"status_url":"https://queue.fal.run/fal-ai/flux/requests/{{Rid}}"}""").Should().BeEmpty();
+
+    // Пакет с нестроковыми/пустыми request_id и не-объектами в jobs[]: берутся только
+    // строковые id структурной позиции, без исключения. Голый id строкой в массиве — не
+    // элемент jobs[] структурной формы, он не берётся.
+    [Theory]
+    [InlineData("""{"status":"COMPLETED","jobs":[{"request_id":null},{"request_id":""},{"request_id":123},{"status":"QUEUED"},{"request_id":"01a19694-7252-73d0-a000-000000000000000a","response_url":"https://queue.fal.run/fal-ai/flux/requests/x"}]}""", RidA)]
+    [InlineData("""{"status":"COMPLETED","jobs":["01a19694-7252-73d0-a000-000000000000000a",{"request_id":"01a19694-7252-73d1-b000-000000000000000b","response_url":"https://queue.fal.run/fal-ai/flux/requests/x"}]}""", RidB)]
+    public void TryExtractFalRequestIds_ПакетСНестроковымиЭлементами_ТолькоСтроковыеId(string content, string onlyId) =>
+        SpendMapping.TryExtractFalRequestIds(content).Should().Equal(onlyId);
+
+    // Guard по fal-домену остался: чужой результат со своим request_id (без fal-домена) — пусто.
     [Theory]
     [InlineData("""{"request_id":"deadbeef-0000-0000-0000-000000000000","image_url":"https://cdn.example.com/x.webp"}""")]
     [InlineData("request_id: deadbeef-0000-0000-0000-000000000000\nresult: https://cdn.example.com/x.webp")]
-    public void TryExtractFalRequestId_БезFalДомена_Null(string content) =>
-        SpendMapping.TryExtractFalRequestId(content).Should().BeNull();
+    [InlineData("""{"status":"COMPLETED","jobs":[{"request_id":"deadbeef-0000-0000-0000-000000000000"}],"image_url":"https://cdn.example.com/x.webp"}""")]
+    public void TryExtractFalRequestIds_БезFalДомена_Пусто(string content) =>
+        SpendMapping.TryExtractFalRequestIds(content).Should().BeEmpty();
 
-    // Fal-домен есть, request_id нет (или не строка) — тихо null, без исключения.
+    // Fal-домен есть, request_id нет (или не строка) — тихо пусто, без исключения.
     [Theory]
     [InlineData("""{"status":"COMPLETED","response_url":"https://queue.fal.run/fal-ai/flux/requests/unknown"}""")]
     [InlineData("""{"request_id":null,"image_url":"https://fal.media/files/puma/x1.webp"}""")]
+    [InlineData("""{"status":"COMPLETED","jobs":[]}""")]
     [InlineData("")]
     [InlineData(null)]
-    public void TryExtractFalRequestId_FalДоменБезId_ИлиПусто_Null(string? content) =>
-        SpendMapping.TryExtractFalRequestId(content!).Should().BeNull();
+    public void TryExtractFalRequestIds_FalДоменБезId_ИлиПусто_Пусто(string? content) =>
+        SpendMapping.TryExtractFalRequestIds(content!).Should().BeEmpty();
 }
 
 // S-SPEND-8: генерации, которые зовёт сам CLI в ходе (внешний mcp.fal.ai, glif, higgsfield),

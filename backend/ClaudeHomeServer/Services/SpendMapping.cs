@@ -33,33 +33,54 @@ internal static class SpendMapping
         @"""request_id""\s*:\s*""([0-9A-Za-z_-]{1,64})""",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
-    // Извлекает request_id из результата вызова, если это генерация fal.ai. Признак fal —
+    // Извлекает request_id результата вызова, если это генерация fal.ai. Признак fal —
     // наличие fal-домена где-либо в ответе. Покрывает обе формы результата:
     //  • run_model/submit_job: fal.run в *_url (status_url/response_url/cancel_url);
     //  • get_job_result (видео/аудио): *_url нет, но fal.media в URL медиа.
-    // Форма контента — любая: цельный JSON-объект (старый путь, top-level request_id) или
-    // текст, где JSON испорчен маркером изображения (поиск первого request_id). Ничего не
-    // найдено — null тихо, без исключения: это не fal-результат.
-    public static string? TryExtractFalRequestId(string content)
+    // Форма контента — любая: цельный JSON-объект или текст, где JSON испорчен маркером
+    // изображения (поиск первого request_id). Для цельного объекта берутся только
+    // СТРУКТУРНЫЕ поля ответа fal: top-level request_id (одиночный вызов) и request_id
+    // элементов массива jobs[] (пакетные submit_jobs/wait_for_jobs: верхнего id у них нет,
+    // и один такой tool_result терял сразу все N запросов — живая сверка 04f65504). Чужие
+    // вложенные id (напр. data.request_id) не берутся: это не структурная форма fal.
+    // Id, названный и на верхнем уровне, и в jobs[], отдаётся один раз: одному сетевому
+    // циклу — одна запись расхода. Ничего не найдено — пустой список тихо, без исключения.
+    public static IReadOnlyList<string> TryExtractFalRequestIds(string content)
     {
-        if (string.IsNullOrEmpty(content)) return null;
-        if (!content.Contains("fal.run") && !content.Contains("fal.ai") && !content.Contains("fal.media")) return null;
+        if (string.IsNullOrEmpty(content)) return [];
+        if (!content.Contains("fal.run") && !content.Contains("fal.ai") && !content.Contains("fal.media")) return [];
         try
         {
             using var doc = JsonDocument.Parse(content);
             var root = doc.RootElement;
-            // Цельный JSON-объект — поведение прежнее: только top-level request_id (обратная
-            // совместимость; вложенный id в цельном JSON не выдерживаем, как и раньше).
             if (root.ValueKind == JsonValueKind.Object)
-                return root.TryGetProperty("request_id", out var rid) && rid.ValueKind == JsonValueKind.String
-                    ? rid.GetString()
-                    : null;
+            {
+                var ids = new List<string>();
+                AddStructuralId(root, ids);
+                if (root.TryGetProperty("jobs", out var jobs) && jobs.ValueKind == JsonValueKind.Array)
+                    foreach (var job in jobs.EnumerateArray())
+                        AddStructuralId(job, ids);
+                // Дедуп по первому вхождению: верхний id, повторённый в jobs[], считается один раз.
+                return ids.Distinct(StringComparer.Ordinal).ToList();
+            }
         }
         catch { /* не JSON целиком — tool_result с маркером [Image: …], читаем по тексту ниже */ }
         // Нецельный контент: первое вхождение request_id в тексте (маркер — блок картинки этого
         // же вызова, отдельного запроса в тексте нет).
         var match = FalRequestIdInText.Match(content);
-        return match.Success ? match.Groups[1].Value : null;
+        return match.Success ? [match.Groups[1].Value] : [];
+    }
+
+    // request_id структурной позиции цельного JSON-объекта: только строковое поле с этим
+    // именем у самого элемента; не-объект, отсутствующее поле или не-строка — ничего не добавляют.
+    private static void AddStructuralId(JsonElement el, List<string> into)
+    {
+        if (el.ValueKind != JsonValueKind.Object) return;
+        if (el.TryGetProperty("request_id", out var rid) && rid.ValueKind == JsonValueKind.String)
+        {
+            var v = rid.GetString();
+            if (!string.IsNullOrEmpty(v)) into.Add(v);
+        }
     }
 
     // Запись расхода штатного хода в аналитику (Spend Analytics): разрезы — из фактического

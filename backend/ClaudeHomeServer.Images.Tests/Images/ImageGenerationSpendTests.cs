@@ -56,6 +56,8 @@ public class ImageGenerationSpendTests
             await Task.WhenAny(tcs!.Task, Task.Delay(timeout));
         }
 
+        public Task WaitForFirst(TimeSpan timeout) => WaitForCount(1, timeout);
+
         public Task WaitForSecond(TimeSpan timeout) => WaitForCount(2, timeout);
     }
 
@@ -401,27 +403,109 @@ public class ImageGenerationSpendTests
         cost.Calls.Should().Be(2, "по одному опосу цены на вызов");
     }
 
-    // Граница п.5 ревью R-S-SPEND-2: факт «фал тарифицировал отработанный без результата
-    // запрос» не имеет носителя в контракте — id запроса несут картинки, без них он до роутера
-    // не доходит. Поэтому траты нет ни у провайдера, ответившего идентификатором, но без
-    // картинки (случай «тело без images»), ни у вызова, оборванного без ответа (таймаут,
-    // обрыв транспорта): выдуманной траты не кладём. Закрыть дыру — отдельное решение о
-    // контракте IImageGenerator, а не поправка здесь.
+
+    // Пустой результат: картинок нет, а id запроса fal есть (скачивания упали / 4xx после GPU).
+    // Запись без картинок — тот же факт траты, что и обычная: она несёт владельца, актора,
+    // проект и инициатора (инвариант слияния линии траты), а не урезанный набор признаков.
     [Fact]
-    public async Task ПровайдерНеОтдалКартинок_ТратыНет()
+    public async Task ПустойFal_ЦенаБольшеНуля_РовноОднаЗаписьБезКартинок()
     {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1", returnsImages: false);
         var spend = new CapturingSpend();
-        var cost = new FakeCost(0.01);
+        var cost = new FakeCost(0.04);
+        var service = new ImageGenerationService([fal], Store(NewTempDir(), ("Images:Models:fal", "fal-ai/flux/dev")),
+            null, spend, cost);
 
-        var withId = new FakeGenerator("fal", enabled: true, requestId: "req-1", returnsImages: false);
-        var answered = new ImageGenerationService([withId], Store(NewTempDir()), null, spend, cost);
-        Assert.Empty(await answered.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human));
+        Assert.Empty(await service.GenerateManyAsync(Avatar, "кот", 1, "tenant-o", SpendInitiators.Agent,
+            "actor-u", "project-1"));
+        await spend.WaitForFirst(Settle);
+        await spend.WaitForSecond(TimeSpan.FromMilliseconds(300));
 
-        var noId = new FakeGenerator("fal", enabled: true, returnsImages: false);
-        var broken = new ImageGenerationService([noId], Store(NewTempDir()), null, spend, cost);
-        Assert.Empty(await broken.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human));
+        var rec = spend.Records.Should().ContainSingle("pending-записи нет: платность запроса неизвестна").Subject;
+        rec.Generations.Should().Be(0);
+        rec.CostUsd.Should().Be(0.04);
+        rec.Label.Should().Be(ImageGenerationService.SpendLabelNoImages);
+        rec.Provider.Should().Be("fal");
+        rec.Source.Should().Be(SpendSources.Fal);
+        rec.Model.Should().Be("fal-ai/flux/dev");
+        rec.OwnerId.Should().Be("tenant-o");
+        rec.Initiator.Should().Be(SpendInitiators.Agent);
+        rec.ActorUserId.Should().Be("actor-u", "запись без картинок несёт актора, как и обычная");
+        rec.ProjectId.Should().Be("project-1", "запись без картинок несёт проект, как и обычная");
+    }
 
-        spend.Records.Should().BeEmpty("нет картинок — нечего назвать тратой");
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0.0)]
+    public async Task ПустойFal_ЦенаНеизвестнаИлиНоль_ЗаписейНет(double? usd)
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1", returnsImages: false);
+        var spend = new CapturingSpend();
+        var cost = new FakeCost(usd);
+        var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, cost);
+
+        Assert.Empty(await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human));
+
+        await cost.AskedOrTimeout;
+        await spend.WaitForFirst(TimeSpan.FromMilliseconds(300));
+        cost.Calls.Should().Be(1, "цену спросили — иначе тест проходил бы вакуумно");
+        spend.Records.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ПустойFal_БезIdЗапроса_ЦенуНеСпрашиваем()
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: null, returnsImages: false);
+        var spend = new CapturingSpend();
+        var cost = new FakeCost(0.04);
+        var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, cost);
+
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human);
+
+        await spend.WaitForFirst(TimeSpan.FromMilliseconds(300));
+        spend.Records.Should().BeEmpty();
         cost.Calls.Should().Be(0);
+    }
+
+    // Фолбэк не съедает трату пустого fal. ProviderOrder статичен (glif → fal), поэтому
+    // «fal, затем glif» в проде недостижим; механизм проверяем цепочкой fal → драйвер с
+    // неизвестным ключом (OrderOf кладёт его в хвост): трата fal пишется в своей итерации.
+    [Fact]
+    public async Task Auto_ПустойFal_ПотомДругойПровайдерСКартинками_ДвеТраты()
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1", returnsImages: false);
+        var next = new FakeGenerator("next", enabled: true);
+        var spend = new CapturingSpend();
+        var cost = new FakeCost(0.04);
+        var service = new ImageGenerationService([next, fal], Store(NewTempDir()), null, spend, cost);
+
+        var images = await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, ct: CancellationToken.None);
+
+        images.Should().HaveCount(1);
+        await spend.WaitForSecond(Settle);
+        spend.Records.Should().HaveCount(2);
+        spend.Records.Should().ContainSingle(r => r.Source == SpendSources.Fal && r.Label == ImageGenerationService.SpendLabelNoImages
+            && r.CostUsd == 0.04 && r.Generations == 0);
+        spend.Records.Should().ContainSingle(r => r.Source == "next" && r.Generations == 1
+            && r.Label == ImageGenerationService.SpendLabel,
+            "у провайдера без id запроса цены не будет — «сумма уточняется» не обещаем");
+    }
+
+    // Регресс: с картинками — прежний путь (pending с Generations = N + догоняющая)
+    [Fact]
+    public async Task ФалСКартинками_ПутьНеИзменился()
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1");
+        var spend = new CapturingSpend();
+        var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, new FakeCost(0.02));
+
+        await service.GenerateManyAsync(Avatar, "кот", 3, Owner, SpendInitiators.Human, ct: CancellationToken.None);
+        await spend.WaitForSecond(Settle);
+
+        spend.Records.Should().HaveCount(2);
+        spend.Records[0].Should().Match<SpendRecord>(r => r.Generations == 3 && r.CostUsd == null
+            && r.Label == ImageGenerationService.SpendLabelPendingAmount);
+        spend.Records[1].Should().Match<SpendRecord>(r => r.Generations == 0 && r.CostUsd == 0.02
+            && r.Label == ImageGenerationService.SpendLabel);
     }
 }

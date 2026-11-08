@@ -24,6 +24,9 @@ public sealed class ImageGenerationService
     // endpoint или тип вывода).
     public const string SpendLabel = "image-generation";
     public const string SpendLabelPendingAmount = "image-generation: сумма уточняется";
+    // Платный запрос fal без единой картинки: отличает эту запись от догоняющей записи
+    // удачного запроса (у обеих Generations = 0).
+    public const string SpendLabelNoImages = "image-generation: без картинок";
 
     private readonly IReadOnlyList<IImageGenerator> _generators;
     private readonly ImageGenerationSettingsStore _settings;
@@ -113,6 +116,10 @@ public sealed class ImageGenerationService
                     actorUserId, projectId);
                 return images;
             }
+            // Пустой ответ fal с id запроса мог быть платным (скачивания упали, 4xx после работы
+            // GPU): цену спрашиваем ДО перехода к следующему провайдеру, чтобы фолбэк не съел трату
+            RecordNoImagesSpend(place, generator, model, generated.RequestId, ownerId, initiator,
+                actorUserId, projectId);
             if (i + 1 < chain.Count)
                 _log?.LogWarning("Генератор {Provider} не вернул картинок для места {Place} — пробую {Next}",
                     generator.Key, place, chain[i + 1].Key);
@@ -201,8 +208,9 @@ public sealed class ImageGenerationService
     // моделью провайдер пошёл (это знает только драйвер, у него и спрашиваем).
     //
     // Траты нет, когда: коллектора нет (учёт выключен), владельца нет (повесить не на
-    // кого), провайдер не отдал картинок (факт тарификации отработанного без результата
-    // запроса не имеет носителя в контракте — выдуманной траты не кладём, п.5).
+    // кого), провайдер не отдал картинок (за них не платили) — кроме пустого запроса fal с
+    // id: там единственная запись с SpendLabelNoImages, и только при цене > 0 (RecordNoImagesSpend);
+    // она несёт ту же атрибуцию (владелец, актор, проект, инициатор), что и обычная.
 
     private void RecordSpend(
         string place, IImageGenerator generator, string? model,
@@ -260,12 +268,28 @@ public sealed class ImageGenerationService
         _ = TopUpAmountAsync(ownerId, actualModel, requestId!, named, actorUserId, projectId);
     }
 
+    // Пустой результат с id запроса у fal: первую запись (pending) НЕ пишем — неизвестно,
+    // платный ли запрос, а ложная «сумма уточняется» хуже отсутствия записи. Запись появится
+    // одна и только если догонялка нашла цену > 0. Остаток: наш таймаут после приёма запроса
+    // fal — id нет, тарифицируется ли он, неизвестно.
+    private void RecordNoImagesSpend(
+        string place, IImageGenerator generator, string? model, string? requestId, string ownerId, string initiator,
+        string? actorUserId, string? projectId)
+    {
+        if (requestId is null || _spend is null || _falCost is null || string.IsNullOrWhiteSpace(ownerId)
+            || !string.Equals(generator.Key, SpendSources.Fal, StringComparison.OrdinalIgnoreCase)) return;
+        _log?.LogInformation("Генерация картинок: {Provider} не вернул картинок для места {Place}, уточняю цену по {RequestId}",
+            generator.Key, place, requestId);
+        _ = TopUpAmountAsync(ownerId, model, requestId, string.IsNullOrWhiteSpace(initiator) ? null : initiator,
+            actorUserId, projectId, noImages: true);
+    }
+
     // Фактическая цена по request_id — через существующий Core-шов IFalRequestCost
     // (тот же экземпляр FalCostService, что и у чата). Свой токен: token вызывающего к этому
     // моменту уже снят вместе с его запросом, а окно опроса ограничено самим FalCostService.
     // Цены нет — штатный исход: остаётся первая запись без суммы.
     private async Task TopUpAmountAsync(string ownerId, string? model, string requestId, string? initiator,
-        string? actorUserId, string? projectId)
+        string? actorUserId, string? projectId, bool noImages = false)
     {
         try
         {
@@ -276,10 +300,15 @@ public sealed class ImageGenerationService
                     requestId);
                 return;
             }
+            if (noImages && usd <= 0)
+            {
+                _log?.LogInformation("Учёт расхода: запрос fal {RequestId} без картинок не тарифицирован, записи нет", requestId);
+                return;
+            }
             // Догоняющая запись — про тот же вызов: инициатор, актор, проект и модель у неё
             // те же, что у первой
             WriteSpend(ownerId, SpendSources.Fal, model, amount: usd, generations: 0, initiator,
-                pendingAmount: false, actorUserId, projectId);
+                pendingAmount: false, actorUserId, projectId, label: noImages ? SpendLabelNoImages : null);
         }
         catch (Exception ex)
         {
@@ -290,7 +319,7 @@ public sealed class ImageGenerationService
     // pendingAmount — «сумму догонят»: право на подпись «сумма уточняется» даёт не отсутствие
     // суммы в этой записи, а то, что у провайдера есть по чему её спрашивать (см. RecordSpend).
     private void WriteSpend(string ownerId, string providerKey, string? model, double? amount, int generations,
-        string? initiator, bool pendingAmount, string? actorUserId, string? projectId)
+        string? initiator, bool pendingAmount, string? actorUserId, string? projectId, string? label = null)
     {
         try
         {
@@ -324,7 +353,8 @@ public sealed class ImageGenerationService
                 Initiator = initiator,
                 // Обещание уточнения звучит только там, где его будут исполнять: у провайдера,
                 // у которого цены не будет никогда, подпись остаётся обычным счётчиком вызовов.
-                Label = pendingAmount ? SpendLabelPendingAmount : SpendLabel,
+                // Явная подпись (пустой запрос fal) перекрывает обе.
+                Label = label ?? (pendingAmount ? SpendLabelPendingAmount : SpendLabel),
             });
         }
         catch (Exception ex)

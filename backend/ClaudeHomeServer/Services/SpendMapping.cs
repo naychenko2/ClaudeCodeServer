@@ -23,52 +23,78 @@ internal static class SpendMapping
     private static int _falSpendWarned;
     private static int _glifSpendWarned;
 
-    // request_id внутри текста: для результата, который перестал быть одним JSON. По наблюдению
-    // разведки (f7e8c46d), tool_result внешнего MCP mcp.fal.ai с блоком картинки Claude CLI
-    // отдаёт с маркером "[Image: source: …webp]" вместо этого блока — после этого JSON целиком
-    // не парсится, и такие вызовы не учитывались вовсе (эмпирика 29.09–01.11: 4 пропущенных).
-    // Символы id ограничены [A-Za-z0-9_-] и длиной 64 — чтобы не выхватить длинное поле чужого
-    // формата; форма id'а fal (UUID) в этот набор входит.
+    // request_id внутри текста: ПОСЛЕДНИЙ путь разбора — для результата, который не является
+    // JSON вовсе (не даже испорченным маркером). По наблюдению разведки (f7e8c46d) такие
+    // вызовы не учитывались вовсе (эмпирика 29.09–01.11: 4 пропущенных) — этот путь остаётся
+    // их страховкой. Символы id ограничены [A-Za-z0-9_-] и длиной 64 — чтобы не выхватить
+    // длинное поле чужого формата; форма id'а fal (UUID) в этот набор входит.
     private static readonly Regex FalRequestIdInText = new(
         @"""request_id""\s*:\s*""([0-9A-Za-z_-]{1,64})""",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    // Маркер блока картинки в tool_result внешнего MCP: Claude CLI ставит "[Image: source: …webp]"
+    // вместо самого блока (наблюдение разведки f7e8c46d), и JSON ответа перестаёт парситься
+    // целиком. Для разбора id маркер вырезается целиком: это заглушка бинарного блока, не данные
+    // ответа; после вырезания остаток снова цельный JSON и разбирается структурно.
+    private static readonly Regex ImageMarker = new(
+        @"\[Image:[^\]]*\]",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     // Извлекает request_id результата вызова, если это генерация fal.ai. Признак fal —
     // наличие fal-домена где-либо в ответе. Покрывает обе формы результата:
     //  • run_model/submit_job: fal.run в *_url (status_url/response_url/cancel_url);
     //  • get_job_result (видео/аудио): *_url нет, но fal.media в URL медиа.
-    // Форма контента — любая: цельный JSON-объект или текст, где JSON испорчен маркером
-    // изображения (поиск первого request_id). Для цельного объекта берутся только
-    // СТРУКТУРНЫЕ поля ответа fal: top-level request_id (одиночный вызов) и request_id
-    // элементов массива jobs[] (пакетные submit_jobs/wait_for_jobs: верхнего id у них нет,
-    // и один такой tool_result терял сразу все N запросов — живая сверка 04f65504). Чужие
-    // вложенные id (напр. data.request_id) не берутся: это не структурная форма fal.
-    // Id, названный и на верхнем уровне, и в jobs[], отдаётся один раз: одному сетевому
-    // циклу — одна запись расхода. Ничего не найдено — пустой список тихо, без исключения.
+    // Порядок разбора — от структурного к текстовому:
+    //  • цельный JSON-объект: только СТРУКТУРНЫЕ поля ответа fal — top-level request_id
+    //    (одиночный вызов) и request_id элементов массива jobs[] (пакетные submit_jobs/
+    //    wait_for_jobs: верхнего id у них нет, и один такой tool_result терял сразу все N
+    //    запросов — живая сверка 04f65504);
+    //  • JSON, испорченный маркером блока картинки: маркеры вырезаются, остаток разбирается
+    //    тем же структурным способом — пакет с блоками картинок даёт все N id, а не первое
+    //    вхождение request_id (хвост ревью R-S-SPEND-ПАКЕТ, п.2: прежний regex по тексту
+    //    терял N−1 записей расхода);
+    //  • контент, не JSON вовсе: первое вхождение request_id по тексту (страховка S-SPEND-3).
+    // Чужие вложенные id (напр. data.request_id) не берутся никогда: это не структурная форма
+    // fal — ни в цельном JSON, ни в очищенном от маркеров. Id, названный и на верхнем уровне,
+    // и в jobs[], отдаётся один раз: одному сетевому циклу — одна запись расхода. Ничего не
+    // найдено — пустой список тихо, без исключения.
     public static IReadOnlyList<string> TryExtractFalRequestIds(string content)
     {
         if (string.IsNullOrEmpty(content)) return [];
         if (!content.Contains("fal.run") && !content.Contains("fal.ai") && !content.Contains("fal.media")) return [];
-        try
-        {
-            using var doc = JsonDocument.Parse(content);
-            var root = doc.RootElement;
-            if (root.ValueKind == JsonValueKind.Object)
-            {
-                var ids = new List<string>();
-                AddStructuralId(root, ids);
-                if (root.TryGetProperty("jobs", out var jobs) && jobs.ValueKind == JsonValueKind.Array)
-                    foreach (var job in jobs.EnumerateArray())
-                        AddStructuralId(job, ids);
-                // Дедуп по первому вхождению: верхний id, повторённый в jobs[], считается один раз.
-                return ids.Distinct(StringComparer.Ordinal).ToList();
-            }
-        }
-        catch { /* не JSON целиком — tool_result с маркером [Image: …], читаем по тексту ниже */ }
-        // Нецельный контент: первое вхождение request_id в тексте (маркер — блок картинки этого
-        // же вызова, отдельного запроса в тексте нет).
+        if (TryStructuralIds(content, out var ids)) return ids;
+        // Маркерная форма: тот же ответ, из которого CLI вырезал блоки картинок. Остаток после
+        // вырезания маркеров — снова цельный JSON, и пакет разбирается по структурным полям.
+        if (content.Contains("[Image:") && TryStructuralIds(ImageMarker.Replace(content, ""), out ids))
+            return ids;
         var match = FalRequestIdInText.Match(content);
         return match.Success ? [match.Groups[1].Value] : [];
+    }
+
+    // request_id структурных позиций JSON-текста (цельного или очищенного от маркеров):
+    // true — текст разобрался как JSON-объект, id собраны с дедупом; false — не JSON или
+    // не-объект (как и прежде, уходит к следующему пути разбора).
+    private static bool TryStructuralIds(string json, out IReadOnlyList<string> ids)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                ids = [];
+                return false;
+            }
+            var list = new List<string>();
+            AddStructuralId(root, list);
+            if (root.TryGetProperty("jobs", out var jobs) && jobs.ValueKind == JsonValueKind.Array)
+                foreach (var job in jobs.EnumerateArray())
+                    AddStructuralId(job, list);
+            // Дедуп по первому вхождению: верхний id, повторённый в jobs[], считается один раз.
+            ids = list.Distinct(StringComparer.Ordinal).ToList();
+            return true;
+        }
+        catch { ids = []; return false; }
     }
 
     // request_id структурной позиции цельного JSON-объекта: только строковое поле с этим

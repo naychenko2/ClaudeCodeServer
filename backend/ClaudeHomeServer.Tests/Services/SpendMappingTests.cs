@@ -218,6 +218,21 @@ public class SpendMappingFalRequestIdTests
         return $$"""{"status":"COMPLETED","jobs":[{{jobs}}]}""";
     }
 
+    // Тот же пакет с блоками картинок: маркеры строкой после JSON (по одному на блок).
+    private static string BatchWithMarkersAfter(params string[] ids)
+    {
+        var markers = string.Join("\n", ids.Select(i => $"[Image: source: /tmp/claude-1000/mcp-images/{i}.webp]"));
+        return BatchJson(ids) + "\n" + markers;
+    }
+
+    // Маркер встал вместо блока images ВНУТРИ каждого job — JSON рвётся в середине массива.
+    private static string BatchWithMarkersInside(params string[] ids)
+    {
+        var jobs = string.Join(",", ids.Select(i =>
+            $$"""{"request_id":"{{i}}","status":"COMPLETED","images":[[Image: source: https://fal.media/files/puma/{{i}}.webp]]}"""));
+        return $$"""{"status":"COMPLETED","jobs":[{{jobs}}]}""";
+    }
+
     // Контент с маркером — прежний пропуск, теперь тот же id, что у чистого JSON.
     [Theory]
     [InlineData(false)] // маркер строкой после JSON
@@ -242,6 +257,34 @@ public class SpendMappingFalRequestIdTests
         var ids = SpendMapping.TryExtractFalRequestIds(BatchJson(RidA, RidB, RidC));
         ids.Should().Equal(RidA, RidB, RidC);
         ids.Should().HaveCount(3, "число id равно числу запросов в пакете");
+    }
+
+    // Пакетный ответ с блоками картинок (wait_for_jobs с картинкой в каждом job): после
+    // вырезания маркеров остаток — цельный JSON, и каждый id из jobs[] учтён. Прежний regex
+    // по тексту давал ПЕРВОЕ вхождение: N−1 записей расхода терялись (хвост ревью
+    // R-S-SPEND-ПАКЕТ, п.2).
+    [Theory]
+    [InlineData(false)] // маркеры строкой после JSON пакета
+    [InlineData(true)]  // маркер встал вместо блока images внутри каждого job
+    public void TryExtractFalRequestIds_ПакетСМаркерамиКартинок_КаждыйIdИзJobs(bool markerInside)
+    {
+        var content = markerInside ? BatchWithMarkersInside(RidA, RidB, RidC) : BatchWithMarkersAfter(RidA, RidB, RidC);
+        var ids = SpendMapping.TryExtractFalRequestIds(content);
+        ids.Should().Equal(RidA, RidB, RidC);
+        ids.Should().HaveCount(3, "число id равно числу запросов в пакете");
+    }
+
+    // Чужой вложенный id не берётся и в маркерной форме: очищенный от маркера контент —
+    // JSON-объект, и структурное правило остаётся (data.request_id — не форма fal).
+    // Прежний путь давал здесь именно чужой id: этот тест держит инвариант на обеих формах.
+    [Fact]
+    public void TryExtractFalRequestIds_МаркерныйJSONСЧужимВложеннымId_Пусто()
+    {
+        var content = $$"""
+            {"data":{"request_id":"{{Rid}}"},"status_url":"https://queue.fal.run/fal-ai/flux/requests/{{Rid}}"}
+            [Image: source: /tmp/claude-1000/mcp-images/8f2c1a.webp]
+            """;
+        SpendMapping.TryExtractFalRequestIds(content).Should().BeEmpty();
     }
 
     // Id, названный и на верхнем уровне, и в jobs[] (одна и та же генерация в двух формах

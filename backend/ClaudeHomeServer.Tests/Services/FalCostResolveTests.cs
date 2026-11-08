@@ -648,9 +648,11 @@ public class FalCostResolveTests
     {
         public TaskCompletionSource BfStarted { get; } = new();
         public TaskCompletionSource BfFinished { get; } = new();
+        public HttpRequestMessage? LastRequest { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
+            LastRequest = request;
             var slow = request.RequestUri!.Query.Contains("req-bf");
             if (slow) BfStarted.TrySetResult();
             if (slow) await Task.Delay(slowMs, ct);
@@ -685,6 +687,38 @@ public class FalCostResolveTests
         (await live).Should().Be(0.123);
         handler.BfFinished.Task.IsCompleted.Should().BeFalse(
             "бэкфилл ещё в транспорте — живой опрос его не ждал");
+    }
+
+    [Fact]
+    public async Task ЖивойПотребительПриСовпаденииRequestIdНеЖдётБэкфилловуюОчередь_ОбщийОпросОдин()
+    {
+        // S-SPEND-TAIL-1 (минор ревью R-S-SPEND-MERGE-PREP): кэш _pollings общий на request_id,
+        // полоса досталась «первому начавшему». Бэкфилл (Track) начал опрос req-x раньше шва и
+        // встал в очередь _gate за медленным req-bf1. Живой потребитель (ResolveUsdAsync по тому
+        // же id, Images ждёт число) обязан завершиться, пока бэкфилл ещё в полёте: он поднимает
+        // полосу общего опроса до живой (S-SPEND-TAIL-1) — без второй сети и без очереди бэкфилла.
+        var handler = new MixedHandler(slowMs: 1500);
+        var svc = MakeService(handler);
+        svc.MinRequestIntervalMs = 1000;
+
+        svc.Track("s-1", "req-bf1", null);
+        (await Task.WhenAny(handler.BfStarted.Task, Task.Delay(5000))).Should().Be(handler.BfStarted.Task,
+            "бэкфилл вошёл в транспорт и держит слот гейта");
+        svc.Track("s-1", "req-x", null); // его опрос встаёт в очередь _gate за занятым слотом
+
+        var live = svc.ResolveUsdAsync("req-x", CancellationToken.None);
+        (await Task.WhenAny(live, Task.Delay(800))).Should().Be(live,
+            "живой потребитель не ждёт очередь бэкфилла по совпавшему request_id");
+        (await live).Should().Be(0.123);
+        handler.BfFinished.Task.IsCompleted.Should().BeFalse(
+            "бэкфилл ещё в транспорте — живой опрос его не ждал");
+
+        // Повышение полосы не рвёт дедуп: опрос по req-x был один, тот же результат общий.
+        var again = await svc.ResolveUsdAsync("req-x", CancellationToken.None);
+        again.Should().Be(0.123, "повторный запрос берётся из того же общего опроса");
+        var query = handler.LastRequest!.RequestUri!.Query;
+        query.Should().Contain("request_id=req-x", "последний сетевой запрос — по общему request_id");
+        query.Should().NotContain("req-bf", "после живого опроса бэкфилл не вошёл в транспорт второй раз");
     }
 
     [Fact]

@@ -34,7 +34,19 @@ public class FalCostService : IFalRequestCost
     // у fal может появиться позже окна (дефект 8f6f9e06), поэтому пустой результат из кэша
     // убирается и следующий запрос по тому же request_id идёт в сеть заново. Дедуп параллельных
     // опросов это не трогает: пока task не завершён, запись на месте и все приходят к нему.
-    private readonly ConcurrentDictionary<string, Task<FalCostMessage?>> _pollings = new();
+    private readonly ConcurrentDictionary<string, Polling> _pollings = new();
+
+    // Один опрос по request_id: результат + его полоса. Живой потребитель, пришедший к опросу,
+    // уже начатому бэкфиллом, поднимает его полосу до живой (S-SPEND-TAIL-1): сетевой цикл
+    // остаётся общим (тот же результат, что требует дедуп), но очередь бэкфилла его не держит.
+    private sealed class Polling
+    {
+        public readonly TaskCompletionSource<FalCostMessage?> Tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        // Завершается, когда к опросу пришёл живой потребитель: цикл опроса меняет полосу.
+        public readonly TaskCompletionSource<bool> Promised = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        // volatile: читается циклом опроса на каждой попытке, поднимается чужим потоком.
+        public volatile bool Live;
+    }
 
     // Троттлинг опроса (дефект S-SPEND-4): всплески бэкфилла при открытии старых чатов
     // упираются в лимит fal (207 строк «billing-events 429» в журнале проде за 28.10/04–07.11).
@@ -54,6 +66,9 @@ public class FalCostService : IFalRequestCost
     // параллельны между собой, но не ждут интервала бэкфилла и не встают за ним. Механизм интервала
     // (_gate + _lastRequestAtMs) остаётся защитой бэкфилла от 429-всплесков; живой поток по природе
     // мал (один запрос на генерацию) и своей сериализацией защищён от собственной волны.
+    // При совпадении request_id с уже начатым бэкфилловым опросом живой потребитель поднимает
+    // полосу этого опроса до живой (S-SPEND-TAIL-1): инвариант живой полосы держится и при
+    // общем опросе — см. Polling.Promised.
     private readonly SemaphoreSlim _liveGate = new(1, 1);
 
     // Публикация найденной стоимости (broadcast в SignalR + запись в историю). Ставит SessionManager.
@@ -82,7 +97,7 @@ public class FalCostService : IFalRequestCost
         // в чат — один раз, по дедупу _seen. finishedAtMs идёт в построитель окна: если
         // время не читается из самого request_id, окно строится от времени генерации (S-SPEND-4).
         var poll = GetOrStartPolling(requestId, finishedAtMs, CancellationToken.None, live: false);
-        _ = PublishAsync(sessionId, requestId, poll);
+        _ = PublishAsync(sessionId, requestId, poll.Tcs.Task);
     }
 
     // Реализация шва IFalRequestCost: фактическая цена по request_id либо null — когда
@@ -93,7 +108,8 @@ public class FalCostService : IFalRequestCost
     public async Task<double?> ResolveUsdAsync(string requestId, CancellationToken ct)
     {
         if (!Enabled || string.IsNullOrWhiteSpace(requestId)) return null;
-        var cost = await GetOrStartPolling(requestId, null, ct, live: true);
+        var poll = GetOrStartPolling(requestId, null, ct, live: true);
+        var cost = await poll.Tcs.Task;
         return cost?.CostUsd;
     }
 
@@ -101,13 +117,24 @@ public class FalCostService : IFalRequestCost
     // GetOrAdd значением, не фабрикой: на гонке лишнего опроса не возникает вовсе — фабрику
     // вызвал бы каждый проигравший. Полоса (live) и время окна (finishedAtMs) — у первого
     // начавшего: последующие берут тот же task, а не своё окно и не свой гейт.
-    private Task<FalCostMessage?> GetOrStartPolling(string requestId, long? finishedAtMs, CancellationToken ct, bool live)
+    private Polling GetOrStartPolling(string requestId, long? finishedAtMs, CancellationToken ct, bool live)
     {
-        var tcs = new TaskCompletionSource<FalCostMessage?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var own = tcs.Task;
+        var own = new Polling { Live = live };
         var existing = _pollings.GetOrAdd(requestId, own);
-        if (!ReferenceEquals(existing, own)) return existing; // опрос уже начат кем-то — берём его результат
-        _ = FinishPollingAsync(requestId, finishedAtMs, live, tcs, ct);
+        if (!ReferenceEquals(existing, own))
+        {
+            // Опрос уже начат кем-то — берём его результат. Живой потребитель, пришедший к
+            // бэкфилловому опросу того же id, поднимает его полосу (S-SPEND-TAIL-1): общий
+            // сетевой цикл сохраняется, но очередь бэкфилла его не держит — см. FetchCostAsync.
+            if (live && !existing.Live)
+            {
+                existing.Live = true;
+                existing.Promised.TrySetResult(true);
+            }
+            return existing;
+        }
+        // Живой старт: own.Live уже истинен — цикл с первой попытки идёт по _liveGate, Promised не нужен.
+        _ = FinishPollingAsync(requestId, finishedAtMs, own, ct);
         return own;
     }
 
@@ -115,12 +142,12 @@ public class FalCostService : IFalRequestCost
     // в сеть), пустой результат — убрать: «за окно не пришли» не решает за будущие запросы,
     // что цены нет вообще. Свой ct решает судьбу только этого общего опроса — следующим
     // запросам путь он не перекрывает.
-    private async Task FinishPollingAsync(string requestId, long? finishedAtMs, bool live, TaskCompletionSource<FalCostMessage?> tcs, CancellationToken ct)
+    private async Task FinishPollingAsync(string requestId, long? finishedAtMs, Polling poll, CancellationToken ct)
     {
         FalCostMessage? cost;
         try
         {
-            cost = await PollForCostAsync(requestId, finishedAtMs, ct, live);
+            cost = await PollForCostAsync(requestId, finishedAtMs, ct, poll);
         }
         catch (Exception ex)
         {
@@ -130,15 +157,16 @@ public class FalCostService : IFalRequestCost
             cost = null;
         }
         if (cost is null) _pollings.TryRemove(requestId, out _);
-        tcs.TrySetResult(cost);
+        poll.Tcs.TrySetResult(cost);
     }
 
     // Единый цикл опроса billing-events (бэкофф → FetchCostAsync по request_id). Начинает его
     // только GetOrStartPolling — путь чата и потребители шва ждут результат одного task.
     // Сбои опроса глотаются, как прежде: «цены нет» → null после исчерпанного окна.
-    // live — живая полоса (по ней идёт шов ResolveUsdAsync, у которого есть ждущий
-    // потребитель); бэкфилл (Track) — обычная очередь с интервалом. См. _liveGate.
-    private async Task<FalCostMessage?> PollForCostAsync(string requestId, long? finishedAtMs, CancellationToken ct, bool live)
+    // Полоса — у poll: живая (шов ResolveUsdAsync, у которого есть ждущий потребитель) или
+    // бэкфилловая (Track, очередь с интервалом); флаг может быть поднят живым потребителем уже
+    // после начала опроса — см. Polling. См. _liveGate.
+    private async Task<FalCostMessage?> PollForCostAsync(string requestId, long? finishedAtMs, CancellationToken ct, Polling poll)
     {
         // Окно времени запроса: без start API отдаёт только последние 24 ч (доки fal: start по
         // умолчанию = −24ч) — генерации старше суток не находились никогда (дефект S-SPEND-4).
@@ -149,7 +177,7 @@ public class FalCostService : IFalRequestCost
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(BackoffSeconds[attempt]), ct);
-                cost = await FetchCostAsync(requestId, startParam, endParam, ct, live);
+                cost = await FetchCostAsync(requestId, startParam, endParam, ct, poll);
             }
             // Отмена вызывающего и таймаут транспорта — разные исходы (тот же приём, что в
             // McpProbeService/McpOAuthService): таймаут HttpClient бросает TaskCanceledException
@@ -247,14 +275,48 @@ public class FalCostService : IFalRequestCost
     private static string FormatUtc(long unixMs) => Uri.EscapeDataString(
         DateTimeOffset.FromUnixTimeMilliseconds(unixMs).ToString("yyyy-MM-ddTHH:mm:ss'Z'", CultureInfo.InvariantCulture));
 
-    private async Task<FalCostMessage?> FetchCostAsync(string requestId, string? startParam, string? endParam, CancellationToken ct, bool live)
+    private async Task<FalCostMessage?> FetchCostAsync(string requestId, string? startParam, string? endParam, CancellationToken ct, Polling poll)
     {
         // Троттлинг (MinRequestIntervalMs): однослотовый гейт + минимальный интервал между
         // стартами запросов. Очередь живёт под ct: отмена вызывающего в очереди — штатный выход.
         // Живые запросы (шов ResolveUsdAsync) — своей полосой: не ждут интервала бэкфилла и не
         // встают за его очередью (сериализованы только между собой). См. _liveGate.
-        var gate = live ? _liveGate : _gate;
-        await gate.WaitAsync(ct);
+        // Живой потребитель, пришедший к уже начатому бэкфилловому опросу того же request_id,
+        // поднимает его полосу (S-SPEND-TAIL-1): опрос не дожидается очереди _gate — переходит
+        // на живую полосу, сетевой цикл остаётся общим (без второй сети). Подъём полосы до
+        // входа в очередь не меняет поведение: живой опрос изначально идёт по _liveGate.
+        var live = poll.Live;
+        SemaphoreSlim gate;
+        if (live)
+        {
+            gate = _liveGate;
+            await _liveGate.WaitAsync(ct);
+        }
+        else
+        {
+            var backfillWait = _gate.WaitAsync(ct);
+            if (await Task.WhenAny(backfillWait, poll.Promised.Task).ConfigureAwait(false) == backfillWait)
+            {
+                // Тот же порядок, что был: отмена в очереди выходит из опроса исключением,
+                // а не входом в try без занятого слота (иначе Release отдаст чужой).
+                // Если живой потребитель пришёл уже после занятия слота — опрос вне очереди:
+                // ожидание ограничено интервалом и транспортом этой же попытки, следующая
+                // попытка цикла уже пойдёт по живой полосе (флаг poll.Live).
+                await backfillWait.ConfigureAwait(false);
+                gate = _gate;
+            }
+            else
+            {
+                // Живой потребитель ждёт этот опрос — уходим из очереди бэкфилла на живую полосу.
+                // Позиция в _gate при этом не остаётся: дождавшийся слот освобождается, иначе
+                // гейт залипает. Полоса становится живой и дальше: интервал бэкфилла этот опрос
+                // уже не касается — он живой, и _lastRequestAtMs не двигает.
+                _ = ReleaseIfAdmittedAsync(backfillWait);
+                live = true;
+                gate = _liveGate;
+                await _liveGate.WaitAsync(ct);
+            }
+        }
         try
         {
             if (!live)
@@ -299,6 +361,16 @@ public class FalCostService : IFalRequestCost
         {
             gate.Release();
         }
+    }
+
+    // Оставленное ожидание _gate (ушли на живую полосу) может всё же получить слот позже —
+    // освободить его, иначе гейт залипает и следующий бэкфилл не проходит никогда.
+    // Отменённое ожидание слота не берёт: ничего не освобождать.
+    private async Task ReleaseIfAdmittedAsync(Task wait)
+    {
+        try { await wait.ConfigureAwait(false); }
+        catch (OperationCanceledException) { return; }
+        _gate.Release();
     }
 
     private static FalCostMessage? ParseBillingEvents(string requestId, string json)

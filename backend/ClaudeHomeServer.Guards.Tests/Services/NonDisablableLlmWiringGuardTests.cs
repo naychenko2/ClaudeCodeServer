@@ -11,8 +11,9 @@ namespace ClaudeHomeServer.Tests.Services;
 /// Текущий набор границ: (1) вызов есть вне комментариев; (2) он верхний оператор — ровно одна строка
 /// с колонки 0, без вложенности в if/блок; (3) нижняя граница — ПОСЛЕ подключения источника тумблеров
 /// подсистем (<c>AddJsonFile(subsystemsPath…)</c>), иначе <c>Subsystems:llm:Enabled=false</c> из
-/// <c>subsystems.json</c> ещё не прочитан; (4) между этим источником и вызовом, а также после вызова нет других источников
-/// конфига (Add*-провайдеры, <c>Configuration.Add</c>, <c>Sources</c>); строковые литералы источником не считаются;
+/// <c>subsystems.json</c> ещё не прочитан; (4) между этим источником и вызовом, а также от вызова до конца файла
+/// нет других источников конфига (Add*-провайдеры, <c>Configuration.Add</c>, <c>Sources</c>); строковые и символьные
+/// литералы источником не считаются;
 /// (5) верхняя граница — до <c>AddSubsystems</c> и до <c>AddCore</c>.
 ///
 /// Зачем текстовый сторож: тело проверки охраняет <c>NonDisablableSubsystemsTests</c>, а саму
@@ -20,8 +21,8 @@ namespace ClaudeHomeServer.Tests.Services;
 /// <c>TestWebApplicationFactory</c> подмешивает ExtraConfig (проба: снять вызов — 4 из 4 зелёные).
 /// Вариант «перенести проверку в AddCore» отвергнут: до AddCore в Program.cs уже идут побочные
 /// эффекты старта (источники конфига, миграции, загрузка модулей), и отказ перестал бы быть первым.
-/// Сторож читает исходник с того же дерева, что собирается; комментарии вырезаются, иначе
-/// упоминание в тексте пояснения засчитывалось бы за вызов.
+/// Сторож читает исходник с того же дерева, что собирается; комментарии и литералы (строковые, символьные)
+/// вырезаются, иначе упоминание в тексте пояснения или строки засчитывалось бы за вызов.
 /// </summary>
 public class NonDisablableLlmWiringGuardTests
 {
@@ -54,9 +55,11 @@ public class NonDisablableLlmWiringGuardTests
         @"|\bConfiguration\s*\.\s*Add\s*[<(]" +
         @"|\bSources\s*\.\s*(Add|Insert)\s*\(", RegexOptions.Compiled);
 
-    // Строковые литералы разбираем вместе с комментариями (в них бывает «//»), чтобы токены не склеились.
+    // Строковые и символьные литералы разбираем вместе с комментариями (в них бывает «//»), чтобы токены не склеились.
+    // Символьный литерал идёт первым: одиночная кавычка '"' иначе открыла бы «строку» и сдвинула все пары ниже.
     private static readonly Regex Tokens = new(
-        @"@?""(?:\\.|""""|[^""\\])*""|/\*.*?\*/|//[^\r\n]*", RegexOptions.Compiled | RegexOptions.Singleline);
+        @"'(?:\\u[0-9A-Fa-f]{4}|\\x[0-9A-Fa-f]{1,4}|\\.|[^'\\])'|@?""(?:\\.|""""|[^""\\])*""|/\*.*?\*/|//[^\r\n]*",
+        RegexOptions.Compiled | RegexOptions.Singleline);
 
     [Fact]
     public void ProgramCs_ВызываетEnsureLlmEnabled_ДоAddSubsystemsИAddCore()
@@ -149,12 +152,6 @@ public class NonDisablableLlmWiringGuardTests
     }
 
     [Fact]
-    public void Правило_ЗеленоеЕслиИмяИсточникаТолькоВСтроковомЛитерале()
-    {
-        AssertWiring(Source + "Console.Error.WriteLine(\"AddJsonFile не подключён\");\n" + Call + Core + Subsystems);
-    }
-
-    [Fact]
     public void Правило_КраснеетЕслиИсточникПодсистемНеНайден()
     {
         var act = () => AssertWiring(Call + Core + Subsystems);
@@ -194,7 +191,8 @@ public class NonDisablableLlmWiringGuardTests
         var between = text.Substring(source.Index + source.Length, at - source.Index - source.Length);
         OtherConfigSourceCall.IsMatch(between).Should().BeFalse(
             "отказ — после всех источников конфига: между источником подсистем и вызовом появился " +
-            "другой AddJsonFile/AddInMemoryCollection, и тумблер llm мог прийти из него уже после проверки");
+            "другой источник (Add*-провайдер конфига, Configuration.Add или правка Sources), " +
+            "и тумблер llm мог прийти из него уже после проверки");
         var after = text.Substring(at + calls[0].Length);
         OtherConfigSourceCall.IsMatch(after).Should().BeFalse(
             "ни одного источника конфига после вызова: Subsystems:llm:Enabled=false из него прочитается позже " +
@@ -206,6 +204,29 @@ public class NonDisablableLlmWiringGuardTests
     // Комментарии вырезаются, литералы опустошаются: имя вызова в тексте строки — не вызов.
     private static string StripCommentsAndLiterals(string text) =>
         Tokens.Replace(text, m => m.Value[0] == '"' || m.Value[0] == '@' ? "\"\"" : " ");
+
+    // Литерал с «Add…(» внутри: без вырезания литералов правило источника сработало бы, и тест покраснел.
+    [Theory]
+    [InlineData("Console.Error.WriteLine(\"AddJsonFile(\");")]
+    [InlineData("var s = @\"AddJsonFile(\";")]
+    [InlineData("var s = $\"AddJsonFile(\";")]
+    [InlineData("var s = \"\"\"AddJsonFile(\"\"\";")]
+    public void Правило_ЗеленоеЕслиИмяИсточникаСоСкобкойТолькоВЛитерале(string literal)
+    {
+        AssertWiring(Source + literal + "\n" + Call + literal + "\n" + Core + Subsystems);
+    }
+
+    // Одиночная кавычка в символьном литерале не должна сдвигать пары и прятать настоящий источник.
+    [Theory]
+    [InlineData("var q = '\"';")]
+    [InlineData("var q = '\\\"';")]
+    [InlineData("var q = '\\u0022';")]
+    public void Правило_КраснеетНаИсточникеПослеСимвольногоЛитералаСКавычкой(string charLiteral)
+    {
+        var act = () => AssertWiring(
+            Source + Call + charLiteral + "\nbuilder.Configuration.AddJsonFile(\"evil.json\");\n" + Core + Subsystems);
+        act.Should().Throw<Exception>().WithMessage("*ни одного источника конфига после вызова*");
+    }
 
     // .git бывает файлом (worktree), поэтому проверяем и каталог, и файл
     private static string FindRepoRoot()

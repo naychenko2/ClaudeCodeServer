@@ -245,7 +245,7 @@ git grep -l 'SessionManager' 03d78e1aa -- backend | sed 's/^[^:]*://' \
 | `PersonaLayerBuilder` | personas, bindings, agentSync, spheres, flags, projects, users, store, endpoint, config | **10** |
 | `ExternalMcpContexts` | store, endpoint, bindings, projects, mcpRegistry, mcpSecrets, mcpOAuth, flags, users, config | **10** |
 | `ModulesMcpContexts` | endpoint, users, flags, modules, moduleTokens | 5 |
-| `TurnPassports` | bus, promptSnapshots, mcpStatus, subagentRuns, turnRuns, contributors, store, queue, `Lazy<ITurnStarter>` | 9 |
+| `TurnPassports` | bus, promptSnapshots, mcpStatus, subagentRuns, turnRuns, store, `Lazy<IWorkLoopContinuation>` (переходный шов к фасаду, не постоянный), contributors | 8 |
 | `TurnLaunchContextFactory` | builtin, personaLayer, external, moduleContexts, launchers, pluginDir, store, `Lazy<ITurnStarter>`, `Lazy<ITurnMessageSink>`, config | **10** |
 | `TurnProcessHost` | adapters, factory, store, history, route, queue, deviceGate, projects, `Lazy<ITurnStarter>`, bus | **10** |
 | `TurnRecovery` | store, queue, route, `ChatHistoryService`, `Lazy<ITurnStarter>`, config | 6 |

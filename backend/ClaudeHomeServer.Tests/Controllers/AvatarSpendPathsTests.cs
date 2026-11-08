@@ -4,6 +4,7 @@ using System.Text.Json;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Images;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Spend;
@@ -25,12 +26,17 @@ internal sealed class AlwaysImagesGenerator : IImageGenerator
     // Выключаемой: тесту догоняющей очереди нужен прогон «генератора нет» (заявка) и
     // прогон «генератор появился» (сама догоняющая генерация) на одном хосте
     public bool Enabled { get; set; } = true;
+    // Пустой ответ при включённом драйвере: ветка «провайдер не отдал картинок» в
+    // GenerateAvatarAsync на том же хосте (п.4 хвоста R-S-SPEND-2)
+    public bool ReturnImages { get; set; } = true;
     public IReadOnlyList<ImageModelInfo> Models => [];
 
     public Task<ImageGenerationResult> GenerateManyAsync(
         string prompt, int count, string? model, CancellationToken ct = default) =>
-        Task.FromResult(new ImageGenerationResult(
-            Enumerable.Range(1, count).Select(_ => new GeneratedImage([1, 2, 3], "image/png")).ToList(), null));
+        Task.FromResult(ReturnImages
+            ? new ImageGenerationResult(
+                Enumerable.Range(1, count).Select(_ => new GeneratedImage([1, 2, 3], "image/png")).ToList(), null)
+            : ImageGenerationResult.Empty);
 }
 
 // Черновик персоны для страховки «Применить итоги разговора» — тот же контракт, что в
@@ -237,6 +243,97 @@ public class AvatarSpendPathsTests : IClassFixture<AvatarSpendFactory>
         added[0].Initiator.Should().Be(SpendInitiators.Agent);
     }
 
+    // Проектная персона через REST (тесты веток Enqueue): проект назван в заявке — значит,
+    // и заявка обязана назвать его, как успешная генерация
+    private async Task<(string ProjectId, string PersonaId)> ProjectPersonaAsync()
+    {
+        var project = await _client.PostAsJsonAsync("/api/projects", new { name = $"asq-{Guid.NewGuid():N}" });
+        project.EnsureSuccessStatusCode();
+        var projectId = (await project.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        var created = await _client.PostAsJsonAsync("/api/personas",
+            new { name = "Заявка" + Guid.NewGuid().ToString("N")[..4], scope = "project", projectId });
+        created.EnsureSuccessStatusCode();
+        return (projectId, (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!);
+    }
+
+    private ImageBackfillRequest? QueuedRequest(string personaId) =>
+        _factory.Services.GetRequiredService<ImageBackfillStore>()
+            .Find(ImageBackfillKinds.PersonaAvatar, personaId);
+
+    // П.4 хвоста R-S-SPEND-2: ветка «генератора нет» в GenerateAvatarAsync. Заявка обязана
+    // нести ту же атрибуцию, что успешная генерация этого же вызова: актора, названного
+    // вызывающим, и проект персоны. Проверяются значения, а не «факт вызова»: если ветка
+    // подставит обратившегося вместо актора или снимет проект — этот тест красный
+    [Fact]
+    public async Task ЗаявкаБезГенератора_НесётАктораИПроектВызывающего()
+    {
+        var (projectId, personaId) = await ProjectPersonaAsync();
+        var generator = (AlwaysImagesGenerator)_factory.Services.GetRequiredService<IImageGenerator>();
+        generator.Enabled = false;
+        try
+        {
+            var result = await _factory.Services.GetRequiredService<PersonasCrudService>()
+                .GenerateAvatarAsync(OwnerId, personaId, new GenerateAvatarRequest("рыжий кот", 1),
+                    SpendInitiators.Agent, "actor-participant");
+            result.Should().BeOfType<Microsoft.AspNetCore.Mvc.BadRequestObjectResult>(
+                "генератора нет — отказ, но аватар не теряется: заявка догонит");
+        }
+        finally { generator.Enabled = true; }
+
+        try
+        {
+            var queued = QueuedRequest(personaId);
+            queued.Should().NotBeNull("отказ с canBackfill ставит заявку в очередь");
+            queued!.OwnerId.Should().Be(OwnerId, "ключ хранилища — арендатор");
+            queued.ActorUserId.Should().Be("actor-participant",
+                "актор заявки — тот же, что назван вызывающим для успешной генерации");
+            queued.ProjectId.Should().Be(projectId, "проект заявки называется, как у успешной генерации");
+            queued.Initiator.Should().Be(SpendInitiators.Agent);
+        }
+        finally
+        {
+            // Заявка этого теста не должна догоняться чужим прогоном: очередь — общий стор
+            _factory.Services.GetRequiredService<ImageBackfillStore>()
+                .Remove(ImageBackfillKinds.PersonaAvatar, personaId);
+        }
+    }
+
+    // П.4 хвоста R-S-SPEND-2: вторая ветка Enqueue — «провайдер не отдал картинок». Та же
+    // атрибуция в заявке, та же проверка значений
+    [Fact]
+    public async Task ЗаявкаБезКартинокПровайдера_НесётАктораИПроектВызывающего()
+    {
+        var (projectId, personaId) = await ProjectPersonaAsync();
+        var generator = (AlwaysImagesGenerator)_factory.Services.GetRequiredService<IImageGenerator>();
+        generator.ReturnImages = false;
+        try
+        {
+            var result = await _factory.Services.GetRequiredService<PersonasCrudService>()
+                .GenerateAvatarAsync(OwnerId, personaId, new GenerateAvatarRequest("рыжий кот", 1),
+                    SpendInitiators.Agent, "actor-participant");
+            result.Should().BeOfType<Microsoft.AspNetCore.Mvc.ObjectResult>().Which.StatusCode.Should().Be(502,
+                "провайдер не отдал картинок — отказ, но аватар не теряется: заявка догонит");
+        }
+        finally { generator.ReturnImages = true; }
+
+        try
+        {
+            var queued = QueuedRequest(personaId);
+            queued.Should().NotBeNull("отказ с canBackfill ставит заявку в очередь");
+            queued!.OwnerId.Should().Be(OwnerId, "ключ хранилища — арендатор");
+            queued.ActorUserId.Should().Be("actor-participant",
+                "актор заявки — тот же, что назван вызывающим для успешной генерации");
+            queued.ProjectId.Should().Be(projectId, "проект заявки называется, как у успешной генерации");
+            queued.Initiator.Should().Be(SpendInitiators.Agent);
+        }
+        finally
+        {
+            // Заявка этого теста не должна догоняться чужим прогоном: очередь — общий стор
+            _factory.Services.GetRequiredService<ImageBackfillStore>()
+                .Remove(ImageBackfillKinds.PersonaAvatar, personaId);
+        }
+    }
+
     // П.1 хвоста R-S-SPEND-2: аватар проектной персоны догенерился фоном — догоняющая запись
     // обязана нести ту же атрибуцию, что интерактивная: проект и актора (раньше — пусто, и та же
     // персона при удачной генерации в разрез по проекту попадала, при догоняющей — нет)
@@ -345,5 +442,137 @@ public class AvatarSpendPathsTests : IClassFixture<AvatarSpendFactory>
         added.Should().ContainSingle("аватар онбординга оплачен инстансом — трата видна в учёте");
         added[0].OwnerId.Should().Be(OwnerId);
         added[0].Initiator.Should().Be(SpendInitiators.Human, "итог знакомства применяет человек из UI");
+    }
+}
+
+/// <summary>
+/// Мягкий гейт прав актора: живой отказывает personas_generate_avatar любому, кто не
+/// арендатор (OwnerOnly в ActorToolRights), поэтому вызов с чужим актором хода не доходит
+/// до измеряемой строки тулсета. Гейт — не предмет теста; подменяется, чтобы тест
+/// дотянулся до тулсета.
+/// </summary>
+internal sealed class AllowAllActorRightGate : IActorRightGate
+{
+    public string? Denied(string server, string tool, string? callerSessionId, string ownerId, string? projectId) => null;
+}
+
+/// <summary>
+/// Хост с открытыми граничными швами (рамка — WideTurnFrame, права актора — AllowAll).
+/// Оба — не предмет теста: живая рамка закрывает personas_generate_avatar в общем чате
+/// всем, включая владельца (решение 29.10, TurnFrame.Resolve), а живой гейт прав — всем,
+/// кто не арендатор (OwnerOnly). Поэтому end-to-end с чужим актором хода в сегодняшней
+/// конфигурации невозможен в принципе, а строка тулсета defensive: она обязана звать
+/// актора из реестра на случай, когда право откроют. Швы подменяются, чтобы тест дотянулся
+/// до строки; актор при этом настоящий — его ставит реальный SessionManager, ход запущен
+/// участником.
+/// </summary>
+public class SharedChatAvatarSpendFactory : AvatarSpendFactory
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        base.ConfigureWebHost(builder);
+        builder.ConfigureServices(services =>
+        {
+            services.RemoveAll<ITurnFrameSource>();
+            services.AddSingleton<ITurnFrameSource>(new WideTurnFrame());
+            services.RemoveAll<IActorRightGate>();
+            services.AddSingleton<IActorRightGate>(new AllowAllActorRightGate());
+        });
+    }
+}
+
+/// <summary>
+/// П.3 хвоста ревью R-S-SPEND-2: строка тулсета PersonasToolset.cs:481 обязана звать актора
+/// хода (GetTurnActor), а не владельца песочницы. Раньше ни один тест на неё не краснел:
+/// существующие били по CRUD-уровню, а в достижимых тогда рамках актор совпадал с арендатором
+/// и подмена в строке была незаметна. Здесь: ход участника в общем чате (актор — реальный
+/// реестр SessionManager) → вызов personas_generate_avatar токеном арендатора (как агент в
+/// чате участника) → трата несёт актора хода. Граничные швы этой ветки (рамка, права актора)
+/// в живом составе закрывают такой вызов — они открыты в SharedChatAvatarSpendFactory и НЕ
+/// являются предметом теста; меряется ровно выбор значения в строке тулсета. Мутация
+/// (подмена GetTurnActor(session.Id, ownerId) ?? ownerId на ownerId в PersonasToolset.cs:481)
+/// краснит ровно этот тест.
+/// </summary>
+[Trait("Category", "Host")]
+public class AvatarSpendTurnActorTests : IClassFixture<SharedChatAvatarSpendFactory>
+{
+    private readonly SharedChatAvatarSpendFactory _factory;
+    private readonly HttpClient _owner;
+    private readonly HttpClient _member;
+
+    public AvatarSpendTurnActorTests(SharedChatAvatarSpendFactory factory)
+    {
+        _factory = factory;
+        _factory.ExtraConfig[SharedProjectsGate.SwitchKey] = "true";
+        _owner = factory.CreateAuthenticatedClient();
+        _member = factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+    }
+
+    private UserStore Users => _factory.Services.GetRequiredService<UserStore>();
+    private string OwnerId => Users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+    private string MemberId => Users.FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id;
+    private PersonaManager Personas => _factory.Services.GetRequiredService<PersonaManager>();
+    private SessionManager Sessions => _factory.Services.GetRequiredService<SessionManager>();
+
+    private List<SpendRecord> ImageRecords() =>
+        _factory.Spend.Records.Where(r => r.Generations > 0).ToList();
+
+    // Тот же вызов тулсета, что в AvatarSpendPathsTests: токен — владельца-арендатора,
+    // заголовок — чат-вызыватель (X-Caller-Session-Id)
+    private async Task CallToolsetAsync(string sessionId, string tool, object args)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"/mcp/personas/{sessionId}")
+        {
+            Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0", id = 1, method = "tools/call", @params = new { name = tool, arguments = args },
+            }), System.Text.Encoding.UTF8, "application/json"),
+        };
+        req.Headers.Add("X-Caller-Session-Id", sessionId);
+        var resp = await _owner.SendAsync(req);
+        resp.EnsureSuccessStatusCode();
+        var result = (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("result");
+        var isError = result.TryGetProperty("isError", out var e) && e.GetBoolean();
+        isError.Should().BeFalse(result.GetProperty("content")[0].GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public async Task АватарИзЧатаУчастника_ТулсетЗовётАктораХодаАНеВладельца()
+    {
+        foreach (var c in new[] { _owner, _member })
+            (await c.PutAsJsonAsync("/api/feature-flags/shared-projects", new { enabled = true }))
+                .EnsureSuccessStatusCode();
+        var tag = Guid.NewGuid().ToString("N")[..8];
+
+        var project = await _owner.PostAsJsonAsync("/api/projects", new { name = $"att-{tag}" });
+        project.EnsureSuccessStatusCode();
+        var projectId = (await project.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        (await _owner.PostAsJsonAsync($"/api/projects/{projectId}/members",
+            new { username = TestWebApplicationFactory.SecondUsername, role = "editor" })).EnsureSuccessStatusCode();
+        var session = await _owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "acceptEdits" });
+        session.EnsureSuccessStatusCode();
+        var sessionId = (await session.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        // Страховка замера: ход действительно принадлежит участнику — без этого подмена
+        // в строке тулсета осталась бы незаметной (тот же приём, что в TasksToolsetAssigneeTests)
+        (await _member.PostAsJsonAsync($"/api/sessions/{sessionId}/messages",
+            new { text = "сгенерируй аватар", wait = "none" })).EnsureSuccessStatusCode();
+        Sessions.GetTurnActor(sessionId, OwnerId).Should().Be(MemberId,
+            "актор хода — участник, а не владелец чата; иначе тест мерил бы совпадение");
+
+        var persona = Personas.Create(OwnerId, "А" + tag, null, null, null, null, null,
+            PersonaScope.Global, null, null, null, false);
+
+        var before = ImageRecords().Count;
+        await CallToolsetAsync(sessionId, "personas_generate_avatar",
+            new { id = persona.Id, prompt = "рыжий кот" });
+
+        var added = ImageRecords().Skip(before).ToList();
+        added.Should().ContainSingle();
+        added[0].OwnerId.Should().Be(OwnerId, "ключ хранилища — арендатор песочницы, не исполнивший");
+        added[0].ActorUserId.Should().Be(MemberId,
+            "тулсет называет актора хода (GetTurnActor), а не владельца песочницы (PersonasToolset.cs:481)");
+        added[0].Initiator.Should().Be(SpendInitiators.Agent);
     }
 }

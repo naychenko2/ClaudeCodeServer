@@ -77,10 +77,16 @@ public sealed class SessionCoreTestHost : IDisposable
             sp.GetRequiredService<ClaudeHomeServer.Services.Turn.ITurnEventBus>(),
             sp.GetRequiredService<AppSettingsService>(),
             sp.GetRequiredService<ClaudeHomeServer.Services.Execution.SandboxManager>(),
+            // Вертикаль Team помощник не регистрирует: параметр фасада — конкретный класс
+            // TeamPlanningService, а не шов, поэтому единственная ссылка на Team здесь —
+            // необязательный GetService (без регистрации в тесте — null).
             sp.GetService<ClaudeHomeServer.Services.Team.TeamPlanningService>(),
             sp.GetService<TaskManager>(),
             sp.GetService<ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog>()));
-        return new SessionCoreTestHost(services.BuildServiceProvider());
+        // Проверки времени жизни — как у host builder в проде (в Development он включает их сам):
+        // scoped-сервис, захваченный синглтоном, в тесте падает так же, как на стенде.
+        return new SessionCoreTestHost(services.BuildServiceProvider(
+            new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true }));
     }
 
     // Умолчания — те же объекты, что тесты собирали руками для конструктора SessionManager;

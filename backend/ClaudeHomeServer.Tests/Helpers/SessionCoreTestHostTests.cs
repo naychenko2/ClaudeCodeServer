@@ -65,4 +65,21 @@ public sealed class SessionCoreTestHostTests : IDisposable
 
         host.Services.GetRequiredService<SessionStore>().HasViewers("s-1").Should().BeTrue();
     }
+
+    private sealed class ScopedDep;
+    private sealed class SingletonOverScoped(ScopedDep dep) { public ScopedDep Dep { get; } = dep; }
+
+    [Fact]
+    public void Build_SingletonCapturingScopedService_Throws()
+    {
+        // Проверки времени жизни включены: синглтон с scoped-зависимостью валит сборку контейнера,
+        // как на стенде. Без ValidateScopes/ValidateOnBuild ошибка прошла бы незамеченной.
+        var build = () => SessionCoreTestHost.Build(_dir, s =>
+        {
+            s.AddScoped<ScopedDep>();
+            s.AddSingleton<SingletonOverScoped>();
+        });
+
+        build.Should().Throw<Exception>().WithMessage("*ScopedDep*");
+    }
 }

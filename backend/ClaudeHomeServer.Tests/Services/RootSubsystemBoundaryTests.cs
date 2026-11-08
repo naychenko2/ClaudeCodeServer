@@ -306,9 +306,13 @@ public class RootSubsystemBoundaryTests
         // два payload-типа собственных контрактов — TurnResult в SendAndWaitResult.Completed.Result и
         // ChatVisibilityOutcome в ChatVisibilityResult.Outcome, см. SessionCoreFacadeContracts.ReachableTypes)
         // разрешены веткой SessionCoreFacadeContracts в цикле ниже — один перечень с правилом 4
-        // SessionCoreShapeGuardTests (решение лида 98d2368c), своего списка здесь нет. Роли ядра, швы и
-        // данные ядра (QueuedMessage — контракт фасада, PendingQueueFile — данные) остаются запрещены:
-        // ядро сессий — не «общая инфраструктура», а машина хода; вход к ней root-типов — через фасад SessionManager.
+        // SessionCoreShapeGuardTests (решение лида 98d2368c), своего списка здесь нет.
+        // Роли ядра, швы и данные ядра (формат хранения вне сигнатур фасада — сейчас только
+        // PendingQueueFile) остаются запрещены: ядро сессий — машина хода, вход к ней root-типов —
+        // через фасад SessionManager. QueuedMessage сюда не относится: он в сигнатуре GetPending,
+        // то есть контракт фасада, и допущен по типу через SessionCoreFacadeContracts (решение лида
+        // 5e81ccbb). Грань определяет механический критерий, а не ярлык: тип из сигнатуры фасада не
+        // может быть запрещённым «данным ядра», пересечение граней ловит SessionCoreShapeGuardTests.
     };
 
     /// <summary>Корневые инфраструктурные слоны, исключённые из проверки (и как

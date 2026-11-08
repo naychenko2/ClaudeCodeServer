@@ -282,6 +282,39 @@ public class AvatarSpendPathsTests : IClassFixture<AvatarSpendFactory>
         added[0].Initiator.Should().Be(SpendInitiators.Human, "инициатор заявки — человек из формы создания");
     }
 
+    // Хвост S-SPEND-TAIL-ATTR-2: заявка очереди несёт ИМЕНОВАННОГО чужого актора, а не фолбэк
+    // на обратившегося. Прежняя проба догоняющей ветки называла актора владельцем, совпадающим
+    // с фолбэком, и снятие аргумента в EnqueueAvatarBackfill её не краснило
+    [Fact]
+    public async Task ДогоняющаяГенерация_НесётИменованногоЧужогоАктора()
+    {
+        var persona = NewPersona();
+        var crud = _factory.Services.GetRequiredService<PersonasCrudService>();
+        var generator = (AlwaysImagesGenerator)_factory.Services.GetRequiredService<IImageGenerator>();
+        var backfill = _factory.Services.GetRequiredService<ImageBackfillService>();
+        generator.Enabled = false;
+        try
+        {
+            // Генератора нет — аватар уходит в очередь, актор фиксируется при постановке
+            await crud.TryAutoGenerateAvatarAsync(OwnerId, persona, null, SpendInitiators.Agent, "actor-participant");
+        }
+        finally
+        {
+            generator.Enabled = true;
+        }
+
+        var before = ImageRecords().Count;
+        var summary = await backfill.RunAsync(OwnerId);
+        summary.Generated.Should().Be(1, "провайдер появился — заявка догнала аватар");
+
+        var added = ImageRecords().Skip(before).ToList();
+        added.Should().ContainSingle();
+        added[0].OwnerId.Should().Be(OwnerId, "ключ записи — владелец заявки");
+        added[0].ActorUserId.Should().Be("actor-participant",
+            "актор переживает постановку в очередь: заявка несёт названного, а не обратившегося");
+        added[0].Initiator.Should().Be(SpendInitiators.Agent);
+    }
+
     // Персона из чата (personas_create с AutoAvatar): аватар генерирует агент, и его
     // инициатор доходит до записи траты. Актор здесь — сам владелец: ход его собственный,
     // GetTurnActor другого не называет → права арендатора (тот же фолбэк, что у

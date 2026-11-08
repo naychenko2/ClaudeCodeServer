@@ -246,27 +246,64 @@ public class SessionCoreShapeGuardTests
     /// Допускаются <c>new()</c> и <c>new Dictionary&lt;string, string&gt;(…)</c>, тело — на одной строке или на нескольких.</summary>
     internal static Dictionary<string, List<string>> InitializerKeys(string source)
     {
-        var consts = Regex.Matches(source, @"const\s+string\s+(\w+)\s*=\s*""([^""]*)""")
-            .ToDictionary(m => m.Groups[1].Value, m => m.Groups[2].Value);
+        // Одноимённые объявления складываются, а не затирают друг друга: фикстура с именем реального
+        // словаря видна как расхождение полноты (DuplicateDeclaredNames), а не как тихая перезапись.
         var result = new Dictionary<string, List<string>>();
-        foreach (Match d in Regex.Matches(source,
-                     @"Dictionary<string,\s*string>\s+(\w+)\s*=\s*new\s*(?:Dictionary<string,\s*string>)?\s*\([^)]*\)\s*\{"))
+        foreach (var (name, keys) in InitializerDeclarations(source))
         {
-            var body = BraceBody(source, d.Index + d.Length);
-            var keys = Regex.Matches(body, @"(?:^|[{,])\s*\[\s*(?:(\w+)\s*\+\s*)?""([^""]+)""\s*\]\s*=")
-                .Select(m => m.Groups[1].Success
-                    ? (consts.TryGetValue(m.Groups[1].Value, out var prefix)
-                        ? prefix + m.Groups[2].Value
-                        : throw new InvalidOperationException($"Префикс ключа «{m.Groups[1].Value}» не const string в исходнике"))
-                    : m.Groups[2].Value)
-                .ToList();
-            result[d.Groups[1].Value] = keys;
+            if (result.TryGetValue(name, out var prior)) prior.AddRange(keys);
+            else result[name] = keys;
         }
         return result;
     }
 
-    /// <summary>Тело инициализатора от позиции после «{» до парной «}» без комментариев; строковые
-    /// литералы (с экранированием) скобок не считают.</summary>
+    /// <summary>Имена словарей, объявленных в тексте больше одного раза (в том числе фикстурой в файле):
+    /// разбор по имени для них неоднозначен.</summary>
+    internal static List<string> DuplicateDeclaredNames(string source) =>
+        InitializerDeclarations(source).GroupBy(d => d.Name).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
+
+    /// <summary>Объявления разбираются построчно: строка начинается с модификаторов и самого объявления,
+    /// поэтому текст внутри обычных строковых литералов (фикстуры) за объявление не принимается, а raw-строки
+    /// вырезаются целиком. Повтор имени <c>const string</c> не роняет разбор: ошибкой он становится
+    /// только если этим именем реально подставляют префикс и значения различаются.</summary>
+    private static List<(string Name, List<string> Keys)> InitializerDeclarations(string rawSource)
+    {
+        var source = Regex.Replace(rawSource, "\"\"\"[\\s\\S]*?\"\"\"", "");
+        var consts = new Dictionary<string, HashSet<string>>();
+        foreach (Match c in Regex.Matches(source,
+                     @"^[ \t]*(?:\w+[ \t]+)*const[ \t]+string[ \t]+(\w+)[ \t]*=[ \t]*""([^""]*)""[ \t]*;",
+                     RegexOptions.Multiline))
+        {
+            if (!consts.TryGetValue(c.Groups[1].Value, out var values)) consts[c.Groups[1].Value] = values = [];
+            values.Add(c.Groups[2].Value);
+        }
+        var result = new List<(string, List<string>)>();
+        foreach (Match d in Regex.Matches(source,
+                     @"^[ \t]*(?:\w+[ \t]+)*Dictionary<string,\s*string>\s+(\w+)\s*=\s*new\s*(?:Dictionary<string,\s*string>)?\s*\([^)]*\)\s*\{",
+                     RegexOptions.Multiline))
+        {
+            var body = BraceBody(source, d.Index + d.Length);
+            var keys = Regex.Matches(body, @"(?:^|[{,])\s*\[\s*(?:(\w+)\s*\+\s*)?""([^""]+)""\s*\]\s*=")
+                .Select(m => m.Groups[1].Success ? ResolvePrefix(consts, m.Groups[1].Value) + m.Groups[2].Value : m.Groups[2].Value)
+                .ToList();
+            result.Add((d.Groups[1].Value, keys));
+        }
+        return result;
+    }
+
+    private static string ResolvePrefix(Dictionary<string, HashSet<string>> consts, string name)
+    {
+        if (!consts.TryGetValue(name, out var values))
+            throw new InvalidOperationException($"Префикс ключа «{name}» не const string в исходнике");
+        if (values.Count > 1)
+            throw new InvalidOperationException(
+                $"Префикс ключа «{name}» объявлен const string несколько раз с разными значениями ({string.Join(" | ", values)}): подстановка неоднозначна");
+        return values.Single();
+    }
+
+    /// <summary>Тело инициализатора от позиции после «{» до парной «}» без комментариев (<c>//</c> и
+    /// <c>/* … */</c>); скобки внутри обычных строк с экранированием, verbatim-строк <c>@"…""…"</c> и
+    /// char-литералов (<c>'}'</c>) не считаются. Незакрытая форма — громкое исключение, не тихий пропуск.</summary>
     private static string BraceBody(string source, int start)
     {
         var sb = new System.Text.StringBuilder();
@@ -274,7 +311,22 @@ public class SessionCoreShapeGuardTests
         for (var i = start; i < source.Length; i++)
         {
             var c = source[i];
-            if (c == '"')
+            var next = i + 1 < source.Length ? source[i + 1] : '\0';
+            if (c == '@' && next == '"')
+            {
+                sb.Append("@\"");
+                for (i += 2; i < source.Length; i++)
+                {
+                    if (source[i] == '"')
+                    {
+                        if (i + 1 < source.Length && source[i + 1] == '"') { sb.Append("\"\""); i++; continue; }
+                        break;
+                    }
+                    sb.Append(source[i]);
+                }
+                if (i < source.Length) sb.Append('"');
+            }
+            else if (c == '"')
             {
                 sb.Append(c);
                 for (i++; i < source.Length && source[i] != '"'; i++)
@@ -284,10 +336,23 @@ public class SessionCoreShapeGuardTests
                 }
                 if (i < source.Length) sb.Append('"');
             }
-            else if (c == '/' && i + 1 < source.Length && source[i + 1] == '/')
+            else if (c == '\'')
+            {
+                for (i++; i < source.Length && source[i] != '\''; i++)
+                    if (source[i] == '\\') i++;
+                sb.Append("''");
+            }
+            else if (c == '/' && next == '/')
             {
                 while (i < source.Length && source[i] != '\n') i++;
                 sb.Append('\n');
+            }
+            else if (c == '/' && next == '*')
+            {
+                var end = source.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                if (end < 0) break;
+                i = end + 1;
+                sb.Append(' ');
             }
             else
             {
@@ -447,17 +512,100 @@ public class SessionCoreShapeGuardTests
         DuplicateInitializerKeys(mixed).Should().Equal("C: q");
     }
 
-    private static void AssertParsedMatchesRuntime(Type owner, string sourceFile)
+    /// <summary>Статические <c>Dictionary&lt;string, string&gt;</c> ВСЕХ типов файла: top-level типы по тексту
+    /// (имя + пространство имён якоря) вместе со вложенными на любую глубину. Нестатические поля и локальные
+    /// переменные в сверку полноты не входят; файловый тип, не найденный в сборке, — громкий отказ.</summary>
+    internal static List<FieldInfo> FileStaticDictionaryFields(Type anchor, string source)
     {
-        var parsed = InitializerKeys(ReadGuardsSource(sourceFile));
-        var fields = owner.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
-            .Where(f => f.FieldType == typeof(Dictionary<string, string>)).ToList();
-        fields.Should().NotBeEmpty(owner.Name + ": словарей не найдено — проверка вакуумна");
+        var names = FacadeTopLevelNames(source);
+        var roots = anchor.Assembly.GetTypes()
+            .Where(t => !t.IsNested && t.Namespace == anchor.Namespace && names.Contains(t.Name)).ToList();
+        names.Except(roots.Select(t => t.Name)).Should().BeEmpty("top-level тип файла не найден в сборке: сверка полноты была бы неполной");
+        return roots.SelectMany(WithNested)
+            .Where(t => !t.IsGenericTypeDefinition)
+            .SelectMany(t => t.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+            .Where(f => f.FieldType == typeof(Dictionary<string, string>))
+            .ToList();
+    }
+
+    private static IEnumerable<Type> WithNested(Type t) =>
+        new[] { t }.Concat(t.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic).SelectMany(WithNested));
+
+    [Fact]
+    public void Самопроверка_разбора_повтор_имени_const_и_фикстура_с_именем_словаря_не_роняют_и_не_подменяют()
+    {
+        // Повтор имени const с тем же значением и неиспользуемый повтор разбор не роняют.
+        const string dupConst = "const string Ns = \"P.\";\nconst string Ns = \"P.\";\nconst string Unused = \"1\";\nconst string Unused = \"2\";\n"
+            + "static readonly Dictionary<string, string> Demo = new()\n{\n    [Ns + \"C\"] = \"x\",\n};\n";
+        InitializerKeys(dupConst)["Demo"].Should().Equal("P.C");
+
+        // Префикс с РАЗНЫМИ значениями — осмысленный отказ про неоднозначность, а не ArgumentException.
+        var ambiguous = dupConst.Replace("const string Ns = \"P.\";\nconst string Ns = \"P.\";", "const string Ns = \"P.\";\nconst string Ns = \"Q.\";");
+        FluentActions.Invoking(() => InitializerKeys(ambiguous))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Ns*неоднозначна*");
+
+        // Фикстура с именем реального словаря не затирает запись настоящего: имя видно как объявленное дважды.
+        const string twin = "Dictionary<string, string> Real = new() { [\"a\"] = \"1\" };\nDictionary<string, string> Real = new() { [\"b\"] = \"2\" };\n";
+        DuplicateDeclaredNames(twin).Should().Equal("Real");
+        InitializerKeys(twin)["Real"].Should().Equal("a", "b");
+
+        // Текст внутри обычной строки (фикстура в одну строку) объявлением не считается.
+        InitializerKeys("var f = \"Dictionary<string, string> Fake = new() { [\\\"k\\\"] = 1 };\";\n").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Самопроверка_разбора_блок_комментарий_char_и_verbatim_не_меняют_набор_ключей()
+    {
+        const string head = "Dictionary<string, string> D = new()\n{\n";
+        // Блок-комментарий со скобкой и ключом внутри.
+        InitializerKeys(head + "    /* [\"fake\"] = \"x\", } */\n    [\"a\"] = \"1\",\n    [\"b\"] = \"2\",\n};\nDictionary<string, string> E = new() { [\"e\"] = \"1\" };")
+            .Should().BeEquivalentTo(new Dictionary<string, List<string>> { ["D"] = ["a", "b"], ["E"] = ["e"] });
+        // Char-литералы со скобкой и кавычкой в значении.
+        InitializerKeys(head + "    [\"a\"] = '}'.ToString(),\n    [\"b\"] = '\"'.ToString(),\n};\nDictionary<string, string> E = new() { [\"e\"] = \"1\" };")
+            .Should().BeEquivalentTo(new Dictionary<string, List<string>> { ["D"] = ["a", "b"], ["E"] = ["e"] });
+        // Verbatim: удвоенная кавычка, обратная косая перед закрывающей, скобка и «//» внутри.
+        InitializerKeys(head + "    [\"a\"] = @\"x\"\"}\"\" // y\",\n    [\"b\"] = @\"C:\\\",\n    [\"c\"] = \"3\",\n};\nDictionary<string, string> E = new() { [\"e\"] = \"1\" };")
+            .Should().BeEquivalentTo(new Dictionary<string, List<string>> { ["D"] = ["a", "b", "c"], ["E"] = ["e"] });
+        // Незакрытый блок-комментарий — громкий отказ.
+        FluentActions.Invoking(() => InitializerKeys(head + "    /* [\"a\"] = \"1\",\n};"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*парная*");
+    }
+
+    [Fact]
+    public void Самопроверка_полнота_видит_статические_словари_вложенных_и_других_top_level_типов_файла()
+    {
+        var names = FileStaticDictionaryFields(typeof(SessionCoreShapeGuardTests), ReadGuardsSource("SessionCoreShapeGuardTests.cs"))
+            .Select(f => f.Name).ToList();
+        names.Should().Contain("CoreDataReferrerAllowList", "словарь самого класса");
+        names.Should().Contain(nameof(FakeNestedDicts.Inner.NestedDict), "словарь вложенного типа");
+        names.Should().Contain(nameof(ForeignNames.ForeignDict), "словарь другого top-level класса файла");
+        names.Should().NotContain(nameof(FakeNestedDicts.InstanceDict), "нестатический словарь в сверку не входит");
+    }
+
+    internal sealed class FakeNestedDicts
+    {
+        internal sealed class Inner
+        {
+            internal static readonly Dictionary<string, string> NestedDict = new() { ["n"] = "1" };
+        }
+
+        internal readonly Dictionary<string, string> InstanceDict = new() { ["i"] = "1" };
+    }
+
+    private static void AssertParsedMatchesRuntime(Type anchor, string sourceFile)
+    {
+        var source = ReadGuardsSource(sourceFile);
+        var parsed = InitializerKeys(source);
+        var fields = FileStaticDictionaryFields(anchor, source);
+        fields.Should().NotBeEmpty(sourceFile + ": словарей не найдено — проверка вакуумна");
+        var twice = DuplicateDeclaredNames(source);
         foreach (var f in fields)
         {
-            parsed.Should().ContainKey(f.Name, owner.Name + "." + f.Name + ": словарь не разобран текстовым разбором");
+            twice.Should().NotContain(f.Name,
+                sourceFile + ": имя «" + f.Name + "» объявлено в тексте больше одного раза (фикстура с именем реального словаря?) — разбор по имени неоднозначен");
+            parsed.Should().ContainKey(f.Name, f.DeclaringType!.Name + "." + f.Name + ": словарь не разобран текстовым разбором");
             parsed[f.Name].Count.Should().Be(((Dictionary<string, string>)f.GetValue(null)!).Count,
-                owner.Name + "." + f.Name + ": число ключей в тексте расходится с рантаймовым Count");
+                f.DeclaringType.Name + "." + f.Name + ": число ключей в тексте расходится с рантаймовым Count");
         }
     }
 
@@ -813,6 +961,8 @@ public class SessionCoreShapeGuardTests
 // Одноимённики допустимых типов в чужом (вложенном) пространстве имён — нарушители самопроверок правил 3 и 5.
 internal static class ForeignNames
 {
+    internal static readonly Dictionary<string, string> ForeignDict = new() { ["f"] = "1" };
+
     internal interface ITurnStarter { }
 
     internal sealed class FakeLazyForeignSeam

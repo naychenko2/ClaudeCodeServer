@@ -64,7 +64,8 @@ async function openPanel(page: Page) {
   // событие доставляем прямо элементу (React слушает на корне — обработчик сработает).
   await page.getByRole('button', { name: /Меню пользователя/ }).dispatchEvent('click');
   await page.getByRole('button', { name: 'Компоненты', exact: true }).dispatchEvent('click');
-  const panel = page.locator('.cc-modal-card');
+  // Модалка: на десктопе .cc-modal-card, на мобиле — bottom-sheet .cc-sheet-card.
+  const panel = page.locator('.cc-modal-card, .cc-sheet-card');
   await expect(panel).toBeVisible();
   await expect(panel.getByText('Компоненты', { exact: true })).toBeVisible();
   return panel;
@@ -309,6 +310,40 @@ test('роли: обычному пользователю панель недо�
   }
 });
 
+test('мобильная раскладка 360: карточки вместо таблицы, тумблеры видимы, переполнения нет', async ({ page }) => {
+  test.skip(PHASE !== 'ui', 'фаза ui');
+  await page.setViewportSize({ width: 360, height: 720 });
+  await loginViaUi(page, USER, PASS);
+  const panel = await openPanel(page);
+
+  const list = await client.get<SubsystemRow[]>('/api/admin/subsystems');
+  const disableable = list.filter(s => s.canDisable);
+  expect(disableable.length, 'на стенде есть отключаемые подсистемы').toBeGreaterThan(0);
+
+  // Таблица на мобиле не рендерится: заголовка колонок нет (в DOM — исходный регистр).
+  await expect(panel.getByText('Компонент', { exact: true })).toHaveCount(0);
+  // Каждая отключаемая — своя карточка с видимым тумблером; группа ядра на месте.
+  for (const s of disableable) {
+    await expect(row(page, s.key)).toBeVisible();
+    await expect(switchOf(page, s.key)).toBeVisible();
+  }
+  await expect(panel.getByTestId('components-core')).toBeVisible();
+
+  // Горизонтального переполнения нет: документ и карточка панели не шире вьюпорта,
+  // содержимое карточки не выходит за её границы.
+  const geo = await page.evaluate(() => {
+    const el = document.querySelector('.cc-modal-card, .cc-sheet-card') as HTMLElement | null;
+    return {
+      doc: document.documentElement.scrollWidth,
+      card: el ? { w: el.clientWidth, sw: el.scrollWidth } : null,
+    };
+  });
+  expect(geo.doc, 'документ не шире 360').toBeLessThanOrEqual(360);
+  expect(geo.card, 'карточка панели на месте').not.toBeNull();
+  expect(geo.card!.w, 'карточка панели не шире вьюпорта').toBeLessThanOrEqual(360);
+  expect(geo.card!.sw, 'содержимое карточки не переполняет её').toBeLessThanOrEqual(geo.card!.w);
+});
+
 // ─── off: выключаю «Заметки» тумблером (запись в бек) ───────────────────────
 
 test('выключаю «Заметки» тумблером — запись уходит в бек', async ({ page, context }) => {
@@ -365,6 +400,21 @@ test('после рестарта «Заметки» действительно 
   await openPanel(page);
   await expect(row(page, TARGET)).toContainText('Выключен');
   await expect(switchOf(page, TARGET)).toHaveAttribute('aria-checked', 'false');
+});
+
+test('строка выключенной «Заметки» названа по-русски и с описанием (регрессия b53cd1fa)', async ({ page }) => {
+  test.skip(PHASE !== 'off-effect', 'фаза off-effect');
+  await loginViaUi(page, USER, PASS);
+
+  // Бэк: имя и описание выключенного модуля — из его класса, не из реестровой заглушки.
+  const s = await subsystem(client, TARGET);
+  expect(s.title, 'заголовок выключенного модуля — человеческое имя раздела').toBe('Заметки');
+  expect(s.description, 'описание выключенного модуля не пустое').toBeTruthy();
+
+  // Фронт рисовает ровно это.
+  await openPanel(page);
+  await expect(row(page, TARGET)).toContainText('Заметки');
+  await expect(row(page, TARGET)).toContainText(s.description);
 });
 
 // ─── on: включаю обратно ────────────────────────────────────────────────────

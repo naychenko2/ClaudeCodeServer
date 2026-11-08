@@ -503,7 +503,7 @@ public class ImageGenerationSpendTests
         var cost = new FakeCost(0.04);
         var service = new ImageGenerationService([fal, glif], Store(NewTempDir()), null, spend, cost);
 
-        Assert.Empty(await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None));
+        Assert.Empty(await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, ct: CancellationToken.None));
 
         await spend.WaitForFirst(Settle);
         await spend.WaitForSecond(TimeSpan.FromMilliseconds(300));
@@ -540,7 +540,7 @@ public class ImageGenerationSpendTests
         var cost = new FakeCost(null);
         var service = new ImageGenerationService([fal], Store(NewTempDir()), log, new CapturingSpend(), cost);
 
-        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None);
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, ct: CancellationToken.None);
         await cost.AskedOrTimeout;
         await Task.Delay(300);
 
@@ -556,7 +556,7 @@ public class ImageGenerationSpendTests
         var cost = new FakeCost(0.04);
         var service = new ImageGenerationService([fal], Store(NewTempDir()), log, new CapturingSpend(), cost);
 
-        await service.GenerateManyAsync(Avatar, "кот", 1, "", SpendInitiators.Human, CancellationToken.None);
+        await service.GenerateManyAsync(Avatar, "кот", 1, "", SpendInitiators.Human, ct: CancellationToken.None);
 
         log.Items.Should().Contain(i => i.Level == LogLevel.Warning && i.Text.Contains("записи нет"));
         cost.Calls.Should().Be(0);

@@ -469,6 +469,36 @@ public class ImageGenerationSpendTests
         cost.Calls.Should().Be(0);
     }
 
+    // П.1 хвоста R-S-SPEND-9a: отмена вызывающего, пришедшая после того как fal принял запрос
+    // (id в ответе — так её отдаёт драйвер), не проглатывается роутером. Порядок ровно тот:
+    // сначала трата по принятому запросу (цена спросится по id, запись будет только если цена
+    // есть), затем отмена наверх — и никакого фолбэка после того, как человек отменил ход.
+    [Fact]
+    public async Task ОтменаПослеПринятогоЗапроса_ТратаЗаписана_ОтменаИдётВыше()
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1", returnsImages: false);
+        var next = new FakeGenerator("next", enabled: true);
+        var spend = new CapturingSpend();
+        var cost = new FakeCost(0.04);
+        // Порядок auto-цепочки: fal, неизвестный ключ — в хвосте, он и есть фолбэк
+        var service = new ImageGenerationService([next, fal], Store(NewTempDir()), null, spend, cost);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var call = () => service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, ct: cts.Token);
+
+        await call.Should().ThrowAsync<OperationCanceledException>(
+            "отменённый ход не может выглядеть как «генерация не удалась»: отмена доходит до подавшего её");
+
+        await spend.WaitForFirst(Settle);
+        var rec = spend.Records.Should().ContainSingle("трата по принятому запросу оформлена до отмены").Subject;
+        rec.Source.Should().Be(SpendSources.Fal);
+        rec.Label.Should().Be(ImageGenerationService.SpendLabelNoImages);
+        rec.CostUsd.Should().Be(0.04);
+        rec.Generations.Should().Be(0);
+        next.Calls.Should().Be(0, "после отмены цепочка фолбэка не продолжается");
+    }
+
     // Фолбэк не съедает трату пустого fal. ProviderOrder статичен (glif → fal), поэтому
     // «fal, затем glif» в проде недостижим; механизм проверяем цепочкой fal → драйвер с
     // неизвестным ключом (OrderOf кладёт его в хвост): трата fal пишется в своей итерации.

@@ -41,12 +41,13 @@ internal sealed class TeamStateService
     private readonly TeamPlanningService? _teamPlanning;
     private readonly IProjectManager _projects;
     private readonly IConfiguration? _config;
-    // Реестр приходит от фасада и может не быть: у выключенной вертикали llm его регистрации
-    // нет (LlmSubsystem.cs:296), фасад деградирует в null (его поле _llmProviders). Без реестра
-    // возможности модели — как у родного Claude (фолбэк CapabilitiesFor, LlmProviderRegistry.cs:443).
-    private readonly LlmProviderRegistry? _llmProviders;
+    // Реестр приходит от фасада и обязателен: llm — неотключаемая подсистема (ADR-014 §5),
+    // её регистрации в контейнере не отсутствует. Возможности модели решает сам реестр: для
+    // нерезолвленной модели он отдаёт родной Claude (CapabilitiesFor, LlmProviderRegistry.cs:443)
+    // — своей запасной таблицы здесь нет и заводить нечего.
+    private readonly LlmProviderRegistry _llmProviders;
     internal TeamStateService(SessionManager sessions, TeamPlanningService? teamPlanning,
-        IProjectManager projects, IConfiguration? config, LlmProviderRegistry? llmProviders)
+        IProjectManager projects, IConfiguration? config, LlmProviderRegistry llmProviders)
     {
         _sessions = sessions;
         _dir = sessions;
@@ -204,11 +205,11 @@ internal sealed class TeamStateService
     // → волна → снова интервью» обязан вернуть исходный выбор человека, а не Plan,
     // поставленный прошлым заходом), живой прогон CLI получает set_permission_mode
     // на лету через шов ITeamRunState.TrySetPermissionModeLive.
-    // Гейт план-фазы по модели. Реестра вертикали llm нет (она выключена) — возможности
-    // родного Claude: тот же фолбэк, что у LlmProviderRegistry.CapabilitiesFor для
-    // нерезолвленной модели (LlmProviderRegistry.cs:443) и у адаптера хода (ClaudeSession.cs:30).
-    private bool SupportsPlanMode(string? model) =>
-        (_llmProviders?.CapabilitiesFor(model) ?? LlmCapabilitiesCatalog.Claude).SupportsPlanMode;
+    // Гейт план-фазы по модели — решение принимает реестр: он же отдаёт возможности родного
+    // Claude для нерезолвленной модели (CapabilitiesFor, LlmProviderRegistry.cs:443), тем же
+    // путём, что адаптер хода (ClaudeSession.cs:30). Ядро сессий по возможностям модели не
+    // деградирует: своего фолбэка поверх реестра здесь нет.
+    private bool SupportsPlanMode(string? model) => _llmProviders.CapabilitiesFor(model).SupportsPlanMode;
 
     public void EnterPlanPhaseMode(string sessionId)
     {

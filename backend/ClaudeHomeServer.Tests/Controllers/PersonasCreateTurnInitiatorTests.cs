@@ -65,6 +65,22 @@ public class PersonasCreateTurnInitiatorTests : IClassFixture<SharedChatAvatarSp
         resp.EnsureSuccessStatusCode();
     }
 
+    // POST /api/personas/{id}/avatar/generate: тот же REST-вход, что у stdio-инструмента
+    // personas_generate_avatar; заголовок-вызыватель ставит MCP-сервер, браузер — никогда
+    private async Task GenerateAvatarAsync(string? callerSessionId)
+    {
+        var created = await _owner.PostAsJsonAsync("/api/personas", new { name = "Аватар" + Tag(), autoAvatar = false });
+        created.EnsureSuccessStatusCode();
+        var personaId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"/api/personas/{personaId}/avatar/generate")
+        {
+            Content = new StringContent(JsonSerializer.Serialize(new { prompt = "рыжий кот", count = 1 }),
+                System.Text.Encoding.UTF8, "application/json"),
+        };
+        if (callerSessionId is not null) req.Headers.Add("X-Caller-Session-Id", callerSessionId);
+        (await _owner.SendAsync(req)).EnsureSuccessStatusCode();
+    }
+
     private async Task<string> CreateSessionAsync(HttpClient client, string pathName)
     {
         var project = await client.PostAsJsonAsync("/api/projects", new { name = pathName });
@@ -188,5 +204,35 @@ public class PersonasCreateTurnInitiatorTests : IClassFixture<SharedChatAvatarSp
         added[0].Initiator.Should().Be(SpendInitiators.Human,
             "ход начал человек (участник) — его запрос, а не канал доставки");
         added[0].ActorUserId.Should().Be(MemberId, "актор — подавший, а не владелец токена");
+    }
+
+    // Аватар, половина «из UI»: вызов без чата-вызывателя — человек, актор — обратившийся
+    [Fact]
+    public async Task ГенерацияАватараИзUI_ИнициаторЧеловека()
+    {
+        var before = ImageRecords().Count;
+        await GenerateAvatarAsync(null);
+
+        var added = ImageRecords().Skip(before).ToList();
+        added.Should().NotBeEmpty();
+        added.Should().OnlyContain(r => r.Initiator == SpendInitiators.Human && r.ActorUserId == OwnerId);
+    }
+
+    // Аватар, половина «агентский ход по поручению участника»: stdio-путь personas_generate_avatar.
+    // Мутация «жёсткий Human» в GenerateAvatar краснит этот тест
+    [Fact]
+    public async Task ГенерацияАватараИзАгентскогоХода_ИнициаторАгентаИАкторУчастника()
+    {
+        var sessionId = await SharedSessionAsync($"ct-av-{Tag()}");
+        await Sessions.SendMessageAndWaitAsync(sessionId, "поручение от участника", TimeSpan.Zero,
+            agentDepth: 1, senderUserId: MemberId);
+        AssertLiveTurn(sessionId);
+
+        var before = ImageRecords().Count;
+        await GenerateAvatarAsync(sessionId);
+
+        var added = ImageRecords().Skip(before).ToList();
+        added.Should().NotBeEmpty();
+        added.Should().OnlyContain(r => r.Initiator == SpendInitiators.Agent && r.ActorUserId == MemberId);
     }
 }

@@ -301,10 +301,14 @@ public class PersonasController(
     // и модель выбирает роутер по настройке инстанса. Кандидаты сохраняются во временную
     // папку, аватар персоны НЕ меняется до выбора.
     // prompt пуст → строим фото-промпт из имени/описания персоны.
-    // Путь формы — человеческий: человек просит варианты сам (S-SPEND-8)
+    // Инициатора и актора выводит CallerSpendAttribution: форма (без чата-вызывателя) — человек,
+    // агентский вызов через stdio-MCP — по признаку живого хода (S-SPEND-8)
     [HttpPost("{id}/avatar/generate")]
-    public Task<ActionResult> GenerateAvatar(string id, [FromBody] GenerateAvatarRequest req) =>
-        _crud.GenerateAvatarAsync(UserId, id, req, SpendInitiators.Human);
+    public Task<ActionResult> GenerateAvatar(string id, [FromBody] GenerateAvatarRequest req)
+    {
+        var (initiator, actor) = CallerSpendAttribution();
+        return _crud.GenerateAvatarAsync(UserId, id, req, initiator, actor);
+    }
 
     // Отдать кандидата аватара (превью в галерее выбора). access_token в query для <img>.
     [HttpGet("{id}/avatar/candidate/{file}")]

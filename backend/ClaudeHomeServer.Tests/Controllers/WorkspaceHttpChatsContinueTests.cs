@@ -9,6 +9,7 @@ using ClaudeHomeServer.Services.Turn;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -53,7 +54,7 @@ public class WorkspaceHttpChatsContinueTests : IDisposable
     // Подкладываем ход агента в накопитель сессии: GetHistoryAsync читает живую запись
     private void SeedAgentTurn(string sessionId)
     {
-        var field = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var field = typeof(SessionManager).GetProperty("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
         var entry = ((System.Collections.IDictionary)field.GetValue(Sessions)!)[sessionId]!;
         List<StoredMessage> turns =
         [
@@ -144,7 +145,7 @@ public class WorkspaceHttpChatsContinueTests : IDisposable
     // «Липкий» актор прогона: GetTurnActor читает его, когда ход не идёт, а адаптера нет
     private void SetRunActor(string sessionId, string actor, bool submit = false)
     {
-        var field = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var field = typeof(SessionManager).GetProperty("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
         var entry = ((System.Collections.IDictionary)field.GetValue(Sessions)!)[sessionId]!;
         entry.GetType().GetField("RunActor")!.SetValue(entry, actor);
         if (submit) entry.GetType().GetField("SubmitActor")!.SetValue(entry, actor);

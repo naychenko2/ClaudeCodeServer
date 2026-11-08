@@ -4,6 +4,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Turn;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Services;
 

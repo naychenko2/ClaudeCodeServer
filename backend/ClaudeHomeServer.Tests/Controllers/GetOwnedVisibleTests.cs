@@ -21,6 +21,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Xunit;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -167,16 +168,37 @@ public sealed class GetOwnedVisibleTests : IDisposable
             knowledge, new SkillsService(), userStore, _config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(_config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
-        return new SessionManager(_projects, _history, _config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas, bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, new TestSessionBroadcaster(),
-            cheap: _cheap, services: AccessProvider());
+        return SessionCoreTestHost.Build(_tempDir, s =>
+        {
+            s.AddSingleton<global::ClaudeHomeServer.Services.ProjectManager>(_projects);
+            s.AddSingleton<global::ClaudeHomeServer.Services.ChatHistoryService>(_history);
+            s.AddSingleton<global::Microsoft.Extensions.Configuration.IConfiguration>(_config);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(adapters);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FalCostService>(falCost);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.UsageService>(usage);
+            s.AddSingleton<global::ClaudeHomeServer.Services.AppSettingsService>(appSettings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.UserStore>(userStore);
+            s.AddSingleton<global::ClaudeHomeServer.Services.JwtService>(jwt);
+            s.AddSingleton<global::Microsoft.AspNetCore.Hosting.Server.IServer>(server.Object);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.LlmProviderRegistry>(llmProviders);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FeatureFlagService>(flags);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaManager>(personas);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaBindingsService>(bindings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(subPool);
+            s.AddSingleton<global::Microsoft.Extensions.Logging.ILogger<ClaudeHomeServer.Services.SessionManager>>(NullLogger<SessionManager>.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.ILauncherFactory>(TestLauncherFactory.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.SandboxManager>(sandbox);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(new TestSessionBroadcaster());
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ICheapTextRunner>(_cheap);
+            AddAccess(s);
+        }).Manager;
     }
 
     // Корень DI с настоящей точкой доступа (тот же ленивый шов, что в проде: прямая зависимость
     // замкнула бы цикл ProjectAccessService → ISessionDirectory → SessionManager). Лямбда
     // читает _sessions позже — к первому GetService он уже собран.
-    private ServiceProvider AccessProvider()
+    private void AddAccess(IServiceCollection services)
     {
-        var services = new ServiceCollection();
         services.AddSingleton<IProjectAccess>(_ => new ProjectAccessService(
             _projects, _sessions, new SharedProjectsGate(_config, new FeatureFlagService(_users))));
         // Шов IFeatureChatLinks — как в проде: Program.cs:414 регистрирует NoFeatureChatLinks,
@@ -185,7 +207,6 @@ public sealed class GetOwnedVisibleTests : IDisposable
         // без неё (та же регистрация, что в ChatVisibilityEndpointTests и ChatsControllerPrivateAttachmentUploadTests).
         // Без неё ленивый шов SetChatVisibility (SessionManager.cs:2576) падает на GetRequiredService.
         services.AddSingleton<IFeatureChatLinks, NoFeatureChatLinks>();
-        return services.BuildServiceProvider();
     }
 
     // «Дешёвый» раннер со счётчиком вызовов: нужен одним — показать, что на отказанной ручке
@@ -642,8 +663,8 @@ public sealed class GetOwnedVisibleTests : IDisposable
         var res = (await SessionsAs(_ownerId).IconBatch(_projectId, default))
             .Should().BeOfType<OkObjectResult>().Subject;
         // Размечены ровно два видимых чата; чужой приватный не попал ни в processed, ни в skipped
-        ((SessionManager.IconBatchResult)res.Value!).Processed.Should().Be(2);
-        ((SessionManager.IconBatchResult)res.Value!).Skipped.Should().Be(0);
+        ((IconBatchResult)res.Value!).Processed.Should().Be(2);
+        ((IconBatchResult)res.Value!).Skipped.Should().Be(0);
         // Модель звалась дважды — по транскриптам своего приватного и общего; по чужому приватному — ни разу
         _cheap.Calls.Should().Be(2);
         // Карточка чужого приватного не написана: значка нет
@@ -656,7 +677,7 @@ public sealed class GetOwnedVisibleTests : IDisposable
         // арендатору) — шаг это не меняет; чужой приватный по-прежнему не тронут
         var asMember = (await SessionsAs(_otherId).IconBatch(_projectId, default))
             .Should().BeOfType<OkObjectResult>().Subject;
-        ((SessionManager.IconBatchResult)asMember.Value!).Processed.Should().Be(0);
+        ((IconBatchResult)asMember.Value!).Processed.Should().Be(0);
         _cheap.Calls.Should().Be(2);
         _sessions.GetById(ForeignPrivateId)!.Topic.Should().BeNull();
     }

@@ -14,6 +14,7 @@ using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Files;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
 
@@ -253,7 +254,7 @@ public sealed partial class WorkspaceToolset(
     /// </summary>
     private bool TryResolve(McpToolCallContext context,
         out Session session, out Persona? persona,
-        out SessionManager.WorkspaceMcpPlan plan,
+        out WorkspaceMcpPlan plan,
         [System.Diagnostics.CodeAnalysis.NotNullWhen(false)] out string? error)
     {
         session = null!;
@@ -289,7 +290,7 @@ public sealed partial class WorkspaceToolset(
     /// записи — урок приёмки волны 2 (у tasks запись проверяла только readonly-подмножество,
     /// пропуская запись в любой проект владельца).
     /// </summary>
-    private string? ProjectDenied(McpToolCallContext context, SessionManager.WorkspaceMcpPlan plan,
+    private string? ProjectDenied(McpToolCallContext context, WorkspaceMcpPlan plan,
         string? projectId)
     {
         if (string.IsNullOrWhiteSpace(projectId)) return "Не указан projectId";
@@ -302,7 +303,7 @@ public sealed partial class WorkspaceToolset(
     }
 
     // Проект с проверкой (ProjectDenied) + сам объект, без двойного чтения стора
-    private bool TryGetProject(McpToolCallContext context, SessionManager.WorkspaceMcpPlan plan,
+    private bool TryGetProject(McpToolCallContext context, WorkspaceMcpPlan plan,
         JsonObject arguments, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Project? project,
         [System.Diagnostics.CodeAnalysis.NotNullWhen(false)] out string? denied)
     {
@@ -431,7 +432,7 @@ public sealed partial class WorkspaceToolset(
     // Сессия — только вызыватель из хвоста маршрута (TryResolve проверил владельца), параметра
     // нет намеренно: иначе модель спросила бы состав чужого чата. Формат — как у stdio-ветки.
     private McpToolCallResult ContextCall(Session session, McpToolCallContext context,
-        SessionManager.WorkspaceMcpPlan plan)
+        WorkspaceMcpPlan plan)
     {
         var all = contextResolver.Resolve(session, context.OwnerId);
         var projectId = session.ProjectId;
@@ -465,7 +466,7 @@ public sealed partial class WorkspaceToolset(
     // --- Секция projects (projects_* + tags_*) ---
 
     private async Task<McpToolCallResult> ProjectsCall(string tool, JsonObject arguments,
-        McpToolCallContext context, Session session, SessionManager.WorkspaceMcpPlan plan)
+        McpToolCallContext context, Session session, WorkspaceMcpPlan plan)
     {
         switch (tool)
         {
@@ -827,7 +828,7 @@ public sealed partial class WorkspaceToolset(
     // --- Секция files (files_*): все пути — только через FileService (SafeJoin внутри него) ---
 
     private async Task<McpToolCallResult> FilesCall(string tool, JsonObject arguments,
-        McpToolCallContext context, Session session, SessionManager.WorkspaceMcpPlan plan, CancellationToken ct)
+        McpToolCallContext context, Session session, WorkspaceMcpPlan plan, CancellationToken ct)
     {
         if (!TryGetProject(context, plan, arguments, out var p, out var denied))
             return Deny(denied);
@@ -1205,7 +1206,7 @@ public sealed partial class WorkspaceToolset(
     // --- Секция knowledge (база знаний ПРОЕКТА) ---
 
     private async Task<McpToolCallResult> KnowledgeCall(string tool, JsonObject arguments,
-        McpToolCallContext context, Session session, SessionManager.WorkspaceMcpPlan plan)
+        McpToolCallContext context, Session session, WorkspaceMcpPlan plan)
     {
         if (!TryGetProject(context, plan, arguments, out var p, out var denied))
             return Deny(denied);
@@ -1310,7 +1311,7 @@ public sealed partial class WorkspaceToolset(
     // --- Секция search (единый поиск по рабочему пространству) ---
 
     private async Task<McpToolCallResult> SearchCall(string tool, JsonObject arguments,
-        McpToolCallContext context, SessionManager.WorkspaceMcpPlan plan)
+        McpToolCallContext context, WorkspaceMcpPlan plan)
     {
         if (tool != "search_unified") return Deny($"Неизвестный инструмент: {tool}");
         var query = StringArg(arguments, "query").Trim();
@@ -1326,7 +1327,7 @@ public sealed partial class WorkspaceToolset(
     // stdio-ветка (она не передавала ?sessionId=, REST RootFor брал корень проекта) ---
 
     private async Task<McpToolCallResult> GitCall(string tool, JsonObject arguments,
-        McpToolCallContext context, Session session, SessionManager.WorkspaceMcpPlan plan,
+        McpToolCallContext context, Session session, WorkspaceMcpPlan plan,
         CancellationToken ct)
     {
         if (!TryGetProject(context, plan, arguments, out var p, out var denied))
@@ -1521,7 +1522,7 @@ public sealed partial class WorkspaceToolset(
             : $"Сессия {sessionId} не найдена.";
 
     private async Task<McpToolCallResult> ChatsCall(string tool, JsonObject arguments,
-        McpToolCallContext context, Session session, SessionManager.WorkspaceMcpPlan plan)
+        McpToolCallContext context, Session session, WorkspaceMcpPlan plan)
     {
         switch (tool)
         {
@@ -1622,10 +1623,10 @@ public sealed partial class WorkspaceToolset(
                         if (personaId is not null)
                         {
                             try { sessions.EnsurePersonasVisibleInFrame(p.Id, new[] { personas.Get(personaId, context.OwnerId) }); }
-                            catch (SessionManager.GlobalPersonaInSharedException ex)
+                            catch (GlobalPersonaInSharedException ex)
                             {
                                 return Deny(JsonSerializer.Serialize(
-                                    new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }, JsonOpts));
+                                    new { error = ex.Message, code = GlobalPersonaInSharedException.Code }, JsonOpts));
                             }
                         }
                         personaId ??= await ResolveNewChatPersona(context.OwnerId, p.Id, default);
@@ -1920,7 +1921,7 @@ public sealed partial class WorkspaceToolset(
     // вызов — как [DenyOnDelegatedTurn] на REST-эндпоинтах ---
 
     private async Task<McpToolCallResult> DestructiveCall(string tool, JsonObject arguments,
-        McpToolCallContext context, Session session, SessionManager.WorkspaceMcpPlan plan)
+        McpToolCallContext context, Session session, WorkspaceMcpPlan plan)
     {
         switch (tool)
         {

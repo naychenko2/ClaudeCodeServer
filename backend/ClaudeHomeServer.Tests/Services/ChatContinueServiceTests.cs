@@ -1,8 +1,10 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Reflection;
 using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
@@ -81,10 +83,29 @@ public class ChatContinueServiceTests : IDisposable
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
 
-        _sut = new SessionManager(_projectManager, _historyService, config, adapters, falCost, usage,
-            appSettings, userStore, jwt, server.Object, _llmProviders, flags, personas, bindings, subPool,
-            NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
-            broadcaster: broadcaster, turnEvents: _bus);
+        _sut = SessionCoreTestHost.Build(_tempDir, s =>
+        {
+            s.AddSingleton<global::ClaudeHomeServer.Services.ProjectManager>(_projectManager);
+            s.AddSingleton<global::ClaudeHomeServer.Services.ChatHistoryService>(_historyService);
+            s.AddSingleton<global::Microsoft.Extensions.Configuration.IConfiguration>(config);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(adapters);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FalCostService>(falCost);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.UsageService>(usage);
+            s.AddSingleton<global::ClaudeHomeServer.Services.AppSettingsService>(appSettings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.UserStore>(userStore);
+            s.AddSingleton<global::ClaudeHomeServer.Services.JwtService>(jwt);
+            s.AddSingleton<global::Microsoft.AspNetCore.Hosting.Server.IServer>(server.Object);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.LlmProviderRegistry>(_llmProviders);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FeatureFlagService>(flags);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaManager>(personas);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaBindingsService>(bindings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(subPool);
+            s.AddSingleton<global::Microsoft.Extensions.Logging.ILogger<ClaudeHomeServer.Services.SessionManager>>(NullLogger<SessionManager>.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.ILauncherFactory>(TestLauncherFactory.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.SandboxManager>(sandbox);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(broadcaster);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Turn.ITurnEventBus>(_bus);
+        }).Manager;
     }
 
     public void Dispose()
@@ -116,7 +137,7 @@ public class ChatContinueServiceTests : IDisposable
 
     private object GetEntry(string sessionId)
     {
-        var field = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var field = typeof(SessionManager).GetProperty("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
         var sessions = (System.Collections.IDictionary)field.GetValue(_sut)!;
         return sessions[sessionId]!;
     }
@@ -127,8 +148,8 @@ public class ChatContinueServiceTests : IDisposable
     private static void EnqueueUser(object entry, string text)
     {
         var pending = (System.Collections.IList)entry.GetType().GetField("Pending")!.GetValue(entry)!;
-        pending.Add(new SessionManager.QueuedMessage(Guid.NewGuid().ToString("N"), text, null, null,
-            0, DateTime.UtcNow, Kind: SessionManager.PendingKind.User));
+        pending.Add(new QueuedMessage(Guid.NewGuid().ToString("N"), text, null, null,
+            0, DateTime.UtcNow, Kind: PendingKind.User));
     }
 
 
@@ -435,7 +456,7 @@ public class ChatContinueServiceTests : IDisposable
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*идёт ход*");
         var pending = (System.Collections.IList)GetEntry(source.Id).GetType().GetField("Pending")!
             .GetValue(GetEntry(source.Id))!;
-        pending.Cast<SessionManager.QueuedMessage>()
+        pending.Cast<QueuedMessage>()
             .Should().NotContain(p => p.Text == ChatContinueService.HandoffPrompt,
                 "промпт записки вычищен: не отработает отдельным ходом");
         source.ContinuedInSessionId.Should().BeNull();

@@ -1,9 +1,9 @@
 ﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Turn;
+using ClaudeHomeServer.Services.Sessions;
 // ReportUpResult — публичный enum, объявленный внутри класса SessionManager (Services).
 // Через алиас using получаем короткое имя без префикса SessionManager в сигнатуре.
-using ReportUpResult = ClaudeHomeServer.Services.SessionManager.ReportUpResult;
 
 namespace ClaudeHomeServer.Services.Team;
 

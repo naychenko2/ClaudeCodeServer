@@ -7,6 +7,7 @@ using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -110,12 +111,25 @@ public class GitAutoCommitAuthorTests : IDisposable
     }
 
     // Ядро — «голый» SessionManager (по образцу SessionMessageObserverTests): нужен только
-    // event OnSessionMessage; поднимаем его через reflection backing-поля, как там.
+    // event OnSessionMessage. С S3-6 событие и его backing-поле живут в TurnCompletion,
+    // поэтому голому ядру подставляем голую же роль в поле _completion — аксессоры фасада
+    // делегируют туда, и подписка (StartAsync) доходит до поля роли.
+    private static SessionManager BareSessions()
+    {
+        var sessions = (SessionManager)RuntimeHelpers.GetUninitializedObject(typeof(SessionManager));
+        typeof(SessionManager).GetField("_completion",
+                BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(sessions, RuntimeHelpers.GetUninitializedObject(typeof(TurnCompletion)));
+        return sessions;
+    }
+
     private static void FireOnSessionMessage(SessionManager sessions, Session s, ServerMessage m)
     {
-        var field = typeof(SessionManager).GetField(nameof(SessionManager.OnSessionMessage),
+        var completion = (TurnCompletion)typeof(SessionManager)
+            .GetField("_completion", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(sessions)!;
+        var field = typeof(TurnCompletion).GetField(nameof(TurnCompletion.OnSessionMessage),
             BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)!;
-        var del = (Func<Session, ServerMessage, Task>?)field.GetValue(sessions);
+        var del = (Func<Session, ServerMessage, Task>?)field.GetValue(completion);
         if (del is null) return;
         foreach (var d in del.GetInvocationList().Cast<Func<Session, ServerMessage, Task>>())
             d(s, m).GetAwaiter().GetResult();
@@ -158,7 +172,7 @@ public class GitAutoCommitAuthorTests : IDisposable
         var member = project.Members![0];
         var baseSha = (await _git.RunAsync(null, _repo, ["rev-parse", "HEAD"])).Stdout.Trim();
 
-        var sessions = (SessionManager)RuntimeHelpers.GetUninitializedObject(typeof(SessionManager));
+        var sessions = BareSessions();
         var registry = new LiveTurnActorRegistry { ActorId = member.UserId };
         var sut = new GitAutoCommitService(
             sessions, _projects, _users, _git, new NoOpBroadcaster(), registry,
@@ -189,7 +203,7 @@ public class GitAutoCommitAuthorTests : IDisposable
         var project = await SetupProjectAsync(shared: true);
         var baseSha = (await _git.RunAsync(null, _repo, ["rev-parse", "HEAD"])).Stdout.Trim();
 
-        var sessions = (SessionManager)RuntimeHelpers.GetUninitializedObject(typeof(SessionManager));
+        var sessions = BareSessions();
         var registry = new LiveTurnActorRegistry { ActorId = null }; // фон, исполнитель без инициатора
         var sut = new GitAutoCommitService(
             sessions, _projects, _users, _git, new NoOpBroadcaster(), registry,
@@ -209,7 +223,7 @@ public class GitAutoCommitAuthorTests : IDisposable
         var project = await SetupProjectAsync(shared: false); // участников нет — личный проект
         var baseSha = (await _git.RunAsync(null, _repo, ["rev-parse", "HEAD"])).Stdout.Trim();
 
-        var sessions = (SessionManager)RuntimeHelpers.GetUninitializedObject(typeof(SessionManager));
+        var sessions = BareSessions();
         var registry = new LiveTurnActorRegistry { ActorId = _users.GetFirst()!.Id };
         var sut = new GitAutoCommitService(
             sessions, _projects, _users, _git, new NoOpBroadcaster(), registry,

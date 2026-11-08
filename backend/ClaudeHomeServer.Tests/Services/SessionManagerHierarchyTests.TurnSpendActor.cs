@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Spend;
 using FluentAssertions;
 
@@ -21,13 +22,20 @@ public partial class SessionManagerHierarchyTests
     }
 
     // Фикстура собирает _sut без коллектора (параметр ctor необязательный): подставляем
-    // считающий в то же поле _spend, которое читает боевой путь.
+    // считающий в то же поле _spend, которое читает боевой путь. С S3-6 расход хода пишет
+    // TurnCompletion через TurnCostLedger: боевое поле — на журнале цен роли.
     private RecordingSpend AttachSpend()
     {
         var rec = new RecordingSpend();
-        typeof(SessionManager).GetField("_spend",
+        var completion = typeof(SessionManager).GetField("_completion",
                 System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
-            .SetValue(_sut, rec);
+            .GetValue(_sut)!;
+        var costs = typeof(TurnCompletion).GetField("_costs",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetValue(completion)!;
+        typeof(TurnCostLedger).GetField("_spend",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .SetValue(costs, rec);
         return rec;
     }
 

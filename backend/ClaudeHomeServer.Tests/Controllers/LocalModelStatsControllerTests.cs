@@ -8,13 +8,14 @@ using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Xunit;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
 // REST-панель «Локальные модели» (вкладка «Текст»): авторизация (403/401),
-// валидация window (400), since (только хвост), выключенная вертикаль (configured:false),
-// unsupported из снимка.
+// валидация window (400), since (только хвост), отсутствие регистрации IComfyStats
+// (configured:false — подменой регистрации в хосте, см. StatsHost.noComfy), unsupported из снимка.
 [Trait("Category", "Host")]
 public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsControllerTests.Hosts>, IDisposable
 {
@@ -46,9 +47,9 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         // Второй стенд gemma: BaseUrl/Model/StateUrl/FallbackRoute/MetricsUrl из конфига
         public StatsHost Engine { get; } = new(EngineConfig(metrics: true));
         public StatsHost EngineNoMetrics { get; } = new(EngineConfig(metrics: false));
-        // Images выключена: IComfyStats нет вовсе (GetService → null)
-        public StatsHost EngineImagesOff { get; } = new(comfy: false,
-            config: [.. EngineConfig(metrics: true), ("Subsystems:images:Enabled", "false")]);
+        // Контракт деградации по отключаемой images: IComfyStats в хосте нет вовсе —
+        // подменой регистрации (см. StatsHost.noComfy), а не ключом Subsystems:images:Enabled
+        public StatsHost EngineNoComfy { get; } = new(noComfy: true, config: EngineConfig(metrics: true));
         public StatsHost LabelsSet { get; } = new(
             ("LlmProviders:local-qwen:Stats:Model", "Qwen3.8-Flash-Next IQ3_XXS"),
             ("LlmProviders:local-qwen:Stats:EngineLabel", " Strata 0.2.7 "),
@@ -64,20 +65,16 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
             ("LlmProviders:local-aaa-chat:AnthropicBaseUrl", "http://127.0.0.1:1"),
             ("LlmProviders:local-aaa-chat:IsLocal", "true"),
             ("LlmProviders:local-aaa-chat:Models:0:Id", "aaa-chat-model")]);
-        // Вертикаль Llm выключена: сервисов вертикали в контейнере нет, подмен тоже
-        public LlmOffHost LlmOff { get; } = new();
-
         public void Dispose()
         {
             Plain.Dispose();
             Engine.Dispose();
             EngineNoMetrics.Dispose();
-            EngineImagesOff.Dispose();
+            EngineNoComfy.Dispose();
             LabelsSet.Dispose();
             LabelsBlank.Dispose();
             MediaOff.Dispose();
             TitlesSet.Dispose();
-            LlmOff.Dispose();
         }
 
         private static (string Key, string Value)[] EngineConfig(bool metrics)
@@ -92,11 +89,6 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
             if (metrics) config.Add(("LocalEngines:gemma:MetricsUrl", "http://127.0.0.1:18030/metrics"));
             return [.. config];
         }
-    }
-
-    public sealed class LlmOffHost : TestWebApplicationFactory
-    {
-        public LlmOffHost() => ExtraConfig["Subsystems:llm:Enabled"] = "false";
     }
 
     // Хост с переключаемыми заглушками: сервис в DI — прокси, цель которого тест подставляет
@@ -114,9 +106,15 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         // Журнал вызовов мест: у каждого теста свой (Use* заводит новый), сервис — transient
         private EngineCallLedger _ledger = new();
 
-        public StatsHost(params (string Key, string Value)[] config) : this(true, config) { }
+        public StatsHost(params (string Key, string Value)[] config) : this(false, config) { }
 
-        public StatsHost(bool comfy, params (string Key, string Value)[] config)
+        // noComfy — хост без IComfyStats вовсе: заглушка регистрируется как обычно и тут же
+        // снимается вместе с боевой регистрацией images (RemoveAll по всем её дескрипторам —
+        // ExtraServices идёт после регистраций Program.cs). Так проверяется контракт деградации
+        // по ОТСУТСТВИЮ РЕГИСТРАЦИИ: ключ Subsystems:images:Enabled до AddSubsystems в Program.cs
+        // не доезжает и «выключенной подсистемы» не давал (механизм доставки ExtraConfig —
+        // отдельная карточка f0f8da41, здесь не трогается).
+        public StatsHost(bool noComfy, params (string Key, string Value)[] config)
         {
             foreach (var (key, value) in config) ExtraConfig[key] = value;
             ExtraServices = services =>
@@ -127,7 +125,8 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
                 services.AddSingleton<ILocalEngineStatsDirectory>(_directory);
                 services.AddSingleton<IEngineArbiterStateReader>(_arbiter);
                 services.AddTransient<EngineCallLedger>(_ => _ledger);
-                if (comfy) services.AddSingleton<IComfyStats>(_comfy);
+                services.AddSingleton<IComfyStats>(_comfy);
+                if (noComfy) services.RemoveAll(typeof(IComfyStats));
             };
         }
 
@@ -524,18 +523,6 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         body.GetProperty("othersCount").GetInt32().Should().Be(3);
     }
 
-    // Счётчик хода не в контейнере (вертикаль Llm выключена) → chats: [].
-    [Fact]
-    public async Task Chats_СчётчикВыключен_Пусто()
-    {
-        var factory = _hosts.LlmOff;
-        using var admin = factory.CreateAuthenticatedClient();
-        var resp = await admin.GetAsync("/api/local-model/stats");
-        resp.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("chats").GetArrayLength().Should().Be(0, "без счётчика хода чатов нет");
-    }
-
     // ─── unsupported из снимка ───────────────────────────────────────────────────
 
     // unsupported из снимка Current проходит в ответ без искажений.
@@ -691,22 +678,6 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         body.GetProperty("model").GetString().Should().Be("qwen3.8-27b");
         body.TryGetProperty("engineLabel", out _).Should().BeFalse();
         body.TryGetProperty("topology", out _).Should().BeFalse();
-    }
-
-    // ─── Выключенная вертикаль Llm → configured:false, status:notConnected, 200 ───
-
-    // Subsystems:llm:Enabled=false — ILocalModelStatsReader/IGpuSampler не в контейнере;
-    // контроллер через GetService видит null → {configured:false, status:notConnected} (200, не 500).
-    [Fact]
-    public async Task ВертикальВыключена_ConfiguredFalse()
-    {
-        var factory = _hosts.LlmOff;
-        using var admin = factory.CreateAuthenticatedClient();
-        var resp = await admin.GetAsync("/api/local-model/stats");
-        resp.StatusCode.Should().Be(HttpStatusCode.OK, "выключенная вертикаль — 200, а не 500");
-        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("configured").GetBoolean().Should().BeFalse();
-        body.GetProperty("status").GetString().Should().Be("notConnected");
     }
 
     // ─── Медиа: GET /api/local-model/stats/media ─────────────────────────────────
@@ -1274,22 +1245,6 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         list[0].GetProperty("configured").GetBoolean().Should().BeFalse();
     }
 
-    // Выключенная вертикаль Llm: engines отвечает без Llm-зависимостей — {main:false}, 200 (не 500).
-    [Fact]
-    public async Task Engines_LlmВыключена_НеПустойСписок()
-    {
-        var factory = _hosts.LlmOff;
-        using var admin = factory.CreateAuthenticatedClient();
-
-        var resp = await admin.GetAsync("/api/local-model/engines");
-        resp.StatusCode.Should().Be(HttpStatusCode.OK, "выключенная Llm — 200, не 500");
-        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
-        var list = body.EnumerateArray().ToList();
-        list.Count.Should().Be(1);
-        list[0].GetProperty("name").GetString().Should().Be("main");
-        list[0].GetProperty("configured").GetBoolean().Should().BeFalse();
-    }
-
     // ─── Второй стенд (Б3c): GET /api/local-model/stats?engine= ──────────────────────────
 
     // Роль на действии, как у /stats без engine: не-админ → 403.
@@ -1317,20 +1272,6 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         body.GetProperty("configured").GetBoolean().Should().BeFalse();
         body.GetProperty("status").GetString().Should().Be("notConnected");
         body.TryGetProperty("duty", out _).Should().BeFalse("нет дорожки — нет блока «Дежурство»");
-    }
-
-    // Выключенная Llm: тот же ответ, что для неизвестного движка (200, не 500).
-    [Fact]
-    public async Task StatsEngine_LlmВыключена_ConfiguredFalse()
-    {
-        var factory = _hosts.LlmOff;
-        using var admin = factory.CreateAuthenticatedClient();
-
-        var resp = await admin.GetAsync("/api/local-model/stats?engine=gemma");
-        resp.StatusCode.Should().Be(HttpStatusCode.OK, "выключенная Llm — 200, не 500");
-        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("configured").GetBoolean().Should().BeFalse();
-        body.GetProperty("status").GetString().Should().Be("notConnected");
     }
 
     // Стенд именованного движка целиком: снимок дорожки (engine — тип движка, не имя стенда),
@@ -1486,10 +1427,14 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         lease.EnumerateObject().Select(p => p.Name).Should().BeEquivalentTo(new[] { "reason", "leftS" }, "id аренды наружу не уходит");
     }
 
-    // c1: выключенная Images → у именованного стенда нет Gpus и jobKind (шва нет — вид не
-    // утверждаем; known остаётся null). Мутация: звать IComfyStats без null-проверки — 500, краснеет.
+    // Контракт деградации по отключаемой images (ADR-014 §5): при отсутствии РЕГИСТРАЦИИ
+    // IComfyStats именованный стенд отдаёт пустое по картинкам — gpus null, jobKind/known нет
+    // (шва нет — вид не утверждаем). Comfy в этом тесте ГРОМКИЙ (KindComfyStats: карта Video и
+    // вид задания) и всё равно ничего не даёт: в хосте снята сама регистрация.
+    // Мутация бьёт в производителя, а не в тест: убрать services.RemoveAll(typeof(IComfyStats))
+    // в StatsHost — громкая заглушка остаётся, gpus не null, тест краснеет.
     [Fact]
-    public async Task StatsEngine_Engine_ImagesВыключена_GpusNull_JobKindNull()
+    public async Task StatsEngine_Engine_РегистрацииComfyStatsНет_GpusNull_JobKindNull()
     {
         var t0 = new DateTimeOffset(2026, 10, 28, 11, 0, 0, TimeSpan.Zero);
         var dir = new FakeDirectory();
@@ -1499,14 +1444,14 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
             Reachable: true, State: "waiting-vram", Reasons: ["comfy:a1b2c3d4"],
             SinceAt: t0, Yields: 1, Returns: 0, LastYieldS: 0.2, LastReturnS: null,
             Mode: "shared", QuietLeftS: null, Leases: null, SeenAt: t0);
-        var factory = _hosts.EngineImagesOff.UseEngine(dir, arbiter);
+        var factory = _hosts.EngineNoComfy.UseEngine(dir, arbiter, new KindComfyStats());
 
         using var admin = factory.CreateAuthenticatedClient();
         var resp = await admin.GetAsync("/api/local-model/stats?engine=gemma");
-        resp.StatusCode.Should().Be(HttpStatusCode.OK, "выключенная Images — 200, не 500");
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, "нет регистрации IComfyStats — 200, не 500");
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
 
-        body.GetProperty("gpus").ValueKind.Should().Be(JsonValueKind.Null, "нет узла ComfyUI — нет данных о карте");
+        body.GetProperty("gpus").ValueKind.Should().Be(JsonValueKind.Null, "нет регистрации IComfyStats — нет данных о карте");
         var reason = body.GetProperty("duty").GetProperty("arbiter").GetProperty("reasons")[0];
         reason.GetProperty("kind").GetString().Should().Be("comfy");
         reason.TryGetProperty("jobKind", out _).Should().BeFalse("шва Images нет — вид не утверждаем");

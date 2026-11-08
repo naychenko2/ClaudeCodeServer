@@ -9,6 +9,7 @@ using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -51,7 +52,7 @@ public class ChatsControllerHandoffTests : IClassFixture<TestWebApplicationFacto
     private object EntryOf(string sessionId)
     {
         var sessions = _factory.Services.GetRequiredService<SessionManager>();
-        var field = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var field = typeof(SessionManager).GetProperty("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
         return ((System.Collections.IDictionary)field.GetValue(sessions)!)[sessionId]!;
     }
 

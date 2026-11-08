@@ -17,6 +17,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Files;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -278,8 +279,8 @@ public class PersonasController(
         }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
         // Чат от лица глобальной персоны в общем проекте (доработка R-S2a-8): 400 с машинным кодом.
-        catch (SessionManager.GlobalPersonaInSharedException ex)
-        { return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }); }
+        catch (GlobalPersonaInSharedException ex)
+        { return BadRequest(new { error = ex.Message, code = GlobalPersonaInSharedException.Code }); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 

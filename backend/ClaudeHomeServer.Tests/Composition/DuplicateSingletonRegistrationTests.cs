@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -104,6 +105,41 @@ public class DuplicateSingletonRegistrationTests
         duplicates.Should().BeEmpty(string.Join("\n", duplicates.Select(d =>
             $"{d.ImplementationType} зарегистрирован как Singleton {d.Count} раз под " +
             $"ServiceType: [{string.Join(", ", d.ServiceTypes)}]")));
+    }
+
+    // ИЗВЕСТНАЯ СЛЕПОТА сторожа выше: дубль, заведённый фабрикой (`AddSingleton<X>(sp => ...)`
+    // рядом с `AddSingleton<X>()`), фильтр `ImplementationType is not null` отсеивает. Общий сторож
+    // по ServiceType не годится: в коллекции законны наборы реализаций под один интерфейс
+    // (IAppSubsystem, IMcpToolset, IPromptSectionContributor…) и подмены тестового хоста
+    // (ICheapTextRunner, ILlmSessionAdapterFactory) — allow-list на 18 строк прикрыл бы дефект
+    // сам. Класс дефекта в коде был один — рекордер лимитов подписок (фабрика в ядре сессий плюс
+    // type-based в LlmSubsystem, шаг 85c896c0f), поэтому закреплён он точечно: ровно один
+    // дескриптор и именно type-based. Новый сервис с тем же риском — в список ниже.
+    private static readonly Type[] SingleTypeBasedRegistration =
+    [
+        typeof(SubscriptionLimitRecorder),
+    ];
+
+    [Fact]
+    public void SingleRegistrationServices_ОдинДескрипторТипомБезФабрики()
+    {
+        using var factory = new TestWebApplicationFactory();
+        IServiceCollection? captured = null;
+        factory.WithWebHostBuilder(b => b.ConfigureServices(s => captured = s))
+            .CreateClient();
+
+        captured.Should().NotBeNull();
+
+        foreach (var type in SingleTypeBasedRegistration)
+        {
+            var descriptors = captured!.Where(d => d.ServiceType == type).ToArray();
+
+            descriptors.Should().ContainSingle(
+                $"{type.Name} регистрируется ровно один раз (дубль, в том числе фабричный, " +
+                "сторож по ImplementationType не видит)");
+            descriptors[0].ImplementationType.Should().Be(type,
+                "единственная регистрация — type-based в слое Llm, фабрику в ядре не возвращать");
+        }
     }
 
     private readonly record struct DuplicateGroup(

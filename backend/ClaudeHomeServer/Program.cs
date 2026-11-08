@@ -72,6 +72,14 @@ var inspectionOverrides = ClaudeHomeServer.Services.Backup.BackupCli.InspectionO
 if (inspectionOverrides is not null) builder.Configuration.AddInMemoryCollection(inspectionOverrides);
 var inspectionMode = builder.Configuration.GetValue<bool>("InspectionMode");
 
+// `llm` — неотключаемая подсистема: ядро сессий зависит от LlmProviderRegistry обязательно
+// (ADR-014, «Неотключаемые подсистемы»). Вызов остаётся здесь, до регистраций и до побочных
+// эффектов старта (чанка процессов-сирот, загрузка модулей): иначе старт падал бы глубже и
+// с чужим текстом — «No service for type 'LlmProviderRegistry' has been registered», по нему
+// причину приходится раскапывать заново. Тело проверки — в NonDisablableSubsystems.EnsureLlmEnabled:
+// туда оно вынесено ради юнит-теста, который может вызвать саму проверку (сюда — нет).
+NonDisablableSubsystems.EnsureLlmEnabled(builder.Configuration);
+
 // Таймстемп в консольном логе (I11): обёртка Console.Out/Error добавляет UTC-время в начало
 // каждой строки — и для ILogger, и для голых Console.WriteLine. Здесь, чтобы Local.json тоже
 // мог переопределить формат. Ключ Diagnostics:ConsoleTimestampFormat — НЕ под Logging:Console:
@@ -196,12 +204,12 @@ builder.Services.AddResponseCompression(o =>
     // `[assembly: ApplicationPart("...")]` — MSBuild дописывает его в сгенерированный
     // `obj/*/ClaudeHomeServer.MvcApplicationPartsAssemblyInfo.cs` ссылочного проекта
     // Main, и `ApplicationPartManager.PopulateDefaultParts` добавляет их к составу
-    // MVC. Из-за этого выключение вертикали гейтом `Subsystems:Notes:Enabled=false`
-    // не изолирует её контроллеры: роутер находит action и пытается активировать
-    // `NotesController` без зависимостей → ProblemDetails 500 на каждый запрос к
-    // `/api/notes/*` (задача 4defaacc, QA-прогон 2026-09-10).
+    // MVC. Из-за этого гейт сам по себе маршрутов не снимает: у обычной ProjectReference-
+    // вертикали часть остаётся подключённой, и отказ даёт сам контроллер — честный 503
+    // с причиной (например PluginsController). В пилоте (Notes, до fa922fe7c) контроллер
+    // гейт не проверял: активация падала на отсутствующих зависимостях → ProblemDetails
+    // 500 на каждый запрос к `/api/notes/*` (задача 4defaacc, QA-прогон 2026-09-10).
     //
-    // Убираем часть здесь, в композиции Main — единая точка для всех вертикалей.
     // Notes — теперь динамический модуль (сценарий Б): ApplicationPart добавляется
     // ModuleLoader'ом по пути из DynamicModules-конфига (см. ниже), а не автоматически
     // через ProjectReference. Старый gate по имени сборки ("ClaudeHomeServer.Notes") удалён.
@@ -277,8 +285,10 @@ using (var dynamicModuleLogFactory = LoggerFactory.Create(logging => logging
 
 // Статические вертикали: их `[assembly: ApplicationPart("...")]` MSBuild дописывает
 // автоматически (см. блок выше). Гейт `Subsystems:{key}:Enabled` снимает DI-регистрацию
-// (Register не вызывается), но ApplicationPart остаётся в MVC-частях → роутер находит
-// контроллер, пытается его активировать без зависимостей → 500 вместо 404.
+// (Register не вызывается), но ApplicationPart остаётся в MVC-частях: маршруты на месте,
+// и отказ даёт сам контроллер, держущий гейт, — честный 503 с причиной
+// (сейчас — PluginsController; 500 на активации без зависимостей был состоянием
+// до nullable-волны, см. блок выше). У вертикали без контроллера HTTP-маршрутов нет вовсе.
 // Notes и Spend — динамические модули (сценарий Б): ApplicationPart подключает
 // ModuleLoader (выше), а не MSBuild-атрибут — M1-костыль (ручное снятие части
 // ClaudeHomeServer.Spend) снят после перехода на ReferenceOutputAssembly="false".
@@ -793,6 +803,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Media.IMediaEvents, Clau
 // `AddSubsystems` не зовёт `NotesSubsystem.Register`, и контрибьютор не регистрируется вовсе —
 // ни предикат на регистрации, ни пост-хок удаление дескрипторов здесь больше не нужны.
 builder.Services.AddPromptSectionContributors();
+builder.Services.AddSessionCore();
 builder.Services.AddSingleton<SessionManager>();
 // Актор и рамка хода (S2a-1): читает только шов, пишет ядро сессий в двух точках подачи
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Access.ITurnActorRegistry>(sp => sp.GetRequiredService<SessionManager>());

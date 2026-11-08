@@ -67,8 +67,11 @@ public class FalCostProductionPathTests : SessionManagerTestBase
         // в чат (broadcast + история). Тест читает эфир — до него доходят только те id, которых
         // вызывающий реально поставил в Track.
         fal.OnCostResolved = _sut.PublishFalCostAsync;
-        typeof(SessionManager).GetField("_falCost", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .SetValue(_sut, fal);
+        // Цены хода живут в роли TurnCostLedger (ядро S3-2): подменяем сервис в ней, фасад держит лишь ссылку
+        var ledger = typeof(SessionManager).GetField("_costs", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(_sut)!;
+        ledger.GetType().GetField("_falCost", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(ledger, fal);
     }
 
     private async Task<Session> MkChatAsync(string suffix, string? resumeSessionId = null)

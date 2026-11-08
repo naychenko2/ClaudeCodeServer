@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Logging;
 using System.Runtime.CompilerServices;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Hubs;
 
@@ -304,14 +305,14 @@ public class SessionHub : Hub
         // остановленный человеком — так же, как его помечает клиент в живой ленте.
         // senderConnectionId: реплику получают остальные устройства, а отправитель её уже показал.
         var outcome = await _sessions.SendMessageAsync(sessionId, text, attachedPaths ?? [], mode, auto: auto,
-            senderConnectionId: Context.ConnectionId, cause: Services.SessionManager.DeliveryCause.User,
+            senderConnectionId: Context.ConnectionId, cause: DeliveryCause.User,
             senderUserId: UserId);
         return outcome switch
         {
-            Services.SessionManager.SendUserOutcome.Started => "started",
+            SendUserOutcome.Started => "started",
             // Ход пришлось прервать ради этого сообщения — клиент отметит это в ленте, иначе
             // голый exited убитого хода прочитается как авария
-            Services.SessionManager.SendUserOutcome.QueuedPreempted => "queued-preempted",
+            SendUserOutcome.QueuedPreempted => "queued-preempted",
             _ => "queued",
         };
     }

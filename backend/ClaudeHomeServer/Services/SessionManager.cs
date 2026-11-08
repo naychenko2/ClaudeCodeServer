@@ -3193,9 +3193,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     internal Task OnMessageQueuedAsync(string sessionId, TurnAccumulator acc, ServerMessage msg, long runId = 0) =>
         _completion.OnMessageQueuedAsync(sessionId, acc, msg, runId);
 
-    // Цены хода (трекинг/догоняющий учёт/публикация fal и glif) — в TurnCostLedger (S3-2):
-    // вызывающие места (приём хода, загрузка истории) и их тело — в роли (TurnCompletion),
-    // обёрток в ядре нет.
+    // Цены хода (трекинг/догоняющий учёт/публикация fal и glif) — в TurnCostLedger (S3-2).
+    // Вызывающие места: приём хода — в роли (TurnCompletion: TryTrack* на tool_result хода),
+    // загрузка истории — здесь, в GetHistoryAsync выше (Backfill* по загруженной ленте), и
+    // в роли ChatNaming (та же склейка ленты). Отдельных обёрток трекинга/бэкфилла в ядре
+    // нет: бэкфилл вызывается прямо из тела загрузки истории — это боевой вход догоняющего
+    // учёта, защищён FalCostProductionPathTests (БэкфиллИсторииСПакетнымToolResult…).
 
     // Публикация учёта glif-генерации: запись в историю (дедуп) + broadcast клиентам.
     public Task PublishGlifCostAsync(string sessionId, GlifCostMessage msg) => _costs.PublishGlifCostAsync(sessionId, msg);

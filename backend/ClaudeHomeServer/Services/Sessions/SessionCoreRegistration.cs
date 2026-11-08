@@ -14,16 +14,12 @@ public static class SessionCoreRegistration
 {
     public static IServiceCollection AddSessionCore(this IServiceCollection services)
     {
-        // Стор метаданных сессий (S3-1): единственный реестр сессий процесса. ITaskLookup (адаптер
-        // TaskLookupAdapter над TaskManager, раньше его строил сам SessionManager) уже в DI —
-        // регистрация в Program.cs для Spend; второй регистрации того же адаптера не заводим:
-        // её ловит DuplicateSingletonRegistrationTests.
-        services.AddSingleton(sp => new SessionStore(
-            sp.GetRequiredService<IConfiguration>(),
-            sp.GetRequiredService<ProjectManager>(),
-            sp.GetRequiredService<ISessionBroadcaster>(),
-            sp.GetRequiredService<ILogger<SessionStore>>(),
-            sp.GetRequiredService<ITaskLookup>()));
+        // Стор метаданных сессий (S3-1): единственный реестр сессий процесса. С S3-8c — активация
+        // типа: ни один конструктор (фасада или регистрации) не строит стор запасным экземпляром,
+        // единственная его сборка — здесь, из контейнера. ITaskLookup (адаптер TaskLookupAdapter
+        // над TaskManager) уже в DI — регистрация в Program.cs для Spend; второй регистрации
+        // того же адаптера не заводим: её ловит DuplicateSingletonRegistrationTests.
+        services.AddSingleton<SessionStore>();
 
         // --- Роли ядра (S3-2) ---
         // Шов «очередь → приём хода»: ленивый — прямая зависимость дала бы цикл

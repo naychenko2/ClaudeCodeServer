@@ -114,7 +114,7 @@ public class TaskExecutionServiceDeviceWaitTests : IDisposable
     // а не «неизвестного». Актор хода читаем из реестра сессии: SubmitActor/RunActor (white-box, как StubProcess).
     private string? TurnActorOf(string sessionId)
     {
-        var field = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var field = typeof(SessionManager).GetProperty("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
         var entry = ((System.Collections.IDictionary)field.GetValue(_sessions)!)[sessionId]!;
         var actor = (string?)entry.GetType().GetField("SubmitActor")!.GetValue(entry);
         return string.IsNullOrEmpty(actor) ? null : actor; // "" — «неизвестный» актор, как в GetTurnActor

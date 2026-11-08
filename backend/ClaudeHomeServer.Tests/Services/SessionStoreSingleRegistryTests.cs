@@ -29,8 +29,11 @@ public class SessionStoreSingleRegistryTests : IClassFixture<TestWebApplicationF
         var manager = sp.GetRequiredService<SessionManager>();
 
         Field(manager, "_store").Should().BeSameAs(store);
-        Field(manager, "_sessions").Should().BeSameAs(store.Sessions,
-            "поле реестра на фасаде — ссылка на словарь стора, а не его копия");
+        // С S3-8c (хвост D) второго держателя словаря на фасаде нет: _sessions — свойство,
+        // читающее словарь стора напрямую.
+        typeof(SessionManager).GetProperty("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(manager).Should().BeSameAs(store.Sessions,
+                "реестр на фасаде — свойство над словаром стора, а не его копия");
     }
 
     // «Реестр один» для ядра приёма (S3-7): ядро, собранное контейнером, — тот же экземпляр,

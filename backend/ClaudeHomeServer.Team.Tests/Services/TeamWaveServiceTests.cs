@@ -260,7 +260,7 @@ public class TeamWaveServiceTests : IClassFixture<TeamWaveServiceTests.Fixture>
     // с диска (у живого чата план — один и тот же объект в аккумуляторе).
     private object GetEntry(string sessionId)
     {
-        var field = typeof(SessionManager).GetField("_sessions",
+        var field = typeof(SessionManager).GetProperty("_sessions",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
         var entries = (System.Collections.IDictionary)field.GetValue(_sessions)!;
         return entries[sessionId]!;

@@ -139,7 +139,7 @@ public sealed class DeviceWaitTestHost : IDisposable
     public TaskCompletionSource<string> StubProcess(Session chat)
     {
         var delivered = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var field = typeof(SessionManager).GetField("_sessions",
+        var field = typeof(SessionManager).GetProperty("_sessions",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
         var entry = ((System.Collections.IDictionary)field.GetValue(_sessions)!)[chat.Id]!;
         var adapter = new Mock<ILlmSessionAdapter>();

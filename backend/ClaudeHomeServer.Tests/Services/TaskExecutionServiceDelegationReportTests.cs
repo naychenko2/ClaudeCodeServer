@@ -140,7 +140,7 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
     // Реестр сессий приватный — тот же white-box приём, что в SessionManagerTests.
     private void StubProcess(Session session)
     {
-        var field = typeof(SessionManager).GetField("_sessions",
+        var field = typeof(SessionManager).GetProperty("_sessions",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         var entry = ((System.Collections.IDictionary)field.GetValue(_sessions)!)[session.Id]!;
         var adapter = new Mock<ILlmSessionAdapter>();

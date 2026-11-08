@@ -733,9 +733,10 @@ public abstract class SessionManagerTestBase : IDisposable
         return ok;
     }
 
-    // Опубликовать TurnCompleted через шину того же SessionManager. В тестах шина создаётся
-    // лениво в SessionManager (TurnEvents), подписчик HandleTeamTurnCompletedShim уже
-    // зарегистрирован в конструкторе — публикация сразу идёт в него.
+    // Опубликовать TurnCompleted через шину того же SessionManager. С S3-8c шина — синглтон
+    // тестового контейнера, тот же, что фасад получил параметром (поле-шов _turnEvents);
+    // подписчик HandleTeamTurnCompletedShim уже зарегистрирован в конструкторе — публикация
+    // сразу идёт в него.
     protected static async Task PublishTurnCompletedAsync(
         SessionManager sut, string sessionId, int turnSeq, string outcome, string? errorClass = null)
     {
@@ -994,7 +995,7 @@ public abstract class SessionManagerTestBase : IDisposable
     // не воспроизводит окно TOCTOU — все точки входа гейтят по статусу ДО EnqueuePendingAsync).
     protected object GetEntry(string sessionId)
     {
-        var field = typeof(SessionManager).GetField("_sessions",
+        var field = typeof(SessionManager).GetProperty("_sessions",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         var sessions = (System.Collections.IDictionary)field.GetValue(_sut)!;
         return sessions[sessionId]!;
@@ -1264,7 +1265,7 @@ public abstract class SessionManagerTestBase : IDisposable
 
     protected static object GetEntryOf(SessionManager manager, string sessionId)
     {
-        var field = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var field = typeof(SessionManager).GetProperty("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
         return ((System.Collections.IDictionary)field.GetValue(manager)!)[sessionId]!;
     }
 

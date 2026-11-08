@@ -1236,7 +1236,7 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
 
         // Форсируем чтение истории с диска (как после рестарта сервера) — accumulator=null
-        var sessionsDict = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!
+        var sessionsDict = typeof(SessionManager).GetProperty("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!
             .GetValue(_sut)!;
         var args = new object?[] { session.Id, null };
         ((bool)sessionsDict.GetType().GetMethod("TryGetValue")!.Invoke(sessionsDict, args)!).Should().BeTrue();

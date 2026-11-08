@@ -398,7 +398,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
         adapter.SetupGet(a => a.HasLiveTurn).Returns(true);
         adapter.SetupGet(a => a.HasPendingBg).Returns(true); // фоновая команда ещё жива
         adapter.Setup(a => a.DisposeAsync()).Returns(ValueTask.CompletedTask);
-        var sessionsField = typeof(SessionManager).GetField("_sessions",
+        var sessionsField = typeof(SessionManager).GetProperty("_sessions",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
         var entry = ((System.Collections.IDictionary)sessionsField.GetValue(_sessions)!)[session.Id]!;
         entry.GetType().GetField("Process")!.SetValue(entry, adapter.Object);

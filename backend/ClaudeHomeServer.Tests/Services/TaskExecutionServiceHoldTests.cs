@@ -151,7 +151,7 @@ public class TaskExecutionServiceHoldTests : IDisposable
     // физического прерывания.
     private Mock<ILlmSessionAdapter> SetRunningTurn(string sessionId)
     {
-        var field = typeof(SessionManager).GetField("_sessions",
+        var field = typeof(SessionManager).GetProperty("_sessions",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         var entry = ((System.Collections.IDictionary)field.GetValue(_sessions)!)[sessionId]!;
         var info = (Session)entry.GetType().GetField("Info")!.GetValue(entry)!;
@@ -337,7 +337,7 @@ public class TaskExecutionServiceHoldTests : IDisposable
     // прерванного хода.
     private void SetIdle(string sessionId)
     {
-        var field = typeof(SessionManager).GetField("_sessions",
+        var field = typeof(SessionManager).GetProperty("_sessions",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         var entry = ((System.Collections.IDictionary)field.GetValue(_sessions)!)[sessionId]!;
         var info = (Session)entry.GetType().GetField("Info")!.GetValue(entry)!;
@@ -971,7 +971,7 @@ public class TaskExecutionServiceHoldTests : IDisposable
     // одновременно с чатом, а отказанная задача не должна порождать ни того, ни другого.
     private int LiveSessionCount()
     {
-        var field = typeof(SessionManager).GetField("_sessions",
+        var field = typeof(SessionManager).GetProperty("_sessions",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         return ((System.Collections.IDictionary)field.GetValue(_sessions)!).Count;
     }

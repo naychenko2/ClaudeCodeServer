@@ -227,7 +227,7 @@ public sealed class PrivateChatListVisibilityTests : IDisposable
     private void SetLiveBg(string sessionId)
     {
         var map = (System.Collections.IDictionary)typeof(SessionManager)
-            .GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(_sessions)!;
+            .GetProperty("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(_sessions)!;
         var entry = map[sessionId]!;
         var adapter = new Mock<ILlmSessionAdapter>();
         adapter.SetupGet(a => a.Info).Returns((Session)entry.GetType().GetField("Info")!.GetValue(entry)!);

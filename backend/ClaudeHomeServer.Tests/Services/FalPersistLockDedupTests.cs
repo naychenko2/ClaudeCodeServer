@@ -219,7 +219,7 @@ public class FalPersistLockDedupTests : IDisposable
     // идти через дисковую ветку — ту, что защищена нашим _falPersistLock.
     private void ClearAccumulator(string sessionId)
     {
-        var entriesField = typeof(SessionManager).GetField("_sessions",
+        var entriesField = typeof(SessionManager).GetProperty("_sessions",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         var entries = (System.Collections.IDictionary)entriesField!.GetValue(_sessions)!;
         var entry = entries[sessionId]!;

@@ -184,7 +184,7 @@ public sealed class SessionManagerLocalTranscriptTests : IDisposable
     private string? FindResumeTranscript(string sessionId)
     {
         var sessions = (System.Collections.IDictionary)typeof(SessionManager)
-            .GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(_sut)!;
+            .GetProperty("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(_sut)!;
         var method = typeof(SessionManager).GetMethod("FindResumeTranscript", BindingFlags.NonPublic | BindingFlags.Instance)!;
         return (string?)method.Invoke(_sut, [sessions[sessionId]]);
     }

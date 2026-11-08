@@ -173,7 +173,7 @@ public class VoiceLocalTurnTests : IDisposable
 
     private object GetEntry(string sessionId)
     {
-        var field = typeof(SessionManager).GetField("_sessions",
+        var field = typeof(SessionManager).GetProperty("_sessions",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         var sessions = (System.Collections.IDictionary)field.GetValue(_sut)!;
         return sessions[sessionId]!;

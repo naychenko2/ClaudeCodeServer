@@ -136,7 +136,7 @@ public class TeamBlockerResolveTests : IDisposable
     // SessionEntry.Info — у публичного типа Session такого свойства нет).
     private System.Collections.IDictionary MakeSessionEntryDict()
     {
-        var entryField = typeof(SessionManager).GetField("_sessions",
+        var entryField = typeof(SessionManager).GetProperty("_sessions",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
         return (System.Collections.IDictionary)entryField.GetValue(_sessions)!;
     }
@@ -430,7 +430,7 @@ public class TeamBlockerResolveTests : IDisposable
         // метод ядра, проверяем через рефлексию — единственный путь, раз он private
         var method = typeof(SessionManager).GetMethod("ResumeTeamFromDecisionOnUserInput",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
-        var entryField = typeof(SessionManager).GetField("_sessions",
+        var entryField = typeof(SessionManager).GetProperty("_sessions",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
         var entryDict = (System.Collections.IDictionary)entryField.GetValue(_sessions)!;
         var sessionEntry = entryDict[stab.Id]!;

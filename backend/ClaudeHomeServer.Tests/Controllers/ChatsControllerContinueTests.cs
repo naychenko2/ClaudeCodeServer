@@ -38,7 +38,7 @@ public class ChatsControllerContinueTests(TestWebApplicationFactory factory)
     private object EntryOf(string sessionId)
     {
         var sessions = factory.Services.GetRequiredService<SessionManager>();
-        var field = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var field = typeof(SessionManager).GetProperty("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
         return ((System.Collections.IDictionary)field.GetValue(sessions)!)[sessionId]!;
     }
 

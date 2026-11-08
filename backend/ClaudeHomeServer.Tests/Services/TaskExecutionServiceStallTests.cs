@@ -457,7 +457,7 @@ public class TaskExecutionServiceStallTests : IDisposable
     // SessionManagerTests и TaskExecutionServiceDelegationReportTests
     private void StubProcess(Session session)
     {
-        var field = typeof(SessionManager).GetField("_sessions",
+        var field = typeof(SessionManager).GetProperty("_sessions",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         var entry = ((System.Collections.IDictionary)field.GetValue(_sessions)!)[session.Id]!;
         var adapter = new Mock<ILlmSessionAdapter>();

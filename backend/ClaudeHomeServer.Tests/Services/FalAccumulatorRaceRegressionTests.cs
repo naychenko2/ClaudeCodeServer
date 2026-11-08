@@ -161,7 +161,7 @@ public class FalAccumulatorRaceRegressionTests : IDisposable
 
     private void SetAccumulator(string sessionId, object? value)
     {
-        var entriesField = typeof(SessionManager).GetField("_sessions",
+        var entriesField = typeof(SessionManager).GetProperty("_sessions",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         var entries = (System.Collections.IDictionary)entriesField!.GetValue(_sessions)!;
         var entry = entries[sessionId]!;

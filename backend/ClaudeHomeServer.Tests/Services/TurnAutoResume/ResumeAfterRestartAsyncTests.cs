@@ -4,12 +4,12 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Llm;
-using ClaudeHomeServer.Services.Skills;
-using ClaudeHomeServer.Services.Notes;
-using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.Sessions;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
@@ -30,10 +30,6 @@ public class ResumeAfterRestartAsyncTests : IDisposable
     private readonly string _tempDir;
     private readonly string _projectsJsonPath;
     private readonly string _sessionsJsonPath;
-    private readonly IConfiguration _config;
-    private readonly ProjectManager _projectManager;
-    private readonly ChatHistoryService _historyService;
-    private readonly TestSessionBroadcaster _broadcaster = new();
 
     public ResumeAfterRestartAsyncTests()
     {
@@ -42,18 +38,6 @@ public class ResumeAfterRestartAsyncTests : IDisposable
 
         _projectsJsonPath = Path.Combine(_tempDir, "projects.json");
         _sessionsJsonPath = Path.Combine(_tempDir, "sessions.json");
-
-        _config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["DataPath"] = _projectsJsonPath,
-            })
-            .Build();
-
-        var userStore = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
-        var appSettings = new AppSettingsService(_config);
-        _projectManager = new ProjectManager(_config, userStore, appSettings);
-        _historyService = new ChatHistoryService(_config);
     }
 
     public void Dispose() => Helpers.TestFs.DeleteDirectoryResilient(_tempDir);
@@ -71,18 +55,30 @@ public class ResumeAfterRestartAsyncTests : IDisposable
         // на момент отправки resume-хода (контракт: Append карточки ДО OnUserMessage).
         public readonly List<string> OpLog = [];
 
+        // Та же сигнатура, что у сжатого конструктора фасада (S3-8c): аргументы резолвятся
+        // из контейнера помощника (CreateSpySessionManager), подмена — только виртуальных швов.
         public SpySessionManager(
+            SessionStore store, SessionHistory historyRole, TurnCostLedger costs,
+            PendingQueueService pending, CliRoute route, ChatWorktree worktree,
+            ProviderMigration providerMigration, ChatNaming naming, ChatVisibility visibility,
+            ChatSettings settings, McpEndpoint mcpEndpoint, BuiltinMcpContexts builtinContexts,
+            PersonaLayerBuilder personaLayer, ExternalMcpContexts externalContexts,
+            ModulesMcpContexts moduleContexts, TurnPassports turnPassports, TurnProcessHost processHost,
+            TurnRecovery recovery, ChatCreation chatCreation, ChatDeletion chatDeletion,
+            TurnCompletion completion, TurnIntake intake,
             ProjectManager projects, ChatHistoryService history, IConfiguration config,
-            ILlmSessionAdapterFactory adapters, FalCostService falCost, UsageService usage,
-            AppSettingsService appSettings, UserStore users, JwtService jwt,
-            Microsoft.AspNetCore.Hosting.Server.IServer server, LlmProviderRegistry llmProviders,
-            FeatureFlagService flags, PersonaManager personas, PersonaBindingsService bindings,
-            ClaudeSubscriptionPool subscriptionPool, ILogger<SessionManager> log,
-            ClaudeHomeServer.Services.Execution.ILauncherFactory launchers,
+            LlmProviderRegistry llmProviders, PersonaManager personas, ILogger<SessionManager> log,
+            ISessionBroadcaster broadcaster, ILoggerFactory loggerFactory, IServiceProvider services,
+            ClaudeHomeServer.Services.Turn.ITurnEventBus turnEvents, AppSettingsService appSettings,
             ClaudeHomeServer.Services.Execution.SandboxManager sandbox,
-            ClaudeHomeServer.Services.Composition.ISessionBroadcaster broadcaster)
-            : base(projects, history, config, adapters, falCost, usage, appSettings, users, jwt, server,
-                llmProviders, flags, personas, bindings, subscriptionPool, log, launchers, sandbox, broadcaster)
+            ClaudeHomeServer.Services.Team.TeamPlanningService? teamPlanning, TaskManager? tasks,
+            ICheapTextRunner? cheap, ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog? subagentRuns)
+            : base(store, historyRole, costs, pending, route, worktree, providerMigration, naming,
+                visibility, settings, mcpEndpoint, builtinContexts, personaLayer, externalContexts,
+                moduleContexts, turnPassports, processHost, recovery, chatCreation, chatDeletion,
+                completion, intake, projects, history, config, llmProviders, personas, log, broadcaster,
+                loggerFactory, services, turnEvents, appSettings, sandbox, teamPlanning, tasks,
+                cheap, subagentRuns)
         {
         }
 
@@ -106,36 +102,51 @@ public class ResumeAfterRestartAsyncTests : IDisposable
         }
     }
 
+    // Ядро собирается общим помощником S3-8a (тот же AddSessionCore, что в проде; конфиг и
+    // пути — от него, DataPath = _tempDir/projects.json — те же файлы, что пишет WriteSessions).
+    // Спай конструируется из тех же ролей контейнера: подменяются только виртуальные швы.
     private SpySessionManager CreateSpySessionManager()
     {
-        var llmProviders = new LlmProviderRegistry(_config);
-        var subPool = new ClaudeSubscriptionPool(_config);
-        var adapters = new LlmSessionAdapterFactory(
-            _config, new AgentPromptSourceAdapter(new SkillsService()),
-            new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(_config)), llmProviders, subPool);
-        var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, _config);
-        var usage = new UsageService(_config);
-        var userStore = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
-        var appSettings = new AppSettingsService(_config);
-        var jwt = new JwtService(_config, userStore, NullLogger<JwtService>.Instance);
-        var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
-        server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
-        var wkStore = new WorkspaceKnowledgeStore(_config);
-        var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
-            Microsoft.Extensions.Options.Options.Create(new DifyOptions()), wkStore);
-        var flags = new FeatureFlagService(userStore);
-        var notesSvc = new NotesService(_projectManager, _config, NullLogger<NotesService>.Instance);
-        var notesKb = new NotesKnowledgeService(knowledge, notesSvc, userStore, _config,
-            NullLogger<NotesKnowledgeService>.Instance);
-        var personas = new PersonaManager(_config);
-        var bindings = new PersonaBindingsService(personas, _projectManager, wkStore,
-            knowledge, new SkillsService(), userStore, _config, NullLogger<PersonaBindingsService>.Instance,
-            notes: notesSvc, notesKb: notesKb);
-        var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(_config,
-            NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
-        return new SpySessionManager(_projectManager, _historyService, _config, adapters, falCost, usage,
-            appSettings, userStore, jwt, server.Object, llmProviders, flags, personas, bindings, subPool,
-            NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, _broadcaster);
+        var sp = SessionCoreTestHost.Build(_tempDir).Services;
+        return new SpySessionManager(
+            sp.GetRequiredService<SessionStore>(),
+            sp.GetRequiredService<SessionHistory>(),
+            sp.GetRequiredService<TurnCostLedger>(),
+            sp.GetRequiredService<PendingQueueService>(),
+            sp.GetRequiredService<CliRoute>(),
+            sp.GetRequiredService<ChatWorktree>(),
+            sp.GetRequiredService<ProviderMigration>(),
+            sp.GetRequiredService<ChatNaming>(),
+            sp.GetRequiredService<ChatVisibility>(),
+            sp.GetRequiredService<ChatSettings>(),
+            sp.GetRequiredService<McpEndpoint>(),
+            sp.GetRequiredService<BuiltinMcpContexts>(),
+            sp.GetRequiredService<PersonaLayerBuilder>(),
+            sp.GetRequiredService<ExternalMcpContexts>(),
+            sp.GetRequiredService<ModulesMcpContexts>(),
+            sp.GetRequiredService<TurnPassports>(),
+            sp.GetRequiredService<TurnProcessHost>(),
+            sp.GetRequiredService<TurnRecovery>(),
+            sp.GetRequiredService<ChatCreation>(),
+            sp.GetRequiredService<ChatDeletion>(),
+            sp.GetRequiredService<TurnCompletion>(),
+            sp.GetRequiredService<TurnIntake>(),
+            sp.GetRequiredService<ProjectManager>(),
+            sp.GetRequiredService<ChatHistoryService>(),
+            sp.GetRequiredService<IConfiguration>(),
+            sp.GetRequiredService<LlmProviderRegistry>(),
+            sp.GetRequiredService<PersonaManager>(),
+            sp.GetRequiredService<ILogger<SessionManager>>(),
+            sp.GetRequiredService<ISessionBroadcaster>(),
+            sp.GetRequiredService<ILoggerFactory>(),
+            sp,
+            sp.GetRequiredService<ClaudeHomeServer.Services.Turn.ITurnEventBus>(),
+            sp.GetRequiredService<AppSettingsService>(),
+            sp.GetRequiredService<ClaudeHomeServer.Services.Execution.SandboxManager>(),
+            sp.GetService<ClaudeHomeServer.Services.Team.TeamPlanningService>(),
+            sp.GetService<TaskManager>(),
+            sp.GetService<ICheapTextRunner>(),
+            sp.GetService<ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog>());
     }
 
     private void WriteSessions(IEnumerable<Session> sessions)

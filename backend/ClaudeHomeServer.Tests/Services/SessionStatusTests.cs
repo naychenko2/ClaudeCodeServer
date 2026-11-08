@@ -523,7 +523,7 @@ public class SessionStatusTests : IDisposable
 
     private static object GetEntry(SessionManager sut, string sessionId)
     {
-        var field = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var field = typeof(SessionManager).GetProperty("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
         return ((System.Collections.IDictionary)field.GetValue(sut)!)[sessionId]!;
     }
 }

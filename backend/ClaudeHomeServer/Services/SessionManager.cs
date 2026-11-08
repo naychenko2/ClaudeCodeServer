@@ -101,29 +101,15 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     public enum SendUserOutcome { Started, Queued, QueuedPreempted }
 
     // Стор метаданных сессий (S3-1): реестр, сохранение sessions.json, владелец и видимость,
-    // актор хода, наблюдатели, рассылка статуса. Синглтон из DI (AddSessionCore); без DI
-    // (юниты) собирается в конструкторе. SessionManager — фасад над ним.
+    // актор хода, наблюдатели, рассылка статуса. Синглтон DI (AddSessionCore); фасад получает
+    // его параметром — запасной сборки нет с S3-8c. SessionManager — фасад над ним.
     private readonly SessionStore _store;
-    // Тот же реестр, что держит стор (одна точка правды): поле оставлено на фасаде, потому что
-    // на него завязаны тела ещё не вынесенных ролей и white-box тесты (рефлексия по «_sessions»).
-    private readonly ConcurrentDictionary<string, SessionEntry> _sessions;
-    private readonly ProjectManager _projects;
-    // Готовность устройства локального проекта (ADR-016, вариант А плана §5): фоновые и
-    // отложенные доставки в чат офлайн-устройства паркуются в Session.DeviceWaitQueue вместо
-    // хода, обречённого на отказ. null — проверки нет (тесты без неё): ход идёт как раньше.
-    private readonly Execution.IProjectDeviceGate? _deviceGate;
-    // Шов Ф4 (Этап 5): заменяет _hub.Clients.Group(...).SendAsync — префиксы
-    // собираются внутри SessionHubBroadcaster, а не в вызывающем коде.
-    private readonly Composition.ISessionBroadcaster _broadcaster;
+    // Тот же реестр, что держит стор (одна точка правды): второго держателя нет — свойство
+    // читает словарь стора напрямую (хвост 52a8981c п.4, S3-8c). На него завязаны тела ещё
+    // не вынесенных ролей и white-box тесты (рефлексия «_sessions» — теперь по свойству).
+    private ConcurrentDictionary<string, SessionEntry> _sessions => _store.Sessions;
+    // «Дешёвый» раннер для авто-заголовка чата (локальная модель / claude).
     private readonly Llm.ICheapTextRunner? _cheap;
-    // Маршруты мест каталога (локаль/слот/модель) и параметры профилей — для ветки
-    // локального голосового хода (chat-voice). null — в тестах без локали.
-    private readonly Llm.LocalActionRouter? _router;
-    // Прямой HTTP-клиент локальной LLM (Ollama или llama-server) для локальных голосовых
-    // ходов; null — в тестах.
-    private readonly Llm.ILocalLlmClient? _ollama;
-    // Планировщик режима «Командная реализация» (Э2); null — режим без планирования
-    private readonly TeamPlanningService? _teamPlanning;
     // Координатор режима «Командная реализация» (этап 4, шаг 2г-3а): owning — создаётся
     // в конструкторе SessionManager, DI-регистрация придёт в шаге 2г-4. Owning разрывает
     // цикл «ядро ↔ вертикаль штаба» без Lazy<T> и без нового Func-канала.
@@ -143,15 +129,13 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // обёртки-делегаты, чтобы не переписывать тесты (18 мест вызывают _sut.CreateTeamPlanAsync).
     private readonly TeamPlanService _teamPlan;
     private readonly ChatHistoryService _history;
-    // Снимки промпта ходов (кнопка «какой промпт ушёл»); null — в тестах
-    private readonly PromptSnapshotStore? _promptSnapshots;
-    // Паспорта прогонов сабагентов (диагностика обрывов + сигнал для автодобивания); null — в тестах
+    // Паспорта прогонов сабагентов (диагностика обрывов + сигнал для автодобивания); null — без
+    // вертикали Llm в контейнере. Подписки на шине для паспортов ставит TurnPassports (S3-4).
     private readonly Llm.Claude.SubagentRunLog? _subagentRuns;
-    // Шина событий хода (ADR-013): уезжает в LlmSessionContext.Events каждой сессии.
-    // null — в тестах без DI: лениво создаётся в TurnEvents, чтобы подписчики могли
-    // звать шину и без явной передачи (тесты SessionManagerTests опираются на это).
-    private Turn.ITurnEventBus? _turnEvents;
-    private Turn.ITurnEventBus TurnEvents => _turnEvents ??= new Turn.TurnEventBus();
+    // Шина событий хода (ADR-013): синглон DI, тот же, что читают роли. Телом фасада поле не
+    // читается (теневой подписчик ставится из параметра) — держится как тест-шов: базовые
+    // тесты штаба публикуют TurnCompleted через ТОТ ЖЕ экземпляр (SessionManagerTestBase).
+    private readonly Turn.ITurnEventBus _turnEvents;
     // Лок сохранения sessions.json — один на процесс, живёт в сторе; пометки «зафиксировано в git»
     // (MarkFilesCommitted/UnmarkFileCommitted) делают read-modify-write под тем же замком.
     private Lock _saveLock => _store.SaveLock;
@@ -176,8 +160,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private readonly int _maxWaitingTicks;
     // Роли ядра сессий (S3-2, docs/research/session-manager-split-2026-11.md): фасад
     // делегирует им тонкими обёртками — сигнатуры наружу не меняются, тела ещё не
-    // вынесенных ролей вызывают прежние имена. Экземпляры — синглтоны DI (AddSessionCore)
-    // или запасная сборка в конструкторе (юниты); один экземпляр на фасад.
+    // вынесенных ролей вызывают прежние имена. Экземпляры — синглтоны DI (AddSessionCore),
+    // приходят параметрами конструктора (S3-8c); один экземпляр на фасад.
     private readonly SessionHistory _sessionHistory;
     private readonly TurnCostLedger _costs;
     private readonly PendingQueueService _pending;
@@ -194,7 +178,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private readonly ChatSettings _settings;
     // Контекст запуска (S3-4): адрес и токен MCP, встроенные продуктовые серверы, слой персоны,
     // внешние серверы и модули, паспорта хода. Тот же порядок, что в S3-2/S3-3: DI-экземпляр
-    // или запасная сборка в конструкторе (юниты); один экземпляр на фасад.
+    // параметром конструктора (S3-8c); один экземпляр на фасад.
     private readonly McpEndpoint _endpoint;
     private readonly BuiltinMcpContexts _builtin;
     private readonly PersonaLayerBuilder _persona;
@@ -202,8 +186,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private readonly ModulesMcpContexts _moduleContexts;
     private readonly TurnPassports _passports;
     // Процесс CLI и жизненный цикл чата (S3-5): хост процесса, возобновление оборванного
-    // хода, создание и удаление чата. Тот же порядок, что в S3-2/S3-3/S3-4: DI-экземпляр или
-    // запасная сборка в конструкторе (юниты); один экземпляр на фасад. Фабрика контекста
+    // хода, создание и удаление чата. Тот же порядок, что в S3-2/S3-3/S3-4: DI-экземпляр
+    // параметром конструктора (S3-8c); один экземпляр на фасад. Фабрика контекста
     // запуска — internal-тип внутри хоста (полем фасада она быть не может: CS0051), шов
     // приёма сообщений — ленивый на этот же экземляр: с S3-6 разбор сообщений делает
     // роль конца хода, не фасад.
@@ -242,18 +226,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         Converters = { new JsonStringEnumConverter() },
     };
 
-    private readonly ILlmSessionAdapterFactory _adapters;
     private readonly LlmProviderRegistry _llmProviders;
-    // FalCostService здесь больше не поле: трекинг и публикация стоимости — в TurnCostLedger
-    // (S3-2), он получает falCost в свой конструктор (и ставит OnCostResolved там же).
-    private readonly UsageService _usage;
+    // FalCostService, UsageService, ModelAssignmentResolver, UserHomeResolver и
+    // ArchivedTranscriptStore здесь больше не поля и не параметры: их читают роли
+    // (TurnCostLedger, CliRoute, ChatSettings, ChatCreation), собранные в AddSessionCore (S3-8c).
     private readonly ITierModelResolver _appSettings;
-    // Резолвер моделей агентных мест: пустая модель → назначение места → слот тира
-    private readonly Llm.ModelAssignmentResolver _assignments;
     private readonly IConfiguration _config;
-    // Копии транскриптов заархивированных чатов (data/archived-transcripts) — шаг 0 плана
-    // «Архив чатов»: создаётся в конструкторе напрямую, см. там же
-    private readonly ArchivedTranscriptStore _archivedTranscripts;
 
     // Зрители сессии и живой прогон CLI — в сторе (S3-1)
     public void AddViewer(string sessionId, string connectionId) => _store.AddViewer(sessionId, connectionId);
@@ -289,46 +267,29 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // Удаление сессии (чат/проектная сессия) — для авто-движков: сбросить ссылки на чат правила.
     public event Action<Session>? OnSessionDeleted;
 
-    private readonly IServiceProvider? _services;
-    private Services.Mcp.Http.McpToolsetRegistry? _mcpToolsets;
+    // Корень контейнера: ленивые резолвы фасада (IProjectAccess для GetWithRight/GetAccessible,
+    // internal-роли вроде LocalVoiceTurn — CS0051, параметром быть не могут). Прямой зависимости
+    // ролей через него нет — это решение 05.11 (1dda7103), см. комментарий ChatDeletion.cs:17.
+    private readonly IServiceProvider _services;
     private readonly PersonaManager _personas;
-    private readonly PersonaBindingsService _bindings;
-    private readonly ClaudeSubscriptionPool _subscriptionPool;
-    // Время последней фактической активности аккаунта пула (живой ход/пинг) для идл-пинга
-    // подписок (SubscriptionUsageWarmupService); null — в тестах, тогда просто не трогаем.
-    private readonly SubscriptionActivityTracker? _activity;
-    // Учёт лимитов подписок по rate_limit_event хода: та же точка, что у шлюза LLM. Состояние
-    // рекордер не держит (оно в _usage и _subscriptionPool), поэтому свой экземпляр тут не
-    // второй счётчик.
-    private readonly SubscriptionLimitRecorder _limitRecorder;
     private readonly ILogger<SessionManager> _log;
     // Фабрика логгеров для вертикали (волна В): TeamPlanService получает собственный
-    // типизированный ILogger. null — в тестах без DI, TeamPlanService работает на NullLogger.
+    // типизированный ILogger.
     private readonly ILoggerFactory? _loggerFactory;
-    // Драйверы среды исполнения владельцев (local / docker-песочница)
-    private readonly Execution.ILauncherFactory _launchers;
     private readonly Execution.SandboxManager _sandbox;
-    // Домашняя папка владельца ({база по среде}/{username} либо override из конфига)
-    private readonly UserHomeResolver _homes;
-    // Git-операции worktree чата (null — в тестах: worktree-фича выключена)
-    private readonly Git.GitService? _git;
-    // Учёт glif-генераций — не поле фасада: он в TurnCostLedger (S3-2), glif идёт в его конструктор.
-    // Аналитика расхода токенов (null — в тестах: сбор выключен)
-    private readonly Spend.ISpendCollector? _spend;
-    // Граф кода, watcher'ы файлов и прогрев сборки worktree (S3-3): поля переехали в
-    // ChatWorktree — параметры конструктора остались и передаются в его запасную сборку.
     // Шов «ядро → штаб» (этап 4, шаг 2б плана выноса штаба): четыре крючка уведомления
     // и запрос IsSessionBusy, реализованные этим же классом как обёртка над прежними
-    // приватными методами (см. явные реализации ITeamNotifier ниже). В шаге 2г реализация
-    // переедет в вертикаль штаба целиком, а сюда будет приходить через DI.
-    private readonly ITeamNotifier _teamNotifier;
-    // Четыре шва данных «штаб → ядро» (этап 4, шаг 2г-3б; объявления — Services/Team/
+    // приватными методами (см. явные реализации ITeamNotifier ниже). Поле снято в S3-8c:
+    // реализация остаётся на этом же классе, отдельный держатель шва не нужен.
+    // Три шва данных «штаб → ядро» (этап 4, шаг 2г-3б; объявления — Services/Team/
     // TeamCoreSeams.cs). Направление обратное ITeamNotifier: здесь вертикаль спрашивает ядро.
-    // Реализация — этот же класс явными реализациями ниже (обёртки над прежними приватными
-    // методами, поведение один в один). Поля нужны, чтобы штабной блок ходил в ядро уже через
-    // контракт: в шаге 2г тело уедет в вертикаль, и вызовы менять не придётся — только
-    // источник интерфейсов (DI вместо this). Каталога сессий среди полей нет намеренно: его
-    // спрашивает только вертикаль (у тела штаба, пока оно здесь, entry уже на руках).
+    // С S3-8c ITeamRunState держит SessionStore, ITeamTurnIntake — ядро приёма (п.2):
+    // вертикаль получает эти роли прямо в свои конструкторы. ITeamHistoryStore остаётся на
+    // фасаде (this): половина его тел — фасадная развилка Accumulator/диск и эскалационные
+    // методы, чьи тела живут в вертикали (TeamDecisionService.cs:441); перенос тел в роль —
+    // правка формы ядра, отдельный шаг (находка отчёта S3-8c). Каталога сессий среди полей
+    // нет намеренно: его спрашивает только вертикаль (у тела штаба, пока оно здесь, entry
+    // уже на руках).
     private readonly ITeamHistoryStore _teamHistory;
     private readonly ITeamRunState _teamRunState;
     private readonly ITeamTurnIntake _teamIntake;
@@ -354,7 +315,8 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private readonly Sessions.TurnCompletion _completion;
     // Локальный голосовой ход (S3-6): прямой вызов Ollama мимо CLI. Единственный потребитель —
     // приём хода (ShouldRunLocalVoice/RunLocalVoiceTurnAsync), поэтому полем конструктора не
-    // становится и собирается здесь же (тот же приём, что с internal-фабрикой контекста S3-5).
+    // становится: internal-тип (CS0051), общий синглтон с ядром приёма — резолв из контейнера
+    // в конструкторе без запасной сборки (S3-8c).
     private readonly Sessions.LocalVoiceTurn _voice;
     // Резолв задач (SessionTaskLinks.ParentSessionId / IsTaskDone) живёт в сторе (S3-1):
     // Core-шов ITaskLookup, null — задача не резолвится (ParentSessionId=null, TaskDone=false).
@@ -363,438 +325,143 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // (DI-цикл), поэтому юниты, которым нужен резолв задачи, подменяют lookup явно.
     internal void SetTaskLookupForTests(ITaskLookup? lookup) => _store.TaskLookup = lookup;
 
-    public SessionManager(ProjectManager projects,
-        ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,
-        FalCostService falCost, UsageService usage,
-        AppSettingsService appSettings, UserStore users, JwtService jwt,
-        Microsoft.AspNetCore.Hosting.Server.IServer server,
-        LlmProviderRegistry llmProviders,
-        FeatureFlagService flags, PersonaManager personas,
-        PersonaBindingsService bindings,
-        ClaudeSubscriptionPool subscriptionPool,
-        ILogger<SessionManager> log,
-        Execution.ILauncherFactory launchers,
-        Execution.SandboxManager sandbox,
-        // Шов Ф4 (Этап 5): ISessionBroadcaster нужен TeamCoordinator — его экземпляр
-        // ядро держит в owning-обёртке (см. комментарий TeamCoordinator.cs:14). Сам
-        // SessionManager пока сидит на IHubContext<SessionHub> — миграция будет
-        // отдельным коммитом (это корневой сервис, см. задачу Ф4).
-        Composition.ISessionBroadcaster broadcaster = null!,
-        // Опционально (в тестах не передаётся): синк файловых сабагентов-персон
-        PersonaAgentFileSync? agentSync = null,
-        UserHomeResolver? homes = null,
-        // Опционально: «дешёвый» раннер для авто-заголовка чата (локальная модель / claude)
-        Llm.ICheapTextRunner? cheap = null,
-        // Опционально (в тестах не передаётся): платформа внешних модулей —
-        // реестр манифестов + выпуск модульных токенов для их MCP-серверов (R7)
-        Modules.ModuleRegistry? modules = null,
-        Modules.ModuleTokenService? moduleTokens = null,
-        // Опционально (в тестах не передаётся): git-операции worktree чата
-        Git.GitService? git = null,
-        // Опционально (в тестах не передаётся): сбор расхода токенов (Spend Analytics)
-        Spend.ISpendCollector? spend = null,
-        // Опционально: резолвер моделей агентных мест (назначения + слоты тиров);
-        // без него собирается локально от appSettings — слоты работают и в тестах
-        Llm.ModelAssignmentResolver? assignments = null,
-        // Опционально (в тестах не передаётся): граф кода и watcher'ы файлов — нужны для уборки
-        // за отдельным деревом чата (снимок графа + watcher его файлов), ADR-003
-        CodeGraph.CodeGraphService? codeGraphs = null,
-        FileWatcherService? fileWatchers = null,
-        // Опционально: планирование режима «Командная реализация» (Э2). Без него режим
-        // включается, но план не строится — CreateTeamPlanAsync отдаёт причину отказа.
-        TeamPlanningService? teamPlanning = null,
-        // Опционально (в тестах не передаётся): трекер активности аккаунтов пула подписок
-        SubscriptionActivityTracker? activity = null,
-        // Опционально: учёт glif-генераций; без него детект glif_cost не работает
-        GlifAccountService? glif = null,
-        // Опционально (в тестах не передаётся): снимки промпта ходов — кнопка «какой промпт
-        // ушёл» под постом. Без него ходы идут как раньше, просто без снимков.
-        PromptSnapshotStore? promptSnapshots = null,
-        // Опционально (в тестах не передаётся): личный реестр MCP-серверов владельца
-        // и значения их секретов — состав серверов хода поверх встроенных
-        Mcp.McpRegistry? mcpRegistry = null,
-        Mcp.McpSecretStore? mcpSecrets = null,
-        // Опционально (в тестах не передаётся): последний известный статус MCP-серверов —
-        // наблюдение из system/init каждого хода, фонового поллинга нет
-        Mcp.McpStatusStore? mcpStatus = null,
-        // Опционально (в тестах не передаётся): OAuth внешних серверов — обновление
-        // истекающего токена перед ходом, иначе инструменты сервера получали бы 401
-        Mcp.McpOAuthService? mcpOAuth = null,
-        // Опционально (в тестах не передаётся): OAuth-сервис Higgsfield (инстансное подключение)
-        Mcp.HiggsfieldOAuthService? higgsfieldOAuth = null,
-        // Опционально (в тестах не передаётся): паспорта прогонов сабагентов. Без него
-        // диагностики обрывов нет и автодобивание молчит — ходы идут как раньше.
-        Llm.Claude.SubagentRunLog? subagentRuns = null,
-        // Опционально (в тестах не передаётся): паспорта ходов. Без него стор не ведётся,
-        // но и контракт «ровно один источник записи» соблюдён — без стора запись не идёт
-        // ни в finally фолбэк-адаптера, ни в шинный подписчик (нет подписчика → нет события).
-        Llm.TurnRunLog? turnRuns = null,
-        // Опционально (в тестах не передаётся): маршрутизатор мест и клиент локальной
-        // модели — ветка локального голосового хода (chat-voice). Без них разговор
-        // идёт через claude CLI как раньше.
-        Llm.LocalActionRouter? router = null,
-        Llm.ILocalLlmClient? ollama = null,
-        // Опционально (в тестах не передаётся): реестр контрибьюторов секций промпта
-        // (этап 2 плана «Шина событий хода»). Без DI бак пуст, шина работает как раньше.
-        IEnumerable<Turn.IPromptSectionContributor>? promptSectionContributors = null,
-        // Опционально (в тестах не передаётся): шина событий хода (ADR-013). Подписчики
-        // SessionManager ведут паспорта ходов/сабагентов и снимки промпта (этап 1).
-        Turn.ITurnEventBus? turnEvents = null,
-        // Опционально (в тестах не передаётся): реестр задач — единая точка вычисления
-        // вычисляемых «связей» сессии (SessionTaskLinks.ParentSessionId / IsTaskDone).
-        TaskManager? tasks = null,
-        // Опционально (в тестах не передаётся): фабрика логгеров — нужна вертикали
-        // TeamPlanService с собственным типизированным логгером (волна В). Без неё
-        // TeamPlanService работает на NullLogger.
-        ILoggerFactory? loggerFactory = null,
-        // Опционально (в тестах не передаётся): готовность устройства локального проекта
-        Execution.IProjectDeviceGate? deviceGate = null,
-        // Корень DI: реестр MCP-тулсетов резолвится лениво (BuildImageEditorContext) — прямая
-        // зависимость дала бы цикл SessionManager → реестр → тулсеты → SessionManager
-        IServiceProvider? services = null,
-        // Опционально (в тестах не передаётся): снимок загруженных подсистем — факт загрузки
-        // динамических модулей (Architecture). Без него сервер arch_* ходу не объявляется.
-        Composition.SubsystemStateStore? subsystemStates = null,
-        // Опционально (в тестах без сфер не передаётся): справочник сфер для зоны персон; без него
-        // персона сферы нигде не видна (fail-closed)
-        ISphereDirectory? spheres = null,
-        // Опционально (ADR-031, шаг 2.1): шов каталогов плагинов владельца для --plugin-dir.
-        // null — подсистема Plugins выключена (IPluginDirSource не в DI): ход идёт без --plugin-dir.
-        Plugins.IPluginDirSource? pluginDirSource = null,
-        // Опционально (в тестах не передаётся): шов графа кода — прогрев графа свежепривязанного
-        // worktree, чтобы первый вызов codegraph_* не упирался в «граф строится»
-        CodeGraph.ICodeGraphInspector? graphInspector = null,
-        // Стор метаданных сессий (S3-1, AddSessionCore). Опционально: без DI (57 мест new SessionManager
-        // в тестах) стор собирается здесь же из тех же зависимостей. Запасная сборка снимается в S3-8c.
-        SessionStore? store = null,
-        // Опционально (S3-2, AddSessionCore): роли ядра — история, цены, очередь, маршрут CLI.
-        // Без DI (юниты, new SessionManager) собираются здесь же из тех же зависимостей;
-        // переходный режим S3-0 §4, запасная сборка снимается в S3-8c.
-        Sessions.SessionHistory? historyRole = null,
-        Sessions.TurnCostLedger? costs = null,
-        Sessions.PendingQueueService? pending = null,
-        Sessions.CliRoute? route = null,
-        // Опционально (S3-2 → S3-3, AddSessionCore): рабочая папка чата и жизненный цикл —
-        // worktree, именование, смена провайдера, настройки, видимость. Без DI (юниты,
-        // new SessionManager) собираются здесь же из тех же зависимостей; переходный режим
-        // S3-0 §4, запасная сборка снимается в S3-8c.
-        Sessions.ChatWorktree? worktree = null,
-        Sessions.ProviderMigration? providerMigration = null,
-        Sessions.ChatNaming? naming = null,
-        Sessions.ChatVisibility? visibility = null,
-        Sessions.ChatSettings? settings = null,
-        // Опционально (S3-4, AddSessionCore): контекст запуска — адрес и токен MCP, встроенные
-        // продуктовые серверы, слой персоны, внешние серверы и модули, паспорта хода. Без DI
-        // (юниты, new SessionManager) собираются здесь же из тех же зависимостей; переходный
-        // режим S3-0 §4, запасная сборка снимается в S3-8c.
-        Sessions.McpEndpoint? mcpEndpoint = null,
-        Sessions.BuiltinMcpContexts? builtinContexts = null,
-        Sessions.PersonaLayerBuilder? personaLayer = null,
-        Sessions.ExternalMcpContexts? externalContexts = null,
-        Sessions.ModulesMcpContexts? moduleContexts = null,
-        Sessions.TurnPassports? turnPassports = null,
-        // Опционально: учёт лимитов подписок и стор копий транскриптов архивных чатов — теперь
-        // ОБЩИЕ экземпляры с ролями (TurnCostLedger / CliRoute), не отдельный счётчик здесь.
-        SubscriptionLimitRecorder? limitRecorder = null,
-        ArchivedTranscriptStore? archivedTranscripts = null,
-        // Опционально (S3-5, AddSessionCore): процесс CLI, возобновление оборванного хода,
-        // создание и удаление чата. Без DI (юниты, new SessionManager) собираются здесь же из
-        // тех же зависимостей; переходный режим S3-0 §4, запасная сборка снимается в S3-8c.
-        // Фабрика контекста запуска и шов приёма сообщений параметрами не становятся: оба
-        // internal-типа (CS0051), они собираются внутри запасной сборки хоста.
-        Sessions.TurnProcessHost? processHost = null,
-        Sessions.TurnRecovery? recovery = null,
-        Sessions.ChatCreation? chatCreation = null,
-        Sessions.ChatDeletion? chatDeletion = null,
-        // Опционально (S3-6, AddSessionCore): конец хода — разбор сообщений адаптера и очередь
-        // рассылки. Без DI (юниты, new SessionManager) собирается здесь же из тех же
-        // зависимостей; переходный режим S3-0 §4, запасная сборка снимается в S3-8c.
-        // Локальный голосовой ход параметром не становится: internal-тип (CS0051); с S3-7 он
-        // общий синглтон с ядром приёма (AddSessionCore), без DI — одна запасная сборка здесь,
-        // отдаётся ядру.
-        Sessions.TurnCompletion? completion = null,
-        // Опционально (S3-7, AddSessionCore): ядро приёма хода — единственный стартующий ход.
-        // Без DI (юниты, new SessionManager) собирается здесь же из тех же зависимостей;
-        // переходный режим S3-0 §4, запасная сборка снимается в S3-8c.
-        Sessions.TurnIntake? intake = null)
+    // Сжатие конструктора (S3-8c, решение (А) 08.11): роли ядра и живые зависимости фасада и
+    // штаба — типизированными параметрами; запасные сборки S3-1…S3-7 сняты. internal-типы
+    // ролей (LocalVoiceTurn) параметрами публичного конструктора не становятся (CS0051) —
+    // резолвятся из контейнера в теле, без запасной сборки. Nullable-параметры ровно там,
+    // где сервиса может не быть в контейнере (выключенная подсистема, тест без него):
+    // null означает «подсистемы нет», запасной экземпляр не собирается.
+    public SessionManager(
+        // Роли ядра (Services/Sessions, AddSessionCore): все — синглтоны, один экземпляр на фасад.
+        SessionStore store, SessionHistory historyRole, TurnCostLedger costs, PendingQueueService pending,
+        CliRoute route, ChatWorktree worktree, ProviderMigration providerMigration, ChatNaming naming,
+        ChatVisibility visibility, ChatSettings settings, McpEndpoint mcpEndpoint,
+        BuiltinMcpContexts builtinContexts, PersonaLayerBuilder personaLayer,
+        ExternalMcpContexts externalContexts, ModulesMcpContexts moduleContexts, TurnPassports turnPassports,
+        TurnProcessHost processHost, TurnRecovery recovery, ChatCreation chatCreation, ChatDeletion chatDeletion,
+        Sessions.TurnCompletion completion, Sessions.TurnIntake intake,
+        // Живые зависимости фасада и штаба: конфигурация и резолверы, читаемые телом фасада,
+        // и зависимости, нужные создаваемым здесь сервисам штаба.
+        ProjectManager projects, ChatHistoryService history, IConfiguration config,
+        LlmProviderRegistry llmProviders, PersonaManager personas, ILogger<SessionManager> log,
+        // Шов Ф4 (Этап 5): ISessionBroadcaster нужен TeamCoordinator и стору; сам фасад на нём
+        // не сидит (рассылки — через роли).
+        Composition.ISessionBroadcaster broadcaster,
+        // Фабрика логгеров — типизированные логгеры вертикали (волна В); корень контейнера —
+        // ленивые резолвы фасада (IProjectAccess, internal-роли); шина хода (ADR-013) — тот же
+        // синглтон, что читают роли; учёт лимитов тира — резолвер моделей агентных мест.
+        ILoggerFactory loggerFactory, IServiceProvider services, Turn.ITurnEventBus turnEvents,
+        AppSettingsService appSettings, Execution.SandboxManager sandbox,
+        // Опциональны ровно там, где сервиса может не быть в контейнере: без план-механики штаба
+        // режим включается, но план не строится; без реестра задач связи сессии не резолвятся;
+        // без «дешёвого» раннера авто-заголовок не генерируется; без журнала прогонов нudge
+        // сабагентов молчит.
+        TeamPlanningService? teamPlanning, TaskManager? tasks, Llm.ICheapTextRunner? cheap,
+        Llm.Claude.SubagentRunLog? subagentRuns)
     {
-        // Стор — первым: на него опираются поле реестра, швы штаба и всё, что ниже читает сессии
-        _store = store ?? new SessionStore(config, projects, broadcaster,
-            loggerFactory?.CreateLogger<SessionStore>()
-                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<SessionStore>.Instance,
-            tasks is null ? null : new Composition.TaskLookupAdapter(tasks));
-        _sessions = _store.Sessions;
-        _spheres = spheres;
-        _pluginDirSource = pluginDirSource;
-        _deviceGate = deviceGate;
+        // Стор — первым: на него опираются реестр, швы штаба и всё, что ниже читает сессии.
+        _store = store;
         _services = services;
-        _turnEvents = turnEvents;
         _loggerFactory = loggerFactory;
         _subagentRuns = subagentRuns;
-        _router = router;
-        _ollama = ollama;
-
-        _promptSnapshots = promptSnapshots;
-        _teamPlanning = teamPlanning;
-        _activity = activity;
-        _spend = spend;
         _cheap = cheap;
-        _git = git;
-        _homes = homes ?? UserHomeResolver.WithoutOverrides(appSettings, sandbox);
-        _launchers = launchers;
         _sandbox = sandbox;
-        _projects = projects;
-        _broadcaster = broadcaster;
-        _teamCoordinator = new TeamCoordinator(broadcaster);
-        // Хранитель состояния режима (волна А): создаётся ДО _teamNotifier/teamHistory
-        // и до LoadSessions, чтобы восстановление состояния режима после рестарта
-        // (через публичные обёртки WithTeamState) могло идти через TeamStateService
-        // сразу. Owning по тому же шаблону, что _teamCoordinator. Волна Б: в
-        // конструктор добавлен LlmProviderRegistry — вертикаль сама проверяет
-        // CapabilitiesFor(model).SupportsPlanMode при входе в план-фазу.
-        _teamState = new TeamStateService(this, _teamPlanning, _projects, _config, llmProviders);
-        // _personas обязаны присвоить ДО создания TeamPlanService — иначе вертикаль
-        // получает null в конструкторе (порядок инициализации полей в классе идёт до
-        // тела конструктора, а тело выполняется по тексту). На строгом конструкторе
-        // это поймал бы компилятор (CS8618), но поле non-null и присваивается ниже,
-        // поэтому компилятор верит, а в runtime — null.
         _personas = personas;
+        _history = history;
+        _llmProviders = llmProviders;
+        _appSettings = appSettings;
+        _config = config;
+        _log = log;
+
+        // Роли ядра (S3-2…S3-7): приходят готовыми из AddSessionCore, параметром конструктора
+        // (S3-8c): фасад только присваивает поля. Порядок сборки задаёт регистрация: журнал
+        // цен ставит OnCostResolved на свою публикацию, очередь и маршрут читают стор —
+        // он зарегистрирован первым.
+        _sessionHistory = historyRole;
+        _costs = costs;
+        _pending = pending;
+        _route = route;
+        _worktree = worktree;
+        _providerMigration = providerMigration;
+        _naming = naming;
+        _visibility = visibility;
+        _settings = settings;
+        _endpoint = mcpEndpoint;
+        _builtin = builtinContexts;
+        _persona = personaLayer;
+        _external = externalContexts;
+        _moduleContexts = moduleContexts;
+        _passports = turnPassports;
+        _process = processHost;
+        _recovery = recovery;
+        _creation = chatCreation;
+        _deletion = chatDeletion;
+        _completion = completion;
+        _intake = intake;
+        // Локальный голосовой ход (S3-6/S3-7): общий синглтон с ядром приёма — internal-тип
+        // (CS0051), параметром не становится; резолв из контейнера, без запасной сборки (S3-8c).
+        _voice = services.GetRequiredService<Sessions.LocalVoiceTurn>();
+        // Тест-шов: та же шина, что держит фасад. Телом фасада поле не читается (подписку
+        // ставит параметр), но SessionManagerTestBase.PublishTurnCompletedAsync публикует
+        // TurnCompleted через ТОТ ЖЕ экземпляр — иначе тест публиковал бы мимо подписчика.
+        _turnEvents = turnEvents;
+
+        // Швы данных «штаб → ядро» (ITeamHistoryStore/ITeamRunState/ITeamTurnIntake): поля держат
+        // экземпляры ролей (п.2, S3-8c): ITeamRunState — SessionStore, ITeamTurnIntake — ядро
+        // приёма. ITeamHistoryStore остаётся на фасаде: тела его эскалационных методов живут
+        // в вертикали (PublishTeamEscalationAsync — TeamDecisionService.cs:441) и в фасадной
+        // развилке Accumulator/диск; перенос тел — отдельный шаг (находка отчёта S3-8c).
+        // Присваивание швов — до создания сервисов вертикали: они получают их в конструкторы.
+        _teamHistory = this;
+        _teamRunState = _store;
+        _teamIntake = _intake;
+
+        // Штаб: создание остаётся в конструкторе (п.2). Первый параметр семи сервисов типизирован
+        // SessionManager — это по-прежнему this (вертикаль знает фасад); интерфейсные швы получают
+        // экземпляры ролей. Owning-паттерн без изменений: он разрывает цикл «ядро ↔ вертикаль
+        // штаба» без Lazy<T> и без нового Func-канала.
+        _teamCoordinator = new TeamCoordinator(broadcaster);
+        // Хранитель состояния режима (волна А): создаётся ДО остального штаба и до LoadSessions,
+        // чтобы восстановление состояния режима после рестарта (через публичные обёртки
+        // WithTeamState) могло идти через TeamStateService сразу. Owning по тому же шаблону,
+        // что _teamCoordinator. Волна Б: вертикаль сама проверяет
+        // CapabilitiesFor(model).SupportsPlanMode при входе в план-фазу.
+        _teamState = new TeamStateService(this, teamPlanning, projects, config, llmProviders);
         // Волна В: создаётся ПОСЛЕ _teamState, потому что TeamPlanService зовёт публичные
         // обёртки ядра (RestoreUserMode, SaveSessions, BroadcastTeamImplementAsync,
         // ResolveTeamPlanRoot) и видит швы данных через сам SessionManager. Жизненный цикл
         // симметричен _teamCoordinator/TeamStateService — owning в конструкторе, регистрация
         // через DI придёт в шаге 2г-4.
-        _teamPlan = new TeamPlanService(this, this, this, _teamPlanning, _teamCoordinator,
-            _personas, _projects, _teamState,
-            // Опциональный ILoggerFactory (для вертикали TeamPlanService с собственным
-            // типизированным логгером). В тестах SessionManagerTests логгер не передаётся —
-            // подменяем на null-логгер, чтобы вертикаль могла логировать не падая.
-            loggerFactory?.CreateLogger<TeamPlanService>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TeamPlanService>.Instance);
+        _teamPlan = new TeamPlanService(this, _teamHistory, _teamRunState, teamPlanning, _teamCoordinator,
+            _personas, projects, _teamState, loggerFactory.CreateLogger<TeamPlanService>());
         // Волна Г: координатор решений по карточке плана (запуск работы, закрытие
         // интервью, реакция на карточку). Owning-паттерн (создаётся в конструкторе
         // SessionManager — здесь тот же приём, что у _teamCoordinator/_teamState/_teamPlan).
         // В DI переедет на шаге 2г-4, owning-обёртки StartTeamWorkAsync/CloseTeamTalkAsync/
         // RespondTeamPlanAsync в SessionManager будут сняты.
-        _teamDecision = new TeamDecisionService(this, this, this, this, this, _personas, _teamState, _teamPlan,
-            loggerFactory?.CreateLogger<TeamDecisionService>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TeamDecisionService>.Instance);
+        _teamDecision = new TeamDecisionService(this, this, _teamHistory, _teamRunState, _teamIntake,
+            _personas, _teamState, _teamPlan, loggerFactory.CreateLogger<TeamDecisionService>());
         // Квоты и бюджет практики (волна Е). Owning-паттерн (создаётся в конструкторе,
         // в DI переедет на шаге 2г-4) разрывает цикл «SessionManager хочет TeamBudgetService,
         // TeamBudgetService хочет SessionManager» — вертикаль видит ядро по прямой ссылке,
         // а ядро знает о вертикали через поле _teamBudget.
-        _teamBudget = new TeamBudgetService(this, this, this, _teamState,
-            loggerFactory?.CreateLogger<TeamBudgetService>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TeamBudgetService>.Instance);
+        _teamBudget = new TeamBudgetService(this, this, _teamRunState, _teamState,
+            loggerFactory.CreateLogger<TeamBudgetService>());
         // Шапка разбора хода штаба и доклад о блокере (волна Ж): owning-паттерн по тому же
         // рецепту, что у _teamDecision/_teamBudget. Подписчик turn/completed переехал в
         // вертикаль — шинная подписка ниже регистрирует делегат на метод TeamTurnCompletionService.
-        _teamTurnCompletion = new TeamTurnCompletionService(this, this, this, this, _teamDecision,
-            loggerFactory?.CreateLogger<TeamTurnCompletionService>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TeamTurnCompletionService>.Instance,
-            tasks);
+        _teamTurnCompletion = new TeamTurnCompletionService(this, this, _teamHistory, _teamRunState,
+            _teamDecision, loggerFactory.CreateLogger<TeamTurnCompletionService>(), tasks);
         // Включение и переключение режима «Командная реализация» (волна Ж): SetTeamImplementAsync
         // и SetTeamImplementAutoAsync. Owning-паттерн по тому же рецепту, что и _teamBudget.
-        _teamEnable = new TeamEnableService(this, this, this, this, _teamState,
-            loggerFactory?.CreateLogger<TeamEnableService>() ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<TeamEnableService>.Instance);
-        _history = history;
-        _adapters = adapters;
-        _llmProviders = llmProviders;
-        _usage = usage;
-        _appSettings = appSettings;
-        _assignments = assignments ?? new Llm.ModelAssignmentResolver(appSettings);
-        _config = config;
-        // Копии транскриптов архивных чатов (шаг 0 плана «Архив чатов»): стор файловый и
-        // без зависимостей. Точки вызова (SetArchived/DeleteAsync) живут здесь, а поиск,
-        // перенос и удаление — в CliRoute (S3-2), поэтому экземляр общий: без DI собирается
-        // здесь, с DI приходит из AddSessionCore тем же синглтоном.
-        _archivedTranscripts = archivedTranscripts ?? new ArchivedTranscriptStore(config);
-        // _personas инициализирован выше (до создания TeamPlanService, чтобы вертикаль
-        // не получила null в конструкторе).
-        _bindings = bindings;
-        _subscriptionPool = subscriptionPool;
-        _limitRecorder = limitRecorder ?? new SubscriptionLimitRecorder(_usage, subscriptionPool, _activity);
-        _log = log;
+        _teamEnable = new TeamEnableService(this, this, _teamHistory, _teamRunState, _teamState,
+            loggerFactory.CreateLogger<TeamEnableService>());
 
-        // Роли ядра (S3-2): история, журнал цен, очередь, маршрут CLI. В DI приходят готовыми
-        // (AddSessionCore); без DI (юниты, new SessionManager) собираются здесь из тех же
-        // зависимостей — переходный режим S3-0 §4, запасная сборка снимается в S3-8c.
-        // Порядок важен: конструктор TurnCostLedger ставит FalCostService.OnCostResolved на
-        // СВОЮ публикацию, поэтому журнал собирается после того, как параметр falCost дошёл
-        // до него (сам falCost полем фасада больше не является); _limitRecorder и
-        // _archivedTranscripts — общие экземпляры, они собраны выше. Очередь и маршрут
-        // читают стор, он собран первым.
-        _sessionHistory = historyRole ?? new Sessions.SessionHistory(
-            history, _store,
-            loggerFactory?.CreateLogger<Sessions.SessionHistory>()
-                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.SessionHistory>.Instance);
-        _costs = costs ?? new Sessions.TurnCostLedger(
-            falCost, glif, spend, _limitRecorder, _sessionHistory, history, _store, llmProviders,
-            loggerFactory?.CreateLogger<Sessions.TurnCostLedger>()
-                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.TurnCostLedger>.Instance);
-        // Шов «очередь → приём хода» (S3-0 §3): ленивый, на этот же экземляр — при переходе
-        // очереди 0→1 очередь просит разбор, а разбор живёт в ядре до S3-4/S3-7.
-        _pending = pending ?? new Sessions.PendingQueueService(
-            _store, history, _sessionHistory, new Lazy<Sessions.ITurnStarter>(() => _intake!),
-            loggerFactory?.CreateLogger<Sessions.PendingQueueService>()
-                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.PendingQueueService>.Instance);
-        _route = route ?? new Sessions.CliRoute(
-            llmProviders, subscriptionPool, _assignments, users, _homes, launchers, sandbox,
-            projects, _store, _archivedTranscripts,
-            loggerFactory?.CreateLogger<Sessions.CliRoute>()
-                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.CliRoute>.Instance);
-        // Рабочая папка чата (S3-3): опирается на стор и маршрут (WorktreesBase/CwdForOwner/
-        // ConfigRootFor), поэтому собирается после них. Прогрев сборки — его собственный:
-        // без DI здесь же (как раньше), с DI приходит из AddSessionCore тем же синглтоном.
-        _worktree = worktree ?? new Sessions.ChatWorktree(
-            git, codeGraphs, graphInspector, fileWatchers,
-            new WorktreeBuildWarmup(launchers, config, log),
-            projects, _store, _route,
-            loggerFactory?.CreateLogger<Sessions.ChatWorktree>()
-                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.ChatWorktree>.Instance);
-        // Смена провайдера (S3-3): шов «миграция → штаб» — ленивый на этот же экземляр:
-        // прямая зависимость дала бы цикл ProviderMigration → SessionManager → UpdateAsync
-        // → ProviderMigration (S3-0 §3); на резолве шва RestoreUserMode идёт через фасад.
-        _providerMigration = providerMigration ?? new Sessions.ProviderMigration(
-            _store, _route, llmProviders, subscriptionPool,
-            new Lazy<Team.ITeamNotifier>(() => this),
-            loggerFactory?.CreateLogger<Sessions.ProviderMigration>()
-                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.ProviderMigration>.Instance);
-        // Именование чата (S3-3): читает ленту через ту же склейку, что фасад GetHistoryAsync
-        // (history + досчёт цен), поэтому собирается после журнала цен.
-        _naming = naming ?? new Sessions.ChatNaming(
-            _store, _sessionHistory, _costs, cheap, config, projects,
-            loggerFactory?.CreateLogger<Sessions.ChatNaming>()
-                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.ChatNaming>.Instance);
-        // Видимость чата (S3-3): шов к привязке чатам фичи — ленивый и опциональный (цикл
-        // FeatureChatLinks → ядро через фасад); без DI остаётся null, как прежний null _services:
-        // привязка к фиче не проверяется.
-        _visibility = visibility ?? new Sessions.ChatVisibility(
-            _store, history, projects, broadcaster,
-            null,
-            loggerFactory?.CreateLogger<Sessions.ChatVisibility>()
-                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.ChatVisibility>.Instance);
-        // Настройки и жизненный цикл чата (S3-3): опирается на стор, маршрут и роль смены
-        // провайдера (UpdateAsync зовёт MigrateProviderAsync), поэтому собирается после них.
-        _settings = settings ?? new Sessions.ChatSettings(
-            _store, _sessionHistory, _route, _providerMigration, projects, llmProviders,
-            _assignments, subscriptionPool, personas, spheres,
-            loggerFactory?.CreateLogger<Sessions.ChatSettings>()
-                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.ChatSettings>.Instance);
-
-        // Конец хода (S3-6): разбор сообщений адаптера и очередь рассылки. Собирается после
-        // маршрута, worktree, смены провайдера и журнала цен — на них она опирается; швы
-        // ITurnStarter/ITeamNotifier — ленивые: с S3-7 ITurnStarter резолвит ядро приёма
-        // (прямая зависимость дала бы цикл «конец хода → приём хода → конец хода»), ITeamNotifier
-        // остаётся на этом экземляре. Флаг штатной остановки с S3-7 в ядре приёма
-        // (TurnIntake.Stopping): здесь его читают через IsStopping шва. В DI приходит готовым
-        // (AddSessionCore); без DI — переходный режим S3-0 §4, запасная сборка снимается в S3-8c.
-        _completion = completion ?? new Sessions.TurnCompletion(
-            _store, history, _route, _worktree, _providerMigration, _costs,
-            new Lazy<Sessions.ITurnStarter>(() => _intake!),
-            new Lazy<Sessions.IWorkLoopContinuation>(() => this),
-            new Lazy<Team.ITeamNotifier>(() => this),
-            loggerFactory?.CreateLogger<Sessions.TurnCompletion>()
-                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.TurnCompletion>.Instance);
-        // Локальный голосовой ход (S3-6): читает маршрутизатор/клиент локальной модели (те же
-        // опциональные параметры, что были у фасада), резолв владельца — через стор, синтез
-        // ответа — через конец хода. Без router/ollama ShouldRunLocalVoice даёт false —
-        // разговор идёт через CLI, как раньше. С S3-7 экземляр общий с ядром приёма: в DI —
-        // тот же синглтон AddSessionCore, в частичном контейтере (тесты с services без
-        // AddSessionCore) и без DI — одна сборка здесь, отдаётся ядру ниже; два экземпляра
-        // дали бы два состояния голосовой ветки. GetService, не GetRequiredService:
-        // частичный контейнер не обязан держать эту роль (тот же приём, что у ReviewTreePool).
-        _voice = services?.GetService<Sessions.LocalVoiceTurn>()
-            ?? new Sessions.LocalVoiceTurn(_router, _ollama, _personas, _store, _completion);
-
-        // Контекст запуска (S3-4): адрес и токен MCP, встроенные продуктовые серверы, слой
-        // персоны, внешние серверы и модули, паспорта хода. В DI приходят готовыми
-        // (AddSessionCore); без DI (юниты, new SessionManager) собираются здесь из тех же
-        // зависимостей — переходный режим S3-0 §4, запасная сборка снимается в S3-8c.
-        // Порядок: endpoint первым (его читают остальные), паспорта — после стора и шва
-        // IWorkLoopContinuation: добивание оборванного сабагента просит продолжение цикла
-        // через этот шов (S3-7: с ITurnStarter оно снято — добивание ход не стартует само).
-        _endpoint = mcpEndpoint ?? new Sessions.McpEndpoint(config, server, jwt, launchers,
-            loggerFactory?.CreateLogger<Sessions.McpEndpoint>()
-                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.McpEndpoint>.Instance);
-        _builtin = builtinContexts ?? new Sessions.BuiltinMcpContexts(
-            _endpoint, flags, bindings, services, subsystemStates, projects, higgsfieldOAuth, config);
-        _persona = personaLayer ?? new Sessions.PersonaLayerBuilder(
-            _store, _endpoint, personas, bindings, agentSync, projects, spheres,
-            loggerFactory?.CreateLogger<Sessions.PersonaLayerBuilder>()
-                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.PersonaLayerBuilder>.Instance);
-        _external = externalContexts ?? new Sessions.ExternalMcpContexts(
-            _store, _endpoint, bindings, projects, mcpRegistry, mcpSecrets, mcpOAuth, flags, users, config,
-            loggerFactory?.CreateLogger<Sessions.ExternalMcpContexts>()
-                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.ExternalMcpContexts>.Instance);
-        _moduleContexts = moduleContexts ?? new Sessions.ModulesMcpContexts(
-            _endpoint, users, flags, modules, moduleTokens);
-        _passports = turnPassports ?? new Sessions.TurnPassports(
-            TurnEvents, promptSnapshots, mcpStatus, subagentRuns, turnRuns, _store,
-            new Lazy<Sessions.IWorkLoopContinuation>(() => this), promptSectionContributors);
-
-        // Процесс CLI и жизненный цикл чата (S3-5): сборка контекста запуска, хост процесса,
-        // возобновление оборванного хода, создание и удаление чата. В DI приходят готовыми
-        // (AddSessionCore); без DI (юниты, new SessionManager) собираются здесь из тех же
-        // зависимостей — переходный режим S3-0 §4, запасная сборка снимается в S3-8c.
-        // Порядок: шов сообщений первым (его читает фабрика), фабрика — до хоста (хост просит
-        // контекст), хост — до создания чата (старт нового чата и гейт устройства), всё это —
-        // до LoadSessions: он зовёт роль восстановления (маркеры обрыва и кандидаты auto-resume).
-        // Шов приёма сообщений — ленивый на TurnCompletion (S3-6: владелец разбора сообщений —
-        // роль, не фасад). Строка new Lazy<…>(() => _completion) ниже — та единственная
-        // запасная сборка шва, изменённая вместе со строкой регистрации в
-        // AddSessionCore. Фабрика контекста — internal-тип (её сигнатура держит internal-шов
-        // с internal TurnAccumulator), полем фасада не становится: она нужна только хосту.
-        _process = processHost ?? new Sessions.TurnProcessHost(
-            adapters,
-            new Sessions.TurnLaunchContextFactory(
-                _builtin, _persona, _external, _moduleContexts, launchers, pluginDirSource, config, _store,
-                new Lazy<Sessions.ITurnMessageSink>(() => _completion), new Lazy<Sessions.ITurnStarter>(() => _intake!)),
-            _store, _sessionHistory, _route, _pending, deviceGate, projects,
-            new Lazy<Sessions.ITurnStarter>(() => _intake!), TurnEvents,
-            loggerFactory?.CreateLogger<Sessions.TurnProcessHost>()
-                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.TurnProcessHost>.Instance);
-        _recovery = recovery ?? new Sessions.TurnRecovery(
-            _store, _pending, _route, history, _sessionHistory,
-            new Lazy<Sessions.ITurnStarter>(() => _intake!), config);
-        _creation = chatCreation ?? new Sessions.ChatCreation(
-            _store, history, _route, _process, projects, _persona, _assignments, _settings, TurnEvents);
-        // Lazy<ReviewTreePool?> вместо IServiceProvider (решение Александра 05.11, 1dda7103):
-        // настоящий цикл ReviewTreePool → SessionManager; при отсутствии пула — null, как был
-        // null у прежнего _services?.GetService<ReviewTreePool>().
-        _deletion = chatDeletion ?? new Sessions.ChatDeletion(
-            _store, history, _route, _worktree, promptSnapshots,
-            new Lazy<ReviewTreePool?>(() => services?.GetService<ReviewTreePool>()), TurnEvents,
-            loggerFactory?.CreateLogger<Sessions.ChatDeletion>()
-                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.ChatDeletion>.Instance);
-
-        // Ядро приёма хода (S3-7, аддендум §1): собирается после всех ролей, которых просит
-        // (конец хода, хост процесса, очередь, настройки, именование, голос, слой персоны), и
-        // ДО LoadSessions: роль восстановления при загрузке может попросить разбор очереди
-        // через шов ITurnStarter. Шов штаба — ленивый на этот же экземляр (прямая зависимость
-        // дала бы цикл «приём хода → штаб → приём хода»); без DI — переходный режим S3-0 §4,
-        // запасная сборка снимается в S3-8c.
-        _intake = intake ?? new Sessions.TurnIntake(
-            _store, _persona, _pending, _process, _completion, _settings, _naming, _voice,
-            new Lazy<Team.ITeamNotifier>(() => this), config,
-            loggerFactory?.CreateLogger<Sessions.TurnIntake>()
-                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<Sessions.TurnIntake>.Instance);
         // Переходный хук «пустая очередь при активном цикле — цикл продолжит директивой»:
         // ядро регистрирует факт, тело цикла живёт здесь до шага 2 (вынос TurnContinuation),
         // там хук перейдёт новому владельцу.
         _intake.OnLoopContinueRequested = ContinueWorkLoopAsync;
 
-        // Швы данных «штаб → ядро» (ITeamHistoryStore/ITeamRunState/ITeamTurnIntake)
-        // назначаем ДО создания TeamPlanService/TeamDecisionService: они передают `this`
-        // в конструкторы вертикальных сервисов, и без присваивания поля upcast'ятся в null.
-        // Тот же приём, что у _teamNotifier (волна Б), но вынесен выше — вертикальная
-        // команда растёт, и швы нужны раньше создания самих вертикальных сервисов.
-        _teamHistory = this;
-        // Рантайм-поля записи и транзакция над состоянием режима — в сторе (S3-1); вертикаль
-        // по-прежнему получает `this` и ходит через явные реализации, которые переадресуют сюда.
-        _teamRunState = _store;
-        // С S3-7 приём хода реализует штабной шов сам (ядро, карта §3): поле держит ядро —
-        // собственные обращения фасада к шву идут прямо к нему. Вертикальные сервисы
-        // создаются до ядра (своей очередью конструктора) и получают `this`; их путь к ядру —
-        // однострочная переадресация фасада. Прямая передача ядра в их конструкторы —
-        // перестройка порядка всего конструктора, не этот шаг.
-        _teamIntake = _intake;
         // Найденную стоимость fal.ai публикует TurnCostLedger: он ставит
         // FalCostService.OnCostResolved на свою PublishFalCostAsync в своём конструкторе
         // (S3-2). Здесь колбэк не ставим — иначе последний присвоенный затёр бы запись роли.
@@ -802,23 +469,17 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // сессий, чтобы Tool-рубильники и MCP-серверы перемонтировались со следующего хода
         _personas.OnPersonaChanged += p => InvalidatePersonaSessions(p.Id);
 
-        // Шов «ядро → штаб» смотрит на this через ITeamNotifier. Назначаем ДО LoadSessions,
-        // чтобы TrySweepStuckActive (его зовёт SaveSessions) мог читать TeamPlanningInFlight
-        // через этот шов, а SaveSessions может сработать из конструктора через
-        // Llm.ChatTopicMigration.Apply.
-        _teamNotifier = this;
-
         // Подписка на шину событий хода (ADR-013): здесь остаётся только тень разбора хода
         // штаба (HandleTeamTurnCompletedShim) — она относится к вертикали штаба, а не к
         // паспортам. Подписчики паспортов (PromptAssembled/SubagentRunCompleted/TurnCompleted)
         // и реестр контрибьюторов секций промпта ставит TurnPassports в своём конструкторе
-        // (S3-4) на ТОМ ЖЕ экземпляре шины: синглтон DI, а в тестах без DI — тот, что лениво
-        // создан здесь (TurnEvents) и передан в запасную сборку роли.
+        // (S3-4) на ТОМ ЖЕ экземпляре шины: синглтон DI — тот же, что получает этот конструктор
+        // параметром (S3-8c).
         // Этап 4 / шаг 1б: теневой подписчик turn/completed для штаба. ИНЕРТЕН — боевую
         // логику HandleTeamTurnEndAsync НЕ зовёт, только сверяет факт вызова старого пути с
         // тем, что диктует Outcome. Старый путь работает как единственный. Переключение
         // (под-шаг 3) снимет прямой вызов из OnMessageAsync и дедуп SkipNextTeamTurnEnd.
-        TurnEvents.OnNotification<TurnCompleted>(HandleTeamTurnCompletedShim,
+        turnEvents.OnNotification<TurnCompleted>(HandleTeamTurnCompletedShim,
             "SessionManager.TeamShadowSubscriber");
 
         LoadSessions();
@@ -1430,13 +1091,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // пометки нет. path — уже нормализованный (SessionChangedPaths.Normalize).
     // UpdatedAt не двигаем (см. MarkFilesCommitted).
     public void UnmarkFileCommitted(string sessionId, string path) => _worktree.UnmarkFileCommitted(sessionId, path);
-
-    private readonly ISphereDirectory? _spheres;
-    // Шов каталогов плагинов владельца для --plugin-dir (ADR-031, шаг 2.1); null — подсистема
-    // Plugins выключена (опциональная зависимость, ход идёт без --plugin-dir).
-    private readonly Plugins.IPluginDirSource? _pluginDirSource;
-
-    private ISphereDirectory SphereDir => _spheres ?? NoSphereDirectory.Instance;
 
     /// <summary>Видна ли персоне работа в проекте (зона Global/Project/Sphere) — единая проверка чатов.</summary>
     public bool PersonaVisibleIn(Persona persona, string? projectId) => _settings.PersonaVisibleIn(persona, projectId);
@@ -2935,9 +2589,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     }
 
     // === Шов «ядро → штаб» (этап 4, шаг 2б плана выноса штаба) ===
-    // Явные реализации ITeamNotifier: наружу недоступны, наружу только через _teamNotifier.
-    // Тела повторяют прежние приватные методы один в один — поведение не меняется. В шаге 2г
-    // реализация переедет в вертикаль штаба целиком, эти методы уйдут вместе с телом.
+    // Явные реализации ITeamNotifier: наружу доступны только как явная реализация на этом
+    // классе — их зовут роли через ленивый шов Lazy<ITeamNotifier> (AddSessionCore). Отдельный
+    // держатель шва полем снят в S3-8c: он нигде не читался. Тела повторяют прежние приватные
+    // методы один в один — поведение не меняется. В шаге 2г реализация переедет в вертикаль
+    // штаба целиком, эти методы уйдут вместе с телом.
 
     void ITeamNotifier.OnHumanInput(string sessionId)
     {

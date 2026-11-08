@@ -355,9 +355,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // Опциональны ровно там, где сервиса может не быть в контейнере: без план-механики штаба
         // режим включается, но план не строится; без реестра задач связи сессии не резолвятся;
         // без «дешёвого» раннера авто-заголовок не генерируется; без журнала прогонов нudge
-        // сабагентов молчит.
-        TeamPlanningService? teamPlanning, TaskManager? tasks, Llm.ICheapTextRunner? cheap,
-        Llm.Claude.SubagentRunLog? subagentRuns)
+        // сабагентов молчит. Дефолт = null обязателен: nullable-аннотация для контейнера ничего
+        // не значит — параметр опционален только с значением по умолчанию (CLAUDE.md:291,
+        // прецедент NotesSubsystemGateTests.cs:90); без него активация фасада падает вместо
+        // деградации в null.
+        TeamPlanningService? teamPlanning = null, TaskManager? tasks = null,
+        Llm.ICheapTextRunner? cheap = null, Llm.Claude.SubagentRunLog? subagentRuns = null)
     {
         // Стор — первым: на него опираются реестр, швы штаба и всё, что ниже читает сессии.
         _store = store;

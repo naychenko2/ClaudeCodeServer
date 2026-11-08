@@ -469,6 +469,25 @@ public class ImageGenerationSpendTests
         spend.Records.Single().Label.Should().Be(ImageGenerationService.SpendLabel);
     }
 
+    // Обещание не зависит от ключа провайдера: драйвер не fal с id запроса и средством опроса
+    // получает «сумма уточняется», а догоняющая запись несёт его же ключ, а не fal.
+    [Fact]
+    public async Task ПровайдерНеFalСIdИСредствомОпроса_ОбещаниеЕсть_ДогонНесётКлючПровайдера()
+    {
+        var other = new FakeGenerator("other", enabled: true, requestId: "req-1");
+        var spend = new CapturingSpend();
+        var service = new ImageGenerationService([other], Store(NewTempDir()), null, spend, new FakeCost(0.05));
+
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human);
+        await spend.WaitForSecond(Settle);
+
+        spend.Records.First().Label.Should().Be(ImageGenerationService.SpendLabelPendingAmount);
+        var topUp = spend.Records.Last();
+        topUp.Provider.Should().Be("other");
+        topUp.Source.Should().Be("other");
+        topUp.CostUsd.Should().Be(0.05);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData(0.0)]

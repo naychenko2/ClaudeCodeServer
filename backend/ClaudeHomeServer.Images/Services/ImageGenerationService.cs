@@ -270,7 +270,7 @@ public sealed class ImageGenerationService
         if (!pendingAmount) return;
         // Нормализованный инициатор, а не сырой: пустая строка дала бы второй записи «""» при
         // первой с null — у одного факта два признака (комментарий выше, S-SPEND-8)
-        _ = TopUpAmountAsync(ownerId, actualModel, requestId!, named, actorUserId, projectId);
+        _ = TopUpAmountAsync(ownerId, generator.Key, actualModel, requestId!, named, actorUserId, projectId);
     }
 
     // Пустой результат с id запроса у fal: первую запись (pending) НЕ пишем — неизвестно,
@@ -297,15 +297,16 @@ public sealed class ImageGenerationService
         }
         _log?.LogInformation("Генерация картинок: {Provider} не вернул картинок для места {Place}, уточняю цену по {RequestId}",
             generator.Key, place, requestId);
-        _ = TopUpAmountAsync(ownerId, string.IsNullOrWhiteSpace(model) ? generator.DefaultModel : model, requestId, string.IsNullOrWhiteSpace(initiator) ? null : initiator,
-            actorUserId, projectId, noImages: true);
+        // Здесь провайдер — всегда fal (проверка выше): опрос цены есть только у fal
+        _ = TopUpAmountAsync(ownerId, SpendSources.Fal, string.IsNullOrWhiteSpace(model) ? generator.DefaultModel : model, requestId,
+            string.IsNullOrWhiteSpace(initiator) ? null : initiator, actorUserId, projectId, noImages: true);
     }
 
     // Фактическая цена по request_id — через существующий Core-шов IFalRequestCost
     // (тот же экземпляр FalCostService, что и у чата). Свой токен: token вызывающего к этому
     // моменту уже снят вместе с его запросом, а окно опроса ограничено самим FalCostService.
     // Цены нет — штатный исход: остаётся первая запись без суммы.
-    private async Task TopUpAmountAsync(string ownerId, string? model, string requestId, string? initiator,
+    private async Task TopUpAmountAsync(string ownerId, string providerKey, string? model, string requestId, string? initiator,
         string? actorUserId, string? projectId, bool noImages = false)
     {
         try
@@ -326,9 +327,9 @@ public sealed class ImageGenerationService
                 _log?.LogInformation("Учёт расхода: запрос fal {RequestId} без картинок не тарифицирован, записи нет", requestId);
                 return;
             }
-            // Догоняющая запись — про тот же вызов: инициатор, актор, проект и модель у неё
-            // те же, что были у самого вызова
-            WriteSpend(ownerId, SpendSources.Fal, model, amount: usd, generations: 0, initiator,
+            // Догоняющая запись — про тот же вызов: провайдер, инициатор, актор, проект и модель
+            // у неё те же, что были у самого вызова
+            WriteSpend(ownerId, providerKey, model, amount: usd, generations: 0, initiator,
                 pendingAmount: false, actorUserId, projectId, label: noImages ? SpendLabelNoImages : null);
         }
         catch (Exception ex)

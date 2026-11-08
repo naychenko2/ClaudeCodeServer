@@ -808,6 +808,10 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 CostUsd = credits ? null : amount,
                 CostCredits = credits ? amount : null,
                 Generations = generations,
+                // Правило редактора НЕ равно правилу слоя генерации (ImageGenerationService:
+                // «есть id запроса и средство опроса»): здесь сумму догоняют не только опросом fal,
+                // но и ActualCost из ответа поставщика (Higgsfield), поэтому обещание даёт сам
+                // факт приёма без суммы. Подписи разные («image-editor:» / «image-generation:»).
                 Label = amount is null && generations > 0 ? SpendLabelPendingAmount : SpendLabel,
             });
         }

@@ -52,6 +52,10 @@ public class ProjectBackgroundsController(
     // причиной — раньше любого 404 (матрица S2a-2, SubsystemDisableMatrixTests). Права те же, что у
     // master: Write для генерации и сброса (участник Write не получает, см. ProjectAccessService),
     // Read для тайла. Чужой/несуществующий проект — 404, существование чужого не подтверждаем.
+    // Осознанное расхождение с соседями на [ProjectScope]: редактору общего проекта (Read есть,
+    // Write нет) они отвечают 403 «Нет права на запись», здесь — тоже 404. Единообразия ради
+    // различать не стали: ответ остаётся безопасным (не подтверждает существование), а отдельная
+    // ветка 403 в явном Resolve ничего не даёт. Закреплено ProjectBackgroundsEditorTests.
     private Project? Scoped(string id, ProjectRight right) =>
         access.Resolve(UserId, id, right) is null ? null : projects.GetById(id);
 

@@ -82,7 +82,7 @@ public class ImageGenerationSpendTests
     // (у glif его нет, и это тоже проверяемый случай). defaultModel — дефолт, который
     // заглушка объявляет себе по тому же контракту, что и боевые драйверы.
     private sealed class FakeGenerator(string key, bool enabled, string? requestId = null,
-        bool returnsImages = true, string? defaultModel = null)
+        bool returnsImages = true, string? defaultModel = null, List<string>? callOrder = null)
         : IImageGenerator
     {
         public string Key => key;
@@ -101,6 +101,7 @@ public class ImageGenerationSpendTests
             string prompt, int count, string? model, CancellationToken ct = default)
         {
             Calls++;
+            callOrder?.Add(key);
             LastModel = model;
             IReadOnlyList<GeneratedImage> result = returnsImages
                 ? Enumerable.Range(1, count).Select(_ => new GeneratedImage([1, 2, 3], "image/png")).ToList()
@@ -497,8 +498,9 @@ public class ImageGenerationSpendTests
     [Fact]
     public async Task Auto_БоевойПорядок_ПустойGlif_ПустойFalСId_РовноОднаЗаписьFal()
     {
-        var glif = new FakeGenerator("glif", enabled: true, returnsImages: false);
-        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1", returnsImages: false);
+        var order = new List<string>();
+        var glif = new FakeGenerator("glif", enabled: true, returnsImages: false, callOrder: order);
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1", returnsImages: false, callOrder: order);
         var spend = new CapturingSpend();
         var cost = new FakeCost(0.04);
         var service = new ImageGenerationService([fal, glif], Store(NewTempDir()), null, spend, cost);
@@ -507,6 +509,7 @@ public class ImageGenerationSpendTests
 
         await spend.WaitForFirst(Settle);
         await spend.WaitForSecond(TimeSpan.FromMilliseconds(300));
+        order.Should().Equal(["glif", "fal"], "в auto цепочка идёт glif → fal, fal последний; регистрация в DI — наоборот");
         glif.Calls.Should().Be(1);
         fal.Calls.Should().Be(1);
         var rec = spend.Records.Should().ContainSingle().Subject;
@@ -541,8 +544,9 @@ public class ImageGenerationSpendTests
         var service = new ImageGenerationService([fal], Store(NewTempDir()), log, new CapturingSpend(), cost);
 
         await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, ct: CancellationToken.None);
+        // Цену спросили до возврата из GenerateManyAsync, предупреждение пишется после
+        // завершённого ответа FakeCost — отдельной задержки ждать нечего
         await cost.AskedOrTimeout;
-        await Task.Delay(300);
 
         var warn = log.Items.Should().ContainSingle(i => i.Level == LogLevel.Warning).Subject;
         warn.Text.Should().Contain("записи нет").And.NotContain("трата остаётся без суммы");
@@ -559,6 +563,52 @@ public class ImageGenerationSpendTests
         await service.GenerateManyAsync(Avatar, "кот", 1, "", SpendInitiators.Human, ct: CancellationToken.None);
 
         log.Items.Should().Contain(i => i.Level == LogLevel.Warning && i.Text.Contains("записи нет"));
+        cost.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ФалСКартинками_ЦенаНеПоявилась_ЛогГоворитТратаБезСуммы()
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1");
+        var log = new CapturingLog();
+        var cost = new FakeCost(null);
+        var service = new ImageGenerationService([fal], Store(NewTempDir()), log, new CapturingSpend(), cost);
+
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, ct: CancellationToken.None);
+        await cost.AskedOrTimeout;
+
+        var warn = log.Items.Should().ContainSingle(i => i.Level == LogLevel.Warning).Subject;
+        warn.Text.Should().Contain("трата остаётся без суммы").And.NotContain("записи нет");
+    }
+
+    [Fact]
+    public async Task ПустойGlifБезId_РанийВыходПишетInformation_ЦенуНеСпрашивает()
+    {
+        var glif = new FakeGenerator("glif", enabled: true, returnsImages: false);
+        var log = new CapturingLog();
+        var cost = new FakeCost(0.04);
+        var service = new ImageGenerationService([glif], Store(NewTempDir()), log, new CapturingSpend(), cost);
+
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, ct: CancellationToken.None);
+
+        log.Items.Should().Contain(i => i.Level == LogLevel.Information
+            && i.Text.Contains("цену спросить не по чему") && i.Text.Contains("записи нет"));
+        log.Items.Should().NotContain(i => i.Level == LogLevel.Warning && i.Text.Contains("учёт расхода недоступен"));
+        cost.Calls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ПустойFal_КоллектораНет_РанийВыходПишетWarning_ЦенуНеСпрашивает()
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1", returnsImages: false);
+        var log = new CapturingLog();
+        var cost = new FakeCost(0.04);
+        var service = new ImageGenerationService([fal], Store(NewTempDir()), log, null, cost);
+
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, ct: CancellationToken.None);
+
+        log.Items.Should().Contain(i => i.Level == LogLevel.Warning
+            && i.Text.Contains("учёт расхода недоступен") && i.Text.Contains("записи нет"));
         cost.Calls.Should().Be(0);
     }
 

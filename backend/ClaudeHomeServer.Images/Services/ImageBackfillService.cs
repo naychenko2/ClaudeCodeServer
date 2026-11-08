@@ -222,11 +222,14 @@ public sealed class ImageBackfillService(
         return new ImageBackfillSummary(0, 0, 1);
     }
 
-    // Инициатор траты этой заявки — из самой заявки (S-SPEND-8). Пустой/отсутствующий —
-    // заявка поставлена до появления поля: читаем её как human, другой инициатор не
-    // выдумываем (фон — исполнитель чужого решения, а не инициатор).
+    // Инициатор траты этой заявки — из самой заявки (S-SPEND-8). null (поля нет) — заявка
+    // поставлена до его появления: по решению постановки читаем её как human, другого
+    // инициатора не выдумываем (system не подходит: фон действует по решению человека или
+    // агента, а не по своему). Пустая строка — постановка инициатора не назвала: отдаём
+    // пустой, роутер запишет трату без инициатора, а не припишет её человеку.
     private static string InitiatorOf(ImageBackfillRequest request) =>
-        string.IsNullOrWhiteSpace(request.Initiator) ? Models.SpendInitiators.Human : request.Initiator;
+        request.Initiator is null ? Models.SpendInitiators.Human
+        : string.IsNullOrWhiteSpace(request.Initiator) ? "" : request.Initiator;
 
     // Одна попытка: null — успех, иначе причина отказа
     private async Task<string?> TryGenerateAsync(ImageBackfillRequest request, string prompt, CancellationToken ct)

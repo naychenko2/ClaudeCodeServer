@@ -28,7 +28,8 @@ public sealed class ImageBackfillRequest
     // Кто подал заявку (SpendInitiators.*): факт известен только в момент постановки, а
     // догоняющая генерация идёт позже и в другом потоке — без этого поля он терялся
     // (S-SPEND-8). null — заявка, поставленная до этого поля: читается как human (решение
-    // по шагу; раньше инициатор в очереди не сохранялся вовсе). Аддитивное поле: старый
+    // по шагу; раньше инициатор в очереди не сохранялся вовсе). Пустая строка — вызывающий
+    // инициатора не назвал: трата пишется без него, а не как human. Аддитивное поле: старый
     // файл читается штатно, FormatVersion не двигается (ломающим было бы изменение
     // существующих полей).
     public string? Initiator { get; set; }
@@ -113,11 +114,18 @@ public sealed class ImageBackfillStore
         lock (_writeLock)
         {
             var existing = _file.Requests.FirstOrDefault(r => Matches(r, kind, entityId));
+            if (string.IsNullOrWhiteSpace(initiator))
+                _log?.LogWarning("Заявка догоняющей генерации {Kind} {Entity}: вызывающий не назвал инициатора, трата будет записана без него",
+                    kind, entityId);
             if (existing is not null)
             {
                 if (string.IsNullOrWhiteSpace(prompt) || existing.Prompt == prompt.Trim()) return false;
+                // Заявка до S-SPEND-8 (поля нет) или поставленная без инициатора получает его
+                // от этой постановки; уже названный не перетирается — он про первую постановку
+                var fill = string.IsNullOrWhiteSpace(existing.Initiator) && !string.IsNullOrWhiteSpace(initiator)
+                    ? initiator : null;
                 Write(_file.Requests
-                    .Select(r => Matches(r, kind, entityId) ? Copy(r, prompt.Trim()) : r)
+                    .Select(r => Matches(r, kind, entityId) ? Copy(r, prompt.Trim(), initiator: fill) : r)
                     .ToList());
                 return false;
             }
@@ -128,10 +136,10 @@ public sealed class ImageBackfillStore
                 EntityId = entityId,
                 OwnerId = ownerId,
                 Prompt = string.IsNullOrWhiteSpace(prompt) ? null : prompt.Trim(),
-                // Пустой инициатор не пишем: «не назван» и отсутствие поля — одно и то же,
-                // читается одинаково (human). Та же нормализация у атрибуции: у пустой строки
-                // нет отдельного значения (п.1 хвоста R-S-SPEND-2)
-                Initiator = string.IsNullOrWhiteSpace(initiator) ? null : initiator,
+                // «Не назван» пишем пустой строкой, а не null: null — заявка до появления поля
+                // (читается как human по решению постановки), и сливать их нельзя — это разные
+                // факты (S-SPEND-8)
+                Initiator = string.IsNullOrWhiteSpace(initiator) ? "" : initiator,
                 ActorUserId = string.IsNullOrWhiteSpace(actorUserId) ? null : actorUserId,
                 ProjectId = string.IsNullOrWhiteSpace(projectId) ? null : projectId,
             }]);
@@ -174,7 +182,7 @@ public sealed class ImageBackfillStore
         && string.Equals(r.EntityId, entityId, StringComparison.Ordinal);
 
     private static ImageBackfillRequest Copy(ImageBackfillRequest r, string? prompt,
-        int? attempts = null, string? failReason = null) =>
+        int? attempts = null, string? failReason = null, string? initiator = null) =>
         new()
         {
             Kind = r.Kind,
@@ -183,7 +191,7 @@ public sealed class ImageBackfillStore
             Prompt = prompt,
             // Инициатор и атрибуция переживают и повторные попытки, и смену промпта: они про
             // заявку, а не про конкретную попытку (S-SPEND-8, п.1 хвоста R-S-SPEND-2)
-            Initiator = r.Initiator,
+            Initiator = initiator ?? r.Initiator,
             ActorUserId = r.ActorUserId,
             ProjectId = r.ProjectId,
             Attempts = attempts ?? r.Attempts,

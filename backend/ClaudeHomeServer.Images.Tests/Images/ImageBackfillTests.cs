@@ -145,6 +145,65 @@ public class ImageBackfillTests : IDisposable
         Assert.Equal(SpendInitiators.Human, Assert.Single(spend.Records).Initiator);
     }
 
+    // П.1 хвоста S-SPEND-8: заявка до появления поля (Initiator = null) перепоставляется
+    // агентом с новым промптом — инициатор новой постановки не теряется, фоновая трата
+    // идёт как agent, а не как human. Мутация (убрать дозаполнение в Enqueue) краснит тест
+    [Fact]
+    public async Task ПерепостановкаСтаройЗаявки_ПринимаетИнициатораНовойПостановки()
+    {
+        var persona = NewPersona();
+        File.WriteAllText(Path.Combine(_tempDir, ImageBackfillStore.FileName),
+            $$"""
+            {"Version":1,"Requests":[{"Kind":"persona-avatar","EntityId":"{{persona.Id}}","OwnerId":"{{_owner.Id}}","Prompt":"старый","Attempts":0,"CreatedAt":"2026-11-01T00:00:00Z"}]}
+            """);
+        var store = NewStore();
+
+        Assert.False(store.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "новый",
+            SpendInitiators.Agent));
+
+        var queued = Assert.Single(NewStore().All);
+        Assert.Equal("новый", queued.Prompt);
+        Assert.Equal(SpendInitiators.Agent, queued.Initiator);
+
+        var spend = new CapturingSpend();
+        var summary = await ServiceWithSpend(new FakeGenerator(), spend, store).RunAsync(_owner.Id);
+        Assert.Equal(1, summary.Generated);
+        Assert.Equal(SpendInitiators.Agent, Assert.Single(spend.Records).Initiator);
+    }
+
+    // П.2 хвоста S-SPEND-8: «не назван» и «человек» — разные значения. Пустой инициатор даёт
+    // warning в лог и трату без инициатора (null), а не human; заявка без поля (старая) —
+    // по-прежнему human. Мутация (писать пустой как null) краснит тест
+    [Fact]
+    public async Task ПустойИнициатор_ПредупреждениеИТратаБезИнициатора()
+    {
+        var persona = NewPersona();
+        var log = new ListLogger<ImageBackfillStore>();
+        var store = new ImageBackfillStore(_config, log);
+
+        Assert.True(store.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар", ""));
+
+        Assert.Contains(log.Warnings, m => m.Contains("не назвал инициатора"));
+        Assert.Equal("", Assert.Single(store.All).Initiator);
+
+        var spend = new CapturingSpend();
+        var summary = await ServiceWithSpend(new FakeGenerator(), spend, store).RunAsync(_owner.Id);
+        Assert.Equal(1, summary.Generated);
+        Assert.Null(Assert.Single(spend.Records).Initiator);
+    }
+
+    private sealed class ListLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
+    {
+        public List<string> Warnings { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId,
+            TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == Microsoft.Extensions.Logging.LogLevel.Warning) Warnings.Add(formatter(state, exception));
+        }
+    }
+
     // Инициатор относится к заявке, а не к конкретной попытке: транзиентный отказ оставил
     // заявку в очереди — следующий прогон обязан вести её с тем же инициатором (Copy
     // заявки несёт поле, а не пересобирает её заново)

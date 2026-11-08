@@ -26,7 +26,8 @@ public sealed class TaskBridge(TaskManager tasks) : INoteTaskBridge
             Status: MapStatus(req.Status),
             SourceNoteId: req.SourceNoteId,
             SourceNoteLine: req.SourceNoteLine,
-            Recurrence: MapRecurrence(req.Recurrence)));
+            Recurrence: MapRecurrence(req.Recurrence),
+            CreatedByHuman: req.CreatedByHuman));
         return MapToCore(task);
     }
 
@@ -67,7 +68,7 @@ public sealed class TaskBridge(TaskManager tasks) : INoteTaskBridge
 
     private static NoteTaskRef MapToCore(TaskItem t) =>
         new(t.Id, t.Title, t.SourceNoteLine, t.DueDate, MapStatus(t.Status),
-            MapRecurrence(t.Recurrence), MapKind(t.Kind));
+            MapRecurrence(t.Recurrence), MapKind(t.Kind), t.ProjectId);
 
     private static TaskItemStatus MapStatus(NoteTaskStatus s) => s switch
     {

@@ -19,6 +19,17 @@ namespace ClaudeHomeServer.Tests.Services.Mcp.Http;
 // падать, только если Whitelist или извлечение SSE/JSON сломались.
 public class HiggsfieldToolsetTests
 {
+    // Эти тесты проверяют протокол и кэш, а не рамку; но тулсет теперь требует шов рамки
+    // обязательным (fail-closed, R-S2a-3b). Стаб с широкой рамкой сохраняет прежнее
+    // поведение вызовов (рамка ничего не резала при nullable-шовом)
+    private sealed class WideFrame : ClaudeHomeServer.Services.Access.ITurnFrameSource
+    {
+        public ClaudeHomeServer.Services.Access.TurnFrameKind Frame(string? sessionId, string ownerId) =>
+            ClaudeHomeServer.Services.Access.TurnFrameKind.Wide;
+    }
+
+    private static readonly ClaudeHomeServer.Services.Access.ITurnFrameSource Wide = new WideFrame();
+
     // Whitelist — единственный источник правды для состава хода.
     // Если кто-то добавит инструмент «сверху» (минуя константу),
     // модель увидит его в Higgsfield, но в конфиг хода он не попадёт.
@@ -198,7 +209,8 @@ public class HiggsfieldToolsetTests
             sessions: null!,
             config: null!,
             mcpStatus: null,
-            log: NullLogger<HiggsfieldToolset>.Instance);
+            log: NullLogger<HiggsfieldToolset>.Instance,
+            frames: Wide);
         act.Should().NotThrow();
     }
 
@@ -265,7 +277,8 @@ public class HiggsfieldToolsetTests
                 sessions: null!,
                 config,
                 mcpStatus: statuses,
-                log: NullLogger<HiggsfieldToolset>.Instance);
+                log: NullLogger<HiggsfieldToolset>.Instance,
+                frames: Wide);
 
             // Сценарий: протухший кэш, handler будет таймаутить при Sync-вызове.
             // Без валидной сессии ToolsFor вернёт [] через TryResolveSession — это
@@ -316,7 +329,8 @@ public class HiggsfieldToolsetTests
             sessions: null!,
             config: null!,
             mcpStatus: null,
-            NullLogger<HiggsfieldToolset>.Instance);
+            NullLogger<HiggsfieldToolset>.Instance,
+            frames: Wide);
 
         // Снимок есть, но lastSuccessAt — 25 часов назад.
         var snapshot = new List<McpToolSchema>
@@ -366,7 +380,8 @@ public class HiggsfieldToolsetTests
                 sessions: null!,
                 config,
                 mcpStatus: null,
-                NullLogger<HiggsfieldToolset>.Instance);
+                NullLogger<HiggsfieldToolset>.Instance,
+                frames: Wide);
 
             // Свежий кэш: lastSuccessAt — только что
             var snapshot = new List<McpToolSchema>
@@ -460,7 +475,8 @@ public class HiggsfieldToolsetTests
                 sessions: null!,
                 config,
                 mcpStatus: null,
-                NullLogger<HiggsfieldToolset>.Instance);
+                NullLogger<HiggsfieldToolset>.Instance,
+                frames: Wide);
 
             // Кэш поднят со снимка — _cachedTools не null, _lastSuccessAt близок к savedAt.
             var cached = typeof(HiggsfieldToolset).GetField("_cachedTools",
@@ -506,7 +522,8 @@ public class HiggsfieldToolsetTests
                 sessions: null!,
                 config,
                 mcpStatus: null,
-                NullLogger<HiggsfieldToolset>.Instance);
+                NullLogger<HiggsfieldToolset>.Instance,
+                frames: Wide);
 
             var newTools = new List<McpToolSchema>
             {
@@ -578,7 +595,8 @@ public class HiggsfieldToolsetTests
                 sessions: null!,
                 config,
                 mcpStatus: null,
-                NullLogger<HiggsfieldToolset>.Instance);
+                NullLogger<HiggsfieldToolset>.Instance,
+                frames: Wide);
             act.Should().NotThrow(
                 "битый снимок обязан пройти fail-open — иначе рестарт процесса оставит ход без инструментов");
 
@@ -628,7 +646,8 @@ public class HiggsfieldToolsetTests
                 sessions: null!,
                 config,
                 mcpStatus: null,
-                NullLogger<HiggsfieldToolset>.Instance);
+                NullLogger<HiggsfieldToolset>.Instance,
+                frames: Wide);
             act.Should().NotThrow("пустой снимок обязан пройти fail-open");
 
             cachedField.GetValue(toolset).Should().BeNull(
@@ -725,7 +744,8 @@ public class HiggsfieldToolsetTests
                 sessions: null!,
                 config,
                 mcpStatus: statuses,
-                NullLogger<HiggsfieldToolset>.Instance);
+                NullLogger<HiggsfieldToolset>.Instance,
+                frames: Wide);
 
             var fetch = typeof(HiggsfieldToolset).GetMethod("FetchToolsListAsync",
                 BindingFlags.NonPublic | BindingFlags.Instance)!;
@@ -757,7 +777,8 @@ public class HiggsfieldToolsetTests
                 sessions: null!,
                 config,
                 mcpStatus: statuses,
-                NullLogger<HiggsfieldToolset>.Instance);
+                NullLogger<HiggsfieldToolset>.Instance,
+                frames: Wide);
 
             var fetch = typeof(HiggsfieldToolset).GetMethod("FetchToolsListAsync",
                 BindingFlags.NonPublic | BindingFlags.Instance)!;
@@ -811,7 +832,8 @@ public class HiggsfieldToolsetTests
                 sessions: null!,
                 config,
                 mcpStatus: statuses,
-                NullLogger<HiggsfieldToolset>.Instance);
+                NullLogger<HiggsfieldToolset>.Instance,
+                frames: Wide);
 
             var fetch = typeof(HiggsfieldToolset).GetMethod("FetchToolsListAsync",
                 BindingFlags.NonPublic | BindingFlags.Instance)!;
@@ -851,7 +873,8 @@ public class HiggsfieldToolsetTests
                 sessions: null!,
                 config,
                 mcpStatus: statuses,
-                NullLogger<HiggsfieldToolset>.Instance);
+                NullLogger<HiggsfieldToolset>.Instance,
+                frames: Wide);
 
             var fetch = typeof(HiggsfieldToolset).GetMethod("FetchToolsListAsync",
                 BindingFlags.NonPublic | BindingFlags.Instance)!;
@@ -913,7 +936,8 @@ public class HiggsfieldToolsetTests
                 sessions: null!,
                 config,
                 mcpStatus: statuses,
-                logger);
+                logger,
+                frames: Wide);
 
             // Должен просто вернуть false, не бросить и не оставить статус Failed.
             var refreshed = await toolset.RefreshNowAsync(CancellationToken.None);
@@ -962,7 +986,8 @@ public class HiggsfieldToolsetTests
                 sessions: null!,
                 config,
                 mcpStatus: statuses,
-                NullLogger<HiggsfieldToolset>.Instance);
+                NullLogger<HiggsfieldToolset>.Instance,
+                frames: Wide);
 
             // Без снимка на диске: первый RefreshNowAsync обязан сходить в сеть.
             var refreshed = await toolset.RefreshNowAsync(CancellationToken.None);
@@ -1018,7 +1043,8 @@ public class HiggsfieldToolsetTests
                 sessions: null!,
                 config,
                 mcpStatus: statuses,
-                NullLogger<HiggsfieldToolset>.Instance);
+                NullLogger<HiggsfieldToolset>.Instance,
+                frames: Wide);
 
             var fetch = typeof(HiggsfieldToolset).GetMethod("FetchToolsListAsync",
                 BindingFlags.NonPublic | BindingFlags.Instance)!;
@@ -1056,7 +1082,8 @@ public class HiggsfieldToolsetTests
                 sessions: null!,
                 config,
                 mcpStatus: statuses,
-                NullLogger<HiggsfieldToolset>.Instance);
+                NullLogger<HiggsfieldToolset>.Instance,
+                frames: Wide);
 
             // Зовём приватный PostToHiggsfieldAsync напрямую: проверяем контракт метода,
             // а не путь через CallAsync (там ещё проверка whitelist/whitelisted и пр.).
@@ -1099,7 +1126,8 @@ public class HiggsfieldToolsetTests
                 sessions: null!,
                 config,
                 mcpStatus: statuses,
-                NullLogger<HiggsfieldToolset>.Instance);
+                NullLogger<HiggsfieldToolset>.Instance,
+                frames: Wide);
 
             // Предпосылка: прошлая ошибка зависла в сторе как failed.
             statuses.RecordProbe(HiggsfieldOAuthService.ServiceOwnerId, HiggsfieldOAuthService.Key,
@@ -1138,7 +1166,8 @@ public class HiggsfieldToolsetTests
                 sessions: null!,
                 config,
                 mcpStatus: statuses,
-                NullLogger<HiggsfieldToolset>.Instance);
+                NullLogger<HiggsfieldToolset>.Instance,
+                frames: Wide);
 
             // Предпосылка: интеграция была здорова — connected/null.
             statuses.RecordProbe(HiggsfieldOAuthService.ServiceOwnerId, HiggsfieldOAuthService.Key,

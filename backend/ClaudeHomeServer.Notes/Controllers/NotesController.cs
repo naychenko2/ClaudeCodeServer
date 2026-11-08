@@ -44,7 +44,7 @@ public class NotesController : ControllerBase
 
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
-    private Task Broadcast(string action, string? noteId = null)
+    private Task Broadcast(string action, string? noteId = null, string? source = null)
     {
         // Любая мутация — отложенная синхронизация семантического индекса (дифф по хешам)
         _kb.QueueSync(UserId);
@@ -52,7 +52,27 @@ public class NotesController : ControllerBase
         // события уровня папки (`folder_created`, `folder_deleted`, `updated` без
         // конкретной заметки) шлём с пустым id — клиент различает действия по полю
         // `Action`, а не по наличию `NoteId`.
-        return _hubNotifier.BroadcastNotesChangedAsync(UserId, action, noteId ?? string.Empty);
+        // S2c-4: источник передаём шву — проектная заметка уходит группе проекта
+        // (участники получают «заметка изменилась») и моим вкладкам; личный vault
+        // ("personal") — null, только владельцу, как раньше.
+        var projectId = source is not null && source != "personal" ? source : null;
+        return _hubNotifier.BroadcastNotesChangedAsync(UserId, action, noteId ?? string.Empty, projectId);
+    }
+
+    // Источник заметки из её id (base64url(sourceKey|relPath)) — нужен только Delete:
+    // остальные операции знают источник из возвращённой заметки или из запроса.
+    // null — id не разобрался (событие пойдёт только владельцу, как раньше).
+    private static string? SourceOfId(string id)
+    {
+        try
+        {
+            var b64 = id.Replace('-', '+').Replace('_', '/');
+            switch (b64.Length % 4) { case 2: b64 += "=="; break; case 3: b64 += "="; break; }
+            var raw = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(b64));
+            var sep = raw.IndexOf('|');
+            return sep < 0 ? null : raw[..sep];
+        }
+        catch (FormatException) { return null; }
     }
 
     // Единый ответ отказа «в вики пишет только Хранитель» (ADR-035, решение 2): 409 с кодом
@@ -125,8 +145,8 @@ public class NotesController : ControllerBase
     {
         try
         {
-            var note = _notes.Annotate(UserId, req);
-            await Broadcast("created", note.Id);
+            var note = _notes.Annotate(UserId, req, byHuman: true);
+            await Broadcast("created", note.Id, note.Source);
             return Ok(note);
         }
         catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
@@ -156,8 +176,8 @@ public class NotesController : ControllerBase
     {
         try
         {
-            var note = _notes.RepinAnnotation(UserId, id, selection);
-            await Broadcast("updated", id);
+            var note = _notes.RepinAnnotation(UserId, id, selection, byHuman: true);
+            await Broadcast("updated", id, note.Source);
             return Ok(note);
         }
         catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
@@ -174,8 +194,8 @@ public class NotesController : ControllerBase
     {
         try
         {
-            var note = _notes.Reply(UserId, id, req);
-            await Broadcast("created", note.Id);
+            var note = _notes.Reply(UserId, id, req, byHuman: true);
+            await Broadcast("created", note.Id, note.Source);
             return Ok(note);
         }
         catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
@@ -200,14 +220,16 @@ public class NotesController : ControllerBase
     {
         try
         {
-            var note = _notes.SetAnnotationStatus(UserId, id, req.Status);
+            var note = _notes.SetAnnotationStatus(UserId, id, req.Status, byHuman: true);
             if (note is null) return NotFound();
-            await Broadcast("updated", id);
+            await Broadcast("updated", id, note.Source);
             return Ok(note);
         }
         catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+        // «Источник не мой/не существует» = «несуществующее»: 404, как в Create
+        catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return Forbid(); }
     }
 
@@ -247,7 +269,7 @@ public class NotesController : ControllerBase
     public async Task<ActionResult<NoteDetail>> Daily([FromBody] DailyNoteRequest req)
     {
         var note = _notes.GetOrCreateDaily(UserId, req.Date);
-        await Broadcast("updated", note.Id);
+        await Broadcast("updated", note.Id, note.Source);
         return Ok(note);
     }
 
@@ -285,11 +307,12 @@ public class NotesController : ControllerBase
         try
         {
             var note = await _ai.SuggestTocAsync(UserId, id, ct);
-            await Broadcast("updated", note.Id);
+            await Broadcast("updated", note.Id, note.Source);
             return Ok(note);
         }
         catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return Forbid(); }
         catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
     }
 
@@ -300,11 +323,12 @@ public class NotesController : ControllerBase
         try
         {
             var note = await _ai.TranslateAsync(UserId, id, ct);
-            await Broadcast("updated", note.Id);
+            await Broadcast("updated", note.Id, note.Source);
             return Ok(note);
         }
         catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return Forbid(); }
         catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
     }
 
@@ -315,7 +339,7 @@ public class NotesController : ControllerBase
         try
         {
             var note = await _ai.DailySummaryAsync(UserId, req.Date, ct);
-            await Broadcast("updated", note.Id);
+            await Broadcast("updated", note.Id, note.Source);
             return Ok(note);
         }
         catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
@@ -335,7 +359,7 @@ public class NotesController : ControllerBase
     [HttpPost("{id}/tasks/promote")]
     public async Task<ActionResult> PromoteTask(string id, [FromBody] PromoteTaskRequest req)
     {
-        try { return Ok(await _noteTasks.PromoteAsync(UserId, id, req.Line)); }
+        try { return Ok(await _noteTasks.PromoteAsync(UserId, id, req.Line, createdByHuman: true)); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return Forbid(); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
@@ -345,7 +369,7 @@ public class NotesController : ControllerBase
     [HttpPost("{id}/tasks/toggle")]
     public async Task<ActionResult<NoteDetail>> ToggleTask(string id, [FromBody] ToggleTaskRequest req)
     {
-        try { return Ok(await _noteTasks.ToggleAsync(UserId, id, req.Line, req.Done)); }
+        try { return Ok(await _noteTasks.ToggleAsync(UserId, id, req.Line, req.Done, byHuman: true)); }
         catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return Forbid(); }
@@ -359,7 +383,7 @@ public class NotesController : ControllerBase
         var due = string.IsNullOrWhiteSpace(req.Due) ? null : req.Due.Trim();
         if (due is not null && !DateOnly.TryParseExact(due, "yyyy-MM-dd", out _))
             return BadRequest(new { error = "Некорректная дата (нужен формат YYYY-MM-DD)" });
-        try { return Ok(await _noteTasks.SetDueAsync(UserId, id, req.Line, due)); }
+        try { return Ok(await _noteTasks.SetDueAsync(UserId, id, req.Line, due, byHuman: true)); }
         catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return Forbid(); }
@@ -372,8 +396,8 @@ public class NotesController : ControllerBase
     {
         try
         {
-            var moved = _notes.MoveFolder(UserId, req.Source, req.Path, req.NewPath);
-            await Broadcast("updated");
+            var moved = _notes.MoveFolder(UserId, req.Source, req.Path, req.NewPath, byHuman: true);
+            await Broadcast("updated", null, req.Source);
             return Ok(new { notes = moved });
         }
         catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
@@ -395,7 +419,7 @@ public class NotesController : ControllerBase
         try
         {
             var folder = _notes.CreateFolder(UserId, req.Source, req.Path);
-            await Broadcast("folder_created");
+            await Broadcast("folder_created", null, req.Source);
             return Ok(folder);
         }
         catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
@@ -411,8 +435,8 @@ public class NotesController : ControllerBase
     {
         try
         {
-            var removed = _notes.DeleteFolder(UserId, source, path);
-            await Broadcast("folder_deleted");
+            var removed = _notes.DeleteFolder(UserId, source, path, byHuman: true);
+            await Broadcast("folder_deleted", null, source);
             return Ok(new { removed });
         }
         catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
@@ -427,13 +451,15 @@ public class NotesController : ControllerBase
     {
         try
         {
-            var note = _notes.Move(UserId, id, req.Folder, req.TargetSource);
+            var note = _notes.Move(UserId, id, req.Folder, req.TargetSource, byHuman: true);
             if (note is null) return NotFound();
-            await Broadcast("updated", note.Id);
+            await Broadcast("updated", note.Id, note.Source);
             return Ok(note);
         }
         catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (UnauthorizedAccessException) { return Forbid(); }
+        // «Источник не мой/не существует» = «несуществующее»: 404, как в Create
+        catch (KeyNotFoundException) { return NotFound(); }
         catch (ArgumentException) { return BadRequest("Некорректный id заметки"); }
         catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
     }
@@ -446,21 +472,27 @@ public class NotesController : ControllerBase
             return BadRequest("Не задан заголовок цели");
         try
         {
-            var note = _notes.LinkMention(UserId, id, req.TargetTitle);
+            var note = _notes.LinkMention(UserId, id, req.TargetTitle, byHuman: true);
             if (note is null) return NotFound();
-            await Broadcast("updated", note.Id);
+            await Broadcast("updated", note.Id, note.Source);
             return Ok(note);
         }
         catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (UnauthorizedAccessException) { return Forbid(); }
+        // «Источник не мой/не существует» = «несуществующее»: 404, как в Create
+        catch (KeyNotFoundException) { return NotFound(); }
         catch (ArgumentException) { return BadRequest("Некорректный id заметки"); }
     }
 
+    // GET отдаёт заметку и заголовок ETag — хеш её содержимого (К8): по нему следующий PUT
+    // проверяет, что копия клиента ещё актуальна.
     [HttpGet("{id}")]
     public ActionResult<NoteDetail> Get(string id)
     {
         var note = _notes.GetDetail(UserId, id);
-        return note is null ? NotFound() : Ok(note);
+        if (note is null) return NotFound();
+        Response.Headers.ETag = $"\"{NotesService.ContentSha256(note.Content)}\"";
+        return Ok(note);
     }
 
     [HttpGet("{id}/backlinks")]
@@ -474,8 +506,9 @@ public class NotesController : ControllerBase
             return BadRequest("Не задан заголовок заметки");
         try
         {
-            var note = _notes.Create(UserId, req);
-            await Broadcast("created", note.Id);
+            // S3-3c1: это правка человека (REST-ручка) — в журнал правок общего проекта (S3-3)
+            var note = _notes.Create(UserId, req, byHuman: true);
+            await Broadcast("created", note.Id, note.Source);
             return Ok(note);
         }
         catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
@@ -483,18 +516,45 @@ public class NotesController : ControllerBase
         catch (KeyNotFoundException) { return NotFound(); }
     }
 
+    // PUT с If-Match (К8): сохранение только поверх актуальной копии. Совпадает — запись;
+    // не совпадает — 409 note_changed с актуальным состоянием, заметка не тронута.
+    // Без If-Match — как раньше.
     [HttpPut("{id}")]
     public async Task<ActionResult<NoteDetail>> Update(string id, [FromBody] UpdateNoteRequest req)
     {
+        var ifMatch = Request.Headers.IfMatch.ToString();
         try
         {
-            var note = _notes.Update(UserId, id, req);
+            // S3-3c1: правка человека — в журнал правок (S3-3); при 409/403/404 ниже — отказа
+            // NoteConflictException/Unauth до записи, и журнал не вызывается вовсе.
+            var note = _notes.Update(UserId, id, req, string.IsNullOrWhiteSpace(ifMatch) ? null : ifMatch, byHuman: true);
             if (note is null) return NotFound();
-            await Broadcast("updated", note.Id);
+            // Новое состояние — новый ETag: следующая правка этого клиента идёт по нему
+            Response.Headers.ETag = $"\"{NotesService.ContentSha256(note.Content)}\"";
+            await Broadcast("updated", note.Id, note.Source);
             return Ok(note);
+        }
+        catch (NoteConflictException ex)
+        {
+            // Тело по К8: актуальный хеш и содержимое, время правки (состояние сервера).
+            // author — из серверного состояния: его источник (буфер коммиттера) появляется в
+            // S3-3; здесь сервер автора победившей правки не знает — null (авторство из тела
+            // запроса не принимается: вызывающий мог проиграть гонку, и показать его автором
+            // чужой правки — ложь). За REST-сохранением нет чата — source null.
+            return Conflict(new
+            {
+                code = "note_changed",
+                content = ex.Content,
+                sha256 = ex.Sha256,
+                author = (object?)null,
+                changedAt = ex.ChangedAt,
+                source = (string?)null,
+            });
         }
         catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (UnauthorizedAccessException) { return Forbid(); }
+        // «Источник не мой/не существует» = «несуществующее»: 404, как в Create
+        catch (KeyNotFoundException) { return NotFound(); }
         catch (ArgumentException) { return BadRequest("Некорректный id заметки"); }
     }
 
@@ -503,12 +563,15 @@ public class NotesController : ControllerBase
     {
         try
         {
-            if (!_notes.Delete(UserId, id)) return NotFound();
-            await Broadcast("deleted", id);
+            // S3-3c1: удаление человеком — правка пути в журнал (S3-3); 404 (файла нет) — отказа нет
+            if (!_notes.Delete(UserId, id, byHuman: true)) return NotFound();
+            await Broadcast("deleted", id, SourceOfId(id));
             return NoContent();
         }
         catch (WikiReadOnlyException ex) { return WikiReadOnly(ex); }
         catch (UnauthorizedAccessException) { return Forbid(); }
+        // «Источник не мой/не существует» = «несуществующее»: 404, как в Create
+        catch (KeyNotFoundException) { return NotFound(); }
         catch (ArgumentException) { return BadRequest("Некорректный id заметки"); }
     }
 }

@@ -346,6 +346,11 @@ builder.Services.AddSignalR(o =>
         o.PayloadSerializerOptions.Converters.Add(new ClaudeHomeServer.Services.FeatureNoteJsonConverter());
     });
 
+// Реестр живых соединений пользователя (S1-4): держится рядом с SignalR — его читают
+// только хаб (OnConnected/OnDisconnected) и точки отзыва членства (ProjectMembershipService).
+// Состояние — память процесса, синглтон; после рестарта заполняется заново подключениями.
+builder.Services.AddSingleton<ClaudeHomeServer.Hubs.UserConnectionRegistry>();
+
 // Observability: OTel SDK (traces + metrics) с two-mode конфигурацией.
 // Конфиг через секцию Telemetry в appsettings*.json. См. docs/observability/overview.md.
 builder.Services.AddObservability(builder.Configuration);
@@ -417,6 +422,11 @@ builder.Services.AddSingleton<PersonaAskService>();
 // PersonaMemoryAutolearnService. Здесь, а не в GitSubsystem, потому что регистрации
 // реакторов — общая композиция спины, а не домена Git.
 builder.Services.AddGatedHostedService<GitAutoCommitService>(builder.Configuration);
+// Журнал правок человека в общем проекте (S3-3): дебаунс-коммит ТОЛЬКО записанных путей с
+// автором-человеком. Один экземпляр: шов IHumanEditJournal и hosted-сервис — тот же объект.
+builder.Services.AddSingleton<HumanEditCommitter>();
+builder.Services.AddSingleton<IHumanEditJournal>(sp => sp.GetRequiredService<HumanEditCommitter>());
+builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<HumanEditCommitter>());
 // Детект коммита по сдвигу HEAD: помечает чатам зафиксированные пути
 // (Session.CommittedFilePaths), чтобы атрибуция файлов чатам не врала после коммита.
 // Аналогично GitAutoCommitService — реактор на горячем пути статуса, не домен Git.
@@ -558,6 +568,12 @@ builder.Services.AddHttpClient("safe-download")
 // провайдеров: подсистема самодостаточна, точку регистрации кеша в `Program.cs`
 // больше не держим.
 builder.Services.AddChatContext();
+// Личное состояние чата участника общего проекта (S1-7): оверлей поверх полей Session. Читает его
+// конвертер Session на границе сериализации, поэтому нужен доступ к текущему запросу.
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddSingleton(sp => new ClaudeHomeServer.Services.ChatUserState.ChatUserStateStore(
+    ClaudeHomeServer.Services.ChatUserState.ChatUserStateStore.RootFromConfig(sp.GetRequiredService<IConfiguration>())));
+builder.Services.AddSingleton<ClaudeHomeServer.Services.ChatUserStateService>();
 builder.Services.AddSubsystems(builder.Configuration,
     // `git` идёт ПЕРВЫМ: это нижний слой вертикалей — на него смотрят будущие
     // Dossiers (захват коммитов), Knowledge (синк файлов), Deploy (publish/rollback),
@@ -718,7 +734,7 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.RemoteCommands.IShellCom
 builder.Services.AddSingleton<ClaudeHomeServer.Services.RemoteCommands.RemoteCommandsService>();
 builder.Services.AddSingleton<IHostedService>(sp =>
     sp.GetRequiredService<ClaudeHomeServer.Services.RemoteCommands.RemoteCommandsService>());
-// Авто-возобновление ходов после рестарта (флаг turn-auto-resume): параметры из секции TurnAutoResume.
+// Авто-возобновление ходов после рестарта (ADR-033): параметры из секции TurnAutoResume.
 builder.Services.Configure<ClaudeHomeServer.Models.TurnAutoResumeOptions>(builder.Configuration.GetSection(ClaudeHomeServer.Models.TurnAutoResumeOptions.Section));
 // Фоновый оркестратор: шов-хост (адаптер над SessionManager) + hosted-сервис (в Testing не стартует)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.ITurnAutoResumeHost, ClaudeHomeServer.Services.SessionManagerTurnResumeHost>();

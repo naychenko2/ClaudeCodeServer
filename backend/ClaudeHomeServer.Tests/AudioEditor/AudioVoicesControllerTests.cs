@@ -181,6 +181,74 @@ public class AudioVoicesControllerTests : IClassFixture<AudioVoicesControllerTes
         Directory.GetDirectories(Path.Combine(_projectRoot, "voices")).Should().ContainSingle();
     }
 
+    // F2-M1: образцы из файлов проекта проходят общий предикат private (ProjectLinkGuard.ResolveInsideAs,
+    // субъект — вызывающий): чужой .cc-attachments/private/{X} — 400 как «файл не найден» (наличие не
+    // раскрываем), в voices/ ничего не записано на обеих ручках; свой private и обычный файл — как раньше
+    [Fact]
+    public async Task Чужой_private_в_образцах_400_в_voices_ничего_не_записано()
+    {
+        Start();
+        var foreign = Path.Combine(_projectRoot, ".cc-attachments", "private", "other-user", "g1");
+        Directory.CreateDirectory(foreign);
+        File.WriteAllBytes(Path.Combine(foreign, "secret.wav"), Wav);
+
+        // Create: чужое private — отказ как «файл не найден», включая нормализованный обход
+        foreach (var file in new[]
+                 {
+                     ".cc-attachments/private/other-user/g1/secret.wav",
+                     ".cc-attachments/PRIVATE/other-user/g1/../g1/secret.wav",
+                 })
+        {
+            var denied = await _client.PostAsync(Voices, Form("Аня", "Привет", projectFile: file, upload: false));
+            denied.StatusCode.Should().Be(HttpStatusCode.BadRequest, file);
+            var body = await Json(denied);
+            body.GetProperty("code").GetString().Should().Be(AudioEditErrorCodes.InvalidRequest, file);
+            // дошёл именно до отказа пути: текст — тот же, что у «вне проекта»
+            body.GetProperty("error").GetString().Should().Contain("Файл не найден в проекте", file);
+        }
+        Directory.Exists(Path.Combine(_projectRoot, "voices")).Should().BeFalse("отказанное создание не трогает диск");
+        (await Json(await _client.GetAsync(Voices))).GetProperty("voices").GetArrayLength().Should().Be(0);
+
+        // AddSamples: тот же отказ, образцы голоса не изменились
+        var slug = await CreateVoice();
+        var dir = Path.Combine(_projectRoot, "voices", slug);
+        var added = await _client.PostAsync($"{Voices}/{slug}/samples",
+            Form(null, projectFile: ".cc-attachments/private/other-user/g1/secret.wav", upload: false));
+        added.StatusCode.Should().Be(HttpStatusCode.BadRequest, await added.Content.ReadAsStringAsync());
+        (await Json(added)).GetProperty("code").GetString().Should().Be(AudioEditErrorCodes.InvalidRequest);
+        Directory.GetFiles(dir).Select(Path.GetFileName).Should().BeEquivalentTo("voice.json", "sample-01.wav", "sample-02.wav");
+    }
+
+    // Свой private участника и обычный файл проекта остаются образцами на обеих ручках
+    [Fact]
+    public async Task Свой_private_и_обычный_файл_становятся_образцом()
+    {
+        Start();
+        // валидный WAV, но байтами отличимый от Wav — чтобы проверить, что образец взят из private-файла
+        byte[] mine = [.. "RIFF"u8, 1, 1, 1, 1, .. "WAVE"u8, 3, 3];
+        var own = Path.Combine(_projectRoot, ".cc-attachments", "private", _ownerId, "g1");
+        Directory.CreateDirectory(own);
+        File.WriteAllBytes(Path.Combine(own, "mine.wav"), mine);
+        var ownRel = $".cc-attachments/private/{_ownerId}/g1/mine.wav";
+
+        // Create: загрузка + обычный файл проекта — как раньше
+        var slug = await CreateVoice();
+        var dir = Path.Combine(_projectRoot, "voices", slug);
+        Directory.GetFiles(dir).Select(Path.GetFileName).Should().BeEquivalentTo("voice.json", "sample-01.wav", "sample-02.wav");
+
+        // AddSamples: свой private — принят, его байты легли в образец
+        var added = await _client.PostAsync($"{Voices}/{slug}/samples", Form(null, projectFile: ownRel, upload: false));
+        added.StatusCode.Should().Be(HttpStatusCode.OK, await added.Content.ReadAsStringAsync());
+        (await Json(added)).GetProperty("samples").GetArrayLength().Should().Be(3);
+        File.ReadAllBytes(Path.Combine(dir, "sample-03.wav")).Should().Equal(mine);
+
+        // Create: свой private — единственный источник образца
+        var created = await _client.PostAsync(Voices, Form("Борис", "Привет", projectFile: ownRel, upload: false));
+        created.StatusCode.Should().Be(HttpStatusCode.Created, await created.Content.ReadAsStringAsync());
+        var ownSlug = (await Json(created)).GetProperty("slug").GetString()!;
+        File.ReadAllBytes(Path.Combine(_projectRoot, "voices", ownSlug, "sample-01.wav")).Should().Equal(mine);
+    }
+
     [Fact]
     public async Task Rvc_ИзВерсииНити_ПараЛожитсяВместе()
     {

@@ -100,38 +100,45 @@ internal sealed class TeamEnableService
         // в план-режиме, который ему навязал штаб (Э8).
         if (!enabled) _state.RestoreUserMode(sessionId);
 
-        if (enabled && session.TeamImplement is { } active)
+        // S2d-7b-3: включение режима — проверка приватности и запись TeamImplement под замком
+        // видимости (через шов ядра); выключение разрешено всегда.
+        void ApplyMode()
         {
-            // M4: повторное включение поверх активного режима — правка настроек, а не рестарт.
-            // Пересоздание объекта стирало SavedMode, бюджет, стадию, PlanCardId и счёт волн:
-            // волна сиротела — задачи доисполнялись, а закрытия, сводки и проверки не было
-            // никогда (план по пустому PlanCardId не находился). Меняем только настраиваемое.
-            active.AutoWaves = autoWaves;
-            active.CoordinatorPersonaId = coordinatorPersonaId;
-            active.PlannerPersonaId = plannerPersonaId;
-            active.ExecutorPersonaIds = executorPersonaIds?.ToList() ?? [];
-            active.CoordinatorNoCode = coordinatorNoCode;
+            if (enabled && session.TeamImplement is { } active)
+            {
+                // M4: повторное включение поверх активного режима — правка настроек, а не рестарт.
+                // Пересоздание объекта стирало SavedMode, бюджет, стадию, PlanCardId и счёт волн:
+                // волна сиротела — задачи доисполнялись, а закрытия, сводки и проверки не было
+                // никогда (план по пустому PlanCardId не находился). Меняем только настраиваемое.
+                active.AutoWaves = autoWaves;
+                active.CoordinatorPersonaId = coordinatorPersonaId;
+                active.PlannerPersonaId = plannerPersonaId;
+                active.ExecutorPersonaIds = executorPersonaIds?.ToList() ?? [];
+                active.CoordinatorNoCode = coordinatorNoCode;
+            }
+            else
+            {
+                session.TeamImplement = enabled
+                    ? new SessionTeamImplement
+                    {
+                        // Minor (волна 3): по спеке Э8 первая стадия итерации — интервью, а не
+                        // планирование (дефолт модели). До этой правки бейдж окно между включением
+                        // режима и первой вводной мог показать «планирование» — тексту спеки
+                        // соответствует только по совпадению (первая вводная тут же переводит
+                        // стадию через ResetTeamIterationOnUserInput).
+                        Stage = TeamImplementStage.Interview,
+                        AutoWaves = autoWaves,
+                        CoordinatorPersonaId = coordinatorPersonaId,
+                        PlannerPersonaId = plannerPersonaId,
+                        ExecutorPersonaIds = executorPersonaIds?.ToList() ?? [],
+                        Budget = _state.NewTeamImplementBudget(),
+                        CoordinatorNoCode = coordinatorNoCode,
+                    }
+                    : null;
+            }
         }
-        else
-        {
-            session.TeamImplement = enabled
-                ? new SessionTeamImplement
-                {
-                    // Minor (волна 3): по спеке Э8 первая стадия итерации — интервью, а не
-                    // планирование (дефолт модели). До этой правки бейдж окно между включением
-                    // режима и первой вводной мог показать «планирование» — тексту спеки
-                    // соответствует только по совпадению (первая вводная тут же переводит
-                    // стадию через ResetTeamIterationOnUserInput).
-                    Stage = TeamImplementStage.Interview,
-                    AutoWaves = autoWaves,
-                    CoordinatorPersonaId = coordinatorPersonaId,
-                    PlannerPersonaId = plannerPersonaId,
-                    ExecutorPersonaIds = executorPersonaIds?.ToList() ?? [],
-                    Budget = _state.NewTeamImplementBudget(),
-                    CoordinatorNoCode = coordinatorNoCode,
-                }
-                : null;
-        }
+        if (enabled) _dir.WriteUnlessPrivate(sessionId, ApplyMode);
+        else ApplyMode();
         // Гард «координатор не пишет код» (CoordinatorWriteGuard) проверяет команду Bash/
         // PowerShell в момент permission-запроса — а CLI спрашивает разрешение не в любом
         // --permission-mode: в acceptEdits/bypassPermissions запись через shell проходит мимо

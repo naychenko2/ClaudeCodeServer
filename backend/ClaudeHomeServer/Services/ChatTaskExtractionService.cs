@@ -26,6 +26,14 @@ public sealed class ChatTaskExtractionService(
         if (ownerId is null || ownerId != userId)
             throw new UnauthorizedAccessException("Сессия принадлежит другому пользователю");
 
+        // Приватный чат (S2d-5a, разрез 4bc3d04f §1 «S2d-5a», путь 17): карточка задачи,
+        // извлеченная из такого чата, видна всем участникам проекта, а сам чат — только
+        // автору. Извлечение не запускается вовсе: ни транскрипта, ни LLM. Проверка после
+        // владения: чужой приватный остаётся неотличим от «нет такого чата» (403, как и был).
+        if (session.PrivateToUserId is not null)
+            throw new InvalidOperationException(
+                "Задачи из приватного чата не извлекаются: карточка задачи видна всем участникам проекта.");
+
         var history = await sessions.GetHistoryAsync(sessionId);
         var transcript = SessionSummaryService.BuildTranscript(history, TranscriptBudget);
         if (string.IsNullOrWhiteSpace(transcript))

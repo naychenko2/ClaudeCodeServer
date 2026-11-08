@@ -37,7 +37,7 @@ public sealed class FilmPatchFeedTests : IDisposable
 
     private async Task<string> Patch(FilmService svc, string revision, string initiator, params FilmPatchOp[] ops)
     {
-        var result = await svc.PatchAsync(Owner, _w.Scope, Path, new FilmPatch(revision, ops), initiator, default, Session);
+        var result = await svc.PatchAsync(Owner, Owner, _w.Scope, Path, new FilmPatch(revision, ops), initiator, default, Session);
         result.IsOk.Should().BeTrue(result.Error);
         return result.Value!.Revision;
     }

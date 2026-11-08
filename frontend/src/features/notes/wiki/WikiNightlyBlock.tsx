@@ -33,10 +33,11 @@ import { AlertTriangle, Clock, Inbox, Lock } from 'lucide-react';
 import {
   C, FONT, FS, R, SHADOW, SP, useIsMobile,
   WikiError,
-  loadWikiSettings, putWikiNightly, useWikiSettings,
+  loadWikiSettings, loadWikiTree, putWikiNightly, runWikiNightlyNow, useWikiSettings, useWikiTree,
   type WikiLastNight, type WikiNightlyOutcome, type WikiNightlyPatch, type WikiSettingsSnapshot,
 } from 'aihome_shell/kit';
 import { Button } from '../../../components/ui/Button';
+import { ConfirmDialog } from '../../../components/ui/ConfirmDialog';
 import { Field, TextField } from '../../../components/ui/Field';
 import { Notice } from '../../../components/ui/Notice';
 import { ProgressBar } from '../../../components/ui/ProgressBar';
@@ -45,6 +46,8 @@ import { Toggle } from '../../../components/ui/Toggle';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import {
   NIGHTLY_COMPLETED_LINE, NIGHTLY_MAX_PACKAGES, NIGHTLY_MAX_TOKENS, NIGHTLY_NONE_TITLE,
+  NIGHTLY_RUN_ASK_TITLE, NIGHTLY_RUN_BUSY, NIGHTLY_RUN_BUTTON, NIGHTLY_RUN_CONFIRM,
+  NIGHTLY_RUN_OFF_HINT, nightlyRejectedLine, nightlyRunAskText, nightlyRunRefusalText,
   nightOutcomeNotice, nightlyNoneText,
 } from './wikiLabels';
 
@@ -127,6 +130,18 @@ function kvCell(v: number, label: string) {
   );
 }
 
+// «отказано N» — пятая метрика итога (WN-6b): отказанные разборы среди analyzed
+// (WikiNightlyService.cs:117-119). Не голое число, как остальные: слово с числом одной строкой,
+// подпись называет связь с соседней метрикой («из разобранного» — ровно то, что считает бэк)
+function rejectedCell(n: number) {
+  return (
+    <div key="rejected">
+      <div style={{ fontSize: FS.lg, fontWeight: 600, color: C.textHeading }}>{nightlyRejectedLine(n)}</div>
+      <div style={{ fontSize: FS.xs, color: C.textMuted }}>из разобранного</div>
+    </div>
+  );
+}
+
 // Итог прошлой ночи: предупреждение по исходу (тексты — wikiLabels), карточка четырёх
 // чисел и оценочный расход («≈»: оценка, не факт — ProgressBar estimate: пунктир).
 function LastNightBlock({ last, snapshot, isMobile, onOpenInbox, onOpenJournal }: {
@@ -142,6 +157,16 @@ function LastNightBlock({ last, snapshot, isMobile, onOpenInbox, onOpenJournal }
   // видит в поле рядом; сравнение честно ровно в эту сторону и сказано в title строки
   const budget = Math.max(1, snapshot.nightly.inputTokenBudget);
   const pct = Math.max(0, Math.min(100, Math.round((last.estTokens / budget) * 100)));
+  // rejected — опциональное поле (старый итог без него читается «ничего не отказано», WN-2):
+  // строка появляется только при настоящем отказе
+  const rejected = last.rejected ?? 0;
+  const cells = [
+    kvCell(last.selected, 'чатов отобрано'),
+    kvCell(last.analyzed, 'разобрано'),
+    kvCell(last.applied, 'пакетов применено само'),
+    kvCell(last.toInbox, 'ждут вас во «Входящих»'),
+    ...(rejected > 0 ? [rejectedCell(rejected)] : []),
+  ];
   return (
     <>
       {notice && (
@@ -159,11 +184,8 @@ function LastNightBlock({ last, snapshot, isMobile, onOpenInbox, onOpenJournal }
         </div>
       )}
       <div data-testid="wiki-nightly-card" style={{ ...CARD, marginTop: SP.md }}>
-        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(4, 1fr)', gap: SP.md }}>
-          {kvCell(last.selected, 'чатов отобрано')}
-          {kvCell(last.analyzed, 'разобрано')}
-          {kvCell(last.applied, 'пакетов применено само')}
-          {kvCell(last.toInbox, 'ждут вас во «Входящих»')}
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : `repeat(${cells.length}, 1fr)`, gap: SP.md }}>
+          {cells}
         </div>
         <div
           title="Расход той ночи против текущего «Бюджета за ночь»"
@@ -194,6 +216,10 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
   onOpenJournal?: () => void;
 }) {
   const snapshot = useWikiSettings();
+  // Состояние заведённости вики — из стора дерева (LI-3): поля «initialized» в DTO
+  // настроек нет, и второго источника здесь быть не должно; null — дерево ещё не читали,
+  // состояния не знаем, подписи нет
+  const tree = useWikiTree();
   const isMobile = useIsMobile();
   const [loadError, setLoadError] = useState<unknown>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -206,6 +232,10 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
   // пока поле в работе — в нём черновик, а не значение стора
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [numErrors, setNumErrors] = useState<Record<string, string>>({});
+  // «Запустить сейчас» (WN-6b): диалог подтверждения открыт; отказ запуска — текст у кнопки.
+  // Состояние «идёт» не локальное: его несёт стор (snapshot.nightlyRunning, WN-6a)
+  const [askRun, setAskRun] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setLoadError(null);
@@ -271,6 +301,17 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
     if (start === end) { setWinError('Начало и конец окна совпадают'); return; }
     setWinError(null);
     void runAction(() => putWikiNightly({ windowStartHour: start, windowEndHour: end }));
+  };
+
+  // Подтверждение диалога (WN-6b): диалог закрывается первым — состоянием «идёт» владеет стор
+  // (runWikiNightlyNow оптимистично ставит nightlyRunning, как тумблер; опрос до конца прохода —
+  // его же, WN-6a). Отказ — текст у кнопки, тот же приём, что у ошибки PUT: вызывающий называет
+  // причину по коду, состояния стор не залипает. Исключений run не несёт (WN-6a), try не нужен
+  const startRun = async () => {
+    setAskRun(false);
+    setRunError(null);
+    const r = await runWikiNightlyNow();
+    if (!r.ok) setRunError(nightlyRunRefusalText(r.code));
   };
 
   if (loadError) {
@@ -350,9 +391,30 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
           disabled={busy}
           focusable
           ariaLabel="Разбирать по ночам"
-          onChange={(v) => { void runAction(() => putWikiNightly({ enabled: v })); }}
+          onChange={(v) => {
+            void runAction(async () => {
+              const r = await putWikiNightly({ enabled: v });
+              // Включение заводит вики тем же PUT'ом (LI-2): после подтверждённого
+              // включения перечитываем дерево — подпись уходит без перезагрузки экрана.
+              // Отказ перечитки молчит: настройки уже сохранены, исключение наружу не
+              // идёт (иначе «Не удалось сохранить» на сохранённые настройки); устаревший
+              // ответ или ответ чужого владельца стор отбрасывает сам (поколение и
+              // сверка владельца в loadWikiTree).
+              if (r.ok && v) await loadWikiTree().catch(() => undefined);
+              return r;
+            });
+          }}
         />
       </div>
+
+      {/* Вики ещё не заведена (LI-3): её заводит тот же PUT, что включает тумблер (LI-2) —
+          после подтверждённого включения дерево перечитывается, и подпись уходит без
+          перезагрузки экрана. Подпись называет это, а не просит действия: кнопки здесь нет */}
+      {tree && !tree.initialized && (
+        <div data-testid="wiki-nightly-uninitialized" style={{ fontSize: FS.sm, color: C.textMuted, marginTop: SP.xs }}>
+          Вики ещё не создана — она создастся, как только вы включите ночной разбор.
+        </div>
+      )}
 
       {!nightly.enabled && (
         <div style={{ marginTop: SP.md }}>
@@ -421,7 +483,28 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
         <span>Назначает администратор в «Поставщиках моделей».</span>
       </div>
 
-      <h3 style={SECTION_H3}>Прошлая ночь{snapshot.lastNight ? nightRangeText(snapshot.lastNight.date) : ''}</h3>
+      {/* «Запустить сейчас» (WN-6b) — рядом с заголовком итога. flexWrap: на 360 px заголовок и
+          кнопка становятся двумя строками, а не выходят за край; фиксированных ширин нет.
+          disabled: «идёт» (состояние стора) или выключенный тумблер (решение плана: при
+          выключенном не запускаем, и бэк на это отвечает 409 wiki_nightly_disabled) */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: SP.sm, margin: `${SP.lg}px 0 ${SP.xs}px` }}>
+        <h3 style={{ ...SECTION_H3, margin: 0 }}>Прошлая ночь{snapshot.lastNight ? nightRangeText(snapshot.lastNight.date) : ''}</h3>
+        <Button
+          variant="secondary"
+          size="sm"
+          dataTestId="wiki-nightly-run"
+          disabled={snapshot.nightlyRunning || !nightly.enabled}
+          onClick={() => setAskRun(true)}
+        >
+          {snapshot.nightlyRunning ? NIGHTLY_RUN_BUSY : NIGHTLY_RUN_BUTTON}
+        </Button>
+        {!nightly.enabled && (
+          <span data-testid="wiki-nightly-run-off-hint" style={{ fontSize: FS.xs, color: C.textMuted }}>{NIGHTLY_RUN_OFF_HINT}</span>
+        )}
+        {runError && (
+          <span data-testid="wiki-nightly-run-error" style={{ fontSize: FS.sm, color: C.dangerText }}>{runError}</span>
+        )}
+      </div>
       {snapshot.lastNight ? (
         <LastNightBlock last={snapshot.lastNight} snapshot={snapshot} isMobile={isMobile} onOpenInbox={onOpenInbox} onOpenJournal={onOpenJournal} />
       ) : (
@@ -431,6 +514,19 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
             {nightlyNoneText(nightly.enabled, `${pad2(nightly.windowStartHour)}:00`, `${pad2(nightly.windowEndHour)}:00`)}
           </div>
         </div>
+      )}
+
+      {/* Диалог подтверждения ручного запуска (WN-6b): лимит в тексте — тот, что человек видит
+          в поле «Пакетов за ночь» (maxPackagesPerNight из снимка, решение 1 плана).
+          «Отмена» — встроенная в ConfirmDialog */}
+      {askRun && (
+        <ConfirmDialog
+          title={NIGHTLY_RUN_ASK_TITLE}
+          subtitle={nightlyRunAskText(nightly.maxPackagesPerNight)}
+          confirmLabel={NIGHTLY_RUN_CONFIRM}
+          onConfirm={startRun}
+          onCancel={() => setAskRun(false)}
+        />
       )}
     </div>
   );

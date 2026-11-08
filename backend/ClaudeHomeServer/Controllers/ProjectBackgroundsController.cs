@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Backgrounds;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -24,6 +25,7 @@ namespace ClaudeHomeServer.Controllers;
 [SubsystemUsage("backgrounds")]
 public class ProjectBackgroundsController(
     ProjectManager projects,
+    IProjectAccess access,
     // `= null` — обязательность для DI: без значения по умолчанию активация контроллера на
     // выключенной вертикали падала (500), а не отвечала гейтом (та же форма, что PluginsController)
     ProjectBackgroundService? backgrounds = null)
@@ -43,12 +45,15 @@ public class ProjectBackgroundsController(
         error = "Подсистема фонов проекта выключена (Subsystems:backgrounds:Enabled=false)",
     });
 
-    // Чужой проект — 404, а не 403: подтверждать его существование незачем
-    private Project? Owned(string id)
-    {
-        var project = projects.GetById(id);
-        return project is null || project.OwnerId != UserId ? null : project;
-    }
+    // Доступ к проекту — явный IProjectAccess.Resolve (тот же путь, что разрешил S0-4b для ручек без
+    // атрибута: «[ProjectScope] / явный IProjectAccess.Resolve», см. ProjectScopeRestControllersTests и
+    // CodeGraphController.cs:38-41). Здесь атрибут ставить нельзя: он фильтр действия и ответил бы
+    // 404 на nonexistent id ДО тела действия, а на выключенной вертикали отказ обязан быть 503 с
+    // причиной — раньше любого 404 (матрица S2a-2, SubsystemDisableMatrixTests). Права те же, что у
+    // master: Write для генерации и сброса (участник Write не получает, см. ProjectAccessService),
+    // Read для тайла. Чужой/несуществующий проект — 404, существование чужого не подтверждаем.
+    private Project? Scoped(string id, ProjectRight right) =>
+        access.Resolve(UserId, id, right) is null ? null : projects.GetById(id);
 
     private static object Payload(BackgroundResult r) => new
     {
@@ -63,7 +68,7 @@ public class ProjectBackgroundsController(
     public async Task<ActionResult> Generate(string id, CancellationToken ct)
     {
         if (backgrounds is null) return BackgroundsDisabled();
-        if (Owned(id) is not { } project) return NotFound();
+        if (Scoped(id, ProjectRight.Write) is not { } project) return NotFound();
 
         return Ok(Payload(await backgrounds.GenerateAsync(project, ct)));
     }
@@ -72,7 +77,7 @@ public class ProjectBackgroundsController(
     public ActionResult Reset(string id)
     {
         if (backgrounds is null) return BackgroundsDisabled();
-        if (Owned(id) is null) return NotFound();
+        if (Scoped(id, ProjectRight.Write) is null) return NotFound();
 
         return Ok(Payload(backgrounds.Reset(id)));
     }
@@ -84,7 +89,7 @@ public class ProjectBackgroundsController(
     public IActionResult Tile(string id)
     {
         if (backgrounds is null) return BackgroundsDisabled();
-        if (Owned(id) is not { Background: { Kind: ProjectBackgroundKind.Generated, TileFile: { } file } })
+        if (Scoped(id, ProjectRight.Read) is not { Background: { Kind: ProjectBackgroundKind.Generated, TileFile: { } file } })
             return NotFound();
 
         var full = Path.Combine(projects.BackgroundsDir, id, file);

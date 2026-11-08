@@ -83,8 +83,10 @@ public class ChatHandoffService(
     /// </summary>
     public async Task<ChatHandoffResult> HandoffAsync(string userId, string sessionId, CancellationToken ct)
     {
-        // Владение — GetOwned (проектные сессии тоже): чужой id — KeyNotFound, не 500
-        var source = sessions.GetOwned(sessionId, userId)
+        // Владение — GetOwned (проектные сессии тоже): чужой id — KeyNotFound, не 500.
+        // S1: участнику общего проекта отказ — передача создала бы чат в его пространстве.
+        // S2d-7b-1: GetOwnedVisible — чужой приватный чат не переносится даже владельцем проекта
+        var source = sessions.GetOwnedVisible(sessionId, userId)
             ?? throw new KeyNotFoundException("Чат не найден");
 
         // Всё, что можно отвергнуть без платного хода, отвергаем ДО него
@@ -241,7 +243,7 @@ public class ChatHandoffService(
         var sent = await (SendOverride is { } send
             ? send(source.Id, BuildWarmPrompt(), WarmTurnTimeout)
             : sessions.SendMessageAndWaitAsync(source.Id, BuildWarmPrompt(), WarmTurnTimeout,
-                preempt: false));
+                preempt: false, senderUserId: ownerId));
 
         var note = sent switch
         {

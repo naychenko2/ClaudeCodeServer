@@ -4,13 +4,14 @@ import { ArrowDown, ArrowUp, RotateCw, CircleHelp, Archive, ArchiveRestore } fro
 import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, Task, WorkLoopState, SessionTeamImplement, TeamPlanDecision } from '../types';
 import { ProjectFeature } from '../types';
 import { featureReason, isLocalProject, useProjectFeature } from '../lib/projectCapabilities';
-import { useSession } from '../hooks/useSession';
+import { remapPaths, useSession } from '../hooks/useSession';
 import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonasLoaded, personaLabel } from '../lib/personas';
 import { useSphereOf } from '../lib/useSphereOf';
 import { isZoneRefusal } from '../lib/personaZone';
 import { buildBranchAnchors, branchAnchorText as branchAnchorTextOf, BRANCH_BEFORE_PROMPT } from '../lib/branchAnchors';
 import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
+import { denialTextOf, guardTurnAction, ownerDecisionDeniedReason, ownerSettingsDeniedReason, turnDeniedReason } from '../features/projects/members/participantGate';
 import { isArchivedChat } from '../lib/chatFilters';
 import { archiveApi } from '../api/chats';
 import { projectMainColor } from '../features/projects/projectUtil';
@@ -70,7 +71,6 @@ import { ChatProjectContext, ToolLivenessContext, ChatTreePathContext, ChatSessi
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { TurnPlanPill } from './chat/TurnPlanPill';
 import { useFeatureRuns } from '../lib/featureRuns';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 import { useFeaturesIndex, featureOf } from '../lib/featuresIndex';
 import { Modal, ModalActions, ConfirmDialog, Button } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
@@ -79,6 +79,8 @@ import { ToolGroupBlock, AgentActionsBlock, itemKey, type ActivityEntry } from '
 import { splitAgentResultTail } from '../lib/agentTail';
 import { ChatItemView, FileChangedRow, shouldHideAbortBanner } from './chat/ChatItemView';
 import { PendingMessageList } from './chat/PendingMessageView';
+import { readStoredUserId } from '../lib/offline';
+import { canCancelPending } from '../features/projects/members/messageAuthor';
 import { type ToolUseItem } from './chat/ToolUseView';
 import { buildMediaVisibility } from './chat/mediaDedup';
 import { isTasksCreate } from './chat/TaskCreatedView';
@@ -245,7 +247,26 @@ function memoizedCacheEntry(
 }
 
 export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, contextBar, headerDragProps, availableChatIds }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, liveContextTokens, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, teamWavePulse, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, liveContextTokens, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, teamWavePulse, promptSuggestion, pending, composerRestore, consumeRestore, send: rawSend, allowPermission: rawAllowPermission, denyPermission: rawDenyPermission, allowAlways: rawAllowAlways, answerQuestion: rawAnswerQuestion, respondPlan: rawRespondPlan, respondTeamPlan: rawRespondTeamPlan, respondTeamEscalation: rawRespondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  // Участник общего проекта не запускает ходы и не отвечает агенту (бэк откажет): все входы
+  // вне композера идут через гейт в точке отправки, а не каждый со своей проверкой
+  const projectRef = useRef(project);
+  projectRef.current = project;
+  const turnDenied = turnDeniedReason(project);
+  const { send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation } = useMemo(() => {
+    const deny = (reason: string) => showToast('Чат', reason);
+    const get = () => projectRef.current;
+    return {
+      send: guardTurnAction(get, rawSend, deny),
+      allowPermission: guardTurnAction(get, rawAllowPermission, deny, ownerDecisionDeniedReason),
+      allowAlways: guardTurnAction(get, rawAllowAlways, deny, ownerDecisionDeniedReason),
+      answerQuestion: guardTurnAction(get, rawAnswerQuestion, deny),
+      respondPlan: guardTurnAction(get, rawRespondPlan, deny, ownerDecisionDeniedReason),
+      denyPermission: guardTurnAction(get, rawDenyPermission, deny, ownerDecisionDeniedReason),
+      respondTeamPlan: guardTurnAction(get, rawRespondTeamPlan, deny, ownerDecisionDeniedReason),
+      respondTeamEscalation: guardTurnAction(get, rawRespondTeamEscalation, deny, ownerDecisionDeniedReason),
+    };
+  }, [rawSend, rawAllowPermission, rawDenyPermission, rawAllowAlways, rawAnswerQuestion, rawRespondPlan, rawRespondTeamPlan, rawRespondTeamEscalation]);
   // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу
   // в поле ввода: сюда пришли писать, а не читать. Решение принимаем один раз на чат и
   // только ПОСЛЕ загрузки истории: до неё items пуст у любого чата, и фокус улетал бы
@@ -329,6 +350,10 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
   // бэке) + озвучка ответа. Прайминг аудио прямо в обработчике клика — политика autoplay
   // разрешает воспроизведение только после пользовательского жеста.
   const voiceMode = session.voiceMode === true;
+  // «Голос» — настройка чата, только владелец проекта (QA-P1F, зеркало бэкового
+  // OwnerSettingsGate): участнику общего проекта тумблер неактивен (гейт в Composer),
+  // и PUT отсюда не уходит. Обычный проект и чат вне проекта — без изменений
+  const voiceDeniedReason = ownerSettingsDeniedReason(project);
   // Стиль озвучки живёт ЗДЕСЬ, а не в модуле-хранилище: значение читают четыре места в
   // двух компонентах (ветка кнопки и плашка состояния в Composer, гейт стрима и ветка
   // озвучки здесь). Голые функции чтения/записи не реактивны — выбор пункта в меню
@@ -396,13 +421,20 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
   // к handleToggleVoiceMode ниже). Ошибки молча: чинить тут человеку нечего
   useEffect(() => {
     if (!voiceMode) return;
+    // Участнику общего проекта бэк отказал бы этот PUT (403 owner_settings) — не шлём:
+    // стиль остаётся таким, каким его оставил владелец (QA-P1F)
+    if (voiceDeniedReason) return;
     if (normalizeVoiceStyle(session.voiceStyle) === voiceStyle) return;
     if (styleSyncedRef.current === session.id) return;
     styleSyncedRef.current = session.id;
     void updateChatFields(session, { voiceStyle }).catch(() => {});
-  }, [session, voiceMode, voiceStyle]);
+  }, [session, voiceMode, voiceStyle, voiceDeniedReason]);
 
   const handleToggleVoiceMode = useCallback(async (next: boolean) => {
+    // «Голос» — настройка владельца (QA-P1F): у участника кнопка неактивна (гейт в Composer),
+    // а авто-переключение петли падает здесь: причина вместо запроса — её catch гасит
+    // разговор так же, как провал запроса (voiceMode на чате остаётся как у владельца)
+    if (voiceDeniedReason) throw new Error(voiceDeniedReason);
     primeAudio();
     // Разбудить аудиоконтекст сигналов в том же жесте: сигнал «нужно решение» может
     // понадобиться и без запуска петли, а вне жеста браузер контекст не пустит
@@ -420,7 +452,7 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
       // и петля разговора крутилась бы вхолостую — композер по ошибке её гасит
       throw err;
     }
-  }, [session, onSessionUpdated, stopSpeech, voiceStyle]);
+  }, [session, onSessionUpdated, stopSpeech, voiceStyle, voiceDeniedReason]);
 
   // Признак архива — производное от бэка (см. isArchivedChat). Плашка открытого
   // архивного чата сидит над лентой; считаем прямо в рендере, useState тут не нужен —
@@ -879,6 +911,7 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
     ? {
       id: project.id, rootPath: project.rootPath, transcriptReason: featureReason(project, ProjectFeature.WorkflowView),
       local: isLocalProject(project), devicePlatform: project.device?.platform ?? null,
+      myRole: project.myRole, formerMembers: project.formerMembers,
     }
     : null, [project]);
   // Ветка копирует транскрипт CLI на сервере — у локального проекта кнопок ветвления нет
@@ -1252,6 +1285,11 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
   // в рабочую папку сессии (для worktree-чата — в неё же, а не в корень проекта) и сам
   // сохраняет оригинальное имя, уникальность даёт подпапка. Путь из ответа — во вложения.
   const chatFileInputRef = useRef<HTMLInputElement>(null);
+  // Черновик вложений для колбэков, живущих дольше рендера: загрузка b стартовала при
+  // черновике [a], пока она шла, тумблер переписал черновик в [a']. Замыкание по
+  // attachedFiles вернуло бы [a, b] — перенесённый путь потерян; через ref выходит [a', b].
+  const attachedFilesRef = useRef(attachedFiles);
+  attachedFilesRef.current = attachedFiles;
   const handleChatUpload = useCallback(async (files: File[]) => {
     const added: string[] = [];
     for (const file of files) {
@@ -1261,8 +1299,12 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
         added.push(path);
       } catch { showToast('Вложение', UPLOAD_FAIL_MSG); }
     }
-    if (added.length) onAttachedFilesChange([...attachedFiles, ...added]);
-  }, [session.id, project?.id, attachedFiles, onAttachedFilesChange]);
+    if (added.length) onAttachedFilesChange([...attachedFilesRef.current, ...added]);
+  }, [session.id, project?.id, onAttachedFilesChange]);
+
+  // Черновик по карте переноса (S2d-6b-4F3): пути вложений, перенесённых бэком в private/…,
+  // подменяются в черновике композера — иначе AttachmentInliner молча пропустит файл
+  const handleAttachmentMoves = useCallback((moves: Record<string, string>) => onAttachedFilesChange(remapPaths(attachedFilesRef.current, moves)), [onAttachedFilesChange]);
 
   // Единая точка загрузки с устройства (вставка, перетаскивание, кнопка пикера):
   // гейт по зрению модели сужен до картинок — pdf и документы claude читает с диска
@@ -1436,7 +1478,9 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
           : await api.chats.update(session.id, payload);
       onSessionUpdated?.(updated);
     } catch (err) {
-      showToast('Модель', err instanceof Error ? err.message : 'Не удалось сменить модель');
+      // Отказ по машинному коду (S2a-10b): «настройки выбирает владелец» — текстом клиента,
+      // короткую серверную строку человек не обязан понимать сам. Незнакомый отказ — как раньше.
+      showToast('Модель', denialTextOf(err) ?? (err instanceof Error ? err.message : 'Не удалось сменить модель'));
     }
   }, [session.id, session.model, session.projectId, session.claudeSessionId, onSessionUpdated]);
 
@@ -1465,7 +1509,7 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
   // карточка лежит глубоко в ленте.
   const handleRespondTeamPlan = useCallback((planId: string, decision: TeamPlanDecision,
     subtaskId?: string, executorPersonaId?: string, feedback?: string) => {
-    respondTeamPlan(planId, decision, subtaskId, executorPersonaId, feedback).catch(err => {
+    respondTeamPlan(planId, decision, subtaskId, executorPersonaId, feedback)?.catch(err => {
       showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось отправить решение по плану');
     });
   }, [respondTeamPlan]);
@@ -1776,19 +1820,15 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
   const lastPlanIndex = useMemo(
     () => todoBatches.reduce((max, b) => Math.max(max, b.lastIndex), -1),
     [todoBatches]);
-  // Режим «Исполнение фичи»: гейт фич-флага (dark-launch) — выключен, фича не
-  // показывается и источник не зовётся. Агрегаты берутся из REST по сессии чата.
-  const featureMode = useFeature(FLAGS.turnPlanFeatureMode);
-  const featureRuns = useFeatureRuns(session.id, featureMode);
-  // Слот строки фичи в шапке (В2) живёт под ДВУМЯ флагами — как сама строка (FeatureBanner).
+  // Режим «Исполнение фичи»: агрегаты берутся из REST по сессии чата.
+  const featureRuns = useFeatureRuns(session.id);
+  // Слот строки фичи в шапке (В2), как и сама строка (FeatureBanner).
   // Решение «есть ли у чата фича» принимается ЗДЕСЬ: React-элемент всегда truthy, и
   // переданный при пустом чате слот гасил бы линию тулбара у каждого чата без фичи
   // (ревью F2, major 2). Индекс — тот же стор, что у FeatureBanner (один запрос на
   // проект, идемпотентен), нужен ровно чтобы отличить «слот задан» от «в нём есть».
-  const featuresOverview = useFeature(FLAGS.featuresOverview);
-  const featureRowOn = featureMode && featuresOverview;
-  useFeaturesIndex(session.projectId ?? null, featureRowOn);
-  const hasFeatureRow = featureRowOn && featureOf(session.id).length > 0;
+  useFeaturesIndex(session.projectId ?? null);
+  const hasFeatureRow = featureOf(session.id).length > 0;
 
 
   // Снимок промпта и размер контекста ДЛЯ КАЖДОГО индекса ленты: у постов ассистента
@@ -1943,7 +1983,7 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
   // topEscalation зависит от openEscalations. Контекст живёт, пока включён режим —
   // в выключенном чате карточки только читаются
   const handleRespondTeamEscalation = useCallback((escalationId: string, actionId?: string, comment?: string) => {
-    respondTeamEscalation(escalationId, actionId, comment).catch((err: unknown) => {
+    respondTeamEscalation(escalationId, actionId, comment)?.catch((err: unknown) => {
       showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось отправить решение');
     });
   }, [respondTeamEscalation]);
@@ -2728,6 +2768,7 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
       agent={persona ? null : chatAgent}
       participants={isGroupChat ? participantPersonas : null}
       onSessionUpdated={onSessionUpdated}
+      onAttachmentMoves={handleAttachmentMoves}
       onAddToWall={onAddToWall}
       onChatDeleted={onChatDeleted}
       // Строка фичи — вторая строка шапки (В2 «Трек», F2): под заголовком, над
@@ -3000,6 +3041,7 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
             а кнопка на стоящей очереди читалась бы как сломанная */}
         <PendingMessageList items={pending} isMobile={isMobile}
           sessionId={session.id}
+          canCancelItem={p => canCancelPending(project, p.senderUserId, readStoredUserId())}
           onCancel={online ? cancelPending : undefined}
           onPreempt={online && isWaiting ? preemptForPending : undefined} />
 
@@ -3041,10 +3083,12 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
               </div>
               <button
                 onClick={() => { atBottomRef.current = true; void send('Продолжи', [], mode); }}
+                disabled={!!turnDenied}
+                title={turnDenied ?? undefined}
                 style={{
                   display: 'inline-flex', alignItems: 'center', gap: 7,
                   padding: '9px 22px', borderRadius: R.lg, fontSize: 13, fontWeight: 600,
-                  background: C.accent, border: 'none', cursor: 'pointer', color: C.onAccent,
+                  background: C.accent, border: 'none', cursor: turnDenied ? 'not-allowed' : 'pointer', color: C.onAccent, opacity: turnDenied ? 0.5 : 1,
                   boxShadow: SHADOW.button, transition: 'opacity 0.12s',
                 }}
                 onMouseEnter={e => { e.currentTarget.style.opacity = '0.88'; }}

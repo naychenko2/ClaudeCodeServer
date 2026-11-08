@@ -48,14 +48,14 @@ public sealed class FilmFeedParityTests
         var (scene, version) = w.SceneWithClip();
         w.Feed.Records.Clear();
         var saver = new FilmSceneSaver(w.Service, w.Workspace, NullLogger<FilmSceneSaver>.Instance);
-        (await saver.SaveAsync(Owner, w.Scope, new SaveSceneRequest(Session, scene.SceneId, version.VersionId, null, null), initiator, default))
+        (await saver.SaveAsync(Owner, Owner, w.Scope, new SaveSceneRequest(Session, scene.SceneId, version.VersionId, null, null), initiator, default))
             .IsOk.Should().BeTrue();
         result["save"] = Take();
 
         // Правка фильма
         w.WriteFile("video/утро/extra.mp4");
-        var state = w.Service.State(Owner, w.Scope, "video/утро/утро.film").Value!;
-        (await w.Service.PatchAsync(Owner, w.Scope, "video/утро/утро.film",
+        var state = w.Service.State(Owner, Owner, w.Scope, "video/утро/утро.film").Value!;
+        (await w.Service.PatchAsync(Owner, Owner, w.Scope, "video/утро/утро.film",
             new FilmPatch(state.Revision, [new FilmPatchOp(FilmPatchOps.Add, "video/утро/extra.mp4", Trim: [0, 3])]),
             initiator, default, Session)).IsOk.Should().BeTrue();
         result["patch"] = Take();
@@ -63,7 +63,7 @@ public sealed class FilmFeedParityTests
         // Сборка фильма
         var assembler = new FilmAssembler(w.Service, w.Registry, new ConfigurationBuilder().Build(),
             NullLogger<FilmAssembler>.Instance, new OkDsp());
-        assembler.Start(Owner, w.Scope, "video/утро/утро.film", initiator, Session).IsOk.Should().BeTrue();
+        assembler.Start(Owner, Owner, w.Scope, "video/утро/утро.film", initiator, Session).IsOk.Should().BeTrue();
         await assembler.WhenIdleAsync();
         result["build"] = Take();
         return result;
@@ -121,7 +121,7 @@ public sealed class FilmFeedParityTests
         w.WriteFile("video/a/2.mp4");
         var revision = w.WriteFilm("video/a/a.film", Doc(Item("video/a/1.mp4")));
 
-        await w.Service.PatchAsync(Owner, w.Scope, "video/a/a.film",
+        await w.Service.PatchAsync(Owner, Owner, w.Scope, "video/a/a.film",
             new FilmPatch(revision, [new FilmPatchOp(FilmPatchOps.Add, "video/a/2.mp4", Trim: [0, 3])]),
             VideoInitiators.Agent, default, "чужой-чат");
 

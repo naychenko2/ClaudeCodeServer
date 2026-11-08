@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Knowledge;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
@@ -51,7 +52,8 @@ public sealed class DifyToolset(
     SessionManager sessions,
     ProjectManager projects,
     UserStore users,
-    WorkspaceKnowledgeStore workspaceStore) : IMcpParameterizedToolset
+    WorkspaceKnowledgeStore workspaceStore,
+    ITurnFrameSource frames) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/dify/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession)
@@ -88,6 +90,27 @@ public sealed class DifyToolset(
             return Deny("У проекта чата есть своя база знаний — сервер работает в режиме поиска "
                 + "(DIFY_SEARCH_ONLY): управление базами и документами недоступно.");
 
+        // Узкая рамка хода (общий проект, S2a-3b, решение 29.10): датасеты Dify живут в
+        // пространстве владельца (личная база — с его префиксом, публичная — в общем
+        // пространстве инстанса). В общем чате доступна только база этого чата проекта —
+        // дефолтный датасет, резолвленный по рабочей папке сессии; личные и чужие датасеты
+        // закрыты всем, включая владельца. Создание/удаление баз — тоже пространство
+        // владельца. list_datasets в узкой рамке отдаёт только базу этого проекта.
+        var frame = frames.Frame(context.CallerSessionId, context.OwnerId);
+        var narrow = frame == TurnFrameKind.Narrow;
+        if (narrow)
+        {
+            if (string.IsNullOrEmpty(defaultDatasetId))
+                return Deny("В общем проекте доступна только база знаний этого проекта — "
+                    + "у этого проекта её нет.");
+            if (tool is "create_dataset" or "delete_dataset")
+                return Deny("Создание и удаление баз знаний закрыты в общем проекте: "
+                    + "базы живут в пространстве владельца.");
+            if (arguments["dataset_id"] is JsonValue wantedId && wantedId.TryGetValue<string>(out var wanted)
+                && wanted.Trim().Length > 0 && wanted.Trim() != defaultDatasetId)
+                return Deny("В этом чате доступна только база знаний этого проекта.");
+        }
+
         try
         {
             switch (tool)
@@ -123,6 +146,9 @@ public sealed class DifyToolset(
                 case "list_datasets":
                 {
                     var (_, items) = await catalog.ListForUserAsync(username);
+                    // Узкая рамка: список ограничивается базой этого проекта — личные и
+                    // чужие датасеты владельца в общий чат не выносятся
+                    if (narrow) items = items.Where(i => i.Id == defaultDatasetId).ToList();
                     return Json(new
                     {
                         configured = true,

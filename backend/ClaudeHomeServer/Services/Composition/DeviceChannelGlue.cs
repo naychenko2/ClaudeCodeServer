@@ -24,7 +24,7 @@ public static class DeviceChannelGlue
         // Статус рук локального проекта (ADR-016 §7) — в чат хода из донесений агента
         services.AddSingleton<ClaudeHomeServer.Services.Devices.ILocalHandsNotifier,
             ClaudeHomeServer.Services.Composition.LocalHandsNotifier>();
-        // Живые события локальной модели (флаг local-model-stats): тиковый снимок генерации и
+        // Живые события локальной модели (статистика локальных моделей): тиковый снимок генерации и
         // итог хода — в session-группу чата, только при наличии зрителя (LocalModelLiveSink).
         // Интерфейс (ILocalModelLiveSink) — в Llm; счётчик ходов (LocalModelTurnMeter) резолвит
         // его лениво, поэтому порядок регистрации не важен.

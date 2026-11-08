@@ -19,6 +19,8 @@ namespace ClaudeHomeServer.Tests.Services;
 public class WebDavWikiGateTests : IDisposable
 {
     private const string Project = "p1";
+    // Пользователь WebDAV (S2d-6b-3): COPY/MOVE сверяют пути с его приватными вложениями
+    private const string DavUser = "u1";
     private readonly string _root = Path.Combine(Path.GetTempPath(), "webdav-wiki-gate-" + Guid.NewGuid().ToString("N"));
     private readonly string _dataDir;   // {root}/data — тот же data-корень, что у ResolveDataDir(DataPath)
 
@@ -114,7 +116,7 @@ public class WebDavWikiGateTests : IDisposable
 
         var ctx = Ctx();
         SetDestination(ctx, "data/wiki/u1/pages/Страница.md");
-        await WebDavHandler.HandleCopyAsync(ctx, new FileService(), _root, "docs/a.txt", Project);
+        await WebDavHandler.HandleCopyAsync(ctx, new FileService(), _root, "docs/a.txt", Project, DavUser);
 
         ctx.Response.StatusCode.Should().Be(403);
         File.Exists(Path.Combine(_dataDir, "wiki", "u1", "pages", "Страница.md")).Should().BeFalse();
@@ -131,7 +133,7 @@ public class WebDavWikiGateTests : IDisposable
 
         var ctx = Ctx();
         SetDestination(ctx, "Копия.md");
-        await WebDavHandler.HandleCopyAsync(ctx, new FileService(), _root, "data/wiki/u1/pages/Страница.md", Project);
+        await WebDavHandler.HandleCopyAsync(ctx, new FileService(), _root, "data/wiki/u1/pages/Страница.md", Project, DavUser);
 
         ctx.Response.StatusCode.Should().Be(403);
         File.Exists(page).Should().BeTrue();
@@ -147,14 +149,14 @@ public class WebDavWikiGateTests : IDisposable
 
         var ctx = Ctx();
         SetDestination(ctx, "docs/b.txt");
-        await WebDavHandler.HandleCopyAsync(ctx, new FileService(), _root, "docs/a.txt", Project);
+        await WebDavHandler.HandleCopyAsync(ctx, new FileService(), _root, "docs/a.txt", Project, DavUser);
         ctx.Response.StatusCode.Should().Be(201);
         (await File.ReadAllTextAsync(Path.Combine(_root, "docs", "b.txt"))).Should().Be("обычное");
 
         // под data/, но мимо вики — прежний успех
         var notes = Ctx();
         SetDestination(notes, "data/notes/Копия.md");
-        await WebDavHandler.HandleCopyAsync(notes, new FileService(), _root, "docs/a.txt", Project);
+        await WebDavHandler.HandleCopyAsync(notes, new FileService(), _root, "docs/a.txt", Project, DavUser);
         notes.Response.StatusCode.Should().Be(201);
         File.Exists(Path.Combine(_dataDir, "notes", "Копия.md")).Should().BeTrue();
     }
@@ -183,7 +185,7 @@ public class WebDavWikiGateTests : IDisposable
 
         var ctx = Ctx();
         SetMoveDestination(ctx, "data/wiki/u1/pages/Страница.md");
-        WebDavHandler.HandleMove(ctx, new FileService(), _root, "notes/x.md", Project);
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "notes/x.md", Project, DavUser);
 
         ctx.Response.StatusCode.Should().Be(403);
         File.Exists(page).Should().BeTrue(); // цель не снесена: отказ до любого следа на диске
@@ -200,7 +202,7 @@ public class WebDavWikiGateTests : IDisposable
 
         var ctx = Ctx();
         SetMoveDestination(ctx, "docs/x.md");
-        WebDavHandler.HandleMove(ctx, new FileService(), _root, "data/wiki/u1/pages/Страница.md", Project);
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "data/wiki/u1/pages/Страница.md", Project, DavUser);
 
         ctx.Response.StatusCode.Should().Be(403);
         File.Exists(dst).Should().BeTrue();  // обычный файл не снесён
@@ -221,7 +223,7 @@ public class WebDavWikiGateTests : IDisposable
 
         var ctx = Ctx();
         SetMoveDestination(ctx, "data"); // Overwrite не шлётся — по умолчанию «да»: снос существующей цели
-        WebDavHandler.HandleMove(ctx, new FileService(), _root, "notes/x.md", Project);
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "notes/x.md", Project, DavUser);
 
         ctx.Response.StatusCode.Should().Be(403);
         Directory.Exists(_dataDir).Should().BeTrue(); // data не снесён: отказ до любого следа на диске
@@ -242,7 +244,7 @@ public class WebDavWikiGateTests : IDisposable
 
         var ctx = Ctx();
         SetMoveDestination(ctx, "docs/x.md");
-        WebDavHandler.HandleMove(ctx, new FileService(), _root, "data", Project);
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "data", Project, DavUser);
 
         ctx.Response.StatusCode.Should().Be(403);
         File.Exists(dst).Should().BeTrue();           // цель не снесена
@@ -262,7 +264,7 @@ public class WebDavWikiGateTests : IDisposable
 
         var ctx = Ctx();
         SetMoveDestination(ctx, "data/notes/Заметка.md");
-        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project);
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project, DavUser);
 
         ctx.Response.StatusCode.Should().Be(201);
         File.ReadAllText(Path.Combine(dstDir, "Заметка.md")).Should().Be("переносимое");
@@ -280,7 +282,7 @@ public class WebDavWikiGateTests : IDisposable
 
         var ctx = Ctx();
         SetMoveDestination(ctx, "docs/b.txt");
-        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project);
+        WebDavHandler.HandleMove(ctx, new FileService(), _root, "docs/a.txt", Project, DavUser);
 
         ctx.Response.StatusCode.Should().Be(204);
         File.ReadAllText(dst).Should().Be("новое");

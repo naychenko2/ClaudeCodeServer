@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Reflection;
 using System.Text.Json;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Turn;
@@ -38,7 +39,7 @@ public class WorkspaceHttpChatsContinueTests : IDisposable
 
     private static async Task<JsonElement> CallRpcAsync(HttpClient client, string sessionId, string method, object? args)
     {
-        var resp = await client.PostAsJsonAsync($"/mcp/wsp/{sessionId}", new
+        var resp = await client.AsCaller(sessionId).PostAsJsonAsync($"/mcp/wsp/{sessionId}", new
         {
             jsonrpc = "2.0", id = 1, method, @params = args,
         });
@@ -136,5 +137,92 @@ public class WorkspaceHttpChatsContinueTests : IDisposable
 
         rpc.GetProperty("result").GetProperty("isError").GetBoolean().Should().BeTrue();
         TextOf(rpc).Should().Contain("не найдена");
+    }
+
+    // --- S2d-7b-1: гейт приватности в chats_continue (WorkspaceToolset) ---
+
+    // «Липкий» актор прогона: GetTurnActor читает его, когда ход не идёт, а адаптера нет
+    private void SetRunActor(string sessionId, string actor, bool submit = false)
+    {
+        var field = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var entry = ((System.Collections.IDictionary)field.GetValue(Sessions)!)[sessionId]!;
+        entry.GetType().GetField("RunActor")!.SetValue(entry, actor);
+        if (submit) entry.GetType().GetField("SubmitActor")!.SetValue(entry, actor);
+    }
+
+    // Счётчик подач: если гейт пропустил, ChatContinueService.Schedule запустит фон и дойдёт до SendOverride
+    private int _sendCalls;
+
+    private void CountSends() =>
+        _factory.Services.GetRequiredService<ChatContinueService>().SendOverride = (_, _, _, sys) =>
+        {
+            Interlocked.Increment(ref _sendCalls);
+            return Task.FromResult<SendAndWaitResult>(sys
+                ? new SendAndWaitResult.Completed(new TurnResult("## Цель\nпродолжить", 1, null, Succeeded: true))
+                : new SendAndWaitResult.Running());
+        };
+
+    [Fact]
+    public async Task ПриватныйЧат_АкторНеизвестен_ОтказНеНайдена_ПродолжениеНеЗапущено()
+    {
+        // Ход не идёт, актора нет — fail-closed: приватный чат не виден, Schedule не вызывается
+        var client = Client;
+        var chat = await CreateChatAsync(client);
+        SeedAgentTurn(chat);
+        CountSends();
+        Sessions.GetById(chat)!.PrivateToUserId = Sessions.ResolveOwnerId(Sessions.GetById(chat)!);
+
+        var rpc = await CallRpcAsync(client, chat, "tools/call",
+            new { name = "chats_continue", arguments = new { note = "x" } });
+
+        rpc.GetProperty("result").GetProperty("isError").GetBoolean().Should().BeTrue();
+        TextOf(rpc).Should().Contain("не найдена");
+        await Task.Delay(300);
+        _sendCalls.Should().Be(0, "гейт тулсета не пустил до постановки продолжения");
+        Sessions.GetById(chat)!.ContinuedInSessionId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ПриватныйЧат_АкторПустойИлиЧужой_ОтказНеНайдена_ПродолжениеНеЗапущено()
+    {
+        var client = Client;
+        var chat = await CreateChatAsync(client);
+        SeedAgentTurn(chat);
+        CountSends();
+        Sessions.GetById(chat)!.PrivateToUserId = Sessions.ResolveOwnerId(Sessions.GetById(chat)!);
+
+        foreach (var actor in new[] { "", "u-stranger" })
+        {
+            SetRunActor(chat, actor);
+            var rpc = await CallRpcAsync(client, chat, "tools/call",
+                new { name = "chats_continue", arguments = new { } });
+
+            rpc.GetProperty("result").GetProperty("isError").GetBoolean().Should().BeTrue($"актор «{actor}» приватный чат не видит");
+            TextOf(rpc).Should().Contain("не найдена");
+        }
+        await Task.Delay(300);
+        _sendCalls.Should().Be(0);
+        Sessions.GetById(chat)!.ContinuedInSessionId.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ПриватныйЧат_АкторАвтор_Проходит_Контроль()
+    {
+        // Контроль: тот же приватный чат с видящим актором проходит гейт — без него отказ выше
+        // мог бы объясняться чем угодно, кроме проверки видимости
+        var client = Client;
+        var chat = await CreateChatAsync(client);
+        SeedAgentTurn(chat);
+        ReplyWithNote();
+        var owner = Sessions.ResolveOwnerId(Sessions.GetById(chat)!)!;
+        Sessions.GetById(chat)!.PrivateToUserId = owner;
+        // Актор виден, пока ход идёт: RunActor без живых фоновых агентов GetTurnActor гасит
+        Sessions.GetById(chat)!.Status = SessionStatus.Working;
+        SetRunActor(chat, owner, submit: true);
+
+        var rpc = await CallRpcAsync(client, chat, "tools/call",
+            new { name = "chats_continue", arguments = new { } });
+
+        TextOf(rpc).Should().Contain("\"status\":\"scheduled\"");
     }
 }

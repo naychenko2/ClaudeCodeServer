@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.CodeGraph;
 using ClaudeHomeServer.Services.Knowledge;
 using Microsoft.AspNetCore.Authorization;
@@ -27,11 +28,17 @@ public class CodeGraphController(
     CodeGraphQueryService queries,
     ProjectManager projects,
     SessionManager sessions,
+    IProjectAccess access,
     FileWatcherService watchers,
     ILogger<CodeGraphController> logger) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+
+    // Контракт «чужой проект — 403» (UI различает «нет доступа» и «графа нет») сохранён, поэтому
+    // вместо [ProjectScope] (у него 404) — явный Resolve: несуществующий проект отсеивает вызывающий (404)
+    private bool HasAccess(string projectId, ProjectRight right) =>
+        access.Resolve(UserId, projectId, right) is not null;
 
     /// <summary>
     /// Дерево, к графу которого идёт запрос. Без ?rootPath= — корень проекта (прежнее поведение).
@@ -76,7 +83,7 @@ public class CodeGraphController(
             // Не раскрываем существование — 404, как ProjectsController.
             return NotFound();
         }
-        if (project.OwnerId != UserId)
+        if (!HasAccess(projectId, ProjectRight.Read))
         {
             // Чужой проект — явно 403 (контракт задачи): UI различает «нет доступа» и «графа нет».
             return Forbid();
@@ -126,7 +133,7 @@ public class CodeGraphController(
         var project = projects.GetById(projectId);
         if (project is null)
             return NotFound();
-        if (project.OwnerId != UserId)
+        if (!HasAccess(projectId, ProjectRight.Write))
             return Forbid();
         if (ResolveRoot(project, rootPath) is not { } root) return BadRoot();
 
@@ -221,7 +228,7 @@ public class CodeGraphController(
     {
         var project = projects.GetById(projectId);
         if (project is null) return NotFound();
-        if (project.OwnerId != UserId) return Forbid();
+        if (!HasAccess(projectId, ProjectRight.Read)) return Forbid();
         if (ResolveRoot(project, rootPath) is not { } root) return BadRoot();
 
         try

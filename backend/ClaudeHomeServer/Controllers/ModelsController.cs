@@ -148,16 +148,30 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
         // место по признакам сессии, поверх замороженной модели чата.
         if (!string.IsNullOrEmpty(sessionId) && persona is null)
         {
-            var session = sessions.GetById(sessionId);
-            // Чужая/неизвестная сессия — 404, не раскрывая существование
-            if (session is null || sessions.ResolveOwnerId(session) != ownerId)
+            // Чужая/неизвестная сессия — 404, не раскрывая существования. Гейт — ЧТЕНИЕ
+            // (GetAccessible → IProjectAccess.ResolveSession → SessionAccess.CanSee), а не
+            // гейт записи GetOwnedVisible: превью модели ничего не меняет, и участник общего
+            // проекта законно видит модель СВОЕГО чата проекта и общего чата (решение DEC-TAIL
+            // п.3, по разделению S2d-3e: чтение — GetAccessible, запись — GetOwnedVisible).
+            // Хвост FIN3 (дефект 6c037429) остаётся: приватный чат участника не виден даже
+            // владельцу проекта (решение 28.10) — ответ неотличим от «нет такого чата».
+            if (sessions.GetAccessible(sessionId, ownerId) is not { } found)
                 return NotFound(new { error = "Сессия не найдена" });
+            var (session, scope) = found;
+            // Ключ резолва — арендатор боевого хода (RequestScope.TenantOwnerId =
+            // ResolveOwnerId сессии), а не id вызывающего: им же чату резолвят модель при
+            // создании (SessionManager.CreateAsync → project.OwnerId) и им же идёт его ход
+            // (StartNewSessionAsync → LlmSessionContext.OwnerId → ClaudeSession._turnOwnerId).
+            // Участнику иначе показали бы его личные слоты вместо тех, которыми реально
+            // живёт его чат.
+            var tenantId = scope.TenantOwnerId;
             var usageKey = UsageKeyFor(session);
             // Персона сессии — как в бою (ClaudeSession.EffectiveTurnChain зовёт ResolveChain
             // с матрицами персоны): без неё превью показывало хвост общего слота владельца,
-            // а не цепочку, которой реально идёт ход (инцидент 2026-08-26).
-            var sessionPersona = session.PersonaId is null ? null : personas.Get(session.PersonaId, ownerId);
-            var chain = assignments.ResolveChain(usageKey, session.Model, ownerId, sessionPersona);
+            // а не цепочку, которой реально идёт ход (инцидент 2026-08-26). Тот же ключ,
+            // что у BuildPersonaLayer боя (SessionManager.StartNewSessionAsync).
+            var sessionPersona = session.PersonaId is null ? null : personas.Get(session.PersonaId, tenantId);
+            var chain = assignments.ResolveChain(usageKey, session.Model, tenantId, sessionPersona);
             // Замороженность — свойство сессии: чат с непустой Model не перечитывает
             // настройки (ADR-007 §9.1, смена подложится только новым чатом); с пустой —
             // живёт по назначению места каждым ходом.
@@ -167,8 +181,8 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
                 // точкой, что достройка хвоста в бою (TierOfModel с матрицами персоны)
                 ? new ModelAssignmentResolver.ModelSourceDetail(session.Model!.Trim(),
                     ModelAssignmentResolver.ModelSource.ExplicitModel,
-                    assignments.TierOfModel(session.Model, ownerId, sessionPersona), null, null, chain)
-                : assignments.Preview(usageKey, null, PersonaSpecialty.None, ownerId, null) with { Chain = chain };
+                    assignments.TierOfModel(session.Model, tenantId, sessionPersona), null, null, chain)
+                : assignments.Preview(usageKey, null, PersonaSpecialty.None, tenantId, null) with { Chain = chain };
             return Ok(PreviewResponse(cd, frozen, chip: null));
         }
 
@@ -179,13 +193,18 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
         {
             if (persona is null)
                 return BadRequest(new { error = "subagentChip требует существующего personaId" });
-            var session = sessions.GetById(sessionId);
-            // Чужая/неизвестная сессия — 404, не раскрывая существование. Проверка та же,
-            // что у ветки чата выше (ResolveOwnerId): проектная сессия принадлежит
-            // владельцу проекта и при пустом OwnerId чип недоступен посторонним.
-            if (session is null || sessions.ResolveOwnerId(session) != ownerId)
+            // Чужая/неизвестная сессия — 404, не раскрывая существования. Проверка та же,
+            // что у ветки чата выше: гейт чтения GetAccessible. Проектная сессия относится
+            // её арендатору, и при пустом OwnerId чип недоступен посторонним вне проекта;
+            // приватный чат участника не виден и владельцу проекта (хвост FIN3, дефект 6c037429).
+            if (sessions.GetAccessible(sessionId, ownerId) is not { } found)
                 return NotFound(new { error = "Сессия не найдена" });
-            chip = assignments.SubagentChipFor(persona, session.Model, ownerId);
+            var session = found.Session;
+            // Ключ пина — владелец самой персоны, а не id вызывающего и не арендатор чата:
+            // тем же ключом в бою пишется frontmatter .md-агента персоны (PersonaAgentFileSync:
+            // ownerId = persona.OwnerId), и персона в запросе всегда своя (personas.Get
+            // фильтрует по владельцу). Её пин резолвится по её собственным слотам и ячейкам.
+            chip = assignments.SubagentChipFor(persona, session.Model, persona.OwnerId);
         }
 
         return Ok(PreviewResponse(d, frozen: null, chip: chip));

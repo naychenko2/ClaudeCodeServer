@@ -113,6 +113,12 @@ public static class CoreRegistration
         // Ф5: явный класс-адаптер ProjectManagerAdapter (вместо фабрики-синонима) —
         // точка для подмены в тестах и формализация, что это узкая проекция, а не весь ProjectManager.
         services.AddSingleton<IProjectManager, ProjectManagerAdapter>();
+        // Точка доступа к проекту/чату: область запроса (RequestScope) для [ProjectScope] и явных резолвов (S0-2)
+        services.AddSingleton<ClaudeHomeServer.Services.Access.IProjectAccess, ClaudeHomeServer.Services.ProjectAccessService>();
+        // Шов привязок чата к фиче (S2d-7b-2): настоящая реализация регистрируется в TasksSubsystem вместе
+        // с TaskManager; при выключенной подсистеме — честное «привязок нет». Неразрешимый шов при включённой — сбой.
+        if (!ClaudeHomeServer.Services.Composition.SubsystemGate.IsEnabled(config, "tasks"))
+            services.AddSingleton<ClaudeHomeServer.Services.IFeatureChatLinks, ClaudeHomeServer.Services.NoFeatureChatLinks>();
         // Шов для вертикалей (Этап 3, волна 1): вместо прямой зависимости от ProjectManager
         // вертикали берут узкий контракт IProjectRootLookup. Реализация — тонкая обёртка
         // над ProjectManager в `Services/ProjectRootLookup`, живёт здесь же в Main.
@@ -200,6 +206,8 @@ public static class CoreRegistration
         // Применение пресета каркаса знакомства v2: только добавляет поверх живой папки,
         // отчёт по каждому шагу; зависимости-синглтоны, сам тоже stateless-синглтон
         services.AddSingleton<ProjectPresetService>();
+        services.AddSingleton<SharedProjectsGate>();
+        services.AddSingleton<ProjectMembershipService>();
         services.AddSingleton<UnifiedSearchService>();
         services.AddSingleton<SyncService>();
         services.AddSingleton<FileWatcherService>();
@@ -212,6 +220,11 @@ public static class CoreRegistration
         // один на инстанс; сами редакторы друг о друге не знают
         services.AddSingleton<ClaudeHomeServer.Services.Media.IMediaEvents, ClaudeHomeServer.Services.Media.MediaEventHub>();
         services.AddSingleton<SessionManager>();
+        // Актор и рамка хода (S2a-1): читает только шов, пишет ядро сессий в двух точках подачи
+        services.AddSingleton<ClaudeHomeServer.Services.Access.ITurnActorRegistry>(sp => sp.GetRequiredService<SessionManager>());
+        services.AddSingleton<ClaudeHomeServer.Services.Access.ITurnFrameSource>(sp => sp.GetRequiredService<SessionManager>());
+        // Право актора в пишущих MCP-инструментах (S2c-6): таблица «инструмент → право», default-deny
+        services.AddSingleton<ClaudeHomeServer.Services.Access.IActorRightGate, ClaudeHomeServer.Services.Access.ActorRightGate>();
         // Обратный индекс «файл → какие ещё чаты его меняли» (панель «Изменения») — см. GetForProjectAsync
         services.AddSingleton<ProjectFileSessionsIndex>();
         // Кэш отпечатков префиксов истории (Перф-3 B8): SHA-256 2,5 МБ-истории не пересчитывается

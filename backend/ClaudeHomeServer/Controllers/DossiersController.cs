@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.CodeGraph;
 using ClaudeHomeServer.Services.Dossiers;
 using ClaudeHomeServer.Services.Git;
@@ -14,19 +15,20 @@ namespace ClaudeHomeServer.Controllers;
 // Паспорта изменений: просмотр (ADR-004, этап 1), активный канал recall — поиск
 // для MCP dossier_lookup и полная запись для dossier_get (этап 2 §5; изоляция —
 // владелец проекта, сервисный JWT памяти резолвит того же владельца) и выгрузка
-// в ветку ccs/dossiers/v1 (этап 3). Всё, кроме List, — за флагом change-dossiers-recall.
+// в ветку ccs/dossiers/v1 (этап 3). Доступно всем владельцам (флаг снят).
 [ProjectCapability(ProjectCapabilityArea.ServerContent, ProjectKey = "id")]
 [ApiController]
 [Authorize]
 [Route("api/projects")]
 [SubsystemUsage("dossiers")]
 public class DossiersController(ProjectManager projects, DossierStore store,
-    CodeGraphService graphs, DossierRecallService recall, FeatureFlagService flags,
+    CodeGraphService graphs, DossierRecallService recall,
     GitService git, IGitRefSnapshotStore snapshotStore, SessionManager sessions, UserStore users,
     InstanceSecretsProvider secrets, DossierDiscussionService discussions,
     DossierCaptureState captureState) : ControllerBase
 {
-    private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
+    // Ключ хранилищ — арендатор из RequestScope ([ProjectScope])
+    private string TenantId => HttpContext.GetRequestScope().TenantOwnerId;
 
     // Помощник: IGitRefSnapshotStore и GitService регистрируются на одном синглтоне
     // (см. GitSubsystem), так что оба указывают на тот же объект. Контроллеру нужны оба:
@@ -44,27 +46,24 @@ public class DossiersController(ProjectManager projects, DossierStore store,
     // Гейт автовыгрузки — тот же паттерн: опрашивается статусом выгрузки (autoExport)
     private DossierAutoExportGate AutoExportGate => new(projects, DossiersGit, captureState);
 
-    // Чужой проект — 404, а не 403: подтверждать его существование незачему
-    private Project? Owned(string id)
-    {
-        var p = projects.GetById(id);
-        return p is null || p.OwnerId != UserId ? null : p;
-    }
+    // Доступ к проекту проверил [ProjectScope] (чужой — 404, а не 403: существование не подтверждаем)
+    private Project? Scoped(string id) => projects.GetById(id);
 
     // Окно метрики охвата (спринт «История решений», блок В): знаменатель — коммиты
     // за 7 суток. Отдаётся наружу в coverage.periodDays — долю охвата фронт считает сам.
     private const int CoveragePeriodDays = 7;
 
     [HttpGet("{id}/dossiers")]
+    [ProjectScope(Key = "id")]
     public async Task<IActionResult> List(string id, [FromQuery] string? file,
         [FromQuery] string? symbol, [FromQuery] string? commit, CancellationToken ct)
     {
-        var p = Owned(id);
+        var p = Scoped(id);
         if (p is null) return NotFound();
 
         var result = string.IsNullOrWhiteSpace(file) && string.IsNullOrWhiteSpace(symbol) && string.IsNullOrWhiteSpace(commit)
-            ? store.List(UserId, id).OrderByDescending(d => d.CommittedAt).ToList()
-            : store.Find(UserId, id, file, symbol, commit);
+            ? store.List(TenantId, id).OrderByDescending(d => d.CommittedAt).ToList()
+            : store.Find(TenantId, id, file, symbol, commit);
 
         // Метрика охвата: коммиты окна против числа паспортов в выдаче. При файловом
         // фильтре знаменатель сужается до истории одного файла (--follow), символ и
@@ -103,24 +102,26 @@ public class DossiersController(ProjectManager projects, DossierStore store,
     // свободному тексту — в том числе archived (в пассивный канал они не идут, но найти
     // их можно). Один из фильтров обязателен; без фильтров — свежие сверху (лимит).
     [HttpGet("{id}/dossiers/lookup")]
+    [ProjectScope(Key = "id")]
     public IActionResult Lookup(string id, [FromQuery] string? path, [FromQuery] string? symbol,
         [FromQuery] string? query, [FromQuery] int limit = 20)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (p is null) return NotFound();
 
         var capped = Math.Clamp(limit, 1, 50);
-        return Ok(recall.Lookup(UserId, id, path, symbol, query, capped));
+        return Ok(recall.Lookup(TenantId, id, path, symbol, query, capped));
     }
 
     // Полная запись паспорта для MCP dossier_get (этап 2): по id, только свой проект.
     [HttpGet("{id}/dossiers/{dossierId}")]
+    [ProjectScope(Key = "id")]
     public IActionResult GetById(string id, string dossierId)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
+        if (p is null) return NotFound();
 
-        return store.GetById(UserId, id, dossierId) is { } dossier ? Ok(dossier) : NotFound();
+        return store.GetById(TenantId, id, dossierId) is { } dossier ? Ok(dossier) : NotFound();
     }
 
     // ---------- Выгрузка в ветку ccs/dossiers/v1 (ADR-004 §6) ----------
@@ -136,10 +137,10 @@ public class DossiersController(ProjectManager projects, DossierStore store,
     // чужом tip / одной origin-ветке / общей папке — панель выбирает текст по причине.
     // null, когда проект не git-репозиторий (подсказка тогда всё равно скрыта).
     [HttpGet("{id}/dossiers/export/status")]
+    [ProjectScope(Key = "id")]
     public async Task<IActionResult> ExportStatus(string id, CancellationToken ct)
     {
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChangeDossiersRecall)) return NotFound();
-        var p = Owned(id);
+        var p = Scoped(id);
         if (p is null) return NotFound();
 
         var isGitRepo = GitRepo.IsRepo(p.RootPath);
@@ -148,26 +149,26 @@ public class DossiersController(ProjectManager projects, DossierStore store,
             isGitRepo,
             sharedFolder = projects.GetByRootPath(p.RootPath).Any(x => x.OwnerId != p.OwnerId),
             hasDossierBranch = await DossiersGit.RefExistsAsync(p.OwnerId, p.RootPath, DossierBranch.Ref, ct),
-            autoExport = isGitRepo ? await AutoExportGate.ClassifyAsync(UserId, p, ct) : null,
+            autoExport = isGitRepo ? await AutoExportGate.ClassifyAsync(TenantId, p, ct) : null,
         });
     }
 
     // Запуск выгрузки. Ветка остаётся локальной: push отсюда недоступен, публикация —
     // отдельный POST /export/push по явной команде пользователя.
     [HttpPost("{id}/dossiers/export")]
+    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public async Task<IActionResult> Export(string id, CancellationToken ct)
     {
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChangeDossiersRecall)) return NotFound();
-        var p = Owned(id);
+        var p = Scoped(id);
         if (p is null) return NotFound();
 
         try
         {
-            var result = await Exporter.ExportAsync(UserId, p, ct: ct);
+            var result = await Exporter.ExportAsync(TenantId, p, ct: ct);
             // Tip ручной выгрузки — тоже «наш»: тик автоимпорта не должен завозить
             // содержимое только что выгруженной ветки обратно как «чужое» (та же
             // петля, что у автовыгрузки — разбор 23.08)
-            captureState.MarkOwnTip(UserId, p.Id, result.CommitSha);
+            captureState.MarkOwnTip(TenantId, p.Id, result.CommitSha);
             return Ok(new
             {
                 status = result.Committed ? "exported" : "nothingToExport",
@@ -182,10 +183,10 @@ public class DossiersController(ProjectManager projects, DossierStore store,
     // владельца — как у обычной публикации в GitController; без них git пробует
     // анонимно/системным helper'ом (публичные remote так тоже работают).
     [HttpPost("{id}/dossiers/export/push")]
+    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public async Task<IActionResult> Push(string id, CancellationToken ct)
     {
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChangeDossiersRecall)) return NotFound();
-        var p = Owned(id);
+        var p = Scoped(id);
         if (p is null) return NotFound();
 
         var owner = p.OwnerId is null ? null : users.GetById(p.OwnerId);
@@ -203,7 +204,7 @@ public class DossiersController(ProjectManager projects, DossierStore store,
             var tip = resolved is null
                 ? null
                 : await DossiersGit.TipAsync(p.OwnerId, p.RootPath, resolved, ct);
-            captureState.MarkOwnTip(UserId, p.Id, tip?.CommitSha);
+            captureState.MarkOwnTip(TenantId, p.Id, tip?.CommitSha);
             return Ok(new { pushed = true });
         }
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
@@ -217,15 +218,15 @@ public class DossiersController(ProjectManager projects, DossierStore store,
     // же состояния ветки — no-op: существующие записи не меняются, свой паспорт по тому же
     // sha не перезаписывается никогда (импортированный живёт рядом отдельной записью).
     [HttpPost("{id}/dossiers/import")]
+    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public async Task<IActionResult> Import(string id, CancellationToken ct)
     {
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChangeDossiersRecall)) return NotFound();
-        var p = Owned(id);
+        var p = Scoped(id);
         if (p is null) return NotFound();
 
         try
         {
-            var result = await Importer.ImportAsync(UserId, p, ct);
+            var result = await Importer.ImportAsync(TenantId, p, ct);
             return Ok(new
             {
                 status = !result.BranchFound ? "noBranch"

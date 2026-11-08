@@ -81,6 +81,12 @@ public class PersonasController(
     private string? CallerSessionId() =>
         Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault();
 
+    // Запись фактов консультации в память персоны закрыта, если чат-вызыватель приватный ИЛИ
+    // не определён (нет заголовка, чужая или несуществующая сессия): fail-closed, ответ отдаётся
+    private bool AskCallerIsPrivateOrUnknown(string? callerSessionId) =>
+        callerSessionId is null || _sessions.GetOwnedVisible(callerSessionId, UserId) is not { } caller
+        || caller.PrivateToUserId is not null;
+
     private Task Broadcast(string action, string? personaId = null) =>
         _hub.Clients.Group("user_" + UserId)
             .SendAsync("message", new PersonasChangedMessage(action, personaId));
@@ -231,6 +237,14 @@ public class PersonasController(
     public async Task<ActionResult<Session>> CreateChat(string id, [FromBody] CreatePersonaChatRequest req)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
+        // FIN3-2 (доработка по возврату ревью cea595f7): тот же гейт, что на POST /sessions
+        // (SessionsController.cs:55), для обеих веток CreatePersonaChatAsync — проектной
+        // (contextProjectId, SessionManager.cs:4378) и чата вне проекта: ClaudeSessionId =
+        // resumeSessionId (:4390/:4415) — ключ истории (HistoryKeyOf) и транскрипта CLI.
+        // Отказ неотличим от несуществующего; неизвестный ключ не трогается. Гейт здесь, не в
+        // сервисе: исключение из StartNewSessionAsync дало бы 400 в catch ниже, а нужен 404.
+        if (req.ResumeSessionId is { Length: > 0 } resumeId && _sessions.IsTranscriptReservedForOthers(resumeId, UserId))
+            return NotFound(new { error = "Чат не найден" });
         var mode = ClaudeModeExtensions.ForNewChat(req.Mode, hasPersona: true);
         try
         {
@@ -239,6 +253,9 @@ public class PersonasController(
             return Ok(chat);
         }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
+        // Чат от лица глобальной персоны в общем проекте (доработка R-S2a-8): 400 с машинным кодом.
+        catch (SessionManager.GlobalPersonaInSharedException ex)
+        { return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
@@ -1593,7 +1610,7 @@ public class PersonasController(
         try
         {
             var answer = await _ask.AskAsync(UserId, persona, req.Question, req.Context,
-                HttpContext.RequestAborted);
+                HttpContext.RequestAborted, AskCallerIsPrivateOrUnknown(CallerSessionId()));
             return Ok(new { handle = persona.Handle, name = persona.Name, role = persona.Role, answer });
         }
         catch (Exception ex)

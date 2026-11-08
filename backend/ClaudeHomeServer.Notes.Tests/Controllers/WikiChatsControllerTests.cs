@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Notes.Controllers;
@@ -28,8 +29,10 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Контракт: 200 {outcome, reason?, packageIds[]} — applied / awaiting_human / nothing_new /
 // up_to_date и rejected без кода; 202 {running:true} — ожидание истекло, разбор продолжается;
 // 404 {code:"not_found"} — чужой и несуществующий неразличимы; 409 {code,message} —
-// task_execution, marked_skip, personal_section, wiki_not_initialized; нечитаемый стор
+// task_execution, marked_skip, personal_section; нечитаемый стор
 // списка/пересчёта — wiki_triage_invalid с текстом «файл разбора чатов не читается».
+// С LI-2 analyze перед разбором заводит вику заявителя: 409 wiki_not_initialized этой ручки
+// больше нет (состояния разбора — прежние); svc и выключенный флаг до заведения не доходят.
 // analyze-status: 200 {running, last?{outcome,reason,packageIds,finishedAt}}, чужой чат — 404.
 // Список: строка чата несёт running, cursor, chroniclePath (путь — по формуле сервиса,
 // и только если файл хроники есть на диске — N1, дефект 58ad40a5: после отката — null)
@@ -97,7 +100,7 @@ public class WikiChatsControllerTests : IDisposable
             .Build();
         var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         _projects = new ProjectManager(_config, users, new AppSettingsService(_config));
-        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, new WikiFlagOn());
+        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, flags: new WikiFlagOn());
         _keeper = new WikiKeeper(_notes, _config);
         var apply = new WikiApplyService(_notes, _keeper, new NoSpheres(), _config);
         _chat = new WikiChatIngestService(
@@ -142,12 +145,17 @@ public class WikiChatsControllerTests : IDisposable
         AssertBody(await Controller(flagsOn: false).AnalyzeCore(ChatId, Wait), 409, "wiki_llm_wiki_off");
         // Мутация «убрать проверку флага в AnalyzeCore»: разбор доходит до модели — тест красный.
         _llm.Calls.Should().BeEmpty("при выключенном флаге разбор не стартует");
+
+        // LI-2: и при выключенной функции вики не появляется: ни одной точки заведения при
+        // выключенном llm-wiki (u2 в этом стенде не заведён).
+        AssertBody(await Controller(Foreign, flagsOn: false).AnalyzeCore("s-any", Wait), 409, "wiki_llm_wiki_off");
+        WikiPaths.IsInitialized(_dir, Foreign).Should().BeFalse();
     }
 
-    // ─── 2. Ступень 0 и незаведённая вики: 409 с точным кодом ────────────────
+    // ─── 2. Ступень 0: 409 с точным кодом ───────────────────────────────────
 
     [Fact]
-    public async Task Analyze_Ступень0_И_НезаведённаяВики_409_СТочнымКодом()
+    public async Task Analyze_Ступень0_409_СТочнымКодом()
     {
         AddSession("s-task", taskExecution: true);
         AssertBody(await Controller().AnalyzeCore("s-task", Wait), 409, WikiChatIngestService.CodeTaskExecution);
@@ -158,12 +166,70 @@ public class WikiChatsControllerTests : IDisposable
         AddSession("s-personal", projectId: null);
         AssertBody(await Controller().AnalyzeCore("s-personal", Wait), 409, WikiChatIngestService.CodePersonalSection);
 
-        // Свой чат владельца с незаведённой вики: u2 не инициализирован в этом стенде.
+        _llm.Calls.Should().BeEmpty("все три отказа — до обращения к модели");
+    }
+
+    // ─── 2b. LI-2: вика заявителя заводится сама, до разбора ────────────────
+
+    [Fact]
+    public async Task AnalyzeНезаведённойВикиЗаводитЕёИРазборИдётДальше()
+    {
+        // Мутация (критерий c2): убрать EnsureInitializedAsync в AnalyzeCore — u2 остаётся без
+        // pages/_schema.md, сервис отвечает 409 wiki_not_initialized и модель не звала: красный.
         AddSession("s-nowiki", projectId: "p1");
         _sessions.All.Single(s => s.Id == "s-nowiki").OwnerId = Foreign;
-        AssertBody(await Controller(Foreign).AnalyzeCore("s-nowiki", Wait), 409, WikiChatIngestService.CodeWikiNotInitialized);
+        SetShortHistory("s-nowiki");
+        _llm.Script(("A", Claims(Claim1)), ("B", Plan1));
 
-        _llm.Calls.Should().BeEmpty("все четыре отказа — до обращения к модели");
+        var res = await Controller(Foreign).AnalyzeCore("s-nowiki", Wait);
+
+        var schema = Path.Combine(WikiPaths.Pages(_dir, Foreign), WikiPaths.SchemaFileName);
+        File.Exists(schema).Should().BeTrue("«разобрать этот чат» — действие человека: его вика создаётся сама");
+        File.ReadAllText(schema).Should().StartWith("# Схема вики", "шаблон пишет только Хранитель");
+        _llm.Calls.Should().NotBeEmpty("разбор дошёл до модели: отказа по незаведённой вике здесь нет");
+        AssertNotCode(res, WikiChatIngestService.CodeWikiNotInitialized);
+    }
+
+    [Fact]
+    public async Task ГонкаДвухАнализовНезаведённойВики_ОдинШаблон_ПравкаЧеловекаНеЗатёрта()
+    {
+        // Два одновременных действия одного владельца (барьер — TaskCompletionSource, не
+        // Task.Delay): ни одно не бросает, вика заведена ровно одним шаблоном. Затем правка
+        // человека между вызовами: последующие действия проходят по «файл уже есть» и её не
+        // затирают. Мутация (критерий c2): снять EnsureInitializedAsync в AnalyzeCore — этот
+        // тест красный на первой же проверке (проверено: вики остаётся незаведённой).
+        // Сам замок _initLocks здесь не мерится: у Write уникальное имя temp
+        // (WikiFileWriter.cs:24), поэтому двойная запись не даёт коллизии; замок держит
+        // тест WikiKeeperTests.ДваПараллельныхЗавестиВики (там вместе с именем temp).
+        AddSession("s-race-a", projectId: "p1", wikiMark: WikiMarks.Skip);
+        AddSession("s-race-b", projectId: "p1", wikiMark: WikiMarks.Skip);
+        foreach (var id in new[] { "s-race-a", "s-race-b" })
+            _sessions.All.Single(s => s.Id == id).OwnerId = Foreign;
+
+        await RunBoth("s-race-a", "s-race-b"); // ни один из двух не бросил — иначе бросил бы здесь
+
+        var schema = Path.Combine(WikiPaths.Pages(_dir, Foreign), WikiPaths.SchemaFileName);
+        File.Exists(schema).Should().BeTrue("гонка не оставила вики незаведённой");
+        File.ReadAllText(schema).Should().StartWith("# Схема вики");
+
+        // Человек правил схему (операция schema, решение 6).
+        File.WriteAllText(schema, "# Схема вики\n\nправка человека.", new UTF8Encoding(false));
+
+        await RunBoth("s-race-a", "s-race-b");
+        File.ReadAllText(schema).Should().Be("# Схема вики\n\nправка человека.",
+            "повторное заведение идемпотентно: правку человека никто не затирает");
+        _llm.Calls.Should().BeEmpty("заведение — до ступени 0, до модели никто не дошёл");
+    }
+
+    /// <summary>Два действия одного владельца, стартованные от одного барьера.</summary>
+    private Task RunBoth(string idA, string idB)
+    {
+        var barrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var a = Task.Run(async () => { await barrier.Task; return await Controller(Foreign).AnalyzeCore(idA, Wait); });
+        var b = Task.Run(async () => { await barrier.Task; return await Controller(Foreign).AnalyzeCore(idB, Wait); });
+        barrier.SetResult();
+        // Ни один не бросает и не зависает: барьер открыт, потолок — страхование от зависания.
+        return Task.WhenAll(a, b).WaitAsync(TimeSpan.FromSeconds(20));
     }
 
     // ─── 3. Применённый и up_to_date: 200 с исходом (не отказ) ───────────────
@@ -512,6 +578,12 @@ public class WikiChatsControllerTests : IDisposable
 
         ((IStatusCodeActionResult)res).StatusCode.Should().Be(403);
         _llm.Calls.Should().BeEmpty("отказ по типу токена — до обращения к модели");
+
+        // LI-2: svc не доходит и до заведения — агент не заводит вику (инвариант ADR-035).
+        AddSession("s-svc-niki", projectId: "p1");
+        _sessions.All.Single(s => s.Id == "s-svc-niki").OwnerId = Foreign;
+        AssertBodyStatus(await Controller(Foreign, svc: true).AnalyzeCore("s-svc-niki", Wait), 403);
+        WikiPaths.IsInitialized(_dir, Foreign).Should().BeFalse("403 по токену — ни байта в pages/");
     }
 
     // Отказ по типу токена не зависит от состояния: при выключенном флаге и у несуществующего
@@ -590,7 +662,7 @@ public class WikiChatsControllerTests : IDisposable
         // MapInboundClaims=false оставляет raw-имена, как в бою.
         if (svc) identity.AddClaim(new Claim("typ", "svc"));
         http.User = new ClaimsPrincipal(identity);
-        return new WikiChatsController(_sessions, _chat, new WikiChatRecalc(_sessions, _config), _config, flagsOn ? new WikiFlagOn() : new WikiFlagOff())
+        return new WikiChatsController(_sessions, _chat, new WikiChatRecalc(_sessions, _config), _keeper, _config, flagsOn ? new WikiFlagOn() : new WikiFlagOff())
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -610,6 +682,14 @@ public class WikiChatsControllerTests : IDisposable
     // PluginsController/TasksController): проверяется только статус.
     private static void AssertBodyStatus(IActionResult result, int status) =>
         ((IStatusCodeActionResult)result).StatusCode.Should().Be(status);
+
+    // Этот ответ не является отказом с данным кодом (для точек, где прежний отказ снят:
+    // какой исход дал сервис дальше — предмет других тестов).
+    private static void AssertNotCode(IActionResult result, string code)
+    {
+        if (result is ObjectResult { Value: not null } obj && Body(obj).TryGetProperty("code", out var got))
+            got.GetString().Should().NotBe(code);
+    }
 
     // Подменённая модель того же образца, что в WikiChatIngestTests: проходы по директивам
     // промпта, gate первого прохода A; скрипт и gate тест выставляет перед своим прогоном.

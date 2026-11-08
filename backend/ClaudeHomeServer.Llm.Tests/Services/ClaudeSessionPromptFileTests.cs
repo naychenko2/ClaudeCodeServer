@@ -56,7 +56,8 @@ public class ClaudeSessionPromptFileTests : IDisposable
             var args = new List<string> { "--print", "--model", "opus" };
             ClaudeSession.PrepareTurnPromptFile(prompt, _dir, p => p, args);
             return ClaudeSession.BuildLaunchSignature(
-                args, "tasks", "", new Dictionary<string, string>(), null);
+                args, "tasks", "", new Dictionary<string, string>(), null,
+                ClaudeHomeServer.Services.Access.TurnFrameKind.Wide);
         }
 
         Sig("один").Should().Be(Sig("один"), "путь Guid не должен мерцать в сигнатуре");

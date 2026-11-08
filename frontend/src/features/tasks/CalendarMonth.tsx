@@ -10,7 +10,7 @@ import { ChevronLeft, ChevronRight, Plus } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { NO_PROJECT_LABEL, projectColor, todayIso, toIsoDate } from '../../lib/tasks';
 import { TaskCard } from './TaskCard';
-import { RepeatIcon } from './bits';
+import { RepeatIcon, SharedTaskChip, isSharedTask } from './bits';
 import { useTaskHover } from './useTaskHover';
 import { useUserScrollGate } from '../../lib/userScrollGate';
 
@@ -339,6 +339,7 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
                   task={t}
                   onClick={() => onOpenTask(t)}
                   projectName={t.projectId ? projectsById.get(t.projectId)?.name : NO_PROJECT_LABEL}
+                  shared={isSharedTask(t, projectsById)}
                 />
               ))}
             </div>
@@ -439,6 +440,7 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
                       }}>
                         {t.title}
                       </span>
+                      {isSharedTask(t, projectsById) && <SharedTaskChip compact />}
                       {t.virtual && (
                         <span title="Повтор" style={{ color: color.main, opacity: 0.75, display: 'flex', flexShrink: 0 }}>
                           <RepeatIcon size={9} />

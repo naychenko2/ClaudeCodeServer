@@ -12,7 +12,6 @@ import {
 } from 'lucide-react';
 import {
   Badge, Button, Dot, IconButton, Menu, MenuItem, Notice, ProgressBar, C, FS, R, SP, ICON_SIZE, ICON_STROKE, isCardPick, useChatContext, useIsMobile,
-  FLAGS, useFeature,
 } from 'aihome_shell/kit';
 import { stripVisible } from './characterPhotos';
 import {
@@ -154,15 +153,13 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   const saved = versionSaved(thread, version);
   const name = `${threadName(thread)} · ${versionName(version)}`;
   const done = versionDone(thread, version);
-  // Блок «Фото персонажа» (ADR-027, шаг 18): не у исходника, не у обрезки без ИИ, только с персонажем
-  const smart = useFeature(FLAGS.characterSmartPhotos);
   const launch = version.jobId ? launchOf(thread, version.jobId) : null;
   // Лица запуска (ADR-028): при N > 1 общего сходства версии нет — оно у каждого лица в строках
   const faces = launchFaces(launch);
   const sim = !versionSimilarityShown(faces) ? ''
     : typeof version.similarity === 'number' ? `сходство ${simText(version.similarity)}`
     : version.jobId && launchVersions(thread, version.jobId).some(x => typeof x.similarity === 'number') ? 'лицо не найдено' : '';
-  const character = stripVisible({ smart, versionId: version.id, cropNote: cropNote ?? null, character: launch?.character ?? null })
+  const character = stripVisible({ versionId: version.id, cropNote: cropNote ?? null, character: launch?.character ?? null })
     ? (launch?.character ?? null) : null;
   const personal = isPersonalScope(projectId);
   const primary = versionPrimary(thread, version, focused, saved, personal);
@@ -170,8 +167,7 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   const run = async (fn: () => Promise<unknown>) => { setBusy(true); await fn(); setBusy(false); };
   const open = () => openEditor(sessionId, thread.id, version.id);
   // «Подставить персонажа» (этап 2 · шаг 10b): вход — пункт меню «⋯», виден только в проекте,
-  // за флагом, при персонажах в проекте и доступных локальных моделях. Нет условия — нет и «⋯»
-  const faceFlag = useFeature(FLAGS.characterFaceSwap);
+  // при персонажах в проекте и доступных локальных моделях. Нет условия — нет и «⋯»
   const { list: faceChars } = useCharacters(projectId);
   // «Подставить персонажа» (этап 2 · шаг 10c, этап 3 · шаг 17): подпись «Мария → лицо 1, Иван → лицо 2»;
   // имя — по slug персонажа из списка проекта, персонажа больше нет — сам slug. Есть итог по
@@ -184,7 +180,7 @@ export function VersionCard({ projectId, sessionId, thread, version, focused, mo
   const metaTitle = sim === 'лицо не найдено' ? `${meta} — сходство не посчитано` : meta;
   const faceCatalog = useCatalog(projectId);
   const faceLocal = faceCatalog ? (faceCatalog.providers.find(p => p.key === 'local')?.available ?? true) : false;
-  const faceEntryVisible = !personal && faceFlag && (faceChars?.length ?? 0) > 0 && faceLocal;
+  const faceEntryVisible = !personal && (faceChars?.length ?? 0) > 0 && faceLocal;
   const [faceMenu, setFaceMenu] = useState(false);
 
   return (
@@ -294,7 +290,6 @@ function RunningLine({ projectId, sessionId, thread, jobId, model, faces, count 
 }) {
   const { status, cancel } = useJobStatus(projectId, jobId);
   const mobile = useIsMobile();
-  const feature = useFeature(FLAGS.localModelStats);
   const running = (status?.phase ?? 'run') === 'run';
   const progress = useProgress(status, running);
   // Несколько лиц (ADR-028): «Проход k из N · лицо n» по run/runs из событий задачи; их нет — «Рисуем…»
@@ -313,7 +308,7 @@ function RunningLine({ projectId, sessionId, thread, jobId, model, faces, count 
         : <ProgressBar value={progress.percent} transition="width .5s linear" />}
       {stage?.hint && <div style={{ fontSize: FS.xs, color: C.textMuted }}>{stage.hint}</div>}
       <GpuQueueBlock projectId={projectId} sessionId={sessionId} thread={thread} status={status}
-        feature={feature} count={count} />
+        count={count} />
     </div>
   );
 }

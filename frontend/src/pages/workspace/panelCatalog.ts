@@ -18,6 +18,7 @@ import {
   BookOpen, BookOpenText, ClipboardList, Contact, FolderTree, GitCompare, ListTodo, Bot, User, Users,
   SquareTerminal, AppWindow, MonitorPlay, Network, MessageCircle, NotebookPen, StickyNote, Library, Puzzle,
   TableOfContents, Lightbulb, DraftingCompass, SlidersHorizontal, Mic, Cpu, Plug,
+  ArrowDownToLine, History, Activity, Settings,
   type LucideIcon,
 } from 'lucide-react';
 import type { BadgeTone } from '../../components/ui/CountBadge';
@@ -27,6 +28,12 @@ import { SUBSYSTEMS } from '../../lib/subsystems';
 // Сторона экрана. Зон ровно две, и обе равноправны: любая панель может лежать
 // в любой из них.
 export type Zone = 'left' | 'right';
+
+// Панели вики раздела «Заметки»: «Входящие», «Журнал»,
+// «Здоровье», «Настройки». Ключи живут в общем реестре сразу после графа заметок —
+// вики читается рядом с ними; домашняя зона — правая (см. PANEL_HOME), набор
+// выведен через shell-kit для вклада раздела.
+export const WIKI_PANEL_KEYS = ['wikiInbox', 'wikiJournal', 'wikiHealth', 'wikiSettings'] as const;
 
 // Все панели продукта. Порядок = порядок иконок в рельсе сверху вниз (внутри
 // своей группы, см. SESSION_KEYS). Какие из них доступны на конкретном экране,
@@ -42,7 +49,7 @@ export const PANEL_KEYS = [
   // Панели подсистем (слот workspace-panel-def): ключ зарезервирован здесь, тело и
   // доступность — у подсистемы; выключена подсистема — нет содержимого, нет и кнопки
   'characters',
-  // «Локальные модели» (фича local-model-stats): только админ, значок — при
+  // «Локальные модели»: только админ, значок — при
   // настроенном локальном провайдере (условие — у фичи, см. manifest)
   'localModel',
   // «Голоса» редактора звука: библиотека voices/ проекта отдельной панелью
@@ -63,7 +70,7 @@ export const PANEL_KEYS = [
   // каждый ключ.
   'pluginPanels',
   // Панели разделов хаба
-  'notesList', 'notesGraph', 'knowledgeList', 'personasList', 'projectGroups',
+  'notesList', 'notesGraph', ...WIKI_PANEL_KEYS, 'knowledgeList', 'personasList', 'projectGroups',
 ] as const;
 // Статические ключи реестра: все панели продукта, известные на момент компиляции
 export type StaticPanelKey = typeof PANEL_KEYS[number];
@@ -162,7 +169,7 @@ export const PANEL_META: Record<Exclude<PanelKey, 'pluginPanels'>, { title: stri
   toc:      { title: 'Оглавление', Icon: TableOfContents },
   // Персонажи редактора картинок (модуль image-editor): люди с фото для генераций
   characters: { title: 'Персонажи', Icon: Contact },
-  // Локальные модели (фича local-model-stats): статистика локального движка, только админ
+  // Локальные модели: статистика локального движка, только админ
   localModel: { title: 'Локальные модели', Icon: Cpu },
   // Голоса редактора звука (модуль audio-editor): библиотека voices/ проекта
   voices: { title: 'Голоса', Icon: Mic },
@@ -175,6 +182,14 @@ export const PANEL_META: Record<Exclude<PanelKey, 'pluginPanels'>, { title: stri
   // проекта; notesGraph — граф ЗАМЕТОК, а graph — граф зависимостей кода.
   notesList:     { title: 'Заметки',  Icon: NotebookPen },
   notesGraph:    { title: 'Граф',     Icon: Network },
+  // Панели вики раздела «Заметки»: «Входящие» — очередь
+  // входящих разборов (ArrowDownToLine — входящее вниз, в очередь), «Журнал» —
+  // лента событий вики (History), «Здоровье» — состояние страниц (Activity —
+  // живой сигнал), «Настройки» — управление отбором (Settings).
+  wikiInbox:     { title: 'Входящие', Icon: ArrowDownToLine },
+  wikiJournal:   { title: 'Журнал',   Icon: History },
+  wikiHealth:    { title: 'Здоровье', Icon: Activity },
+  wikiSettings:  { title: 'Настройки', Icon: Settings },
   knowledgeList: { title: 'Базы',     Icon: Library },
   personasList:  { title: 'Персоны',  Icon: Users },
   projectGroups: { title: 'Группы',   Icon: FolderTree },
@@ -214,6 +229,12 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   // Разделы хаба выросли из левого сайдбара — там их дом
   notesList: 'left',
   notesGraph: 'left',
+  // Панели вики: открытая вики живёт справа от списка
+  // заметок — туда и их дом
+  wikiInbox: 'right',
+  wikiJournal: 'right',
+  wikiHealth: 'right',
+  wikiSettings: 'right',
   knowledgeList: 'left',
   personasList: 'left',
   projectGroups: 'left',
@@ -273,7 +294,7 @@ export function workspaceKeysFor(isEnabled: (key: string) => boolean): PanelKey[
 
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)
 export const CHAT_KEYS: readonly PanelKey[] = ['chats', 'plan', 'agents', 'context', 'video'];
-export const NOTES_KEYS: readonly PanelKey[] = ['notesList', 'notesGraph'];
+export const NOTES_KEYS: readonly PanelKey[] = ['notesList', 'notesGraph', ...WIKI_PANEL_KEYS];
 export const KNOWLEDGE_KEYS: readonly PanelKey[] = ['knowledgeList'];
 export const PERSONAS_KEYS: readonly PanelKey[] = ['personasList'];
 export const PROJECTS_KEYS: readonly PanelKey[] = ['projectGroups'];

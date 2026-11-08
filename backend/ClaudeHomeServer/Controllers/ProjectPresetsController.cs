@@ -1,7 +1,6 @@
-using System.IdentityModel.Tokens.Jwt;
-using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Core.Telemetry;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -15,20 +14,15 @@ namespace ClaudeHomeServer.Controllers;
 /// PresetCatalog и пишется через ProjectPresetService.
 /// </summary>
 [ProjectCapability(ProjectCapabilityArea.Platform, ProjectKey = "id")]
+[ProjectScope(Key = "id", Right = ProjectRight.Write)]
 [ApiController]
 [Authorize]
 [Route("api/projects/{id}/preset")]
 public class ProjectPresetsController(ProjectManager projects, ProjectPresetService presets)
     : ControllerBase
 {
-    private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
-
-    // Чужой проект — 404, а не 403: подтверждать его существование незачем
-    private Project? Owned(string id)
-    {
-        var project = projects.GetById(id);
-        return project is null || project.OwnerId != UserId ? null : project;
-    }
+    // Доступ к проекту проверил [ProjectScope] (чужой — 404, а не 403: существование не подтверждаем)
+    private Project? Scoped(string id) => projects.GetById(id);
 
     // Применить пресет ({ presetKey: "<ключ каталога>" }) или зафиксировать отказ
     // ({ presetKey: "none" }). Идемпотентность: PresetKey != "pending" → 409 —
@@ -38,7 +32,7 @@ public class ProjectPresetsController(ProjectManager projects, ProjectPresetServ
     [ProjectCapability(ProjectCapabilityArea.FileBound, ProjectKey = "id")]
     public ActionResult Apply(string id, [FromBody] ApplyPresetRequest req)
     {
-        if (Owned(id) is not { } project) return NotFound();
+        if (Scoped(id) is not { } project) return NotFound();
 
         var key = (req.PresetKey ?? "").Trim();
         if (key.Length == 0)

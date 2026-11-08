@@ -34,6 +34,12 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // отображает её итог: тот же пересчёт зовёт и ночной разбор. Поэтому список СОБИРАЕТ
 // показ: исход разбора nothing_new приоритетен, пока его поставил разбор, иначе
 // показывается зона ступени 1 (ShownZone).
+//
+// С LI-2 analyze («разобрать этот чат») заводит вику перед обращением к сервису: это действие
+// человека, которому нужна вики, — прежний 409 wiki_not_initialized из этой ручки больше не
+// приходит. Порядок проверок (токен → svc → флаг) не менялся: до заведения svc и выключенный
+// флаг не доходят. Гейт IsInitialized в WikiChatIngestService остаётся второй линией защиты;
+// recalculate и mark вику не заводят — их предмет от заведённости не зависит.
 [ApiController]
 [Authorize]
 [Route("api/wiki/chats")]
@@ -42,15 +48,17 @@ public class WikiChatsController : ControllerBase
     private readonly ISessionDirectory _sessions;
     private readonly WikiChatIngestService _chat;
     private readonly WikiChatRecalc _recalc;
+    private readonly WikiKeeper _keeper;
     private readonly string _dataDir;
     private readonly IFeatureFlagGate? _flags;
 
     public WikiChatsController(ISessionDirectory sessions, WikiChatIngestService chat, WikiChatRecalc recalc,
-        IConfiguration config, IFeatureFlagGate? flags = null)
+        WikiKeeper keeper, IConfiguration config, IFeatureFlagGate? flags = null)
     {
         _sessions = sessions;
         _chat = chat;
         _recalc = recalc;
+        _keeper = keeper;
         _flags = flags;
         // Каталог данных — как у всех сервисов (DataPath указывает на projects.json в dataDir).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
@@ -117,9 +125,11 @@ public class WikiChatsController : ControllerBase
 
     /// <summary>GET /api/wiki/chats — список отбора по своей вики: запись стора на каждый
     /// существующий свой чат, с причиной и сигналами; counts — число чатов по каждой
-    /// ПОКАЗАННОЙ зоне (ShownZone). Записи несуществующего или уже чужого чата из списка
-    /// выпадают (список — про чаты, а не про файл), но на counts несуществующего чата нет.
-    /// Нечитаемый стор — 409 с кодом: список не притворяется пустым там, где файл сломан.</summary>
+    /// ПОКАЗАННОЙ зоне (ShownZone). Записи несуществующего, уже чужого или приватного чата
+    /// (PrivateToUserId, FIN3-3) из списка выпадают (список — про чаты, а не про файл), на
+    /// counts их тоже нет: имя, зона и причина приватного чата — машинная производная от его
+    /// содержания, а машинные потребители приватный чат не читают. Нечитаемый стор — 409 с
+    /// кодом: список не притворяется пустым там, где файл сломан.</summary>
     [HttpGet]
     public IActionResult List()
     {
@@ -135,7 +145,10 @@ public class WikiChatsController : ControllerBase
         foreach (var e in read.Entries)
         {
             var session = _sessions.GetById(e.SessionId);
-            if (session is null || _sessions.ResolveOwnerId(session) != userId)
+            // Приватный чат (FIN3-3): запись о нём выпадает из списка и из counts так же, как
+            // запись несуществующего, — при любом запросившем (тот же фильтр, что у BuildQueue
+            // и AnalyzeAsync: машинные потребители приватный чат не читают).
+            if (session is null || _sessions.ResolveOwnerId(session) != userId || session.PrivateToUserId is not null)
                 continue;
             var zone = ShownZone(e);
             counts[zone] = counts.TryGetValue(zone, out var c) ? c + 1 : 1;
@@ -239,7 +252,9 @@ public class WikiChatsController : ControllerBase
     /// AnalyzeWaitSeconds; не дождался — 202 {running:true}: разбор продолжается на стороне
     /// сервиса, его получают analyze-status. ct заявителя в прогон не идёт: отвалившийся
     /// клиент не гасит разбор (тот же порядок, что у заявки очереди, S6b-3). Отказ с машинным
-    /// кодом — 404/409 {code,message}; без кода — 200 rejected: исключения наружу нет.</summary>
+    /// кодом — 404/409 {code,message}; без кода — 200 rejected: исключения наружу нет.
+    /// С LI-2 вики владельца заводится перед разбором: 409 wiki_not_initialized из этой ручки
+    /// больше нет (состояния разбора — прежние).</summary>
     private const int AnalyzeWaitSeconds = 10;
 
     [HttpPost("{sessionId}/analyze")]
@@ -258,6 +273,12 @@ public class WikiChatsController : ControllerBase
         // между этой проверкой и ходом модели — допустимо; уже идущий разбор не прерывается.
         if (_flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) != true)
             return StatusCode(409, new { code = CodeLlmWikiOff, message = "разбор не запущен: функция выключена" });
+
+        // LI-2: «разобрать этот чат» — действие человека, которому нужна вики: она заводится
+        // сама, прежний 409 wiki_not_initialized этой ручки больше нет. Идемпотентный
+        // EnsureInitializedAsync под замком владельца: два одновременных разбора (или разбор и
+        // PUT ночи) дают ровно один шаблон. Гейт IsInitialized в _chat остаётся второй линией.
+        await _keeper.EnsureInitializedAsync(userId);
 
         var task = _chat.AnalyzeAsync(userId, sessionId); // ct заявителя в прогон не идёт
         try

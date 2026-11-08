@@ -129,4 +129,119 @@ public class LlmSessionAdapterFactoryTests
         }
         finally { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true); }
     }
+
+    // Возврат финального ревью 892deb00 (П1): фабрика резолвила провайдера по session.OwnerId,
+    // тогда как ClaudeSession.EffectiveModel переведён на _turnOwnerId (DEC-FALLBACK 3f2f33fb).
+    // У проектной сессии session.OwnerId пуст по контракту → модель уходила в личный слот
+    // владельца, провайдер — в общий слот инстанса: CLI стартовал в профиле одного провайдера
+    // с моделью другого (инцидент 14.08, 401). Оба конца обязаны брать один ключ — владельца хода.
+    private static (LlmSessionAdapterFactory Factory, string OwnerId) BuildFactoryWithOwnerSlot(
+        IConfiguration config, LlmProviderRegistry providers)
+    {
+        // Два разных слота: общий (инстанса) — родная Claude-модель, личный слот владельца —
+        // модель провайдера kimi. По итогу guard'а видно, каким ключом прошёл резолв.
+        var appSettings = new AppSettingsService(config);
+        appSettings.Save(new AppSettings { ModelTierStrong = "instance-opus" });
+        var users = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<UserStore>.Instance);
+        var owner = users.Add("owner", "p", "user");
+        users.SetModelTiers(owner.Id, strong: "kimi-k3", null, null);
+        var assignments = new ModelAssignmentResolver(appSettings, new LocalActionOverridesStore(config),
+            new UserModelTierResolver(users, appSettings));
+        var factory = new LlmSessionAdapterFactory(config,
+            new AgentPromptSourceAdapter(new SkillsService()),
+            new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)),
+            providers, new ClaudeSubscriptionPool(config), assignments);
+        return (factory, owner.Id);
+    }
+
+    private static IConfiguration ConfigWithProviders(string tempDir, bool kimiConfigured = true) =>
+        new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(tempDir, "projects.json"),
+            ["LlmProviders:kimi:AnthropicBaseUrl"] = "https://kimi.example.com",
+            ["LlmProviders:kimi:Models:0:Id"] = "kimi-k3",
+            // Без ключа провайдер остаётся в реестре (его модели резолвятся), но Enabled=false
+            ["LlmProviders:kimi:ApiKey"] = kimiConfigured ? "sk-kimi" : null,
+            ["LlmProviders:glm:ApiKey"] = "sk-test",
+            ["LlmProviders:glm:AnthropicBaseUrl"] = "https://glm.example.com",
+            ["LlmProviders:glm:Models:0:Id"] = "glm-5.2",
+        }).Build();
+
+    private static LlmSessionContext Ctx(string tempDir, string? ownerId) => new LlmSessionContext(
+        RootPath: tempDir,
+        OnMessage: _ => Task.CompletedTask,
+        RawSystemPrompt: null, BuiltInSystemPrompt: ClaudeHomeServer.Services.ProjectManager.BuiltInSystemPrompt,
+        PermissionRules: null,
+        TasksMcp: null)
+    { OwnerId = ownerId };
+
+    // Чат проекта на «По умолчанию» с устаревшим чужим ключом: эффективная модель — из личного
+    // слота владельца хода (kimi-k3), guard обязан чинить пару по НЕЙ. До правки резолв шёл по
+    // пустому session.OwnerId → общий слот инстанса (instance-opus) → «чинился» на claude: CLI
+    // ушёл бы в профиль claude с моделью kimi (тот же 401).
+    [Fact]
+    public void ПроектнаяСессия_ЧужойКлючЧинитсяПоМоделиСлотаВладельца()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ccs_factory_owner_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var config = ConfigWithProviders(tempDir);
+            var (factory, ownerId) = BuildFactoryWithOwnerSlot(config, new LlmProviderRegistry(config));
+
+            var foreign = new Session { ProjectId = "p1", OwnerId = null, Model = null, Provider = "glm" };
+            factory.Create(foreign, Ctx(tempDir, ownerId));
+            foreign.Provider.Should().Be("kimi",
+                "пара чинится по модели личного слота владельца хода, а не по общему слоту инстанса");
+
+            // Регрессия чата вне проекта: владелец на сессии, контекста нет — тот же ключ, что раньше.
+            var personal = new Session { Model = null, Provider = "glm", OwnerId = ownerId };
+            factory.Create(personal, Ctx(tempDir, null));
+            personal.Provider.Should().Be("kimi", "чат вне проекта резолвится по своему владельцу, как раньше");
+        }
+        finally { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true); }
+    }
+
+    // Обратная половина того же шва: пара, собранная из слота владельца, согласована — guard её
+    // не трогает. По старому ключу (пустой OwnerId → слот инстанса) она выглядела бы
+    // рассогласованной и молча уехала бы на claude.
+    [Fact]
+    public void ПроектнаяСессия_СогласованнаяПараВладельца_GuardМолчит()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ccs_factory_own_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var config = ConfigWithProviders(tempDir);
+            var (factory, ownerId) = BuildFactoryWithOwnerSlot(config, new LlmProviderRegistry(config));
+
+            var own = new Session { ProjectId = "p1", OwnerId = null, Model = null, Provider = "kimi" };
+            factory.Create(own, Ctx(tempDir, ownerId));
+            own.Provider.Should().Be("kimi", "согласованная пара владельца — guard молчит");
+        }
+        finally { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true); }
+    }
+
+    // Выбор провайдера (не только guard): при пустом Provider чата он весь в резолве по модели.
+    // Ненастроенный провайдер слота владельца должен отсеяться здесь же, внятной ошибкой, а не
+    // молчаливым стартом CLI в профиле claude с чужой моделью (401 у вендора).
+    [Fact]
+    public void ПроектнаяСессия_НенастроенныйПровайдерСлотаВладельца_ОтказДоЗапускаCli()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ccs_factory_unconfigured_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var config = ConfigWithProviders(tempDir, kimiConfigured: false);
+            var (factory, ownerId) = BuildFactoryWithOwnerSlot(config, new LlmProviderRegistry(config));
+
+            var act = new Action(() => factory.Create(
+                new Session { ProjectId = "p1", OwnerId = null, Model = null }, Ctx(tempDir, ownerId)));
+
+            act.Should().Throw<InvalidOperationException>()
+                .WithMessage("*не настроен*");
+        }
+        finally { if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true); }
+    }
 }

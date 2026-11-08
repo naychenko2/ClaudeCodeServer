@@ -17,7 +17,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace ClaudeHomeServer.Tests.ImageEditor;
 
 // Запуск с FaceTarget: HTTP-статусы отказов (ADR-028, этап 2).
-// faces_changed → 409, feature_disabled → 404, busy → 503, provider_unavailable → 409,
+// faces_changed → 409, busy → 503, provider_unavailable → 409,
 // version_not_found → 404, invalid_request → 400.
 [Trait("Category", "Host")]
 public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests.Hosts>
@@ -40,7 +40,7 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
 
     // Хост на КОНФИГУРАЦИЮ (шов детекции лиц), а не на тест: объекты фабрик создаются сразу, ASP.NET-хост
     // внутри каждой стартует лениво; гасятся вместе с фикстурой. Состояние (проект, персонаж, чат, нить, файл) каждый тест заводит
-    // сам в своём каталоге через Prepare; флаг персонажей выставляет сам тест
+    // сам в своём каталоге через Prepare
     public sealed class Hosts : IDisposable
     {
         // Одно годное лицо
@@ -127,12 +127,6 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
             .Create("ft-" + Guid.NewGuid().ToString("N")[..6], dir, user.Id, username).Id;
     }
 
-    private void SetFlag(bool on) => SetFlag(_factory, _ownerId, on);
-
-    private static void SetFlag(TestWebApplicationFactory factory, string ownerId, bool on) =>
-        factory.Services.GetRequiredService<UserStore>()
-            .SetFeatureFlag(ownerId, FeatureFlagKeys.CharacterFaceSwap, on);
-
     // Форма запуска с faceTarget в нити сцены
     private static MultipartFormDataContent JobForm(Scene scene, string faceTargetJson)
     {
@@ -206,7 +200,6 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
     [Fact]
     public async Task FacesKey_не_совпал_409_faces_changed()
     {
-        SetFlag(true);
         // Верхнего characterSlug нет: персонаж — в faceTarget.faces (иначе новый отказ «двусмысленный вход»)
         var resp = await Start(FaceTargetJson("stale:v1"));
 
@@ -228,7 +221,6 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
     [Fact]
     public async Task Faces_ручка_отвечает_без_code()
     {
-        SetFlag(true);
         var resp = await _client.PostAsync(
             $"/api/projects/{_projectId}/image-editor/sessions/{_chatId}/threads/{_threadId}/versions/origin/faces",
             new StringContent("{}", System.Text.Encoding.UTF8, "application/json"));
@@ -244,25 +236,11 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
         body.TryGetProperty("error", out _).Should().BeFalse();
     }
 
-    // ── feature_disabled → 404 ───────────────────────────────────────────────────
-
-    [Fact]
-    public async Task Флаг_выключен_404_feature_disabled()
-    {
-        SetFlag(false);
-        // Верхнего characterSlug нет: персонаж — в faceTarget.faces; флаг проверяется в сборщике
-        var resp = await Start(FaceTargetJson(_facesKey));
-
-        resp.StatusCode.Should().Be(HttpStatusCode.NotFound, await resp.Content.ReadAsStringAsync());
-        (await Code(resp)).Should().Be(ImageEditErrorCodes.FeatureDisabled);
-    }
-
     // ── version_not_found → 404 ───────────────────────────────────────────────────
 
     [Fact]
     public async Task Версии_нет_404_version_not_found()
     {
-        SetFlag(true);
         // FaceTarget с несуществующей версией; верхнего characterSlug нет (персонаж — в faces)
         var json = $"{{\"versionId\":\"нет-такой\",\"facesKey\":\"{_facesKey}\",\"faces\":[{{\"face\":1,\"characterSlug\":\"{_charSlug}\"}}]}}";
         var resp = await Start(json);
@@ -276,7 +254,6 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
     [Fact]
     public async Task Запуск_faceTarget_без_верхнего_слага_202()
     {
-        SetFlag(true);
         var resp = await Start(FaceTargetJson(_facesKey, 1, _charSlug), characterSlug: null);
 
         resp.StatusCode.Should().Be(HttpStatusCode.Accepted, await resp.Content.ReadAsStringAsync());
@@ -287,7 +264,6 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
     [Fact]
     public async Task Запуск_faceTarget_с_верхним_слагом_400()
     {
-        SetFlag(true);
         var resp = await Start(FaceTargetJson(_facesKey, 1, _charSlug), characterSlug: _charSlug);
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
@@ -299,7 +275,6 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
     [Fact]
     public async Task Котировка_faceTarget_без_верхнего_слага_200()
     {
-        SetFlag(true);
         var resp = await Quote(FaceTargetJson(_facesKey, 1, _charSlug), characterSlug: null);
 
         resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
@@ -310,7 +285,6 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
     [Fact]
     public async Task Котировка_faceTarget_с_верхним_слагом_400()
     {
-        SetFlag(true);
         var resp = await Quote(FaceTargetJson(_facesKey, 1, _charSlug), characterSlug: _charSlug);
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
@@ -323,7 +297,6 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
     [Fact]
     public async Task Парсер_face_строкой_400()
     {
-        SetFlag(true);
         var json = $"{{\"versionId\":\"origin\",\"facesKey\":\"{_facesKey}\",\"faces\":[{{\"face\":\"abc\",\"characterSlug\":\"{_charSlug}\"}}]}}";
         var resp = await Start(json);
 
@@ -335,7 +308,6 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
     [Fact]
     public async Task Парсер_face_null_400()
     {
-        SetFlag(true);
         var json = $"{{\"versionId\":\"origin\",\"facesKey\":\"{_facesKey}\",\"faces\":[{{\"face\":null,\"characterSlug\":\"{_charSlug}\"}}]}}";
         var resp = await Start(json);
 
@@ -347,7 +319,6 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
     [Fact]
     public async Task Парсер_faces_не_массив_400()
     {
-        SetFlag(true);
         var json = $"{{\"versionId\":\"origin\",\"facesKey\":\"{_facesKey}\",\"faces\":\"x\"}}";
         var resp = await Start(json);
 
@@ -359,7 +330,6 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
     [Fact]
     public async Task Парсер_элемент_не_объект_400()
     {
-        SetFlag(true);
         var json = $"{{\"versionId\":\"origin\",\"facesKey\":\"{_facesKey}\",\"faces\":[1]}}";
         var resp = await Start(json);
 
@@ -371,7 +341,6 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
     [Fact]
     public async Task Парсер_пустая_строка_400()
     {
-        SetFlag(true);
         var resp = await Start("");
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
@@ -382,7 +351,6 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
     [Fact]
     public async Task Парсер_пустой_объект_400()
     {
-        SetFlag(true);
         var resp = await Start("{}");
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
@@ -393,7 +361,6 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
     [Fact]
     public async Task Парсер_null_400()
     {
-        SetFlag(true);
         var resp = await Start("null");
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
@@ -410,7 +377,6 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
         var factory = _hosts.SmallSecond;
         var client = factory.CreateAuthenticatedClient();
         var scene = Prepare(factory);
-        SetFlag(factory, scene.OwnerId, true);
 
         var resp = await client.PostAsync($"/api/projects/{scene.ProjectId}/image-editor/jobs",
             JobForm(scene, FaceTargetJson(scene.FacesKey, 2, scene.CharSlug!)));
@@ -429,7 +395,6 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
     [Fact]
     public async Task Лицо_не_найдено_несёт_face_3()
     {
-        SetFlag(true);
         var resp = await Start(FaceTargetJson(_facesKey, 3, _charSlug));
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
@@ -447,7 +412,6 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
         var factory = _hosts.Ok;
         var client = factory.CreateAuthenticatedClient();
         var scene = Prepare(factory, withCharacter: false);
-        SetFlag(factory, scene.OwnerId, true);
 
         var resp = await client.PostAsync($"/api/projects/{scene.ProjectId}/image-editor/jobs",
             JobForm(scene, FaceTargetJson(scene.FacesKey, 1, "no-such-char")));
@@ -467,7 +431,6 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
         var factory = _hosts.Busy;
         var client = factory.CreateAuthenticatedClient();
         var scene = Prepare(factory);
-        SetFlag(factory, scene.OwnerId, true);
 
         // Верхнего characterSlug нет: персонаж — в faceTarget.faces (иначе новый отказ «двусмысленный вход»)
         var resp = await client.PostAsync($"/api/projects/{scene.ProjectId}/image-editor/jobs",
@@ -485,7 +448,6 @@ public class FaceTargetLaunchHttpTests : IClassFixture<FaceTargetLaunchHttpTests
         var factory = _hosts.Error;
         var client = factory.CreateAuthenticatedClient();
         var scene = Prepare(factory);
-        SetFlag(factory, scene.OwnerId, true);
 
         // Верхнего characterSlug нет: персонаж — в faceTarget.faces (иначе новый отказ «двусмысленный вход»)
         var resp = await client.PostAsync($"/api/projects/{scene.ProjectId}/image-editor/jobs",

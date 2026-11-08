@@ -23,7 +23,8 @@
 #   * frontend/node_modules — symlink на node_modules источника, как в worktree-setup.sh.
 #
 # Использование:
-#   scripts/mutation-copy.sh create [--from <дерево>]   путь копии — последней строкой stdout
+#   scripts/mutation-copy.sh create [--from <дерево>]   путь копии — последней строкой stdout;
+#                                                       перед созданием молча зовёт gc (24 ч)
 #   scripts/mutation-copy.sh remove <путь>
 #   scripts/mutation-copy.sh gc [--older-than-hours N]  (дефолт 24)
 #
@@ -175,6 +176,9 @@ cmd_create() {
   local root name dst head
   root="$(mutation_root)"
   case "$src/" in "$root"/*) die "источник $src сам лежит под $root" ;; esac
+  # Уборка без расписания: копии старше суток без живых процессов убираются перед каждой новой
+  # (логика gc). Молча и в подоболочке — её сбой (die, битые метаданные) create не роняет.
+  ( cmd_gc >/dev/null 2>&1 ) || true
   name="$(basename "$src")"
   dst="$(mktemp -d "$root/$name-XXXXXX")"
   CREATE_DST="$dst"

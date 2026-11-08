@@ -10,7 +10,6 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { setAllFlags } from '../../../lib/featureFlags';
 import {
   CLOUD_REPRODUCIBLE_OPS, cloudCandidate, cloudOriginalParams, cloudQuoteRequest, GpuQueueBlock,
   isCloudButtonEnabled, isStandDown, makeLaunchGuard, originalTaskParams, showCloudButton, showQueueLine,
@@ -89,7 +88,6 @@ vi.mock('./useJobStatus', () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  setAllFlags({ 'local-model-stats': true });
   (useQuote as ReturnType<typeof vi.fn>).mockReturnValue({ quote: null, loading: false });
   (useCatalog as ReturnType<typeof vi.fn>).mockReturnValue(null);
   (useBoxWidth as ReturnType<typeof vi.fn>).mockReturnValue(0);
@@ -153,7 +151,7 @@ describe('GpuQueueBlock: m5 (пустой промпт → кнопки нет)'
     const html = renderToStaticMarkup(
       createElement(GpuQueueBlock, {
         projectId: 'p1', sessionId: 's1', thread: EMPTY_PROMPT_THREAD, status: { gpu: DOWN } as never,
-        feature: true, count: 2,
+        count: 2,
       }),
     );
     expect(html).not.toContain('Сделать в облаке');
@@ -161,18 +159,15 @@ describe('GpuQueueBlock: m5 (пустой промпт → кнопки нет)'
 });
 
 describe('showCloudButton (видимость)', () => {
-  it('true: флаг + down + облачный исполнитель', () => {
-    expect(showCloudButton(true, DOWN, CATALOG)).toBe(true);
-  });
-  it('false: флаг выключен (мутация «показ с выключенным флагом»)', () => {
-    expect(showCloudButton(false, DOWN, CATALOG)).toBe(false);
+  it('true: down + облачный исполнитель', () => {
+    expect(showCloudButton(DOWN, CATALOG)).toBe(true);
   });
   it('false: стенд не лежит (мутация «показ без down»)', () => {
-    expect(showCloudButton(true, QUEUED, CATALOG)).toBe(false);
+    expect(showCloudButton(QUEUED, CATALOG)).toBe(false);
   });
-  it('false: нет gpu', () => expect(showCloudButton(true, null, CATALOG)).toBe(false));
+  it('false: нет gpu', () => expect(showCloudButton(null, CATALOG)).toBe(false));
   it('false: нет облачного исполнителя (умолчание локальное)', () => {
-    expect(showCloudButton(true, DOWN, LOCAL_DEFAULT)).toBe(false);
+    expect(showCloudButton(DOWN, LOCAL_DEFAULT)).toBe(false);
   });
 });
 
@@ -183,9 +178,8 @@ describe('isCloudButtonEnabled (кликабельность)', () => {
 });
 
 describe('showQueueLine', () => {
-  it('false: флаг выключен', () => expect(showQueueLine(false, QUEUED)).toBe(false));
-  it('false: нет gpu', () => expect(showQueueLine(true, null)).toBe(false));
-  it('true: флаг + gpu', () => expect(showQueueLine(true, QUEUED)).toBe(true));
+  it('false: нет gpu', () => expect(showQueueLine(null)).toBe(false));
+  it('true: есть gpu', () => expect(showQueueLine(QUEUED)).toBe(true));
 });
 
 describe('cloudQuoteRequest', () => {
@@ -220,7 +214,7 @@ describe('текст про локальную задачу', () => {
     const html = renderToStaticMarkup(
       createElement(GpuQueueBlock, {
         projectId: 'p1', sessionId: 's1', thread: EMPTY_THREAD, status: { gpu: DOWN } as never,
-        feature: true, count: 2,
+        count: 2,
       }),
     );
     expect(html).toContain('локальная задача продолжит ждать');
@@ -407,7 +401,7 @@ function renderBlockDown() {
   (useCatalog as ReturnType<typeof vi.fn>).mockReturnValue(CATALOG);
   return mount(createElement(GpuQueueBlock, {
     projectId: 'p1', sessionId: 's1', thread: EMPTY_THREAD, status: { gpu: DOWN } as never,
-    feature: true, count: 2,
+    count: 2,
   }));
 }
 
@@ -530,7 +524,7 @@ describe('GpuQueueBlock: запуск только по клику', () => {
     renderToStaticMarkup(
       createElement(GpuQueueBlock, {
         projectId: 'p1', sessionId: 's1', thread: EMPTY_THREAD, status: { gpu: DOWN } as never,
-        feature: true, count: 2,
+        count: 2,
       }),
     );
     expect(launchThread).not.toHaveBeenCalled();
@@ -541,7 +535,7 @@ describe('GpuQueueBlock: запуск только по клику', () => {
     renderToStaticMarkup(
       createElement(GpuQueueBlock, {
         projectId: 'p1', sessionId: 's1', thread: EMPTY_THREAD, status: null,
-        feature: true, count: 2,
+        count: 2,
       }),
     );
     expect(launchThread).not.toHaveBeenCalled();
@@ -644,7 +638,7 @@ describe('GpuQueueBlock: мутации финального ревью', () => 
     return renderToStaticMarkup(
       createElement(GpuQueueBlock, {
         projectId: 'p1', sessionId: 's1', thread, status: { gpu: DOWN } as never,
-        feature: true, count: 2,
+        count: 2,
       }),
     );
   };
@@ -664,7 +658,7 @@ describe('GpuQueueBlock: мутации финального ревью', () => 
     setThreadMarks('t1', [{ type: 'mask', points: [[0, 0], [10, 10]], width: 3 }], null);
     const { root } = mount(createElement(GpuQueueBlock, {
       projectId: 'p1', sessionId: 's1', thread: EMPTY_THREAD, status: { gpu: DOWN } as never,
-      feature: true, count: 2,
+      count: 2,
     }));
     // op из original task (edit), не из pickOp (inpaint)
     const req = (useQuote as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[2] as ImageEditQuoteRequest | null | undefined;

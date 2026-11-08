@@ -102,6 +102,7 @@ vi.mock('./lib/signalr', () => {
     __esModule: true,
     onMessage: sub, onReconnected: sub, onFilesChanged: sub, onPreviewMessage: sub,
     onLocalModelMessage: sub, onGitStatusChanged: sub, onAgentHubMessage: sub,
+    onProjectAccessRevoked: sub,
     joinProject: act, leaveProject: act, joinSession: act, leaveSession: act,
     joinUser: act, leaveUser: act, sendMessage: act, respondPermission: act,
     interruptSession: act, compactSession: act, answerQuestion: act, respondPlan: act,
@@ -220,10 +221,27 @@ const { makeStub } = vi.hoisted(() => {
   const { createElement } = require('react');
   return { makeStub: (name: string) => ({ __esModule: true, [name]: () => createElement('div', { 'data-stub': name }) }) };
 });
+// WorkspacePage — записывающая заглушка (QA-D2b): пробуждение уже смонтированной страницы —
+// событие cc-pending-project-chat из openNotificationUrl; сам центр (какой чат показан)
+// доказан WorkspacePage.deeplinkChat.test.ts: он открывает ровно чат из этого канала.
+const { wsWakeups } = vi.hoisted(() => ({ wsWakeups: [] as string[] }));
+vi.mock('./pages/WorkspacePage', async () => {
+  const { createElement, useEffect } = await import('react');
+  return {
+    __esModule: true,
+    WorkspacePage: () => {
+      useEffect(() => {
+        const onWake = () => { wsWakeups.push('cc-pending-project-chat'); };
+        window.addEventListener('cc-pending-project-chat', onWake);
+        return () => window.removeEventListener('cc-pending-project-chat', onWake);
+      }, []);
+      return createElement('div', { 'data-stub': 'WorkspacePage' });
+    },
+  };
+});
 vi.mock('./pages/LoginPage', () => makeStub('LoginPage'));
 vi.mock('./pages/ProjectListPage', () => makeStub('ProjectListPage'));
 vi.mock('./pages/ChatsPage', () => makeStub('ChatsPage'));
-vi.mock('./pages/WorkspacePage', () => makeStub('WorkspacePage'));
 vi.mock('./pages/HomePage', () => makeStub('HomePage'));
 vi.mock('./pages/WallPage', () => makeStub('WallPage'));
 vi.mock('./features/tasks/CalendarPage', () => makeStub('CalendarPage'));
@@ -445,5 +463,73 @@ describe('App: #/spend при выключенной подсистеме — Su
     const text = textNodes(container).join(' ');
     expect(text, 'компонент раздела не отрисован').toContain('SpendPageStub');
     expect(text, 'заглушка не должна появляться при включённой подсистеме').not.toContain('выключен администратором');
+  });
+});
+
+// ═══ QA-D2b (вторая половина дефекта e18f03f2): смена hash на чат ВНУТРИ приложения ══════
+// Ссылка #/project/{P}/chat/{chatId} вставлена или нажата в уже открытом приложении, без
+// перезагрузки: адрес меняется, экран оставался прежним — прежний гейт `if (getNav()) return`
+// глушил любую смену hash, пока в истории есть снимок (внутри приложения он и есть).
+// Ожидание: тот же канал, что диплинк при загрузке (App.tsx:126 / openNotificationUrl) —
+// pending + пробуждение открытой страницы; сам центр доказан WorkspacePage.deeplinkChat.test.ts.
+
+describe('App: смена hash на чат внутри приложения — тот же канал, что диплинк (QA-D2b)', { timeout: 15_000 }, () => {
+  beforeEach(() => {
+    setupTestWindow();
+    store.clear(); sstore.clear();
+    flagsTest.reset();
+    store.set('cc_token', 't');
+    store.set('cc_server_url', 'http://x');
+    store.set('cc_username', 'u');
+    mockData.fail = false;
+    mockData.projects = [project];
+    toastMock.calls.length = 0;
+    wsWakeups.length = 0;
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // Проект открыт диплинком из initialHash (#/project/p1/feature/f1): эффект диплинка зовёт
+  // api.projects.list и пишет снимок в историю (navPush) — состояние «внутри приложения».
+  async function openProjectInsideApp() {
+    mount(createElement(App));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(getNav()?.project?.id, 'проект не открылся — состояние «внутри приложения» не сформировано').toBe('p1');
+    wsWakeups.length = 0;
+  }
+
+  it('смена hash на другой чат: канал выбора записан, открытая страница разбужена (мутация: вернуть гейт по снимку → red)', async () => {
+    const win = globalThis as any;
+    await openProjectInsideApp();
+    // Что делает клик по ссылке/вставка адреса: сменился hash и пришёл hashchange.
+    // Снимок в истории — наш (состояние «внутри приложения» после navPush), а смена пришла
+    // не от нашего navPush/navReplace — они hashchange не диспатчат.
+    win.window.location.hash = '#/project/p1/chat/chatGen';
+    win.window.dispatchEvent(new Event('hashchange'));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // КЛЮЧЕВОЕ (QA-D2b): чат из адреса ушёл в тот же канал, что диплинк при загрузке,
+    // и открытая WorkspacePage разбужена — откроется ровно он (см. deeplinkChat-тесты).
+    // Мутация «вернуть if (getNav()) return» — красный: при прежнем коде ни канала, ни пробуждения.
+    expect(sstore.get('cc_pending_project_chat'), 'чат из адреса не попал в канал выбора').toBe('p1|chatGen');
+    expect(wsWakeups, 'открытая страница не разбужена').toContain('cc-pending-project-chat');
+  });
+
+  it('наш «назад» (popstate + hashchange одного обхода) — канала и пробуждения нет (защита прежнего гейта)', async () => {
+    const win = globalThis as any;
+    await openProjectInsideApp();
+    // Порядок обхода истории: сначала popstate (снимок восстанавливает он), затем hashchange.
+    const snapshot = { screen: 'project', project, view: 'chat', chatId: 'chatOld' };
+    win.window.history.state = snapshot;
+    win.window.location.hash = '#/project/p1/chat/chatOld';
+    win.window.dispatchEvent({ type: 'popstate', state: snapshot });
+    win.window.dispatchEvent(new Event('hashchange'));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    // Наш переход уже восстановлен popstate — повторного выбора через канал быть не должно:
+    // он перечитал бы список и переченил снимок сразу после восстановления.
+    expect(win.sessionStorage.getItem('cc_pending_project_chat'), 'наш «назад» задублирован каналом выбора').toBe(null);
+    expect(wsWakeups, 'наш «назад» задублирован пробуждением').toHaveLength(0);
   });
 });

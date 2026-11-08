@@ -10,8 +10,8 @@ const { me } = vi.hoisted(() => ({ me: vi.fn() }));
 vi.mock('../lib/signalr', () => ({ onMessage: vi.fn(() => () => {}) }));
 vi.mock('../lib/api', () => ({ api: { auth: { me } } }));
 
-import { finishLogin } from './LoginPage';
-import { readStoredToken, readStoredUserId } from '../lib/offline';
+import { finishLogin, loginErrorMessage } from './LoginPage';
+import { readStoredToken, readStoredUserId, OfflineError } from '../lib/offline';
 import { setMeFromServer, clearMe, isTabOwnerConsistent } from '../lib/defaultPersona';
 import type { Me } from '../types';
 
@@ -72,5 +72,31 @@ describe('finishLogin', () => {
     // неизвестен — в хранилище владельца нет, а не «совпал с B».
     expect(readStoredUserId()).not.toBe('u-b');
     expect(isTabOwnerConsistent()).toBe(true);
+  });
+
+  it('(г) /me на входе зовётся live: ответ из IDB-кэша не подставляет id прежнего владельца', async () => {
+    vi.stubGlobal('sessionStorage', storageStub());
+    vi.stubGlobal('localStorage', storageStub());
+    me.mockResolvedValue({ userId: 'u-a', role: 'user' });
+
+    await finishLogin(result, false, 'http://x');
+
+    expect(me).toHaveBeenCalledWith({ live: true });
+  });
+
+  it('(д) обрыв сети на /me → OfflineError пробрасывается, экран покажет «Нет соединения»', async () => {
+    vi.stubGlobal('sessionStorage', storageStub());
+    vi.stubGlobal('localStorage', storageStub());
+    me.mockRejectedValue(new OfflineError());
+
+    const err = await finishLogin(result, true, 'http://x').catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(OfflineError);
+    expect(loginErrorMessage(err)).toContain('Нет соединения');
+  });
+
+  it('(е) текст ошибки экрана: Error — его сообщение, прочее — запасной', () => {
+    expect(loginErrorMessage(new Error('плохой пароль'))).toBe('плохой пароль');
+    expect(loginErrorMessage('x')).toBe('Не удалось подключиться к серверу');
   });
 });

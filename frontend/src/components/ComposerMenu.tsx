@@ -21,6 +21,10 @@ export interface ComposerMenuItem {
   hint?: string;       // вторичный текст рядом с подписью (напр. текущая версия семейства модели)
   icon?: ReactNode;
   badge?: ReactNode;   // правый бейдж строки (напр. окно контекста модели)
+  // Строка видна, но не выбирается: значение принадлежит не мне (в чужом проекте модель
+  // выбирает её владелец). Курсора и подсветки нет, клик ничего не делает — человек
+  // видит, на чём идёт чат, и не может это сломать
+  disabled?: boolean;
 }
 
 export interface ComposerMenuGroup {
@@ -171,17 +175,20 @@ export function ComposerMenu({
               )}
               {g.items.map(it => {
                 const active = it.value === value;
+                const off = !!it.disabled;
                 return (
                   <button
                     key={it.value}
                     type="button"
-                    onClick={() => { setOpen(false); if (!active) onChange?.(it.value); }}
-                    onMouseEnter={e => { if (!active) e.currentTarget.style.background = C.accentLight; }}
-                    onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}
+                    disabled={off}
+                    onClick={() => { setOpen(false); if (!active && !off) onChange?.(it.value); }}
+                    onMouseEnter={e => { if (!active && !off) e.currentTarget.style.background = C.accentLight; }}
+                    onMouseLeave={e => { if (!active && !off) e.currentTarget.style.background = 'transparent'; }}
                     style={{
                       width: '100%', display: 'flex', alignItems: 'flex-start', gap: 9,
                       padding: isMobile ? '11px 11px' : '8px 9px', borderRadius: R.md, border: 'none',
-                      background: active ? C.accentLight : 'transparent', cursor: 'pointer', textAlign: 'left',
+                      background: active ? C.accentLight : 'transparent',
+                      cursor: off ? 'default' : 'pointer', textAlign: 'left',
                     }}
                   >
                     {it.icon && (
@@ -191,8 +198,11 @@ export function ComposerMenu({
                     )}
                     <span style={{ flex: 1, minWidth: 0 }}>
                       <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        {/* Выключенная строка — глухая подпись (активная остаётся читаемой:
+                            это то, на чём сейчас идёт чат) */}
                         <span style={{
-                          flex: it.hint ? '0 1 auto' : 1, minWidth: 0, fontSize: 13, fontWeight: 600, color: C.textHeading,
+                          flex: it.hint ? '0 1 auto' : 1, minWidth: 0, fontSize: 13, fontWeight: 600,
+                          color: off && !active ? C.textMuted : C.textHeading,
                           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                         }}>
                           {it.label}

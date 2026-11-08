@@ -72,9 +72,11 @@ public class WorkspaceDeployDelegationTests : IDisposable
 
     public void Dispose() => _factory.Dispose();
 
+    // Вызов «от лица чата» (S2a-3a): рамка хода читается по заголовку X-Caller-Session-Id,
+    // вызов без него — узкая рамка (fail-closed) и отказ ещё до гейта делегированности
     private async Task<string> DeployStatusTextAsync(HttpClient client, string sessionId)
     {
-        var resp = await client.PostAsJsonAsync($"/mcp/wsp/{sessionId}", new
+        var resp = await client.AsCaller(sessionId).PostAsJsonAsync($"/mcp/wsp/{sessionId}", new
         {
             jsonrpc = "2.0", id = 1, method = "tools/call",
             @params = new { name = "deploy_status", arguments = new { } },
@@ -103,7 +105,7 @@ public class WorkspaceDeployDelegationTests : IDisposable
 
     private static async Task<string> ChatsSendTextAsync(HttpClient client, string sessionId, string targetId)
     {
-        var resp = await client.PostAsJsonAsync($"/mcp/wsp/{sessionId}", new
+        var resp = await client.AsCaller(sessionId).PostAsJsonAsync($"/mcp/wsp/{sessionId}", new
         {
             jsonrpc = "2.0", id = 1, method = "tools/call",
             @params = new { name = "chats_send", arguments = new { sessionId = targetId, text = "привет", wait = "none" } },

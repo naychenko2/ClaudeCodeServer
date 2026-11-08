@@ -175,7 +175,7 @@ public sealed class CodeGraphPromptProvider
         }
         // Сценарные правила «когда звать граф» раньше жили здесь хвостом slice — с ADR-011
         // (шаг 3) они переехали в отдельную статичную секцию хода CodeNavigationPrompts:
-        // единый блок трёх уровней (codegraph / LSP / Grep), виден и без построенного
+        // единый блок двух уровней (codegraph / Grep), виден и без построенного
         // графа. Slice — только данные: хабы и словарь.
         return sb.ToString().TrimEnd();
     }

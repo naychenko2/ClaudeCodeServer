@@ -25,7 +25,7 @@ public sealed class FilmWaveContractTests : IDisposable
 
     private async Task<FilmStateDto> Patch(string revision, params FilmPatchOp[] ops)
     {
-        var result = await _w.Service.PatchAsync(Owner, _w.Scope, Path, new FilmPatch(revision, ops), VideoInitiators.Human, default);
+        var result = await _w.Service.PatchAsync(Owner, Owner, _w.Scope, Path, new FilmPatch(revision, ops), VideoInitiators.Human, default);
         result.IsOk.Should().BeTrue(result.Error);
         return result.Value!;
     }
@@ -34,7 +34,7 @@ public sealed class FilmWaveContractTests : IDisposable
     public void Собранный_фильм_без_правок_не_устарел()
     {
         BuiltFilm("video/a/1.mp4", "video/a/2.mp4");
-        _w.Service.State(Owner, _w.Scope, Path).Value!.Stale.Should().BeFalse();
+        _w.Service.State(Owner, Owner, _w.Scope, Path).Value!.Stale.Should().BeFalse();
     }
 
     public static TheoryData<string> Операции() => new()
@@ -79,7 +79,7 @@ public sealed class FilmWaveContractTests : IDisposable
     [Fact]
     public async Task Новый_фильм_создаётся_пустым_и_валидным()
     {
-        var created = await _w.Service.CreateAsync(Owner, _w.Scope, new FilmCreateRequest("video/новый/новый.film"), default);
+        var created = await _w.Service.CreateAsync(Owner, Owner, _w.Scope, new FilmCreateRequest("video/новый/новый.film"), default);
 
         created.IsOk.Should().BeTrue(created.Error);
         created.Value!.Document.Items.Should().BeEmpty();
@@ -96,9 +96,9 @@ public sealed class FilmWaveContractTests : IDisposable
     {
         var revision = BuiltFilm("video/a/1.mp4");
 
-        var taken = await _w.Service.CreateAsync(Owner, _w.Scope, new FilmCreateRequest(Path), default);
-        var outside = await _w.Service.CreateAsync(Owner, _w.Scope, new FilmCreateRequest("docs/x/x.film"), default);
-        var aspect = await _w.Service.CreateAsync(Owner, _w.Scope, new FilmCreateRequest("video/b/b.film", "7:3"), default);
+        var taken = await _w.Service.CreateAsync(Owner, Owner, _w.Scope, new FilmCreateRequest(Path), default);
+        var outside = await _w.Service.CreateAsync(Owner, Owner, _w.Scope, new FilmCreateRequest("docs/x/x.film"), default);
+        var aspect = await _w.Service.CreateAsync(Owner, Owner, _w.Scope, new FilmCreateRequest("video/b/b.film", "7:3"), default);
 
         taken.ErrorCode.Should().Be(VideoEditorErrors.NameTaken);
         outside.ErrorCode.Should().Be(VideoEditorErrors.OutsideAllowedFolders);

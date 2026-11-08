@@ -866,7 +866,7 @@ public class SessionManagerWorkLoopTests : SessionManagerTestBase
         {
             session.Id, entry, "реакция постановщика",
             null, "task-report", 0, true, true, null, SessionManager.PendingKind.Report,
-            null, null, null
+            null, null, null, null
         })!;
         await enq;
 
@@ -904,7 +904,7 @@ public class SessionManagerWorkLoopTests : SessionManagerTestBase
         {
             session.Id, entry, "постороннее сообщение",
             null, "external-agent", 0, true, false, null, SessionManager.PendingKind.Agent,
-            null, null, null
+            null, null, null, null
         })!;
         await enq;
 

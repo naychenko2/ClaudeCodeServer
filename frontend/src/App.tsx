@@ -32,10 +32,10 @@ import { useOnline } from './hooks/useOnline'
 import { useThemeColor } from './hooks/useThemeColor'
 import { projectMainColor } from './features/projects/projectUtil'
 import { runOfflineSnapshot, syncProjectFiles, drainOfflineQueues } from './lib/sync'
-import { onFilesChanged, onMessage, resetConnection } from './lib/signalr'
+import { onFilesChanged, onMessage, onProjectAccessRevoked, resetConnection } from './lib/signalr'
 import { resetTerminalConnection } from './lib/terminalSignalr'
 import { resetAgentHubs } from './lib/agentHub'
-import { onProjectIconBackfilled } from './features/projects/useAllProjects'
+import { dropProjectFromCache, onProjectIconBackfilled } from './features/projects/useAllProjects'
 import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/nav'
 import { pendingChatOnPop, encodePendingChat } from './lib/pendingProjectChat'
@@ -175,6 +175,10 @@ export default function App() {
       return null
     }
   })
+  // Доступ к открытому проекту отозван (QA-1): сообщение для списка проектов — его рисует
+  // ProjectListPage по этому снимку. Снимок гасится любым переходом в проект или раздел:
+  // он объясняет внезапный выход, а не постоянная плашка.
+  const [accessNotice, setAccessNotice] = useState<{ projectId: string; ownerDisplayName?: string | null } | null>(null)
 
   // Активная вкладка хаба — вне открытого проекта. Стартовый экран — дашборд «Домой»:
   // hash-диплинк приоритетнее, а без hash всегда открывается 'home'. Ключ HUB_TAB_KEY
@@ -431,6 +435,14 @@ export default function App() {
   // Текущий проект — приоритет для снапшота при выходе из офлайна (без ре-триггера при смене проекта)
   const projectIdRef = useRef<string | undefined>(undefined)
   useEffect(() => { projectIdRef.current = project?.id }, [project?.id])
+  // Id проекта, чей воркспейс реально на экране: тот же гейт, что у useThemeColor
+  // (inProjectScreen выше), плюс сам id. Нужен слушателю project_access_revoked:
+  // уход к списку допустим только когда человек видит этот проект; «спящий» проект
+  // (человек в другом разделе — switchHubTab его не сбрасывает) снимается тихо.
+  const projectOnScreenRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    projectOnScreenRef.current = effectiveHubTab === 'projects' && project ? project.id : undefined
+  }, [effectiveHubTab, project])
 
   // Инвалидация DTO открытого проекта при смене дефолт-персоны: бэк шлёт
   // personas_changed action='default' из PersonasController.MakeDefault — и при
@@ -637,10 +649,21 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // QA-D2b (вторая половина дефекта e18f03f2): маркер собственного обхода истории «назад/вперёд».
+  // В обходе истории браузер диспатчит popstate и hashchange по порядку — снимок восстанавливает
+  // popstate, и обработчик hashchange ниже должен пропустить ровно этот случай. Прежний гейт по
+  // наличию снимка глушил любую внешнюю смену hash внутри приложения (вставка адреса, клик по
+  // ссылке на чат): адрес меняется, экран остаётся. Маркер гасится нулевым таймером: обход без
+  // hashchange (тот же hash, другое состояние) не должен оставлять его «навсегда».
+  const historyTraversalRef = useRef(false)
+
   // Кнопки «назад/вперёд» браузера: восстанавливаем уровень проекта из снимка истории.
   // Вложенную навигацию (sidebar/chat/file) обрабатывает WorkspacePage из того же popstate.
   useEffect(() => {
     const onPop = (e: PopStateEvent) => {
+      // QA-D2b: наш обход истории — hashchange того же цикла событий относится к нему
+      historyTraversalRef.current = true
+      setTimeout(() => { historyTraversalRef.current = false }, 0)
       const s = e.state as NavSnapshot | null
       // Уход из зоны проектов кнопкой «назад» — та же память режима, что при клике
       // по пилюле (switchHubTab): клик «Проекты» из другого раздела вернёт туда,
@@ -824,6 +847,8 @@ export default function App() {
   // тянут за собой openProject и navPush/navReplace. Приём тот же, что у openUrlRef ниже.
   const openProjectFromHomeRef = useRef<((p: Project) => void) | null>(null)
   const switchHubTabRef = useRef<((t: HubTabValue) => void) | null>(null)
+  // Зеркало выхода к списку проектов — для эффекта подписки ниже (тот же приём, что выше)
+  const goToProjectsRef = useRef<(() => void) | null>(null)
 
   // Синхронизация раздела с URL при внешней смене hash. Внутренняя навигация (navPush/
   // navReplace) идёт через pushState/replaceState и сама НЕ диспатчит hashchange → рекурсии
@@ -841,9 +866,13 @@ export default function App() {
       if (target.modelsSpend) { requestOpenModelsSpend('quotas'); return }
       if (target.screen === 'project' && target.projectId && target.chatId) {
         // Чат проекта — тем же каналом, что диплинк уведомления (openNotificationUrl):
-        // он кладёт pending и открывает сам чат, а не список чатов проекта. Запись со
-        // снимком — наш же переход «назад/вперёд», его уже восстановил popstate
-        if (getNav()) return
+        // он кладёт pending и открывает сам чат, а не список чатов проекта.
+        // QA-D2b: пропускаем ровно наш обход истории «назад/вперёд» — маркер ставит popstate
+        // того же обхода, он уже восстановил снимок. Внешняя смена hash внутри приложения
+        // (вставка адреса, клик по ссылке на чат) идёт тем же каналом: открывается именно чат
+        // из адреса, как при перезагрузке. Прежний гейт по одному наличию снимка глушил ровно
+        // этот случай: адрес меняется, экран — нет.
+        if (getNav() && historyTraversalRef.current) return
         window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url: window.location.hash } }))
         return
       }
@@ -895,6 +924,8 @@ export default function App() {
   // chatId — сразу запись чата, а не списка проекта: переход в чат чужого проекта кладёт
   // в историю одну запись, и «назад» из него возвращает в прежний чат
   const openProject = (p: Project, chatId?: string) => {
+    // Открыли другой проект — сообщение об отзыве больше не к месту
+    setAccessNotice(null)
     recordRecentProject(p.id)
     localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
     navPush(chatId
@@ -917,9 +948,32 @@ export default function App() {
     navReplace({ screen: 'projects' })
     setProject(null)
   }
+  // Доступ к проекту отозван (дефект QA-1): после выкидывания всех групп этого человека
+  // сервер шлёт личное событие в его группу user_{id}. Клиент убирает проект из общего
+  // кэша списка (зона шапки и палитра перерисовываются). Если это открытый проект:
+  // — его воркспейс на экране — закрываем и уходим к списку: загруженные чаты без доступа
+  //   не должны оставаться на экране, а причину объясняет Notice (снимок accessNotice);
+  // — проект «спит» (человек в другом разделе) — состояние снимается тихо, без навигации
+  //   и без Notice: выкинуть человека из «Чатов» на список из-за проекта, которого он
+  //   сейчас не видит, — потерять открытый чат и ввод без объяснимой причины (ревью S1-F8).
+  // Событие про другой проект текущий экран не трогает.
+  useEffect(() => onProjectAccessRevoked(({ projectId, ownerDisplayName }) => {
+    dropProjectFromCache(projectId)
+    if (projectId !== projectIdRef.current) return
+    if (projectOnScreenRef.current === projectId) {
+      setAccessNotice({ projectId, ownerDisplayName })
+      goToProjectsRef.current?.()
+      return
+    }
+    localStorage.removeItem(OPEN_PROJECT_KEY)
+    setProject(null)
+  }), [])
   // Переключатель раздела «Чаты | Проекты». НЕ сбрасывает открытый проект — он «спит»
   // при уходе в «Чаты» и восстанавливается при возврате в «Проекты» (навигационная память).
   const switchHubTab = (t: HubTabValue) => {
+    // Ушли в другой раздел — сообщение об отзыве доступа гасится (объяснить — его дело,
+    // но только сразу после увода, а не постоянной плашкой на списке)
+    setAccessNotice(null)
     // Гейт подсистемной вкладки: если подсистема не зарегистрирована в бандле или
     // выключена пользователю — ведём в «Чаты». Точка одна, покрывает все вызывающие
     // (пилюлю, диплинк из уведомления, программный switchHubTabRef/hashchange).
@@ -1029,6 +1083,7 @@ export default function App() {
   // обработчик там живёт дольше рендера и обязан звать свежие версии
   useEffect(() => { openProjectFromHomeRef.current = openProjectFromHome })
   useEffect(() => { switchHubTabRef.current = switchHubTab })
+  useEffect(() => { goToProjectsRef.current = goToProjects })
 
   // Чип «← к фиче» в разделе «Чаты» (воркспейса нет, cc-open-feature никто не принял):
   // открываем проект фичи сразу со страницей фичи — снимок с feature читает WorkspacePage
@@ -1409,7 +1464,7 @@ export default function App() {
                 // WorkspacePage — иначе useState-инициализаторы не перечитают состояние
                 // нового проекта и на экране остаётся чат/файл/вкладка старого
                 ? <WorkspacePage key={project.id} project={project} onProjectUpdated={handleOpenProjectUpdated} onGoToProjects={goToProjects} onSwitchHub={switchHubTab} auth={auth} onLogout={logout} />
-                : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} />
+                : <ProjectListPage onOpen={openProject} onLogout={logout} auth={auth} onHubTab={switchHubTab} accessNotice={accessNotice} />
       }
       {auth && historyOpen && (
         <ProductHistory

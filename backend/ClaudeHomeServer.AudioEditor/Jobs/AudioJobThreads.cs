@@ -236,7 +236,7 @@ public sealed class AudioJobThreads(
         if (broadcaster is null) return;
         try
         {
-            await broadcaster.ToOwner(ownerId, new AudioThreadChangedMessage(scopeKey, state.Revision, Project(ownerId, sessionId, state)) { SessionId = sessionId });
+            await broadcaster.ToChatAudience(directory, ownerId, AudioEditScope.ProjectIdOf(scopeKey), sessionId, new AudioThreadChangedMessage(scopeKey, state.Revision, Project(ownerId, sessionId, state)) { SessionId = sessionId });
         }
         catch (Exception ex)
         {

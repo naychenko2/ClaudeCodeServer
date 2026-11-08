@@ -1,5 +1,5 @@
 import { memo, useCallback, useState, useRef, useEffect, useLayoutEffect, type CSSProperties, type ReactNode } from 'react';
-import { AlertCircle, AlarmClock, Archive, ArchiveRestore, Bell, BellOff, Bot, CheckCircle2, Clock, Columns3, FileText, GitCommitVertical, History, Hourglass, Eye, EyeOff, Layers, MessageSquareShare, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
+import { AlertCircle, AlarmClock, Archive, ArchiveRestore, Bell, BellOff, Bot, BookOpen, CheckCircle2, Clock, Columns3, FileText, GitCommitVertical, History, Hourglass, Eye, EyeOff, Layers, MessageSquareShare, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT, FS } from '../lib/design';
 import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem, Tooltip, handlePressableKey } from './ui';
@@ -8,12 +8,14 @@ import { STATUS_CONFIG, STATUS_GLOW, type VisualStatus } from './StatusIndicator
 import { useAgentsRunning, useBgCommandRunning } from '../lib/agentsPresence';
 import { useChatWatchdogs } from '../lib/watchdogPresence';
 import { useActionVisibility } from '../hooks/useActionVisibility';
-import { CHAT_ACTION_ORDER, CARD_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey } from '../lib/chatActions';
+import { useWikiChatAvailable } from '../hooks/useWikiChatAvailable';
+import { CHAT_ACTION_ORDER, CARD_ACTIONS_HIDDEN_BY_DEFAULT, CHAT_ACTION_LABELS, type ChatActionKey } from '../lib/chatActions';
 import { isArchivedChat } from '../lib/chatFilters';
 import { ExpiryBadge } from './ExpiryBadge';
 import { ExpiryPicker } from './chat/ExpiryPicker';
 import { expiresAt, expiryOptionLabel, formatExpiryDate } from '../lib/expiry';
 import { updateChatFields } from '../lib/chatUpdate';
+import { chatFieldsErrorText } from '../lib/api';
 import { isNotifySupported, setChatNotifyEnabled, useChatNotifyOn } from '../lib/notify';
 import { showToast } from '../lib/toast';
 import { ChatOriginBadge } from './ChatOriginBadge';
@@ -30,9 +32,8 @@ import { getLastMechanic, useLastMechanicVersion } from '../lib/lastMechanic';
 import { teamImplementTone, teamImplementStageShort, teamImplementBadgeText } from '../lib/teamImplement';
 import { useCanHover } from '../lib/pointer';
 import { NO_AUTOFILL } from '../lib/noAutofill';
-import { useSlot } from '../lib/subsystems/registry';
-import type { ChatCardBadgeApi, ChatCardBadgeCtx } from '../lib/subsystems/registryCore';
-import { useFeature, FLAGS } from '../lib/featureFlags';
+import { useSlot, useSlotItem } from '../lib/subsystems/registry';
+import type { ChatCardBadgeApi, ChatCardBadgeCtx, ChatWikiMenuCtx } from '../lib/subsystems/registryCore';
 import { featureOf, useFeaturesIndex } from '../lib/featuresIndex';
 import { featureDisplayState, KEY_SESSION_TOOLTIP } from '../lib/chatGroups';
 import { FeatureGlyph } from './chat/feature/FeatureGlyphs';
@@ -149,8 +150,8 @@ function TeamImplementMarker({ session }: { session: Session }) {
 }
 
 // Метка фичи в строке чата (макет features-overview.html, «Дни»: глиф + название,
-// обрезка с title). Показывается для чата, принадлежащего фиче, под флагом
-// features-overview — вместо имени персоны. Глиф — по состоянию фичи
+// обрезка с title). Показывается для чата, принадлежащего фиче —
+// вместо имени персоны. Глиф — по состоянию фичи
 // (featureDisplayState: wait/stopped/run/loop/closed/done).
 export function FeatureLabel({ feature }: { feature: FeatureIndexFeature }) {
   const st = featureDisplayState(feature);
@@ -175,10 +176,9 @@ export function FeatureLabel({ feature }: { feature: FeatureIndexFeature }) {
   );
 }
 
-// Фича чата для метки: null — метки нет (чат без фичи или флаг выключен).
-// Чистая функция: читает индекс фич (featureOf) и флаг; тестируется без рендера.
-export function featureLabelFor(sessionId: string | null, flagOn: boolean): FeatureIndexFeature | null {
-  if (!flagOn) return null;
+// Фича чата для метки: null — метки нет (чат без фичи).
+// Чистая функция: читает индекс фич (featureOf); тестируется без рендера.
+export function featureLabelFor(sessionId: string | null): FeatureIndexFeature | null {
   const entries = featureOf(sessionId);
   return entries[0]?.feature ?? null;
 }
@@ -230,6 +230,22 @@ interface Props {
   // Архив: убрать/вернуть. Вызывающая сторона ловит 409 «в чате идёт ход» и показывает
   // тостом. Не задан — пункта меню «В архив» нет (например, витрина UI-кита)
   onArchive?: (archived: boolean) => void;
+  // Причины недоступности действий чата участнику общего проекта (QA-P1): переименовать/
+  // архивировать — нет права записи чата (читатель), удалить — не автор чата. Значения считает
+  // единый гейт (chatActionDeniedReason), здесь они только ложатся на свои пункты: задана
+  // причина — пункт выключен с этой подсказкой
+  renameDeniedReason?: string | null;
+  archiveDeniedReason?: string | null;
+  deleteDeniedReason?: string | null;
+  // Настройки чата (QA-P1F, остаток M1): срок, мьют и досье — право владельца
+  // (бэковый OwnerSettingsGate, 403 owner_settings — отказ и редактору, и читателю);
+  // «Теги» — правка содержимого чата, тот же гейт записи, что у переименования.
+  // Ложатся на свои пункты так же, как rename/archive/delete: задана причина —
+  // пункт выключен с этой подсказкой
+  tagsDeniedReason?: string | null;
+  notifyDeniedReason?: string | null;
+  dossierDeniedReason?: string | null;
+  expiryDeniedReason?: string | null;
   // Сохранить сессию как заметку. Сеть на стороне списка (saveArchiveSessionAsNote).
   // Не задан — пункта меню «Сохранить в заметки» нет
   onSaveAsNote?: () => Promise<unknown>;
@@ -319,7 +335,7 @@ function ChatCardView({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
   agentsRunning: agentsRunningProp, bgCommandRunning: bgCommandRunningProp, uncommitted,
   onSelect, onHover, onDelete, onTogglePin, tags, onAssignTags, onPickSubject, subjectHint, subjectTitle,
-  onRename, onAddToWall, onArchive, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle, featureRole, inFeatureGroup,
+  onRename, onAddToWall, onArchive, renameDeniedReason, archiveDeniedReason, deleteDeniedReason, tagsDeniedReason, notifyDeniedReason, dossierDeniedReason, expiryDeniedReason, onSaveAsNote, onEdited, leadingInset = 0, swipeOpen, onSwipeToggle, featureRole, inFeatureGroup,
 }: Props) {
   // Персоны и механики карточка читает из сторов напрямую — подписка своя, иначе
   // мемоизированная карточка не узнает, что персона догрузилась или механика сменилась
@@ -346,13 +362,12 @@ function ChatCardView({
   const mechanic = getLastMechanic(s.id);
   // Значки подсистем в строке названия (чат картинки — миниатюра и «картинка»)
   const badges = useSlot<ChatCardBadgeCtx, ChatCardBadgeApi>('chat-card-badge');
-  // Метка фичи: для чата, принадлежащего фиче, под флагом features-overview.
+  // Метка фичи: для чата, принадлежащего фиче.
   // useFeaturesIndex — реактивная подписка на индекс (один запрос на проект:
   // первичная загрузка при 0→1 потребителях); featureLabelFor — чистое решение
   // «показывать ли метку» (null — нет)
-  const featuresOn = useFeature(FLAGS.featuresOverview);
-  useFeaturesIndex(s.projectId ?? null, featuresOn);
-  const feature = featureLabelFor(s.id, featuresOn);
+  useFeaturesIndex(s.projectId ?? null);
+  const feature = featureLabelFor(s.id);
   // Открытое меню действий: rect кнопки-триггера (null — закрыто)
   const [menu, setMenu] = useState<DOMRect | null>(null);
   // M1: фокус на карточке-строке — подсказка «что значит ключевой» (Tooltip) поднимается
@@ -479,6 +494,29 @@ function ChatCardView({
   // переименования нет: там в заголовке стоит имя ЗАДАЧИ (taskChat.title), и правка
   // s.name не изменила бы ни строчки на экране
   const canRename = !!onRename && !taskChat;
+  // Причина недоступности действия в этой карточке (QA-P1, QA-P1F): значения приходят из
+  // единого гейта (chatActionDeniedReason у списка), здесь только сопоставление ключа
+  // с его причиной. Ключей без причины (pin/wall/subject) в таблице нет — они null
+  const deniedReason = (k: ChatActionKey): string | null =>
+    ({ rename: renameDeniedReason, archive: archiveDeniedReason, delete: deleteDeniedReason,
+      tags: tagsDeniedReason, notify: notifyDeniedReason, dossier: dossierDeniedReason,
+      expiry: expiryDeniedReason } as Partial<Record<ChatActionKey, string | null>>)[k] ?? null;
+
+  // «Вики» (WM-4). Доступность действия считает хук: флаг llm-wiki, чат в проекте, роль не
+  // отказана (тот же гейт «только владелец», что у настроек вики — ветка ownerSettingsDeniedReason
+  // participantGate'а, приходит в карточку как dossierDeniedReason), вики владельца заведена.
+  // Пока дерево не загружено — false: пункт скрыт целиком, не серым и не disabled.
+  const wikiAvailable = useWikiChatAvailable(s.projectId, !!dossierDeniedReason);
+  // Меню — вклад «Заметок» слота chat-header-action (тот же, что у шапки). Он монтируется
+  // только пока карточка держит его открытым: его опрос analyze-status живёт ровно пока меню
+  // живо, и при закрытии карточки (чат ушёл из списка, сменился фильтр) снимается сам.
+  // Состояние локальное: две карточки разных чатов меню не делят. Повторное открытие — новый
+  // counter: вклад открывается по его изменению (prevTrigger-гард вклада не даёт двойного
+  // открытия на одном запросе).
+  const wikiMenu = useSlotItem<ChatWikiMenuCtx>('chat-header-action', 'wiki-chat-menu');
+  const wikiReqSeq = useRef(0);
+  const [wikiOpen, setWikiOpen] = useState<{ counter: number; anchor: DOMRect } | null>(null);
+  const requestWikiOpen = (anchor: DOMRect) => setWikiOpen({ counter: ++wikiReqSeq.current, anchor });
 
   // Быстрые действия карточки (hover-кластер на desktop, кнопки свайпа на мобиле).
   // Набор — общий каталог действий чата (тот же, что в шапке открытого чата); какие
@@ -495,6 +533,9 @@ function ChatCardView({
     wall: !!onAddToWall,
     notify: canMute,
     dossier: canEditChat && !!s.projectId,
+    // «Вики» — как решил его хук: нет флага/проекта/заведённой вики/права — нет ни строки
+    // меню, ни быстрой кнопки, ни кнопки свайпа (инвариант «недоступно → скрыто целиком»)
+    wiki: wikiAvailable,
     expiry: canEditChat,
     // Архивный пункт рисуется на меню (см. ниже) и/или в быстром кластере — но
     // только когда родительский список дал колбэк onArchive (= отвечает за сеть
@@ -560,7 +601,7 @@ function ChatCardView({
   // чтобы жест и наведение всегда делали ровно одно и то же. Клики гасят всплытие:
   // иначе любое действие заодно открывало бы чат (onClick карточки)
   const quickButton = (key: ChatActionKey): {
-    icon: ReactNode; title: string; danger?: boolean; active?: boolean;
+    icon: ReactNode; title: string; danger?: boolean; active?: boolean; disabled?: boolean;
     onClick: (e: React.MouseEvent<Element>) => void;
   } => {
     switch (key) {
@@ -595,6 +636,12 @@ function ChatCardView({
         title: s.excludeFromDossiers ? 'Решения не сохраняются' : 'Решения сохраняются',
         onClick: e => { e.stopPropagation(); void toggleDossier(); },
       };
+      case 'wiki': return {
+        icon: <BookOpen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />, title: CHAT_ACTION_LABELS.wiki,
+        // Быстрая кнопка (кластер или свайп) открывает меню по своему rect: она не проходит
+        // через меню карточки, его якоря у неё нет
+        onClick: e => { e.stopPropagation(); requestWikiOpen((e.currentTarget as HTMLElement).getBoundingClientRect()); },
+      };
       case 'expiry': return {
         icon: <Hourglass size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
         title: s.expiresAfterMinutes ? `Хранить: ${expiryOptionLabel(s.expiresAfterMinutes)}` : 'Срок хранения',
@@ -616,6 +663,15 @@ function ChatCardView({
         onClick: e => { e.stopPropagation(); onArchive?.(!isArchivedChat(s)); },
       };
     }
+  };
+
+  // Действие без права выключено: подсказка причины вместо названия, клика нет
+  const quickBtn = (key: ChatActionKey) => {
+    const b = quickButton(key);
+    const reason = deniedReason(key);
+    return reason
+      ? { ...b, disabled: true, title: `${b.title}: ${reason}` }
+      : b;
   };
 
   const [editing, setEditing] = useState(false);
@@ -661,8 +717,9 @@ function ChatCardView({
   const toggleDossier = async () => {
     try {
       onEdited?.(await updateChatFields(s, { excludeFromDossiers: !s.excludeFromDossiers }));
-    } catch {
-      showToast('История решений', 'Не удалось изменить настройку чата', 'info');
+    } catch (e) {
+      // 409 private_chat_dossiers — причина и действие вместо нейтрального текста (S2d-6c-F)
+      showToast('История решений', chatFieldsErrorText(e), 'info');
     }
   };
 
@@ -897,7 +954,7 @@ function ChatCardView({
               берём обязательно: имя (aria-label — на таче title не показывается вовсе)
               и видимое кольцо фокуса (класс cc-iconbtn) */}
           {quickButtons.map((k, i) => {
-            const b = quickButton(k);
+            const b = quickBtn(k);
             return (
               <button
                 key={k}
@@ -906,10 +963,11 @@ function ChatCardView({
                 // Раскрытие закрываем ПЕРЕД действием: пикер тегов/срока встаёт по rect
                 // кнопки, а сама кнопка уедет вместе с закрытием — rect берём заранее
                 onClick={e => { onSwipeToggle?.(false); b.onClick(e); }}
+                disabled={b.disabled}
                 title={b.title}
                 aria-label={b.title}
                 style={{
-                  flex: 1, border: 'none', cursor: 'pointer', display: 'grid', placeItems: 'center',
+                  flex: 1, border: 'none', cursor: b.disabled ? 'not-allowed' : 'pointer', opacity: b.disabled ? 0.5 : 1, display: 'grid', placeItems: 'center',
                   borderLeft: i === 0 ? 'none' : `1px solid ${C.borderLight}`,
                   // Подложка — bgInset, а не bgWhite: у карточки тот же тон, и слой
                   // «под» ней не читался бы ни в светлой теме, ни в тёмной
@@ -1087,7 +1145,7 @@ function ChatCardView({
           {badges.map((b, i) => b.render && <span key={b.name ?? i} style={{ display: 'contents' }}>{b.render({ session: s, isMobile })}</span>)}
           <TeamImplementMarker session={s} />
           <ExpiryBadge session={s} />
-          {/* Метка фичи: для чата, принадлежащего фиче, под флагом features-overview.
+          {/* Метка фичи: для чата, принадлежащего фиче.
               Глиф + название (обрезка с title); в «Днях» — вместо имени персоны.
               Внутри группы фичи (inFeatureGroup) — не рисуем: имя уже в заголовке (n1) */}
           {feature && !inFeatureGroup && <FeatureLabel feature={feature} />}
@@ -1250,7 +1308,7 @@ function ChatCardView({
           background: cardBg, borderRadius: R.lg, boxShadow: SHADOW.card,
         }}>
           {quickButtons.map(k => {
-            const b = quickButton(k);
+            const b = quickBtn(k);
             return (
               <IconButton
                 key={k}
@@ -1259,6 +1317,7 @@ function ChatCardView({
                 size="xs"
                 tone={b.danger ? 'danger' : undefined}
                 active={b.active}
+                disabled={b.disabled}
               >
                 {b.icon}
               </IconButton>
@@ -1306,6 +1365,8 @@ function ChatCardView({
             <MenuItem
               icon={<Pencil size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label="Переименовать"
+              hint={deniedReason('rename') ?? undefined}
+              disabled={!!deniedReason('rename')}
               isMobile={isMobile}
             action={visAction('rename')}
               onClick={e => { e.stopPropagation(); setMenu(null); startRename(); }}
@@ -1324,6 +1385,8 @@ function ChatCardView({
             <MenuItem
               icon={<Tags size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label="Теги"
+              hint={deniedReason('tags') ?? undefined}
+              disabled={!!deniedReason('tags')}
               isMobile={isMobile}
             action={visAction('tags')}
               // Меню маркировки открывается по тому же якорю: кнопка «⋮» уже
@@ -1358,6 +1421,8 @@ function ChatCardView({
             <MenuItem
               icon={notifyOn ? <Bell size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> : <BellOff size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label={notifyOn ? 'Заглушить' : 'Уведомления'}
+              hint={deniedReason('notify') ?? undefined}
+              disabled={!!deniedReason('notify')}
               isMobile={isMobile}
             action={visAction('notify')}
               onClick={e => { e.stopPropagation(); setMenu(null); void toggleNotify(); }}
@@ -1369,15 +1434,34 @@ function ChatCardView({
             <MenuItem
               icon={<History size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label={s.excludeFromDossiers ? 'Досье: не сохраняются' : 'Досье: сохраняются'}
+              hint={deniedReason('dossier') ?? undefined}
+              disabled={!!deniedReason('dossier')}
               isMobile={isMobile}
             action={visAction('dossier')}
               onClick={e => { e.stopPropagation(); setMenu(null); void toggleDossier(); }}
+            />
+          )}
+          {/* «Вики» (WM-4): строка по образцу тегов — по каноническому порядку каталога,
+              между «Досье» и «сроком». Её гейт — cardActionAvailable.wiki: один источник с
+              быстрой кнопкой и свайпом, строка не может разойтись с ними. Для недоступного
+              здесь нет ни серой строки, ни disabled-строки */}
+          {cardActionAvailable.wiki && (
+            <MenuItem
+              icon={<BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+              label={CHAT_ACTION_LABELS.wiki}
+              isMobile={isMobile}
+              action={visAction('wiki')}
+              // Меню вики открывается по тому же якорю, что и это меню закрывается: кнопка «⋮»
+              // исчезнет вместе с ним, и её rect брать будет неоткуда (приём пункта «Теги»)
+              onClick={e => { e.stopPropagation(); const anchor = menu; setMenu(null); requestWikiOpen(anchor); }}
             />
           )}
           {canEditChat && (
             <MenuItem
               icon={<Hourglass size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label={s.expiresAfterMinutes ? `Хранить: ${expiryOptionLabel(s.expiresAfterMinutes)}` : 'Срок хранения'}
+              hint={deniedReason('expiry') ?? undefined}
+              disabled={!!deniedReason('expiry')}
               isMobile={isMobile}
             action={visAction('expiry')}
               // Пикер сроков открывается по тому же якорю, что и это меню: кнопка «⋮»
@@ -1391,6 +1475,8 @@ function ChatCardView({
                 ? <ArchiveRestore size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
                 : <Archive size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               label={isArchivedChat(s) ? 'Вернуть из архива' : 'В архив'}
+              hint={deniedReason('archive') ?? undefined}
+              disabled={!!deniedReason('archive')}
               isMobile={isMobile}
               action={visAction('archive')}
               onClick={e => { e.stopPropagation(); setMenu(null); onArchive(!isArchivedChat(s)); }}
@@ -1413,12 +1499,35 @@ function ChatCardView({
           <MenuItem
             icon={<Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
             label="Удалить"
+            hint={deniedReason('delete') ?? undefined}
+            disabled={!!deniedReason('delete')}
             danger
             isMobile={isMobile}
             action={visAction('delete')}
             onClick={e => { e.stopPropagation(); setMenu(null); onDelete(); }}
           />
         </Menu>
+      )}
+
+      {/* Подменю «Вики» (WM-4): вклад «Заметок» живёт, только пока открыт, — карточка
+          держит его состоянием wikiOpen. Действие пункта зовет onClose: карточка снимает
+          состояние, вклад размонтируется и свой опрос снимает сам (это в самом вкладе).
+          Закрытие кликом вне/Esc наружу не сообщается (контракт WM-2): вклад остаётся
+          открытым состоянием карточки и открывается заново по новому counter.
+          Клик гасится на обёртке: выпадающий список вклада — портал в body, но React-события
+          идут по дереву компонентов, и клик по пункту иначе открыл бы чат (onClick карточки). */}
+      {wikiOpen && (
+        <span style={{ display: 'contents' }} onClick={e => e.stopPropagation()}>
+          {wikiMenu?.render?.({
+            session: s,
+            hasMessages: s.messageCount > 0,
+            online,
+            isMobile,
+            headless: true,
+            open: wikiOpen,
+            onClose: () => setWikiOpen(null),
+          })}
+        </span>
       )}
 
       {expiryMenu && !editing && (

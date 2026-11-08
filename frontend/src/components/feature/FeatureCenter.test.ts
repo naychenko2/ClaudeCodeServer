@@ -85,7 +85,6 @@ describe('FeatureCenter: остров на десктопе (Глеб M2 = Ма�
   beforeEach(() => {
     vi.useFakeTimers();
     pageTest.reset();
-    setAllFlags({ 'features-overview': true });
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -136,7 +135,6 @@ describe('FeatureCenter: уступка страницы фичи файлу (ma
   beforeEach(() => {
     vi.useFakeTimers();
     pageTest.reset();
-    setAllFlags({ 'features-overview': true });
   });
   afterEach(() => {
     vi.useRealTimers();

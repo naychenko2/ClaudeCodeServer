@@ -173,4 +173,25 @@ public class ProjectLinkGuardTests : IDisposable
         act.Should().Throw<UnauthorizedAccessException>();
         File.Exists(Path.Combine(_outside, "secret.v2.png")).Should().BeFalse();
     }
+
+    // F2-P2: чтение образца/файла нити идёт через общий предикат private — чужой private отказ,
+    // свой private и обычный файл читаются
+    [Fact]
+    public async Task ReadProjectImageAsync_чужой_private_отказ_свой_и_обычный_читаются()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, ".cc-attachments", "private", "other", "g"));
+        Directory.CreateDirectory(Path.Combine(_root, ".cc-attachments", "private", "me", "g"));
+        File.WriteAllBytes(Path.Combine(_root, ".cc-attachments", "private", "other", "g", "s.png"), Png);
+        File.WriteAllBytes(Path.Combine(_root, ".cc-attachments", "private", "me", "g", "m.png"), Png);
+
+        var foreign = await ImageEditLaunchAssembler.ReadProjectImageAsync("me", _root,
+            ".cc-attachments/private/other/g/s.png", "Образец", default);
+        foreign.Value.Should().BeNull();
+        (await ImageEditLaunchAssembler.ReadProjectImageAsync("me", _root, ".", "Образец", default))
+            .Value.Should().BeNull("корень проекта — не файл");
+        (await ImageEditLaunchAssembler.ReadProjectImageAsync("me", _root,
+            ".cc-attachments/private/me/g/m.png", "Образец", default)).Value.Should().NotBeNull();
+        (await ImageEditLaunchAssembler.ReadProjectImageAsync("me", _root, "images/hero.png", "Образец", default))
+            .Value.Should().NotBeNull();
+    }
 }

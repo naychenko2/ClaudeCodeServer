@@ -1,0 +1,58 @@
+# Allow-list сторожа DirectProjectAccessGuardTests (дефект R-S1-3a): файлы, где ProjectAccess.Can/Check
+# зовётся напрямую, мимо IProjectAccess. Формат строки: «путь|число» — по ФАЙЛУ со счётчиком.
+# Поднять счётчик или добавить файл можно только осознанно, с вердиктом в дифе: роль, рубильник общих
+# проектов и запрет записи участнику решает IProjectAccess, а не чистая функция.
+# Сама точка доступа и Core-примитив над ней
+backend/ClaudeHomeServer/Services/ProjectAccessService.cs|3
+backend/ClaudeHomeServer.Core/Services/Access/SessionAccess.cs|1
+# Управление участниками: роль вызывающего нужна самой операции, рубильник проверяется в контроллере
+backend/ClaudeHomeServer/Services/ProjectMembershipService.cs|4
+# Список проектов (рубильник учитывается рядом, sharedOn) и WebDAV (только владелец)
+backend/ClaudeHomeServer/Services/ProjectManager.cs|1
+backend/ClaudeHomeServer/WebDav/WebDavHandler.cs|1
+# Личный чат вне проекта (ProjectId проверен в условии выше): владение самим чатом, проект не участвует —
+# вердикт FINAL-1: это не решение о доступе к проекту, роль и рубильник общих проектов тут неприменимы.
+# S2d-1d: второй вызов — SessionAccess.CanSee (видимость приватного чата проекта автору); id вызывающего входит
+# только в него, ключом хранилищ не служит, арендатор берётся по Project.OwnerId (см. S1-3a выше)
+backend/ClaudeHomeServer.AudioEditor/Controllers/AudioEditScopeGate.cs|2
+backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|2
+backend/ClaudeHomeServer.VideoEditor/Controllers/VideoEditScopeGate.cs|2
+# Выбор оверлея личного состояния: нужна лишь классификация роли Editor/Reader; доступ к чату уже решён
+# контроллером/конвертером через IProjectAccess, сама проверка ничего не открывает (вердикт FINAL-1)
+backend/ClaudeHomeServer/Services/ChatUserStateService.cs|1
+# S2d-3a: GetOwnedVisible — id вызывающего входит только в видимость чата (SessionAccess.CanSee):
+# арендатор уже установлен GetOwned (Project.OwnerId / Session.OwnerId), роль и рубильник
+# неприменимы — вызывающий и есть арендатор. Ключом хранилищ id не служит; GetOwned
+# (машинные пути) не затронут.
+# S2d-3f (дефект 183333fb): SetChatIconsAsync — тот же второй вызов в том же файле: пакетный прогон
+# значков отбирает чаты фильтром арендатора (ResolveOwnerId), CanSee добавляет только приватность
+# чата (чужой приватный не отдаёт транскрипт в модель арендатора и не пишется в его карточку).
+# Роль и рубильник неприменимы: вызывающий и есть арендатор; ключом хранилищ id не служит.
+# S2d-4a: VisibleTo — тот же третий вызов в том же файле: человеческие СПИСКИ чатов
+# (GetAllOwnedVisibleBy, GetVisibleByProject, GetPersonaChats, снимок фоновой работы) отобраны
+# фильтром арендатора (ResolveOwnerId, прежнее правило), CanSee добавляет только приватность
+# чата. Роль и рубильник неприменимы: для не-арендатора проект уже отсечён владением, для
+# арендатора он и есть владелец; ключом хранилищ id не служит, записи в этих методах нет.
+# F2-O3 доработка 2 (дельта-ревью 627bd324): DeliverPendingAsync перед стартом хода из очереди
+# перечитывает видимость приватного чата его автору (SessionAccess.CanSee) — гонка «отзыв против
+# уже начатой доставки». Id автора (не вызывающего: вызывающий — серверная доставка) входит только
+# в видимость его же чата; роль и рубильник не решаются — членство уже реализовано RemoveAsync,
+# здесь перечитывается его следствие, чтобы не поднимать ход-сироту в чате, который автор больше
+# не видит. Ключом хранилищ id не служит, нового права никто не получает.
+backend/ClaudeHomeServer/Services/SessionManager.cs|4
+# S2d-4c: доска агентов — id вызывающего (зрителя доски) входит только в видимость чата:
+# невидимый чат теряет ссылку (SessionId/PermissionPending в BoardItem). Право на проект
+# здесь не решается (роль и рубильник неприменимы: это маска ссылки, не допуск к данным —
+# задача и её позиция на доске остаются), ключом хранилищ id не служит.
+backend/ClaudeHomeServer.Tasks/BoardService.cs|1
+# S2d-4b: ChatRefs.For — та же роль, что у доски: id зрителя (или id группы — не человек) входит
+# только в видимость чата, чтобы закрыть ссылку на него в проекции задачи (id-поле обнуляется,
+# рядом форма-заглушка). Право на проект здесь не решается: роль и рубильник неприменимы — это
+# маска ссылки, не допуск к данным (задача и её поля остаются); ключом хранилищ id не служит,
+# записи в ChatRefs нет (чистая функция над каталогом).
+backend/ClaudeHomeServer.Core/Models/ChatRef.cs|1
+# S2d-4b2: TaskExecutionService — SessionAccess.CanSee в NotifyDelegatorAsync: ссылка уведомления
+# на исходный чат строится, только если он виден владельцу задачи; иначе ссылка на задачу. Право на
+# проект здесь не решается (роль и рубильник неприменимы: это маска ссылки, не допуск к данным),
+# ключом хранилищ id не служит, записи нет.
+backend/ClaudeHomeServer/Services/TaskExecutionService.cs|1

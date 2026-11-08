@@ -60,7 +60,7 @@ public class WatchdogStore
     /// </summary>
     public WatchdogRecord? Create(string ownerId, string sessionId, string? projectId,
         string name, string pollCommand, int? intervalSeconds, int? timeoutMinutes,
-        out string? error)
+        out string? error, string? actorUserId = null)
     {
         error = ValidateNew(ownerId, sessionId, name, pollCommand, intervalSeconds, timeoutMinutes);
         if (error is not null) return null;
@@ -70,6 +70,7 @@ public class WatchdogStore
             OwnerId = ownerId,
             SessionId = sessionId,
             ProjectId = string.IsNullOrEmpty(projectId) ? null : projectId,
+            ActorUserId = string.IsNullOrEmpty(actorUserId) ? null : actorUserId,
             Name = name.Trim(),
             PollCommand = pollCommand.Trim(),
             IntervalSeconds = intervalSeconds ?? WatchdogLimits.DefaultIntervalSeconds,

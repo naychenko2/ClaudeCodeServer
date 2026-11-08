@@ -301,7 +301,7 @@ public class TurnPromptGoldenTests : IDisposable
             "оговорка digest обязана быть последним текстом всего --append-system-prompt");
     }
 
-    // ---------- 4. change-dossiers-recall: отдельная секция dossier-recall ----------
+    // ---------- 4. паспорта изменений: отдельная секция dossier-recall ----------
 
     [Fact]
     public async Task ChangeDossiersRecall_Включен_ОтдельнаяСекцияDossierRecall()
@@ -315,7 +315,7 @@ public class TurnPromptGoldenTests : IDisposable
             withPersonaRecallProvider: true,
             withDossierTrailer: false,
             withPromptSectionsProvider: false,
-            dossierToolsEnabled: true, // флаг change-dossiers-recall включён
+            dossierToolsEnabled: true, // инструменты паспортов включены
             personaLayerText: $"{M_PERSONA_LAYER} Ты — Персона");
 
         // Этап 2: контракт «досье отдельно от recall» теперь раздаёт BuildBaseContext: при

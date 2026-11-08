@@ -253,13 +253,13 @@ count }` и `Edit { provider, model, count, op, editMode, ratio }`; плоски
   всегда на `CancellationToken.None` (и в запуске, и read-only: MCP `image_find_faces`, ручка
   `faces`); вызывающий отвязан через `WaitAsync(ct)`.
 - **Код → статус** (единая точка `ImageEditorEndpoints.Map`): `provider_unavailable` → 409,
-  `faces_changed` → 409, `feature_disabled` → 404, `busy` → 503, `faces_too_close` /
+  `faces_changed` → 409, `busy` → 503, `faces_too_close` /
   `face_out_of_frame` → 400.
 - **Инструменты агента:** новый read-only `image_find_faces` (номера лиц версии) и аргументы `face`
   и `faces: [{face, character}]` у `image_generate` — статичная схема; `faces` несовместим с
   `face`/`character`, один вызов — один запуск в счёт `MaxLaunchesPerTurn`. `image_find_faces` в `tools/list` всегда (`ToolsOfInstance`
-  держит его и в урезанном наборе, при `ImageEditor:AgentLaunch=false`); флаг пользователя
-  `character-face-swap` на список не влияет — он даёт только отказ `feature_disabled` (404) на вызове.
+  держит его и в урезанном наборе, при `ImageEditor:AgentLaunch=false`); пользовательского флага
+  у подмены лица больше нет (снят), она доступна всем.
 
 Поставщики (`Providers/`), каталог моделей с `caps` — `ImageEditCatalog`:
 

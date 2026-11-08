@@ -1,10 +1,11 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, useRef } from 'react';
+import { canCreateChats, chatActionDeniedReason, isNotChatAuthorError } from '../features/projects/members/participantGate';
 import { FilterX, ChevronUp, ChevronDown, MessageCircle, Archive, CheckCircle2, Sparkles } from 'lucide-react';
 import type { Project, ProjectSubject, ProjectTag, Session } from '../types';
 import type { FeatureIndexFeature } from '../types/featureIndex';
 import { api } from '../lib/api';
 import { idbGet } from '../lib/idb';
-import { passiveCacheKey } from '../lib/offline';
+import { passiveCacheKey, readStoredUserId } from '../lib/offline';
 import { forgetChatContextOnDeleted } from '../lib/chatContext/forget';
 import { archiveApi, saveArchiveSessionAsNote } from '../api/chats';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
@@ -16,7 +17,6 @@ import { Modal, ModalActions, Button, IconButton, Chip } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { ChatGroupHeader } from './ChatGroupHeader';
 import { FeatureGroupHeader } from './FeatureGroupHeader';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 import { useFeaturesIndex } from '../lib/featuresIndex';
 import { LIST_FLASH_CLASS, LIST_FLASH_MS } from './ListDateDivider';
 import {
@@ -39,6 +39,7 @@ import { buildChatTreeRows, splitChatTreeByRoots, rootChatForSection, rootResolv
 import { useBgWorkPresence } from '../lib/agentsPresence';
 import { startVisiblePoll, throttleRefetch } from '../lib/visiblePoll';
 import { listProjectSessions } from '../lib/sessionsList';
+import { forgetChatRevision } from '../lib/sync';
 import { ensureGit, useGitState } from '../lib/git';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard, ROW_GAP } from './ChatCard';
@@ -96,8 +97,8 @@ interface Props {
 }
 
 // Режимы группировки списка проекта: «Темы» есть только здесь, у глобального списка их
-// нет. «Фичи» — пятый пункт, появляется только при флаге features-overview (см.
-// featureGroupByOptions(true, featuresOn) в теле компонента); глобальный список его не
+// нет. «Фичи» — пятый пункт, есть всегда (см.
+// featureGroupByOptions(true) в теле компонента); глобальный список его не
 // получает (реестра фич у него нет).
 // Зазор под секцией группы (дни, теги, темы). Нижний padding списка его вычитает
 // (не больше SP.sm − ROW_GAP, иначе padding уйдёт в минус)
@@ -241,7 +242,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // Переименование из карточки списка: ответ раскладывается тем же путём, что и теги —
   // в список и (если чат открыт) владельцу, чтобы шапка панели не отстала
   const renameSession = (s: Session, name: string) =>
-    api.sessions.update(project.id, s.id, { name }).then(updated => handleSessionUpdated(updated));
+    api.sessions.update(project.id, s.id, { name }).then(updated => handleSessionUpdated(updated)).catch(e => {
+      if (isNotChatAuthorError(e)) showToast('Переименование', (e as Error).message, 'info');
+      throw e;
+    });
 
   const toggleTag = (s: Session, name: string) => {
     const tags = s.tags ?? [];
@@ -584,6 +588,39 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           .catch(() => { /* чат ушёл из набора или офлайн — ignore */ });
         return;
       }
+      // Чат стал приватным (S2d-F2): сервер снял чужие соединения с группы чата и лишь
+      // потом послал это в project-группу — после события чужой клиент не получит ни
+      // одного события чата. Различение — по ответу GET, он сильнее локальной копии:
+      // автору чат виден (200 с privateToUserId — значок тумблера обновляется), неавтору
+      // 404 — чат больше не виден ни id, ни названием: убираем из списка, открытый
+      // уводим на соседа (тот же механизм, что у chat_deleted) с нейтральным сообщением.
+      // Ревизия истории чата в офлайн-кеше снимается в обоих случаях: после смены
+      // видимости прежняя запись незначима (см. forgetChatRevision).
+      if (msg.type === 'chat_visibility_changed' && msg.sessionId) {
+        void forgetChatRevision(project.id, msg.sessionId);
+        api.chats.get(msg.sessionId)
+          .then(updated => setSessions(prev => prev.map(s => s.id === updated.id ? { ...s, ...updated } : s)))
+          .catch((e: unknown) => {
+            // 404 — «чата для тебя больше нет» (он приватный): убираем. Другой сбой
+            // (офлайн) — список не трогаем: на реконнекте он перечитается сам
+            if ((e as { status?: number })?.status !== 404) return;
+            let reacted = false;
+            setSessions(prev => {
+              const remaining = prev.filter(s => s.id !== msg.sessionId);
+              if (!reacted && activeRef.current?.id === msg.sessionId) {
+                reacted = true;
+                const handler = onActiveDeletedRef.current;
+                const neighbor = chatNeighborForArchive(remaining, msg.sessionId, matchChatFilter(loadChatFilters(project.id)));
+                if (handler) queueMicrotask(() => handler(neighbor));
+                else if (neighbor) queueMicrotask(() => onSelectRef.current(neighbor, undefined, true));
+                else queueMicrotask(() => onClearedRef.current?.());
+              }
+              return remaining;
+            });
+            showToast('Видимость чата', 'Чат стал приватным — вы его больше не видите', 'info');
+          });
+        return;
+      }
       if (msg.type !== 'status_changed') return;
       setSessions(prev => prev.map(s =>
         s.id === msg.sessionId
@@ -637,7 +674,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     // защищаемся от unhandled rejection и не закрываем диалог при сбое
     try {
       await api.sessions.delete(project.id, deleteTarget.id);
-    } catch {
+    } catch (e) {
+      if (isNotChatAuthorError(e)) showToast('Удаление чата', (e as Error).message, 'info');
       setDeleteTarget(null);
       return;
     }
@@ -688,22 +726,19 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // hierarchy в сторе осталась ради совместимости записей и здесь не читается
   const { filters, patch } = useChatFilters(project.id);
   const { sortOrder } = filters;
-  // Режим «Фичи»: фасет по индексу фич (флаг features-overview, dark launch).
-  // Пункт «Фичи» в группировке появляется только при флаге; индекс фич проекта
-  // источник правды (бэк считает bucket/порядок/членство/ключевой чат), фронт
-  // только показывает. Флаг выключен — источник не зовётся (EMPTY, фасет не рисуется)
-  const featuresOn = useFeature(FLAGS.featuresOverview);
-  const groupByOptions = featureGroupByOptions(true, featuresOn);
-  // groupBy из хранилища может быть недоступен этому списку: 'features' при
-  // выключенном флаге (пункта «Фичи» в тулбаре нет, а режим фичи показал бы
-  // «Фич пока нет»). Клампим к опциям — как 'subjects' в глобальном списке
+  // Режим «Фичи»: фасет по индексу фич.
+  // Индекс фич проекта — источник правды (бэк считает bucket/порядок/членство/ключевой
+  // чат), фронт только показывает
+  const groupByOptions = featureGroupByOptions(true);
+  // groupBy из хранилища может быть недоступен этому списку (например, 'subjects').
+  // Клампим к опциям — как 'subjects' в глобальном списке
   // (ChatList.tsx) — иначе ни одна ветка рендера не сработала бы. Хранилище не
   // перезаписываем: первый явный выбор пользователя всё починит сам.
   const groupBy: ChatGroupBy = groupByOptions.includes(filters.groupBy) ? filters.groupBy : 'days';
   const subjectsMode = groupBy === 'subjects';
   const subjectRun = useSubjectRun(project.id, subjectsMode);
   const featuresMode = groupBy === 'features';
-  const featuresIndex = useFeaturesIndex(project.id, featuresOn);
+  const featuresIndex = useFeaturesIndex(project.id);
   // Раскрытые группы фич (по featureId). Пусто = все свёрнуты: группа свёрнута по
   // умолчанию, наружу выведены ключевой и живые/вставшие чаты, остальное — «ещё N»
   const [expandedFeatureGroups, setExpandedFeatureGroups] = useState<Set<string>>(new Set());
@@ -1193,6 +1228,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       </>
     );
   };
+  // id текущего пользователя для авторского гейта действий чата (QA-P1): читается один раз
+  // на рендер списка и передаётся в единый гейт (chatActionDeniedReason)
+  const myUserId = readStoredUserId();
   // leadingInset — место под контрол ветки дерева. На док стены чат отправляется
   // пунктом меню «На стену»: строки дерева держит dnd-kit (ChatTreeRow.useDraggable),
   // и нативный drag на стену глушил бы вложение — его здесь нет намеренно
@@ -1232,6 +1270,15 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           // Возврат из архива открывает чат и выводит список из архивного вида
           if (!archived) leaveArchiveAndOpen(s);
         } : undefined}
+        renameDeniedReason={chatActionDeniedReason('rename', project, s, myUserId)}
+        archiveDeniedReason={chatActionDeniedReason('archive', project, s, myUserId)}
+        deleteDeniedReason={chatActionDeniedReason('delete', project, s, myUserId)}
+        // Настройки чата (QA-P1F): срок/мьют/досье — право владельца, теги — право
+        // записи; тот же диспетчер, что у rename/archive/delete
+        tagsDeniedReason={chatActionDeniedReason('tags', project, s, myUserId)}
+        notifyDeniedReason={chatActionDeniedReason('notify', project, s, myUserId)}
+        dossierDeniedReason={chatActionDeniedReason('dossier', project, s, myUserId)}
+        expiryDeniedReason={chatActionDeniedReason('expiry', project, s, myUserId)}
         onSaveAsNote={online && notesOn ? () => handleSaveAsNote(s) : undefined}
         swipeOpen={openSwipeId === s.id}
         onSwipeToggle={open => setOpenSwipeId(open ? s.id : null)}
@@ -1276,7 +1323,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <ChatListToolbar
         onNew={() => { void createNew(); }}
-        hideNew={!online}
+        hideNew={!online || !canCreateChats(project)}
         sessions={sessions}
         filters={groupBy === filters.groupBy ? filters : { ...filters, groupBy }}
         patch={patch}

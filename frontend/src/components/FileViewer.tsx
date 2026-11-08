@@ -20,11 +20,13 @@ import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml';
 import sql from 'react-syntax-highlighter/dist/esm/languages/prism/sql';
 import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup';
 import type { Project, GitBlameLine, GitLogEntry, ChangedBySession } from '../types';
-import { api } from '../lib/api';
+import { api, FileConflictError } from '../lib/api';
 import { basename } from '../lib/paths';
+import { conflictCopyName } from '../lib/conflictCopyName';
+import { lineDiff } from '../lib/lineDiff';
 import { useContextButton } from '../features/chatContext/useContextButton';
 import { resolveDocImage, resolveDocLink, sliceSection, slugify } from '../lib/docsLinks';
-import { OfflineError } from '../lib/offline';
+import { OfflineError, type EtagRef } from '../lib/offline';
 import { agentStreamUrl, useProjectRoutes } from '../lib/deviceAgent';
 import { useGitState, ensureGit, gitRestoreFile, loadGitRemote } from '../lib/git';
 import { parseDiffToHunks, buildHunkPatch, buildLinesPatch } from '../lib/gitPatch';
@@ -38,6 +40,7 @@ import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
 import { DocPropsPanel } from '../features/docs/DocPropsPanel';
 import { useDocProps } from '../features/docs/useDocProps';
+import { canWriteContent } from '../features/projects/members/contentRights';
 import { showToast } from '../lib/toast';
 import { beginAiBusy, endAiBusy } from '../lib/ai/busy';
 import { setFileContext, clearFileContext } from '../lib/ai/fileContext';
@@ -61,6 +64,7 @@ import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { useToolbarOverflow } from '../hooks/useToolbarOverflow';
 import { Modal, ModalActions, Button, ConfirmDialog, FileTypeTile, useIsMobileModal, Menu as UiMenu, MenuItem, Chip } from './ui';
 import { DiffView } from './DiffView';
+import { SaveConflictDialog } from './SaveConflictDialog';
 import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../lib/selectionScope';
 // Тумблер панели «Оглавление» правит раскладку зон напрямую — тем же каналом, что
 // кнопка «Открыть изменения» в git-баре над композером (ProjectGitBar)
@@ -153,6 +157,19 @@ interface FileContent {
   // источник неизвестен — метку не показываем.
   branch?: string | null;
   isAnchor?: boolean;
+}
+
+// Конфликт сохранения файла (S2c-F2b, п.27): тело последнего 409 file_changed и свой текст
+// на момент попытки. Диалог (SaveConflictDialog) строит по ним diff и имя копии; again —
+// повторный отказ после «Заменить своей»; copyError — копия не создалась (диалог остаётся);
+// mineAt — время своей версии для варианта без диффа (оно одно: момент попытки сохранения).
+interface SaveConflictState {
+  error: FileConflictError;
+  mine: string;
+  again: boolean;
+  copyError: boolean;
+  busy: boolean;
+  mineAt: string;
 }
 
 // Сервер или ретранслятор — решает api.files.fileUrl (у агента поток идёт мимо, см. agentStreamUrl)
@@ -424,7 +441,11 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb, handlers }: {
 // Паттерн — как `__test`-экспорт в hooks/useSession.ts.
 export type WriteActionHooks = { save: () => Promise<boolean>; del: () => Promise<void>; revert: () => Promise<void> };
 const writeHooks: { current: WriteActionHooks | null } = { current: null };
-export const __test = { writeHooks };
+// Тестовый хук автосейва draw.io (S2c-F2b, п.27): из UI handleDiagramSave зовёт DrawioViewer
+// по событием save/autosave/export редактора; iframe с draw.io в тесте node нет, поэтому
+// автосейв зовём напрямую — тем же паттерном, что writeHooks выше.
+const diagramSave: { current: ((xml: string) => Promise<void>) | null } = { current: null };
+export const __test = { writeHooks, diagramSave };
 
 export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine, onOpenFile, scrollToAnchor, onFileBack, onFileForward, canFileBack, canFileForward, onTocChange, changedBy, onOpenChat, sessionId }: Props) {
   const online = useOnline();
@@ -525,13 +546,25 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     setFileContext(filePath, fromRoot);
     return () => clearFileContext(filePath);
   }, [filePath, fromRoot]);
-  const canEdit = can('PUT files/content') && fromRoot;
-  const canDelete = can('DELETE files') && fromRoot;
-  const canRevert = can('POST files/revert') && fromRoot;
-  const canStageHunk = can('POST git/stage-hunk');
-  const canRestoreVersion = can('POST git/commits/{sha}/restore-file');
-  const canToMarkdown = can('POST files/document/to-markdown');
-  const canOfficeEdit = canEdit && can('POST files/office-force-save') && can('POST files/office-discard');
+  // Маршрут + право записи по роли (S2c-F4c): контрол записи есть, только если у проекта
+  // есть маршрут И роль умеет эту дверь контента (contentRights.ts). Закрытый — ПРЯЧЕТ,
+  // не отключён: решение живёт в одном месте, а не по каждому контролу. Двери не переносимы:
+  // под чужой дверью точка записи получила бы отказ бэка, поэтому у каждой точки — свой гейт.
+  // Сохранение и автосейв draw.io — только в ветке редактирования под canEdit (главное
+  // действие режима: «Сохранить», «Редактировать» draw.io); office-правок — под canOfficeEdit;
+  // стейдж ханки и «вернуть версию» — своими строками ниже; «Сохранить мою копией» в диалоге
+  // конфликта — под canCopyOnConflict: копия СОЗДАЁТ файл, её гейтит 'file.create', не 'file.save'.
+  const canEdit = can('PUT files/content') && fromRoot && canWriteContent(project, 'file.save');
+  const canDelete = can('DELETE files') && fromRoot && canWriteContent(project, 'file.delete');
+  const canRevert = can('POST files/revert') && fromRoot && canWriteContent(project, 'file.revert');
+  const canStageHunk = can('POST git/stage-hunk') && canWriteContent(project, 'git.stageHunk');
+  const canRestoreVersion = can('POST git/commits/{sha}/restore-file') && canWriteContent(project, 'git.restoreVersion');
+  const canToMarkdown = can('POST files/document/to-markdown') && canWriteContent(project, 'file.toMarkdown');
+  const canOfficeEdit = canEdit && can('POST files/office-force-save') && can('POST files/office-discard') && canWriteContent(project, 'file.office');
+  // «Сохранить мою копией» в диалоге конфликта создаёт НОВЫЙ файл рядом с оригиналом, а не
+  // пишет его: тот же состав, что у «Создать файл» в дереве (FileExplorer.canCreateFile).
+  // Под canEdit её вести нельзя: canEdit гейтит 'file.save' и fromRoot, а не 'file.create'.
+  const canCopyOnConflict = can('POST files/create') && canWriteContent(project, 'file.create');
   const media = useMediaStream(project.id, filePath, viaAgent,
     !isHostMode && tab === 'file' && !!(fileContent?.isVideo || fileContent?.isAudio));
   // Картинки markdown у локального проекта: билет на каждый путь приходит асинхронно, до
@@ -603,6 +636,14 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const [unsavedIntent, setUnsavedIntent] = useState<'close' | 'mode'>('close');
   // Ошибка мутации (сохранение/откат/удаление) офлайн или при сбое — inline-фидбек
   const [actionError, setActionError] = useState<string | null>(null);
+  // ETag ровно той версии файла, текст которой сейчас в редакторе (S2c-F2b, п.27): с ним
+  // сохранение идёт по If-Match. Тего нет — сохраняем без If-Match, как раньше: без него
+  // сервер 409 по конфликту не отдаёт вовсе (api.files.saveContent). Тего нет для бинарных,
+  // документов, файлов сверх 10 МиБ и на агентской/relay-ветке (ETag там не отдают).
+  const versionEtag = useRef<string | null>(null);
+  // Открытый диалог конфликта сохранения (null — диалога нет). Пока он открыт, автосейв
+  // draw.io на паузе (handleDiagramSave).
+  const [saveConflict, setSaveConflict] = useState<SaveConflictState | null>(null);
   const [imgDims, setImgDims] = useState<{ w: number; h: number } | null>(null);
   // Счётчики комментариев к документу — чип в тулбаре (данные поднимает DocCommentedMarkdown)
   const [commentCounts, setCommentCounts] = useState<{ total: number; open: number } | null>(null);
@@ -730,6 +771,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     setVersionSha(null);
     setVersionDiff(null);
     setRestoreConfirmSha(null);
+    // Новый файл — ни прочитанной версии (etag), ни открытого конфликта (S2c-F2b)
+    versionEtag.current = null;
+    setSaveConflict(null);
     // sessionId (F2b): читать из дерева чата; featureId здесь нет — FileViewer не читает
     // документы эпика, только путь, названный вызывающим
     const contentPromise = isHostMode
@@ -742,6 +786,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     contentPromise.then(r => {
       setFileContent(r);
       setEditContent(r.content ?? '');
+      // etag (S2c-F2b): тег прочитанной версии — с него следующее сохранение пойдёт по If-Match
+      versionEtag.current = ('etag' in r ? r.etag : undefined) ?? null;
       if (!isHostMode && !(sessionId && 'branch' in r && r.branch != null)) {
         // diff недоступен офлайн — мягко игнорируем ошибку
         fetchDiff().then(d => setDiff(d.diff)).catch(() => setDiff(null));
@@ -818,6 +864,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       api.files.getContent(project.id, filePath, undefined, sessionId ? { sessionId } : undefined).then(r => {
         setFileContent(r);
         setEditContent(r.content ?? '');
+        versionEtag.current = r.etag ?? null;
       }).catch(() => {}).finally(() => setLoading(false));
       fetchDiff().then(r => setDiff(r.diff)).catch(() => {});
       setFileLog(null);
@@ -868,7 +915,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       if (projectId !== project.id || editing || isDrawioEditing) return;
       const norm = filePath.replace(/\\/g, '/');
       if (!paths.some(p => p.replace(/\\/g, '/') === norm)) return;
-      api.files.getContent(project.id, filePath, undefined, sessionId ? { sessionId } : undefined).then(r => { setFileContent(r); setEditContent(r.content ?? ''); setLoadError(false); }).catch(() => {});
+      api.files.getContent(project.id, filePath, undefined, sessionId ? { sessionId } : undefined).then(r => { setFileContent(r); setEditContent(r.content ?? ''); versionEtag.current = r.etag ?? null; setLoadError(false); }).catch(() => {});
       if (fromRoot) fetchDiff().then(r => setDiff(r.diff)).catch(() => {});
       setBlame(null);   // авторство устарело — перечитается при открытии вкладки
       setBlameError(false);
@@ -886,11 +933,90 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const mutationErrorText = (e: unknown, fallback: string) =>
     e instanceof OfflineError ? 'Действие недоступно офлайн' : fallback;
 
+  // ——— Конфликт сохранения (S2c-F2b, п.27) ———
+  // Вид и тексты диалога держит SaveConflictDialog (S2c-F1); здесь — только данные конфликта
+  // и три действия. Диалог закрывается, когда выбор исполнен: «копия» создана, «заменить»
+  // записано, «взять чужую» принята. При повторном 409 «Заменить своей» диалог остаётся.
+
+  // Имя автора копии — то же, чем приложение называет пользователя (App держит cc_display_name
+  // по ответу /auth/me). Имени нет — суффикс «без имени» (conflictCopyName).
+  const copyAuthorName = () => {
+    try { return localStorage.getItem('cc_display_name') || ''; } catch { return ''; }
+  };
+
+  const openSaveConflict = (e: FileConflictError, mine: string) => {
+    setSaveConflict({
+      error: e, mine, again: false, copyError: false, busy: false,
+      // Другой даты у своей версии нет: это тот текст, который только что не записался
+      mineAt: relTime(new Date().toISOString()),
+    });
+  };
+
+  // «Сохранить мою копией» (primary): файл-копия рядом с оригиналом, оригинал не тронут.
+  const conflictSaveCopy = async () => {
+    const c = saveConflict;
+    if (!c || c.busy) return;
+    setSaveConflict({ ...c, busy: true, copyError: false });
+    try {
+      await api.files.createFile(project.id, conflictCopyName(filePath, copyAuthorName()), c.mine);
+      setSaveConflict(null);
+    } catch {
+      // Копия не создалась — диалог остаётся, свой текст в редакторе (Notice copyError)
+      setSaveConflict({ ...c, busy: false, copyError: true });
+    }
+  };
+
+  // «Заменить своей»: повторная запись по актуальному состоянию — If-Match = sha256 из тела 409.
+  const conflictReplace = async () => {
+    const c = saveConflict;
+    if (!c || c.busy) return;
+    setSaveConflict({ ...c, busy: true });
+    const etagOut: EtagRef = {};
+    try {
+      await api.files.saveContent(project.id, filePath, c.mine, c.error.sha256 ?? undefined, etagOut);
+      versionEtag.current = etagOut.etag ?? null;
+      setFileContent(prev => prev ? { ...prev, content: c.mine } : prev);
+      setEditing(false);
+      setActionError(null);
+      setSaveConflict(null);
+      const r = await fetchDiff();
+      setDiff(r.diff);
+    } catch (e) {
+      if (e instanceof FileConflictError) {
+        // Файл изменили ещё раз: диалог остаётся, с новым телом 409 и again (Notice над диффом)
+        setSaveConflict({ ...c, error: e, again: true, busy: false, mineAt: relTime(new Date().toISOString()) });
+        return;
+      }
+      // Прочий сбой (офлайн и т.п.) — обычный inline-фидбек; свой текст остаётся в редакторе
+      setSaveConflict(null);
+      setActionError(mutationErrorText(e, 'Не удалось сохранить файл'));
+    }
+  };
+
+  // «Взять чужую версию»: редактор и прочитанная версия — чужный текст, тег — чужой sha256.
+  const conflictTakeTheirs = () => {
+    const c = saveConflict;
+    if (!c) return;
+    setSaveConflict(null);
+    const theirs = c.error.content;
+    // Не-текста в 409 нет (для него нет и тега) — брать нечего, но и терять нечего
+    if (theirs == null) return;
+    setFileContent(prev => prev ? { ...prev, content: theirs } : prev);
+    setEditContent(theirs);
+    versionEtag.current = c.error.sha256 ?? null;
+  };
+
   const handleSave = async (): Promise<boolean> => {
     // Файл из дерева чата только для чтения: запись ушла бы в корень проекта (п.28)
     if (!fromRoot) return false;
     try {
-      await api.files.saveContent(project.id, filePath, editContent);
+      // If-Match — только когда известна прочитанная версия (etag из getContent). Без него
+      // запрос ровно прежний: сервер 409 по конфликту не отдаёт, диалога нет (п.27).
+      const etagOut: EtagRef = {};
+      await api.files.saveContent(project.id, filePath, editContent, versionEtag.current ?? undefined, etagOut);
+      // Новый ETag ответа (S2c-1): следующее сохранение идёт против актуальной версии.
+      // Ответа нет (старый сервер) — тега нет: дальше сохраняем без If-Match.
+      versionEtag.current = etagOut.etag ?? null;
       setFileContent(prev => prev ? { ...prev, content: editContent } : prev);
       setEditing(false);
       setActionError(null);
@@ -899,6 +1025,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       return true;
     } catch (e) {
       // Не выходим из режима редактирования — иначе потеряются несохранённые правки
+      if (e instanceof FileConflictError) { openSaveConflict(e, editContent); return false; }
       setActionError(mutationErrorText(e, 'Не удалось сохранить файл'));
       return false;
     }
@@ -924,6 +1051,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       const r = await api.files.getContent(project.id, filePath, undefined, sessionId ? { sessionId } : undefined);
       setFileContent(r);
       setEditContent(r.content ?? '');
+      versionEtag.current = r.etag ?? null;
       setDiff(null);
       setBlame(null);
       setBlameError(false);
@@ -1294,17 +1422,27 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // только по событию init), поэтому редактор не сбрасывается.
   const handleDiagramSave = async (xml: string) => {
     if (!fromRoot) return;
+    // Пока открыт диалог конфликта, автосейв на паузе (п.27): draw.io шлёт autosave на
+    // каждое изменение холста, и запись под открытым диалогом только плодила бы новые 409,
+    // пока человек выбирает, что делать с уже найденным конфликтом.
+    if (saveConflict) return;
     try {
-      await api.files.saveContent(project.id, filePath, xml);
+      const etagOut: EtagRef = {};
+      await api.files.saveContent(project.id, filePath, xml, versionEtag.current ?? undefined, etagOut);
+      versionEtag.current = etagOut.etag ?? null;
       setFileContent(prev => prev ? { ...prev, content: xml } : prev);
       setEditContent(xml);
       setActionError(null);
       const r = await fetchDiff();
       setDiff(r.diff);
     } catch (e) {
+      if (e instanceof FileConflictError) { openSaveConflict(e, xml); return; }
       setActionError(mutationErrorText(e, 'Не удалось сохранить диаграмму'));
     }
   };
+  // Тестовый хук автосейва (S2c-F2b): тот же паттерн, что writeHooks (п.28) — из UI этот
+  // обработчик зовёт DrawioViewer, а в тесте его нет.
+  useEffect(() => { diagramSave.current = handleDiagramSave; }, [handleDiagramSave]);
 
   // ===== Модель шапки: ступени по ширине панели =====
   // Строка собирается из блоков: [☰ + имя] [бейджи + вкладки + главное действие]
@@ -2595,6 +2733,42 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
           }
         />
       )}
+
+      {/* Конфликт сохранения (S2c-F2b, п.27): 409 file_changed на запись по If-Match. Вид и
+          тексты — целиком SaveConflictDialog (S2c-F1), своих здесь нет. draw.io — вариант без
+          диффа: XML-разницу человек не читает; файл без текста в ответе 409 — тоже. */}
+      {saveConflict && (() => {
+        const e = saveConflict.error;
+        const theirs = e.content;
+        const noText = isDrawio || theirs === null;
+        // «в проекте → ваша версия»; выше потолка строк lineDiff — null → тот же вариант без диффа
+        const diff = noText ? null : lineDiff(theirs, saveConflict.mine);
+        return (
+          <SaveConflictDialog
+            conflict={{
+              code: 'file_changed',
+              sha256: e.sha256 ?? '',
+              // author и source бэк заполнит с S3-3/S2d-4, сейчас всегда null — диалог сам
+              // подставит «Другой участник» и не подпишет источник
+              author: e.author ? { userId: e.author.userId, displayName: e.author.displayName ?? '' } : undefined,
+              changedAt: e.changedAt ?? undefined,
+              source: e.source ?? undefined,
+            }}
+            fileName={fileName}
+            copyName={conflictCopyName(filePath, copyAuthorName())}
+            diff={diff ?? undefined}
+            noDiff={noText || diff === null}
+            mineAt={saveConflict.mineAt}
+            again={saveConflict.again}
+            copyError={saveConflict.copyError}
+            busy={saveConflict.busy}
+            onSaveCopy={canCopyOnConflict ? () => { void conflictSaveCopy(); } : undefined}
+            onReplace={() => { void conflictReplace(); }}
+            onTakeTheirs={conflictTakeTheirs}
+            onClose={() => setSaveConflict(null)}
+          />
+        );
+      })()}
     </CenterViewShell>
   );
 }

@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -30,7 +31,7 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// отказ с текстом, а не пустая память (McpHttpOwnerIsolationTests + MemoryHttpTransportTests).
 ///
 /// ИНВАРИАНТ состава (IMcpToolset): tools/list зависит только от хвоста и владельца
-/// (персона/проект/флаг change-dossiers-recall) — всё это закреплено конфигом хода на
+/// (персона/проект) — всё это закреплено конфигом хода на
 /// жизнь адаптера и от свойств хода не зависит. Сторож парности со stdio-веткой отката —
 /// MemoryToolsetParityTests.
 /// </summary>
@@ -38,6 +39,7 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 public sealed class MemoryToolset(
     PersonaManager personas,
     ProjectManager projects,
+    ISessionDirectory sessions,
     PersonaMemoryService memory,
     TeamMemoryService teamMemory,
     SphereMemoryService sphereMemory,
@@ -46,7 +48,8 @@ public sealed class MemoryToolset(
     DossierRecallService dossierRecall,
     FeatureFlagService flags,
     IConfiguration config,
-    ISessionBroadcaster broadcaster) : IMcpParameterizedToolset
+    ISessionBroadcaster broadcaster,
+    ITurnFrameSource frames) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/memory/{personaId}/{projectId}.
     // Константа — единственная точка правды: URL конфига хода (ClaudeSession) и хвост
@@ -91,6 +94,40 @@ public sealed class MemoryToolset(
 
         var personal = persona is not null;
         var team = project is not null;
+
+        // Узкая рамка хода (общий проект, S2a-3b, решение 29.10): личное пространство владельца
+        // закрыто в его общем чате всем, включая самого владельца. Здесь это личная память
+        // глобальной персоны (она — долгая память владельца о его жизни, не проекта) и полка
+        // сферы (сферы — личная группировка владельца, §2.5 разреза). Командная память проекта —
+        // контекст проекта, остаётся. Вердикт только читается: ни в стор, ни в кэш ничего не
+        // пишется, состав tools/list от рамки не зависит (McpToolsetStabilityTests).
+        var frame = frames.Frame(context.CallerSessionId, context.OwnerId);
+        var narrow = frame == TurnFrameKind.Narrow;
+        // Личная память закрыта у глобальной и сферной персоны (сферная — по решению 30.10,
+        // R-S2a-3b): сфера — личная группировка владельца (§2.5 разреза), и резать полку её
+        // памяти, оставляя личную память её персоны, — непоследовательно. Память проектной
+        // персоны — контекст её команды, остаётся
+        if (narrow && tool.StartsWith("memory_", StringComparison.Ordinal))
+        {
+            if (persona?.Scope == PersonaScope.Global) return Deny(NarrowPersonalMemoryText);
+            // Та же единая точка правды зоны, что в остальных местах (guard PersonaZoneGuardTests:
+            // прямых сравнений зоны в бэкенде нет)
+            if (persona is not null && PersonaZone.IsSpherePersona(persona)) return Deny(NarrowSpherePersonaMemoryText);
+        }
+
+        // Запись в общую память из приватного чата — отказ всем, включая автора-владельца
+        // (S2d-5a, разрез 4bc3d04f §1 «S2d-5a», путь 17): приватный чат виден только автору, а
+        // память команды, полка сферы и память проектной персоны читают все чаты проекта —
+        // факт разговора пересёк бы границу приватности. Гейт актора S2c-6 этого не даёт: автор
+        // своего приватного чата проходит его как актор. Чтение общих полок и личная память
+        // (глобальной/сферной персоны) — как раньше.
+        if (CallerChatIsPrivate(context))
+        {
+            if (TeamWriteTools.Contains(tool)) return Deny(PrivateChatTeamText);
+            if (SphereWriteTools.Contains(tool)) return Deny(PrivateChatSphereText);
+            if (persona is not null && PersonaZone.IsProjectPersona(persona) && PersonalWriteTools.Contains(tool))
+                return Deny(PrivateChatProjectPersonaText);
+        }
 
         switch (tool)
         {
@@ -286,11 +323,11 @@ public sealed class MemoryToolset(
             case "sphere_memory_remember":
             case "sphere_memory_forget":
             case "sphere_memory_adopt":
-                return await CallSphereAsync(tool, arguments, context, persona, project);
+                return await CallSphereAsync(tool, arguments, context, persona, project, narrow);
 
             case "dossier_lookup":
             {
-                if (!team || !DossierToolsEnabled(context)) return DenyDossier();
+                if (!team) return DenyDossier();
                 var found = dossierRecall.Lookup(context.OwnerId, project!.Id,
                     OptionalArg(arguments, "path"), OptionalArg(arguments, "symbol"),
                     OptionalArg(arguments, "query"), 20);
@@ -304,7 +341,7 @@ public sealed class MemoryToolset(
 
             case "dossier_get":
             {
-                if (!team || !DossierToolsEnabled(context)) return DenyDossier();
+                if (!team) return DenyDossier();
                 if (dossiers.GetById(context.OwnerId, project!.Id, StringArg(arguments, "id")) is not { } dossier)
                     return Deny($"Паспорт {StringArg(arguments, "id")} не найден.");
                 var section = (string title, IReadOnlyList<string>? items) =>
@@ -330,8 +367,11 @@ public sealed class MemoryToolset(
     // TryResolve), любой sphereId в аргументах игнорируется ---
 
     private async Task<McpToolCallResult> CallSphereAsync(string tool, JsonObject arguments,
-        McpToolCallContext context, Persona? persona, Project? project)
+        McpToolCallContext context, Persona? persona, Project? project, bool narrow)
     {
+        // Полка сферы — личное пространство владельца (сферы личные, §2.5 разреза): в общем
+        // проекте закрыта всем, включая владельца (решение 29.10)
+        if (narrow) return Deny(NarrowSphereMemoryText);
         if (!SphereToolsEnabled(context)) return Deny(
             "Память сферы не доступна: у владельца выключен флаг «Сферы».");
         if (project is null || sphereDirectory.SphereOf(context.OwnerId, project.Id) is not { } sphereId)
@@ -491,8 +531,7 @@ public sealed class MemoryToolset(
     }
 
     // Состав по хвосту: personal — при своей персоне, team — при своём проекте,
-    // dossier — при проекте и флаге владельца change-dossiers-recall (решается по
-    // владельцу, стабильно в рамках сессии — инвариант IMcpToolset)
+    // dossier — при проекте (стабильно в рамках сессии — инвариант IMcpToolset)
     private IReadOnlyList<McpToolSchema> BuildTools(McpToolCallContext context)
     {
         if (!TryResolve(context, out var persona, out var project, out _)) return [];
@@ -501,16 +540,13 @@ public sealed class MemoryToolset(
         if (project is not null)
         {
             tools.AddRange(TeamTools);
-            if (DossierToolsEnabled(context)) tools.AddRange(DossierTools);
+            tools.AddRange(DossierTools);
         }
         // Память сферы — по флагу владельца, а не по членству проекта: отказ «проект не входит
         // в сферу» выдаёт сам вызов
         if (SphereToolsEnabled(context)) tools.AddRange(SphereTools);
         return tools;
     }
-
-    private bool DossierToolsEnabled(McpToolCallContext context) =>
-        flags.IsEnabled(context.OwnerId, FeatureFlagKeys.ChangeDossiersRecall);
 
     // Гейт записи команды (③-3.4): пишет либо «свой» вызов без персоны (обычный проектный
     // чат), либо персона САМОГО проекта. Вызывающая персона здесь — персона из хвоста
@@ -521,6 +557,66 @@ public sealed class MemoryToolset(
         TeamMemoryService.WriteDeniedFor(persona?.Id, persona, project.Id);
 
     // --- Ответы ---
+
+    // Тексты отказа узкой рамки — фиксированные, без id и названий из личных данных
+    // владельца (в аргументах модели они могут лежать — в ответе их быть не должно)
+    private const string NarrowPersonalMemoryText =
+        "Личная память глобальной персоны закрыта в общем проекте: это личное пространство "
+        + "владельца. Память проектной персоны и память команды проекта доступны как обычно.";
+
+    private const string NarrowSphereMemoryText =
+        "Память сферы закрыта в общем проекте: сфера — личное пространство владельца. "
+        + "Память команды этого проекта доступна как обычно (team_memory_*).";
+
+    private const string NarrowSpherePersonaMemoryText =
+        "Личная память сферной персоны закрыта в общем проекте: сфера — личная группировка "
+        + "владельца, её полка и память её персон — его личное пространство. Память команды "
+        + "этого проекта доступна как обычно (team_memory_*).";
+
+    // --- Приватный чат (S2d-5a) ---
+
+    // Приватный ли чат-вызыватель: признак — Session.PrivateToUserId (S2d-1, Core). Сессия
+    // берётся из заголовка X-Caller-Session-Id: в бою его ставит конфиг хода (ClaudeSession),
+    // модель его не видит и не меняет. Вызов без заголовка — не чат (прямой запрос, sidecar):
+    // не приватный. Чужой приватный чат в заголовке — тоже отказ (аномалия, fail-closed);
+    // неизвестный id — как раньше: проверка ничего не открывает, только добавляет отказ.
+    private bool CallerChatIsPrivate(McpToolCallContext context) =>
+        context.CallerSessionId is { } id && sessions.GetById(id)?.PrivateToUserId is not null;
+
+    // Операции записи в общие полки — только они и закрыты из приватного чата: чтение
+    // (search/list/get_focus) ничего не выносит наружу. Для проектной персоны закрыты и
+    // memory_from_note (закрепление заметки в её памяти — запись в общую полку), и
+    // memory_clear_focus (меняет состояние персоны, видимое другим чатам: фокус подмешивается
+    // в recall). memory_to_note НЕ закрыт: он копирует уже общую запись персоны в personal
+    // vault вызывающего (NotesService.Create без Source → PersonalKey) — ни записи в общую
+    // полку, ни выноса приватного содержания наружу в нём нет.
+    private static readonly HashSet<string> TeamWriteTools =
+        new(StringComparer.Ordinal) { "team_memory_remember", "team_memory_update", "team_memory_forget" };
+    private static readonly HashSet<string> SphereWriteTools =
+        new(StringComparer.Ordinal) { "sphere_memory_remember", "sphere_memory_forget", "sphere_memory_adopt" };
+    private static readonly HashSet<string> PersonalWriteTools =
+        new(StringComparer.Ordinal)
+        {
+            "memory_remember", "memory_rethink", "memory_forget",
+            "memory_from_note", "memory_clear_focus",
+        };
+
+    // Тексты отказа приватного чата — фиксированные, без id и названий (тот же приём, что у
+    // текстов узкой рамки)
+    private const string PrivateChatTeamText =
+        "Запись в память команды из приватного чата закрыта: приватный чат виден только "
+        + "автору, а память команды читают все участники проекта. Чтение (team_memory_list/"
+        + "team_memory_search) доступно. Запиши это из общего чата проекта.";
+
+    private const string PrivateChatSphereText =
+        "Запись в память сферы из приватного чата закрыта: память сферы читают все проекты "
+        + "сферы. Чтение (sphere_memory_list/sphere_memory_search) доступно. Запиши это из "
+        + "общего чата.";
+
+    private const string PrivateChatProjectPersonaText =
+        "Запись в память проектной персоны из приватного чата закрыта: проектная персона — "
+        + "общий собеседник команды, её память подмешивается ко всем чатам проекта. Чтение "
+        + "своей памяти и личная память глобальной персоны доступны как обычно.";
 
     private static McpToolCallResult Text(string text) => new(text);
 
@@ -536,7 +632,7 @@ public sealed class MemoryToolset(
         "Память команды проекта не доступна: чат вне проекта либо проект недоступен.");
 
     private static McpToolCallResult DenyDossier() => Deny(
-        "Паспорта изменений не доступны в этом чате (нет проекта либо выключен флаг владельца change-dossiers-recall).");
+        "Паспорта изменений не доступны в этом чате (нет проекта).");
 
     // --- Аргументы вызова ---
 
@@ -582,7 +678,7 @@ public sealed class MemoryToolset(
             new PersonasChangedMessage("memory", personaId));
 
     private async Task BroadcastTeamAsync(string ownerId, string projectId, string action, string? entryId) =>
-        await broadcaster.ToOwner(ownerId,
+        await broadcaster.ToProject(projectId,
             new TeamMemoryChangedMessage(action, projectId, entryId));
 
     // --- Схемы инструментов: копия mcp/memory-server/index.js (источник контракта — здесь,

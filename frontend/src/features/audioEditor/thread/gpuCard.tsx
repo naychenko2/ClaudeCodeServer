@@ -1,6 +1,6 @@
 // Строка ожидания GPU (шаг 29) и кнопка «Сделать в облаке» (шаг 36) в карточке
-// идущего звука. Показывается только за флагом local-model-stats и только когда
-// задача несёт живой снимок очереди GPU (gpu). Без флага или без gpu карточка —
+// идущего звука. Показывается только когда
+// задача несёт живой снимок очереди GPU (gpu). Без gpu карточка —
 // как раньше. Кнопка — только когда стенд лежит (downSince) и есть облачный
 // исполнитель для операции («Автоматически», без локальных); запуск — только по клику
 // человека, новым запуском с явным поставщиком, параллельно с локальной задачей.
@@ -37,12 +37,12 @@ export function cloudCandidate(catalog: AudioCatalog | null, op: AudioOp | null)
   return autoOrder(catalog).find(p => p.available && p.key !== 'local' && supportsOp(p, op)) ?? null;
 }
 
-// Кнопка «Сделать в облаке» видна: флаг включён, стенд лежит, есть облачный исполнитель
+// Кнопка «Сделать в облаке» видна: стенд лежит, есть облачный исполнитель
 // для операции. Котировка на этот момент может ещё грузиться
 export function showCloudButton(
-  feature: boolean, gpu: LocalGpuQueueInfo | null, catalog: AudioCatalog | null, op: AudioOp | null,
+  gpu: LocalGpuQueueInfo | null, catalog: AudioCatalog | null, op: AudioOp | null,
 ): boolean {
-  return feature && isStandDown(gpu) && cloudCandidate(catalog, op) != null;
+  return isStandDown(gpu) && cloudCandidate(catalog, op) != null;
 }
 
 // Кнопка кликабельна: котировка облачного исполнителя пришла с ценой. Пока грузится —
@@ -50,8 +50,8 @@ export function showCloudButton(
 export const isCloudButtonEnabled = (quote: AudioQuote | null): boolean =>
   quote != null && quote.price.amount != null;
 
-// Строка ожидания GPU: флаг включён и задача несёт живой снимок очереди
-export const showQueueLine = (feature: boolean, gpu: LocalGpuQueueInfo | null): boolean => feature && gpu != null;
+// Строка ожидания GPU: задача несёт живой снимок очереди
+export const showQueueLine = (gpu: LocalGpuQueueInfo | null): boolean => gpu != null;
 
 // Поле, в котором вход операции уходит модели: text — озвучка, prompt — стиль/описание,
 // none — не нужен (обработка). null — операция не в каталоге: поле определить нельзя.
@@ -170,7 +170,6 @@ export interface GpuQueueBlockProps {
   sessionId: string;
   thread: AudioThread;
   job: JobProgress | null;
-  feature: boolean;
   // Операция, режим и число вариантов текущей задачи — для котировки облачного исполнителя;
   // null — операция запуска не распознана, облачного исполнителя нет
   op: AudioOp | null;
@@ -178,7 +177,7 @@ export interface GpuQueueBlockProps {
   count: number;
 }
 
-export function GpuQueueBlock({ scope, sessionId, thread, job, feature, op, mode, count }: GpuQueueBlockProps) {
+export function GpuQueueBlock({ scope, sessionId, thread, job, op, mode, count }: GpuQueueBlockProps) {
   const ref = useRef<HTMLDivElement>(null);
   const width = useBoxWidth(ref);
   // Пока ширина не измерена (0) — полная форма: на широком экране короткая форма не мигает
@@ -196,14 +195,14 @@ export function GpuQueueBlock({ scope, sessionId, thread, job, feature, op, mode
   // Защита от двойного клика: guard выставляется синхронно, до первого await
   const guard = useRef(makeLaunchGuard());
 
-  // showQueueLine = feature && gpu != null; повторная проверка gpu сужает тип для TS
-  if (!showQueueLine(feature, gpu) || gpu == null) return null;
+  // showQueueLine = gpu != null; повторная проверка gpu сужает тип для TS
+  if (!showQueueLine(gpu) || gpu == null) return null;
 
   // M1: кнопка видна только когда есть облачный исполнитель для операции И исходный вход
   // задачи восстановим: для операций, где вход обязателен (озвучка/песня/эффект), пустой
   // вход дал бы ненулевую цену Run-модели, а запуск ушёл бы с пустым промптом и провалился.
   // Операции без входа (обработка) — кнопка видна и без промпта.
-  const showBtn = showCloudButton(feature, gpu, catalog, op) && inputSatisfied(op, origPrompt);
+  const showBtn = showCloudButton(gpu, catalog, op) && inputSatisfied(op, origPrompt);
   const enabled = isCloudButtonEnabled(quote);
 
   // Новый запуск с явным поставщиком: локальную задачу не отменяем, её ход не трогаем.

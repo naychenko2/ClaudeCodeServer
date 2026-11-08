@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import type { Persona, Task, TeamImplementBudget, TeamPlanDecision } from '../../types';
+import type { Persona, Project, ProjectRoleView, Task, TeamImplementBudget, TeamPlanDecision } from '../../types';
 
 // Контекст текущего проекта — для резолва локальных путей картинок в сообщениях.
 // transcriptReason — почему недоступны механики транскрипта CLI (живой поток субагентов,
@@ -8,6 +8,8 @@ import type { Persona, Task, TeamImplementBudget, TeamPlanDecision } from '../..
 export const ChatProjectContext = createContext<{
   id: string; rootPath: string; transcriptReason?: string | null;
   local?: boolean; devicePlatform?: string | null;
+  // Общий проект: роль вызывающего и бывшие участники — для подписи автора над чужим пузырём
+  myRole?: ProjectRoleView; formerMembers?: Project['formerMembers'];
 } | null>(null);
 
 // Корень активного git-дерева (worktree) хода/чата — пути в ленте сначала пробуют

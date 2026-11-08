@@ -2,11 +2,13 @@ using System.Security.Claims;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Services.Plugins;
 using ClaudeHomeServer.Services.Plugins.Controllers;
 using ClaudeHomeServer.Services.Plugins.Mcp;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -117,7 +119,11 @@ public class PluginsSubsystemDisabledTests
         services.AddSubsystems(config, new PluginsSubsystem());
         // Неусловная регистрация (Main): тулсет в контейнере, даже когда Register не вызван.
         services.AddSingleton<IMcpToolset, PluginsToolset>();
-        // Зависимости PluginsToolset (спина) — стабы. Сессия-вызыватель — валидная: TryResolve
+        // Зависимости PluginsToolset (спина) — стабы. Шов рамки хода (S2a-3b) — обязательный
+        // параметр конструктора: без него DI не активирует тулсет вовсе. Широкая рамка сохраняет
+        // прежний смысл теста: отказ обязан быть по гейту подсистемы, а не по рамке.
+        services.AddSingleton<ITurnFrameSource, WideTurnFrame>();
+        // Сессия-вызыватель — валидная: TryResolve
         // обязан пройти (иначе «Чат не найден» сработает ДО гейта подсистемы и тест не проверит его).
         var sessions = new Mock<IMcpSessionAccessor>();
         sessions.Setup(a => a.GetOwned(It.IsAny<string>(), It.IsAny<string>()))

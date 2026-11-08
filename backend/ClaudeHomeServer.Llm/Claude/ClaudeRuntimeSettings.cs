@@ -75,6 +75,15 @@ namespace ClaudeHomeServer.Services.Llm.Claude;
 // состава перезапускало бы живой CLI со всеми MCP. Для container-владельцев --settings не
 // передаётся, и data/ в песочницу не монтируется — отказ там выполнен построением.
 //
+// Восьмая обязанность файла — второй хук PreToolUse на Bash, отказывающий в `dotnet test`,
+// `dotnet build` и `npx vitest` из Bash — но ТОЛЬКО в чатах-исполнителях задач. Такие прогоны
+// идут мимо общей очереди сборок (BuildConcurrencyGate) и давят память ccs-agents.slice
+// (разбор транскриптов 01–04.11: 155 запусков за три дня, ~140 — в копиях мутации). Файл
+// настроек ОДИН на все чаты (путь входит в сигнатуру прогона и кэш _cachedPaths, второй файл
+// по признаку хода дал бы мерцание сигнатуры и один кэш на двоих), поэтому признак ходит не в
+// файле, а в окружении процесса CLI: ClaudeSession ставит CCS_TASK_EXECUTOR=1 у сессии с
+// Session.TaskExecution, и скрипт без неё молчит (обычные чаты человека и оркестраторы).
+//
 // Только для local-среды: в песочнице (Linux) окон нет, а путь к хостовому файлу
 // внутри контейнера недоступен — там --settings не добавляем (и гейт браузера
 // в песочнице не работает; браузера в образе всё равно нет).
@@ -88,6 +97,11 @@ public static class ClaudeRuntimeSettings
     private const int TranscriptRetentionDays = 3650;
 
     private const string BlockKillScriptName = "block-process-kill.py";
+
+    private const string ToolsDisciplineScriptName = "block-build-in-bash.py";
+
+    // Имя переменной окружения процесса CLI: ClaudeSession ставит её чату-исполнителю задачи
+    internal const string TaskExecutorEnv = "CCS_TASK_EXECUTOR";
 
     internal const string ConsumersHookScriptName = "edit-consumers-hook.py";
 
@@ -308,6 +322,138 @@ public static class ClaudeRuntimeSettings
             sys.exit(2)
         """;
 
+    // Хук «сборка и тесты — только инструментами» (см. восьмую обязанность файла). Действует лишь
+    // при CCS_TASK_EXECUTOR=1. Команду разбирает как оболочка в первом приближении: кавычки,
+    // комментарии и тело heredoc — не команды; разделители ; & | ( ) { } и перевод строки открывают
+    // новую команду; перед командой допускаются VAR=…, sudo/env/time/nice/nohup/exec/command и
+    // ключевые слова if/then/do/while. `cd … && dotnet test` — две команды, вторая ловится.
+    // Код 2 + stderr — отказ, текст уходит модели. Сбой разбора — молчание и код 0.
+    private const string ToolsDisciplineScript = """
+        import json, os, re, sys
+
+        if os.environ.get("CCS_TASK_EXECUTOR") != "1":
+            sys.exit(0)
+
+        try:
+            cmd = (json.load(sys.stdin).get("tool_input") or {}).get("command") or ""
+        except Exception:
+            sys.exit(0)
+
+        SEPARATORS = ";&|(){}\n"
+        WRAPPERS = {"sudo", "env", "time", "nice", "nohup", "exec", "command", "stdbuf"}
+        KEYWORDS = {"if", "then", "else", "elif", "do", "while", "until", "!", "{"}
+        SHELLS = {"bash", "sh", "zsh", "dash"}
+
+
+        def segments(text):
+            segs, toks, cur, quote = [], [], None, None
+            i, n = 0, len(text)
+            while i < n:
+                c = text[i]
+                if quote == "'":
+                    if c == "'":
+                        quote = None
+                    else:
+                        cur += c
+                elif quote == '"':
+                    if c == "\\" and i + 1 < n:
+                        i += 1
+                        cur += text[i]
+                    elif c == '"':
+                        quote = None
+                    else:
+                        cur += c
+                elif c == "\\" and i + 1 < n:
+                    i += 1
+                    if text[i] != "\n":
+                        cur = (cur or "") + text[i]
+                elif c in "'\"":
+                    quote = c
+                    cur = cur or ""
+                elif c == "#" and cur is None:
+                    while i < n and text[i] != "\n":
+                        i += 1
+                    continue
+                elif c in SEPARATORS:
+                    if cur is not None:
+                        toks.append(cur)
+                        cur = None
+                    if toks:
+                        segs.append(toks)
+                        toks = []
+                elif c in " \t":
+                    if cur is not None:
+                        toks.append(cur)
+                        cur = None
+                else:
+                    cur = (cur or "") + c
+                i += 1
+            if cur is not None:
+                toks.append(cur)
+            if toks:
+                segs.append(toks)
+            return segs
+
+
+        def strip_prefix(toks):
+            toks = list(toks)
+            while toks:
+                t = toks[0]
+                if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", t) or t in KEYWORDS:
+                    toks.pop(0)
+                elif t in WRAPPERS:
+                    toks.pop(0)
+                    while toks and toks[0].startswith("-"):
+                        toks.pop(0)
+                else:
+                    break
+            return toks
+
+
+        def first_word(toks):
+            for t in toks:
+                if not t.startswith("-"):
+                    return t
+            return None
+
+
+        def runs_build(text, depth=0):
+            for seg in segments(text):
+                toks = strip_prefix(seg)
+                if not toks:
+                    continue
+                head = os.path.basename(toks[0])
+                if head == "dotnet" and first_word(toks[1:]) in ("test", "build"):
+                    return True
+                if head == "npx" and first_word(toks[1:]) == "vitest":
+                    return True
+                if head in SHELLS and depth < 2:
+                    for k, t in enumerate(toks[1:-1], 1):
+                        if re.fullmatch(r"-[a-z]*c[a-z]*", t) and runs_build(toks[k + 1], depth + 1):
+                            return True
+            return False
+
+
+        try:
+            # Тело heredoc — текст, а не команда
+            cmd = re.sub(r"<<-?\s*(['\"]?)(\w+)\1[^\n]*\n.*?\n\s*\2\b", "<<", cmd, flags=re.S)
+            blocked = runs_build(cmd)
+        except Exception:
+            sys.exit(0)
+
+        if blocked:
+            sys.stderr.write(
+                "Заблокировано: dotnet test, dotnet build и npx vitest из Bash в чате-исполнителе задачи "
+                "запрещены — такой прогон идёт мимо общей очереди сборок и давит память ccs-agents.slice. "
+                "Используй инструменты: mcp__tests__run_tests (kind=dotnet|vitest|playwright, target "
+                "обязателен) и mcp__dev__build (kind=dotnet|npm). Собираешь в своём worktree — передай "
+                "его полный путь в tree (worktree проекта из git worktree list): разные деревья друг друга "
+                "не блокируют. Копия мутации (если в проекте есть scripts/mutation-copy.sh) — тот же "
+                "параметр tree=<путь копии>. Нет схемы инструмента — "
+                "сначала ToolSearch с запросом select:mcp__tests__run_tests,mcp__dev__build.\n")
+            sys.exit(2)
+        """;
+
     // На Windows хуки плагинов порождают мелькающие окна консоли — гасим.
     // На остальных платформах хуки нужны как канал влияния на локальную модель.
     private static bool HostRequiresHooksOff => OperatingSystem.IsWindows();
@@ -362,7 +508,8 @@ public static class ClaudeRuntimeSettings
             var disableHooks = HostRequiresHooksOff;
             var cacheKey = (hostTempDir, browserEnabled, disableHooks, wikiDenyDataDir);
             if (_cachedPaths.TryGetValue(cacheKey, out var cached) && File.Exists(cached)) return cached;
-            var path = WriteSettings(hostTempDir, browserEnabled, disableHooks, BlockKillScript, ConsumersHookScript, wikiDenyDataDir);
+            var path = WriteSettings(hostTempDir, browserEnabled, disableHooks, BlockKillScript, ConsumersHookScript, wikiDenyDataDir,
+                ToolsDisciplineScript);
             _cachedPaths[cacheKey] = path;
             return path;
         }
@@ -376,11 +523,13 @@ public static class ClaudeRuntimeSettings
     // wikiDenyDataDir = null — без deny-правил вики (состав файла от хода не зависит — отпечаток
     // стабилен, живой CLI не перезапускается между ходами).
     internal static string WriteSettings(string hostTempDir, bool browserEnabled, bool disableHooks,
-        string blockKillScript, string? consumersScript, string? wikiDenyDataDir = null)
+        string blockKillScript, string? consumersScript, string? wikiDenyDataDir = null,
+        string? toolsDisciplineScript = null)
     {
         var fingerprint = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(string.Join('\u0001',
-                disableHooks, Environment.UserName, blockKillScript, consumersScript ?? "-", wikiDenyDataDir ?? "-"))))[..12].ToLowerInvariant();
+                disableHooks, Environment.UserName, blockKillScript, consumersScript ?? "-", wikiDenyDataDir ?? "-",
+                toolsDisciplineScript ?? "-"))))[..12].ToLowerInvariant();
         var dir = Path.Combine(hostTempDir, RuntimeDirName, fingerprint);
         if (OperatingSystem.IsWindows()) Directory.CreateDirectory(dir);
         else Directory.CreateDirectory(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -396,6 +545,13 @@ public static class ClaudeRuntimeSettings
             File.WriteAllText(scriptPath, blockKillScript);
             var command = JsonSerializer.Serialize($"python3 -I \"{scriptPath}\"");
             hooks.Add($"{{\"matcher\":\"Bash\",\"hooks\":[{{\"type\":\"command\",\"command\":{command}}}]}}");
+            if (toolsDisciplineScript is not null)
+            {
+                var toolsPath = Path.Combine(dir, ToolsDisciplineScriptName);
+                File.WriteAllText(toolsPath, toolsDisciplineScript);
+                var toolsCommand = JsonSerializer.Serialize($"python3 -I \"{toolsPath}\"");
+                hooks.Add($"{{\"matcher\":\"Bash\",\"hooks\":[{{\"type\":\"command\",\"command\":{toolsCommand}}}]}}");
+            }
             if (consumersScript is not null)
             {
                 var consumersPath = Path.Combine(dir, ConsumersHookScriptName);

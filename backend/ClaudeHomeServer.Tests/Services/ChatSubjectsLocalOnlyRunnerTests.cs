@@ -116,20 +116,21 @@ public class ChatSubjectsLocalOnlyRunnerTests : IDisposable
             store, local, http, paid), busy);
     }
 
-    // На локальном движке идёт ход исполнителя (LocalBlockedByTurn): у места нет облачного
-    // шага, поэтому вызов отдаёт null — ни локаль, ни облако, ни claude не тронуты
+    // Вариант А (06.11): в режиме «без облака» на локальном маршруте занятый ходом движок
+    // не пропускается — облачного шага там нет, пропуск был потерей вызова. Очередь внутри
+    // движка держит слот TrackedLocalLlmClient, а не цепочка; в стенде локаль стоит без слота.
     [Fact]
-    public async Task ЛокальЗанятаХодом_NullБезОблакаИБезЛокали()
+    public async Task ЛокальЗанятаХодом_БезОблака_ИдётВДвижок()
     {
         var ((runner, _, local, http, paid), busy) = StandWithBusy();
         using var turn = busy.Enter();
 
         var answer = await runner.RunLocalOrChosenAsync(Action, "реплики чатов", jsonFormat: "json", ct: CancellationToken.None);
 
-        answer.Should().BeNull();
-        local.JsonCalls.Should().Be(0, "фон не лезет в занятый ходом движок");
+        answer.Should().Be("{\"assign\":[]}", "занятый движок не повод терять вызов в режиме без облака");
+        local.JsonCalls.Should().Be(1, "на локальном маршруте без облака вызов идёт в движок");
         local.TextCalls.Should().Be(0);
-        http.Created.Should().Be(0, "занятая локаль не повод уходить в облако");
+        http.Created.Should().Be(0, "по локальному маршруту облачного шага нет");
         paid.Calls.Should().Be(0);
     }
 

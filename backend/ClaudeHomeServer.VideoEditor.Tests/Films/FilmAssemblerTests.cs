@@ -58,12 +58,12 @@ public sealed class FilmAssemblerTests : IDisposable
         var feed = new FilmPatchFeed(_w.JobThreads, NullLogger<FilmPatchFeed>.Instance, null, TimeSpan.FromHours(1), TimeSpan.FromHours(2));
         var svc = new FilmService(_w.Films, _w.Side, _w.JobThreads, _w.Registry, NullLogger<FilmService>.Instance, _dsp, patchFeed: feed);
         var revision = _w.Films.ReadFile(_w.Full("video/a/a.film")).Revision;
-        var patched = await svc.PatchAsync(Owner, _w.Scope, "video/a/a.film",
+        var patched = await svc.PatchAsync(Owner, Owner, _w.Scope, "video/a/a.film",
             new FilmPatch(revision, [new FilmPatchOp(FilmPatchOps.Trim, Index: 0, Trim: [0, 2])]), VideoInitiators.Human, default, FilmWorld.Session);
         patched.IsOk.Should().BeTrue(patched.Error);
         var assembler = new FilmAssembler(svc, _w.Registry, new ConfigurationBuilder().Build(), NullLogger<FilmAssembler>.Instance, _dsp, _spend);
 
-        assembler.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human, FilmWorld.Session).IsOk.Should().BeTrue();
+        assembler.Start(Owner, Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human, FilmWorld.Session).IsOk.Should().BeTrue();
         await assembler.WhenIdleAsync();
         await feed.FlushAllAsync();
 
@@ -79,7 +79,7 @@ public sealed class FilmAssemblerTests : IDisposable
         ThreeClipFilm();
         var assembler = Assembler();
 
-        var started = assembler.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human);
+        var started = assembler.Start(Owner, Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human);
         await assembler.WhenIdleAsync();
 
         started.Value!.State.Should().Be(FilmBuildStates.Waiting);
@@ -107,11 +107,11 @@ public sealed class FilmAssemblerTests : IDisposable
     {
         ThreeClipFilm();
         var assembler = Assembler();
-        assembler.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human);
+        assembler.Start(Owner, Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human);
         await assembler.WhenIdleAsync();
         File.WriteAllBytes(_w.Full("video/a/film.mp4"), [42]);
 
-        assembler.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Agent);
+        assembler.Start(Owner, Owner, _w.Scope, "video/a/a.film", VideoInitiators.Agent);
         await assembler.WhenIdleAsync();
 
         File.ReadAllBytes(_w.Full("video/a/film.mp4")).Should().Equal(42);
@@ -120,8 +120,8 @@ public sealed class FilmAssemblerTests : IDisposable
             .Should().Equal("video/a/film.mp4", "video/a/film.v2.mp4");
         _spend.Records.Last().Initiator.Should().Be(SpendInitiators.Agent);
 
-        var state = _w.Service.State(Owner, _w.Scope, "video/a/a.film").Value!;
-        await _w.Service.PatchAsync(Owner, _w.Scope, "video/a/a.film",
+        var state = _w.Service.State(Owner, Owner, _w.Scope, "video/a/a.film").Value!;
+        await _w.Service.PatchAsync(Owner, Owner, _w.Scope, "video/a/a.film",
             new FilmPatch(state.Revision, [new FilmPatchOp(FilmPatchOps.Trim, Index: 0, Trim: [0, 3])]), VideoInitiators.Human, default);
         _w.Service.List(_w.Scope).Value!.Single().Stale.Should().BeTrue("вход изменился после сборки");
     }
@@ -135,7 +135,7 @@ public sealed class FilmAssemblerTests : IDisposable
         var assembler = Assembler(new ConfigurationBuilder().AddInMemoryCollection(
             new Dictionary<string, string?> { ["VideoEditor:AssembleTimeoutMinutes"] = "7" }).Build());
 
-        assembler.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human);
+        assembler.Start(Owner, Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human);
         await assembler.WhenIdleAsync();
 
         var plan = _dsp.Plans.Should().ContainSingle().Subject;
@@ -161,7 +161,7 @@ public sealed class FilmAssemblerTests : IDisposable
         _dsp.Info = new VideoDspInfo(5, w, h, 24, HasAudio: true);
         var assembler = Assembler();
 
-        assembler.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human).IsOk.Should().BeTrue();
+        assembler.Start(Owner, Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human).IsOk.Should().BeTrue();
         await assembler.WhenIdleAsync();
 
         var plan = _dsp.Plans.Should().ContainSingle().Subject;
@@ -181,7 +181,7 @@ public sealed class FilmAssemblerTests : IDisposable
         _dsp.Info = new VideoDspInfo(5, 0, 0, 24, HasAudio: true);
 
         var assembler = Assembler();
-        assembler.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human).IsOk.Should().BeTrue();
+        assembler.Start(Owner, Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human).IsOk.Should().BeTrue();
         await assembler.WhenIdleAsync();
 
         var plan = _dsp.Plans.Should().ContainSingle().Subject;
@@ -194,7 +194,7 @@ public sealed class FilmAssemblerTests : IDisposable
         ThreeClipFilm();
         var assembler = Assembler();
 
-        assembler.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human);
+        assembler.Start(Owner, Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human);
         await assembler.WhenIdleAsync();
 
         _dsp.Plans.Single().Timeout.Should().Be(TimeSpan.FromMinutes(20));
@@ -210,8 +210,8 @@ public sealed class FilmAssemblerTests : IDisposable
         var withoutDsp = new FilmAssembler(_w.Service, _w.Registry, new ConfigurationBuilder().Build(),
             NullLogger<FilmAssembler>.Instance, null, _spend);
 
-        withoutDsp.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human).ErrorCode.Should().Be(VideoEditorErrors.DspUnavailable);
-        off.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human).ErrorCode.Should().Be(VideoEditorErrors.DspUnavailable);
+        withoutDsp.Start(Owner, Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human).ErrorCode.Should().Be(VideoEditorErrors.DspUnavailable);
+        off.Start(Owner, Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human).ErrorCode.Should().Be(VideoEditorErrors.DspUnavailable);
         _w.Registry.ActiveCount().Should().Be(0);
     }
 
@@ -223,13 +223,13 @@ public sealed class FilmAssemblerTests : IDisposable
         File.Delete(_w.Full("video/a/2.mp4"));
         var assembler = Assembler();
 
-        assembler.Start(Owner, new VideoEditScope(VideoEditScope.Personal, null), "video/a/a.film", VideoInitiators.Human)
+        assembler.Start(Owner, Owner, new VideoEditScope(VideoEditScope.Personal, null), "video/a/a.film", VideoInitiators.Human)
             .ErrorCode.Should().Be(VideoEditorErrors.PersonalScopeNoFilms);
-        assembler.Start(Owner, _w.Scope, "video/empty/empty.film", VideoInitiators.Human)
+        assembler.Start(Owner, Owner, _w.Scope, "video/empty/empty.film", VideoInitiators.Human)
             .ErrorCode.Should().Be(VideoEditorErrors.InvalidRequest);
-        assembler.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human)
+        assembler.Start(Owner, Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human)
             .ErrorCode.Should().Be(VideoEditorErrors.FileNotFound);
-        assembler.Start(Owner, _w.Scope, "video/a/none.film", VideoInitiators.Human)
+        assembler.Start(Owner, Owner, _w.Scope, "video/a/none.film", VideoInitiators.Human)
             .ErrorCode.Should().Be(VideoEditorErrors.FileNotFound);
     }
 
@@ -239,7 +239,7 @@ public sealed class FilmAssemblerTests : IDisposable
         ThreeClipFilm();
         using (var stream = new FileStream(_w.Full("video/a/1.mp4"), FileMode.Open)) stream.SetLength(SafeMediaDownloader.VideoMaxBytes + 1);
 
-        var result = Assembler().Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human);
+        var result = Assembler().Start(Owner, Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human);
 
         result.ErrorCode.Should().Be(VideoEditorErrors.InvalidRequest);
         result.Error.Should().Contain("300 МБ");
@@ -253,21 +253,21 @@ public sealed class FilmAssemblerTests : IDisposable
         _dsp.Hold = new TaskCompletionSource();
         var assembler = Assembler();
 
-        assembler.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human).IsOk.Should().BeTrue();
-        assembler.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human).ErrorCode
+        assembler.Start(Owner, Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human).IsOk.Should().BeTrue();
+        assembler.Start(Owner, Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human).ErrorCode
             .Should().Be(VideoEditorErrors.TooManyJobs, "тот же фильм уже собирается");
-        var sameOwner = assembler.Start(Owner, _w.Scope, "video/a/b.film", VideoInitiators.Human);
+        var sameOwner = assembler.Start(Owner, Owner, _w.Scope, "video/a/b.film", VideoInitiators.Human);
         sameOwner.ErrorCode.Should().Be(VideoEditorErrors.TooManyJobs);
         sameOwner.Error.Should().Contain("уже идёт сборка");
-        assembler.Start("u2", _w.Scope, "video/a/a.film", VideoInitiators.Human).IsOk.Should().BeTrue();
-        var instance = assembler.Start("u3", _w.Scope, "video/a/a.film", VideoInitiators.Human);
+        assembler.Start("u2", "u2", _w.Scope, "video/a/a.film", VideoInitiators.Human).IsOk.Should().BeTrue();
+        var instance = assembler.Start("u3", "u3", _w.Scope, "video/a/a.film", VideoInitiators.Human);
         instance.ErrorCode.Should().Be(VideoEditorErrors.TooManyJobs);
         instance.Error.Should().Contain("слишком много");
 
         _dsp.Hold.SetResult();
         await assembler.WhenIdleAsync();
         _w.Registry.ActiveCount().Should().Be(0, "после сборок заявки свободны");
-        assembler.Start(Owner, _w.Scope, "video/a/b.film", VideoInitiators.Human).IsOk.Should().BeTrue();
+        assembler.Start(Owner, Owner, _w.Scope, "video/a/b.film", VideoInitiators.Human).IsOk.Should().BeTrue();
         await assembler.WhenIdleAsync();
     }
 
@@ -277,16 +277,16 @@ public sealed class FilmAssemblerTests : IDisposable
         ThreeClipFilm();
         _dsp.Hold = new TaskCompletionSource();
         var assembler = Assembler();
-        assembler.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human);
+        assembler.Start(Owner, Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human);
         await _dsp.StartedSignal.Task.WaitAsync(Wait);
 
-        assembler.Cancel(Owner, _w.Scope, "video/a/a.film").Should().BeTrue();
+        assembler.Cancel(Owner, Owner, _w.Scope, "video/a/a.film").Should().BeTrue();
         await assembler.WhenIdleAsync();
 
         _w.Registry.Get(Owner, ProjectId, "video/a/a.film")!.State.Should().Be(FilmBuildStates.Cancelled);
         File.Exists(_w.Full("video/a/film.mp4")).Should().BeFalse();
         _w.Films.ReadFile(_w.Full("video/a/a.film")).Document!.Builds.Should().BeEmpty();
-        assembler.Cancel(Owner, _w.Scope, "video/a/a.film").Should().BeFalse("сборка уже не идёт");
+        assembler.Cancel(Owner, Owner, _w.Scope, "video/a/a.film").Should().BeFalse("сборка уже не идёт");
     }
 
     [Fact]
@@ -296,7 +296,7 @@ public sealed class FilmAssemblerTests : IDisposable
         _dsp.Failure = "Не удалось собрать фильм: ffmpeg отказал";
         var assembler = Assembler();
 
-        assembler.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human);
+        assembler.Start(Owner, Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human);
         await assembler.WhenIdleAsync();
 
         var status = _w.Registry.Get(Owner, ProjectId, "video/a/a.film")!;
@@ -313,7 +313,7 @@ public sealed class FilmAssemblerTests : IDisposable
         _dsp.Info = null;
         var assembler = Assembler();
 
-        assembler.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human);
+        assembler.Start(Owner, Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human);
         await assembler.WhenIdleAsync();
 
         _w.Registry.Get(Owner, ProjectId, "video/a/a.film")!.Error.Should().Contain("не разобран");
@@ -327,7 +327,7 @@ public sealed class FilmAssemblerTests : IDisposable
         _dsp.Reports = [new VideoAssembleProgress(VideoAssembleProgress.Waiting, 0), new VideoAssembleProgress(VideoAssembleProgress.Running, 0.5)];
         _dsp.Hold = new TaskCompletionSource();
         var assembler = Assembler();
-        assembler.Start(Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human);
+        assembler.Start(Owner, Owner, _w.Scope, "video/a/a.film", VideoInitiators.Human);
 
         // Отчёт доходит до состояния синхронно на нити сборки: BuildProgress.Report → OnProgress → registry.Set
         // (FilmAssembler.cs:247) выполняется внутри AssembleAsync раньше сигнала. После сигнала состояние

@@ -456,6 +456,17 @@ async function saveChatRevisions(projectId: string, map: Record<string, string>)
   await idbSet('synced-chats:' + projectId, { data: map, savedAt: Date.now() }).catch(() => {});
 }
 
+// Забыть ревизию истории одного чата (S2d-F2): после смены видимости прежняя ревизия
+// незначима — у участника чат теперь не виден (его история больше не относится к его
+// снимку), у автора чат стал приватным. Следующий снапшот спросит заново (или не спросит
+// вовсе — чата в видимом списке нет).
+export async function forgetChatRevision(projectId: string, chatId: string): Promise<void> {
+  const map = await loadChatRevisions(projectId);
+  if (!(chatId in map)) return;
+  delete map[chatId];
+  await saveChatRevisions(projectId, map);
+}
+
 // --- Докачка содержимого ---
 
 // Минимальное время показа спиннера: на localhost докачка мгновенна, без этого спиннер незаметен.

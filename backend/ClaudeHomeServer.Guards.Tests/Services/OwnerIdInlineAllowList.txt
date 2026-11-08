@@ -1,0 +1,90 @@
+# Allow-list сторожа S0-G (OwnerIdInlineGuardTests): инлайн-сравнения владельца с
+# идентификатором вызывающего в точках доступа. Формат строки: «путь/от/корня|число» —
+# по ФАЙЛУ со счётчиком совпадений (решение А1: по номеру строки снимок рассыпается при
+# каждой правке). Снимок построен по коду этого дерева на шаге S0-G: состав — таблица 2
+# карты docs/research/shared-projects-s0-map-2026-10.md, расширенная по вердикту А1
+# (двухшаговые сравнения, ResolveOwnerId, *Toolset.cs вне /Mcp/). Всего 118 совпадений
+# в 50 файлах.
+#
+# Снимок может только сокращаться по мере перевода точек доступа на IProjectAccess/RequestScope
+# (шаги S0-4a/S0-4b/S0-5/S0-6/S0-7, S2a-3). Новая строка — только осознанно, с вердиктом
+# в дифе (личное/админское/«до S4»).
+#
+# Дельта после снимка: −3 совпадения в −2 файлах (S0-6, хаб на точку доступа): SessionHub.cs
+# (OwnsSession/OwnsProject → IProjectAccess) и TerminalHub.cs (OwnsProject → IProjectAccess).
+# Дельта S0-4a: −21 совпадение в −1 файле: ProjectsController.cs переведён на [ProjectScope].
+# Дельта S0-4b: −19 совпадений в −13 файлах (остальные контроллеры Main переведены на
+# [ProjectScope] / явный IProjectAccess.Resolve; CodeGraph и Preview сохраняют контракт 403 через
+# Resolve). Остались осознанно (вердикты):
+#   • DossiersController|1 — x.OwnerId != p.OwnerId сравнивает владельцев двух проектов одной папки
+#     (признак «общая папка»), а не вызывающего;
+#   • TasksController|7 — сравнивают task.OwnerId, не проект (S2b). +1 в S1-3c: та же класс
+#     сравнений в отказе записи участника общего проекта («не твоя задача, но проект виден»).
+#     +1 в S2c-9: «своя ли задача» в выдаче GET /api/tasks — MyTasksQuery уже отобрал задачи по
+#     праву Read, сравнение выбирает форму ответа (свой элемент / проекция участника TaskView),
+#     ключом хранилищ не служит; карточка GetById резолвится только через IProjectAccess.Resolve;
+#     в списке проекта «владелец или участник» берётся из RequestScope ([ProjectScope]), не сравнением.
+#   • ModelsController|2 — задачи (S2b) и личные персоны;
+#   • PersonasController|2 — до S4;
+#   • TtsController|1 — владение чатом при записи расхода (чат — S1-3a, личный расход);
+#   • MediaHistoryController|1 — запись личной истории медиа (ADR-030), не проект;
+#   • ProjectGroupsController|2 — группы проектов личные у владельца, а не проектный доступ;
+#   • LocalModelStatsController|8 — админская статистика: «моя» и чужая строка учёта, не проект.
+# Дельта S2a-3a: −2 совпадения в 0 файлах: WorkspaceToolset.cs 4→2 (проверки проекта по владельцу → IProjectAccess;
+# остаток — task.OwnerId, S2b).
+# Дельта S0-5: −9 совпадений в −6 файлах (контроллеры вертикалей): Architecture, PluginBridge и три
+# *ScopeGate (Image/Audio/Video) переведены на ProjectAccess/SessionAccess, SpendController −1 (бейдж
+# чата; остаток — task.OwnerId, S2b). Тулсеты (*Toolset.cs) — S2a, не входят.
+# Дельта хвоста FIN3 (дефект 6c037429): −2 совпадения в 0 файлах: ModelsController.cs 4→2 — обе ветки
+# превью модели по sessionId (контекст чата и чип сабагента) переведены с ResolveOwnerId на
+# GetOwnedVisible (арендатор + SessionAccess.CanSee), как соседние человеческие ручки
+# (SessionsController.SetPersona): на чужом приватном чате владелец проекта получает 404.
+# Остаток — task.OwnerId (S2b) и p.OwnerId (личные персоны), они не про чат.
+# Дельта F2-T1 (57aa6c829): −2 совпадения в 0 файлах: TasksController.cs 9→7 — сравнения
+# «чужая задача → 404» сняты: право записи меряет TaskAuthorGate (автор или владелец) и
+# IProjectAccess, как названо в разрезе §2.1; вместо них добавлены маски «свой/чужой» по
+# task.OwnerId (тот же класс, что S2c-9: выбирают форму ответа, ключом хранилищ не служат).
+# Дельта F2-T1 (57aa6c829): +1 совпадение: TasksToolset.cs 8→9 — авторский гейт MCP tasks_delete
+# («actor != context.OwnerId»): когда актор хода не арендатор, сверяется автор записи
+# (автор или владелец — то же правило, что REST-удаление). Это право автора, а не ключ хранилищ:
+# задача берётся по id, стор — под арендатором.
+
+backend/ClaudeHomeServer.Architecture/Services/Architecture/ArchitectureToolset.cs|1
+backend/ClaudeHomeServer.AudioEditor/Mcp/AudioEditorToolset.cs|1
+backend/ClaudeHomeServer/Controllers/ChatsController.cs|2
+backend/ClaudeHomeServer/Controllers/DeployController.cs|1
+backend/ClaudeHomeServer/Controllers/DeviceAgentTicketController.cs|1
+backend/ClaudeHomeServer/Controllers/DossiersController.cs|1
+backend/ClaudeHomeServer/Controllers/FeatureChatDoor.cs|1
+backend/ClaudeHomeServer/Controllers/LocalModelStatsController.cs|8
+backend/ClaudeHomeServer/Controllers/MediaHistoryController.cs|1
+backend/ClaudeHomeServer/Controllers/ModelsController.cs|2
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|2
+backend/ClaudeHomeServer/Controllers/ProjectGroupsController.cs|2
+backend/ClaudeHomeServer/Controllers/ProjectRelayController.cs|1
+backend/ClaudeHomeServer/Controllers/SessionHandsController.cs|1
+backend/ClaudeHomeServer/Controllers/SessionLocalModelController.cs|1
+backend/ClaudeHomeServer/Controllers/TasksController.cs|7
+backend/ClaudeHomeServer/Controllers/TelemetryController.cs|2
+backend/ClaudeHomeServer/Controllers/TtsController.cs|1
+backend/ClaudeHomeServer.ImageEditor/Mcp/ImageEditorToolset.cs|1
+backend/ClaudeHomeServer/Services/Mcp/Http/CodeGraphToolset.cs|1
+backend/ClaudeHomeServer/Services/Mcp/Http/DifyToolset.cs|1
+backend/ClaudeHomeServer/Services/Mcp/Http/LocalMediaToolset.cs|1
+backend/ClaudeHomeServer/Services/Mcp/Http/MemoryToolset.cs|1
+backend/ClaudeHomeServer/Services/Mcp/Http/ProjectRunCaller.cs|1
+backend/ClaudeHomeServer/Services/Mcp/Http/TasksToolset.cs|9
+backend/ClaudeHomeServer/Services/Mcp/Http/WorkspaceToolset.cs|2
+backend/ClaudeHomeServer/Services/Mcp/LocalMediaProjectAccess.cs|2
+backend/ClaudeHomeServer.Spend/Controllers/SpendController.cs|1
+backend/ClaudeHomeServer.VideoEditor/Mcp/VideoEditorToolset.cs|1
+# Мерж master 03.11 (LLM-wiki, ADR-035/036): вика — личное пространство владельца
+# (data/wiki/{userId}), в общий проект не открывается. Сравнения осознанные: «раздел
+# проекта — только своего проекта», «пометка/разбор — только своего чата» (fail-closed:
+# участник общего проекта раздел чужого проекта в своей вике не получает — 403).
+backend/ClaudeHomeServer.Notes/Controllers/WikiChatsController.cs|3
+backend/ClaudeHomeServer.Notes/Controllers/WikiController.cs|2
+backend/ClaudeHomeServer.Notes/Controllers/WikiPackagesController.cs|2
+backend/ClaudeHomeServer.Notes/Controllers/WikiPagesController.cs|2
+backend/ClaudeHomeServer.Notes/Controllers/WikiSettingsController.cs|1
+backend/ClaudeHomeServer.Notes/Services/Mcp/NotesToolset.cs|1

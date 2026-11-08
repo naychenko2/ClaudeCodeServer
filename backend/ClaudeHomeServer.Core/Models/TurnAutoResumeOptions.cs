@@ -1,6 +1,6 @@
 namespace ClaudeHomeServer.Models;
 
-// Настройки авто-возобновления ходов после рестарта сервера (флаг turn-auto-resume) —
+// Настройки авто-возобновления ходов после рестарта сервера (ADR-033) —
 // секция «TurnAutoResume» в appsettings.json. Дефолты: MaxPerBoot=10, WarmupSeconds=15,
 // GapSeconds=5. Переопределяются в appsettings.Local.json.
 public class TurnAutoResumeOptions

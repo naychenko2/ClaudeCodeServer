@@ -64,6 +64,13 @@ public sealed class SpendRecord
     public string? SessionId { get; init; }
     public string? TaskId { get; init; }
     public string? PersonaId { get; init; }
+    // Кто подал ход (актор хода общего проекта, S2a-6b): null — запись до этого поля,
+    // серверный ход (one-shot, директива) или актор не известен. Ключ хранилища остаётся
+    // OwnerId (владелец-арендатор): ActorUserId — разрез, не ключ. В срезе чтения
+    // «нет поля → владелец» (тот же порядок, что у SenderUserId в К4): старые записи
+    // относятся владельцу. Аддитивное nullable-поле: старые turns-*.jsonl и daily.json
+    // читаются штатно, новый формат читается старым кодом — BackupSchema.Version не двигается.
+    public string? ActorUserId { get; init; }
     // set (не init): разовый rekey-проход в SpendStore меняет провайдера записей,
     // записанных с Claude-ключом и не-Claude моделью (см. RekeyNonClaudeModelsOnClaudeKeys)
     public string Provider { get; set; } = "claude";
@@ -111,6 +118,10 @@ public sealed class DailySpendRow
     public string? SessionId { get; init; }
     public string? TaskId { get; init; }
     public string? PersonaId { get; init; }
+    // Тот же разрез, что у детальной записи (S2a-6b): без него свёрнутый день не даёт
+    // владельцу разбивку по участникам, а участнику — его записей за окном детального окна.
+    // Агрегаты до появления поля читаются с null и относятся владельцу (см. SpendRecord).
+    public string? ActorUserId { get; init; }
     // set (не init): rekey-проход в SpendStore меняет провайдера агрегата
     // (см. RekeyNonClaudeModelsOnClaudeKeys)
     public string Provider { get; set; } = "";

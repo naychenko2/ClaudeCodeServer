@@ -50,8 +50,9 @@ public sealed class ChatDeviceWaitHandler(
     {
         log.LogWarning("Чат {Session}: {Count} сообщ. не дождались устройства за {Hours} ч и сняты",
             session.Id, count, (int)ProjectCapabilities.DeviceWaitCeiling.TotalHours);
-        // У проектного чата владелец — владелец проекта (Session.OwnerId там не хранится)
-        if (sessions.ResolveOwnerId(session) is not { } owner) return;
+        // Адресат — по приватности чата (S2d-4f): приватный чат — только автор; общий
+        // проектный резолвится через проект (Session.OwnerId там не хранится)
+        if (ChatNotificationAudience.OwnerOf(sessions, session) is not { } owner) return;
         await notifications.SendNotificationMessageAsync(owner, new NotificationMessage(
             Title: "Сообщения не доставлены",
             Body: $"{session.Name ?? "Чат"}: {count} сообщ. ждали устройство проекта " +

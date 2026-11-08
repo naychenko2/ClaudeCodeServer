@@ -32,7 +32,8 @@ public sealed class ArchitectureAgentLauncherAdapter(
     // task_changed и автозапуска, даже если клиент отвалился, — иначе она повиснет
     // незапущенной и заблокирует следующие сборки меткой arch-build.
     public async Task<ArchitectureAgentLaunch> LaunchAsync(
-        string projectId, string ownerId, ArchitectureAgentBrief brief, CancellationToken ct)
+        string projectId, string ownerId, ArchitectureAgentBrief brief, CancellationToken ct,
+        string? createdByUserId)
     {
         var architect = ResolveArchitect(ownerId, projectId);
 
@@ -53,13 +54,15 @@ public sealed class ArchitectureAgentLauncherAdapter(
                 PersonaId: architect?.Id,
                 Labels: [.. brief.Labels],
                 // Сборка редкая и тяжёлая — сильный слот
-                ModelTier: "strong"));
+                ModelTier: "strong",
+                // Человек, запустивший сборку, — создатель: автозапуск наследует его актора (F-9)
+                CreatedByActorUserId: createdByUserId));
         }
 
-        await broadcaster.ToOwner(ownerId, new TaskChangedMessage("created", task));
+        await broadcaster.ToTaskBoard(ownerId, task.ProjectId, new TaskChangedMessage("created", task));
         try
         {
-            await executor.ExecuteAsync(task, auto: true);
+            await executor.ExecuteAsync(task, auto: true, TaskLaunchActor.For(task));
             return new ArchitectureAgentLaunch(task.Id, architect?.Id, null);
         }
         catch (Exception ex)

@@ -244,13 +244,16 @@ public class HiggsfieldFailureClassRegressionTests : IDisposable
         // id живой сессии TryResolveSession проходит и мы доходим до проверки потолка.
         _realSession = session;
 
+        // Шов рамки теперь обязательный (fail-closed, R-S2a-3b); эти тесты проверяют кэш
+        // и состав, не рамку — стаб с широкой рамкой сохраняет их прежнее поведение
         var toolset = new HiggsfieldToolset(
             higgsfield: null!,
             clientFactory: new NoOpHandlerFactory(),
             sessions: sessionManager,
             config,
             mcpStatus: null,
-            NullLogger<HiggsfieldToolset>.Instance);
+            NullLogger<HiggsfieldToolset>.Instance,
+            frames: new WideTurnFrame());
 
         // Свежий снимок в кэше — один инструмент из белого списка, чтобы не-граничные
         // кейсы возвращали не-пустой состав (анти-тест: проверка не «всё пусто»).

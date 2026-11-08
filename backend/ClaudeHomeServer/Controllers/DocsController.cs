@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Docs;
 using ClaudeHomeServer.Services.Notes;
 using Microsoft.AspNetCore.Authorization;
@@ -13,20 +14,21 @@ namespace ClaudeHomeServer.Controllers;
 // Документация проекта для панели «Доки»: README.md + docs/**. Отдельно от FilesController,
 // потому что отдаёт не файлы, а корпус — заголовки, якоря и связи между документами.
 [ProjectCapability(ProjectCapabilityArea.ServerContent)]
+[ProjectScope]
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/docs")]
 public class DocsController(DocsIndexService docs, ProjectManager projects,
     ILogger<DocsController> logger, INoteAccessor? notes = null) : ControllerBase
 {
-    // DefaultMapInboundClaims = false → sub читаем напрямую (как в FilesController)
-    private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+    // Ключ хранилищ (заметки) — арендатор из RequestScope ([ProjectScope]), не вызывающий
+    private string TenantId => HttpContext.GetRequestScope().TenantOwnerId;
 
-    // Проект текущего пользователя; чужой/несуществующий → 404, как у соседних контроллеров
+    // Проект запроса (доступ проверил [ProjectScope], чужой — 404); несуществующий → 404 тоже
     private Project GetProject(string projectId)
     {
         var p = projects.GetById(projectId);
-        if (p is null || p.OwnerId != UserId)
+        if (p is null)
             throw new KeyNotFoundException($"Проект не найден: {projectId}");
         return p;
     }
@@ -92,6 +94,7 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
     // (кнопка «вернуть README в область» в панели) молча перестал бы работать на проектах
     // с файлом — писал бы в хранилище, которое больше не читается.
     [HttpPut("scope")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public IActionResult SetScope(string projectId, [FromBody] SetDocsScopeRequest req)
     {
         try
@@ -130,6 +133,7 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
     // области) и 400 (имя, которого в папке нет). Ответ — свежий индекс: перечитывать его
     // вторым запросом нечестно, порядок обязан приехать вместе с подтверждением
     [HttpPut("order")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public IActionResult SetOrder(string projectId, [FromBody] SetDocsOrderRequest req)
     {
         try
@@ -155,6 +159,7 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
     // Ответ — путь созданного документа и свежий индекс: панель откроет его сразу, не ожидая
     // следующего запроса. 400 — непригодное название, 404 — папка вне области, 409 — занято
     [HttpPost("create")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public IActionResult Create(string projectId, [FromBody] CreateDocRequest req)
     {
         try
@@ -202,6 +207,7 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
     // а не вторым запросом. touched перечисляет ключи, которые изменились фактически, —
     // их больше одного, когда вместе со свойством переписалась «дата смены»
     [HttpPut("property")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public IActionResult SetProperty(string projectId, [FromBody] SetDocPropertyRequest req)
     {
         try
@@ -233,6 +239,7 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
     // писать больше некуда — файла нет, значит он создаётся вместе с действующей областью.
     // Это не «молча»: описать тип документа — уже явный жест, такой же, как POST /scope-file.
     [HttpPut("types")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public IActionResult SetTypes(string projectId, [FromBody] SetDocTypesRequest req)
     {
         try
@@ -264,6 +271,7 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
     // updateLinks: false — файлы чужих документов не трогаем, но в ответе говорим, сколько
     // ссылок осталось битыми: молчание тут хуже, чем неудобная цифра
     [HttpPost("rename")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public IActionResult Rename(string projectId, [FromBody] RenameDocRequest req)
     {
         try
@@ -301,6 +309,7 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
     // поддеревом; ссылки внутри переехавшего чинятся тоже — при смене глубины
     // «../vision.md» указывает уже не туда
     [HttpPost("move")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public IActionResult Move(string projectId, [FromBody] MoveDocRequest req)
     {
         try
@@ -347,7 +356,7 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
         {
             foreach (var (from, to) in moved)
             {
-                try { notes.RewriteAnnotationTargets(UserId!, projectId, from, projectId, to, prefix: true); }
+                try { notes.RewriteAnnotationTargets(TenantId, projectId, from, projectId, to, prefix: true); }
                 catch (Exception ex) { logger.LogWarning(ex, "Перепись привязок комментариев при {Action} {Old}", action, from); }
             }
         }
@@ -371,6 +380,7 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
     // Ссылки на удалённое починить нечем (цели больше нет), поэтому их число просто
     // возвращается: пользователь должен узнать о них здесь, а не при публикации wiki
     [HttpPost("delete")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public IActionResult Delete(string projectId, [FromBody] DeleteDocRequest req)
     {
         try
@@ -413,6 +423,7 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
     // одинакова у всех, кто открыл репозиторий. Отдельным действием, а не автоматически —
     // продукт не создаёт файлы в чужом рабочем дереве без спроса.
     [HttpPost("scope-file")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public IActionResult SaveScopeFile(string projectId)
     {
         try

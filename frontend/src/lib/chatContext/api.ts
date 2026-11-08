@@ -23,8 +23,8 @@ export const chatContextApi = {
     send<ChatContextDto>(`${routes.base(sessionId)}?revision=${revision}`, 'DELETE'),
   savedFiles: (sessionId: string) => request<SavedFileDto[]>(routes.savedFiles(sessionId), { live: true }),
   subscribe: (handler: (e: ChatContextChangedEvent) => void) => onMessage(msg => {
-    const m = msg as unknown as { type?: string; sessionId?: string; context?: ChatContextDto };
-    if (m.type === CHAT_CONTEXT_EVENT && m.sessionId && m.context) handler(m as ChatContextChangedEvent);
+    const m = msg as unknown as { type?: string; sessionId?: string; revision?: unknown };
+    if (m.type === CHAT_CONTEXT_EVENT && m.sessionId && typeof m.revision === 'number') handler(m as ChatContextChangedEvent);
   }),
 };
 

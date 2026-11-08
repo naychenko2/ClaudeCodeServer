@@ -22,8 +22,8 @@ public sealed class VideoPrefsBroadcastTests
 
         w.Rest.PutPrefs(w.ProjectId, Wish("9:16"));
 
-        var call = w.F.Broadcaster.ToOwnerCalls.Should().ContainSingle(c => c.Message is VideoPrefsChangedMessage).Subject;
-        call.OwnerId.Should().Be(w.Owner);
+        var call = w.F.Broadcaster.ToProjectCalls.Should().ContainSingle(c => c.Message is VideoPrefsChangedMessage).Subject;
+        call.ProjectId.Should().Be(w.ProjectId);
         var sent = (VideoPrefsChangedMessage)call.Message;
         sent.ScopeKey.Should().Be(w.F.Scope.Key);
         sent.Prefs.Aspect.Should().Be("9:16");
@@ -39,8 +39,8 @@ public sealed class VideoPrefsBroadcastTests
             .IsError.Should().BeFalse();
         await w.WaitJobsAsync();
 
-        var call = w.F.Broadcaster.ToOwnerCalls.Should().ContainSingle(c => c.Message is VideoPrefsChangedMessage).Subject;
-        call.OwnerId.Should().Be(w.Owner);
+        var call = w.F.Broadcaster.ToProjectCalls.Should().ContainSingle(c => c.Message is VideoPrefsChangedMessage).Subject;
+        call.ProjectId.Should().Be(w.ProjectId);
         ((VideoPrefsChangedMessage)call.Message).Prefs.Format!.By.Should().Be(ContextActor.Agent);
     }
 }

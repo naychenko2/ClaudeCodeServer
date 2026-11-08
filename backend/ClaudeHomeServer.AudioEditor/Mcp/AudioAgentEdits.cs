@@ -20,7 +20,7 @@ public sealed class AudioAgentEdits(DspAudioEngine dsp) : IAudioAgentEdits
         [AudioOp.MixStems] = ["stems", "format"],
     };
 
-    public async Task<AudioEditCallResult<AudioAgentEditDto>> ApplyAsync(string ownerId, AudioEditScope scope,
+    public async Task<AudioEditCallResult<AudioAgentEditDto>> ApplyAsync(string ownerId, string? actorId, AudioEditScope scope,
         string sessionId, string threadId, string? versionId, AudioOp op, double? startSec, double? endSec,
         JsonObject? parameters, CancellationToken ct)
     {
@@ -36,7 +36,7 @@ public sealed class AudioAgentEdits(DspAudioEngine dsp) : IAudioAgentEdits
         {
             if (Stems(args) is not { } stems)
                 return Invalid("params.stems — список стемов { name, gainDb?, muted? }; имена — из audio_state (vocals, drums…)");
-            result = await dsp.MixAsync(ownerId, scope,
+            result = await dsp.MixAsync(ownerId, actorId, scope,
                 new AudioMixInput(sessionId, threadId, stems, versionId, format, Initiator: AudioEditInitiator.Agent), ct);
         }
         else
@@ -60,7 +60,7 @@ public sealed class AudioAgentEdits(DspAudioEngine dsp) : IAudioAgentEdits
                 TargetLufs: lufs,
                 Format: format,
                 Initiator: AudioEditInitiator.Agent);
-            result = await dsp.EditAsync(ownerId, scope, input, ct);
+            result = await dsp.EditAsync(ownerId, actorId, scope, input, ct);
         }
 
         return result.Value is { } v

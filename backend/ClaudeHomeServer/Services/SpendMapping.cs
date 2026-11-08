@@ -45,13 +45,21 @@ internal static class SpendMapping
     // Запись расхода штатного хода в аналитику (Spend Analytics): разрезы — из фактического
     // маршрута прогона (UpstreamProvider/UpstreamModel в result'е, «учётка хода» SP1), фолбэк
     // на старые result без этих полей — настройки сессии. Ошибка записи ход не роняет.
+    //
+    // actors — реестр актора хода (S2a-6b): актор (тот, кто подал ход) читается здесь, в
+    // момент учёта: ядро снимает актора только после обработчика result (смена статуса идёт
+    // ниже по методу), поэтому здесь он ещё жив — тот самый, что запомнен на подаче.
+    // Урок S2a-6c (журнал событий): потребитель, читающий реестр ПОСЛЕ конца хода,
+    // получает null — здесь мы до конца хода. Без реестра (null) и для ходов без человека
+    // запись остаётся без актора: срез чтения относится такие записи владельцу.
     public static void RecordTurnSpend(
         ISpendCollector? spend,
         LlmProviderRegistry llmProviders,
         Func<Session, string?> resolveOwnerId,
         ILogger? log,
         Session? s,
-        ResultMessage m)
+        ResultMessage m,
+        ClaudeHomeServer.Services.Access.ITurnActorRegistry? actors = null)
     {
         if (spend is null || s is null || m.Usage is null)
         {
@@ -76,13 +84,20 @@ internal static class SpendMapping
             // его ходы бесплатные независимо от ключа (напр. "local-qwen"). Признак считается
             // по тому же ключу, что пишется в запись: класс и источник расхода не разъезжаются.
             var isLocal = llmProviders.GetByKey(provider)?.IsLocal == true;
+            var owner = resolveOwnerId(s) ?? "";
+            // Актор хода — из реестра; реестр или актор неизвестен — null (ход без человека,
+            // чат удалён, после рестарта). Ошибка реестра не роняет запись расхода.
+            string? actorUserId;
+            try { actorUserId = actors?.Actor(s.Id, owner); }
+            catch (Exception ex) { actorUserId = null; log?.LogWarning(ex, "spend: актор хода не прочитался"); }
             spend.Record(new SpendRecord
             {
-                OwnerId = resolveOwnerId(s) ?? "",
+                OwnerId = owner,
                 ProjectId = s.ProjectId,
                 SessionId = s.Id,
                 TaskId = s.TaskId,
                 PersonaId = s.PersonaId,
+                ActorUserId = string.IsNullOrEmpty(actorUserId) ? null : actorUserId,
                 Provider = provider,
                 Model = model,
                 Source = SpendSources.IsFree(provider, model, isLocal) ? SpendSources.Free : SpendSources.ChatTurn,

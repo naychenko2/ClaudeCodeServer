@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Мокаем IndexedDB-обёртку целиком: офлайн-пути этого файла работают с ней через
-// idbGet/idbSet/idbDelete
+// idbGet/idbSet/idbDelete (idbDelete нужен и классу содержимого файлов — снимает
+// противоположную пометку)
 const { idbGet, idbSet, idbDelete } = vi.hoisted(() => ({
   idbGet: vi.fn(),
   idbSet: vi.fn(),
@@ -107,6 +108,51 @@ describe('request: network-first', () => {
   it('204 → undefined, пустое тело не парсится как JSON', async () => {
     fetchMock.mockResolvedValue({ ok: true, status: 204, statusText: 'No Content', json: async () => ({}), text: async () => '' });
     await expect(offline.request('/tasks/1', { method: 'DELETE' })).resolves.toBeUndefined();
+  });
+});
+
+describe('request: etagRef (K8 — ETag успешного ответа вызывающему)', () => {
+  it('сервер прислал ETag — sink заполнен', async () => {
+    fetchMock.mockResolvedValue({
+      ...jsonResponse({ content: 'текст' }),
+      headers: { get: (k: string) => (k === 'ETag' ? '"deadbeef"' : null) },
+    });
+
+    const sink: { etag?: string } = {};
+    const data = await offline.request<{ content: string }>('/projects/p1/files/content?path=a.md', { etagRef: sink });
+
+    expect(data.content).toBe('текст');
+    expect(sink.etag).toBe('"deadbeef"');
+  });
+
+  it('без заголовка ETag (бинарник, документ, сверх потолка) — sink пустой', async () => {
+    fetchMock.mockResolvedValue({
+      ...jsonResponse({ content: null, isBinary: true }),
+      headers: { get: () => null },
+    });
+
+    const sink: { etag?: string } = {};
+    await offline.request('/projects/p1/files/content?path=v.mp4', { etagRef: sink });
+    expect(sink.etag).toBeUndefined();
+  });
+
+  it('на ошибке sink не заполняется: заголовок и так в error.responseHeaders', async () => {
+    fetchMock.mockResolvedValue({
+      ...jsonResponse({ code: 'file_changed' }, 409),
+      headers: { get: (k: string) => (k === 'ETag' ? '"e"' : null) },
+    });
+
+    const sink: { etag?: string } = {};
+    await expect(offline.request('/x', { method: 'PUT', body: '{}', etagRef: sink }))
+      .rejects.toMatchObject({ status: 409 });
+    expect(sink.etag).toBeUndefined();
+  });
+
+  it('etagRef не уходит в init fetch (лишним полем запроса)', async () => {
+    fetchMock.mockResolvedValue({ ...jsonResponse({ ok: true }), headers: { get: () => null } });
+    await offline.request('/projects/p1/files', { etagRef: {} });
+    const init = fetchMock.mock.calls[0][1] as Record<string, unknown>;
+    expect(init).not.toHaveProperty('etagRef');
   });
 });
 

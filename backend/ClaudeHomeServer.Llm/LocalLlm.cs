@@ -37,6 +37,46 @@ public interface ILocalLlmClient
         string prompt, string? model, TimeSpan timeout, int numPredict, int numCtx,
         string? ownerId = null, string? label = null, CancellationToken ct = default);
 
+    // Те же вызовы, что ChatJsonAsync/GenerateTextAsync, но вместе с usage ответа движка.
+    // Нужны местам, которым важна фактическая НАГРУЗКА локали (ночной разбор вики и ступень 2
+    // отбора чатов), а не только текст. Usage = null — движок метрик не отдал (нет поля в
+    // ответе либо нераспознанный формат): вызов при этом успешен, потребитель прибавляет 0.
+    // Реализация по умолчанию оборачивает строковый метод без usage: фейки и потребители,
+    // которым метрик не нужен, ничего не переопределяют. Реализации, которые usage уже
+    // разбирают для RecordSpend (LlamaServerClient, OllamaClient), отдают его здесь же.
+    public async Task<(string? Text, UsageInfo? Usage)> ChatJsonDetailedAsync(
+        string systemPrompt, string userPrompt, object jsonFormat, CancellationToken ct = default,
+        string? model = null, int? timeoutMs = null, int? numPredict = null, int? numCtx = null,
+        string? ownerId = null, string? label = null) =>
+        (await ChatJsonAsync(systemPrompt, userPrompt, jsonFormat, ct, model, timeoutMs,
+            numPredict, numCtx, ownerId, label), null);
+
+    public async Task<(string? Text, UsageInfo? Usage)> GenerateTextDetailedAsync(
+        string prompt, string? model, TimeSpan timeout, int numPredict, int numCtx,
+        string? ownerId = null, string? label = null, CancellationToken ct = default) =>
+        (await GenerateTextAsync(prompt, model, timeout, numPredict, numCtx, ownerId, label, ct), null);
+
+    // Те же вызовы, но слот в общем счётчике допуска берётся С ОЖИДАНИЕМ в общей очереди (FIFO,
+    // с потолком ожидания), а не отказом при полной ёмкости. Нужен цепочкам БЕЗ облачной
+    // страховки (RunLocalOrChosen*: ночной разбор вики, ступень 2 отбора): у них нет следующего
+    // шага, и отказ по занятости был потерей работы, а не отступом на облако (WN-4).
+    // Отказ по занятости здесь — LocalEngineSlotRefusalException, а не (null, null): вызывающий
+    // обязан различать «движок занят» и «модель дала пустой ответ».
+    // Реализация по умолчанию — обычный вызов без ожидания: ждущий слот путь знают только
+    // клиенты под общим счётчиком (TrackedLocalLlmClient); прямые движки и тестовые фейки
+    // ничего не переопределяют.
+    public Task<(string? Text, UsageInfo? Usage)> ChatJsonAwaitingSlotAsync(
+        string systemPrompt, string userPrompt, object jsonFormat, CancellationToken ct = default,
+        string? model = null, int? timeoutMs = null, int? numPredict = null, int? numCtx = null,
+        string? ownerId = null, string? label = null) =>
+        ChatJsonDetailedAsync(systemPrompt, userPrompt, jsonFormat, ct, model, timeoutMs,
+            numPredict, numCtx, ownerId, label);
+
+    public Task<(string? Text, UsageInfo? Usage)> GenerateTextAwaitingSlotAsync(
+        string prompt, string? model, TimeSpan timeout, int numPredict, int numCtx,
+        string? ownerId = null, string? label = null, CancellationToken ct = default) =>
+        GenerateTextDetailedAsync(prompt, model, timeout, numPredict, numCtx, ownerId, label, ct);
+
     // Один разговорный ход голосового режима: полный messages[] → короткий ответ.
     // onDelta != null — потоковый режим: куски текста уходят вызывающему по границе
     // предложения через общий StreamSentenceBuffer (озвучка стартует, не дожидаясь

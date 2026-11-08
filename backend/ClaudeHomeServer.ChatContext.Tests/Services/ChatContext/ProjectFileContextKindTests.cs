@@ -100,4 +100,24 @@ public sealed class ProjectFileContextKindTests : IDisposable
         _kind.AcceptedRefs(Scope(), Item("docs/a.md"), null).Should().BeEmpty();
         _kind.DescribeExecutor(Scope(), Item("docs/a.md")).Should().BeNull();
     }
+
+    // F2-P2f: в общем чате субъект приватности — вызывающий (ActorId), арендатор (OwnerId) его не подменяет
+    [Theory]
+    [InlineData("member-a", "member-a", true)]
+    [InlineData("member-a", "tenant", false)]
+    [InlineData("member-a", "member-b", false)]
+    [InlineData("tenant", "member-a", false)]
+    [InlineData("tenant", "tenant", true)]
+    [InlineData(null, "member-a", false)]
+    public void Private_в_общем_чате_судит_вызывающий_а_не_арендатор(string? actor, string fileOf, bool allowed)
+    {
+        var dir = Path.Combine(_root, ".cc-attachments", "private", fileOf, "g1");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "p.png"), "x");
+        var scope = new ContextScope("tenant", new Session(), new Project { RootPath = _root }, actor);
+        var path = $".cc-attachments/private/{fileOf}/g1/p.png";
+
+        _kind.Validate(scope, "project-file", Ref(path)).Should().Be(allowed ? null : "Путь вне проекта");
+        _kind.Describe(scope, Item(path)).Missing.Should().Be(!allowed);
+    }
 }

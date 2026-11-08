@@ -107,6 +107,8 @@ export interface PendingChatMessage {
   // Ждёт устройство локального проекта (ADR-016): лежит отдельно от обычной очереди и уйдёт
   // в работу, когда устройство выйдет на связь, а не по концу текущего хода
   waitingForDevice?: boolean;
+  // Кто поставил сообщение человека в очередь общего проекта; нет у агентских и старых
+  senderUserId?: string;
 }
 
 // Команда композеру подставить прерванное сообщение (событие composer_restore).
@@ -562,6 +564,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ...(msg.auto ? { auto: true } : {}),
         ...(msg.delegationTaskId ? { delegationTaskId: msg.delegationTaskId } : {}),
         ...(msg.imageSnapshot ? { imageSnapshot: msg.imageSnapshot } : {}),
+        ...(msg.senderUserId ? { senderUserId: msg.senderUserId } : {}),
       }]);
     }
 
@@ -1204,8 +1207,8 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
     case 'local_turn_queue': {
       // Ход ждёт свободный слот локальной модели (гейт допуска). Строка live-only и единственная
       // на ход: сдвиг позиции обновит стоящую строку (второй под тем же смыслом не плодится),
-      // position=0 снимает её (допущен/отказан/остановлен). Вне флага local-model-stats —
-      // человек обязан видеть ожидание, а не «виснет молча».
+      // position=0 снимает её (допущен/отказан/остановлен).
+      // Человек обязан видеть ожидание, а не «виснет молча».
       if (msg.position <= 0) {
         return prev.items.some(it => it.kind === 'local_turn_queue')
           ? withItems(prev.items.filter(it => it.kind !== 'local_turn_queue'))

@@ -64,11 +64,11 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     private readonly ImageEditSteps? _steps;
     private readonly ImageProjectPrefsService? _prefs;
     private readonly ChatContext.ImageContextLaunch? _context;
-    private readonly IFeatureFlagGate? _flags;
     private readonly Faces.FaceDetectionCache? _faces;
     private readonly ILocalImageMedia? _localMedia;
     private readonly ClaudeHomeServer.Services.Llm.IMediaGpuYieldGate? _gpuGate;
     private readonly bool _agentLaunch;
+    private readonly ClaudeHomeServer.Services.Access.ITurnActorRegistry? _turnActors;
 
     // Запуски агентом в текущем ходу: sessionId → число. Сброс — TurnCompleted этой сессии
     private readonly Dictionary<string, int> _launches = new(StringComparer.Ordinal);
@@ -91,11 +91,12 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         IConfiguration? config = null,
         ImageProjectPrefsService? prefs = null,
         ChatContext.ImageContextLaunch? context = null,
-        IFeatureFlagGate? flags = null,
         Faces.FaceDetectionCache? faces = null,
         ILocalImageMedia? localMedia = null,
-        ClaudeHomeServer.Services.Llm.IMediaGpuYieldGate? gpuGate = null)
+        ClaudeHomeServer.Services.Llm.IMediaGpuYieldGate? gpuGate = null,
+        ClaudeHomeServer.Services.Access.ITurnActorRegistry? turnActors = null)
     {
+        _turnActors = turnActors;
         _sessions = sessions;
         _projects = projects;
         _editors = editors;
@@ -107,13 +108,16 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         _steps = steps;
         _prefs = prefs;
         _context = context;
-        _flags = flags;
         _faces = faces;
         _localMedia = localMedia;
         _gpuGate = gpuGate;
         _agentLaunch = config?.GetValue(AgentLaunchKey, true) ?? true;
         events?.OnNotification<TurnCompleted>(OnTurnCompleted, "ImageEditorToolset.ResetLaunches");
     }
+
+    // Актор приватности — тот, кто запустил ход, а не арендатор (ownerId). Неизвестен (реестра нет, рестарт) —
+    // null: чужим считается любое private, как в WorkspaceToolset (fail-closed)
+    private string? Actor(string ownerId, Session session) => _turnActors?.Actor(session.Id, ownerId);
 
     public string Name => ServerName;
     public string Version => "2.0.0";
@@ -171,7 +175,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             // У личной области файлов проекта нет — отказ до обращения к диску
             if (scope.Project is not { } project)
                 return Deny(NoProjectFiles);
-            if (ProjectImagePath(project, file) is not { } path)
+            if (ProjectImagePath(Actor(ownerId, session), project, file) is not { } path)
                 return Deny($"Картинка не найдена в проекте: {file}");
             written = await _threads.AgentOpenAsync(ownerId, scope.Key, session.Id, path, null, ct);
         }
@@ -244,10 +248,10 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         "В чате вне проекта нет файлов проекта: заведи новую картинку (image_new) или возьми картинку этого чата по threadId.";
 
     // Путь картинки проекта в форме нитей: от корня через «/», строго внутри и без ссылки наружу
-    private static string? ProjectImagePath(Project project, string file)
+    private static string? ProjectImagePath(string? actorId, Project project, string file)
     {
         var rel = ImageThreadPathTracker.Normalize(file);
-        if (rel.Length == 0 || ProjectLinkGuard.ResolveInside(project.RootPath, rel) is not { } full || !File.Exists(full))
+        if (rel.Length == 0 || ProjectLinkGuard.ResolveInsideAs(project.RootPath, rel, actorId) is not { } full || !File.Exists(full))
             return null;
         return ImageEditLaunchAssembler.ContentTypeByExtension(full).StartsWith("image/", StringComparison.Ordinal)
             ? Path.GetRelativePath(project.RootPath, full).Replace('\\', '/')
@@ -257,13 +261,11 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     // ── image_find_faces ───────────────────────────────────────────────────────
 
     // Только чтение: гейта хода и квоты MaxLaunchesPerTurn нет (детекция — не запуск: траты,
-    // версии и записи в ленту не пишет). Флаг, личная область и локальные модели отказывают
+    // версии и записи в ленту не пишет). Личная область и локальные модели отказывают
     // на вызове — состав tools/list от них не зависит (инвариант McpToolsetStabilityTests)
     private async Task<McpToolCallResult> FindFacesAsync(JsonObject args, string ownerId, Session session,
         ImageEditScope scope, CancellationToken ct)
     {
-        if (_flags?.IsEnabled(ownerId, FeatureFlagKeys.CharacterFaceSwap) != true)
-            return Deny("Функция «Подставить персонажа» выключена");
         if (scope.Project is null)
             return Deny("Подстановка персонажа на лицо — только в чате проекта");
         // Локальные модели — опциональная зависимость: нет шва (подсистема images выключена) —
@@ -286,7 +288,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             bytes = step.Image.Bytes;
         else if (thread.File is { Length: > 0 } file && scope.Project is { } project)
         {
-            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, file, "Версия", ct);
+            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(Actor(ownerId, session), project.RootPath, file, "Версия", ct);
             if (read.Value is not null) bytes = read.Value.Bytes;
         }
         if (bytes is null)
@@ -371,7 +373,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
     {
         if (Str(args, "aspect") is not { } aspect)
             return Deny("Для op crop укажи aspect — пропорции вида 1:1 или 16:9, до которых обрезать.");
-        var done = await _threads.CropToAspectAsync(ownerId, scope, session.Id, thread.Id, version.Id, aspect,
+        var done = await _threads.CropToAspectAsync(ownerId, Actor(ownerId, session), scope, session.Id, thread.Id, version.Id, aspect,
             Str(args, "anchor"), ImageEditInitiator.Agent, dryRun: false, ct);
         if (!done.Ok) return Deny(done.Error ?? "Обрезка не выполнена");
         return Json(new
@@ -518,7 +520,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             // Нить по файлу бывает только в проекте; у личной области — отказ до диска
             if (scope.Project is not { } project) return Deny(NoProjectFiles);
             // Тот же путь чтения, что у образцов человека: проверки пути и лимита одни
-            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, file, "Файл картинки", ct);
+            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(Actor(ownerId, session), project.RootPath, file, "Файл картинки", ct);
             if (read.Value is not { } image) return Deny(read.Error!);
             source = image;
         }
@@ -561,7 +563,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             if (!referencesGiven)
             {
                 references = layout.ReferencePaths;
-                var loaded = await _context.LoadSamplesAsync(ownerId, scope, session.Id, layout, ct);
+                var loaded = await _context.LoadSamplesAsync(ownerId, Actor(ownerId, session), scope, session.Id, layout, ct);
                 if (loaded.Value is not { } samples) return Deny(loaded.Error ?? "Образцы контекста не прочитаны.");
                 contextSamples = samples;
             }
@@ -591,7 +593,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             ThreadSessionId: session.Id,
             ThreadId: thread.Id,
             VersionId: version.Id);
-        var started = await _launcher.LaunchAsync(ownerId, scope, request, ct);
+        var started = await _launcher.LaunchAsync(ownerId, Actor(ownerId, session), scope, request, ct);
         if (started.Value is not { } created)
             return await FailAsync(started.ErrorCode, started.Error, ownerId, scope, quoteRequest, ct);
 
@@ -643,7 +645,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         }
         else if (thread.File is { Length: > 0 } file && scope.Project is { } project)
         {
-            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, file, "Файл картинки", ct);
+            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(Actor(ownerId, session), project.RootPath, file, "Файл картинки", ct);
             if (read.Value is not { } image) return Deny(read.Error!);
             source = image;
         }
@@ -678,7 +680,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             ThreadId: thread.Id,
             VersionId: version.Id,
             FaceTarget: faceTarget);
-        var started = await _launcher.LaunchAsync(ownerId, scope, request, ct);
+        var started = await _launcher.LaunchAsync(ownerId, Actor(ownerId, session), scope, request, ct);
         if (started.Value is not { } created)
             return await FailAsync(started.ErrorCode, started.Error, ownerId, scope, quoteRequest, ct, face: true);
 
@@ -776,7 +778,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             threads = state.Threads.Select(t => new
             {
                 thread = DescribeThread(t, scope),
-                size = t.File is { Length: > 0 } file && scope.Project is { } project ? SizeOf(project, file) : null,
+                size = t.File is { Length: > 0 } file && scope.Project is { } project ? SizeOf(Actor(ownerId, session), project, file) : null,
                 pendingJob = t.PendingJobId is { } jobId && _jobs?.Get(ownerId, scope.Key, jobId) is { } j
                     ? new { j.JobId, j.Status, j.Provider, j.Model, variants = j.Variants.Count, j.Cost, j.Error, j.Initiator }
                     : null,
@@ -840,9 +842,9 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         };
     }
 
-    private static object? SizeOf(Project project, string file)
+    private static object? SizeOf(string? actorId, Project project, string file)
     {
-        var full = ProjectLinkGuard.ResolveInside(project.RootPath, file);
+        var full = ProjectLinkGuard.ResolveInsideAs(project.RootPath, file, actorId);
         if (full is null || !File.Exists(full)) return null;
         using var stream = File.OpenRead(full);
         var head = new byte[Math.Min(64 * 1024, stream.Length)];

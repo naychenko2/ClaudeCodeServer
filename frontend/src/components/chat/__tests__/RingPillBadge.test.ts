@@ -1,5 +1,5 @@
-// Ари-лейбл кольцевой пилюли: строка «Локальная модель: <хвост/лицо>» под флагом
-// local-model-stats и только для локального чата (m1, ревью Глеба). Статический рендер —
+// Ари-лейбл кольцевой пилюли: строка «Локальная модель: <хвост/лицо>»
+// показывается только для локального чата (m1, ревью Глеба). Статический рендер —
 // как соседние тесты шапки (ToolUseView.test, sphereGate.test).
 // Вторая часть — циферблат кэша промпта (F-1b): появление по данным ленты, текст на
 // десктопе и его отсутствие на мобиле, «идёт ход» без минут.
@@ -85,29 +85,20 @@ afterEach(() => setAllFlags({}));
 
 describe('RingPillBadge aria-label: локальная модель (m1)', () => {
   it('десктоп, генерация, флаг вкл — строка «Локальная модель: 38 ток/с»', () => {
-    setAllFlags({ 'local-model-stats': true });
     const label = renderAriaLabel(liveGenerating);
     expect(label).toContain('Локальная модель: 38 ток/с');
   });
 
   it('мобила, генерация, контекст в норме — строка со словом-лицом «38 т/с»', () => {
-    setAllFlags({ 'local-model-stats': true });
     const label = renderAriaLabel(liveGenerating, true);
     expect(label).toContain('Локальная модель: 38 т/с');
   });
 
-  it('флаг выкл — строки нет (хотя чат локальный)', () => {
-    setAllFlags({ 'local-model-stats': false });
-    expect(hasLmLine(renderAriaLabel(liveGenerating))).toBe(false);
-  });
-
   it('idle без скорости последнего хода — строки нет (активного состояния нет)', () => {
-    setAllFlags({ 'local-model-stats': true });
     expect(hasLmLine(renderAriaLabel(liveIdle))).toBe(false);
   });
 
   it('idle с lastTurn: null — строки нет', () => {
-    setAllFlags({ 'local-model-stats': true });
     expect(hasLmLine(renderAriaLabel(undefined))).toBe(false);
   });
 });
@@ -135,17 +126,9 @@ const ariaOf = (html: string): string => /aria-label="([^"]*)"/.exec(html)?.[1] 
 const visibleLeftText = (html: string): string | null => />(\d+ мин|остыл)</.exec(html)?.[1] ?? null;
 
 describe('RingPillBadge: циферблат кэша промпта (F-1b)', () => {
-  // Дефект QA: обвязка циферблата (сам циферблат, строка в подсказке, секция поповера)
-  // живёт за фич-флагом prompt-cache. Тесты состояний — при включённом флаге; выключенный
-  // проверяется отдельным негативным тестом.
-  beforeEach(() => setAllFlags({ 'prompt-cache': true }));
-
-  it('флаг выкл — ни циферблата, ни строки про кэш, несмотря на данные ленты', () => {
-    setAllFlags({});
-    const html = renderPill([cacheItem()]);
-    expect(html).not.toContain('<svg width="14"');
-    expect(ariaOf(html)).not.toContain('Кэш');
-  });
+  // Обвязка циферблата (сам циферблат, строка в подсказке, секция поповера) показывается всегда;
+  // сброс флагов перед каждым тестом.
+  beforeEach(() => setAllFlags({}));
 
   it('до первого result’а с данными кэша — ни циферблата, ни разделителя', () => {
     const html = renderPill([plainResult()]);
@@ -298,23 +281,15 @@ function renderPillWith(est: ContextEstimate, items: ChatItem[]): string {
 
 describe('RingPillBadge: предложение переноса при полном контексте (F-4, вторая точка входа)', () => {
   it('флаг вкл, уровень danger — подсказка предлагает новый чат с запиской', () => {
-    setAllFlags({ 'prompt-cache': true });
     const html = renderPillWith(fullEstimate, [cacheItem()]);
     expect(ariaOf(html), 'предложение — в подсказке и aria-label пилюли').toContain('можно начать новый чат с запиской');
   });
 
-  it('флаг выкл — предложения нет (фича за флагом)', () => {
-    setAllFlags({});
-    expect(ariaOf(renderPillWith(fullEstimate, [cacheItem()]))).not.toContain('можно начать новый чат');
-  });
-
   it('уровень normal — предложения нет, даже с включённым флагом', () => {
-    setAllFlags({ 'prompt-cache': true });
     expect(ariaOf(renderPillWith(estimate, [cacheItem()]))).not.toContain('можно начать новый чат');
   });
 
   it('нет данных кэша — предложения нет: обещание гейтится тем же `cache`, что кнопка (F-4r)', () => {
-    setAllFlags({ 'prompt-cache': true });
     // Danger-контекст без строк кэша в ленте: в таком чате перенос нечем подтвердить —
     // обещание без действия (тупик)
     expect(ariaOf(renderPillWith(fullEstimate, []))).not.toContain('можно начать новый чат');
@@ -361,8 +336,7 @@ describe('RingPillBadge: кнопка «Перенести в новый чат�
     act(() => { (reactProps(pill as never)!.onClick as () => void)(); });
   };
 
-  it('флаг вкл — кнопка в поповере; флаг выкл — её нет', () => {
-    setAllFlags({ 'prompt-cache': true });
+  it('кнопка переноса в поповере', () => {
     let { root, container } = mountPill();
     try {
       openPopover(container);
@@ -370,20 +344,11 @@ describe('RingPillBadge: кнопка «Перенести в новый чат�
     } finally {
       act(() => root.unmount());
     }
-    setAllFlags({});
-    ({ root, container } = mountPill());
-    try {
-      openPopover(container);
-      expect(textNodes(container as never).join(' '), 'за выключенным флагом кнопки нет').not.toContain('Перенести в новый чат');
-    } finally {
-      act(() => root.unmount());
-    }
   });
 
   // Дефект QA: кнопка порогов и вся секция «Кэш промпта» оставались при выключенном
   // флаге — секция поповера гейтуется целиком тем же promptCacheOn, что и циферблат.
-  it('флаг вкл — в поповере секция «Кэш промпта» с кнопкой порогов; флаг выкл — ни секции, ни кнопки', () => {
-    setAllFlags({ 'prompt-cache': true });
+  it('в поповере секция «Кэш промпта» с кнопкой порогов', () => {
     let { root, container } = mountPill();
     try {
       openPopover(container);
@@ -393,20 +358,9 @@ describe('RingPillBadge: кнопка «Перенести в новый чат�
     } finally {
       act(() => root.unmount());
     }
-    setAllFlags({});
-    ({ root, container } = mountPill());
-    try {
-      openPopover(container);
-      const text = textNodes(container as never).join(' ');
-      expect(text, 'за выключенным флагом ни секции, ни кнопки порогов').not.toContain('Кэш промпта');
-      expect(text).not.toContain('Когда предупреждать об остывании');
-    } finally {
-      act(() => root.unmount());
-    }
   });
 
   it('409: текст ошибки бэка показывается как есть, а не «сбой»', async () => {
-    setAllFlags({ 'prompt-cache': true });
     handoff.fn = () => Promise.reject(
       Object.assign(new Error('чат занят другим ходом: просьба о передаче поставлена в очередь'), { status: 409 }),
     );
@@ -426,7 +380,6 @@ describe('RingPillBadge: кнопка «Перенести в новый чат�
   });
 
   it('успех: переход в новый чат, черновик — в префилл композера', async () => {
-    setAllFlags({ 'prompt-cache': true });
     handoff.fn = () => Promise.resolve({ chatId: 'new-chat', projectId: null, draft: 'Короткая запись о разговоре', warm: true });
     openedChats.length = 0;
     toasts.length = 0;
@@ -447,7 +400,6 @@ describe('RingPillBadge: кнопка «Перенести в новый чат�
   });
 
   it('openChatById=false — тоста «открыт» нет, черновик снят (F-4r)', async () => {
-    setAllFlags({ 'prompt-cache': true });
     handoff.fn = () => Promise.resolve({ chatId: 'ghost-chat', projectId: null, draft: 'Запись о разговоре', warm: false });
     openOk.value = false;
     openedChats.length = 0;
@@ -468,7 +420,6 @@ describe('RingPillBadge: кнопка «Перенести в новый чат�
   });
 
   it('404 без тела — человек читает «Чат не найден или удалён», а не «Not Found» (F-4r)', async () => {
-    setAllFlags({ 'prompt-cache': true });
     // Так приходит 404 без тела: message = statusText (offline.ts), текст нечеловеческий
     handoff.fn = () => Promise.reject(Object.assign(new Error('Not Found'), { status: 404 }));
     openedChats.length = 0;

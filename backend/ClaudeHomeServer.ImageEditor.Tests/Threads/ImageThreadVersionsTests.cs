@@ -504,7 +504,7 @@ public class ImageThreadVersionsTests : IDisposable
         jobs.Get(Owner, ProjectId, jobId)!.Status.Should().Be(ImageEditJobStatus.Completed);
         _store.Get(Owner, Chat).Events.Should().Contain(e => e.Kind == ImageThreadEventKinds.Versions
             && e.Text.StartsWith("Готово «синий фон» в картинку images/hero.png: версии 1–3"));
-        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageThreadChangedMessage>()
+        _broadcaster.AllMessages.OfType<ImageThreadChangedMessage>()
             .Should().Contain(m => m.State.Threads.Single().Versions.Count == 4);
     }
 
@@ -632,7 +632,7 @@ public class ImageThreadVersionsTests : IDisposable
         partial.CurrentVersionId.Should().Be(partial.Versions.Last().Id);
         jobs.Get(Owner, ProjectId, jobId)!.Status.Should().NotBe(ImageEditJobStatus.Completed);
         _store.Get(Owner, Chat).Events.Should().NotContain(e => e.Kind == ImageThreadEventKinds.Versions);
-        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageThreadChangedMessage>()
+        _broadcaster.AllMessages.OfType<ImageThreadChangedMessage>()
             .Should().Contain(m => m.State.Threads.Single().Versions.Count == 2);
 
         editor.Release.SetResult();
@@ -701,7 +701,7 @@ public class ImageThreadVersionsTests : IDisposable
 
     private async Task<string> LaunchPersonal(ImageEditLaunchAssembler launcher, ImageEditJobService jobs, string threadId, int count)
     {
-        var started = await launcher.LaunchAsync(Owner, PersonalScope, PersonalRequest(await PersonalQuote(jobs, count), threadId), default);
+        var started = await launcher.LaunchAsync(Owner, Owner, PersonalScope, PersonalRequest(await PersonalQuote(jobs, count), threadId), default);
         started.Value.Should().NotBeNull(started.Error);
         return started.Value!.JobId;
     }
@@ -725,7 +725,7 @@ public class ImageThreadVersionsTests : IDisposable
         foreach (var v in ai)
             steps.Open(Owner, ImageEditScope.Personal, v.CurrentStepId!).Should().NotBeNull();
         jobs.Get(Owner, ImageEditScope.Personal, jobId)!.ProjectId.Should().Be(ImageEditScope.Personal);
-        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageThreadChangedMessage>()
+        _broadcaster.AllMessages.OfType<ImageThreadChangedMessage>()
             .Should().Contain(m => m.ProjectId == ImageEditScope.Personal && m.State.Threads.Single().Versions.Count == 3);
     }
 
@@ -779,8 +779,8 @@ public class ImageThreadVersionsTests : IDisposable
             _ => PersonalRequest(quoteId, null, sourcePath: "images/hero.png"),
         };
 
-        var assembled = await launcher.AssembleAsync(Owner, PersonalScope, request, default);
-        var launched = await launcher.LaunchAsync(Owner, PersonalScope, request, default);
+        var assembled = await launcher.AssembleAsync(Owner, Owner, PersonalScope, request, default);
+        var launched = await launcher.LaunchAsync(Owner, Owner, PersonalScope, request, default);
 
         assembled.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
         launched.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);

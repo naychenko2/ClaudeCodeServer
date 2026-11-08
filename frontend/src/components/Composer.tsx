@@ -34,6 +34,7 @@ import { getDraft, setDraft } from '../lib/drafts';
 import { middleEllipsis } from '../lib/paths';
 import { dativeName } from '../lib/russianName';
 import { showToast } from '../lib/toast';
+import { composerExecBlocked, isParticipant, ownerSettingsDeniedReason, participantComposerGate, participantComposerText, participantSendTitle } from '../features/projects/members/participantGate';
 import { Button, Chip, FileTypeTile, IconButton, Menu, MenuItem, MenuSep, Modal, Notice } from './ui';
 import { plusButtonTitle, shortcutOverflowItems, useCreateShortcuts } from './chat/composerShortcuts';
 import { SLOT_COMPOSER_CHIP, useSlot } from '../lib/subsystems/registry';
@@ -777,8 +778,16 @@ export function Composer({
   const execGate = useMemo(() => canRunTurn(project), [project?.capabilities, project?.deviceId]);
   // Прямой ввод человека при закрытом гейте получает честный отказ, а не очередь: ждать
   // устройство умеет только фоновая работа (ADR-016 §5). Кнопка видно недоступна
-  const execBlocked = !!project && !execGate.available;
+  // Участник общего проекта: ходы запускает только владелец (бэк, S1-7a), поэтому отправка
+  // выключена у любого участника — читателю по роли, редактору до включения его ходов
+  const participantGate = useMemo(() => participantComposerGate(project), [project?.myRole, project?.ownerDisplayName, project?.ownerUsername]);
+  const isMember = isParticipant(project);
+  const execBlocked = composerExecBlocked(project, execGate.available, participantGate);
   const execDeviceOffline = project?.device?.online === false;
+  // «Голос» — настройка чата, только владелец проекта (QA-P1F, зеркало бэкового
+  // OwnerSettingsGate): участнику общего проекта кнопка режима разговора неактивна
+  // с этой причиной; обычный проект и чат вне проекта — без изменений
+  const voiceDeniedReason = ownerSettingsDeniedReason(project);
   // Опасный режим (bypass) ждёт подтверждения в модалке перед применением
   const [pendingMode, setPendingMode] = useState<Mode | null>(null);
   // Штаб «Командной реализации» думает (Э8): стадии интервью/планирования держат чат
@@ -1665,7 +1674,9 @@ export function Composer({
   const teamMechMeta = teamMech ? teamMechanic(teamMech) : null;
   // Подсказка обычного (однострочного) поля. «Написать Вере…»: имя в дательном; не
   // склоняется однозначно — фраза без имени
-  const basePlaceholder = teamMechMeta ? teamMechMeta.placeholder
+  const readerOnly = participantGate.blocked && participantGate.role === 'reader';
+  const basePlaceholder = readerOnly ? 'Только просмотр'
+    : teamMechMeta ? teamMechMeta.placeholder
     : executorTask ? 'Написать исполнителю…'
     : addressee ? `Написать ${addressee}…` : 'Написать сообщение…';
   // Своим слоем рисуем только в пустом однострочном поле: у режимов поле высокое, и их
@@ -1880,6 +1891,7 @@ export function Composer({
           setText(e.target.value);
           updateSkillDropdown(e.target.value, e.target.selectionStart ?? e.target.value.length);
         }}
+        disabled={readerOnly}
         onKeyDown={handleKeyDown}
         onInput={autoResize}
         onPaste={handlePaste}
@@ -2178,15 +2190,20 @@ export function Composer({
   const voiceButton = onToggleVoiceMode ? (
     <button
       type="button"
+      // «Голос» — настройка только владельца проекта (QA-P1F): участнику неактивна
+      // с причиной в подсказке; при выключенной кнопке петля не стартует вовсе
+      disabled={!!voiceDeniedReason}
       onClick={handleVoiceButton}
       onContextMenu={(e) => e.preventDefault()}
-      title={talkActive
-        ? 'Разговор идёт: говори — отвечу вслух. Нажми, чтобы выключить'
-        : voiceMode
-          ? 'Голосовой режим включён. Нажми — начнём разговор без рук'
-          : digestVoice
-            ? 'Режим разговора: говори — отвечу вслух коротким пересказом, ответ останется на экране'
-            : 'Режим разговора: говори — отвечу вслух и снова буду слушать'}
+      title={voiceDeniedReason
+        ? `Режим разговора: ${voiceDeniedReason}`
+        : talkActive
+          ? 'Разговор идёт: говори — отвечу вслух. Нажми, чтобы выключить'
+          : voiceMode
+            ? 'Голосовой режим включён. Нажми — начнём разговор без рук'
+            : digestVoice
+              ? 'Режим разговора: говори — отвечу вслух коротким пересказом, ответ останется на экране'
+              : 'Режим разговора: говори — отвечу вслух и снова буду слушать'}
       aria-label="Режим разговора"
       aria-pressed={voiceMode}
       style={{
@@ -2194,9 +2211,10 @@ export function Composer({
         width: isMobile ? 38 : 34, height: isMobile ? 38 : 34, borderRadius: R.pill, border: 'none',
         background: talkActive ? C.accent : voiceMode ? C.accentLight : C.bgSelected,
         color: talkActive ? C.onAccent : voiceMode ? C.accent : C.textMuted,
-        cursor: 'pointer',
+        cursor: voiceDeniedReason ? 'default' : 'pointer',
+        opacity: voiceDeniedReason ? 0.4 : 1,
         display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-        transition: 'background 0.15s, color 0.15s',
+        transition: 'background 0.15s, color 0.15s, opacity 0.15s',
       }}
     >
       <AudioLines size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
@@ -2288,7 +2306,7 @@ export function Composer({
       disabled={!canSend || execBlocked}
       data-composer-send
       title={execBlocked
-        ? `Не отправится: ${execGate.reason ?? 'ход сейчас недоступен'}`
+        ? (participantGate.blocked ? participantSendTitle(participantGate) : `Не отправится: ${execGate.reason ?? 'ход сейчас недоступен'}`)
         : isMobile ? 'Отправить' : 'Отправить (Enter) · Shift+Enter — новая строка'}
       style={{
         ...iconBtnGuard,
@@ -2319,6 +2337,7 @@ export function Composer({
       selectedPersona={selectedPersona ?? null}
       selectedAgentName={selectedAgentName ?? null}
       onSelect={onCompanionChange}
+      sharedProject={isMember}
       isMobile={isMobile}
       wide={widePickers}
       compact={compactStrip}
@@ -2500,7 +2519,17 @@ export function Composer({
       {/* Баннер закрытого гейта хода (ADR-016 §3.4): у локального проекта с недоступной
           exec говорим, что сообщение не уйдёт и что с этим делать. Кнопка отправки при
           этом недоступна, Enter гасится в handleSend */}
-      {execBlocked && (
+      {participantGate.blocked && (
+        <Notice
+          tone="info"
+          icon={Eye}
+          data-composer-participant-gate
+          style={{ margin: `0 ${SP.sm}px ${SP.xs}px` }}
+        >
+          {participantComposerText(participantGate)}
+        </Notice>
+      )}
+      {execBlocked && !participantGate.blocked && (
         <Notice
           data-composer-exec-gate
           icon={Unplug}
@@ -2530,7 +2559,7 @@ export function Composer({
           onPick={id => { setTeamMech(id); textareaRef.current?.focus(); }}
           onSettings={setTeamSettings}
           onClose={() => setTeamOpen(false)}
-          onResetModes={skills.some(s => s.name === 'oh-my-claudecode:cancel')
+          onResetModes={!execBlocked && skills.some(s => s.name === 'oh-my-claudecode:cancel')
             ? () => {
                 // Тихий ход: чистит state зависших OMC-режимов (autopilot/ultraqa/ralph).
                 // Признака «было ли что чистить» на фронте нет — тост нейтральный
@@ -2788,6 +2817,7 @@ export function Composer({
             <ComposerModelPicker
               value={model}
               onChange={onModelChange}
+              participant={isMember}
               started={chatStarted}
               isMobile={isMobile}
               compact={compactStrip}

@@ -110,6 +110,44 @@ public class TaskExecutionServiceDeviceWaitTests : IDisposable
         started.LinkedSessionId.Should().NotBeNull();
     }
 
+    // F-9: возобновление после «ждёт устройство» несёт актора-создателя задачи (TaskLaunchActor.For),
+    // а не «неизвестного». Актор хода читаем из реестра сессии: SubmitActor/RunActor (white-box, как StubProcess).
+    private string? TurnActorOf(string sessionId)
+    {
+        var field = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var entry = ((System.Collections.IDictionary)field.GetValue(_sessions)!)[sessionId]!;
+        var actor = (string?)entry.GetType().GetField("SubmitActor")!.GetValue(entry);
+        return string.IsNullOrEmpty(actor) ? null : actor; // "" — «неизвестный» актор, как в GetTurnActor
+    }
+
+    // После О2 финального ревью «Общих проектов» (892deb00) безымянный актор общего проекта не имеет
+    // ни одного права, поэтому TaskLaunchActor называет создателя буквально: участника — его id,
+    // владельца и старую запись без создателя — id владельца записи. Тот же порядок, что в
+    // TaskAutoLaunchActorTests (б)/(в): права те же, что раньше, но они носят имя.
+    // Мутации: убрать actorUserId в ResumeDeviceWaitAsync — красный случай «editor»; вернуть в
+    // TaskLaunchActor null для создателя-владельца (алиас до О2) — красные случаи «owner» и «null».
+    [Theory]
+    [InlineData("editor", true)]    // создатель — участник-редактор: он и актор хода
+    [InlineData("owner", false)]    // создатель — владелец: его имя называется явно
+    [InlineData(null, false)]       // старая запись без создателя: считается созданной владельцем буквально
+    public async Task OnDeviceOnline_ЖдавшаяЗадача_АкторХодаЭтоСоздательЗадачи(string? creator, bool creatorIsEditor)
+    {
+        var (owner, project) = LocalProject();
+        var editor = _userStore.Add("device-editor", "password123", "user");
+        var task = ClaudeTask(owner, project);
+        _tasks.GetById(task.Id)!.CreatedByUserId = creator switch { "editor" => editor.Id, "owner" => owner.Id, _ => null };
+        await _sut.ExecuteAsync(task, auto: true);
+
+        _gate.GoOnline();
+        await _sut.OnDeviceOnlineAsync(owner.Id, "dev-1");
+
+        var started = _tasks.GetById(task.Id)!;
+        started.LinkedSessionId.Should().NotBeNull("устройство в сети — исполнитель стартовал");
+        TurnActorOf(started.LinkedSessionId!).Should().Be(creatorIsEditor ? editor.Id : owner.Id,
+            "возобновление автоматикой называет создателя задачи: участника — его именем, владельца и " +
+            "старую запись — именем владельца записи (TaskLaunchActor): безымянного хода нет");
+    }
+
     [Fact]
     public async Task OnDeviceOnline_ДругоеУстройство_ЗадачаЖдётДальше()
     {

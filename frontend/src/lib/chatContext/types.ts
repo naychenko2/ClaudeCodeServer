@@ -53,7 +53,7 @@ export interface ChatContextConflictDto { error: string; context: ChatContextDto
 export interface ChatContextChangedEvent {
   type: typeof CHAT_CONTEXT_EVENT;
   sessionId: string;
-  context: ChatContextDto;
+  revision: number;
 }
 
 export interface SavedFileDto { path: string; threadKind: string; savedAt: string }

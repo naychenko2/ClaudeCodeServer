@@ -181,7 +181,13 @@ public sealed class LlmSubsystem : IAppSubsystem
                         TrackedLocalLlmClient.WarnIfEngineKeyUnknown(config, registry, logger);
                     return registry?.GetByKey(key)?.MaxConcurrentTurns ?? TrackedLocalLlmClient.DefaultLimit;
                 },
-                logger);
+                logger,
+                // Потолок ожидания слота для цепочек без облачной страховки (ночной разбор,
+                // ступень 2): ТЕ ЖЕ очередь и то же время, что у допуска ходов CLI этого же
+                // провайдера — отдельного «своего» потолка для ночи не заводим (WN-4).
+                () => sp.GetService<LlmProviderRegistry>()?.GetByKey(key) is { } provider
+                    ? new LocalSlotWaitPolicy(provider.MaxQueuedTurns, provider.TurnQueueTimeout)
+                    : LocalSlotWaitPolicy.Default);
         });
         // Тихие HTTP-логгеры на оба имени: каждая реализация пишет в свою категорию,
         // и одна мёртвая зависимость не глушит жалобы другой. Без них каждый вызов
@@ -411,7 +417,7 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton(sp => new Gateway.TurnTokenService(
             sp.GetRequiredService<Turn.ITurnEventBus>(),
             log: sp.GetService<ILogger<Gateway.TurnTokenService>>()));
-        // Счётчик хода локальной модели (флаг local-model-stats): реализует ILocalModelRequestSink
+        // Счётчик хода локальной модели (статистика локальных моделей): реализует ILocalModelRequestSink
         // (шлюз отводит ему копию SSE) и подписан на шину хода (TurnCompleted/SessionDeleted).
         // Ленивая фабрика: подписка на шину (Subscribe) — в момент первого резолва, когда все
         // швы на месте. Если убрать фабрику (простая регистрация без Subscribe) — ходы не

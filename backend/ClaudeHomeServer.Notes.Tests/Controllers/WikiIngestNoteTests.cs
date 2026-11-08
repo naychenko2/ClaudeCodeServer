@@ -20,9 +20,12 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// S7b0b: POST api/wiki/ingest/note — «Разобрать заметку в базу» тем же кодом, что
 /// инструмент wiki_ingest (WikiCardIngest): захват → карточка → заявка. Проверяется
 /// контракт ручки: своя заметка доходит до очереди разбора (200 с outcome), чужая —
-/// 404 not_found (владельца проверяет CaptureNote, тот же путь, что у MCP), не заведённая
-/// вика и 21-й открытый пакет — 409 с кодом ДО захвата; две одновременные заявки одной
+/// 404 not_found (владельца проверяет CaptureNote, тот же путь, что у MCP), 21-й открытый
+/// пакет — 409 с кодом ДО захвата; две одновременные заявки одной
 /// заметки — без 500 и без лишних пакетов (дедуп — внутри IngestAsync).
+///
+/// С LI-2 вика заявителя заводится до заявки: прежнего 409 wiki_not_initialized этой ручки
+/// нет (svc 403 и выключенный флаг 409 — раньше заведения, валидация тела — раньше заведения).
 ///
 /// Модель подменена штатным «нечего добавить»: здесь проверяется контракт входа, а не
 /// качество разбора (оно — в тестах WikiIngestService). Образец построения —
@@ -88,8 +91,8 @@ public class WikiIngestNoteTests : IDisposable
 
     private string Root => WikiPaths.Root(_dir, User);
 
-    private Project NewProject(string name) =>
-        _projects.Create(name, Path.Combine(_roots, "proj_" + name), User, User, createDirectory: true);
+    private Project NewProject(string name, string owner = User) =>
+        _projects.Create(name, Path.Combine(_roots, "proj_" + name), owner, owner, createDirectory: true);
 
     // ─── своя заметка доходит до очереди разбора ───────────────────────────
 
@@ -127,15 +130,56 @@ public class WikiIngestNoteTests : IDisposable
         WikiPackageStore.CountOpen(Root).Should().Be(0);
     }
 
-    // ─── состояния вики: 409 с кодом, до захвата ───────────────────────────
+    // ─── LI-2: вика заявителя заводится самой заявкой ───────────────────────
 
     [Fact]
-    public async Task IngestNote_WikiNotInitialized_409()
+    public async Task IngestNoteНезаведённойВикиЗаводитЕёИЗаявкаИдётДальше()
     {
-        // У этого владельца вики не заведена (заведена только u1): отказ — до всякого
-        // обращения к заметке, id может быть любым.
+        // Мутация (критерий c2): вернуть прежний 409 wiki_not_initialized в IngestNote — u3
+        // остаётся без pages/_schema.md, заявка отвечает 409: тест красный.
+        var project = NewProject("П3", "u3");
+        var note = _notes.Create("u3", new CreateNoteRequest("Мысль u3", "Решили: нарезку делает код.", project.Id));
+
+        var res = await Controller("u3").IngestNote(new WikiIngestNoteRequest(note.Id));
+
+        WikiPaths.IsInitialized(_dir, "u3").Should().BeTrue(
+            "заявка владельца — действие человека: его вика создаётся сама, кнопки «Завести» нет");
+        ((IStatusCodeActionResult)res).StatusCode.Should().Be(200, "отказа по незаведённой вике этой ручке нет");
+        JsonOf(res).GetProperty("outcome").GetString().Should().Be(WikiIngestService.OutcomeNothingNew,
+            "заявка дошла до очереди разбора");
+    }
+
+    [Fact]
+    public async Task IngestNoteНетТакойЗаметки_404_ВикаВсёРавноЗаведена()
+    {
+        // Порядок точек разреза: заведение — после валидации тела и до сервиса, т.е. до
+        // обращения к заметке. Отказ несуществующей заметки остаётся своим 404; вика при этом
+        // заведена — пустая заведённая вика после отказанного действия безвредна (разрез).
         var res = await Controller("u3").IngestNote(new WikiIngestNoteRequest("любой-id"));
-        AssertCode(res, 409, "wiki_not_initialized");
+
+        AssertCode(res, 404, "not_found");
+        WikiPaths.IsInitialized(_dir, "u3").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task IngestNote_СервисныйТокен_403_ВикиНеЗаведены()
+    {
+        // LI-2: svc не доходит ни до записей, ни до заведения — агент не заводит вику.
+        var res = await Controller("u3", svc: true).IngestNote(new WikiIngestNoteRequest("любой-id"));
+
+        ((IStatusCodeActionResult)res).StatusCode.Should().Be(403);
+        WikiPaths.IsInitialized(_dir, "u3").Should().BeFalse();
+        Directory.Exists(WikiPaths.Pages(_dir, "u3")).Should().BeFalse("ни байта в pages/");
+    }
+
+    [Fact]
+    public async Task IngestNoteПустоеТелоИлиПустойId_400_ВикиНеЗаведены()
+    {
+        // Валидация тела — раньше заведения (порядок точек не менялся): «менять нечего» не
+        // создаёт вику.
+        AssertCode(await Controller("u3").IngestNote(null), 400, "wiki_note_id");
+        AssertCode(await Controller("u3").IngestNote(new WikiIngestNoteRequest("")), 400, "wiki_note_id");
+        WikiPaths.IsInitialized(_dir, "u3").Should().BeFalse();
     }
 
     [Fact]
@@ -144,6 +188,8 @@ public class WikiIngestNoteTests : IDisposable
         // Флаг выключен: отказ раньше проверки заведённости (u3 без вики) и id заметки;
         // мутация «убрать проверку флага» даёт wiki_not_initialized — тест красный.
         AssertCode(await Controller("u3", flagsOn: false).IngestNote(new WikiIngestNoteRequest("любой-id")), 409, "wiki_llm_wiki_off");
+        // LI-2: при выключенной функции вики не появляется — ни одной точки заведения.
+        WikiPaths.IsInitialized(_dir, "u3").Should().BeFalse("отказ по флагу раньше заведения");
         AssertCode(await Controller(flagsOn: false).IngestNote(null), 409, "wiki_llm_wiki_off");
 
         // Реальная заметка у заведённой вики (u1): флаг выключен — заявка не принята,
@@ -239,10 +285,13 @@ public class WikiIngestNoteTests : IDisposable
             .GetProperty("code").GetString().Should().Be(code);
     }
 
-    private WikiController Controller(string user = User, bool flagsOn = true)
+    private WikiController Controller(string user = User, bool flagsOn = true, bool svc = false)
     {
         var http = new DefaultHttpContext();
-        http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", user)], "test"));
+        var identity = new ClaimsIdentity([new Claim("sub", user)], "test");
+        // Сервисный токен хода (typ=svc) — тот же claim-литерал, что выдаёт JwtService.
+        if (svc) identity.AddClaim(new Claim("typ", "svc"));
+        http.User = new ClaimsPrincipal(identity);
         return new WikiController(_keeper, _projects, _spheres, _lint, _journal, flagsOn ? new WikiFlagOn() : new WikiFlagOff(), _config, _capture, _ingest, _apply, _transfer)
         {
             ControllerContext = new ControllerContext { HttpContext = http },

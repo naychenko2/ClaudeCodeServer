@@ -119,7 +119,8 @@ public class WikiReadPathsGuardTests : IDisposable
         var session = new Session { Id = "s-turn", OwnerId = User, ProjectId = projectId, Name = "Чат хода" };
         _sessions.All.Add(session);
         var toolset = new NotesToolset(new AllowAllPersonas(), new AllowAllBindings(), new OwnSession(session),
-            new TestSessionBroadcaster(), _notes, _kb, _ai, _noteTasks,
+            new ClaudeHomeServer.Tests.Helpers.NotesNoopHubNotifier(), new ClaudeHomeServer.Tests.Helpers.NotesWideTurnFrame(),
+                new ClaudeHomeServer.Tests.Helpers.NotesNoActorDenials(), _notes, _kb, _ai, _noteTasks,
             _config, null, null, null, _sessions,
             withHorizontals ? _spheres : null, withHorizontals ? _projects : null);
         return (toolset, new McpToolCallContext(User, "s-turn", "s-turn"));
@@ -859,8 +860,8 @@ public class WikiReadPathsGuardTests : IDisposable
 
     private sealed class NoopNotesNotifier : INotesHubNotifier
     {
-        public Task BroadcastNotesChangedAsync(string userId, string action, string noteId) => Task.CompletedTask;
-        public Task BroadcastTaskChangedAsync(string userId, string action, string taskId) => Task.CompletedTask;
+        public Task BroadcastNotesChangedAsync(string userId, string action, string noteId, string? projectId = null) => Task.CompletedTask;
+        public Task BroadcastTaskChangedAsync(string userId, string action, string taskId, string? projectId = null) => Task.CompletedTask;
     }
 
     private sealed class NoopCheapRunner : ICheapTextRunner

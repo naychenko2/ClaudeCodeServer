@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Services.Watchdog;
 public interface IWatchdogAlarm
 {
     /// <summary>true — будильник принят (ход запущен/поставлен в очередь), false — не дошло.</summary>
-    Task<bool> DeliverAsync(string ownerId, string sessionId, string text);
+    Task<bool> DeliverAsync(string ownerId, string sessionId, string text, string? actorUserId = null);
 }
 
 
@@ -304,7 +304,7 @@ public class WatchdogService : BackgroundService
         var text = AlarmText(w);
         try
         {
-            var delivered = await _alarm.DeliverAsync(w.OwnerId, w.SessionId, text);
+            var delivered = await _alarm.DeliverAsync(w.OwnerId, w.SessionId, text, w.ActorUserId);
             if (delivered) w.DeliveredAt = nowUtc;
             else w.DeliveryAttempts++;
         }

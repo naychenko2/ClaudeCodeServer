@@ -758,13 +758,62 @@ def rerun_failed(code, procs, proofs, reports, results_root, targets, rerun_max)
 
 
 def write_flaky(results_root, flaky, twice):
-    """FLAKY_FILE: флаки прогона (FQN, класс, сборка, время) и упавшие дважды. Сбой записи не роняет прогон."""
+    """FLAKY_FILE: флаки прогона (FQN, класс, сборка, время) и упавшие дважды; флаки же дописываются в журнал
+    FLAKY_JOURNAL. Сбой записи не роняет прогон."""
     try:
         with open(os.path.join(results_root, FLAKY_FILE), "w", encoding="utf-8") as f:
             json.dump({"time": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "flaky": flaky, "failed_twice": twice},
                       f, ensure_ascii=False, indent=2)
     except OSError as e:
         print(f"{FLAKY_FILE} не записан: {e}", file=sys.stderr)
+    append_flaky_journal(results_root, flaky)
+
+
+# Журнал флаков в корне --results: строка JSON на флак, копится между прогонами (FLAKY_FILE перезаписывается) —
+# источник для карточек дефектов. Держим последние FLAKY_JOURNAL_MAX строк
+FLAKY_JOURNAL = "flaky.jsonl"
+FLAKY_JOURNAL_MAX = 2000
+
+
+def git_head():
+    """(ветка, коммит) дерева скрипта; None на месте того, что git не сказал."""
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def ask(*args):
+        try:
+            done = subprocess.run(["git", "-C", repo, "rev-parse", *args], capture_output=True, text=True, timeout=10)
+            return (done.stdout.strip() or None) if done.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError):
+            return None
+    return ask("--abbrev-ref", "HEAD"), ask("HEAD")
+
+
+def append_flaky_journal(results_root, flaky, limit=FLAKY_JOURNAL_MAX):
+    """Дописывает флаки в FLAKY_JOURNAL (время UTC, FQN, класс, сборка, ветка, коммит) и обрезает журнал до
+    последних limit строк. Сбой не роняет прогон."""
+    if not flaky:
+        return
+    path = os.path.join(results_root, FLAKY_JOURNAL)
+    try:
+        branch, commit = git_head()
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        rows = [json.dumps({"time": stamp, "fqn": e["fqn"], "class": e["class"], "assembly": e["assembly"],
+                            "branch": branch, "commit": commit}, ensure_ascii=False) + "\n" for e in flaky]
+        old = []
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                old = [line if line.endswith("\n") else line + "\n" for line in f if line.strip()]
+        lines = (old + rows)[-limit:]
+        if len(old) + len(rows) <= limit:
+            with open(path, "a", encoding="utf-8") as f:
+                f.writelines(rows)
+        else:
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+            os.replace(tmp, path)
+    except OSError as e:
+        print(f"{FLAKY_JOURNAL} не дописан: {e}", file=sys.stderr)
 
 
 def drop_flaky(results_root):

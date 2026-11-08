@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Access;
 
 namespace ClaudeHomeServer.Services.Mcp;
 
@@ -14,8 +15,15 @@ namespace ClaudeHomeServer.Services.Mcp;
 /// «Только чтение»: он НЕ поглощается allow-list (выдача в проект широковещательна и иначе
 /// вернула бы RO-персонам пишущие внешние инструменты).
 ///
+/// Рамка хода (S2a-7, решение 29.10): при <see cref="TurnFrameKind.Narrow"/> (любой чат общего
+/// проекта, любой актор, включая владельца) оси «включён в проекте / выдан персоне» — свойства
+/// личного пространства — не смотрятся вовсе: единственный путь записи личного реестра в общий
+/// проект — явная пометка <see cref="McpServerRecord.SharedWithMembers"/>. RO-гейт не поглощается
+/// и ей: пометка про участников проекта, а не про профиль персоны.
+///
 /// Инвариант стабильности состава tools/list: все входы условия — свойства
-/// owner/project/persona/записи реестра, ни один не смотрит на ход.
+/// owner/project/persona/записи реестра и вердикт рамки (свойство сессии/проекта),
+/// ни один не смотрит на ход.
 /// </summary>
 public static class McpDelivery
 {
@@ -24,10 +32,18 @@ public static class McpDelivery
         IReadOnlyCollection<string>? projectServersOn,
         bool isProjectChat,
         bool personaGranted,
-        bool readOnly)
+        bool readOnly,
+        TurnFrameKind frame)
     {
         // Ось 0 — рубильник самой записи реестра (как в deny-модели)
         if (!record.Enabled) return false;
+
+        // Ось рамки (S2a-7): в узкой рамке личное пространство арендатора от общего проекта
+        // закрыто всем, включая самого арендатора, — поэтому личные оси здесь не решают
+        // ничего, а доезжает только явно помеченный «для участников» сервер. RO-гейт остаётся:
+        // он про профиль персоны, пометка его не снимает.
+        if (frame == TurnFrameKind.Narrow)
+            return record.SharedWithMembers && (!readOnly || record.AllowReadOnlyPersonas);
 
         // allow-list: включён «здесь» ИЛИ выдан персоне чата.
         // «Здесь» для проектного чата — ключ в McpServersOn; для внепроектного —

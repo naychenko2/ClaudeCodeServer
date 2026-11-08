@@ -86,6 +86,16 @@ export const ORIGIN_META: Record<string, { label: string; genitive: string; icon
 // бэка на Ф2 без пути решения человеку не говорит ничего.
 export const personalSectionRefusalText = 'Личный раздел пока не разбирается — разбор доступен для заметок проекта.';
 
+// Отказ разбора чата (исход rejected и любой неизвестный исход) — по-человечески. reason —
+// сырая строка бэка («пустой ответ модели в окне m11-m381, проход A»): окна, проходы и прочее
+// внутреннее человеку не показываем никогда. Известна одна причина; чужая — без хвоста:
+// смысла не выдумываем, сырая строка уходит только в title пункта.
+export function analyzeRefusalText(reason: string | null): string {
+  const base = 'Не удалось разобрать';
+  if (reason && reason.toLowerCase().includes('пустой ответ')) return `${base}: модель не ответила`;
+  return base;
+}
+
 // Контекст вызова кода not_found: один код значит два разных отказа, и текст выбирается
 // по контексту, а не по коду (хвост ревью R-S7b-0 H4). Разбор чата (analyze /
 // analyze-status): чужой или несуществующий чат (WikiChatIngestService.cs:95-100). Заявка
@@ -99,6 +109,10 @@ export type NotFoundContext = 'chat' | 'note';
 // нечитаемой страницы (READONLY_TEXT, F3a-qa) — второй копии текста в фиче нет
 export const SECTION_OFF_TEXT = 'Вики локальных проектов — отдельной фичей';
 export const SPHERE_RESERVED_TEXT = 'Раздел сферы — следующая фича';
+
+// «Вики выключена в настройках» — один текст на два отказа: чтения настроек (эта таблица) и
+// ручного запуска ночи (nightlyRunRefusalText): второй копии строки в фиче нет
+const WIKI_OFF_TEXT = 'Вики выключена в настройках';
 
 // Отказы контракта (WikiErrorCode, S2f) — понятным русским текстом; 401/404 приходят без
 // тела и без кода, их отличаем по статусу. Формулировки — черновые (тексты фичи ведёт Софья).
@@ -126,12 +140,15 @@ export function wikiErrorText(e: WikiError, ctx?: NotFoundContext): string {
     case 'task_execution': return 'Чаты исполнения задач не разбираются: их итоги уже источники';
     case 'marked_skip': return 'Чат помечен «не разбирать» — сними пометку';
     case 'personal_section': return personalSectionRefusalText;
-    case 'wiki_not_initialized': return 'Твоя вики ещё не заведена';
+    // С LI-2 analyze/ingest/transfer сами заводят вики владельца: этот 409 из действия
+    // человека не приходит, код остаётся как ответ сервисного слоя (MCP/вторая линия
+    // защиты). Текст нейтральный — без просьбы «завести»: кнопки «Завести вики» нет (LI-3).
+    case 'wiki_not_initialized': return 'Вики этого владельца не заведена';
     case 'packages_limit': return 'Открытых пакетов слишком много: разберите «Входящие», потом повторяй заявку';
     case 'wiki_note_id': return 'Нужен id заметки';
     // Здоровье (S3-3) и класс операции (хвост R-S7c-2): общие тексты по коду. У «Здоровья»
     // свой текст прогона (healthErrorText) — он точнее для кнопки линта и остаётся там.
-    case 'wiki_llm_wiki_off': return 'Вики выключена в настройках';
+    case 'wiki_llm_wiki_off': return WIKI_OFF_TEXT;
     case 'wiki_class_key': return 'Неизвестный класс';
     // Список чатов разбора (GET /wiki/chats): файл разбора чатов не читается (R-W4-1)
     case 'wiki_triage_invalid': return 'Файл разбора чатов не читается';
@@ -230,6 +247,38 @@ export function nightOutcomeNotice(
   }
 }
 
+// ─── «Запустить сейчас» (WN-6b) ───
+
+// Формулировки — из карточки плана 0ab580a7 (Софья): текст диалога называет пакеты за проход
+// (решение 1 плана: лимита чатов за ночь в настройках нет — в subtitle то, что есть,
+// maxPackagesPerNight). Состояния и рендер — у WikiNightlyBlock.
+export const NIGHTLY_RUN_BUTTON = 'Запустить сейчас';
+export const NIGHTLY_RUN_BUSY = 'Идёт разбор…';
+export const NIGHTLY_RUN_OFF_HINT = 'Ночной разбор выключен';
+export const NIGHTLY_RUN_ASK_TITLE = 'Запустить ночной разбор сейчас?';
+export const NIGHTLY_RUN_CONFIRM = 'Запустить';
+
+export function nightlyRunAskText(maxPackagesPerNight: number): string {
+  return `Хранитель разберёт новые чаты — не больше ${maxPackagesPerNight} пакетов за проход — и при включённом автоприменении сразу запишет найденное в вики. Откатить можно из „Журнала“.`;
+}
+
+// Отказ ручного запуска (WN-6b): стор возвращает код, а не WikiError (WikiRunNightlyResult, WN-6a).
+// 'wiki_nightly_running' сюда не доходит: «уже идёт» стор считает началом прохода (там же).
+// Прочие кода — отказы ручки run (WikiSettingsController.cs:237-251) и сетевой сбой (null).
+// Неизвестный код — общий текст: смысла не выдумываем.
+export function nightlyRunRefusalText(code: WikiError['code']): string {
+  switch (code) {
+    case 'wiki_llm_wiki_off': return WIKI_OFF_TEXT;
+    case 'wiki_nightly_disabled': return 'Ночной разбор выключен — запустить его нельзя';
+    case 'wiki_settings_invalid': return 'Настройки ночи не читаются — обновите страницу';
+    default: return 'Не удалось запустить разбор';
+  }
+}
+
+// «отказано N» в строке чисел итога ночи: число отказанных разборов среди analyzed
+// (WikiNightlyService.cs:117-119). 0 или отсутствующее поле (старый итог) — строки нет.
+export const nightlyRejectedLine = (n: number): string => `отказано ${n}`;
+
 // Префикс раздела — один форматтер на всю фичу (тот же вид, что у бэка в выдаче notes_*):
 // «Проекты / AI Home», «Сферы / Банк», «Общее», «Личное»
 export function sectionPrefix(s: WikiSectionDto): string {
@@ -305,8 +354,10 @@ export const EDIT_TEXT = {
 // Где правка недоступна по устройству раздела (локальный проект, раздел сферы), формулировка
 // про Хранителя неверна: причина другая. Заголовок — смысл, данный в дефекте; причины —
 // существующие тексты отказа (SECTION_OFF_TEXT / SPHERE_RESERVED_TEXT), не новая выдумка.
-// Для прочих случаев (без флагов, дрейф, сирота, правка выключена) текст плашки прежний —
-// он там верен и остаётся в компоненте.
+// Формулировка не привязана к флагам (TL-6): причина — устройство раздела, и без флагов
+// текст про Хранителя в локальном разделе / разделе сферы был бы так же неверен. Для прочих
+// случаев (обычный раздел без флагов, дрейф, сирота, правка выключена) текст плашки
+// прежний — он там верен и остаётся в компоненте.
 export const READONLY_TEXT = {
   blockedTitle: 'Эту страницу нельзя править здесь',
   localReason: SECTION_OFF_TEXT,
@@ -354,7 +405,8 @@ export type WikiInboxReasonCode =
   | 'target_time_unknown'
   | 'source_not_newer'
   | 'recently_reverted'
-  | 'class_disabled';
+  | 'class_disabled'
+  | 'no_history_section';
 
 // Две «Неизвестно…» причины: длинный префикс стоит первым, первый записан с двоеточием,
 // как в таблице ADR. Каждой из этих мер по отдельности достаточно, чтобы их различить; без обеих
@@ -370,6 +422,9 @@ const INBOX_REASON_PREFIXES: Array<[string, WikiInboxReasonCode, string?]> = [
   ['Источник не новее заменяемого утверждения', 'source_not_newer'],
   ['страницу откатили вручную', 'recently_reverted'],
   ['класс правки', 'class_disabled', 'выключен'],
+  // Строка бэка фиксирована (TL-3, WikiApplyPolicy.cs:158), динамических частей нет —
+  // префикс берётся её началом целиком.
+  ['На этой странице нет секции «История»', 'no_history_section'],
 ];
 
 // Короткие тексты пунктов — правая колонка таблицы ADR-038, дословно.
@@ -380,6 +435,9 @@ export const INBOX_REASON_TEXT: Record<WikiInboxReasonCode, string> = {
   source_not_newer: 'Источник не новее заменяемого утверждения',
   recently_reverted: 'Вы недавно откатывали эту страницу',
   class_disabled: 'Класс выключен',
+  // Текст для человека — правая колонка таблицы ADR-038: «раздела» вместо технического
+  // «секции» из строки бэка, суть та же.
+  no_history_section: 'На этой странице нет раздела «История», прежняя формулировка не сохранится — решите сами',
 };
 
 export const INBOX_TEXT = {

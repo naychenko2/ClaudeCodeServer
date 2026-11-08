@@ -174,7 +174,7 @@ public sealed class ImageContextLaunchTests : IDisposable
         _jobs.Quotes["q1"] = new ImageEditQuoteInfo(ImageEditOp.Edit, revision);
         var request = Request("q1", revision, [("art/body.png", ReferenceRole.Style)], character: "чужой-слаг", threadId: "чужая-нить");
 
-        var result = await _assembler.AssembleAsync(Owner, _scope, request, default);
+        var result = await _assembler.AssembleAsync(Owner, Owner, _scope, request, default);
 
         result.ErrorCode.Should().BeNull(result.Error);
         var input = result.Value!;
@@ -192,7 +192,7 @@ public sealed class ImageContextLaunchTests : IDisposable
         var (_, _, revision) = Fill();
         _jobs.Quotes["q1"] = new ImageEditQuoteInfo(ImageEditOp.Edit, revision);
 
-        var result = await _assembler.AssembleAsync(Owner, _scope, Request("q1", revision - 1), default);
+        var result = await _assembler.AssembleAsync(Owner, Owner, _scope, Request("q1", revision - 1), default);
 
         result.ErrorCode.Should().Be(ImageEditErrorCodes.ContextChanged);
         result.Payload.Should().BeOfType<ChatContextConflictDto>();
@@ -204,7 +204,7 @@ public sealed class ImageContextLaunchTests : IDisposable
         var (_, _, revision) = Fill();
         _jobs.Quotes["q1"] = new ImageEditQuoteInfo(ImageEditOp.Edit, revision);
 
-        var result = await _assembler.LaunchAsync(Owner, _scope, Request("q1", revision - 1), default);
+        var result = await _assembler.LaunchAsync(Owner, Owner, _scope, Request("q1", revision - 1), default);
 
         result.ErrorCode.Should().Be(ImageEditErrorCodes.ContextChanged);
         result.Payload.Should().BeOfType<ChatContextConflictDto>("409 несёт свежий контекст, а не пустое {error, code}");
@@ -216,7 +216,7 @@ public sealed class ImageContextLaunchTests : IDisposable
         var (_, _, revision) = Fill();
         _jobs.Quotes["q1"] = new ImageEditQuoteInfo(ImageEditOp.Edit, revision - 1);
 
-        var result = await _assembler.AssembleAsync(Owner, _scope, Request("q1", revision), default);
+        var result = await _assembler.AssembleAsync(Owner, Owner, _scope, Request("q1", revision), default);
 
         result.ErrorCode.Should().Be(ImageEditErrorCodes.ContextChanged);
     }
@@ -228,7 +228,7 @@ public sealed class ImageContextLaunchTests : IDisposable
         _jobs.Quotes["q1"] = new ImageEditQuoteInfo(ImageEditOp.Edit, null);
         var request = Request("q1", null, [("art/body.png", ReferenceRole.Style)]);
 
-        var result = await _assembler.AssembleAsync(Owner, _scope, request, default);
+        var result = await _assembler.AssembleAsync(Owner, Owner, _scope, request, default);
 
         result.ErrorCode.Should().BeNull(result.Error);
         result.Value!.References.Should().ContainSingle().Which.Label.Should().Be("body.png");

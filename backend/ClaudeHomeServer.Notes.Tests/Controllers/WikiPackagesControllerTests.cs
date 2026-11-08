@@ -54,7 +54,7 @@ public class WikiPackagesControllerTests : IDisposable
         // Флаг llm-wiki: состояние вики читается моделью (BuildFresh) только с ним — тот же
         // приём, что в WikiApplyTests. Без инициализированной вики флаг ничего не меняет:
         // тесты 1–6 вики не читают.
-        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, new WikiFlagOn());
+        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, flags: new WikiFlagOn());
         _keeper = new WikiKeeper(_notes, _config);
         _apply = new WikiApplyService(_notes, _keeper, new NoSpheres(), _config);
         _revert = new WikiPackageRevert(_notes, _keeper, _config);
@@ -1101,7 +1101,7 @@ public class WikiPackagesControllerTests : IDisposable
         private readonly string _packageFile;
         public DropPackageOnEvent(string packageFile) => _packageFile = packageFile;
         public ProjectEvent? Append(string projectId, string ownerId, string type, string actor,
-            string summary, string? entityRef = null)
+            string summary, string? entityRef = null, string? actorUserId = null)
         {
             File.Delete(_packageFile);
             return null;

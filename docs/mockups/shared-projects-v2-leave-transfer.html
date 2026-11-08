@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · Общие проекты v2 · Уход и передача владения</title>
+<!--
+  Макет фичи «Общие проекты», v2, экран 9 из 9: РЕАЛЬНЫЙ экран продукта + минимальные дельты.
+  Привязка: эпик featureId c926e0e5-8a22-4299-88cf-65d3ba1b3355, задача макетов 1dc3409c (role=design),
+  заменяет v1 из задачи 9bdab3c4 (перенесены в docs/mockups/archive/).
+  Шаги-потребители: фронтовые шаги этапов S1–S5 (stepRef появятся в плане фичи, см. shared-projects-v2-proposal.md).
+  Слева «Сейчас» — снимок живого стенда (docs/mockups/shared-projects-v2-real/), справа «Станет» — реплика
+  того же компонента с дельтами: пунктирная рамка и номер = что добавили/поменяли (номера расшифрованы под макетом).
+  Данные выдуманы: владелец Андрей, редактор Мария, читатель Игорь, бывшая участница Ольга. Код продукта не правится.
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css и design.ts (GROUP_COLORS) — единственное место с сырыми значениями ===== */
+
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--c-*) и var(--shadow-*). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4; --c-track:#D8CFBE;
+  --c-overlay:rgba(23,19,15,.42);
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8; --c-plan-text:#4E4196;
+  --c-rose:#B0527C;
+  --c-diff-add-bg:#E8F5E9; --c-diff-add-text:#1B5E20; --c-diff-rem-bg:#FFEBEE; --c-diff-rem-text:#B71C1C;
+  --c-msg-bg:rgba(251,248,242,.42);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-focus-danger:0 0 0 3px rgba(180,69,47,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-modal:0 24px 60px rgba(23,19,15,.40);
+  --shadow-sheet:0 -8px 40px rgba(23,19,15,.22);
+  --shadow-button:0 4px 14px rgba(217,119,87,.30);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B; --c-track:#453F37;
+  --c-overlay:rgba(0,0,0,.62);
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-plan:#9385D8; --c-plan-light:#2A2540; --c-plan-text:#B0A4E6;
+  --c-rose:#D683A6;
+  --c-diff-add-bg:#1E2E1E; --c-diff-add-text:#8FCB79; --c-diff-rem-bg:#33201E; --c-diff-rem-text:#EE8A72;
+  --c-msg-bg:rgba(46,42,37,.38);
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-focus-danger:0 0 0 3px rgba(232,120,94,.26);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-modal:0 28px 70px rgba(0,0,0,.65);
+  --shadow-sheet:0 -10px 46px rgba(0,0,0,.55);
+  --shadow-button:0 4px 16px rgba(227,138,106,.34);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+}
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+button { font:inherit; color:inherit; border:0; background:none; margin:0; padding:0; cursor:pointer; text-align:left; }
+button:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+.serif { font-family:"PT Serif",Georgia,serif; }
+svg { flex-shrink:0; }
+
+/* ===== Обвязка макета (не часть продукта) ===== */
+.mk { position:sticky; top:0; z-index:100; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center;
+  padding:10px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.mk h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); }
+.mk .grp { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.mk .lbl { font-size:10px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.mk nav { display:flex; flex-wrap:wrap; gap:4px; font-size:12px; }
+.mk nav a { color:var(--c-text-secondary); text-decoration:none; padding:3px 7px; border-radius:6px; }
+.mk nav a.on { background:var(--c-bg-white); color:var(--c-text-heading); font-weight:600; box-shadow:var(--shadow-thumb); }
+.pills { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.pills button { color:var(--c-text-secondary); padding:4px 10px; border-radius:7px; font-size:12px; }
+.pills button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.wrap { max-width:1360px; margin:0 auto; padding:16px; }
+section { margin:0 0 36px; }
+section > h2 { font-family:"PT Serif",Georgia,serif; font-size:20px; color:var(--c-text-heading); margin:4px 0 6px; }
+.brief { font-size:13px; color:var(--c-text-secondary); max-width:940px; margin:0 0 12px; }
+.brief b { color:var(--c-text-heading); }
+.row { display:flex; gap:24px; align-items:flex-start; flex-wrap:wrap; }
+.cap { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:0 0 4px 2px; }
+.note { font-size:12px; color:var(--c-text-secondary); margin:6px 2px 0; max-width:620px; }
+.note b { color:var(--c-text-heading); }
+
+/* Рамки: десктоп (ширина задаётся style) и телефон 360 CSS-px */
+.dk { position:relative; }
+.mb { width:360px; position:relative; }
+.isl { background:var(--c-bg-panel); border-radius:14px; box-shadow:var(--shadow-island); overflow:hidden; position:relative; }
+.mb .isl, .phone { border-radius:22px; border:1px solid var(--c-border); box-shadow:none; overflow:hidden; position:relative; background:var(--c-bg-main); min-height:640px; }
+.canvas { background:var(--c-bg-main); border-radius:14px; border:1px solid var(--c-border); position:relative; overflow:hidden; }
+
+/* ===== Примитивы продукта (по components/ui) ===== */
+.hstack { display:flex; align-items:center; gap:8px; }
+.vstack { display:flex; flex-direction:column; gap:8px; }
+.grow { flex:1; min-width:0; }
+.ell { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.t-h { font-family:"PT Serif",Georgia,serif; font-weight:700; color:var(--c-text-heading); }
+.t-lg { font-size:16px; } .t-md { font-size:14px; } .t-sm { font-size:12px; } .t-xs { font-size:11px; } .t-xxs { font-size:10px; }
+.c-sec { color:var(--c-text-secondary); } .c-mut { color:var(--c-text-muted); } .c-head { color:var(--c-text-heading); }
+.c-danger { color:var(--c-danger-text); } .c-acc { color:var(--c-accent); }
+.b6 { font-weight:600; }
+.lab { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-muted); }
+
+/* Button: primary / secondary / ghost / ghostAccent / danger; sm 32 / md 40 */
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; min-height:32px; padding:7px 13px; border-radius:10px;
+  font-size:13px; font-weight:600; white-space:nowrap; }
+.btn.md { min-height:40px; padding:11px 16px; font-size:14px; border-radius:12px; }
+.btn.pri { background:var(--c-accent); color:var(--c-on-accent); box-shadow:var(--shadow-button); }
+.btn.sec { background:var(--c-bg-white); color:var(--c-text-primary); border:1px solid var(--c-border); }
+.btn.gh { color:var(--c-text-secondary); }
+.btn.gh:hover { background:var(--c-bg-selected); color:var(--c-text-heading); }
+.btn.gha { color:var(--c-accent); }
+.btn.gha:hover { background:var(--c-accent-light); }
+.btn.dng { background:var(--c-danger); color:var(--c-on-accent); }
+.btn.ghd { color:var(--c-danger-text); }
+.btn.ghd:hover { background:var(--c-danger-bg); }
+.btn[disabled], .btn.off { opacity:.45; cursor:default; box-shadow:none; }
+.btn.full { width:100%; }
+.mb .btn { min-height:40px; }
+/* IconButton 32 (мобила 40) */
+.ib { width:32px; height:32px; border-radius:8px; color:var(--c-text-secondary); display:inline-flex; align-items:center; justify-content:center; }
+.ib:hover { background:var(--c-bg-selected); color:var(--c-text-heading); }
+.mb .ib { width:40px; height:40px; }
+
+/* Badge: tone × xs/sm */
+.bdg { display:inline-flex; align-items:center; gap:4px; height:20px; padding:0 7px; border-radius:6px; font-size:11px; font-weight:600; white-space:nowrap; }
+.bdg.xs { height:16px; padding:0 5px; font-size:10px; border-radius:5px; }
+.bdg.neu { background:var(--c-bg-inset); color:var(--c-text-muted); }
+.bdg.acc { background:var(--c-accent-light); color:var(--c-accent); }
+.bdg.inf { background:var(--c-info-bg); color:var(--c-info); }
+.bdg.suc { background:var(--c-success-bg); color:var(--c-success-text); }
+.bdg.wrn { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.bdg.dan { background:var(--c-danger-bg); color:var(--c-danger-text); }
+
+/* Notice: warning / danger / info */
+.ntc { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border-radius:12px; font-size:12px; line-height:1.5; }
+.ntc .ti { font-weight:700; font-size:13px; margin:0 0 2px; }
+.ntc.wrn { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.ntc.dan { background:var(--c-danger-bg); color:var(--c-danger-text); border:1px solid var(--c-danger-border); }
+.ntc.inf { background:var(--c-info-bg); color:var(--c-text-primary); }
+.ntc.inf > svg { color:var(--c-info); }
+.ntc .act { margin-top:6px; display:flex; gap:6px; flex-wrap:wrap; }
+.ntc ul { margin:4px 0 0; padding-left:16px; }
+
+/* Field / input / select */
+.fld { display:flex; flex-direction:column; gap:4px; }
+.fld .fl { font-size:12px; font-weight:600; color:var(--c-text-secondary); }
+.inp { display:flex; align-items:center; gap:8px; height:40px; padding:0 12px; border-radius:12px; border:1px solid var(--c-border);
+  background:var(--c-bg-white); font-size:14px; color:var(--c-text-primary); }
+.inp.ph { color:var(--c-text-muted); }
+.inp.foc { border-color:var(--c-accent); box-shadow:var(--shadow-focus); }
+.inp.err { border-color:var(--c-danger); box-shadow:var(--shadow-focus-danger); }
+.inp.dis { background:var(--c-bg-inset); color:var(--c-text-muted); }
+.fld .hint { font-size:11px; color:var(--c-text-muted); }
+.fld .errt { font-size:12px; color:var(--c-danger-text); display:flex; gap:6px; align-items:flex-start; }
+.sel { display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 8px 0 10px; border-radius:10px; border:1px solid var(--c-border);
+  background:var(--c-bg-white); font-size:13px; color:var(--c-text-primary); white-space:nowrap; }
+.sel.dis { background:transparent; border-color:transparent; color:var(--c-text-secondary); }
+.mb .sel { height:40px; }
+
+/* Toggle 36×20 */
+.tg { width:36px; height:20px; border-radius:999px; background:var(--c-track); position:relative; flex-shrink:0; display:inline-block; }
+.tg::after { content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:var(--c-bg-white); box-shadow:var(--shadow-thumb); }
+.tg.on { background:var(--c-accent); }
+.tg.on::after { left:18px; }
+.tg.dis { opacity:.45; }
+
+/* Segmented / Tabs */
+.seg { display:inline-flex; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.seg span { padding:4px 10px; border-radius:7px; font-size:12px; color:var(--c-text-secondary); white-space:nowrap; }
+.seg span.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.mb .seg span { padding:8px 12px; }
+.tabs { display:flex; gap:2px; border-bottom:1px solid var(--c-divider); padding:0 12px; overflow:hidden; }
+.tabs span { padding:9px 10px; font-size:13px; color:var(--c-text-secondary); border-bottom:2px solid transparent; margin-bottom:-1px; white-space:nowrap; }
+.tabs span.on { color:var(--c-text-heading); font-weight:600; border-color:var(--c-accent); }
+.mb .tabs span { padding:12px 10px; }
+
+/* Chip (toggle) */
+.chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; border:1px solid var(--c-border-light);
+  font-size:12px; color:var(--c-text-secondary); white-space:nowrap; }
+.chip.on { background:var(--c-accent); border-color:var(--c-accent); color:var(--c-on-accent); }
+.mb .chip { padding:7px 13px; min-height:40px; }
+
+/* Аватар: кружок с инициалом, пары «фон + текст» из тонов Badge */
+.av { width:28px; height:28px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; flex-shrink:0; }
+.av.s { width:20px; height:20px; font-size:10px; }
+.av.l { width:36px; height:36px; font-size:14px; }
+.av.a { background:var(--c-accent-light); color:var(--c-accent); }
+.av.m { background:var(--c-info-bg); color:var(--c-info); }
+.av.i { background:var(--c-success-bg); color:var(--c-success-text); }
+.av.o { background:var(--c-bg-inset); color:var(--c-text-muted); }
+.av.p { background:var(--c-plan-light); color:var(--c-plan-text); }
+.avs { display:inline-flex; }
+.avs .av { box-shadow:0 0 0 2px var(--c-bg-panel); }
+.avs .av + .av { margin-left:-6px; }
+
+/* Списки и строки */
+.lst { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:12px; overflow:hidden; }
+.li { display:flex; align-items:center; gap:10px; padding:10px 12px; border-top:1px solid var(--c-border-light); min-height:52px; }
+.li:first-child { border-top:0; }
+.mb .li { min-height:56px; }
+.li .nm { font-size:13px; font-weight:600; color:var(--c-text-heading); }
+.li .sb { font-size:11px; color:var(--c-text-muted); }
+.li.sel { background:var(--c-bg-selected); }
+.li.mut .nm { color:var(--c-text-secondary); font-weight:500; }
+
+/* EmptyState */
+.empty { padding:24px 18px; text-align:center; border:1px dashed var(--c-dashed); border-radius:12px; }
+.empty .ic { width:44px; height:44px; border-radius:50%; background:var(--c-bg-inset); color:var(--c-text-secondary); display:inline-flex; align-items:center; justify-content:center; margin-bottom:8px; }
+.empty .tt { font-size:15px; font-weight:600; color:var(--c-text-heading); margin:0 0 4px; }
+.empty .ss { font-size:12px; color:var(--c-text-secondary); margin:0 auto 12px; max-width:340px; }
+.empty ul { text-align:left; display:inline-block; margin:0 0 12px; padding-left:18px; font-size:12px; color:var(--c-text-secondary); max-width:360px; }
+
+/* Скелетон */
+.sk { background:var(--c-bg-selected); border-radius:6px; opacity:.7; }
+.sk.ln { height:10px; }
+.sk.cir { border-radius:50%; }
+
+/* Модалка и шторка */
+.scrim { position:absolute; inset:0; background:var(--c-overlay); display:flex; align-items:center; justify-content:center; padding:16px; }
+.mb .scrim { align-items:flex-end; padding:0; }
+.modal { background:var(--c-bg-white); border-radius:20px; box-shadow:var(--shadow-modal); padding:20px; width:440px; max-width:100%; }
+.modal.cf { width:380px; } .modal.wd { width:720px; }
+.modal .mt { font-family:"PT Serif",Georgia,serif; font-size:18px; font-weight:700; color:var(--c-text-heading); margin:0 0 6px; }
+.modal .ms { font-size:13px; color:var(--c-text-secondary); margin:0 0 12px; }
+.modal .ma { display:flex; justify-content:flex-end; gap:8px; margin-top:16px; flex-wrap:wrap; }
+.sheet { background:var(--c-bg-white); border-radius:22px 22px 0 0; box-shadow:var(--shadow-sheet); padding:8px 16px 20px; width:100%; }
+.sheet .hdl { width:36px; height:4px; border-radius:2px; background:var(--c-border); margin:0 auto 12px; }
+.sheet .mt { font-family:"PT Serif",Georgia,serif; font-size:17px; font-weight:700; color:var(--c-text-heading); margin:0 0 6px; }
+.sheet .ms { font-size:13px; color:var(--c-text-secondary); margin:0 0 12px; }
+.sheet .ma { display:flex; flex-direction:column; gap:8px; margin-top:16px; }
+.cons { margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:8px; font-size:13px; color:var(--c-text-primary); }
+.cons li { display:flex; gap:8px; align-items:flex-start; }
+.cons li svg { margin-top:2px; color:var(--c-text-secondary); }
+
+/* Меню */
+.menu { background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px; box-shadow:var(--shadow-dropdown); padding:4px; min-width:220px; }
+.mi { display:flex; align-items:center; gap:8px; padding:7px 10px; border-radius:8px; font-size:13px; color:var(--c-text-primary); }
+.mi:hover { background:var(--c-bg-selected); }
+.mi.off { color:var(--c-text-muted); cursor:default; }
+.mi.off:hover { background:transparent; }
+.mi .why { display:block; font-size:11px; color:var(--c-text-muted); }
+.mi.dng { color:var(--c-danger-text); }
+.msep { height:1px; background:var(--c-divider); margin:4px 6px; }
+.mhd { padding:6px 10px 2px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-muted); }
+.mb .mi { min-height:44px; }
+
+/* Шапки островов */
+.ph-h { display:flex; align-items:center; gap:8px; padding:12px 14px; border-bottom:1px solid var(--c-divider); min-height:52px; }
+.mb .ph-h { min-height:56px; padding:8px 8px 8px 12px; }
+.ph-h .ttl { font-family:"PT Serif",Georgia,serif; font-weight:700; font-size:16px; color:var(--c-text-heading); }
+.pad { padding:14px; }
+
+/* Сообщения чата (упрощённо) */
+.feed { padding:14px 16px; display:flex; flex-direction:column; gap:14px; }
+.msg-u { align-self:flex-end; max-width:78%; }
+.msg-u .who { display:flex; justify-content:flex-end; align-items:center; gap:6px; font-size:11px; color:var(--c-text-muted); margin:0 4px 3px 0; }
+.msg-u .bub { background:var(--c-accent-light); border:1px solid var(--c-accent-muted); color:var(--c-text-primary); padding:9px 12px; border-radius:14px 14px 4px 14px; font-size:13px; }
+.msg-u.oth { align-self:flex-start; }
+.msg-u.oth .who { justify-content:flex-start; margin:0 0 3px 4px; }
+.msg-u.oth .bub { background:var(--c-bg-card); border-color:var(--c-border-light); border-radius:14px 14px 14px 4px; }
+.msg-u.gone .who b { color:var(--c-text-muted); font-weight:500; }
+.msg-a { font-size:13px; color:var(--c-text-primary); background:var(--c-msg-bg); padding:8px 10px; border-radius:10px; max-width:92%; }
+.composer { margin:0 12px 12px; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:16px; padding:10px 12px; }
+.composer .ph { color:var(--c-text-muted); font-size:14px; min-height:22px; }
+.composer.dis { background:var(--c-bg-inset); }
+.queue { display:flex; align-items:center; gap:8px; margin:0 12px 6px; padding:6px 10px; border-radius:10px; background:var(--c-bg-card); border:1px solid var(--c-border-light); font-size:12px; color:var(--c-text-secondary); }
+
+/* Таблица */
+table.tb { width:100%; border-collapse:collapse; font-size:13px; }
+.tb th { text-align:left; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-muted); padding:6px 10px; border-bottom:1px solid var(--c-divider); }
+.tb td { padding:9px 10px; border-bottom:1px solid var(--c-border-light); vertical-align:middle; }
+.tb td.num { text-align:right; font-family:"JetBrains Mono","Courier New",monospace; font-size:12px; white-space:nowrap; }
+.tb tr.sub td { color:var(--c-text-secondary); font-size:12px; }
+.bar { height:6px; border-radius:3px; background:var(--c-bg-inset); overflow:hidden; min-width:60px; }
+.bar i { display:block; height:100%; border-radius:3px; background:var(--c-accent); }
+
+/* Дифф */
+.diff { font-family:"JetBrains Mono","Courier New",monospace; font-size:12px; line-height:1.6; background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; overflow:hidden; }
+.diff div { padding:0 10px; white-space:pre-wrap; }
+.diff .ad { background:var(--c-diff-add-bg); color:var(--c-diff-add-text); }
+.diff .rm { background:var(--c-diff-rem-bg); color:var(--c-diff-rem-text); }
+.diff .ln { color:var(--c-text-muted); display:inline-block; width:22px; user-select:none; }
+
+
+/* ===== v2: палитра GROUP_COLORS из design.ts (от темы не зависит) — фон NodeAvatar/UserAvatar ===== */
+:root { --g-1:#3E7CA6; --g-2:#8E4A82; --g-3:#3F7A4F; --g-4:#C2693B; --g-5:#B4452F; --g-6:#4B6BB0; --g-7:#7A7250; --c-on-dark:#FFFFFF; }
+
+/* ===== v2: обвязка «было → станет» (не часть продукта) ===== */
+.cmp { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:20px; align-items:start; }
+@media (max-width:980px) { .cmp { grid-template-columns:minmax(0,1fr); } }
+.cmp > * { min-width:0; }
+.shot { display:block; width:100%; height:auto; border:1px solid var(--c-border); border-radius:10px; }
+.shot.m { max-width:260px; }
+.dl { position:relative; outline:2px dashed var(--c-accent); outline-offset:2px; border-radius:6px; }
+.dn { position:absolute; top:-9px; right:-9px; z-index:5; min-width:18px; height:18px; padding:0 4px; border-radius:9px;
+  background:var(--c-accent); color:var(--c-on-accent); font-size:10px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; font-style:normal; }
+.dn.l { right:auto; left:-9px; }
+.dlist { margin:8px 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:6px; font-size:12px; color:var(--c-text-secondary); max-width:640px; }
+.dlist li { display:flex; gap:8px; align-items:flex-start; }
+.dlist li .dn { position:static; flex-shrink:0; margin-top:1px; }
+.dlist b { color:var(--c-text-heading); }
+.src { font-family:"JetBrains Mono","Courier New",monospace; font-size:11px; color:var(--c-text-muted); }
+table.map { width:100%; border-collapse:collapse; font-size:12px; background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:12px; overflow:hidden; }
+.map th { text-align:left; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-muted); padding:8px 10px; border-bottom:1px solid var(--c-divider); background:var(--c-bg-panel); }
+.map td { padding:8px 10px; border-bottom:1px solid var(--c-border-light); vertical-align:top; color:var(--c-text-primary); }
+.map td .src { display:block; margin-top:2px; }
+.whov { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; padding:2px 6px; border-radius:5px; background:var(--c-bg-inset); color:var(--c-text-muted); }
+
+/* ===== v2: UserAvatar = NodeAvatar из features/spend/spendUi.tsx (фон hashColor → GROUP_COLORS, текст C.onDark) ===== */
+.ua { width:20px; height:20px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; font-size:9px; font-weight:700;
+  color:var(--c-on-dark); flex-shrink:0; background:var(--g-1); }
+.ua.s18 { width:18px; height:18px; font-size:9px; }
+.ua.s28 { width:28px; height:28px; font-size:11px; }
+.ua.s34 { width:34px; height:34px; font-size:13px; }
+.ua.g1 { background:var(--g-1); } .ua.g2 { background:var(--g-2); } .ua.g3 { background:var(--g-3); } .ua.g4 { background:var(--g-4); }
+.ua.g6 { background:var(--g-6); } .ua.g7 { background:var(--g-7); }
+.ua.gone { background:var(--c-bg-inset); color:var(--c-text-muted); }
+.uas { display:inline-flex; }
+.uas .ua { box-shadow:0 0 0 2px var(--c-bg-main); }
+.uas .ua + .ua { margin-left:-5px; }
+
+/* ===== v2: реплики реальных компонентов (упрощённо, по исходникам; путь — в подписи) ===== */
+/* HubHeader — крошка проекта */
+.hub { display:flex; align-items:center; gap:10px; height:52px; padding:0 14px; background:transparent; }
+.hub .logo { display:flex; align-items:center; gap:8px; font-family:"PT Serif",Georgia,serif; font-size:17px; color:var(--c-text-heading); }
+.hub .lg { width:24px; height:24px; border-radius:7px; background:var(--c-accent); }
+.hub .crumb { display:flex; align-items:center; gap:7px; font-size:15px; font-weight:500; color:var(--c-text-heading); }
+.picon { width:22px; height:22px; border-radius:6px; background:var(--c-success); color:var(--c-on-dark); display:inline-flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; flex-shrink:0; }
+.picon.l { width:42px; height:42px; border-radius:11px; font-size:16px; }
+.picon.m { width:28px; height:28px; border-radius:8px; font-size:12px; }
+.picon.b { background:var(--g-6); } .picon.o { background:var(--g-4); }
+.hub .tabsx { display:flex; gap:2px; margin:0 auto; font-size:13px; color:var(--c-text-secondary); }
+.hub .tabsx span { padding:5px 11px; border-radius:9px; }
+.hub .tabsx span.on { background:var(--c-text-heading); color:var(--c-bg-main); font-weight:600; }
+.hub .me { display:flex; align-items:center; gap:6px; padding:3px 8px 3px 3px; border-radius:999px; background:var(--c-bg-panel); font-size:11px; color:var(--c-text-muted); }
+.hub .me .dot { width:22px; height:22px; border-radius:50%; background:var(--c-accent); color:var(--c-on-accent); font-size:10px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; }
+
+/* ProjectRow (десктоп) / строка виджета */
+.prow { display:flex; align-items:center; gap:12px; padding:12px 14px; background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:14px; }
+.prow .nm { font-size:15px; font-weight:600; color:var(--c-text-heading); }
+.prow .pth { font-family:"JetBrains Mono","Courier New",monospace; font-size:11px; color:var(--c-text-muted); }
+.prow .act { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--c-text-muted); }
+.prow .act i { width:7px; height:7px; border-radius:50%; background:var(--c-success); display:inline-block; }
+
+/* ChatCard (строка дерева чатов) */
+.ccard { position:relative; padding:9px 12px 9px 14px; border-radius:12px; background:var(--c-bg-card); overflow:hidden; }
+.ccard.on { background:var(--c-accent-light); }
+.ccard.on::before { content:""; position:absolute; left:0; top:8px; bottom:8px; width:4px; border-radius:2px; background:var(--c-accent); }
+.ccard .l1 { display:flex; align-items:center; gap:6px; font-size:13.5px; font-weight:600; color:var(--c-text-heading); }
+.ccard.on .l1 { color:var(--c-accent); font-weight:700; }
+.ccard .l2 { font-size:12px; color:var(--c-text-muted); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ccard .ic { color:var(--c-text-muted); display:inline-flex; }
+.secd { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-muted); padding:10px 4px 4px; }
+
+/* ChatHeaderBar — мета-строка */
+.chh { display:flex; align-items:center; gap:10px; padding:10px 14px; }
+.chh .tt { font-family:"PT Serif",Georgia,serif; font-size:22px; color:var(--c-text-heading); }
+.chh .meta { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--c-text-muted); flex-wrap:wrap; }
+
+/* Пузырь сообщения человека (ChatItemView): справа, bgWhite, радиус 18/18/4/18 */
+.ubub { align-self:flex-end; max-width:80%; background:var(--c-bg-white); color:var(--c-text-primary); padding:10px 14px; border-radius:18px 18px 4px 18px; font-size:13px; box-shadow:var(--shadow-card); }
+.ucap { align-self:flex-end; display:flex; align-items:center; gap:6px; font-size:11px; color:var(--c-text-muted); margin:0 6px -8px 0; }
+.ucap b { color:var(--c-text-secondary); font-weight:600; }
+.amsg { font-size:13px; color:var(--c-text-primary); line-height:1.55; }
+
+/* PendingMessageView — строка очереди */
+.pend { display:flex; align-items:center; gap:8px; padding:7px 10px; border-radius:10px; background:var(--c-bg-inset); border:1px dashed var(--c-dashed); font-size:12px; color:var(--c-text-secondary); }
+.pend .who { font-weight:600; color:var(--c-text-heading); }
+
+/* Composer */
+.cmpz { background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:16px; padding:10px 12px 8px; box-shadow:var(--shadow-card); }
+.cmpz .ph { color:var(--c-text-muted); font-size:14px; min-height:24px; }
+.cmpz .bar2 { display:flex; align-items:center; gap:10px; margin-top:8px; font-size:12px; color:var(--c-text-secondary); }
+.cmpz .send { width:30px; height:30px; border-radius:10px; background:var(--c-accent); color:var(--c-on-accent); display:inline-flex; align-items:center; justify-content:center; }
+.cmpz .send.off { background:var(--c-bg-inset); color:var(--c-text-muted); }
+
+/* NewChatSetup — пилюля */
+.ncp { display:inline-flex; align-items:center; gap:8px; padding:7px 12px; border-radius:12px; border:1px solid var(--c-border); background:var(--c-bg-white); text-align:left; }
+.ncp.on { border-color:var(--c-accent); background:var(--c-accent-light); }
+.ncp .ic { color:var(--c-accent); display:inline-flex; }
+.ncp .k { display:block; font-size:11px; font-weight:600; color:var(--c-text-muted); line-height:1.2; }
+.ncp .v { display:block; font-size:13px; font-weight:600; color:var(--c-text-heading); line-height:1.2; white-space:nowrap; }
+.ncpan { width:380px; max-width:100%; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:16px; box-shadow:var(--shadow-card); padding:12px; }
+
+/* EditDialog: секция-карточка и AccordionSection */
+.edlg { background:var(--c-bg-white); border-radius:20px; box-shadow:var(--shadow-modal); padding:20px; width:500px; max-width:100%; }
+.edlg .mt { font-family:"PT Serif",Georgia,serif; font-size:20px; font-weight:700; color:var(--c-text-heading); margin:0 0 14px; }
+.scard { border:1px solid var(--c-border-light); border-radius:12px; background:var(--c-bg-card); }
+.srow { display:flex; align-items:center; gap:10px; padding:10px 12px; border-top:1px solid var(--c-border-light); font-size:13px; min-height:46px; }
+.srow:first-child { border-top:0; }
+.accs { border:1px solid var(--c-border-light); border-radius:12px; background:var(--c-bg-card); margin-top:8px; }
+.accs .ah { display:flex; align-items:center; gap:10px; padding:11px 12px; font-size:13px; font-weight:600; color:var(--c-text-heading); }
+.accs .ah .sum { margin-left:auto; font-size:11px; font-weight:500; color:var(--c-text-muted); }
+.accs .ah .sum.ok { color:var(--c-success-text); } .accs .ah .sum.wn { color:var(--c-warning-text); }
+.accs .ab { padding:2px 12px 12px; border-top:1px solid var(--c-border-light); }
+
+/* TaskCard */
+.tcard { position:relative; padding:9px 11px 9px 14px; border-radius:12px; background:var(--c-bg-card); border:1px solid var(--c-border-light); }
+.tcard::before { content:""; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--g-3); border-radius:12px 0 0 12px; }
+.tcard .r1 { display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600; color:var(--c-text-heading); }
+.tcard .r2 { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-top:6px; font-size:11px; color:var(--c-text-muted); }
+.tchip { display:inline-flex; align-items:center; gap:5px; height:20px; padding:0 7px 0 3px; border-radius:999px; background:var(--c-bg-inset); font-size:11px; color:var(--c-text-secondary); }
+.tchip.np { padding:0 7px; }
+.meb { width:20px; height:20px; border-radius:50%; background:var(--c-bg-inset); color:var(--c-text-secondary); font-size:10px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; }
+.aib { width:20px; height:20px; border-radius:6px; background:var(--c-accent); color:var(--c-on-accent); font-size:9px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; }
+
+/* ExecutorPicker — список */
+.xp { width:300px; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px; box-shadow:var(--shadow-dropdown); padding:4px; }
+.xp .gh { padding:8px 10px 3px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-muted); }
+.xp .op { display:flex; align-items:center; gap:9px; padding:7px 10px; border-radius:8px; font-size:13px; color:var(--c-text-primary); }
+.xp .op.on { background:var(--c-bg-selected); }
+.xp .op .sb { display:block; font-size:11px; color:var(--c-text-muted); }
+.pav { width:22px; height:22px; border-radius:50%; background:var(--c-plan-light); color:var(--c-plan-text); font-size:10px; font-weight:700; display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; }
+
+/* FileViewer — шапка и сегменты вкладок */
+.fvh { display:flex; align-items:center; gap:8px; padding:8px 10px; border-bottom:1px solid var(--c-border-light); }
+.fvh .fn { font-family:"JetBrains Mono","Courier New",monospace; font-size:12px; color:var(--c-text-heading); font-weight:600; }
+.vrow { display:flex; align-items:center; gap:8px; padding:5px 8px; border-radius:8px; font-size:12.5px; }
+.vrow.on { background:var(--c-bg-selected); }
+.sha { font-family:"JetBrains Mono","Courier New",monospace; font-size:11px; color:var(--c-accent); background:var(--c-accent-light); padding:1px 6px; border-radius:4px; flex-shrink:0; }
+.vrst { flex-shrink:0; padding:3px 9px; border-radius:6px; border:1px solid var(--c-accent); background:var(--c-accent-light); color:var(--c-accent); font-size:11.5px; font-weight:600; }
+.code { font-family:"JetBrains Mono","Courier New",monospace; font-size:12px; line-height:1.65; }
+.bl { display:flex; }
+.bl .bc { width:170px; flex-shrink:0; font-size:11px; color:var(--c-text-muted); padding:0 8px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; display:flex; align-items:center; gap:5px; }
+.bl.alt { background:var(--c-bg-inset); }
+.bl .no { width:28px; text-align:right; color:var(--c-text-muted); padding-right:8px; user-select:none; }
+
+/* Spend TopRow / Card */
+.spc { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:14px; padding:10px 12px; }
+.spc .hd { display:flex; align-items:center; font-family:"PT Serif",Georgia,serif; font-size:14px; font-weight:700; color:var(--c-text-heading); margin-bottom:4px; }
+.spc .hd .more { margin-left:auto; font-family:"Hanken Grotesk","Segoe UI",system-ui,sans-serif; font-size:11px; font-weight:500; color:var(--c-accent); }
+.trow { display:flex; align-items:center; gap:8px; padding:6px 4px; border-radius:8px; font-size:12px; }
+.trow .rk { width:14px; font-size:10px; color:var(--c-text-muted); text-align:right; font-family:"JetBrains Mono","Courier New",monospace; }
+.trow .nm { font-weight:600; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.trow .mt2 { font-size:10px; color:var(--c-text-muted); white-space:nowrap; }
+.trow .br { flex:1; height:6px; border-radius:3px; background:var(--c-bg-selected); overflow:hidden; min-width:36px; }
+.trow .br i { display:block; height:100%; border-radius:3px; background:var(--c-accent); }
+.trow .vl { font-family:"JetBrains Mono","Courier New",monospace; font-size:11px; font-weight:600; color:var(--c-accent); min-width:52px; text-align:right; }
+.ktag { font-size:9px; font-weight:700; text-transform:uppercase; padding:1px 4px; border-radius:4px; background:var(--c-bg-inset); color:var(--c-text-muted); }
+
+/* Тонкая полоса-баннер над лентой (как «Этот чат в архиве», ChatPanel) */
+.band { display:flex; align-items:center; gap:8px; padding:8px 14px; background:var(--c-bg-inset); font-size:12px; color:var(--c-text-secondary); border-radius:10px; }
+.lnk { color:var(--c-accent); font-weight:600; }
+.privph { display:inline-flex; align-items:center; gap:4px; color:var(--c-text-muted); font-size:12px; }
+
+</style>
+</head>
+<body>
+<div class="mk">
+  <h1>Общие проекты v2 · 9/9 · Уход и передача владения</h1>
+  <div class="grp"><span class="lbl">Тема</span>
+    <div class="pills" data-ctl="theme"><button class="on" data-v="light">Светлая</button><button data-v="dark">Тёмная</button></div></div>
+  <nav><a href="shared-projects-v2-settings.html">1. Настройки проекта → «Участники»</a><a href="shared-projects-v2-projects.html">2. Проект в списках и шапке</a><a href="shared-projects-v2-chat.html">3. Чат общего проекта</a><a href="shared-projects-v2-private-chat.html">4. Приватный чат</a><a href="shared-projects-v2-conflict.html">5. Конфликт правок</a><a href="shared-projects-v2-history.html">6. История и «Кто менял»</a><a href="shared-projects-v2-tasks.html">7. Задачи и календарь</a><a href="shared-projects-v2-spend.html">8. Аналитика токенов</a><a href="shared-projects-v2-leave-transfer.html" class="on">9. Уход и передача владения</a><a href="shared-projects-v2-proposal.md">Спецификация</a></nav>
+</div>
+<div class="wrap">
+<style>
+.cmp > div, .row > div { min-width:0; max-width:100%; overflow-x:auto; padding:10px 10px 10px 4px; }
+.dlg-wrap { display:flex; justify-content:center; padding:16px; background:var(--c-overlay); border-radius:14px; }
+.cand { display:flex; align-items:center; gap:10px; padding:10px 12px; border:1px solid var(--c-border-light); border-radius:12px; background:var(--c-bg-card); }
+.cand.on { border-color:var(--c-accent); background:var(--c-accent-light); }
+.rad { width:16px; height:16px; border-radius:50%; border:2px solid var(--c-border); flex-shrink:0; }
+.cand.on .rad { border-color:var(--c-accent); box-shadow:inset 0 0 0 3px var(--c-bg-white); background:var(--c-accent); }
+.chk { display:flex; gap:8px; align-items:flex-start; font-size:12px; padding:3px 0; }
+.chk .ok { color:var(--c-success); } .chk .no { color:var(--c-danger); }
+.toast { width:340px; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:14px; box-shadow:var(--shadow-dropdown); padding:12px 14px; }
+.mrow { display:flex; align-items:center; gap:10px; padding:9px 0; border-top:1px solid var(--c-border-light); }
+.mrow:first-child { border-top:0; }
+.mrow .nm { font-size:13px; font-weight:600; color:var(--c-text-heading); }
+.mrow .un { font-size:11px; color:var(--c-text-muted); }
+.urow { display:flex; align-items:center; gap:10px; padding:10px 12px; border-top:1px solid var(--c-border-light); font-size:13px; }
+.phbg { padding-top:120px; background:var(--c-overlay); display:flex; flex-direction:column; justify-content:flex-end; }
+.phbg .sheet .cons { font-size:13px; }
+</style>
+
+<section>
+  <h2>Что тут</h2>
+  <p class="brief">Мария уходит из проекта сама — кнопкой в той же секции «Участники». Андрей передаёт проект Марии из меню её строки, а она принимает
+  предложение из уведомления. Удаление проекта и удаление учётки предупреждают о людях. Все окна — существующие диалоги продукта с новым текстом.</p>
+</section>
+
+<section>
+  <h2>п.42 · «Покинуть проект»</h2>
+  <p class="brief">ConfirmDialog danger <span class="src">components/ui/ConfirmDialog.tsx:23</span>. Вход — кнопка в секции «Участники» (<span class="src">EditDialog.tsx</span>, макет 1) и пункт меню «⋯» проекта (<span class="src">ProjectActionsMenu.tsx</span>).</p>
+  <div class="hstack" style="margin:0 0 10px"><span class="lbl c-mut" style="font-size:10px;text-transform:uppercase">Состояние</span>
+    <div class="pills" data-ctl="l42"><button class="on" data-v="priv">Есть приватные чаты</button><button data-v="none">Без приватных</button><button data-v="busy">Идёт свой ход</button></div></div>
+  <div class="cmp">
+    <div><div class="cap">Сейчас — по коду (образец: ConfirmDialog danger)</div>
+      <div class="dlg-wrap"><div class="modal cf"><div class="mt">Удалить пользователя?</div><div class="ms">Учётка и её данные будут удалены.</div><div class="ma"><span class="btn gh">Отмена</span><span class="btn dng">Удалить</span></div></div></div></div>
+    <div><div class="cap">Станет — Мария</div>
+      <div class="dlg-wrap"><div class="modal cf"><div class="mt">Покинуть «Лендинг пекарни»?</div>
+        <div class="ms">Проект пропадёт из вашего списка. Сделанное вами в проекте — файлы, задачи, общие чаты — останется у Андрея.</div>
+        <div data-when="l42:priv" class="dl" style="margin-bottom:4px"><i class="dn">1</i><div class="ntc wrn"><div><div class="ti">Ваши приватные чаты удалятся — 2</div><ul><li>Черновик цен</li><li>Идеи для акции</li></ul></div></div></div>
+        <div data-when="l42:busy" style="display:none"><div class="ntc inf"><div>В чате «Фото витрины» идёт ваш ход. Дождитесь конца или остановите его — потом можно уйти.</div></div></div>
+        <div class="ma"><span class="btn gh">Отмена</span>
+          <span data-when="l42:priv" class="btn dng dl"><i class="dn">2</i>Покинуть и удалить 2 чата</span>
+          <span data-when="l42:none" class="btn dng" style="display:none">Покинуть проект</span>
+          <span data-when="l42:busy" class="btn dng off" style="display:none" title="Идёт ваш ход">Покинуть проект</span></div></div></div></div>
+  </div>
+  <ul class="dlist">
+    <li><i class="dn">1</i><span>Notice warning со списком своих приватных чатов по названию (это свои — можно назвать). Строки с нулём не показываем.</span></li>
+    <li><i class="dn">2</i><span>Кнопка повторяет действие и число. Идёт свой ход — кнопка disabled, причина в Notice info. Мобила — шторка, кнопка danger первой на всю ширину.</span></li>
+  </ul>
+  <div class="row" style="margin-top:16px"><div class="mb"><div class="cap">Мобила 360</div>
+    <div class="phone phbg"><div class="sheet"><div class="hdl"></div><div class="mt">Покинуть «Лендинг пекарни»?</div>
+      <div class="ms">Сделанное вами в проекте останется у Андрея.</div>
+      <div class="ntc wrn"><div><div class="ti">Ваши приватные чаты удалятся — 2</div><ul><li>Черновик цен</li><li>Идеи для акции</li></ul></div></div>
+      <div class="ma"><span class="btn dng full">Покинуть и удалить 2 чата</span><span class="btn sec full">Отмена</span></div></div></div></div></div>
+</section>
+
+<section>
+  <h2>п.43 · «Передать проект…»</h2>
+  <p class="brief">Вход — пункт меню «⋯» строки участника (макет 1). Окно — по образцу выбора преемника в <span class="src">features/personas/DeletePersonaDialog.tsx:61</span>
+  и формулировки «Сменить руководителя проекта?» (<span class="src">ProjectPersonasPanel.tsx:274</span>).</p>
+  <div class="hstack" style="margin:0 0 10px"><span class="lbl c-mut" style="font-size:10px;text-transform:uppercase">Проверка</span>
+    <div class="pills" data-ctl="l43"><button class="on" data-v="ok">Всё готово</button><button data-v="bad">Есть препятствие</button><button data-v="chk">Проверяем</button></div></div>
+  <div class="cmp">
+    <div><div class="cap">Сейчас — по коду (DeletePersonaDialog)</div>
+      <div class="dlg-wrap"><div class="modal cf"><div class="mt">Выберите преемника</div><div class="ms">Остаться без персоны по умолчанию нельзя.</div>
+        <div class="vstack"><div class="cand on"><span class="pav">В</span>Вера</div><div class="cand"><span class="pav">Г</span>Глеб</div></div>
+        <div class="ma"><span class="btn gh">Отмена</span><span class="btn pri">Назначить и удалить</span></div></div></div></div>
+    <div><div class="cap">Станет — Андрей</div>
+      <div class="dlg-wrap"><div class="modal cf" style="width:420px"><div class="mt">Передать «Лендинг пекарни»</div>
+        <div class="vstack dl"><i class="dn">1</i>
+          <div class="cand on"><span class="rad"></span><span class="ua s28 g1">М</span><div class="grow"><div class="b6 c-head">Мария</div><div class="t-xs c-mut">редактор</div></div></div>
+          <div class="cand"><span class="rad"></span><span class="ua s28 g3">И</span><div class="grow"><div class="b6 c-head">Игорь</div><div class="t-xs c-mut">читатель</div></div></div>
+        </div>
+        <div class="dl" style="margin-top:12px;padding:6px 4px"><i class="dn">2</i>
+          <div class="chk"><svg class="ok" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>У Марии включены общие проекты</div>
+          <div class="chk"><svg class="ok" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>Та же среда исполнения (на сервере)</div>
+          <div class="chk" data-when="l43:ok"><svg class="ok" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M20 6 9 17l-5-5"/></svg>Сейчас в проекте не идут ходы</div>
+          <div class="chk" data-when="l43:bad" style="display:none"><svg class="no" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M18 6 6 18M6 6l12 12"/></svg><span>Идёт ход в чате «Меню на зиму». <span class="lnk">Открыть чат</span> — передать можно, когда он закончится.</span></div>
+          <div class="chk" data-when="l43:chk" style="display:none"><span class="sk cir" style="width:14px;height:14px"></span>Проверяем ходы проекта…</div>
+        </div>
+        <div class="ntc wrn dl" style="margin-top:10px"><i class="dn">3</i><div><div class="ti">Что изменится для вас</div>Вы станете редактором. Ходы пойдут за счёт Марии и по её настройкам. Ваши приватные чаты останутся вашими.</div></div>
+        <div class="ma"><span class="btn gh">Отмена</span><span class="btn pri" data-when="l43:ok">Предложить Марии</span><span class="btn pri off" data-when="l43:bad" style="display:none">Предложить Марии</span><span class="btn pri off" data-when="l43:chk" style="display:none">Предложить Марии</span></div></div></div></div>
+  </div>
+  <ul class="dlist">
+    <li><i class="dn">1</i><span>Кандидаты — участники строками с радио и UserAvatar 28. Пусто — «Передавать некому» + «К участникам».</span></li>
+    <li><i class="dn">2</i><span>Живая проверка условий: CircleCheck C.success / CircleX C.danger с причиной и действием / скелетон на время проверки.</span></li>
+    <li><i class="dn">3</i><span>Notice warning «что изменится для вас». «Предложить Марии» активна только при всех галочках. Это предложение, а не передача: Мария должна принять.</span></li>
+  </ul>
+  <div class="cmp" style="margin-top:16px">
+    <div><div class="cap">Ожидание и отказ — внутри секции «Участники» (EditDialog)</div>
+      <div class="accs" style="max-width:460px"><div class="ah">Участники<span class="sum ok">3 человека</span></div><div class="ab">
+        <div class="ntc inf dl" style="margin:8px 0"><i class="dn">4</i><div class="grow">Ждём ответа Марии на передачу проекта.<div class="act"><span class="btn gh">Отозвать предложение</span></div></div></div>
+        <div class="ntc wrn" style="margin:0 0 8px"><div>Мария отказалась принять проект. Проект остаётся у вас.</div></div>
+        <div class="mrow"><span class="ua s28 g4">А</span><div class="grow"><div class="nm">Андрей (вы)</div></div><span class="bdg acc">владелец</span></div>
+        <div class="mrow"><span class="ua s28 g1">М</span><div class="grow"><div class="nm">Мария</div></div><span class="bdg inf">ждёт ответа</span></div></div></div></div>
+    <div><div class="cap">Некому передать / перенос идёт / сбой / готово</div>
+      <div class="vstack" style="max-width:460px">
+        <div class="empty"><div class="tt">Передавать некому</div><div class="ss">Проект можно передать только участнику. Сначала добавьте человека.</div><span class="btn gha">К участникам</span></div>
+        <div class="ntc inf"><div>Проект переезжает к Марии. Чаты пока только для чтения — это займёт минуту.</div></div>
+        <div class="ntc dan"><div>Перенести проект не удалось — всё вернули как было. Ничего не потеряно, можно попробовать снова.</div></div>
+        <div class="modal" style="width:100%"><div class="mt">Проект теперь у Марии</div><ul class="cons"><li>Вы — редактор.</li><li>Ходы идут за счёт Марии и по её настройкам.</li><li>Ваши приватные чаты остались вашими.</li><li>Ваши MCP-подключения в проекте отключены.</li></ul><div class="ma"><span class="btn pri">Понятно</span></div></div>
+      </div></div>
+  </div>
+  <ul class="dlist"><li><i class="dn">4</i><span>Пока предложение висит — Notice info в секции «Участники» с «Отозвать предложение»; у строки Марии Badge info «ждёт ответа». Отказ — Notice warning.</span></li></ul>
+</section>
+
+<section>
+  <h2>п.44 · Уведомление получателю</h2>
+  <p class="brief">Тост <span class="src">components/NotificationToasts.tsx</span> и тот же пункт в колоколе — как уведомление «Доступна новая версия claude CLI» на стенде.</p>
+  <div class="cmp">
+    <div><div class="cap">Сейчас — снимок стенда (тост в правом верху)</div><img class="shot" src="shared-projects-v2-real/project-d.jpg" alt="Тост уведомления"></div>
+    <div><div class="cap">Станет — Мария</div>
+      <div class="toast dl"><i class="dn">1</i><div class="hstack" style="align-items:flex-start"><span class="ua s28 g4">А</span><div class="grow">
+        <div class="t-xxs c-mut" style="text-transform:uppercase;letter-spacing:.05em">Общие проекты</div>
+        <div class="b6 c-head">Андрей предлагает вам проект «Лендинг пекарни»</div>
+        <div class="t-sm c-sec" style="margin-top:2px">Если примете — ходы пойдут за ваш счёт и по вашим настройкам. Андрей станет редактором.</div>
+        <div class="hstack" style="margin-top:8px"><span class="btn pri">Принять проект</span><span class="btn gh">Отклонить</span></div></div></div></div>
+      <div class="row" style="margin-top:14px"><div class="mb" style="width:300px"><div class="cap">Мобила 360 — тост на всю ширину</div>
+        <div class="toast" style="width:100%"><div class="b6 c-head">Андрей предлагает вам проект «Лендинг пекарни»</div><div class="t-sm c-sec">Ходы пойдут за ваш счёт.</div><div class="vstack" style="margin-top:8px"><span class="btn pri full">Принять проект</span><span class="btn sec full">Отклонить</span></div></div></div></div>
+    </div>
+  </div>
+  <ul class="dlist"><li><i class="dn">1</i><span>Тост не исчезает сам, пока нет ответа; в колоколе — тот же текст и кнопки. Главная мысль — «за ваш счёт»: это меняет кошелёк получателя.</span></li></ul>
+</section>
+
+<section>
+  <h2>п.45 · Удаление проекта с участниками</h2>
+  <p class="brief">DeleteDialog <span class="src">features/projects/dialogs/DeleteDialog.tsx:62</span>: уже считает ущерб («Смотрю, что ещё затронет удаление…») и показывает плашку danger про персоны.</p>
+  <div class="cmp">
+    <div><div class="cap">Сейчас — по коду</div>
+      <div class="dlg-wrap"><div class="modal cf"><div class="mt">Удалить проект?</div><div class="ms">Проект «Лендинг пекарни» будет удалён без возможности восстановления. Файлы на диске не затрагиваются.</div>
+        <div class="ntc dan"><div>Вместе с проектом удалятся персоны (2) и вся их долгая память.</div></div>
+        <div class="band" style="margin-top:8px">Чаты проекта (12) не удаляются, но потеряют привязку.</div>
+        <div class="ma"><span class="btn gh">Отмена</span><span class="btn dng">Удалить</span></div></div></div></div>
+    <div><div class="cap">Станет — Андрей</div>
+      <div class="dlg-wrap"><div class="modal cf"><div class="mt">Удалить проект?</div><div class="ms">Проект «Лендинг пекарни» будет удалён без возможности восстановления. Файлы на диске не затрагиваются.</div>
+        <div class="ntc dan dl"><i class="dn">1</i><div>У проекта 2 участника — они потеряют доступ. Приватные чаты участников (3) удалятся.<br>Вместе с проектом удалятся персоны (2) и вся их долгая память.</div></div>
+        <div class="band" style="margin-top:8px">Чаты проекта (12) не удаляются, но потеряют привязку.</div>
+        <div class="ma"><span class="btn gh">Отмена</span><span class="btn dng">Удалить</span></div></div></div></div>
+  </div>
+  <ul class="dlist"><li><i class="dn">1</i><span>Первой строкой той же danger-плашки — люди и число чужих приватных чатов (названий нет — владелец их не видит). Нет участников — строки нет.</span></li></ul>
+</section>
+
+<section>
+  <h2>п.46 · Удаление учётки владельца общих проектов</h2>
+  <p class="brief">UserManagementModal <span class="src">components/UserManagementModal.tsx:416</span>, меню аватара → «Пользователи» (админ).</p>
+  <div class="cmp">
+    <div><div class="cap">Сейчас — по коду</div>
+      <div class="dlg-wrap"><div class="modal cf"><div class="mt">Удалить пользователя?</div><div class="ms">Учётка andrey и её данные будут удалены.</div><div class="ma"><span class="btn gh">Отмена</span><span class="btn dng">Удалить</span></div></div></div></div>
+    <div><div class="cap">Станет — админ удаляет Андрея</div>
+      <div class="dlg-wrap"><div class="modal cf"><div class="mt">Удалить пользователя?</div><div class="ms">Учётка andrey и её данные будут удалены.</div>
+        <div class="ntc dan dl"><i class="dn">1</i><div class="grow"><div class="ti">Сначала передайте общие проекты</div>У Андрея есть проекты с участниками — без владельца они останутся без хозяина.
+          <div class="lst" style="margin-top:8px"><div class="urow"><span class="picon o">Л</span><span class="grow">Лендинг пекарни</span><span class="uas"><span class="ua g1">М</span><span class="ua g3">И</span></span></div></div></div></div>
+        <div class="ma"><span class="btn gh">Отмена</span><span class="btn dng off" title="Сначала передайте проекты">Удалить</span></div></div></div></div>
+  </div>
+  <ul class="dlist"><li><i class="dn">1</i><span>Notice danger со списком общих проектов с живыми участниками; «Удалить» disabled с title «Сначала передайте проекты». Передать проект может только сам владелец (п.43) — админ видит, кому написать.</span></li></ul>
+</section>
+
+</div>
+<script>
+// Обвязка макета: переключатель темы и групповые пилюли data-ctl (не часть продукта)
+document.querySelectorAll('.pills[data-ctl]').forEach(function (g) {
+  g.addEventListener('click', function (e) {
+    var b = e.target.closest('button'); if (!b) return;
+    g.querySelectorAll('button').forEach(function (x) { x.classList.toggle('on', x === b); });
+    var ctl = g.dataset.ctl, v = b.dataset.v;
+    if (ctl === 'theme') { document.documentElement.dataset.theme = v; return; }
+    document.querySelectorAll('[data-when^="' + ctl + ':"]').forEach(function (el) {
+      el.style.display = el.dataset.when === ctl + ':' + v ? '' : 'none';
+    });
+  });
+});
+</script>
+</body>
+</html>

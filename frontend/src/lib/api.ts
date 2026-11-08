@@ -1,5 +1,5 @@
-import type { Me, Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
-import { cachedToken, readStoredToken, request, writeStoredToken } from './offline';
+import type { Me, Project, ProjectGroup, ProjectMemberRole, ProjectMembersView, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
+import { cachedToken, readStoredToken, request, writeStoredToken, type EtagRef } from './offline';
 import type { FeatureRun } from '../types/featureRun';
 import type { FeaturesIndex, FeaturePage } from '../types/featureIndex';
 import { forgetChatContextSession } from './chatContext/forget';
@@ -29,7 +29,7 @@ export interface GlyphCandidate {
   name?: string | null;
 }
 
-// === «Локальные модели» (фича local-model-stats) ===
+// === «Локальные модели» ===
 //
 // DTO REST-ручек: LocalModelStatsController (снимок панели и список движков, только
 // админ — настройка глобальная) и SessionLocalModelController (итог последнего хода
@@ -131,7 +131,7 @@ export interface LocalModelStats {
 //
 // Ключ словаря движков: 'main' — основной стенд (то, что было до фичи), имя движка LocalEngines (например 'gemma') —
 // llama-server на Video. Ключ — только ключ: URL из него не строится никогда.
-// Обе ручки: админ (иначе 403), флаг local-model-stats на сервере (иначе 404);
+// Обе ручки: только админ (иначе 403);
 // неизвестный движок или выключенная Llm → configured:false, 200; 500 — нигде.
 
 // 'main' — основной стенд; любое другое — имя движка LocalEngines из конфига сервера (например 'gemma').
@@ -354,7 +354,7 @@ export interface MediaDone {
 // 7 дней на диске, переживает рестарты. Запись — один прогон ComfyUI по prompt_id;
 // события журнала (enqueued/started/finished) бэкенд склеивает. В отличие от прочих
 // ручек фичи: времена — ISO-8601 UTC (не unix-мс), и обе ручки проверяют и роль
-// admin (403), и серверный флаг local-model-stats (без него — 404).
+// admin (403), и серверный  (без него — 404).
 // owner — логин владельца; название чата/проекта и sessionId/projectId НЕ отдаются
 // ни у чужих, ни у своих записей (строка и карточка одинаковы для всех).
 export interface MediaHistoryRecord {
@@ -611,7 +611,7 @@ const PREVIEW_START_TIMEOUT_MS = DEV_SERVER_PORT_WAIT_MS + 30_000;
 // за N с»), а не OfflineError, и приложение не уводится в офлайн (offline.ts:423–447).
 const CONTINUE_TIMEOUT_MS = 16 * 60 * 1000;
 
-// Потолок ожидания «Перенести в новый чат» (фича prompt-cache, шаг F-4): тёплый путь —
+// Потолок ожидания «Перенести в новый чат» (фича, шаг F-4): тёплый путь —
 // видимый ход самого чата, бэкенд ждёт его до WarmTurnTimeout = 5 мин (ChatHandoffService.cs);
 // холодный — быстрый раннер по транскрипту. Берём 6 мин: обрыв по этому таймауту —
 // RequestTimeoutError, а не OfflineError (тот же приём, что у CONTINUE_TIMEOUT_MS).
@@ -962,6 +962,123 @@ export interface FeatureSummaryResult {
   eventCount?: number;
 }
 
+// Конфликт сохранения файла (S2c-F2a, К8): 409 с телом {code:'file_changed', …} на
+// PUT files/content с If-Match. Поля — тело 409 как есть: актуальное состояние файла на
+// момент отказа. author и source бэк заполняет с S3-3/S2d-4, сейчас всегда null.
+// Бросается ТОЛЬКО при ifMatch в saveContent: без If-Match сервер 409 по конфликту не отдаёт
+// вовсе, поэтому существующие вызывающие (без ifMatch) этой ошибки не видят.
+export interface FileConflictAuthor { userId?: string; displayName?: string }
+// Форма ChatRef (К5) во фронте; в коде бэка её ещё нет (S2d-4), сейчас сервер шлёт null.
+export interface FileConflictSource { chatTitle?: string; private?: boolean }
+
+export class FileConflictError extends Error {
+  readonly status = 409;
+  readonly code = 'file_changed';
+  // Тег актуальной версии (без кавычек, как в теле 409) — по нему повторяют сохранение
+  readonly sha256: string | null;
+  // Актуальный текст чужой версии; null для не-текста (видео/аудио/документ/сверх потолка)
+  readonly content: string | null;
+  readonly author: FileConflictAuthor | null;
+  readonly changedAt: string | null;
+  readonly source: FileConflictSource | null;
+  constructor(body: {
+    sha256?: string | null; content?: string | null; author?: FileConflictAuthor | null;
+    changedAt?: string | null; source?: FileConflictSource | null;
+  }) {
+    // Текст тот же, что заголовок диалога конфликта (SaveConflictDialog) — отдельной копии нет
+    super('Файл изменили, пока вы правили');
+    this.name = 'FileConflictError';
+    this.sha256 = body.sha256 ?? null;
+    this.content = body.content ?? null;
+    this.author = body.author ?? null;
+    this.changedAt = body.changedAt ?? null;
+    this.source = body.source ?? null;
+  }
+}
+
+// Конфликт сохранения заметки (S2c-F3, К8): 409 с телом {code:'note_changed', …} на
+// PUT /notes/{id} с If-Match. Поля — тело 409 как есть, тот же контракт К8, что у файла:
+// актуальное состояние заметки на момент отказа. author и source бэк заполняет с S3-3,
+// сейчас всегда null. Бросается ТОЛЬКО при ifMatch в notes.update: без If-Match сервер 409
+// по конфликту не отдаёт вовсе, поэтому существующие вызывающие (без ifMatch) её не видят.
+export class NoteConflictError extends Error {
+  readonly status = 409;
+  readonly code = 'note_changed';
+  // Тег актуальной версии (без кавычек, как в теле 409) — по нему повторяют сохранение
+  readonly sha256: string | null;
+  // Актуальный текст чужой версии (заметка — всегда текст)
+  readonly content: string | null;
+  readonly author: FileConflictAuthor | null;
+  readonly changedAt: string | null;
+  readonly source: FileConflictSource | null;
+  constructor(body: {
+    sha256?: string | null; content?: string | null; author?: FileConflictAuthor | null;
+    changedAt?: string | null; source?: FileConflictSource | null;
+  }) {
+    // Текст тот же, что заголовок диалога конфликта (SaveConflictDialog) — отдельной копии нет
+    super('Заметку изменили, пока вы правили');
+    this.name = 'NoteConflictError';
+    this.sha256 = body.sha256 ?? null;
+    this.content = body.content ?? null;
+    this.author = body.author ?? null;
+    this.changedAt = body.changedAt ?? null;
+    this.source = body.source ?? null;
+  }
+}
+
+// Отказ тумблера видимости чата (S2d-F2): 409/403 с полем body.code. Тексты равны
+// серверным (ChatsController.SetVisibility / ChatAuthorGate — русские), чтобы на клиенте
+// не было второй формулировки того же отказа; человеку показывается текст, а не код.
+// Незнакомый код — серверный error как есть, без кода — общий текст.
+export const CHAT_VISIBILITY_TEXTS = {
+  not_shared_project: 'Приватным можно сделать только чат общего проекта',
+  chat_has_messages: 'В чате уже есть сообщения — приватным его не сделать',
+  reader: 'Читатель проекта не меняет видимость чата',
+  not_chat_author: 'Только автор чата',
+  // S2d-6b-4: бэк не смог перенести вложения чата при смене видимости — видимость не изменена
+  attachments_move_failed: 'Не удалось перенести вложения чата — видимость не изменена',
+} as const;
+
+export class ChatVisibilityError extends Error {
+  readonly status: 403 | 409;
+  readonly code: string | null;
+  constructor(status: number, body: { error?: string; code?: string } | undefined) {
+    const code = body?.code && body.code in CHAT_VISIBILITY_TEXTS ? body.code as keyof typeof CHAT_VISIBILITY_TEXTS : null;
+    super(code ? CHAT_VISIBILITY_TEXTS[code] : (body?.error ?? 'Не удалось изменить видимость чата'));
+    this.name = 'ChatVisibilityError';
+    this.status = status as 403 | 409;
+    this.code = body?.code ?? null;
+  }
+}
+
+// Ответ тумблера видимости (S2d-6b-4): поля Session + карта переноса вложений
+// {старый путь: новый путь} — бэк переносит файлы чата при смене видимости; карта
+// есть только когда перенос был. Вызывающий применяет её к ленте (remapSessionAttachedPaths).
+export type ChatVisibilityResponse = Session & { attachmentMoves?: Record<string, string> };
+
+// Отказ обновления полей чата (S2d-6c-F): 409 с полем body.code от PUT sessions/{sid}
+// (SessionsController.cs:126: пока чат приватный, «Не сохранять решения» нельзя
+// выключить). Серверный текст — только отказ; клиентский добавляет действие, как
+// требует постановка S2d-6c-F (человек читает причину и то, что сделать дальше); тон
+// тот же, что у CHAT_VISIBILITY_TEXTS: коротко, без кода и статуса.
+export const CHAT_FIELDS_ERROR_TEXTS = {
+  private_chat_dossiers: 'Пока чат приватный, решения из него не сохраняются — это нельзя выключить. Сначала сделайте чат общим.',
+} as const;
+
+// Текст тоста об отказе изменить настройки чата: знакомый код — понятный текст,
+// любая другая ошибка — тот же нейтральный, что был (отказ не меняет локальное состояние).
+export function chatFieldsErrorText(e: unknown): string {
+  const code = (e as { body?: { code?: string } })?.body?.code;
+  return code && code in CHAT_FIELDS_ERROR_TEXTS
+    ? CHAT_FIELDS_ERROR_TEXTS[code as keyof typeof CHAT_FIELDS_ERROR_TEXTS]
+    : 'Не удалось изменить настройку чата';
+}
+
+// Заметка + тег прочитанной версии (S2c-F3): etag есть только у сетевых get/update;
+// офлайн-доставка из кэша и локальный черновик тега не имеют — версии, по которой можно
+// сохранить по If-Match, без сервера нет. Вызывающие без etag работают как раньше.
+export type NoteWithEtag = NoteDetail & { etag?: string };
+
 // Projects
 export const api = {
   auth: {
@@ -970,7 +1087,9 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ username, password }),
       }),
-    me: (opts?: { timeoutMs?: number }) => request<Me>('/auth/me', opts),
+    // live: true — только для пути входа: ответ из IDB-кэша (ключ по URL, общий для владельцев)
+    // подставил бы id прежнего владельца к токену нового.
+    me: (opts?: { timeoutMs?: number; live?: boolean }) => request<Me>('/auth/me', opts),
     // Возвращает свежий токен: смена пароля отзывает все прежние, включая текущий
     changePassword: (currentPassword: string, newPassword: string) =>
       request<{ token: string; expiresAt: string }>('/auth/password', {
@@ -1076,7 +1195,7 @@ export const api = {
         { method: 'POST', body: JSON.stringify({ preset }) }),
   },
 
-  // «Локальные модели» (фича local-model-stats): снимок панели — только админ
+  // «Локальные модели»: снимок панели — только админ
   // (настройка глобальная), итог последнего хода чата — его владелец. DTO — записи
   // LocalModelStatsController / SessionLocalModelController (типы выше).
   localModel: {
@@ -1202,6 +1321,13 @@ export const api = {
     setEnabled: (id: string, enabled: boolean) =>
       request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}/enable`, {
         method: 'POST', body: JSON.stringify({ enabled }),
+      }),
+    // Пометка «для участников» (S2a-F6): меняет только владелец записи; участник общего
+    // проекта получает 403 (запись для него реальна, но чужие настройки он не правит),
+    // посторонний — 404. Ответ — обновлённая запись
+    setShared: (id: string, shared: boolean) =>
+      request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}/shared`, {
+        method: 'PUT', body: JSON.stringify({ sharedWithMembers: shared }),
       }),
     delete: (id: string) => request<void>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     // Разовая проверка «по кнопке»: рукопожатие + tools/list, результат едет и в стор статусов.
@@ -1663,6 +1789,49 @@ export const api = {
     },
     delete: (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' }),
 
+    // --- Участники общего проекта (shared-projects, план §5 S1-F2) ---
+    //
+    // Эндпоинты — ProjectMembersController: GET /members, POST /members, PUT /members/{userId},
+    // DELETE /members/{userId}, DELETE /members/me. И чтение, и каждая мутация отвечают одним
+    // телом — ProjectMembersView (участники, владелец, моя роль): после правки список берут
+    // из ответа, отдельный запрос не нужен. У отказа — { error, code }: текст готовый для
+    // человека, машинный код — из MEMBER_REFUSAL (lib/offline прикрепляет тело ошибки целиком
+    // к err.body, читают его как в ImageGenNote.isImageGenQueued).
+    // Права: приглашает/меняет роль/убирает только владелец (403 not_owner); участник
+    // может только покинуть сам. Снаружи проекта — 404 от [ProjectScope] (код
+    // project_scope), существование не раскрываем.
+    members: {
+      // Живой запрос: список участников из офлайн-кэша показал бы уже убранного человека
+      list: (id: string) =>
+        request<ProjectMembersView>(`/projects/${encodeURIComponent(id)}/members`, { live: true }),
+      // Пригласить по ТОЧНОМУ username (регистр не важен, как при входе). Поиска по части
+      // имени на бэке нет: нет пользователя → 404 user_not_found; уже участвует → 409
+      // already_member; сам себе → 400 self; флаг выключен у кого-то из них → 409
+      // flag_disabled; проект на устройстве → 409 local_project.
+      add: (id: string, username: string, role: ProjectMemberRole) =>
+        request<ProjectMembersView>(`/projects/${encodeURIComponent(id)}/members`, {
+          method: 'POST', body: JSON.stringify({ username, role }),
+        }),
+      // Сменить роль участника (только владелец). Не участника → 404 not_member.
+      changeRole: (id: string, userId: string, role: ProjectMemberRole) =>
+        request<ProjectMembersView>(
+          `/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`,
+          { method: 'PUT', body: JSON.stringify({ role }) },
+        ),
+      // Убрать участника (только владелец). Его нет в списке → 404 not_member.
+      remove: (id: string, userId: string) =>
+        request<ProjectMembersView>(
+          `/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`,
+          { method: 'DELETE' },
+        ),
+      // Покинуть проект: та же операция удаления, но её делает сам участник — id берёт
+      // сервер из токена, «me» в пути — маркер, не id. Владелец → 400 owner_cannot_leave.
+      leave: (id: string) =>
+        request<ProjectMembersView>(
+          `/projects/${encodeURIComponent(id)}/members/me`, { method: 'DELETE' },
+        ),
+    },
+
     // --- Значок проекта (ADR-009: SVG, белый список lucide, модельный подбор) ---
     // Кандидаты двух видов: name (из белого списка) или paths (нарисованные моделью).
     // Бэк валидирует имя по членству в LucideGlyphs.All и пути по алфавиту/лимитам.
@@ -2110,12 +2279,39 @@ export const api = {
       request<NoteDetail>(`/notes/${encodeURIComponent(id)}/toc`, { method: 'POST' }),
     translate: (id: string) =>
       request<NoteDetail>(`/notes/${encodeURIComponent(id)}/translate`, { method: 'POST' }),
-    get: (id: string) => request<NoteDetail>(`/notes/${encodeURIComponent(id)}`),
+    // etag (S2c-F3, К8): тег прочитанной версии — заголовок ETag ответа (quoted sha256,
+    // NotesController.Get). По нему следующее сохранение идёт по If-Match. Офлайн-доставка
+    // из кэша тега не имеет: офлайн-правка идёт своим путём (notesOffline), не по If-Match.
+    get: async (id: string): Promise<NoteWithEtag> => {
+      const etagRef: EtagRef = {};
+      const d = await request<NoteDetail>(`/notes/${encodeURIComponent(id)}`, { etagRef });
+      return { ...d, etag: etagRef.etag };
+    },
     backlinks: (id: string) => request<NoteBacklink[]>(`/notes/${encodeURIComponent(id)}/backlinks`),
     create: (dto: CreateNoteDto) =>
       request<NoteDetail>('/notes', { method: 'POST', body: JSON.stringify(dto) }),
-    update: (id: string, dto: UpdateNoteDto) =>
-      request<NoteDetail>(`/notes/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(dto) }),
+    // ifMatch (К8): тег версии, которую видел вызывающий — etag из get или sha256 из
+    // NoteConflictError (повторная отправка по актуальному состоянию). С If-Match сервер либо
+    // пишет (200 + новый ETag), либо отказывает 409 note_changed, не трогая заметку, — он
+    // становится NoteConflictError с полями тела. Без ifMatch — ровно как раньше: заголовка
+    // нет, 409 по конфликту сервер не отдаёт, существующие вызывающие ничего не заметили.
+    // etagOut: новый ETag ответа 200 — по нему идёт следующее сохранение (NotesController.Update).
+    update: async (id: string, dto: UpdateNoteDto, ifMatch?: string, etagOut?: EtagRef): Promise<NoteWithEtag> => {
+      const sink: EtagRef = etagOut ?? {};
+      try {
+        const d = await request<NoteDetail>(`/notes/${encodeURIComponent(id)}`, {
+          method: 'PUT',
+          body: JSON.stringify(dto),
+          ...(ifMatch ? { headers: { 'If-Match': ifMatch } } : {}),
+          etagRef: sink,
+        });
+        return { ...d, etag: sink.etag };
+      } catch (e) {
+        const err = e as { status?: number; body?: { code?: string; sha256?: string | null; content?: string | null; author?: FileConflictAuthor | null; changedAt?: string | null; source?: FileConflictSource | null } };
+        if (err?.status === 409 && err?.body?.code === 'note_changed') throw new NoteConflictError(err.body);
+        throw e;
+      }
+    },
     delete: (id: string) =>
       request<void>(`/notes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     // Задачи из заметок (флаг notes-task-sync): чекбоксы .md ↔ задачи
@@ -2610,6 +2806,22 @@ export const api = {
     // Обновить название чата по текущей переписке (AI-хаб, действие chat.retitle)
     retitle: (id: string) =>
       request<Session>(`/chats/${encodeURIComponent(id)}/retitle`, { method: 'POST' }),
+    // Видимость чата (S2d-F2): true — приватный (виден только автору; только чат общего
+    // проекта, только пока в нём нет сообщений), false — снова общий (в любой момент;
+    // после этого приватность уже не вернуть — бэк 409 chat_has_messages). Отказы 409/403
+    // с body.code оборачиваются в ChatVisibilityError — с человеческим текстом, не кодом.
+    // Успешный ответ может нести attachmentMoves (S2d-6b-4) — карта переноса вложений чата.
+    setChatVisibility: async (id: string, isPrivate: boolean): Promise<ChatVisibilityResponse> => {
+      try {
+        return await request<ChatVisibilityResponse>(`/chats/${encodeURIComponent(id)}/visibility`, {
+          method: 'PUT', body: JSON.stringify({ private: isPrivate }),
+        });
+      } catch (e) {
+        const err = e as { status?: number; body?: { error?: string; code?: string } };
+        if (err.status === 409 || err.status === 403) throw new ChatVisibilityError(err.status, err.body);
+        throw e;
+      }
+    },
     // Групповой чат персон (флаг persona-group-chats): 2-4 участника, первый — ведущая.
     // Зона — по ведущей: проектная персона → сессия её проекта, глобальная → чат вне проекта.
     createGroup: (personaIds: string[], mode?: string, name?: string) =>
@@ -2731,7 +2943,7 @@ export const api = {
         `/chats/${id}/continue`,
         { method: 'POST', body: JSON.stringify(note ? { note } : {}), timeoutMs: CONTINUE_TIMEOUT_MS },
       ),
-    // «Перенести в новый чат» (фича prompt-cache, шаг F-4): путь выбирает сервер — тёплый
+    // «Перенести в новый чат» (фича, шаг F-4): путь выбирает сервер — тёплый
     // (записку пишет сам чат, пока его кэш тёплый) или холодный (её собирает дешёвый раннер
     // по транскрипту). Ответ — id нового чата, его проект и черновик композера. 409 — чат
     // занят/повторный клик/не тот тип чата, 502 — модель не дала записку; текст ошибки
@@ -3020,13 +3232,40 @@ export const api = {
     // featureId (W4-5B2): читать из проверенного дерева эпика; без него — корень проекта.
     // sessionId (F1a): резолвить путь в дереве чата; ответ несёт branch (в каком дереве
     // нашли) и isAnchor (true — файл найден в заявленном дереве-анкере, false — в другом).
-    getContent: (projectId: string, path: string, featureId?: string, opts?: { sessionId?: string }) =>
-      projectRequest<{ content: string | null; isBinary: boolean; isImage: boolean; isDocument?: boolean; docKind?: string; mimeType?: string; base64?: string; fileSize?: number; branch?: string | null; isAnchor?: boolean }>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}${featureId ? `&featureId=${encodeURIComponent(featureId)}` : ''}${opts?.sessionId ? `&sessionId=${encodeURIComponent(opts.sessionId)}` : ''}`),
-    saveContent: (projectId: string, path: string, content: string) =>
-      projectRequest<void>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}`, {
-        method: 'PUT',
-        body: JSON.stringify({ content }),
-      }),
+    // etag (S2c-F2a, К8): тег прочитанной версии для сохранения по If-Match. Сервер даёт его
+    // только редактируемому тексту до 10 МиБ (FilesController.IsEtaggableText); видео/аудио/
+    // документы и сверх потолка — без тега, как и их правка без If-Match. Агент и ретранслятор
+    // ETag не отдают вовсе (LocalApi.MapFiles, ProjectRelayController) — там etag undefined.
+    // Офлайн-доставка из кэша тега не имеет: сохранять офлайн нельзя в любом случае.
+    getContent: async (projectId: string, path: string, featureId?: string, opts?: { sessionId?: string }) => {
+      const etagRef: EtagRef = {};
+      const data = await projectRequest<{ content: string | null; isBinary: boolean; isImage: boolean; isDocument?: boolean; docKind?: string; mimeType?: string; base64?: string; fileSize?: number; branch?: string | null; isAnchor?: boolean }>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}${featureId ? `&featureId=${encodeURIComponent(featureId)}` : ''}${opts?.sessionId ? `&sessionId=${encodeURIComponent(opts.sessionId)}` : ''}`, { etagRef });
+      return { ...data, etag: etagRef.etag };
+    },
+    // ifMatch (К8): тег версии, которую видел вызывающий, — etag из getContent или sha256 из
+    // FileConflictError (повторная отправка по актуальному состоянию). С If-Match сервер либо
+    // пишет (200), либо отказывает 409 file_changed, не трогая файл, — он становится
+    // FileConflictError с полями тела. Без ifMatch — ровно как раньше: заголовка нет,
+    // 409 по конфликту сервер не отдаёт, существующие вызывающие ничего не заметили.
+    // Офлайн-сохранение — OfflineError, как любая прочая мутация: очереди файлов нет,
+    // запись с If-Match офлайн не ставится в очередь молча (offline.ts: мутации офлайн запрещены).
+    // etagOut: новый ETag ответа 200, если сервер его прислал (у файлов пока не присылает —
+    // см. дефект; у заметок присылает). На агентской ветке If-Match до агента не доходит и
+    // не проверяется: там конфликта нет по построению бэка.
+    saveContent: async (projectId: string, path: string, content: string, ifMatch?: string, etagOut?: EtagRef): Promise<void> => {
+      try {
+        await projectRequest<void>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}`, {
+          method: 'PUT',
+          body: JSON.stringify({ content }),
+          ...(ifMatch ? { headers: { 'If-Match': ifMatch } } : {}),
+          etagRef: etagOut,
+        });
+      } catch (e) {
+        const err = e as { status?: number; body?: { code?: string; sha256?: string | null; content?: string | null; author?: FileConflictAuthor | null; changedAt?: string | null; source?: FileConflictSource | null } };
+        if (err?.status === 409 && err?.body?.code === 'file_changed') throw new FileConflictError(err.body);
+        throw e;
+      }
+    },
     // Документы (pdf/docx/xlsx/pptx): конвертация в MD + ИИ-помощь (локальная модель / claude)
     documentConvert: (projectId: string, path: string) =>
       projectRequest<{ markdown: string }>(`/projects/${projectId}/files/document/convert?path=${encodeURIComponent(path)}`, { method: 'POST' }),

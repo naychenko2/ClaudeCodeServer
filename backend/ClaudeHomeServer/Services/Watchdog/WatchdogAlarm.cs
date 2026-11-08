@@ -7,15 +7,16 @@ namespace ClaudeHomeServer.Services.Watchdog;
 // а IWatchdogAlarm — в Watchdog-сборке. Адаптер связывает их.
 public sealed class WatchdogAlarm(SessionMessagingService messaging) : IWatchdogAlarm
 {
-    public async Task<bool> DeliverAsync(string ownerId, string sessionId, string text)
+    public async Task<bool> DeliverAsync(string ownerId, string sessionId, string text, string? actorUserId = null)
     {
         // callerSessionId: null — квота пробуждения штаба не тратится, глубина делегирования
         // берётся из agentDepthFallback (0): будильник — системный ход, не агентный.
         // preempt: false — живой ход получателя не рвём, сообщение встанет в очередь и
         // доставится по result. wait: none — сервис не ждёт завершения хода.
+        // actorUserId — актор хода, поставившего сторожа (null — неизвестен, fail-closed).
         var outcome = await messaging.SendAsync(ownerId, sessionId, text,
             callerSessionId: null, senderSessionId: null, agentDepthFallback: 0,
-            wait: "none", timeoutSec: null, preempt: false);
+            wait: "none", timeoutSec: null, preempt: false, actorUserId: actorUserId);
         return outcome switch
         {
             SessionMessagingService.SendOutcome.Completed

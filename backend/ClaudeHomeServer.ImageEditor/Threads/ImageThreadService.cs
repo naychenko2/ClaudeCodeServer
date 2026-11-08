@@ -305,7 +305,7 @@ public sealed class ImageThreadService(
     // (image_generate op = crop). Считает прямоугольник по AspectCrop.Rect, выполняет существующий transform
     // (crop) и кладёт результат НОВОЙ версией нити с якорем запуска в ленте: карточка та же, что у других
     // операций. dryRun только считает размер результата. Бесплатно: провайдера, котировки и траты нет
-    public async Task<ImageCropOutcome> CropToAspectAsync(string ownerId, ImageEditScope scope, string sessionId,
+    public async Task<ImageCropOutcome> CropToAspectAsync(string ownerId, string? actorId, ImageEditScope scope, string sessionId,
         string threadId, string? versionId, string aspect, string? anchor, ImageEditInitiator initiator, bool dryRun,
         CancellationToken ct)
     {
@@ -331,7 +331,7 @@ public sealed class ImageThreadService(
             bytes = found.Image.Bytes;
         else if (thread.File is { Length: > 0 } path && scope.Project is { } project)
         {
-            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, path, "Файл картинки", ct);
+            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(actorId, project.RootPath, path, "Файл картинки", ct);
             if (read.Value is not { } image) return Fail(read.ErrorCode ?? ImageEditErrorCodes.InvalidRequest, read.Error ?? "Файл не прочитан");
             file = new ProjectImage(path, image.Bytes);
             bytes = image.Bytes;
@@ -799,7 +799,7 @@ public sealed class ImageThreadService(
         if (broadcaster is null) return;
         try
         {
-            await broadcaster.ToOwner(ownerId, new ImageThreadChangedMessage(projectId, state.Revision, Project(ownerId, sessionId, state)) { SessionId = sessionId });
+            await broadcaster.ToChatAudience(directory, ownerId, ImageEditScope.ProjectIdOf(projectId), sessionId, new ImageThreadChangedMessage(projectId, state.Revision, Project(ownerId, sessionId, state)) { SessionId = sessionId });
         }
         catch (Exception ex)
         {

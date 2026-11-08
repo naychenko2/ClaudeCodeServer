@@ -32,7 +32,7 @@ public abstract class ImageThreadEndpoints(ImageThreadService threads, IImageEdi
     // threads уже захвачен базовым классом: наследники берут его отсюда, не дублируя хранение (CS9107)
     protected ImageThreadService Threads => threads;
 
-    protected IActionResult GetIn(string sessionId) => Ok(threads.View(UserId, sessionId));
+    protected IActionResult GetIn(ImageEditScope scope, string sessionId) => Ok(threads.View(scope.Tenant, sessionId));
 
     // Взять картинку в работу: ровно одно из file (путь в проекте) и draftFolder (черновик «Новая
     // картинка», "" — корень). Нить по этому файлу уже есть — фокус на неё, второй не будет
@@ -62,16 +62,16 @@ public abstract class ImageThreadEndpoints(ImageThreadService threads, IImageEdi
         }
         else folder = "";
 
-        return Result(await threads.OpenAsync(UserId, scope.Key, sessionId, file, folder, req.Revision, ct));
+        return Result(await threads.OpenAsync(scope.Tenant, scope.Key, sessionId, file, folder, req.Revision, ct));
     }
 
     // Взять картинку в работу или снять выбор (threadId = null)
     protected async Task<IActionResult> FocusIn(ImageEditScope scope, string sessionId, ImageThreadFocusRequest req) =>
-        Result(await threads.FocusAsync(UserId, scope.Key, sessionId, req.ThreadId, req.Revision));
+        Result(await threads.FocusAsync(scope.Tenant, scope.Key, sessionId, req.ThreadId, req.Revision));
 
     // Убрать нить без шагов; у нити с шагами или с ожидающими вариантами — 400
     protected async Task<IActionResult> RemoveIn(ImageEditScope scope, string sessionId, string threadId, long revision) =>
-        Result(await threads.RemoveAsync(UserId, scope.Key, sessionId, threadId, revision));
+        Result(await threads.RemoveAsync(scope.Tenant, scope.Key, sessionId, threadId, revision));
 
     // «Продолжить от версии»: версия становится текущей (от неё пойдёт следующая правка), нить —
     // в работе; stepId — ещё и шаг этой версии. Ничего не удаляет
@@ -81,7 +81,7 @@ public abstract class ImageThreadEndpoints(ImageThreadService threads, IImageEdi
         if (string.IsNullOrWhiteSpace(req.VersionId))
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Не указана версия");
         var stepId = string.IsNullOrWhiteSpace(req.StepId) ? null : req.StepId.Trim();
-        return Result(await threads.ContinueAsync(UserId, scope.Key, sessionId, threadId, req.VersionId.Trim(), stepId,
+        return Result(await threads.ContinueAsync(scope.Tenant, scope.Key, sessionId, threadId, req.VersionId.Trim(), stepId,
             req.Revision));
     }
 
@@ -91,7 +91,7 @@ public abstract class ImageThreadEndpoints(ImageThreadService threads, IImageEdi
     {
         if (string.IsNullOrWhiteSpace(req.StepId))
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Не указан шаг");
-        return TakeResult(await threads.AddStepAsync(UserId, scope.Key, sessionId, threadId, req.StepId.Trim(), req.Revision));
+        return TakeResult(await threads.AddStepAsync(scope.Tenant, scope.Key, sessionId, threadId, req.StepId.Trim(), req.Revision));
     }
 
     // «Обрезать» из «Формата» (ADR-025 §4): тот же метод сервиса, что у image_generate op = crop; результат — новая
@@ -101,10 +101,10 @@ public abstract class ImageThreadEndpoints(ImageThreadService threads, IImageEdi
     {
         if (string.IsNullOrWhiteSpace(req.Aspect))
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Не указаны пропорции");
-        var done = await threads.CropToAspectAsync(UserId, scope, sessionId, threadId, req.VersionId, req.Aspect, req.Anchor,
+        var done = await threads.CropToAspectAsync(scope.Tenant, UserId, scope, sessionId, threadId, req.VersionId, req.Aspect, req.Anchor,
             ImageEditInitiator.Human, req.DryRun, ct);
         if (done.Ok)
-            return Ok(new ImageThreadCropResponse(done.Width, done.Height, done.Aspect!, done.Version?.Id, threads.View(UserId, sessionId)));
+            return Ok(new ImageThreadCropResponse(done.Width, done.Height, done.Aspect!, done.Version?.Id, threads.View(scope.Tenant, sessionId)));
         var status = done.ErrorCode switch
         {
             ImageEditErrorCodes.ThreadNotFound or ImageEditErrorCodes.VersionNotFound or ImageEditErrorCodes.StepNotFound => StatusCodes.Status404NotFound,
@@ -123,7 +123,7 @@ public abstract class ImageThreadEndpoints(ImageThreadService threads, IImageEdi
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
                 "Взять можно ровно одно: вариант задачи (jobId + variant) или шаг правки (stepId)");
 
-        return TakeResult(await threads.TakeAsync(UserId, scope.Key, sessionId, threadId, req.JobId, req.Variant, req.StepId,
+        return TakeResult(await threads.TakeAsync(scope.Tenant, scope.Key, sessionId, threadId, req.JobId, req.Variant, req.StepId,
             req.Revision, jobs, ct));
     }
 
@@ -133,7 +133,7 @@ public abstract class ImageThreadEndpoints(ImageThreadService threads, IImageEdi
     {
         if (string.IsNullOrWhiteSpace(req.JobId))
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Не указана задача");
-        return Result(await threads.DismissAsync(UserId, scope.Key, sessionId, threadId, req.JobId.Trim(), req.Revision));
+        return Result(await threads.DismissAsync(scope.Tenant, scope.Key, sessionId, threadId, req.JobId.Trim(), req.Revision));
     }
 
     // Откат (нити до 27.09): шаг стопки становится текущим (null — исходник); стопки не трогает.
@@ -142,7 +142,7 @@ public abstract class ImageThreadEndpoints(ImageThreadService threads, IImageEdi
         ImageThreadRollbackRequest req)
     {
         var stepId = string.IsNullOrWhiteSpace(req.StepId) ? null : req.StepId.Trim();
-        return Result(await threads.RollbackAsync(UserId, scope.Key, sessionId, threadId, stepId, req.Revision));
+        return Result(await threads.RollbackAsync(scope.Tenant, scope.Key, sessionId, threadId, stepId, req.Revision));
     }
 
     protected async Task<IActionResult> SettingsIn(ImageEditScope scope, string sessionId, string threadId,
@@ -151,7 +151,7 @@ public abstract class ImageThreadEndpoints(ImageThreadService threads, IImageEdi
         if (req.Settings is not { } settings || settings.Count < 1 || settings.Count > ImageEditCatalog.DefaultLimits.MaxCount)
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
                 $"Число вариантов — от 1 до {ImageEditCatalog.DefaultLimits.MaxCount}");
-        return Result(await threads.SetSettingsAsync(UserId, scope.Key, sessionId, threadId, settings, req.Revision));
+        return Result(await threads.SetSettingsAsync(scope.Tenant, scope.Key, sessionId, threadId, settings, req.Revision));
     }
 
     private IActionResult TakeResult(ImageThreadTake taken)
@@ -211,12 +211,11 @@ public class ThreadsController(
     ImageEditSteps? steps = null,
     IProjectManager? projects = null,
     ILocalImageMedia? localMedia = null,
-    IFeatureFlagGate? flags = null,
     Faces.FaceDetectionCache? faces = null) : ImageThreadEndpoints(threads, jobs)
 {
     [HttpGet]
     public IActionResult Get(string projectId, string sessionId) =>
-        Gate(projectId, sessionId, out _, out var denied) ? GetIn(sessionId) : denied;
+        Gate(projectId, sessionId, out var scope, out var denied) ? GetIn(scope, sessionId) : denied;
 
     [HttpPost]
     public async Task<IActionResult> Open(string projectId, string sessionId, [FromBody] ImageThreadOpenRequest req,
@@ -276,18 +275,13 @@ public class ThreadsController(
     {
         if (!Gate(projectId, sessionId, out var scope, out var denied)) return denied;
 
-        // Флаг выключен — 404 с телом feature_disabled (фича скрыта)
-        if (flags?.IsEnabled(UserId, FeatureFlagKeys.CharacterFaceSwap) != true)
-            return StatusCode(StatusCodes.Status404NotFound,
-                new { error = "Подстановка персонажа на лицо выключена", code = ImageEditErrorCodes.FeatureDisabled });
-
         // Локальные модели — опциональная зависимость: нет шва (подсистема images выключена) —
         // provider_unavailable, не 500
         if (localMedia is null)
             return StatusCode(StatusCodes.Status409Conflict,
                 new { error = "Локальные модели не настроены: детекция лиц недоступна", code = "provider_unavailable" });
 
-        var state = Threads.Get(UserId, sessionId);
+        var state = Threads.Get(scope.Tenant, sessionId);
         if (!Threads.OwnChat(scope.Key, sessionId) || state.Threads.FirstOrDefault(t => t.Id == threadId) is not { } thread)
             return StatusCode(StatusCodes.Status404NotFound,
                 new { error = "Картинка не найдена в этом чате", code = ImageEditErrorCodes.ThreadNotFound });
@@ -321,11 +315,11 @@ public class ThreadsController(
     private async Task<byte[]?> VersionBytesAsync(ImageEditScope scope, ImageThread thread,
         ImageThreadVersion version, CancellationToken ct)
     {
-        if (thread.ImageStepOf(version) is { Length: > 0 } stepId && steps?.Open(UserId, scope.Key, stepId) is { } found)
+        if (thread.ImageStepOf(version) is { Length: > 0 } stepId && steps?.Open(scope.Tenant, scope.Key, stepId) is { } found)
             return found.Image.Bytes;
         if (thread.File is { Length: > 0 } file && projects?.GetById(scope.Key) is { } project)
         {
-            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(project.RootPath, file, "Версия", ct);
+            var read = await ImageEditLaunchAssembler.ReadProjectImageAsync(UserId, project.RootPath, file, "Версия", ct);
             return read.Value?.Bytes;
         }
         return null;

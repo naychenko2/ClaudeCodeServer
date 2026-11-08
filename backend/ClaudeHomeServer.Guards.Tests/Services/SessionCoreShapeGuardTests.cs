@@ -230,13 +230,24 @@ public class SessionCoreShapeGuardTests
             .ToList();
 
     internal static HashSet<string> FacadeTopLevelNames(string facadeSource) =>
-        // Raw-строки вырезаются до разбора: «объявление» в колонке 0 внутри них — не объявление.
-        // Атрибут допускает строковые литералы с «]» внутри аргумента: [Obsolete("see Foo[0]")].
-        Regex.Matches(Regex.Replace(facadeSource, "\"\"\"[\\s\\S]*?\"\"\"", ""),
-                @"^(?:\[(?:[^\]\r\n""]|""(?:[^""\\\r\n]|\\.)*"")*\]\s*)*(?:public|internal)\s+(?:(?:sealed|static|abstract|partial|readonly)\s+)*(?:class|record(?:\s+(?:class|struct))?|struct|enum|interface)\s+(\w+)",
+        // Raw-строки и комментарии вырезаются до разбора: «объявление» в колонке 0 внутри них — не объявление.
+        // Атрибут допускает строковые литералы с «]» и вложенные скобки в аргументе: [Obsolete("see Foo[0]")],
+        // [Foo(new[]{1})] — вложенность держит балансирующая группа d.
+        Regex.Matches(StripRawStringsAndComments(facadeSource),
+                @"^(?:\[(?:[^\[\]\r\n""]|""(?:[^""\\\r\n]|\\.)*""|(?<d>\[)|(?<-d>\]))*(?(d)(?!))\]\s*)*(?:public|internal)\s+(?:(?:sealed|static|abstract|partial|readonly)\s+)*(?:class|record(?:\s+(?:class|struct))?|struct|enum|interface)\s+(\w+)",
                 RegexOptions.Multiline)
             .Select(m => m.Groups[1].Value)
             .ToHashSet();
+
+    /// <summary>Вырезает raw-строки и комментарии за ОДИН проход слева направо: каждая конструкция
+    /// разбирается с её собственного начала, поэтому посторонняя <c>"""</c> внутри комментария или обычной
+    /// строки не сопрягается с настоящей raw-строкой и не вырезает объявления между ними. Обычные, verbatim-
+    /// и char-литералы проходят как есть (в них «//» и «"""» — просто текст).</summary>
+    private static string StripRawStringsAndComments(string src) =>
+        Regex.Replace(src,
+            "\"\"\"[\\s\\S]*?\"\"\"|//[^\\n]*|/\\*[\\s\\S]*?\\*/|@\"(?:[^\"]|\"\")*\"|\"(?:[^\"\\\\\\r\\n]|\\\\.)*\"|'(?:\\\\.|[^'\\\\\\r\\n])+'",
+            m => m.Value.StartsWith("\"\"\"", StringComparison.Ordinal) || m.Value.StartsWith("//", StringComparison.Ordinal)
+                || m.Value.StartsWith("/*", StringComparison.Ordinal) ? "" : m.Value);
 
     /// <summary>Ключи индексаторных инициализаторов <c>Dictionary&lt;string, string&gt; Имя = new() { ["ключ"] = … }</c>
     /// по тексту исходника: имя словаря → ПОЛНЫЕ ключи в порядке объявления, с повторами. Индексатор при
@@ -615,6 +626,9 @@ public class SessionCoreShapeGuardTests
         // Файл фасада держит ровно SessionManager; набор top-level пуст ТОЛЬКО потому, что все
         // контракты ушли в ядро. Имя фасада в разборе обязано находиться — иначе регэксп сломан
         // и сторож проходит вакуумно.
+        // Шаг «имя → тип» тоже должен находить фасад: опечатка в FacadeNamespace иначе делает BeEmpty ниже вакуумным.
+        typeof(SessionManager).Namespace.Should().Be(FacadeNamespace,
+            "FacadeNamespace — пространство имён фасада; расхождение делает проверку набора top-level типов вакуумной");
         var source = ReadFacadeSource();
         FacadeTopLevelNames(source).Should().Contain(nameof(SessionManager));
         FacadeTopLevelTypes(source).Should().BeEmpty(
@@ -638,6 +652,12 @@ public class SessionCoreShapeGuardTests
             .Should().BeEquivalentTo("WithAttr", "Two");
         FacadeTopLevelNames("[Obsolete(\"see Foo[0]\")] public class BracketAttr {}").Should().BeEquivalentTo("BracketAttr");
         FacadeTopLevelNames("var s = \"\"\"\npublic class InRaw {}\n\"\"\";\npublic class Real {}").Should().BeEquivalentTo("Real");
+        // Посторонняя «"""» в комментарии не сопрягается с настоящей raw-строкой: объявление между ними сохраняется.
+        FacadeTopLevelNames("// лишняя \"\"\" в комментарии\npublic class Between {}\nvar s = \"\"\"\npublic class InRaw {}\n\"\"\";\npublic class Real {}")
+            .Should().BeEquivalentTo("Between", "Real");
+        // «]» в код-аргументе атрибута (массив, вложенный массив) не выбрасывает объявление.
+        FacadeTopLevelNames("[Foo(new[]{1})] public class ArrAttr {}\n[Foo(new[]{new[]{1}}), Bar] internal class NestedArr {}")
+            .Should().BeEquivalentTo("ArrAttr", "NestedArr");
         FacadeConditionalDirectives("#if false\npublic class Hidden {}\n  #endif\n#region R").Should()
             .BeEquivalentTo("#if false", "#endif");
     }

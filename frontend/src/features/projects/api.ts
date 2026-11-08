@@ -72,7 +72,7 @@ export const projectsApi = {
         deviceId: local?.deviceId,
       }) }).then(noted),
     update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null; mcpServersOn?: string[]; autoImportDossiers?: boolean; mcpCatalogConfirmed?: boolean }) =>
-      request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }).then(noted),
+      request<Project>(`/projects/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }).then(noted),
     // Перепривязка устройства (ADR-016 §3.4): deviceId=null — отвязать проект
     // (сделать серверным). При существующих чатах — 409 с `{error}`. rootPath — новый путь
     // (на устройстве при привязке); без него бэк оставит прежний. Возвращает обновлённый
@@ -272,10 +272,10 @@ export const projectsApi = {
       params.set('v', project.background.tileVersion);
       return `/api/projects/${encodeURIComponent(project.id)}/background/tile.svg?${params}`;
     },
-    getEffectivePrompt: (id: string) => request<{ parts: SystemPromptPart[] }>(`/projects/${id}/effective-prompt`),
+    getEffectivePrompt: (id: string) => request<{ parts: SystemPromptPart[] }>(`/projects/${encodeURIComponent(id)}/effective-prompt`),
     // Кастомные колонки Kanban-доски проекта (пустой массив → дефолтные 3)
     updateBoardColumns: (id: string, columns: BoardColumn[]) =>
-      request<Project>(`/projects/${id}/board-columns`, { method: 'PUT', body: JSON.stringify({ columns }) }),
+      request<Project>(`/projects/${encodeURIComponent(id)}/board-columns`, { method: 'PUT', body: JSON.stringify({ columns }) }),
     // Применить пресет каркаса (знакомство v2, п.4): "docs" / "dev" / "personal" — создать;
     // "none" — зафиксировать отказ. 409 → "Каркас уже применён"; 400 → неверный ключ.
     // 404 → чужой проект. Ответ — отчёт { created, skipped } (на "none" —
@@ -318,28 +318,28 @@ export const projectsApi = {
     // Preview: сервисы проекта (инференс из манифестов + сохранённые в .claude/launch.json).
     // У локального проекта — у агента устройства (projectRequest); внешнего доступа там нет
     services: (id: string) =>
-      projectRequest<{ services: ProjectService[]; activeServiceId: string | null }>(`/projects/${id}/services`),
+      projectRequest<{ services: ProjectService[]; activeServiceId: string | null }>(`/projects/${encodeURIComponent(id)}/services`),
     previewStart: (id: string, svc: {
       serviceId: string; name: string; command: string; args: string[];
       cwd?: string; port?: number; autoPort?: boolean; env?: Record<string, string>;
     }) =>
-      projectRequest<{ status: string; port?: number; error?: string; serviceId: string }>(`/projects/${id}/preview/start`, {
+      projectRequest<{ status: string; port?: number; error?: string; serviceId: string }>(`/projects/${encodeURIComponent(id)}/preview/start`, {
         method: 'POST', body: JSON.stringify(svc), timeoutMs: PREVIEW_START_TIMEOUT_MS,
       }),
     previewStop: (id: string, serviceId: string) =>
-      projectRequest<{ status: string }>(`/projects/${id}/preview/stop`, {
+      projectRequest<{ status: string }>(`/projects/${encodeURIComponent(id)}/preview/stop`, {
         method: 'POST', body: JSON.stringify({ serviceId }),
       }),
     previewStatus: (id: string) =>
-      projectRequest<{ running: { serviceId: string; name: string; port: number | null; status: string; error: string | null }[]; activeServiceId: string | null }>(`/projects/${id}/preview/status`),
+      projectRequest<{ running: { serviceId: string; name: string; port: number | null; status: string; error: string | null }[]; activeServiceId: string | null }>(`/projects/${encodeURIComponent(id)}/preview/status`),
     previewActive: (id: string, serviceId: string) =>
-      projectRequest<{ activeServiceId: string }>(`/projects/${id}/preview/active`, {
+      projectRequest<{ activeServiceId: string }>(`/projects/${encodeURIComponent(id)}/preview/active`, {
         method: 'POST', body: JSON.stringify({ serviceId }),
       }),
     // Сервис поднят вне продукта (Rider, терминал) — показать его в превью.
     // Порт выбирает сервер по конфигурации сервиса, клиент его не передаёт.
     previewActiveExternal: (id: string, serviceId: string) =>
-      projectRequest<{ activeServiceId: string; port: number }>(`/projects/${id}/preview/active-external`, {
+      projectRequest<{ activeServiceId: string; port: number }>(`/projects/${encodeURIComponent(id)}/preview/active-external`, {
         method: 'POST', body: JSON.stringify({ serviceId }),
       }),
     // Внешний доступ: ссылка на сервис по отдельному поддомену. Порт, как и выше, выбирает
@@ -347,17 +347,17 @@ export const projectsApi = {
     // Остановить процесс, поднятый вне продукта. 409 с needsConfirm — порт держит чужой
     // процесс, и гасить его можно только после явного согласия человека.
     previewStopExternal: (id: string, serviceId: string, confirm = false) =>
-      projectRequest<{ status: string; pid: number }>(`/projects/${id}/preview/stop-external`, {
+      projectRequest<{ status: string; pid: number }>(`/projects/${encodeURIComponent(id)}/preview/stop-external`, {
         method: 'POST', body: JSON.stringify({ serviceId, confirm }),
       }),
     previewExternalLink: (id: string, serviceId: string) =>
-      projectRequest<ExternalLinkIssued>(`/projects/${id}/preview/external-link`, {
+      projectRequest<ExternalLinkIssued>(`/projects/${encodeURIComponent(id)}/preview/external-link`, {
         method: 'POST', body: JSON.stringify({ serviceId }),
       }),
     getLaunchConfig: (id: string) =>
-      projectRequest<{ configurations: LaunchConfigEntry[] }>(`/projects/${id}/launch-config`),
+      projectRequest<{ configurations: LaunchConfigEntry[] }>(`/projects/${encodeURIComponent(id)}/launch-config`),
     putLaunchConfig: (id: string, configurations: LaunchConfigEntry[]) =>
-      projectRequest<{ configurations: LaunchConfigEntry[] }>(`/projects/${id}/launch-config`, {
+      projectRequest<{ configurations: LaunchConfigEntry[] }>(`/projects/${encodeURIComponent(id)}/launch-config`, {
         method: 'PUT', body: JSON.stringify({ configurations }),
       }),
   },

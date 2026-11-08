@@ -589,4 +589,80 @@ public class FalCostBatchTests
         rig.Published["r-x-1"].Should().Be(1, "двойной публикации нет: Published держит");
         rig.Usd["r-x-1"].Should().BeApproximately(0.02, 1e-9);
     }
+
+    // Заглушка гонки «пачка нашла цену, живая полоса вернула null»: первый запрос (пачка с id)
+    // держится до ReleaseBatch и отвечает цену; второй (живая полоса по тому же id) держится до
+    // ReleaseLive и отвечает 404 — его результат поздний и пустой. Порядок двух завершений одного
+    // Polling задаёт тест.
+    private sealed class LateLive404Handler : HttpMessageHandler
+    {
+        private int _calls;
+        public TaskCompletionSource BatchStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseBatch { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource LiveStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseLive { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ConcurrentQueue<string[]> Calls { get; } = new();
+
+        public int CallsWith(string id) => Calls.Count(c => c.Contains(id));
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var ids = System.Web.HttpUtility.ParseQueryString(request.RequestUri!.Query).GetValues("request_id") ?? [];
+            Calls.Enqueue(ids);
+            if (Interlocked.Increment(ref _calls) == 1)
+            {
+                BatchStarted.TrySetResult();
+                await ReleaseBatch.Task.WaitAsync(TimeSpan.FromSeconds(8), ct);
+                return Ok(ids);
+            }
+            LiveStarted.TrySetResult();
+            await ReleaseLive.Task.WaitAsync(TimeSpan.FromSeconds(8), ct);
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        }
+    }
+
+    [Fact]
+    public async Task ПачкаЗакрылаЦену_ПозднийПустойЖивойОпросНеВытесняетУспешныйИзКэша_ПовторныйБезСети()
+    {
+        // Минор ревью R-S-SPEND-MERGE: на зафиксированной гонке (комментарий в ProcessBatchAsync)
+        // один и тот же Polling завершается дважды: пачка закрывает Tcs ценой, живой опрос по нему
+        // возвращается пустым позже. Пустой результат не вытесняет запись, чья цена известна и
+        // опубликована: следующий вопрос по тому же request_id берётся из кэша, а не начинает
+        // новый сетевой опрос.
+        var handler = new LateLive404Handler();
+        var rig = MakeRig(handler);
+        var dropped = new Signal();
+        var err = new MarkedLog(dropped, ["Стоимость не появилась за отведённое время: r-x-1"]);
+        var prevErr = Console.Error;
+        Console.SetError(err);
+        try
+        {
+            rig.Svc.Track("s-1", "r-x-1", null);
+            await handler.BatchStarted.Task.WaitAsync(TimeSpan.FromSeconds(8)); // пачка с id уже в сети
+
+            var usdTask = rig.Svc.ResolveUsdAsync("r-x-1", CancellationToken.None); // поднимает id в полёте пачки
+            await handler.LiveStarted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+            // Пачка приходит первой: публикует цену и закрывает Tcs. Потребитель получает её,
+            // пока живой запрос ещё в полёте.
+            handler.ReleaseBatch.TrySetResult();
+            (await usdTask).Should().BeApproximately(0.02, 1e-9, "потребитель получил цену из пачки");
+
+            // Живой запрос поздний и пустой: его null не вытесняет успешную запись.
+            handler.ReleaseLive.TrySetResult();
+            (await dropped.WaitAsync(1)).Should().BeTrue("живая полоса отчиталась пустым результатом");
+            // CompletePolling живой полосы идёт сразу за журналом, без await — короткое ожидание
+            // гарантирует, что он отработал до повторного вопроса.
+            await Task.Delay(50);
+
+            var again = await rig.Svc.ResolveUsdAsync("r-x-1", CancellationToken.None);
+            again.Should().BeApproximately(0.02, 1e-9, "цена известна: повторный запрос берётся из кэша");
+            handler.CallsWith("r-x-1").Should().Be(2, "третьего сетевого запроса по известной цене не было");
+            rig.Published["r-x-1"].Should().Be(1, "двойной публикации нет: Published держит");
+        }
+        finally
+        {
+            Console.SetError(prevErr);
+        }
+    }
 }

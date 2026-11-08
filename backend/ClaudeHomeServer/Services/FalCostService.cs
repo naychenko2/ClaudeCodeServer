@@ -214,9 +214,14 @@ public class FalCostService : IFalRequestCost
     }
 
     // Итог опроса: пустой убирается из кэша (только своя запись — чужую, начатую позже, не трогаем).
+    // Успешный не вытесняется никогда: на зафиксированной гонке (комментарий в ProcessBatchAsync)
+    // тот же Polling закрывается ценой пачки, а живой опрос по нему возвращается пустым позже —
+    // вытеснение такой записи ломало инвариант «в кэше живёт НАЧАТЫЙ или УСПЕШНЫЙ опрос» и
+    // следующий вопрос по тому же id начинал лишний сетевой опрос (хвосты ревью R-S-SPEND-MERGE).
     private void CompletePolling(string requestId, Polling poll, FalCostMessage? cost)
     {
-        if (cost is null) _pollings.TryRemove(new KeyValuePair<string, Polling>(requestId, poll));
+        if (cost is null && poll.Tcs.Task is not { IsCompleted: true, Result: not null })
+            _pollings.TryRemove(new KeyValuePair<string, Polling>(requestId, poll));
         poll.Tcs.TrySetResult(cost);
     }
 

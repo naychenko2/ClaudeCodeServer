@@ -427,10 +427,28 @@ public class SessionCoreShapeGuardTests
             .Which.Should().Contain("FakeRootWithStructs+PlainStruct");
     }
 
+    [Fact]
+    public void Самопроверка_рукописный_PrintMembers_в_обычной_struct_не_делает_её_записью()
+    {
+        SessionCoreFacadeContracts.IsRecord(typeof(FakeRootWithHandwrittenPrint.HandStruct)).Should().BeFalse(
+            "признак записи — синтезированный компилятором PrintMembers, а не метод с тем же именем");
+        SessionCoreFacadeContracts.NestedShapeViolations([typeof(FakeRootWithHandwrittenPrint)]).Should().ContainSingle()
+            .Which.Should().Contain("FakeRootWithHandwrittenPrint+HandStruct");
+    }
+
     private sealed class FakeRootWithStructs
     {
         public readonly record struct RecStruct(int X);
         public struct PlainStruct { public int X; }
+    }
+
+    private sealed class FakeRootWithHandwrittenPrint
+    {
+        public struct HandStruct
+        {
+            public int X;
+            private bool PrintMembers(System.Text.StringBuilder sb) => false;
+        }
     }
 
     [Fact]

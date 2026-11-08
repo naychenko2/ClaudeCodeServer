@@ -127,11 +127,13 @@ internal static class SessionCoreFacadeContracts
     }
 
     /// <summary>record class опознаётся по синтезированному <c>&lt;Clone&gt;$</c>; у record struct его нет —
-    /// там признак синтезированный закрытый <c>PrintMembers(StringBuilder)</c> (у обычной структуры его не бывает).</summary>
+    /// там признак синтезированный компилятором <c>PrintMembers(StringBuilder)</c> (с <c>CompilerGeneratedAttribute</c>):
+    /// рукописный метод с тем же именем в обычной структуре записью не считается.</summary>
     internal static bool IsRecord(Type t) =>
         t.GetMethod("<Clone>$", BindingFlags.Public | BindingFlags.Instance) is not null
         || t.IsValueType && t.GetMethod("PrintMembers", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance,
-            null, [typeof(System.Text.StringBuilder)], null) is not null;
+            null, [typeof(System.Text.StringBuilder)], null)
+            ?.IsDefined(typeof(System.Runtime.CompilerServices.CompilerGeneratedAttribute), false) == true;
 
     /// <summary>Форма контракта фасада — данные: record/enum/исключение. Роль или шов контрактом не бывает.</summary>
     internal static bool IsContractShape(Type t) =>

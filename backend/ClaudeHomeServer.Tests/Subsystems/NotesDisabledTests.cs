@@ -83,18 +83,31 @@ public class NotesDisabledTests : IClassFixture<NotesDisabledTests.Hosts>
     // а не тем, что проверка написана мимо (мимо маршрута, мимо имени тулсета, мимо ключа).
     private TestWebApplicationFactory _enabled => _hosts.Enabled;
 
-    // Два хоста на КЛАСС, а не на тест: поднимаются лениво и гасятся вместе с фикстурой.
+    // Три хоста на КЛАСС, а не на тест: поднимаются лениво и гасятся вместе с фикстурой.
     // Состояние хоста тесты не меняют; сток ошибок читается со сдвигом «до/после» (Skip(count)),
     // поэтому накопленные другими тестами записи ему не мешают
     public sealed class Hosts : IDisposable
     {
         public DisabledNotesFactory Disabled { get; } = new();
         public EnabledFactory Enabled { get; } = new();
+        public SubsystemsGateOffFactory GateOff { get; } = new();
 
         public void Dispose()
         {
             Disabled.Dispose();
             Enabled.Dispose();
+            GateOff.Dispose();
+        }
+    }
+
+    // Хост фактического сценария панели: модуль в реестре и в развертке, админ выключил только
+    // рубильник подсистемы. Хост поднимается на класс (вложенная фикстура Hosts), а не на тест. Механика UseSetting и почему это не гонка — в шапке класса.
+    public sealed class SubsystemsGateOffFactory : TestWebApplicationFactory
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            base.ConfigureWebHost(builder);
+            builder.UseSetting("Subsystems:Notes:Enabled", "false");
         }
     }
 
@@ -450,21 +463,9 @@ public class NotesDisabledTests : IClassFixture<NotesDisabledTests.Hosts>
         await AssertDisabledRowNamedLikeEnabledAsync(await RowAsync(_disabled, "notes"), await RowAsync(_enabled, "notes"));
     }
 
-    // Хост фактического сценария панели: модуль в реестре и в развертке, админ выключил только
-    // рубильник подсистемы. Механика UseSetting и почему это не гонка — в шапке класса.
-    private sealed class SubsystemsGateOffFactory : TestWebApplicationFactory
-    {
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
-        {
-            base.ConfigureWebHost(builder);
-            builder.UseSetting("Subsystems:Notes:Enabled", "false");
-        }
-    }
-
     [Fact]
     public async Task ВыключеннаяСтрокаНазванаКакВключённая_РубильникПодсистемы()
     {
-        using var factory = new SubsystemsGateOffFactory();
-        await AssertDisabledRowNamedLikeEnabledAsync(await RowAsync(factory, "notes"), await RowAsync(_enabled, "notes"));
+        await AssertDisabledRowNamedLikeEnabledAsync(await RowAsync(_hosts.GateOff, "notes"), await RowAsync(_enabled, "notes"));
     }
 }

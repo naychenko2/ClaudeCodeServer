@@ -70,14 +70,14 @@ public class ImageGenerationSpendTests
         public IReadOnlyList<ImageModelInfo> Models { get; init; } = [];
         public int Calls { get; private set; }
 
-        public Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
+        public Task<ImageGenerationResult> GenerateManyAsync(
             string prompt, int count, string? model, CancellationToken ct = default)
         {
             Calls++;
             IReadOnlyList<GeneratedImage> result = returnsImages
-                ? Enumerable.Range(1, count).Select(_ => new GeneratedImage([1, 2, 3], "image/png", requestId)).ToList()
+                ? Enumerable.Range(1, count).Select(_ => new GeneratedImage([1, 2, 3], "image/png")).ToList()
                 : [];
-            return Task.FromResult(result);
+            return Task.FromResult(new ImageGenerationResult(result, requestId));
         }
     }
 

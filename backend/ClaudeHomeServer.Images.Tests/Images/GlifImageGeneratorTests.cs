@@ -33,7 +33,8 @@ public class GlifImageGeneratorTests
     {
         // Фабрика клиентов — заглушка: если драйвер полезет в сеть, тест упадёт по NRE
         var images = await Generator(null).GenerateManyAsync("иконка проекта", 2, null);
-        images.Should().BeEmpty();
+        images.Images.Should().BeEmpty();
+        images.RequestId.Should().BeNull();
     }
 
     [Fact]

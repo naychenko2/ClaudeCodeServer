@@ -94,11 +94,12 @@ public sealed class ImageGenerationService
         {
             var generator = chain[i];
             var model = _settings.ModelFor(place, generator.Key);
-            var images = await generator.GenerateManyAsync(prompt, count, model, ct);
+            var generated = await generator.GenerateManyAsync(prompt, count, model, ct);
+            var images = generated.Images;
             // Трата — только за того, кто реально отдал картинки: пустой провайдер не стоил ничего
             if (images.Count > 0)
             {
-                RecordSpend(place, generator, model, images, ownerId, initiator);
+                RecordSpend(place, generator, model, images, generated.RequestId, ownerId, initiator);
                 return images;
             }
             if (i + 1 < chain.Count)
@@ -188,7 +189,7 @@ public sealed class ImageGenerationService
 
     private void RecordSpend(
         string place, IImageGenerator generator, string? model,
-        IReadOnlyList<GeneratedImage> images, string ownerId, string initiator)
+        IReadOnlyList<GeneratedImage> images, string? requestId, string ownerId, string initiator)
     {
         if (_spend is null)
         {
@@ -218,7 +219,6 @@ public sealed class ImageGenerationService
         // идентификатора, по которому его цена спрашивается — GlifJobParser берёт jobId, media
         // и status, поля цены там отсутствуют. Трата glif остаётся счётчиком вызовов, как и в
         // пишущейся записи чата (SpendMapping.RecordGlifGeneration: CostUsd = null).
-        var requestId = RequestIdOf(images);
         if (requestId is null || _falCost is null
             || !string.Equals(generator.Key, SpendSources.Fal, StringComparison.OrdinalIgnoreCase)) return;
         _ = TopUpAmountAsync(ownerId, model, requestId, initiator);
@@ -282,8 +282,4 @@ public sealed class ImageGenerationService
             _log?.LogError(ex, "Генерация картинок: не удалось записать трату {Provider}", providerKey);
         }
     }
-
-    // id один на весь запрос — его несёт каждая картинка этого вызова
-    private static string? RequestIdOf(IReadOnlyList<GeneratedImage> images) =>
-        images.Select(i => i.RequestId).FirstOrDefault(r => !string.IsNullOrWhiteSpace(r));
 }

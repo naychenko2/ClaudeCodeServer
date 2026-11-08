@@ -25,7 +25,7 @@ public class ImageGenerationServiceTests
         public int Calls { get; private set; }
         public string? LastModel { get; private set; }
 
-        public Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
+        public Task<ImageGenerationResult> GenerateManyAsync(
             string prompt, int count, string? model, CancellationToken ct = default)
         {
             Calls++;
@@ -33,7 +33,7 @@ public class ImageGenerationServiceTests
             IReadOnlyList<GeneratedImage> result = returnsImages
                 ? [new GeneratedImage([1, 2, 3], "image/png")]
                 : [];
-            return Task.FromResult(result);
+            return Task.FromResult(new ImageGenerationResult(result, null));
         }
     }
 

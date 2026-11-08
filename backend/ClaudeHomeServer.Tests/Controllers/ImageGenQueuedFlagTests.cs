@@ -21,9 +21,9 @@ internal sealed class SilentImageGenerator : IImageGenerator
     public bool Enabled => true;
     public IReadOnlyList<ImageModelInfo> Models => [];
 
-    public Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
+    public Task<ImageGenerationResult> GenerateManyAsync(
         string prompt, int count, string? model, CancellationToken ct = default) =>
-        Task.FromResult<IReadOnlyList<GeneratedImage>>([]);
+        Task.FromResult(ImageGenerationResult.Empty);
 }
 
 // Хост, где единственный драйвер картинок — молчащий: EnabledFor(place) = true,

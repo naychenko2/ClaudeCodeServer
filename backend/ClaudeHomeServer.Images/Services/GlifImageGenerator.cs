@@ -58,10 +58,10 @@ public sealed class GlifImageGenerator : IImageGenerator
         _logger = logger;
     }
 
-    public async Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
+    public async Task<ImageGenerationResult> GenerateManyAsync(
         string prompt, int count, string? model, CancellationToken ct = default)
     {
-        if (!Enabled || string.IsNullOrWhiteSpace(prompt)) return [];
+        if (!Enabled || string.IsNullOrWhiteSpace(prompt)) return ImageGenerationResult.Empty;
         count = Math.Clamp(count, 1, 4);
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -77,7 +77,7 @@ public sealed class GlifImageGenerator : IImageGenerator
             if (job.State == GlifJobState.Failed || string.IsNullOrWhiteSpace(job.JobId))
             {
                 _logger.LogWarning("glif: compose_project не стартовал ({Error})", job.Error ?? "нет jobId");
-                return [];
+                return ImageGenerationResult.Empty;
             }
 
             // Последний разобранный ответ — по нему объясняем в логе пустой финал
@@ -94,7 +94,7 @@ public sealed class GlifImageGenerator : IImageGenerator
                 if (status.State == GlifJobState.Failed)
                 {
                     _logger.LogWarning("glif: джоба {JobId} провалилась ({Error})", job.JobId, status.Error);
-                    return [];
+                    return ImageGenerationResult.Empty;
                 }
                 if (status.State == GlifJobState.Completed)
                 {
@@ -109,7 +109,7 @@ public sealed class GlifImageGenerator : IImageGenerator
             if (urls.Count == 0)
             {
                 LogEmptyResult(finished);
-                return [];
+                return ImageGenerationResult.Empty;
             }
 
             var result = new List<GeneratedImage>();
@@ -119,7 +119,7 @@ public sealed class GlifImageGenerator : IImageGenerator
                 var image = await ImageDownload.FetchAsync(url, token);
                 if (image is not null) result.Add(image);
             }
-            return result;
+            return new ImageGenerationResult(result, null);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -128,12 +128,12 @@ public sealed class GlifImageGenerator : IImageGenerator
         catch (OperationCanceledException)
         {
             _logger.LogWarning("glif: генерация не уложилась в {Seconds}с", TotalTimeout.TotalSeconds);
-            return [];
+            return ImageGenerationResult.Empty;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Ошибка генерации картинки через glif");
-            return [];
+            return ImageGenerationResult.Empty;
         }
     }
 

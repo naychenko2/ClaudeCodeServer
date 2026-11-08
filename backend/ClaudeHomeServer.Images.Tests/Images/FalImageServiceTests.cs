@@ -36,7 +36,78 @@ public class FalImageServiceTests
         // Фабрика клиентов — заглушка: полезет в сеть — упадёт по NRE
         if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("FAL_KEY"))) return;
         var images = await Service(null).GenerateManyAsync("иконка проекта", 2, null);
-        images.Should().BeEmpty();
+        images.Images.Should().BeEmpty();
+        images.RequestId.Should().BeNull();
+    }
+
+    // Фабрика клиентов с подставным обработчиком: сеть не нужна, ответ задаёт тест
+    private sealed class StubFactory(Func<HttpRequestMessage, HttpResponseMessage> respond) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(new StubHandler(respond));
+    }
+
+    private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct) =>
+            Task.FromResult(respond(request));
+    }
+
+    private static FalImageService ServiceWith(Func<HttpRequestMessage, HttpResponseMessage> respond)
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Fal:ApiKey"] = "k" }).Build();
+        return new FalImageService(new StubFactory(respond), config, NullLogger<FalImageService>.Instance);
+    }
+
+    [Fact]
+    public async Task RequestId_ВсеСкачиванияУпали_ВсёРавноВозвращён()
+    {
+        // 200 и images[], но data:-ссылка с битым base64 не скачивается: картинок нет, а запрос принят
+        var svc = ServiceWith(_ =>
+        {
+            var resp = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"images\":[{\"url\":\"data:image/png;base64,!!!\"}]}",
+                    System.Text.Encoding.UTF8, "application/json"),
+            };
+            resp.Headers.Add("x-fal-request-id", "req-dl-fail");
+            return resp;
+        });
+
+        var result = await svc.GenerateManyAsync("кот", 1, null);
+
+        result.Images.Should().BeEmpty();
+        result.RequestId.Should().Be("req-dl-fail");
+    }
+
+    [Fact]
+    public async Task RequestId_Ответ422СЗаголовком_ВозвращённПриПустыхКартинках()
+    {
+        var svc = ServiceWith(_ =>
+        {
+            var resp = new HttpResponseMessage(System.Net.HttpStatusCode.UnprocessableEntity)
+            {
+                Content = new StringContent("{\"detail\":\"bad\"}"),
+            };
+            resp.Headers.Add("x-fal-request-id", "req-422");
+            return resp;
+        });
+
+        var result = await svc.GenerateManyAsync("кот", 1, null);
+
+        result.Images.Should().BeEmpty();
+        result.RequestId.Should().Be("req-422");
+    }
+
+    [Fact]
+    public async Task RequestId_ИсключениеДоОтвета_Null()
+    {
+        var svc = ServiceWith(_ => throw new HttpRequestException("нет сети"));
+
+        var result = await svc.GenerateManyAsync("кот", 1, null);
+
+        result.Images.Should().BeEmpty();
+        result.RequestId.Should().BeNull();
     }
 
     [Fact]

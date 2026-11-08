@@ -380,6 +380,35 @@ public class SessionCoreShapeGuardTests
             "решение 05.11 (1dda7103): allow-list — одна роль; новая строка требует нового решения Александра");
 
     [Fact]
+    public void Точки_сборки_ядра_правила4_состоят_только_из_SessionCoreRegistration() =>
+        CoreCompositionRoots.Keys.Should().BeEquivalentTo(
+            ["ClaudeHomeServer.Services.Composition.SessionCoreRegistration"],
+            "строка здесь даёт корню полный доступ к ядру (грань Full): новая строка требует нового решения "
+            + "Александра; точка сборки поведение ролей не вызывает, второй тип сюда не добавляется");
+
+    [Fact]
+    public void Вызывающие_данных_правила4_состоят_только_из_названных_корней() =>
+        CoreDataReferrerAllowList.Keys.Should().BeEquivalentTo(
+            [
+                "ClaudeHomeServer.Services.ChatHistoryService",
+                "ClaudeHomeServer.Services.TaskExecutionService",
+                "ClaudeHomeServer.Controllers.SessionMessagesController",
+                "ClaudeHomeServer.Hubs.SessionHub",
+                "ClaudeHomeServer.Controllers.ChatsController",
+                "ClaudeHomeServer.Controllers.PersonasController",
+                "ClaudeHomeServer.Controllers.SessionsController",
+                "ClaudeHomeServer.Services.Mcp.Http.WorkspaceToolset",
+                "ClaudeHomeServer.Services.SessionMessagingService",
+                "ClaudeHomeServer.Services.Team.TeamTurnCompletionService",
+                "ClaudeHomeServer.Services.SessionManagerTurnResumeHost",
+                "ClaudeHomeServer.Controllers.OnboardingController",
+                "ClaudeHomeServer.Services.PersonaAutomationService",
+                "ClaudeHomeServer.Services.ChatContinueService",
+                "ClaudeHomeServer.Services.ChatHandoffService",
+            ],
+            "новая строка требует нового решения Александра: допуск только на типы-данные ядра");
+
+    [Fact]
     public void Список_типов_данных_состоит_только_из_контрактов_очереди_и_перенесённых_типов_фасада() =>
         CoreDataContracts.Keys.Should().BeEquivalentTo(
             [

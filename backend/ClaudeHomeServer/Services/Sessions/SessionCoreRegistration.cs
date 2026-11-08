@@ -3,8 +3,11 @@ using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Team;
 
 // Namespace намеренно Composition, а не Sessions: Program.cs уже импортирует Composition (его
-// строка остаётся ровно одной), а сторож формы ядра запрещает ссылки на типы Services.Sessions
-// из чего-либо, кроме SessionManager и самих Services.Sessions.
+// строка остаётся ровно одной). Сторож формы ядра допускает ссылки на типы Services.Sessions
+// только из SessionManager, самих Services.Sessions, этой точки сборки (CoreCompositionRoots,
+// полный доступ) и поимённого списка вызывающих за ядром (CoreDataReferrerAllowList, только
+// типы-данные). Именно из-за пространства имён Composition файл правилами 1–3 и 5 не охвачен:
+// они берут типы по namespace Services.Sessions.
 namespace ClaudeHomeServer.Services.Composition;
 
 // Регистрация ядра сессий: роли, вынесенные из SessionManager (docs/research/session-manager-split-2026-11.md).

@@ -524,6 +524,7 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
         {
             throw new ComfyException($"ComfyUI недоступен ({what})", ex);
         }
+        // Узкий тип: в try только транспортный вызов, его контракт таймаута — TaskCanceledException; нормализация на базовый тип — в хвосте 1dacc989
         catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
         {
             throw new ComfyException($"ComfyUI не ответил вовремя ({what})", ex);

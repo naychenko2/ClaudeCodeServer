@@ -132,6 +132,7 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
             }
             return null;
         }
+        // Узкий тип: таймаут транспорта даёт TaskCanceledException, чтение контента может дать сырой OperationCanceledException; нормализация на базовый тип — в хвосте 1dacc989
         catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException && !ct.IsCancellationRequested)
         {
             _log.LogDebug(ex, "fal: прайс {Endpoint} недоступен, беру ориентир каталога", endpoint);
@@ -193,6 +194,7 @@ public sealed class FalAudioEngine : IAudioEngine, IAudioQuoter, IAudioParamSche
             }
             return (null, "в OpenAPI нет схемы входа");
         }
+        // Узкий тип: таймаут транспорта даёт TaskCanceledException, чтение контента может дать сырой OperationCanceledException; нормализация на базовый тип — в хвосте 1dacc989
         catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException && !ct.IsCancellationRequested)
         {
             _log.LogDebug(ex, "fal: схема {Endpoint} недоступна", endpoint);

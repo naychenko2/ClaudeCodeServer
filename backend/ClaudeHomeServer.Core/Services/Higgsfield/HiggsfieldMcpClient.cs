@@ -63,6 +63,7 @@ public sealed class HiggsfieldMcpClient(IHttpClientFactory http, IConfiguration 
             if (!resp.IsSuccessStatusCode)
                 return HiggsfieldCall.NoAccess($"Higgsfield ответил {(int)resp.StatusCode}");
         }
+        // Узкий тип: таймаут транспорта даёт TaskCanceledException, чтение контента может дать сырой OperationCanceledException; нормализация на базовый тип — в хвосте 1dacc989
         catch (Exception ex) when (ex is HttpRequestException || ex is TaskCanceledException && !ct.IsCancellationRequested)
         {
             return HiggsfieldCall.NoAccess("Higgsfield не ответил: " + ex.Message);

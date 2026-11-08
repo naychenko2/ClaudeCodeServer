@@ -108,8 +108,6 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // читает словарь стора напрямую (хвост 52a8981c п.4, S3-8c). На него завязаны тела ещё
     // не вынесенных ролей и white-box тесты (рефлексия «_sessions» — теперь по свойству).
     private ConcurrentDictionary<string, SessionEntry> _sessions => _store.Sessions;
-    // «Дешёвый» раннер для авто-заголовка чата (локальная модель / claude).
-    private readonly Llm.ICheapTextRunner? _cheap;
     // Координатор режима «Командная реализация» (этап 4, шаг 2г-3а): owning — создаётся
     // в конструкторе SessionManager, DI-регистрация придёт в шаге 2г-4. Owning разрывает
     // цикл «ядро ↔ вертикаль штаба» без Lazy<T> и без нового Func-канала.
@@ -273,9 +271,6 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     private readonly IServiceProvider _services;
     private readonly PersonaManager _personas;
     private readonly ILogger<SessionManager> _log;
-    // Фабрика логгеров для вертикали (волна В): TeamPlanService получает собственный
-    // типизированный ILogger.
-    private readonly ILoggerFactory? _loggerFactory;
     private readonly Execution.SandboxManager _sandbox;
     // Шов «ядро → штаб» (этап 4, шаг 2б плана выноса штаба): четыре крючка уведомления
     // и запрос IsSessionBusy, реализованные этим же классом как обёртка над прежними
@@ -354,20 +349,17 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         AppSettingsService appSettings, Execution.SandboxManager sandbox,
         // Опциональны ровно там, где сервиса может не быть в контейнере: без план-механики штаба
         // режим включается, но план не строится; без реестра задач связи сессии не резолвятся;
-        // без «дешёвого» раннера авто-заголовок не генерируется; без журнала прогонов нudge
-        // сабагентов молчит. Дефолт = null обязателен: nullable-аннотация для контейнера ничего
-        // не значит — параметр опционален только с значением по умолчанию (CLAUDE.md:291,
-        // прецедент NotesSubsystemGateTests.cs:90); без него активация фасада падает вместо
-        // деградации в null.
+        // без журнала прогонов нudge сабагентов молчит. Дефолт = null обязателен:
+        // nullable-аннотация для контейнера ничего не значит — параметр опционален только с
+        // значением по умолчанию (CLAUDE.md:291, прецедент NotesSubsystemGateTests.cs:90);
+        // без него активация фасада падает вместо деградации в null.
         TeamPlanningService? teamPlanning = null, TaskManager? tasks = null,
-        Llm.ICheapTextRunner? cheap = null, Llm.Claude.SubagentRunLog? subagentRuns = null)
+        Llm.Claude.SubagentRunLog? subagentRuns = null)
     {
         // Стор — первым: на него опираются реестр, швы штаба и всё, что ниже читает сессии.
         _store = store;
         _services = services;
-        _loggerFactory = loggerFactory;
         _subagentRuns = subagentRuns;
-        _cheap = cheap;
         _sandbox = sandbox;
         _personas = personas;
         _history = history;

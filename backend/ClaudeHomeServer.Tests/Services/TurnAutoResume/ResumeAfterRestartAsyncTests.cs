@@ -72,13 +72,13 @@ public class ResumeAfterRestartAsyncTests : IDisposable
             ClaudeHomeServer.Services.Turn.ITurnEventBus turnEvents, AppSettingsService appSettings,
             ClaudeHomeServer.Services.Execution.SandboxManager sandbox,
             ClaudeHomeServer.Services.Team.TeamPlanningService? teamPlanning, TaskManager? tasks,
-            ICheapTextRunner? cheap, ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog? subagentRuns)
+            ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog? subagentRuns)
             : base(store, historyRole, costs, pending, route, worktree, providerMigration, naming,
                 visibility, settings, mcpEndpoint, builtinContexts, personaLayer, externalContexts,
                 moduleContexts, turnPassports, processHost, recovery, chatCreation, chatDeletion,
                 completion, intake, projects, history, config, llmProviders, personas, log, broadcaster,
                 loggerFactory, services, turnEvents, appSettings, sandbox, teamPlanning, tasks,
-                cheap, subagentRuns)
+                subagentRuns)
         {
         }
 
@@ -145,7 +145,6 @@ public class ResumeAfterRestartAsyncTests : IDisposable
             sp.GetRequiredService<ClaudeHomeServer.Services.Execution.SandboxManager>(),
             sp.GetService<ClaudeHomeServer.Services.Team.TeamPlanningService>(),
             sp.GetService<TaskManager>(),
-            sp.GetService<ICheapTextRunner>(),
             sp.GetService<ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog>());
     }
 

@@ -79,14 +79,13 @@ public sealed class SessionCoreTestHost : IDisposable
             sp.GetRequiredService<ClaudeHomeServer.Services.Execution.SandboxManager>(),
             sp.GetService<ClaudeHomeServer.Services.Team.TeamPlanningService>(),
             sp.GetService<TaskManager>(),
-            sp.GetService<ICheapTextRunner>(),
             sp.GetService<ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog>()));
         return new SessionCoreTestHost(services.BuildServiceProvider());
     }
 
     // Умолчания — те же объекты, что тесты собирали руками для конструктора SessionManager;
     // всё строится от IConfiguration из контейнера, поэтому конфиг теста (configure) подхватывают
-    // и умолчания. Необязательные зависимости фасада (git, cheap, spend…) здесь не регистрируются:
+    // и умолчания. Необязательные зависимости фасада (git, spend…) здесь не регистрируются:
     // без них ядро работает так же, как раньше с null.
     private static void AddDefaults(IServiceCollection services, string dataDir)
     {

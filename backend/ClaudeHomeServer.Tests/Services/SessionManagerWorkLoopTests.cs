@@ -1125,7 +1125,7 @@ public class SessionManagerWorkLoopTests : SessionManagerTestBase
 
         var outcome = await _sut.SendMessageAsync(session.Id, "как дела?", []);
 
-        outcome.Should().Be(SessionManager.SendUserOutcome.Queued);
+        outcome.Should().Be(SendUserOutcome.Queued);
         adapter.Verify(a => a.Interrupt(), Times.Never()); // отправка ход штаба не рушит
         GetTeamTurnText(entry).Should().NotBeEmpty("ход жив — буфер копится дальше");
 

@@ -4,6 +4,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 using Moq;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -157,7 +158,7 @@ public class SessionManagerShutdownTests : SessionManagerTestBase
                 BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
             if (m is null) continue;
             return await (Task<bool>)m.Invoke(owner,
-                [sessionId, text, SessionManager.DeliveryCause.Unknown])!;
+                [sessionId, text, DeliveryCause.Unknown])!;
         }
         throw new MissingMethodException(typeof(SessionManager).FullName, "TrySubmitContinuationAsync");
     }

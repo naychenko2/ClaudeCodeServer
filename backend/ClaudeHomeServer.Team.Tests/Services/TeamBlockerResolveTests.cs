@@ -15,6 +15,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ClaudeHomeServer.Services.Mcp.Http;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -837,7 +838,7 @@ public class TeamBlockerResolveTests : IDisposable
 
         var r = await _sessions.ReportBlockerAsync(child.Id, "застрял на паузе", UserId);
 
-        r.Should().BeOneOf(SessionManager.ReportUpResult.Delivered, SessionManager.ReportUpResult.Queued);
+        r.Should().BeOneOf(ReportUpResult.Delivered, ReportUpResult.Queued);
         _sessions.GetById(stab.Id)!.TeamImplement!.Budget.WakeupsUsed.Should().Be(0,
             "фича на паузе — координатор не будится, платное пробуждение не расходуется");
         (await _sessions.GetHistoryAsync(stab.Id)).OfType<Protocol.StoredUserMessage>().Should()
@@ -871,7 +872,7 @@ public class TeamBlockerResolveTests : IDisposable
         _sessions.SetParent(child.Id, stab.Id, UserId);
 
         var r = await _sessions.ReportBlockerAsync(child.Id, "застрял на черновике", UserId);
-        r.Should().BeOneOf(SessionManager.ReportUpResult.Delivered, SessionManager.ReportUpResult.Queued);
+        r.Should().BeOneOf(ReportUpResult.Delivered, ReportUpResult.Queued);
         _sessions.GetById(stab.Id)!.TeamImplement!.Budget.WakeupsUsed.Should().Be(1,
             "черновик — не пауза: доклад идёт обычным путём пробуждения, квота расходуется");
     }

@@ -466,9 +466,9 @@ public class SessionStatusTests : IDisposable
     }
 
     [Theory]
-    [InlineData(SessionManager.DeliveryCause.ServerRestartResume)]
-    [InlineData(SessionManager.DeliveryCause.WorkLoop)]
-    public async Task АвтоХод_СчётчикНеТрогает(SessionManager.DeliveryCause cause)
+    [InlineData(DeliveryCause.ServerRestartResume)]
+    [InlineData(DeliveryCause.WorkLoop)]
+    public async Task АвтоХод_СчётчикНеТрогает(DeliveryCause cause)
     {
         var project = MakeProject("auto-" + cause);
         var s = MakeSession(SessionStatus.Active, projectId: project.Id);
@@ -504,7 +504,7 @@ public class SessionStatusTests : IDisposable
 
         // Чат занят (Working) → сообщение человека встаёт в очередь, а не в новый ход.
         var outcome = await sut.SendMessageAsync(s.Id, "из очереди", []);
-        outcome.Should().Be(SessionManager.SendUserOutcome.Queued,
+        outcome.Should().Be(SendUserOutcome.Queued,
             "занятый чат: сообщение человека уходит в очередь");
 
         // Разбор очереди: DeliverPendingAsync → SendDirectAsync (fromQueue, cause=QueueUser).

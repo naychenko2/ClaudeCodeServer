@@ -33,10 +33,10 @@ public interface ITurnStarter
     // (BeginShutdown / TrySubmitContinuationAsync под флагом ядра), иначе TOCTOU.
     bool IsStopping { get; }
 
-    Task<SessionManager.SendUserOutcome> SendMessageAsync(string sessionId, string text,
+    Task<SendUserOutcome> SendMessageAsync(string sessionId, string text,
         IReadOnlyList<string> attachedPaths, string? mode, bool systemDirective, bool auto,
         string? senderPersonaId, bool suppressTasksExecute, string? senderOrigin,
-        string? senderConnectionId, string? staffNote, SessionManager.DeliveryCause cause,
+        string? senderConnectionId, string? staffNote, DeliveryCause cause,
         int agentDepth, string? senderUserId);
 
     Task<bool> SendOrEnqueueAsync(string sessionId, string text, string? senderPersonaId,

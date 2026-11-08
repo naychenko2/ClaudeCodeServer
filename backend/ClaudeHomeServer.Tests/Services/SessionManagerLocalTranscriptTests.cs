@@ -15,6 +15,7 @@ using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -219,7 +220,7 @@ public sealed class SessionManagerLocalTranscriptTests : IDisposable
         var (session, _) = await SeedLocalChatAsync();
         var before = Snapshot();
 
-        var act = () => _sut.BranchAsync(session.Id, OwnerId, 0, UserText1, SessionManager.ChatBranchInclude.Turn);
+        var act = () => _sut.BranchAsync(session.Id, OwnerId, 0, UserText1, ChatBranchInclude.Turn);
 
         (await act.Should().ThrowAsync<LocalProjectException>())
             .WithMessage(ProjectCapabilities.TranscriptOnDeviceReason);

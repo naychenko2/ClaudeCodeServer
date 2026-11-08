@@ -2,8 +2,6 @@ using System.Collections.Concurrent;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 
-using ChatBranchResult = ClaudeHomeServer.Services.SessionManager.ChatBranchResult;
-using ChatBranchInclude = ClaudeHomeServer.Services.SessionManager.ChatBranchInclude;
 
 namespace ClaudeHomeServer.Services.Sessions;
 

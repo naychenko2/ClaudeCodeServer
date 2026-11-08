@@ -21,6 +21,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Xunit;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -662,8 +663,8 @@ public sealed class GetOwnedVisibleTests : IDisposable
         var res = (await SessionsAs(_ownerId).IconBatch(_projectId, default))
             .Should().BeOfType<OkObjectResult>().Subject;
         // Размечены ровно два видимых чата; чужой приватный не попал ни в processed, ни в skipped
-        ((SessionManager.IconBatchResult)res.Value!).Processed.Should().Be(2);
-        ((SessionManager.IconBatchResult)res.Value!).Skipped.Should().Be(0);
+        ((IconBatchResult)res.Value!).Processed.Should().Be(2);
+        ((IconBatchResult)res.Value!).Skipped.Should().Be(0);
         // Модель звалась дважды — по транскриптам своего приватного и общего; по чужому приватному — ни разу
         _cheap.Calls.Should().Be(2);
         // Карточка чужого приватного не написана: значка нет
@@ -676,7 +677,7 @@ public sealed class GetOwnedVisibleTests : IDisposable
         // арендатору) — шаг это не меняет; чужой приватный по-прежнему не тронут
         var asMember = (await SessionsAs(_otherId).IconBatch(_projectId, default))
             .Should().BeOfType<OkObjectResult>().Subject;
-        ((SessionManager.IconBatchResult)asMember.Value!).Processed.Should().Be(0);
+        ((IconBatchResult)asMember.Value!).Processed.Should().Be(0);
         _cheap.Calls.Should().Be(2);
         _sessions.GetById(ForeignPrivateId)!.Topic.Should().BeNull();
     }

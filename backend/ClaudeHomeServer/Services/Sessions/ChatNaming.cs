@@ -7,7 +7,6 @@ using Microsoft.Extensions.Logging;
 // Тип результата пакетного прогона значков — часть контракта фасада (его читает контроллер
 // и тесты), объявлен вложенным в SessionManager; здесь обращение через alias, чтобы тела
 // остались дословными (тот же приём, что с QueuedMessage в PendingQueueService).
-using IconBatchResult = ClaudeHomeServer.Services.SessionManager.IconBatchResult;
 
 namespace ClaudeHomeServer.Services.Sessions;
 

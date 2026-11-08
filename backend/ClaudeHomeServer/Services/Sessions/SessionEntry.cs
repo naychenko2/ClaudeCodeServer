@@ -232,7 +232,7 @@ internal sealed class SessionEntry
     public long DrainOnExitedRun;
     // Снимок последнего ПОЛЬЗОВАТЕЛЬСКОГО сообщения, ушедшего в работу: по «Стоп» его
     // копия возвращается в композер (как в десктопном Claude). null — ход авто/агентский.
-    public volatile SessionManager.UserTurnSnapshot? CurrentTurnSnapshot;
+    public volatile UserTurnSnapshot? CurrentTurnSnapshot;
     // Длина цепочки автоматических отчётов, приведшей в этот чат: доклад исполнителя
     // ставит сюда «своя глубина + 1». Гасит лавину «отчёт → реакция → отчёт выше»:
     // человек в переписке её не создаёт, поэтому его ход счётчик обнуляет.

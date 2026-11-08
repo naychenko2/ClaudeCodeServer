@@ -3,10 +3,9 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
 
 // Тип отказа «глобальная персона в общем проекте» — часть контракта фасада (его ловят
-// контроллеры по SessionManager.GlobalPersonaInSharedException), объявлен вложенным в
+// контроллеры по GlobalPersonaInSharedException), объявлен вложенным в
 // SessionManager; здесь обращение через alias, чтобы тела остались дословными (тот же приём,
 // что с QueuedMessage в PendingQueueService).
-using GlobalPersonaInSharedException = ClaudeHomeServer.Services.SessionManager.GlobalPersonaInSharedException;
 
 namespace ClaudeHomeServer.Services.Sessions;
 

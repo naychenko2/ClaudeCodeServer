@@ -2,10 +2,6 @@ using System.Collections.Concurrent;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 
-using RestartResumeResult = ClaudeHomeServer.Services.SessionManager.RestartResumeResult;
-using SendUserOutcome = ClaudeHomeServer.Services.SessionManager.SendUserOutcome;
-using StuckTurnRestartResult = ClaudeHomeServer.Services.SessionManager.StuckTurnRestartResult;
-using TurnTranscriptDamagedException = ClaudeHomeServer.Services.SessionManager.TurnTranscriptDamagedException;
 
 namespace ClaudeHomeServer.Services.Sessions;
 

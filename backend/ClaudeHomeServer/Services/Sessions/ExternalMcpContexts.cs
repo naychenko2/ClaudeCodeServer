@@ -4,9 +4,8 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
 
 // Типы плана рабочего пространства остаются частью контракта фасада (их читает WorkspaceToolset
-// и тесты по SessionManager.WorkspaceMcpPlan); здесь — обращение через alias, чтобы тела
+// и тесты по WorkspaceMcpPlan); здесь — обращение через alias, чтобы тела
 // остались дословными (тот же приём, что с QueuedMessage в PendingQueueService).
-using WorkspaceMcpPlan = ClaudeHomeServer.Services.SessionManager.WorkspaceMcpPlan;
 
 namespace ClaudeHomeServer.Services.Sessions;
 
@@ -25,7 +24,7 @@ namespace ClaudeHomeServer.Services.Sessions;
 // Класс public ТОЛЬКО потому, что он параметр публичного конструктора SessionManager (CS0051) и DI нужен
 // публичный конструктор. Обход фасада к типам Services.Sessions закрывает сторож формы ядра (правило 4),
 // но он смотрит только на ссылки с Namespace Services.Sessions (SessionCoreShapeGuardTests,
-// Rule4OnlyFacadeReferences): alias выше ведёт к вложенному типу фасада SessionManager.WorkspaceMcpPlan
+// Rule4OnlyFacadeReferences): alias выше ведёт к вложенному типу фасада WorkspaceMcpPlan
 // с Namespace ClaudeHomeServer.Services — правило 4 такой ссылки не видит.
 // Сохранение типа плана вложенным в фасад — осознанное решение (план — часть контракта фасада,
 // см. комментарий у alias), а не пропуск сторожа; расширять правило 4 на этот случай — решение

@@ -211,7 +211,7 @@ public class SessionManagerBranchTests : IDisposable
         var entry = GetEntry(session.Id);
         EnqueueUser(entry, "ещё одно сообщение");
 
-        var act = () => _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+        var act = () => _sut.BranchAsync(session.Id, TestUserId, 0, text1, ChatBranchInclude.Turn);
 
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*идёт ход*");
     }
@@ -226,7 +226,7 @@ public class SessionManagerBranchTests : IDisposable
         adapter.SetupGet(a => a.HasTrackedBg).Returns(true);
         SetProcess(entry, adapter.Object);
 
-        var act = () => _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+        var act = () => _sut.BranchAsync(session.Id, TestUserId, 0, text1, ChatBranchInclude.Turn);
 
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*фоновые агенты*");
     }
@@ -240,7 +240,7 @@ public class SessionManagerBranchTests : IDisposable
         var project = _projectManager.Create("P-no-csid", dir, TestUserId, TestUsername);
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
 
-        var act = () => _sut.BranchAsync(session.Id, TestUserId, 0, "текст", SessionManager.ChatBranchInclude.Turn);
+        var act = () => _sut.BranchAsync(session.Id, TestUserId, 0, "текст", ChatBranchInclude.Turn);
 
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*ветвить нечего*");
     }
@@ -253,7 +253,7 @@ public class SessionManagerBranchTests : IDisposable
         var (session, _, _, text1, _) = await SeedBranchableChatAsync("group");
         session.Participants = ["p1", "p2"];
 
-        var act = () => _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+        var act = () => _sut.BranchAsync(session.Id, TestUserId, 0, text1, ChatBranchInclude.Turn);
 
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*Групповой чат*");
     }
@@ -264,7 +264,7 @@ public class SessionManagerBranchTests : IDisposable
         var (session, _, _, text1, _) = await SeedBranchableChatAsync("team");
         session.TeamImplement = new SessionTeamImplement();
 
-        var act = () => _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+        var act = () => _sut.BranchAsync(session.Id, TestUserId, 0, text1, ChatBranchInclude.Turn);
 
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*Командная реализация*");
     }
@@ -277,7 +277,7 @@ public class SessionManagerBranchTests : IDisposable
         var (session, _, _, text1, _) = await SeedBranchableChatAsync("worktree");
         session.WorktreePath = "/some/worktree/path";
 
-        var act = () => _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+        var act = () => _sut.BranchAsync(session.Id, TestUserId, 0, text1, ChatBranchInclude.Turn);
 
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*рабочем дереве*");
     }
@@ -297,7 +297,7 @@ public class SessionManagerBranchTests : IDisposable
         // Транскрипт намеренно не пишем — ни в профиле, ни в архиве
 
         var act = () => _sut.BranchAsync(session.Id, TestUserId, 0,
-            "сообщение без транскрипта на диске", SessionManager.ChatBranchInclude.Turn);
+            "сообщение без транскрипта на диске", ChatBranchInclude.Turn);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*убрана плановой уборкой CLI*");
@@ -316,7 +316,7 @@ public class SessionManagerBranchTests : IDisposable
             "полностью посторонний текст первого промпта транскрипта, никак не связанный с историей",
             "полностью посторонний текст второго промпта транскрипта, тоже не связанный с историей");
 
-        var act = () => _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+        var act = () => _sut.BranchAsync(session.Id, TestUserId, 0, text1, ChatBranchInclude.Turn);
 
         await act.Should().ThrowAsync<InvalidOperationException>()
             .WithMessage("*не удалось найти этот шаг*");
@@ -331,7 +331,7 @@ public class SessionManagerBranchTests : IDisposable
 
         var act = () => _sut.BranchAsync(session.Id, TestUserId, 0,
             "совершенно другой текст, никак не связанный с сообщением по индексу",
-            SessionManager.ChatBranchInclude.Turn);
+            ChatBranchInclude.Turn);
 
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*разошлись*");
     }
@@ -346,7 +346,7 @@ public class SessionManagerBranchTests : IDisposable
         var archivedAtBefore = session.ArchivedAt;
         var csidBefore = session.ClaudeSessionId;
 
-        await _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+        await _sut.BranchAsync(session.Id, TestUserId, 0, text1, ChatBranchInclude.Turn);
 
         var after = _sut.GetById(session.Id)!;
         after.UpdatedAt.Should().Be(updatedAtBefore);
@@ -371,7 +371,7 @@ public class SessionManagerBranchTests : IDisposable
         session.TaskId = "some-task-id";
         session.TaskExecution = true;
 
-        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, ChatBranchInclude.Turn);
 
         result.Session.Model.Should().Be("glm-5.2");
         result.Session.Provider.Should().Be("glm");
@@ -400,7 +400,7 @@ public class SessionManagerBranchTests : IDisposable
             TotalCostUsd = 1.25,
         };
 
-        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, ChatBranchInclude.Turn);
 
         result.Session.LastCostState.Should().NotBeNull("снимок cost-state родителя — база дельты первого хода ветки");
         result.Session.LastCostState!.TotalCostUsd.Should().Be(1.25);
@@ -414,7 +414,7 @@ public class SessionManagerBranchTests : IDisposable
     {
         var (session, _, _, text1, _) = await SeedBranchableChatAsync("name-default");
 
-        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, ChatBranchInclude.Turn);
 
         result.Session.Name.Should().Be(session.Name + " (ветка)");
     }
@@ -425,7 +425,7 @@ public class SessionManagerBranchTests : IDisposable
         var (session, _, _, text1, _) = await SeedBranchableChatAsync("name-explicit");
 
         var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1,
-            SessionManager.ChatBranchInclude.Turn, name: "Моё имя ветки");
+            ChatBranchInclude.Turn, name: "Моё имя ветки");
 
         result.Session.Name.Should().Be("Моё имя ветки");
     }
@@ -438,7 +438,7 @@ public class SessionManagerBranchTests : IDisposable
         var (session, _, csid, text1, text2) = await SeedBranchableChatAsync("before-prompt");
 
         var result = await _sut.BranchAsync(session.Id, TestUserId, 1, text2,
-            SessionManager.ChatBranchInclude.BeforePrompt);
+            ChatBranchInclude.BeforePrompt);
 
         result.Draft.Should().Be(text2);
         var branchHistory = await _historyService.LoadAsync(result.Session.ClaudeSessionId!);
@@ -454,7 +454,7 @@ public class SessionManagerBranchTests : IDisposable
         var (session, _, csid, text1, text2) = await SeedBranchableChatAsync("turn-include");
 
         var result = await _sut.BranchAsync(session.Id, TestUserId, 1, text2,
-            SessionManager.ChatBranchInclude.Turn);
+            ChatBranchInclude.Turn);
 
         result.Draft.Should().BeNull();
         var branchHistory = await _historyService.LoadAsync(result.Session.ClaudeSessionId!);
@@ -468,7 +468,7 @@ public class SessionManagerBranchTests : IDisposable
     {
         var (session, _, _, text1, _) = await SeedBranchableChatAsync("marker");
 
-        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, ChatBranchInclude.Turn);
 
         var branchHistory = await _historyService.LoadAsync(result.Session.ClaudeSessionId!);
         var marker = branchHistory.OfType<StoredBranchedFromMessage>().Should().ContainSingle().Subject;
@@ -486,13 +486,13 @@ public class SessionManagerBranchTests : IDisposable
 
         // A → B: ветвим от первого хода, у B история кончается плашкой «Ветка от A»
         var b = (await _sut.BranchAsync(session.Id, TestUserId, 0, text1,
-            SessionManager.ChatBranchInclude.Turn)).Session;
+            ChatBranchInclude.Turn)).Session;
         var bHistory = await _historyService.LoadAsync(b.ClaudeSessionId!);
         bHistory[^1].Should().BeOfType<StoredBranchedFromMessage>("затравка сценария: плашка — хвост истории B");
 
         // B → C: тот же ход, он же последний в B — после него только плашка
         var c = (await _sut.BranchAsync(b.Id, TestUserId, 0, text1,
-            SessionManager.ChatBranchInclude.Turn)).Session;
+            ChatBranchInclude.Turn)).Session;
 
         var cHistory = await _historyService.LoadAsync(c.ClaudeSessionId!);
         var marker = cHistory.OfType<StoredBranchedFromMessage>().Should().ContainSingle(
@@ -508,7 +508,7 @@ public class SessionManagerBranchTests : IDisposable
     {
         var (session, _, csid, text1, _) = await SeedBranchableChatAsync("own-csid");
 
-        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, ChatBranchInclude.Turn);
 
         result.Session.ClaudeSessionId.Should().NotBeNullOrEmpty().And.NotBe(csid);
         result.Session.Id.Should().NotBe(session.Id);
@@ -526,7 +526,7 @@ public class SessionManagerBranchTests : IDisposable
             userText1: "да", tailUuid1: "a1");
 
         var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1,
-            SessionManager.ChatBranchInclude.Turn);
+            ChatBranchInclude.Turn);
 
         var branchHistory = await _historyService.LoadAsync(result.Session.ClaudeSessionId!);
         branchHistory.OfType<StoredUserMessage>().Should().ContainSingle(m => m.Text == "да");
@@ -541,7 +541,7 @@ public class SessionManagerBranchTests : IDisposable
             userText1: "да");
 
         var act = () => _sut.BranchAsync(session.Id, TestUserId, 0, text1,
-            SessionManager.ChatBranchInclude.Turn);
+            ChatBranchInclude.Turn);
 
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*в памяти модели*");
     }
@@ -563,7 +563,7 @@ public class SessionManagerBranchTests : IDisposable
         var (session, project, _, text1, text2) = await SeedBranchableChatAsync("transcript-before");
 
         var result = await _sut.BranchAsync(session.Id, TestUserId, 1, text2,
-            SessionManager.ChatBranchInclude.BeforePrompt);
+            ChatBranchInclude.BeforePrompt);
 
         var transcript = await File.ReadAllTextAsync(BranchTranscriptPath(result.Session, project));
         transcript.Should().Contain(text1).And.Contain("ответ 1");
@@ -579,7 +579,7 @@ public class SessionManagerBranchTests : IDisposable
         var (session, project, _, text1, text2) = await SeedBranchableChatAsync("transcript-turn");
 
         var result = await _sut.BranchAsync(session.Id, TestUserId, 1, text2,
-            SessionManager.ChatBranchInclude.Turn);
+            ChatBranchInclude.Turn);
 
         var transcript = await File.ReadAllTextAsync(BranchTranscriptPath(result.Session, project));
         transcript.Should().Contain(text1).And.Contain(text2).And.Contain("ответ 2");
@@ -636,7 +636,7 @@ public class SessionManagerBranchTests : IDisposable
         var (session, project, text1, text2) = await SeedInterruptedChatAsync("interrupted");
 
         var result = await _sut.BranchAsync(session.Id, TestUserId, 1, text2,
-            SessionManager.ChatBranchInclude.Turn);
+            ChatBranchInclude.Turn);
 
         result.Draft.Should().Be(text2, "незавершённый ввод возвращается человеку, а не теряется");
 
@@ -668,7 +668,7 @@ public class SessionManagerBranchTests : IDisposable
                 userText1: a1, userText2: a2, tailUuid1: "a1", tailUuid2: "a2");
 
             var result = await _sut.BranchAsync(session.Id, TestUserId, 1, a2,
-                SessionManager.ChatBranchInclude.BeforePrompt);
+                ChatBranchInclude.BeforePrompt);
 
             var transcriptPath = BranchTranscriptPath(result.Session, project);
             var transcript = await File.ReadAllTextAsync(transcriptPath);
@@ -731,7 +731,7 @@ public class SessionManagerBranchTests : IDisposable
             // история обрезается по ту же границу, что и транскрипт, текст прерванного сообщения
             // уходит черновиком.
             var result = await _sut.BranchAsync(session.Id, TestUserId, 1, a2,
-                SessionManager.ChatBranchInclude.Turn);
+                ChatBranchInclude.Turn);
 
             var transcriptPath = Path.Combine(_llmProviders.UserProfileDir, "projects",
                 TranscriptMigrator.FlattenCwd(project.RootPath), result.Session.ClaudeSessionId + ".jsonl");
@@ -776,7 +776,7 @@ public class SessionManagerBranchTests : IDisposable
     {
         var (session, project, _, text1, _) = await SeedBranchableChatAsync("csid-guard");
         var branch = (await _sut.BranchAsync(session.Id, TestUserId, 0, text1,
-            SessionManager.ChatBranchInclude.Turn)).Session;
+            ChatBranchInclude.Turn)).Session;
         var prepared = branch.ClaudeSessionId!;
         var preparedPath = BranchTranscriptPath(branch, project);
         File.Exists(preparedPath).Should().BeTrue("затравка: ветвление подложило транскрипт под своим csid");
@@ -813,7 +813,7 @@ public class SessionManagerBranchTests : IDisposable
             tailUuid1: "a1", tailUuid2: "a2");
 
         var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1,
-            SessionManager.ChatBranchInclude.Turn);
+            ChatBranchInclude.Turn);
 
         var branchHistory = await _historyService.LoadAsync(result.Session.ClaudeSessionId!);
         branchHistory.OfType<StoredUserMessage>().Should().ContainSingle()
@@ -829,7 +829,7 @@ public class SessionManagerBranchTests : IDisposable
         var published = new List<SessionBranched>();
         _bus.OnNotification<SessionBranched>(e => { published.Add(e); return Task.CompletedTask; });
 
-        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, ChatBranchInclude.Turn);
 
         var e = published.Should().ContainSingle().Subject;
         e.SourceSessionId.Should().Be(session.Id);
@@ -873,7 +873,7 @@ public class SessionManagerBranchTests : IDisposable
     {
         var (session, text1) = await SeedPrivateBranchableAsync("priv-branch");
 
-        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, ChatBranchInclude.Turn);
 
         result.Session.PrivateToUserId.Should().Be(TestUserId, "ветка приватного чата остаётся приватной");
         result.Session.CreatedByUserId.Should().Be(TestUserId);
@@ -889,7 +889,7 @@ public class SessionManagerBranchTests : IDisposable
         var (session, project, _, text1, _) = await SeedBranchableChatAsync("shared-branch");
         project.Members = [new ProjectMember { UserId = Участник, Role = ClaudeHomeServer.Services.Access.ProjectRole.Editor, AddedBy = TestUserId }];
 
-        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, ChatBranchInclude.Turn);
 
         result.Session.PrivateToUserId.Should().BeNull();
         _sut.IsVisibleTo(result.Session.Id, Участник).Should().BeTrue();
@@ -901,7 +901,7 @@ public class SessionManagerBranchTests : IDisposable
         var (session, text1) = await SeedPrivateBranchableAsync("priv-branch-foreign", author: Участник);
         var before = _sut.GetAll().Count();
 
-        var act = () => _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+        var act = () => _sut.BranchAsync(session.Id, TestUserId, 0, text1, ChatBranchInclude.Turn);
 
         await act.Should().ThrowAsync<KeyNotFoundException>();
         _sut.GetAll().Count().Should().Be(before, "чат-преемник с содержимым чужого приватного чата не создан");
@@ -924,7 +924,7 @@ public class SessionManagerBranchTests : IDisposable
         var toggle = Task.Run(() => _sut.SetChatVisibility(first.Id, TestUserId, makePrivate: false));
         await Task.Delay(100);
         toggle.IsCompleted.Should().BeFalse("тумблер держится на замке видимости");
-        var branched = await _sut.BranchAsync(first.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+        var branched = await _sut.BranchAsync(first.Id, TestUserId, 0, text1, ChatBranchInclude.Turn);
         release.Set();
         await holder;
         (await toggle).Outcome.Should().Be(ChatVisibilityOutcome.Ok);
@@ -934,7 +934,7 @@ public class SessionManagerBranchTests : IDisposable
 
         var (second, text2) = await SeedPrivateBranchableAsync("priv-branch-race-b");
         _sut.SetChatVisibility(second.Id, TestUserId, makePrivate: false).Outcome.Should().Be(ChatVisibilityOutcome.Ok);
-        var after = await _sut.BranchAsync(second.Id, TestUserId, 0, text2, SessionManager.ChatBranchInclude.Turn);
+        var after = await _sut.BranchAsync(second.Id, TestUserId, 0, text2, ChatBranchInclude.Turn);
         after.Session.PrivateToUserId.Should().BeNull("исходный чат уже открыт — ветка общая");
     }
 }

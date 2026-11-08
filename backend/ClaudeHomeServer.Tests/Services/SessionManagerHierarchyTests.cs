@@ -35,7 +35,7 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
 
         var r = await _sut.ReportUpAsync(lonely.Id, "нашёл блокер", TestUserId, withTurn: false);
 
-        r.Should().Be(SessionManager.ReportUpResult.NoParent);
+        r.Should().Be(ReportUpResult.NoParent);
     }
 
     [Fact]
@@ -46,7 +46,7 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
 
         var r = await _sut.ReportUpAsync(child.Id, "нашёл блокер: нет доступа к БД", TestUserId, withTurn: false);
 
-        r.Should().Be(SessionManager.ReportUpResult.Delivered);
+        r.Should().Be(ReportUpResult.Delivered);
         var history = await _sut.GetHistoryAsync(parent.Id);
         history.Should().ContainSingle(m => m is Protocol.StoredUserMessage)
             .Which.Should().BeOfType<Protocol.StoredUserMessage>()
@@ -66,7 +66,7 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
 
         var r = await _sut.ReportBlockerAsync(child.Id, "нет доступа к тестовой БД", TestUserId);
 
-        r.Should().BeOneOf(SessionManager.ReportUpResult.Delivered, SessionManager.ReportUpResult.Queued);
+        r.Should().BeOneOf(ReportUpResult.Delivered, ReportUpResult.Queued);
         var history = await _sut.GetHistoryAsync(stab.Id);
         history.OfType<Protocol.StoredUserMessage>().Should()
             .Contain(m => m.Text.Contains("нет доступа к тестовой БД") && m.Text.Contains("Блокер"),
@@ -112,7 +112,7 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
 
         var r = await _sut.ReportBlockerAsync(child.Id, "застрял", TestUserId);
 
-        r.Should().Be(SessionManager.ReportUpResult.TooDeep);
+        r.Should().Be(ReportUpResult.TooDeep);
         _sut.GetById(stab.Id)!.TeamImplement!.Budget.WakeupsUsed.Should().Be(0,
             "доклад не дошёл — координатор фактически не разбужен, платить не с чего");
     }
@@ -129,7 +129,7 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
 
         var r = await _sut.ReportBlockerAsync(child.Id, "снова застрял", TestUserId);
 
-        r.Should().Be(SessionManager.ReportUpResult.Delivered);
+        r.Should().Be(ReportUpResult.Delivered);
         (await _sut.GetHistoryAsync(stab.Id)).OfType<Protocol.StoredUserMessage>().Should()
             .Contain(m => m.Text.Contains("снова застрял"), "сам доклад терять нельзя");
         budget.WakeupsUsed.Should().Be(budget.MaxWakeups, "отказ ничего не расходует");
@@ -233,7 +233,7 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
 
         var r = await _sut.ReportBlockerAsync(child.Id, "застрял на конфликте", TestUserId);
 
-        r.Should().BeOneOf(SessionManager.ReportUpResult.Delivered, SessionManager.ReportUpResult.Queued);
+        r.Should().BeOneOf(ReportUpResult.Delivered, ReportUpResult.Queued);
         Sent<TeamEscalationMessage>().Should().BeEmpty(
             "карточка остановки — часть режима практики, обычному чату она не нужна");
     }
@@ -269,14 +269,14 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
 
         // chats[4] → chats[3] → … каждый следующий отчёт наращивает глубину цепочки
         (await _sut.ReportUpAsync(chats[4].Id, "уровень 1", TestUserId, false))
-            .Should().Be(SessionManager.ReportUpResult.Delivered);
+            .Should().Be(ReportUpResult.Delivered);
         (await _sut.ReportUpAsync(chats[3].Id, "уровень 2", TestUserId, false))
-            .Should().Be(SessionManager.ReportUpResult.Delivered);
+            .Should().Be(ReportUpResult.Delivered);
         (await _sut.ReportUpAsync(chats[2].Id, "уровень 3", TestUserId, false))
-            .Should().Be(SessionManager.ReportUpResult.Delivered);
+            .Should().Be(ReportUpResult.Delivered);
 
         (await _sut.ReportUpAsync(chats[1].Id, "уровень 4", TestUserId, false))
-            .Should().Be(SessionManager.ReportUpResult.TooDeep, "цепочка автоотчётов ограничена тремя звеньями");
+            .Should().Be(ReportUpResult.TooDeep, "цепочка автоотчётов ограничена тремя звеньями");
     }
 
     [Fact]
@@ -286,7 +286,7 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
 
         var r = await _sut.ReportUpAsync(child.Id, "текст", "another-user", withTurn: false);
 
-        r.Should().Be(SessionManager.ReportUpResult.NotFound);
+        r.Should().Be(ReportUpResult.NotFound);
     }
 
     // --- SetParent: ручная группировка чатов (drag-and-drop) ---
@@ -1733,7 +1733,7 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
 
         var act = () => _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
 
-        await act.Should().ThrowAsync<SessionManager.TurnTranscriptDamagedException>()
+        await act.Should().ThrowAsync<TurnTranscriptDamagedException>()
             .WithMessage("*повреждён*");
         _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Working,
             "повреждённый транскрипт — не повод реанимировать чат молча: человек решает");

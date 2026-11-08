@@ -74,6 +74,39 @@ public class SessionCoreShapeGuardTests
         ["ClaudeHomeServer.Services.Sessions.PendingQueueFile"] =
             "контракт файла очереди pending.json (PendingQueue.cs:92, перенесён хвостом S3): формат "
             + "данных, не поведение; его держит ChatHistoryService (LoadPending/SavePending, строки 187-193)",
+        // Типы фасада, перенесённые в ядро хвостом линии (снятие alias'ов Sessions → SessionManager.X):
+        // записи/enum/исключения без поведения, их называют вызывающие за ядром через фасад.
+        ["ClaudeHomeServer.Services.Sessions.DeliveryCause"] =
+            "enum причины доставки хода (бывший SessionManager.DeliveryCause): значение аргумента "
+            + "cause при вызове фасада, не поведение",
+        ["ClaudeHomeServer.Services.Sessions.SendUserOutcome"] =
+            "enum исхода постановки пользовательского сообщения (бывший SessionManager.SendUserOutcome): "
+            + "результат вызова фасада, который хаб переводит в строку клиенту",
+        ["ClaudeHomeServer.Services.Sessions.SendAndWaitResult"] =
+            "иерархия результата отправки с ожиданием (бывший верхнеуровневый тип Services): записи без "
+            + "поведения; вложенные Busy/Queued/QueueFull/Completed/Running относятся к корню (IsCoreData)",
+        ["ClaudeHomeServer.Services.Sessions.ReportUpResult"] =
+            "enum исхода отчёта «наверх» (бывший SessionManager.ReportUpResult): результат вызова фасада",
+        ["ClaudeHomeServer.Services.Sessions.GlobalPersonaInSharedException"] =
+            "исключение отказа назначения глобальной персоны в общий проект (бывшее вложенное в фасад): "
+            + "контроллеры и тулсет ловят его по типу и отвечают code=global_persona_in_shared",
+        ["ClaudeHomeServer.Services.Sessions.TurnTranscriptDamagedException"] =
+            "исключение повреждённого транскрипта (бывшее вложенное в фасад): контроллер ловит его по "
+            + "типу и отвечает code=transcript_damaged",
+        ["ClaudeHomeServer.Services.Sessions.RestartResumeResult"] =
+            "запись исхода авто-возобновления хода (бывшая вложенная в фасад): результат "
+            + "ResumeAfterRestartAsync, который читает хост авто-возобновления",
+        ["ClaudeHomeServer.Services.Sessions.StuckTurnRestartResult"] =
+            "запись исхода перезапуска зависшего хода (бывшая вложенная в фасад): результат "
+            + "RestartStuckTurnAsync, который контроллер отдаёт клиенту",
+        ["ClaudeHomeServer.Services.Sessions.ChatBranchResult"] =
+            "запись итога ветвления чата (бывшая вложенная в фасад): результат BranchAsync для контроллера",
+        ["ClaudeHomeServer.Services.Sessions.IconBatchResult"] =
+            "запись итога пакетного прогона значков (бывшая вложенная в фасад): результат "
+            + "SetChatIconsAsync для контроллера",
+        ["ClaudeHomeServer.Services.Sessions.WorkspaceMcpPlan"] =
+            "internal-запись плана сервера рабочего пространства (бывшая вложенная в фасад): "
+            + "её читает WorkspaceToolset по живой сессии, строит её ExternalMcpContexts",
     };
 
     // Поимённый allow-list правила 5 (у каждой строки — причина). SessionStore, ChatVisibility и
@@ -127,6 +160,40 @@ public class SessionCoreShapeGuardTests
         ["ClaudeHomeServer.Controllers.SessionMessagesController"] =
             "зовёт фасад (GetPending) и читает Kind для ответа /pending: значение enum "
             + "Sessions.PendingKind (SessionMessagesController.cs:273,275), не поведение ядра",
+        ["ClaudeHomeServer.Hubs.SessionHub"] =
+            "зовёт фасад (SendMessageAsync): передаёт Sessions.DeliveryCause.User и разбирает возвращённый "
+            + "Sessions.SendUserOutcome — значения enum, не поведение ядра",
+        ["ClaudeHomeServer.Services.TaskExecutionService"] =
+            "передаёт фасаду значения Sessions.DeliveryCause (cause: …) — enum, не поведение ядра "
+            + "(второй допуск этого корня к PendingKind)",
+        ["ClaudeHomeServer.Controllers.ChatsController"] =
+            "ловит Sessions.GlobalPersonaInSharedException и Sessions.TurnTranscriptDamagedException по типу "
+            + "и отвечает кодами отказа; читает Sessions.ChatBranchResult (BranchAsync) и "
+            + "Sessions.StuckTurnRestartResult (RestartStuckTurnAsync) — данные результатов, не поведение ядра",
+        ["ClaudeHomeServer.Controllers.PersonasController"] =
+            "ловит Sessions.GlobalPersonaInSharedException по типу (ответ code=global_persona_in_shared)",
+        ["ClaudeHomeServer.Controllers.SessionsController"] =
+            "ловит Sessions.GlobalPersonaInSharedException по типу (ответ code=global_persona_in_shared) "
+            + "и читает Sessions.IconBatchResult (SetChatIconsAsync) — данные результата",
+        ["ClaudeHomeServer.Services.Mcp.Http.WorkspaceToolset"] =
+            "читает Sessions.WorkspaceMcpPlan (план сервера рабочего пространства) по живой сессии у фасада "
+            + "и ловит Sessions.GlobalPersonaInSharedException — записи/исключения-данные",
+        ["ClaudeHomeServer.Services.SessionMessagingService"] =
+            "зовёт фасад и разбирает Sessions.ReportUpResult и иерархию Sessions.SendAndWaitResult — "
+            + "результаты вызовов, не поведение ядра",
+        ["ClaudeHomeServer.Services.Team.TeamTurnCompletionService"] =
+            "зовёт фасад (ReportUpAsync) и разбирает Sessions.ReportUpResult — enum результата",
+        ["ClaudeHomeServer.Services.SessionManagerTurnResumeHost"] =
+            "зовёт фасад (ResumeAfterRestartAsync) и читает Sent/Reason из Sessions.RestartResumeResult — запись результата",
+        ["ClaudeHomeServer.Controllers.OnboardingController"] =
+            "зовёт фасад (SendMessageAsync): ссылка на Sessions.SendUserOutcome — тип возврата Task<…>, не поведение ядра",
+        ["ClaudeHomeServer.Services.PersonaAutomationService"] =
+            "зовёт фасад (SendMessageAsync, PersonaAutomationService.cs:230) и отбрасывает результат: "
+            + "ссылка на Sessions.SendUserOutcome — лишь тип возврата Task<…>, не поведение ядра",
+        ["ClaudeHomeServer.Services.ChatContinueService"] =
+            "разбирает иерархию Sessions.SendAndWaitResult — результат отправки с ожиданием у фасада",
+        ["ClaudeHomeServer.Services.ChatHandoffService"] =
+            "разбирает иерархию Sessions.SendAndWaitResult — результат отправки с ожиданием у фасада",
     };
 
     static SessionCoreShapeGuardTests()
@@ -201,6 +268,18 @@ public class SessionCoreShapeGuardTests
         select $"{t.Name} упоминает {hit.FullName}: зависимость снята на S3-8c, "
             + "уточнение заголовка живёт в ChatNaming, раннер он берёт из контейнера напрямую";
 
+    /// <summary>Трипвайр обратного ребра (хвост линии ядра): типы ядра не ссылаются на вложенные типы
+    /// фасада. Раньше такую ссылку прятал `using X = …SessionManager.X;`: правило 4 смотрит только на
+    /// ссылки К ядру, поэтому 14 alias'ов на фасад оставались зелёными. Контракты ядра теперь живут в
+    /// Services.Sessions, а вложенных типов у фасада для ядра не осталось.</summary>
+    internal static IEnumerable<string> CoreNoFacadeNestedRefs(IEnumerable<Type> coreTypes) =>
+        from t in coreTypes
+        let hit = BoundaryIlScanner.CollectAllReferencedTypes(t)
+            .FirstOrDefault(r => r.DeclaringType == typeof(SessionManager))
+        where hit is not null
+        select $"{t.FullName} ссылается на {hit.FullName}: контракт, который нужен ядру, живёт в "
+            + "Services.Sessions, а не вложенным типом фасада (ребро «ядро → фасад»)";
+
     /// <summary>Правило 4: кто из <paramref name="referrers"/> ссылается на типы Services.Sessions.
     /// Допуск меряется гранью корня: фасад и сами Services.Sessions — целиком; точка сборки ядра —
     /// целиком (роли и швы — её назначение); вызывающий из data-allow-list — только типы-данные.
@@ -234,7 +313,12 @@ public class SessionCoreShapeGuardTests
         return RefScope.None;
     }
 
-    private static bool IsCoreData(Type t) => CoreDataContracts.ContainsKey(t.FullName ?? t.Name);
+    // Вложенный тип-данные (Queued внутри SendAndWaitResult) принадлежит контракту своего корня.
+    private static bool IsCoreData(Type t)
+    {
+        while (t.DeclaringType is not null) t = t.DeclaringType;
+        return CoreDataContracts.ContainsKey(t.FullName ?? t.Name);
+    }
 
     private enum RefScope { None, DataOnly, Full }
 
@@ -269,6 +353,10 @@ public class SessionCoreShapeGuardTests
         FacadeNoForbiddenLlm([typeof(SessionManager)]).Should().BeEmpty();
 
     [Fact]
+    public void Ядро_не_ссылается_на_вложенные_типы_фасада() =>
+        CoreNoFacadeNestedRefs(CoreTypes()).Should().BeEmpty();
+
+    [Fact]
     public void Правило4_на_типы_ядра_ссылаются_только_фасад_и_сами_Services_Sessions()
     {
         // Referrers — все типы Main (тесты в Main не лежат). Вложенные обходит сам сканер.
@@ -292,12 +380,23 @@ public class SessionCoreShapeGuardTests
             "решение 05.11 (1dda7103): allow-list — одна роль; новая строка требует нового решения Александра");
 
     [Fact]
-    public void Список_типов_данных_состоит_только_из_контрактов_очереди() =>
+    public void Список_типов_данных_состоит_только_из_контрактов_очереди_и_перенесённых_типов_фасада() =>
         CoreDataContracts.Keys.Should().BeEquivalentTo(
             [
                 "ClaudeHomeServer.Services.Sessions.QueuedMessage",
                 "ClaudeHomeServer.Services.Sessions.PendingKind",
                 "ClaudeHomeServer.Services.Sessions.PendingQueueFile",
+                "ClaudeHomeServer.Services.Sessions.DeliveryCause",
+                "ClaudeHomeServer.Services.Sessions.SendUserOutcome",
+                "ClaudeHomeServer.Services.Sessions.SendAndWaitResult",
+                "ClaudeHomeServer.Services.Sessions.ReportUpResult",
+                "ClaudeHomeServer.Services.Sessions.GlobalPersonaInSharedException",
+                "ClaudeHomeServer.Services.Sessions.TurnTranscriptDamagedException",
+                "ClaudeHomeServer.Services.Sessions.RestartResumeResult",
+                "ClaudeHomeServer.Services.Sessions.StuckTurnRestartResult",
+                "ClaudeHomeServer.Services.Sessions.ChatBranchResult",
+                "ClaudeHomeServer.Services.Sessions.IconBatchResult",
+                "ClaudeHomeServer.Services.Sessions.WorkspaceMcpPlan",
             ],
             "тип-данные в ядре — явное решение: на них не считается правило 2, и только на них "
             + "распространяется допуск data-реферера правила 4; новая строка требует его же");
@@ -350,6 +449,8 @@ public class SessionCoreShapeGuardTests
         public IServiceProvider S { get; }
     }
 
+    private sealed class FakeUsesFacadeNested { public SessionManager.TeamRunQuota Quota; }
+
     private sealed class FakeReferrer { public SessionStore? Store; }
 
     private sealed class FakeReferrerTakesData { public QueuedMessage? Item; }
@@ -395,6 +496,14 @@ public class SessionCoreShapeGuardTests
         // SessionStore не может быть изменён в тесте, поэтому нарушитель носит то же имя-роль без права на провайдер.
         Rule5ServiceProviderOnlyAllowListed([typeof(FakeStoreWithProvider)]).Should().ContainSingle();
         Rule5ServiceProviderOnlyAllowListed([typeof(FakeProvider)]).Should().ContainSingle();
+    }
+
+    [Fact]
+    public void Самопроверка_трипвайр_ядра_краснеет_на_ссылке_на_вложенный_тип_фасада()
+    {
+        CoreNoFacadeNestedRefs([typeof(FakeUsesFacadeNested)]).Should().ContainSingle();
+        CoreNoFacadeNestedRefs([typeof(FakeTakesManager)]).Should().BeEmpty(
+            "сам фасад как параметр — не вложенный тип (его ловит правило 1)");
     }
 
     [Fact]

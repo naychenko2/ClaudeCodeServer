@@ -37,39 +37,6 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // исполнитель → постановщик → его постановщик, дальше эскалация теряет смысл.
     private const int MaxReportChainDepth = 3;
 
-    // Атрибуция доставленного хода для лога «Доставка хода» (инцидент 2026-08-10 П3): кто
-    // инициировал авто-доставку, когда src=auto/origin пустой. Различает точки, прежде бывшие
-    // неразличимыми (drain очереди / work-loop / доклад исполнителя / обход байпаса), и pinpoint'ит
-    // источник остаточных повторных доставок после закрытия байпаса (П3 п.3).
-    public enum DeliveryCause
-    {
-        User,           // hub — человек через SignalR
-        QueueUser,      // fromQueue — пользовательское сообщение из Pending
-        QueueAgent,     // fromQueue — агентское сообщение из Pending (в т.ч. обход байпаса)
-        Direct,         // auto — прямая отправка (SendOrEnqueueAsync при свободном чате: доклад исполнителя и пр.)
-        WorkLoop,       // auto — цикл «до готово» (верификация/продолжение)
-        SubagentNudge,  // auto — добивание сабагента, оборвавшегося на середине
-        ToolCallLeakNudge, // auto — повтор вызова инструмента, ушедшего в текст (локальная модель)
-        ServerRestartResume, // auto — возобновление хода, оборванного рестартом сервера (фича turn-auto-resume)
-        HoldResume,     // auto — продолжение хода, прерванного паузой фичи (W4-HOLD-D)
-        HoldCard,      // auto — карточка оркестратору в ключевой чат при снятии паузы: сама
-                      // нотификация, а не продолжение прерванного хода (W4-HOLD-N, хвост R-N)
-        Unknown,        // auto — точка не помечена (диагностика: проставить cause)
-    }
-
-    // Снимок пользовательского сообщения, ушедшего в работу, — для возврата в композер
-    // по «Стоп», если пользовательских в очереди не оказалось
-    public record UserTurnSnapshot(string Text, IReadOnlyList<string> AttachedPaths, string? Mode);
-
-    // Исход постановки пользовательского сообщения (Hub SendMessage возвращает клиенту):
-    // Started — ход запущен сразу; Queued — чат занят/очередь непуста, сообщение встало в
-    // серверную очередь и уйдёт по FIFO (оптимистичный баллон рисовать не надо — придёт
-    // снимок pending_messages, а доставленное вернётся событием user_message);
-    // QueuedPreempted — то же, но идущий ход при этом пришлось прервать (ждал человека либо
-    // шёл цикл «до готово»). Клиенту это нужно знать: убитый ход пришлёт голый exited, и без
-    // отметки о прерывании лента нарисует ложную аварию «AI завершился неожиданно».
-    public enum SendUserOutcome { Started, Queued, QueuedPreempted }
-
     // Стор метаданных сессий (S3-1): реестр, сохранение sessions.json, владелец и видимость,
     // актор хода, наблюдатели, рассылка статуса. Синглтон DI (AddSessionCore); фасад получает
     // его параметром — запасной сборки нет с S3-8c. SessionManager — фасад над ним.
@@ -927,23 +894,10 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         string? subscriptionKey = null)
         => _providerMigration.MigrateProviderAsync(sessionId, ownerId, model, subscriptionKey);
 
-    // Значения include ветвления чата (docs/research/chat-branching-2026-09.md §5, §6):
-    // turn — история по конец хода (кнопка под ответом ассистента), beforePrompt — история
-    // до этого сообщения, а его текст возвращается как draft для композера (транскрипт
-    // обязан заканчиваться завершённым ходом — висящий промпт склеился бы со следующим).
-    public static class ChatBranchInclude
-    {
-        public const string Turn = "turn";
-        public const string BeforePrompt = "beforePrompt";
-    }
-
-    // Итог ветвления: новый чат + черновик композера (не null только у include=beforePrompt).
-    public sealed record ChatBranchResult(Session Session, string? Draft);
-
     // --- Создание и порождение чата (S3-5) ---
     // Тела ушли в Services/Sessions/ChatCreation.cs; сигнатуры фасада прежние: на них сидят
     // контроллеры, тулсеты, ChatContinueService и ChatHandoffService. Типы ChatBranchInclude /
-    // ChatBranchResult остаются здесь — это контракт ручки и тестов.
+    // ChatBranchResult живут в ядре (Services/Sessions/SessionCoreContracts.cs).
     public async Task<ChatBranchResult> BranchAsync(string sessionId, string ownerId,
         int userMessageIndex, string anchorText, string include, string? name = null)
         => await _creation.BranchAsync(sessionId, ownerId, userMessageIndex, anchorText, include, name);
@@ -1145,11 +1099,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return (BuildMemoryContext(ownerId, persona.Id, session.ProjectId), persona);
     }
 
-    // План сервера рабочего пространства — часть контракта фасада: его читает WorkspaceToolset
-    // по живой сессии (живой tools/list) и тесты. Сам план считает ExternalMcpContexts (S3-4).
-    internal sealed record WorkspaceMcpPlan(IReadOnlyList<string> Sections,
-        IReadOnlyList<string>? AllowedProjectIds);
-
     // Id-заглушка пустой зоны: ни один проект владельца под ним не живёт. Определение —
     // в роли (единственная точка, где зона строится), здесь — тот же идентификатор контракта.
     internal const string NoProjectsZone = Sessions.ExternalMcpContexts.NoProjectsZone;
@@ -1174,16 +1123,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     private NotificationsMcpContext? BuildNotificationsContext(string? ownerId, string? personaId, Persona? persona) =>
         _external.BuildNotificationsContext(ownerId, personaId, persona);
 
-
-    // Глобальная персона не бывает собеседником чата общего проекта (S2a-8): рамка хода в
-    // общем проекте узкая для всех, включая арендатора (TurnFrame, решение 29.10), а
-    // глобальная персона — личное пространство арендатора: её характер и память утекали бы
-    // в общий чат. Отдельный тип, а не текст: контроллер отвечает code=global_persona_in_shared,
-    // фронт различает этот отказ среди прочих 400 (по образцу transcript_damaged).
-    public sealed class GlobalPersonaInSharedException(string message) : InvalidOperationException(message)
-    {
-        public const string Code = "global_persona_in_shared";
-    }
 
     /// <summary>
     /// Персона, назначаемая чату, обязана быть видна в рамке этого чата (доработка R-S2a-8):
@@ -1316,10 +1255,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             suppressTasksExecute, staffNote, kind, senderUserId);
 
     // === Отчёт «наверх»: в родительский чат ===
-
-    // Результат попытки отчитаться. TooDeep — цепочка автоотчётов упёрлась в потолок;
-    // NoParent — у чата нет эффективного родителя (обычный чат либо вынесен в корень).
-    public enum ReportUpResult { Delivered, Queued, NoParent, TooDeep, NotFound }
 
     // Положить отчёт в родительский чат. Карточка ложится всегда (0 токенов); ход родителя
     // запускается только для withTurn — финального доклада по задаче. Промежуточный отчёт
@@ -1507,12 +1442,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public Task<Session?> SetChatIconAsync(string userId, string sessionId, CancellationToken ct)
         => _naming.SetChatIconAsync(userId, sessionId, ct);
 
-    // Результат пакетного прогона значков: сколько чатов получили иконку и сколько пропущено
-    // (значок уже стоит, нет переписки, модель не дала имя). Идёт в тост палитры.
-    // Тип — часть контракта фасада (его читает контроллер), остался здесь; тело прогона —
-    // в ChatNaming (обращение через alias).
-    public sealed record IconBatchResult(int Processed, int Skipped);
-
     public Task<IconBatchResult> SetChatIconsAsync(string userId, CancellationToken ct, string? projectId = null)
         => _naming.SetChatIconsAsync(userId, ct, projectId);
 
@@ -1576,15 +1505,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
     // === КР-наблюдаемость, этап 3: перезапуск хода штаба без потери работы ===
 
-    // Повреждённый транскрипт: resume запрещён, человеку предлагаем начать ход заново.
-    // Отдельный тип, а не текст в InvalidOperationException: контроллер различает отказ
-    // гейта (просто текст) и этот случай (code=transcript_damaged + кнопка «начать заново»).
-    public sealed class TurnTranscriptDamagedException(string message) : InvalidOperationException(message);
-
-    // Результат перезапуска хода. Resumed=true — следующий ход продолжит разговор по
-    // транскрипту (--resume); false — ход начнётся заново без старого контекста (startFresh).
-    public sealed record StuckTurnRestartResult(bool Resumed, string Message);
-
     // Ожидание смерти процесса после kill: само ожидание — в TurnRecovery (S3-5), здесь
     // остаётся точка, на которой тесты сужают его до сотен миллисекунд.
     internal TimeSpan KillWaitTimeout { get => _recovery.KillWaitTimeout; set => _recovery.KillWaitTimeout = value; }
@@ -1596,11 +1516,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         => await _recovery.RestartStuckTurnAsync(sessionId, startFresh);
 
     // === Авто-возобновление ходов, оборванных рестартом сервера (фича turn-auto-resume) ===
-
-    // Исход возобновления. Sent=true — resume-ход отправлен (агент продолжит с того же
-    // места); false — отказ (статус не Orphaned / битый хвост), ход не шлём, в ленте
-    // остаётся карточка-баннер. Reason — человекочитаемая причина отказа для лога/отчёта.
-    public sealed record RestartResumeResult(bool Sent, string? Reason = null);
 
     // Шов для тестов: целостность хвоста транскрипта (true — можно возобновлять).
     // По умолчанию — та же проверка, что RestartStuckTurnAsync: файл не найден (локальный
@@ -3401,19 +3316,3 @@ public record ChatVisibilityResult(ChatVisibilityOutcome Outcome, Session? Sessi
 // это сообщение об ошибке или обрубок, а не готовая реплика.
 public record TurnResult(string Reply, long DurationMs, double? CostUsd, bool Succeeded);
 
-// Результат отправки с ожиданием: Queued — сессия была занята, сообщение встало в очередь
-// и уйдёт после текущего хода; QueueFull — очередь переполнена, сообщение отброшено;
-// Completed — ход завершился в срок; Running — ход продолжается (wait=none или истёк таймаут).
-// Busy остаётся для совместимости сигнатуры, но занятость сама по себе больше не отказ.
-public abstract record SendAndWaitResult
-{
-    public sealed record Busy(SessionStatus CurrentStatus) : SendAndWaitResult;
-    // Dispatched — постановка сама форсировала доставку (очередь была пуста, а ход успел
-    // кончиться): вызывающему прерывать нечего, ход уже идёт с этим сообщением
-    public sealed record Queued(int Position, bool Duplicate, bool Dispatched = false) : SendAndWaitResult;
-    public sealed record QueueFull(int Limit) : SendAndWaitResult;
-    public sealed record Completed(TurnResult Result) : SendAndWaitResult;
-    public sealed record Running : SendAndWaitResult;
-
-
-}

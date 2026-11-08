@@ -14,12 +14,19 @@ namespace ClaudeHomeServer.Tests.Services;
 // после перезаписи экземпляра генерации инстанс, который берёт опрос цен, остаётся 15 с.
 // Поднимает полный стенд: проверка идёт по реальному DI-графу Program.
 [Trait("Category", "Host")]
-public class FalHttpClientRegistrationTests
+public class FalHttpClientRegistrationTests : IClassFixture<FalHttpClientRegistrationTests.Hosts>
 {
+    // Хост на КЛАСС (храповик HostPerClassRatchet): оба теста только читают DI-граф и создают
+    // клиентов из фабрики, состояния между тестами не делят
+    public sealed class Hosts : TestWebApplicationFactory;
+
+    private readonly Hosts _factory;
+
+    public FalHttpClientRegistrationTests(Hosts factory) => _factory = factory;
+
     [Fact]
     public void КлиентФалИмеетСвойТаймаут_АНеДефолтные100с() {
-        using var factory = new TestWebApplicationFactory();
-        var client = factory.Services.GetRequiredService<IHttpClientFactory>().CreateClient("fal");
+        var client = _factory.Services.GetRequiredService<IHttpClientFactory>().CreateClient("fal");
 
         client.Timeout.Should().Be(TimeSpan.FromSeconds(15),
             "дефолтные 100 с держат слот гейта опроса полтора минуты на зависшем запросе; "
@@ -28,8 +35,7 @@ public class FalHttpClientRegistrationTests
 
     [Fact]
     public void ПослеПерезаписиТаймаутаГенерации_ИнстансОпросаБиллингаОстаётся15с() {
-        using var factory = new TestWebApplicationFactory();
-        var http = factory.Services.GetRequiredService<IHttpClientFactory>();
+        var http = _factory.Services.GetRequiredService<IHttpClientFactory>();
 
         // Повторяем поведение FalImageService.cs:87-88: инстанс длинной генерации
         // перезаписывается на 180 с.

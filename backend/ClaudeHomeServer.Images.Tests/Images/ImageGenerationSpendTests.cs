@@ -23,6 +23,7 @@ public class ImageGenerationSpendTests
     {
         private readonly List<SpendRecord> _records = [];
         private readonly TaskCompletionSource _second = new();
+        private readonly TaskCompletionSource _first = new();
 
         public IReadOnlyList<SpendRecord> Records
         {
@@ -34,9 +35,13 @@ public class ImageGenerationSpendTests
             lock (_records)
             {
                 _records.Add(record);
+                _first.TrySetResult();
                 if (_records.Count >= 2) _second.TrySetResult();
             }
         }
+
+        public async Task WaitForFirst(TimeSpan timeout) =>
+            await Task.WhenAny(_first.Task, Task.Delay(timeout));
 
         // Дожидаться второй записи: не дождался — значит её никто и не писал
         public async Task WaitForSecond(TimeSpan timeout) =>
@@ -232,17 +237,103 @@ public class ImageGenerationSpendTests
         spend.Records.Single().Initiator.Should().BeNull("неизвестный инициатор не выдумываем");
     }
 
+    // Пустой результат: картинок нет, а id запроса fal есть (скачивания упали / 4xx после GPU)
     [Fact]
-    public async Task ПровайдерНеОтдалКартинок_ТратыНет()
+    public async Task ПустойFal_ЦенаБольшеНуля_РовноОднаЗаписьБезКартинок()
     {
         var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1", returnsImages: false);
         var spend = new CapturingSpend();
-        var cost = new FakeCost(0.01);
+        var cost = new FakeCost(0.04);
+        var service = new ImageGenerationService([fal], Store(NewTempDir(), ("Images:Models:fal", "fal-ai/flux/dev")),
+            null, spend, cost);
+
+        Assert.Empty(await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Agent, CancellationToken.None));
+        await spend.WaitForFirst(Settle);
+        await spend.WaitForSecond(TimeSpan.FromMilliseconds(300));
+
+        var rec = spend.Records.Should().ContainSingle("pending-записи нет: платность запроса неизвестна").Subject;
+        rec.Generations.Should().Be(0);
+        rec.CostUsd.Should().Be(0.04);
+        rec.Label.Should().Be(ImageGenerationService.SpendLabelNoImages);
+        rec.Provider.Should().Be("fal");
+        rec.Source.Should().Be(SpendSources.Fal);
+        rec.Model.Should().Be("fal-ai/flux/dev");
+        rec.OwnerId.Should().Be(Owner);
+        rec.Initiator.Should().Be(SpendInitiators.Agent);
+        rec.ProjectId.Should().BeNull();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0.0)]
+    public async Task ПустойFal_ЦенаНеизвестнаИлиНоль_ЗаписейНет(double? usd)
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1", returnsImages: false);
+        var spend = new CapturingSpend();
+        var cost = new FakeCost(usd);
         var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, cost);
 
         Assert.Empty(await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None));
 
+        await cost.AskedOrTimeout;
+        await spend.WaitForFirst(TimeSpan.FromMilliseconds(300));
+        cost.Calls.Should().Be(1, "цену спросили — иначе тест проходил бы вакуумно");
+        spend.Records.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ПустойFal_БезIdЗапроса_ЦенуНеСпрашиваем()
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: null, returnsImages: false);
+        var spend = new CapturingSpend();
+        var cost = new FakeCost(0.04);
+        var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, cost);
+
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None);
+
+        await spend.WaitForFirst(TimeSpan.FromMilliseconds(300));
         spend.Records.Should().BeEmpty();
         cost.Calls.Should().Be(0);
+    }
+
+    // Фолбэк не съедает трату пустого fal. ProviderOrder статичен (glif → fal), поэтому
+    // «fal, затем glif» в проде недостижим; механизм проверяем цепочкой fal → драйвер с
+    // неизвестным ключом (OrderOf кладёт его в хвост): трата fal пишется в своей итерации.
+    [Fact]
+    public async Task Auto_ПустойFal_ПотомДругойПровайдерСКартинками_ДвеТраты()
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1", returnsImages: false);
+        var next = new FakeGenerator("next", enabled: true);
+        var spend = new CapturingSpend();
+        var cost = new FakeCost(0.04);
+        var service = new ImageGenerationService([next, fal], Store(NewTempDir()), null, spend, cost);
+
+        var images = await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None);
+
+        images.Should().HaveCount(1);
+        await spend.WaitForSecond(Settle);
+        spend.Records.Should().HaveCount(2);
+        spend.Records.Should().ContainSingle(r => r.Source == SpendSources.Fal && r.Label == ImageGenerationService.SpendLabelNoImages
+            && r.CostUsd == 0.04 && r.Generations == 0);
+        spend.Records.Should().ContainSingle(r => r.Source == "next" && r.Generations == 1
+            && r.Label == ImageGenerationService.SpendLabelPendingAmount);
+    }
+
+    // Регресс: с картинками — прежний путь (pending с Generations = N + догоняющая)
+    [Fact]
+    public async Task ФалСКартинками_ПутьНеИзменился()
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1");
+        var spend = new CapturingSpend();
+        var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, new FakeCost(0.02));
+
+        await service.GenerateManyAsync(Avatar, "кот", 3, Owner, SpendInitiators.Human, CancellationToken.None);
+        await spend.WaitForSecond(Settle);
+
+        spend.Records.Should().HaveCount(2);
+        spend.Records[0].Should().Match<SpendRecord>(r => r.Generations == 3 && r.CostUsd == null
+            && r.Label == ImageGenerationService.SpendLabelPendingAmount);
+        spend.Records[1].Should().Match<SpendRecord>(r => r.Generations == 0 && r.CostUsd == 0.02
+            && r.Label == ImageGenerationService.SpendLabel);
     }
 }

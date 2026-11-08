@@ -47,6 +47,13 @@ export const SPEND_SOURCES: Record<string, { label: string; color: string }> = {
 };
 
 export const sourceLabel = (s: string) => SPEND_SOURCES[s]?.label ?? s;
+
+// Подпись генерационной записи в списке анализа: «без картинок» виден вместо модели,
+// иначе запись fal без картинок не отличить от догоняющей записи удачного запроса.
+export const genTurnTitle = (t: { source: string; model?: string | null; label?: string | null }): string => {
+  const noImages = !!t.label && t.label.endsWith('без картинок');
+  return `${sourceLabel(t.source)} · ${noImages ? t.label : (t.model ?? t.label ?? '')}`;
+};
 export const sourceColor = (s: string) => SPEND_SOURCES[s]?.color ?? C.textMuted;
 // Текстовый вариант цвета источника — для моноширинных значений в анализе
 // (у SPEND_SOURCES цвета серий «плотные», на подложке читается text-пара)

@@ -257,46 +257,6 @@ export interface ProjectIcon {
   imageFile?: string | null;
 }
 
-// Code Graph — логическая карта типов проекта и рёбер между ними
-// (GET /api/projects/{id}/code-graph). Узлы — типы, рёбра — связи типов,
-// godNodes — точки перегруза (кандидаты на разбиение).
-export type CodeGraphNodeKind =
-  | 'Class' | 'Interface' | 'Struct' | 'Enum'
-  | 'Component' | 'Hook' | 'UiPrimitive' | 'Util';
-export type CodeGraphRelation = 'Calls' | 'Implements' | 'References';
-export type CodeGraphConfidence = 'Extracted' | 'Inferred';
-
-export interface CodeGraphNode {
-  id: string;
-  label: string;
-  fullyQualifiedName: string;
-  sourceFile: string;
-  sourceLocation: string;   // "line:col"
-  kind: CodeGraphNodeKind;
-}
-
-export interface CodeGraphEdge {
-  source: string;           // id узла-источника
-  target: string;           // id узла-приёмника
-  relation: CodeGraphRelation;
-  confidence: CodeGraphConfidence;
-}
-
-export interface CodeGraphMetadata {
-  builtAt?: string | null;  // ISO времени сборки
-  nodeCount: number;
-  edgeCount: number;
-  fileCount: number;
-  isStale: boolean;         // код изменился после сборки — граф может отставать
-}
-
-export interface CodeGraph {
-  nodes: CodeGraphNode[];
-  edges: CodeGraphEdge[];
-  godNodes: string[];
-  metadata: CodeGraphMetadata;
-}
-
 // ─── Документация проекта (панель «Документы»: README.md + docs/**) ───────────────
 // Класс ссылки: doc — другой документ области (навигация внутри панели),
 // repo — файл проекта вне области, обычно код (открывается в центре),
@@ -1099,62 +1059,6 @@ export interface UsageInfo {
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
-}
-
-// Preview: запускаемый сервис проекта (инференс из манифеста или из .claude/launch.json)
-export interface ProjectService {
-  id: string;
-  name: string;
-  source: string;               // launch.json | npm | dotnet | docker-compose | procfile | makefile | custom
-  command: string;
-  args: string[];
-  cwd: string | null;
-  suggestedPort: number | null;
-  autoPort: boolean;
-  saved: boolean;               // из .claude/launch.json — можно редактировать/удалять
-  // idle | starting | started | stopped | error | external (порт слушает процесс,
-  // запущенный вне продукта — остановить его нельзя и логов у него нет)
-  status: string;
-  runningPort: number | null;
-  error: string | null;
-  // Составной запуск (Rider multilaunch): id входящих сервисов. Своей команды у
-  // группы нет — она поднимает участников, статус и порт производные от них
-  members?: string[] | null;
-  // Стенд поднят агентом из чата (инструмент start_stand): только подпись — жизнь стенда от
-  // чата не зависит
-  origin?: { sessionId: string; label: string } | null;
-}
-
-// Одна конфигурация из .claude/launch.json (формат Claude Desktop)
-// Выданная ссылка внешнего доступа к дев-серверу (поддомен, а не путь /preview/**).
-export interface ExternalPreviewLink {
-  jti: string;
-  projectId: string;
-  serviceId: string;
-  issuedAt: string;
-  expiresAt: string;
-  // Имя проекта приходит с сервера: список сквозной, и чужой проект надо назвать
-  projectName?: string | null;
-}
-
-export interface ExternalLinkIssued {
-  url: string;
-  jti: string;
-  expiresAt: string;
-  // Вытесненные потолком ссылки — их закрыли, и человек обязан об этом узнать
-  evicted: { jti: string; projectId: string; serviceId: string }[];
-}
-
-export interface LaunchConfigEntry {
-  name?: string;
-  runtimeExecutable?: string;
-  runtimeArgs?: string[];
-  program?: string;
-  args?: string[];
-  port?: number;
-  autoPort?: boolean;
-  cwd?: string;
-  env?: Record<string, string>;
 }
 
 // Состояние одного окна лимита подписки (из rate_limit_event). utilization: 0..1.

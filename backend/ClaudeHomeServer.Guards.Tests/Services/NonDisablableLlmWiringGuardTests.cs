@@ -8,6 +8,13 @@ namespace ClaudeHomeServer.Tests.Services;
 /// и он стоит ДО <c>AddSubsystems</c> и до <c>AddCore</c> — отказ обязан случиться раньше сборки
 /// контейнера, с явной причиной, а не как «No service for type LlmProviderRegistry» глубже в старте.
 ///
+/// Текущий набор границ: (1) вызов есть вне комментариев; (2) он верхний оператор — ровно одна строка
+/// с колонки 0, без вложенности в if/блок; (3) нижняя граница — ПОСЛЕ подключения источника тумблеров
+/// подсистем (<c>AddJsonFile(subsystemsPath…)</c>), иначе <c>Subsystems:llm:Enabled=false</c> из
+/// <c>subsystems.json</c> ещё не прочитан; (4) между этим источником и вызовом нет других источников
+/// конфига (<c>AddJsonFile</c>/<c>AddInMemoryCollection</c>) — отказ идёт после прочитанного тумблера llm;
+/// (5) верхняя граница — до <c>AddSubsystems</c> и до <c>AddCore</c>.
+///
 /// Зачем текстовый сторож: тело проверки охраняет <c>NonDisablableSubsystemsTests</c>, а саму
 /// проводку тестом не достать — top-level statements выполняются раньше, чем
 /// <c>TestWebApplicationFactory</c> подмешивает ExtraConfig (проба: снять вызов — 4 из 4 зелёные).
@@ -38,6 +45,10 @@ public class NonDisablableLlmWiringGuardTests
     // Подключение источника тумблеров подсистем (data/subsystems.json): вызов обязан стоять ПОСЛЕ него.
     private static readonly Regex SubsystemsSourceCall = new(
         @"\bAddJsonFile\s*\(\s*subsystemsPath\b", RegexOptions.Compiled);
+
+    // Любой другой источник конфига, появившийся между источником подсистем и вызовом.
+    private static readonly Regex OtherConfigSourceCall = new(
+        @"\bAdd(JsonFile|InMemoryCollection)\s*\(", RegexOptions.Compiled);
 
     [Fact]
     public void ProgramCs_ВызываетEnsureLlmEnabled_ДоAddSubsystemsИAddCore()
@@ -98,6 +109,13 @@ public class NonDisablableLlmWiringGuardTests
     public void Правило_КраснеетЕслиВызовДоПодключенияИсточникаПодсистем()
     {
         var act = () => AssertWiring(Call + Source + Core + Subsystems);
+        act.Should().Throw<Exception>().WithMessage("*после источника подсистем*");
+    }
+
+    [Fact]
+    public void Правило_КраснеетЕслиМеждуИсточникомПодсистемИВызовомЕстьДругойИсточникКонфига()
+    {
+        var act = () => AssertWiring(Source + "builder.Configuration.AddInMemoryCollection(x);\n" + Call + Core + Subsystems);
         act.Should().Throw<Exception>().WithMessage("*после всех источников конфига*");
     }
 
@@ -137,7 +155,11 @@ public class NonDisablableLlmWiringGuardTests
 
         var at = calls[0].Index;
         at.Should().BeGreaterThan(source.Index,
-            "отказ — после всех источников конфига: иначе Subsystems:llm:Enabled=false из subsystems.json не прочитан");
+            "отказ — после источника подсистем: иначе Subsystems:llm:Enabled=false из subsystems.json не прочитан");
+        var between = text.Substring(source.Index + source.Length, at - source.Index - source.Length);
+        OtherConfigSourceCall.IsMatch(between).Should().BeFalse(
+            "отказ — после всех источников конфига: между источником подсистем и вызовом появился " +
+            "другой AddJsonFile/AddInMemoryCollection, и тумблер llm мог прийти из него уже после проверки");
         at.Should().BeLessThan(subsystems.Index, "отказ — до AddSubsystems");
         at.Should().BeLessThan(core.Index, "отказ — до сборки контейнера (AddCore)");
     }

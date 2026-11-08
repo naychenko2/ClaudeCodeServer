@@ -54,10 +54,15 @@ public class SessionCoreShapeGuardTests
     // один переходный: IWorkLoopContinuation (S3-7) — шов живёт ровно до шага 2 выноса
     // цикла «до готово» (TurnContinuation), когда продолжение зовёт ядро через
     // TrySubmitContinuation; после этого список возвращается к пяти.
+    // Опознавание по полному имени: одноимённый тип из чужого пространства имён не разрыв цикла.
     private static readonly HashSet<string> AllowedLazy =
     [
-        "ITurnStarter", "ITurnMessageSink", "ITeamNotifier", "IFeatureChatLinks", "ReviewTreePool",
-        "IWorkLoopContinuation",
+        "ClaudeHomeServer.Services.Sessions.ITurnStarter",
+        "ClaudeHomeServer.Services.Sessions.ITurnMessageSink",
+        "ClaudeHomeServer.Services.Team.ITeamNotifier",
+        "ClaudeHomeServer.Services.IFeatureChatLinks",
+        "ClaudeHomeServer.Services.ReviewTreePool",
+        "ClaudeHomeServer.Services.Sessions.IWorkLoopContinuation",
     ];
 
     // Данные ядра: формат хранения, которого нет в сигнатурах фасада (решение лида 0b942ca6). Допуск
@@ -76,9 +81,10 @@ public class SessionCoreShapeGuardTests
 
     // Поимённый allow-list правила 5 (у каждой строки — причина). SessionStore, ChatVisibility и
     // ChatDeletion в список не входят: их ленивые резолвы описаны типом (Lazy<T>).
+    // Ключ — полное имя типа: одноимённая роль из чужого пространства имён провайдера не получает.
     private static readonly Dictionary<string, string> ServiceProviderAllowList = new()
     {
-        ["BuiltinMcpContexts"] = "резолвит лишь McpToolsetRegistry и IDeviceExecChannel (цикл через реестр тулсетов)",
+        ["ClaudeHomeServer.Services.Sessions.BuiltinMcpContexts"] = "резолвит лишь McpToolsetRegistry и IDeviceExecChannel (цикл через реестр тулсетов)",
     };
 
     // Трипвайр по фасаду (хвост 1f7152c9, находка ревью R-S3-8c): параметр `cheap` снят на S3-8c —
@@ -166,12 +172,12 @@ public class SessionCoreShapeGuardTests
         from p in c.GetParameters()
         where p.ParameterType.IsGenericType && p.ParameterType.GetGenericTypeDefinition() == typeof(Lazy<>)
         let arg = p.ParameterType.GetGenericArguments()[0]
-        where !AllowedLazy.Contains(arg.Name)
-        select $"{t.Name}: Lazy<{arg.Name}> — допустимы только {string.Join(", ", AllowedLazy)}";
+        where !AllowedLazy.Contains(arg.FullName ?? arg.Name)
+        select $"{t.Name}: Lazy<{arg.FullName ?? arg.Name}> — допустимы только {string.Join(", ", AllowedLazy)}";
 
     internal static IEnumerable<string> Rule5ServiceProviderOnlyAllowListed(IEnumerable<Type> types) =>
         from t in types
-        where !ServiceProviderAllowList.ContainsKey(t.Name)
+        where !ServiceProviderAllowList.ContainsKey(t.FullName ?? t.Name)
         from c in Ctors(t)
         from p in c.GetParameters()
         where Mentions(p.ParameterType, typeof(IServiceProvider))
@@ -428,7 +434,7 @@ public class SessionCoreShapeGuardTests
 
     [Fact]
     public void Allow_list_правила5_состоит_только_из_BuiltinMcpContexts() =>
-        ServiceProviderAllowList.Keys.Should().BeEquivalentTo(["BuiltinMcpContexts"],
+        ServiceProviderAllowList.Keys.Should().BeEquivalentTo(["ClaudeHomeServer.Services.Sessions.BuiltinMcpContexts"],
             "решение 05.11 (1dda7103): allow-list — одна роль; новая строка требует нового решения Александра");
 
     [Fact]
@@ -694,6 +700,23 @@ public class SessionCoreShapeGuardTests
     }
 
     [Fact]
+    public void Самопроверка_правило3_ловится_одноимённый_Lazy_из_чужого_пространства_имён()
+    {
+        // Разрыв цикла опознаётся по полному имени: свой ITurnStarter в чужом namespace — не шов ядра.
+        Rule3LazyOnlyNamed([typeof(ForeignNames.FakeLazyForeignSeam)]).Should().ContainSingle();
+        Rule3LazyOnlyNamed([typeof(FakeLazyNamed)]).Should().BeEmpty("настоящие швы по-прежнему проходят");
+    }
+
+    [Fact]
+    public void Самопроверка_правило5_ловится_одноимённая_роль_из_чужого_пространства_имён()
+    {
+        // Allow-list правила 5 по полному имени: BuiltinMcpContexts из чужого namespace провайдера не получает.
+        Rule5ServiceProviderOnlyAllowListed([typeof(ForeignNames.BuiltinMcpContexts)]).Should().ContainSingle();
+        Rule5ServiceProviderOnlyAllowListed([typeof(BuiltinMcpContexts)]).Should().BeEmpty(
+            "настоящая роль из allow-list проходит");
+    }
+
+    [Fact]
     public void Самопроверка_трипвайр_фасада_краснеет_на_поле_параметре_и_свойстве()
     {
         // Каждая форма возврата из пробы 1f7152c9 обязана краснеть отдельно: скан
@@ -704,6 +727,24 @@ public class SessionCoreShapeGuardTests
         FacadeNoForbiddenLlm([typeof(FakeFacadeProperty)]).Should().ContainSingle();
         // Трипвайр не подменяет правило 1: чужой тип (SessionManager) он не ловит.
         FacadeNoForbiddenLlm([typeof(FakeTakesManager)]).Should().BeEmpty();
+    }
+}
+
+// Одноимённики допустимых типов в чужом (вложенном) пространстве имён — нарушители самопроверок правил 3 и 5.
+internal static class ForeignNames
+{
+    internal interface ITurnStarter { }
+
+    internal sealed class FakeLazyForeignSeam
+    {
+        public FakeLazyForeignSeam(Lazy<ITurnStarter> starter) { S = starter; }
+        public Lazy<ITurnStarter> S { get; }
+    }
+
+    internal sealed class BuiltinMcpContexts
+    {
+        public BuiltinMcpContexts(IServiceProvider services) { S = services; }
+        public IServiceProvider S { get; }
     }
 }
 

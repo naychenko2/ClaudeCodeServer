@@ -3193,12 +3193,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     internal Task OnMessageQueuedAsync(string sessionId, TurnAccumulator acc, ServerMessage msg, long runId = 0) =>
         _completion.OnMessageQueuedAsync(sessionId, acc, msg, runId);
 
-    // Цены хода (трекинг/догоняющий учёт/публикация fal и glif) — в TurnCostLedger (S3-2).
-    // Здесь только делегирующие обёртки: вызывающие места (приём хода, загрузка истории)
-    // остаются в ядре, а их тело — в роли.
-    private void TryTrackFalCost(string sessionId, string content, long? finishedAtMs) => _costs.TryTrackFalCost(sessionId, content, finishedAtMs);
-
-    private void TryTrackGlifCost(string sessionId, string content) => _costs.TryTrackGlifCost(sessionId, content);
+    // Цены хода (трекинг/догоняющий учёт/публикация fal и glif) — в TurnCostLedger (S3-2):
+    // вызывающие места (приём хода, загрузка истории) и их тело — в роли (TurnCompletion),
+    // обёрток в ядре нет.
 
     // Публикация учёта glif-генерации: запись в историю (дедуп) + broadcast клиентам.
     public Task PublishGlifCostAsync(string sessionId, GlifCostMessage msg) => _costs.PublishGlifCostAsync(sessionId, msg);

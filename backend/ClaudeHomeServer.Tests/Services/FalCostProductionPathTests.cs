@@ -10,7 +10,8 @@ using Moq;
 namespace ClaudeHomeServer.Tests.Services;
 
 // Тест ПРОДОВОГО пути учёта fal (хвост ревью R-S-SPEND-ПАКЕТ, п.1). TryTrackFalCost и
-// BackfillFalCosts в SessionManager — единственное место, где список id из tool_result
+// BackfillFalCosts в TurnCostLedger (Services/Sessions/TurnCostLedger.cs:85, :97) —
+// единственное место, где список id из tool_result
 // превращается в отдельные Track'ы, а значит — в N публикаций fal_cost на N запросов пакета.
 // Прежний тест (FalCostBatchTests.ПакетныйToolResult…) повторял этот цикл вручную и проверял
 // копию логики: мутация «одиночный вызов вместо цикла» в SessionManager не краснела нигде
@@ -100,7 +101,7 @@ public class FalCostProductionPathTests : SessionManagerTestBase
         return Sent<FalCostMessage>();
     }
 
-    // Живой путь: tool_result пакета хода → TryTrackFalCost (SessionManager) → каждый id своим
+    // Живой путь: tool_result пакета хода → TryTrackFalCost (TurnCostLedger) → каждый id своим
     // Track'ом → N публикаций. Мутация «одиночный вызов вместо цикла» в TryTrackFalCost
     // (Take(1)) даёт ровно одну публикацию — тест краснеет на числе и на составе id.
     [Fact]
@@ -119,8 +120,8 @@ public class FalCostProductionPathTests : SessionManagerTestBase
     }
 
     // Путь бэкфилла: история с пакетным tool_result без fal_cost → GetHistoryAsync →
-    // BackfillFalCosts → каждый id, ещё не учтённый, своим Track'ом. Мутация «одиночный
-    // вызов вместо цикла» в BackfillFalCosts краснеет здесь же — на числе и составе id.
+    // BackfillFalCosts (TurnCostLedger) → каждый id, ещё не учтённый, своим Track'ом. Мутация
+    // «одиночный вызов вместо цикла» в BackfillFalCosts краснеет здесь же — на числе и составе id.
     [Fact]
     public async Task БэкфиллИсторииСПакетнымToolResult_КаждыйIdИзJobs_ПубликуетсяРовноОдинРаз()
     {

@@ -8,7 +8,8 @@ using FluentAssertions;
 namespace ClaudeHomeServer.Tests.Services;
 
 // Блокер вердикта efa973f5: в бою ядро обязано передать реестр актора в учёт расхода хода
-// (SessionManager.cs:11022 → SpendMapping.RecordTurnSpend). Запись строится пока ход жив —
+// (Services/Sessions/TurnCompletion.cs:403 → TurnCostLedger → SpendMapping.RecordTurnSpend).
+// Запись строится пока ход жив —
 // переход статуса по result идёт ниже по методу, ядро снимает актора вместе со статусом,
 // и потребитель после конца хода получил бы null (урок R-S2a-6c). Здесь — ровно боевой
 // порядок: живой ход участника → result → запись несёт его ActorUserId; серверный ход

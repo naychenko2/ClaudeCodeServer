@@ -3298,21 +3298,3 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         string? lastMessage = null, int messageCount = 0) =>
         _store.BroadcastStatusChangeAsync(sessionId, info, status, lastMessage, messageCount);
 }
-
-// Исход смены видимости чата (SetChatVisibility, S2d-7a). Отказы различимы для контроллера:
-// NotAuthor — 403, NotSharedProject / HasMessages / AttachmentsMoveFailed / BoundToFeature / TeamOrGroup — 409, NotFound — 404.
-public enum ChatVisibilityOutcome { Ok, NotFound, NotAuthor, NotSharedProject, HasMessages, AttachmentsMoveFailed, BoundToFeature, TeamOrGroup }
-
-// AttachmentMoves (S2d-6b-4): карта «старый путь → новый» перенесённых вложений — композеру
-// заменить ссылки черновика; null — переносить было нечего.
-public record ChatVisibilityResult(ChatVisibilityOutcome Outcome, Session? Session)
-{
-    public IReadOnlyDictionary<string, string>? AttachmentMoves { get; init; }
-}
-
-// Итог завершённого хода для синхронного ожидания (SendMessageAndWaitAsync):
-// текст последней реплики ассистента, длительность и стоимость (если провайдер её отдал).
-// Succeeded — ход завершился штатным result (true); error/«Стоп» (exited) — false: тогда Reply
-// это сообщение об ошибке или обрубок, а не готовая реплика.
-public record TurnResult(string Reply, long DurationMs, double? CostUsd, bool Succeeded);
-

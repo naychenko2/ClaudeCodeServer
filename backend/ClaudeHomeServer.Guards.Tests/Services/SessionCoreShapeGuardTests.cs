@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Team;
@@ -44,6 +45,7 @@ namespace ClaudeHomeServer.Tests.Services;
 public class SessionCoreShapeGuardTests
 {
     private const string CoreNamespace = "ClaudeHomeServer.Services.Sessions";
+    private const string FacadeNamespace = "ClaudeHomeServer.Services";
     private const int MaxCtorParams = 10;
 
     // Единственные допустимые аргументы Lazy<T> (пять именованных разрывов циклов) плюс
@@ -104,6 +106,16 @@ public class SessionCoreShapeGuardTests
         ["ClaudeHomeServer.Services.Sessions.IconBatchResult"] =
             "запись итога пакетного прогона значков (бывшая вложенная в фасад): результат "
             + "SetChatIconsAsync для контроллера",
+        ["ClaudeHomeServer.Services.Sessions.TurnResult"] =
+            "запись итога завершённого хода (был top-level в файле фасада): Reply/DurationMs/CostUsd/Succeeded, "
+            + "без поведения; его читают потребители SendAndWaitResult.Completed (ChatContinueService, "
+            + "ChatHandoffService, SessionMessagingService) — те же допуски, что у SendAndWaitResult",
+        ["ClaudeHomeServer.Services.Sessions.ChatVisibilityOutcome"] =
+            "enum исхода смены видимости чата (был top-level в файле фасада): ChatsController разбирает его "
+            + "в коды отказов — значение, не поведение",
+        ["ClaudeHomeServer.Services.Sessions.ChatVisibilityResult"] =
+            "запись результата SetChatVisibility (был top-level в файле фасада): Outcome/Session/"
+            + "AttachmentMoves, которые ChatsController отдаёт клиенту — данные без поведения",
         ["ClaudeHomeServer.Services.Sessions.WorkspaceMcpPlan"] =
             "internal-запись плана сервера рабочего пространства (бывшая вложенная в фасад): "
             + "её читает WorkspaceToolset по живой сессии, строит её ExternalMcpContexts",
@@ -156,16 +168,15 @@ public class SessionCoreShapeGuardTests
             "зовёт фасад (SendOrEnqueueAsync) и передаёт ему константу PendingKind.Report: "
             + "к ядро обращается только значением enum. С задачей fada2814 скан видит такую "
             + "константу по позиции аргумента в сигнатуре вызова — допуск стал живым: снятие "
-            + "этой строки красит правило 4 (проверено в копии мутации)",
+            + "этой строки красит правило 4 (проверено в копии мутации); плюс передаёт фасаду значения "
+            + "Sessions.DeliveryCause (cause: …) — enum, не поведение ядра (две причины в одной строке: "
+            + "дубль ключа молча перезаписывал первую)",
         ["ClaudeHomeServer.Controllers.SessionMessagesController"] =
             "зовёт фасад (GetPending) и читает Kind для ответа /pending: значение enum "
             + "Sessions.PendingKind (SessionMessagesController.cs:273,275), не поведение ядра",
         ["ClaudeHomeServer.Hubs.SessionHub"] =
             "зовёт фасад (SendMessageAsync): передаёт Sessions.DeliveryCause.User и разбирает возвращённый "
             + "Sessions.SendUserOutcome — значения enum, не поведение ядра",
-        ["ClaudeHomeServer.Services.TaskExecutionService"] =
-            "передаёт фасаду значения Sessions.DeliveryCause (cause: …) — enum, не поведение ядра "
-            + "(второй допуск этого корня к PendingKind)",
         ["ClaudeHomeServer.Controllers.ChatsController"] =
             "ловит Sessions.GlobalPersonaInSharedException и Sessions.TurnTranscriptDamagedException по типу "
             + "и отвечает кодами отказа; читает Sessions.ChatBranchResult (BranchAsync) и "
@@ -268,17 +279,53 @@ public class SessionCoreShapeGuardTests
         select $"{t.Name} упоминает {hit.FullName}: зависимость снята на S3-8c, "
             + "уточнение заголовка живёт в ChatNaming, раннер он берёт из контейнера напрямую";
 
-    /// <summary>Трипвайр обратного ребра (хвост линии ядра): типы ядра не ссылаются на вложенные типы
-    /// фасада. Раньше такую ссылку прятал `using X = …SessionManager.X;`: правило 4 смотрит только на
-    /// ссылки К ядру, поэтому 14 alias'ов на фасад оставались зелёными. Контракты ядра теперь живут в
-    /// Services.Sessions, а вложенных типов у фасада для ядра не осталось.</summary>
-    internal static IEnumerable<string> CoreNoFacadeNestedRefs(IEnumerable<Type> coreTypes) =>
+    /// <summary>Трипвайр обратного ребра (хвост линии ядра): типы ядра не ссылаются ни на один тип
+    /// фасада — ни на вложенный в <see cref="SessionManager"/>, ни на top-level, объявленный рядом с
+    /// ним (<paramref name="facadeTopLevel"/>, см. <see cref="FacadeTopLevelTypes"/>). Раньше alias
+    /// `using X = …SessionManager.X;` прятал такую ссылку, а первая версия сторожа смотрела только на
+    /// вложенные типы: top-level (`TurnResult`, `ChatVisibilityResult`) имеют DeclaringType == null и
+    /// проходили молча — ребро ядро → фасад оставалось живым при зелёных 68/68.</summary>
+    internal static IEnumerable<string> CoreNoFacadeRefs(IEnumerable<Type> coreTypes,
+        IReadOnlySet<Type> facadeTopLevel) =>
         from t in coreTypes
         let hit = BoundaryIlScanner.CollectAllReferencedTypes(t)
-            .FirstOrDefault(r => r.DeclaringType == typeof(SessionManager))
+            .FirstOrDefault(r => r.DeclaringType == typeof(SessionManager) || facadeTopLevel.Contains(r))
         where hit is not null
         select $"{t.FullName} ссылается на {hit.FullName}: контракт, который нужен ядру, живёт в "
-            + "Services.Sessions, а не вложенным типом фасада (ребро «ядро → фасад»)";
+            + "Services.Sessions, а не типом фасада (ребро «ядро → фасад»)";
+
+    /// <summary>Top-level типы, объявленные в файле фасада SessionManager.cs: по рефлексии они ничем не
+    /// отличаются от прочих типов Services, поэтому набор берётся разбором объявлений в колонке 0
+    /// самого файла и разрешается в сборке Main. Сам <see cref="SessionManager"/> в набор не входит
+    /// (его ловят правило 1 и параметры конструкторов), вложенные — по DeclaringType.</summary>
+    internal static HashSet<Type> FacadeTopLevelTypes(string facadeSource)
+    {
+        var names = FacadeTopLevelNames(facadeSource);
+        return Main.GetTypes()
+            .Where(t => t.DeclaringType is null && t.Namespace == FacadeNamespace && names.Contains(t.Name)
+                && t != typeof(SessionManager))
+            .ToHashSet();
+    }
+
+    internal static HashSet<string> FacadeTopLevelNames(string facadeSource) =>
+        Regex.Matches(facadeSource,
+                @"^(?:public|internal)\s+(?:(?:sealed|static|abstract|partial|readonly)\s+)*(?:class|record(?:\s+(?:class|struct))?|struct|enum|interface)\s+(\w+)",
+                RegexOptions.Multiline)
+            .Select(m => m.Groups[1].Value)
+            .ToHashSet();
+
+    private static string ReadFacadeSource()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            var file = Path.Combine(dir.FullName, "backend", "ClaudeHomeServer", "Services", "SessionManager.cs");
+            if (File.Exists(file)) return File.ReadAllText(file);
+            dir = dir.Parent;
+        }
+        throw new InvalidOperationException(
+            "Не найден SessionManager.cs: подъём от " + AppContext.BaseDirectory + " не встретил backend/ClaudeHomeServer/Services.");
+    }
 
     /// <summary>Правило 4: кто из <paramref name="referrers"/> ссылается на типы Services.Sessions.
     /// Допуск меряется гранью корня: фасад и сами Services.Sessions — целиком; точка сборки ядра —
@@ -353,8 +400,19 @@ public class SessionCoreShapeGuardTests
         FacadeNoForbiddenLlm([typeof(SessionManager)]).Should().BeEmpty();
 
     [Fact]
-    public void Ядро_не_ссылается_на_вложенные_типы_фасада() =>
-        CoreNoFacadeNestedRefs(CoreTypes()).Should().BeEmpty();
+    public void Ядро_не_ссылается_на_типы_фасада_вложенные_и_top_level() =>
+        CoreNoFacadeRefs(CoreTypes(), FacadeTopLevelTypes(ReadFacadeSource())).Should().BeEmpty();
+
+    [Fact]
+    public void Разбор_файла_фасада_не_вакуумный_и_не_видит_типов_ядра()
+    {
+        // Файл фасада держит ровно SessionManager; набор top-level пуст ТОЛЬКО потому, что все
+        // контракты ушли в ядро. Имя фасада в разборе обязано находиться — иначе регэксп сломан
+        // и сторож проходит вакуумно.
+        var source = ReadFacadeSource();
+        FacadeTopLevelNames(source).Should().Contain(nameof(SessionManager));
+        FacadeTopLevelTypes(source).Should().NotContain(t => t.Namespace == CoreNamespace);
+    }
 
     [Fact]
     public void Правило4_на_типы_ядра_ссылаются_только_фасад_и_сами_Services_Sessions()
@@ -426,6 +484,9 @@ public class SessionCoreShapeGuardTests
                 "ClaudeHomeServer.Services.Sessions.ChatBranchResult",
                 "ClaudeHomeServer.Services.Sessions.IconBatchResult",
                 "ClaudeHomeServer.Services.Sessions.WorkspaceMcpPlan",
+                "ClaudeHomeServer.Services.Sessions.TurnResult",
+                "ClaudeHomeServer.Services.Sessions.ChatVisibilityOutcome",
+                "ClaudeHomeServer.Services.Sessions.ChatVisibilityResult",
             ],
             "тип-данные в ядре — явное решение: на них не считается правило 2, и только на них "
             + "распространяется допуск data-реферера правила 4; новая строка требует его же");
@@ -477,6 +538,10 @@ public class SessionCoreShapeGuardTests
         public FakeStoreWithProvider(IServiceProvider services) { S = services; }
         public IServiceProvider S { get; }
     }
+
+    public sealed record FakeFacadeTop(int X);
+
+    private sealed class FakeUsesFacadeTop { public FakeFacadeTop? Top; }
 
     private sealed class FakeUsesFacadeNested { public SessionManager.TeamRunQuota Quota; }
 
@@ -530,9 +595,24 @@ public class SessionCoreShapeGuardTests
     [Fact]
     public void Самопроверка_трипвайр_ядра_краснеет_на_ссылке_на_вложенный_тип_фасада()
     {
-        CoreNoFacadeNestedRefs([typeof(FakeUsesFacadeNested)]).Should().ContainSingle();
-        CoreNoFacadeNestedRefs([typeof(FakeTakesManager)]).Should().BeEmpty(
+        CoreNoFacadeRefs([typeof(FakeUsesFacadeNested)], new HashSet<Type>()).Should().ContainSingle();
+        CoreNoFacadeRefs([typeof(FakeTakesManager)], new HashSet<Type>()).Should().BeEmpty(
             "сам фасад как параметр — не вложенный тип (его ловит правило 1)");
+    }
+
+    [Fact]
+    public void Самопроверка_трипвайр_ядра_краснеет_на_top_level_типе_фасада()
+    {
+        // Тот самый случай ревью e8b4269d: top-level тип фасада (DeclaringType == null) в публичной
+        // сигнатуре типа ядра. Набор top-level берётся из разбора исходника фасада — как в боевой проверке.
+        var facade = FacadeTopLevelTypes("public record FakeFacadeTop(int X);\npublic sealed record Other(int Y);");
+        facade.Should().BeEmpty("в сборке нет таких типов — синтетический набор подаётся явно ниже");
+        var top = new HashSet<Type> { typeof(FakeFacadeTop) };
+        CoreNoFacadeRefs([typeof(FakeUsesFacadeTop)], top).Should().ContainSingle();
+        CoreNoFacadeRefs([typeof(FakeUsesFacadeTop)], new HashSet<Type>()).Should().BeEmpty(
+            "без набора top-level сторож слеп — поэтому боевая проверка собирает набор из файла фасада");
+        FacadeTopLevelNames("public sealed record Completed(TurnResult R);\npublic enum Z { A }\ninternal static class K {}\n    public record Nested(int A);")
+            .Should().BeEquivalentTo("Completed", "Z", "K");
     }
 
     [Fact]

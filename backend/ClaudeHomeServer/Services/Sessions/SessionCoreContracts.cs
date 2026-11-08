@@ -6,7 +6,7 @@ namespace ClaudeHomeServer.Services.Sessions;
 // Раньше жили вложенными в SessionManager, а роли ядра ссылались на них через
 // `using X = ClaudeHomeServer.Services.SessionManager.X;` — ребро «ядро → фасад» было
 // закрыто только формально. Тела перенесены дословно, поведения здесь нет. TurnResult и
-// ChatVisibilityResult остаются в фасаде: их шаг не пройден.
+// ChatVisibilityResult/Outcome тоже здесь: ядро не ссылается ни на один тип фасада.
 
 // Атрибуция доставленного хода для лога «Доставка хода» (инцидент 2026-08-10 П3): кто
 // инициировал авто-доставку, когда src=auto/origin пустой. Различает точки, прежде бывшие
@@ -105,3 +105,20 @@ public sealed record StuckTurnRestartResult(bool Resumed, string Message);
 // места); false — отказ (статус не Orphaned / битый хвост), ход не шлём, в ленте
 // остаётся карточка-баннер. Reason — человекочитаемая причина отказа для лога/отчёта.
 public sealed record RestartResumeResult(bool Sent, string? Reason = null);
+
+// Исход смены видимости чата (SetChatVisibility, S2d-7a). Отказы различимы для контроллера:
+// NotAuthor — 403, NotSharedProject / HasMessages / AttachmentsMoveFailed / BoundToFeature / TeamOrGroup — 409, NotFound — 404.
+public enum ChatVisibilityOutcome { Ok, NotFound, NotAuthor, NotSharedProject, HasMessages, AttachmentsMoveFailed, BoundToFeature, TeamOrGroup }
+
+// AttachmentMoves (S2d-6b-4): карта «старый путь → новый» перенесённых вложений — композеру
+// заменить ссылки черновика; null — переносить было нечего.
+public record ChatVisibilityResult(ChatVisibilityOutcome Outcome, Session? Session)
+{
+    public IReadOnlyDictionary<string, string>? AttachmentMoves { get; init; }
+}
+
+// Итог завершённого хода для синхронного ожидания (SendMessageAndWaitAsync):
+// текст последней реплики ассистента, длительность и стоимость (если провайдер её отдал).
+// Succeeded — ход завершился штатным result (true); error/«Стоп» (exited) — false: тогда Reply
+// это сообщение об ошибке или обрубок, а не готовая реплика.
+public record TurnResult(string Reply, long DurationMs, double? CostUsd, bool Succeeded);

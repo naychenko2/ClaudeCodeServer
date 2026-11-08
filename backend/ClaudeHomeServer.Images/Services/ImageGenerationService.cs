@@ -180,8 +180,12 @@ public sealed class ImageGenerationService
     //
     // По прецеденту редактора картинок (ImageEditJobService.RecordSpend/WriteSpend):
     // первая запись — ВСЕГДА и сразу после того, как провайдер отдал картинки: число
-    // вариантов, суммы нет (Label — SpendLabelPendingAmount). Фактическую сумму догоняет
-    // ОТДЕЛЬНАЯ запись с Generations = 0. Валюты не смешиваем: у этого пути только CostUsd.
+    // вариантов, суммы нет. Фактическую сумму догоняет ОТДЕЛЬНАЯ запись с Generations = 0.
+    // Валюты не смешиваем: у этого пути только CostUsd.
+    //
+    // Два отличия от прецедента видны только здесь: несёт ли провайдер цену вообще (у glif
+    // её не будет никогда — подпись «уточняется» ему не ставят) и какой моделью он пошёл
+    // (это знает только драйвер, у него и спрашиваем).
     //
     // Траты нет, когда: коллектора нет (учёт выключен), владельца нет (повесить не на
     // кого), провайдер не отдал картинок (за них не платили).
@@ -212,16 +216,29 @@ public sealed class ImageGenerationService
             _log?.LogWarning("Генерация картинок: вызывающий не назвал инициатора, трата {Place} ({Provider}) записана без него",
                 place, generator.Key);
 
-        WriteSpend(ownerId, generator.Key, model, amount: null, generations: images.Count, named);
+        // Фактическая модель вызова: названная настройкой места или та, на которую пошёл
+        // сам драйвер (контракт IImageGenerator.GenerateManyAsync «model = null → дефолтная
+        // модель драйвера», она же IImageGenerator.DefaultModel). Драйверу model так и не
+        // навязываем: он сам решает свой дефолт, правка только в том, что несёт запись.
+        // Пустая модель в учёте резолвится аналитикой в дефолт подписки («claude-…»), и
+        // fal/glif-генерация попадает в фильтр по модели вместе с настоящими LLM-тратами.
+        var actualModel = string.IsNullOrWhiteSpace(model) ? generator.DefaultModel : model;
 
-        // Сумму догоняет только fal: в ответах glif (compose_project / get_job_status) нет
-        // идентификатора, по которому его цена спрашивается — GlifJobParser берёт jobId, media
-        // и status, поля цены там отсутствуют. Трата glif остаётся счётчиком вызовов, как и в
-        // пишущейся записи чата (SpendMapping.RecordGlifGeneration: CostUsd = null).
+        // «цена ещё не пришла» от «цена не придёт» отличается наличием ручки, по которой её
+        // догонят: у fal идентификатор запроса даёт сам ответ (заголовок x-fal-request-id,
+        // контракт fal.run — см. ResponseRequestId у FalImageService), у glif его нет вовсе
+        // (GlifJobParser берёт jobId, media и status, поля цены в ответе отсутствуют).
+        // Обещание уточнения ставят только там, где его будут исполнять: трата glif
+        // остаётся счётчиком вызовов навсегда — как и в пишущейся записи чата
+        // (SpendMapping.RecordGlifGeneration: CostUsd = null).
+        var amountIsResolvable = string.Equals(generator.Key, SpendSources.Fal, StringComparison.OrdinalIgnoreCase);
+
+        WriteSpend(ownerId, generator.Key, actualModel, amount: null, generations: images.Count, named,
+            pendingAmount: amountIsResolvable);
+
         var requestId = RequestIdOf(images);
-        if (requestId is null || _falCost is null
-            || !string.Equals(generator.Key, SpendSources.Fal, StringComparison.OrdinalIgnoreCase)) return;
-        _ = TopUpAmountAsync(ownerId, model, requestId, initiator);
+        if (!amountIsResolvable || requestId is null || _falCost is null) return;
+        _ = TopUpAmountAsync(ownerId, actualModel, requestId, initiator);
     }
 
     // Фактическая цена по request_id — через существующий Core-шов IFalRequestCost
@@ -239,8 +256,9 @@ public sealed class ImageGenerationService
                     requestId);
                 return;
             }
-            // Догоняющая запись — про тот же вызов: инициатор у неё тот же, что у первой
-            WriteSpend(ownerId, SpendSources.Fal, model, amount: usd, generations: 0, initiator);
+            // Догоняющая запись — про тот же вызов: инициатор и модель у неё те же, что у первой
+            WriteSpend(ownerId, SpendSources.Fal, model, amount: usd, generations: 0, initiator,
+                pendingAmount: false);
         }
         catch (Exception ex)
         {
@@ -248,8 +266,10 @@ public sealed class ImageGenerationService
         }
     }
 
+    // pendingAmount — «сумму догонят»: право на подпись «сумма уточняется» даёт не отсутствие
+    // суммы в этой записи, а то, что у провайдера есть по чему её спрашивать (см. RecordSpend).
     private void WriteSpend(string ownerId, string providerKey, string? model, double? amount, int generations,
-        string? initiator)
+        string? initiator, bool pendingAmount)
     {
         try
         {
@@ -261,8 +281,10 @@ public sealed class ImageGenerationService
                 // несуществующий проект (тот же приём, что у личной области редактора).
                 ProjectId = null,
                 Provider = providerKey,
-                // null — драйвер пошёл на свою дефолтную модель: её знает только драйвер,
-                // выдумывать за него не будем.
+                // Фактическая модель вызова: названная настройкой места или дефолт самого
+                // драйвера (его спрашиваем у него, выдумывать за него не будем). Пустая здесь
+                // читается аналитикой как дефолт подписки и смешивает генерацию картинок
+                // с LLM-тратами в фильтре по модели.
                 Model = model,
                 // Ключ провайдера и есть ключ источника (как в прецеденте): у fal/glif токенов
                 // нет, их расход — счётчик вызовов (SpendSources.IsTokenless).
@@ -274,7 +296,9 @@ public sealed class ImageGenerationService
                 // поставил (значение сохранено в заявке, S-SPEND-8). Роутер его не вычисляет
                 // (находка ревью R-S-SPEND-2). null — вызывающий назвал пустого.
                 Initiator = initiator,
-                Label = amount is null && generations > 0 ? SpendLabelPendingAmount : SpendLabel,
+                // Обещание уточнения звучит только там, где его будут исполнять: у провайдера,
+                // у которого цены не будет никогда, подпись остаётся обычным счётчиком вызовов.
+                Label = pendingAmount ? SpendLabelPendingAmount : SpendLabel,
             });
         }
         catch (Exception ex)

@@ -38,6 +38,11 @@ public class FalImageService : IImageGenerator
     // он остаётся выбором в пикере.
     public const string DefaultModel = "fal-ai/nano-banana-2";
 
+    // Контракт IImageGenerator: при model = null драйвер идёт на _model (ниже в
+    // GenerateManyAsync: endpoint = model ?? _model). Здесь эффективная модель, а не
+    // константа: с Fal:ImageModel пошёл бы другой endpoint, и учёт о нём соврал бы.
+    string? IImageGenerator.DefaultModel => _model;
+
     // Курируемый список для пикера: актуальные модели (сверено с живым каталогом fal
     // 2026-08-16) плюс модель из конфига, если админ прописал в Fal:ImageModel что-то
     // своё (иначе она бы не выбиралась в UI).

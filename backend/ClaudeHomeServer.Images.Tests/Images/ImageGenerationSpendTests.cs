@@ -60,20 +60,25 @@ public class ImageGenerationSpendTests
     }
 
     // Драйвер-заглушка: отдаёт варианты; requestId — то, что вернул поставщик
-    // (у glif его нет, и это тоже проверяемый случай).
-    private sealed class FakeGenerator(string key, bool enabled, string? requestId = null, bool returnsImages = true)
+    // (у glif его нет, и это тоже проверяемый случай). defaultModel — дефолт, который
+    // заглушка объявляет себе по тому же контракту, что и боевые драйверы.
+    private sealed class FakeGenerator(string key, bool enabled, string? requestId = null,
+        bool returnsImages = true, string? defaultModel = null)
         : IImageGenerator
     {
         public string Key => key;
         public string DisplayName => key;
         public bool Enabled => enabled;
         public IReadOnlyList<ImageModelInfo> Models { get; init; } = [];
+        public string? DefaultModel => defaultModel;
         public int Calls { get; private set; }
+        public string? LastModel { get; private set; }
 
         public Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
             string prompt, int count, string? model, CancellationToken ct = default)
         {
             Calls++;
+            LastModel = model;
             IReadOnlyList<GeneratedImage> result = returnsImages
                 ? Enumerable.Range(1, count).Select(_ => new GeneratedImage([1, 2, 3], "image/png", requestId)).ToList()
                 : [];
@@ -126,6 +131,32 @@ public class ImageGenerationSpendTests
         topUp.CostUsd.Should().Be(0.0123);
         topUp.Label.Should().Be(ImageGenerationService.SpendLabel);
         topUp.Source.Should().Be(SpendSources.Fal);
+        topUp.Model.Should().Be("fal-ai/flux/dev", "догоняющая запись — про тот же вызов");
+    }
+
+    // Модель в настройках места не задана: драйвер пошёл на свой дефолт, и запись несёт
+    // именно его. Пустая модель резолвится аналитикой в дефолт подписки («claude-…»), и
+    // генерация картинок попадала в фильтр по модели вместе с настоящими LLM-тратами.
+    [Fact]
+    public async Task МодельНеНастроена_ВЗаписиФактическийДефолтДрайвера()
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1", defaultModel: "test/default-model");
+        var spend = new CapturingSpend();
+        var cost = new FakeCost(0.0123);
+        var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, cost);
+
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None);
+        await spend.WaitForSecond(Settle);
+
+        var first = spend.Records.First();
+        first.Model.Should().Be("test/default-model",
+            "в учёте стоит модель, с которой провайдер реально пошёл, а не пустота");
+        first.Generations.Should().Be(1);
+        // Самому драйверу модель по-прежнему не навязываем: свой дефолт он берёт сам
+        fal.LastModel.Should().BeNull();
+
+        var topUp = spend.Records.Last();
+        topUp.Model.Should().Be("test/default-model", "догоняющая запись — про тот же вызов");
     }
 
     [Fact]
@@ -143,7 +174,9 @@ public class ImageGenerationSpendTests
         rec.Source.Should().Be(SpendSources.Glif);
         rec.Generations.Should().Be(1);
         rec.CostUsd.Should().BeNull();
-        rec.Label.Should().Be(ImageGenerationService.SpendLabelPendingAmount);
+        // У glif суммы не будет никогда: в его ответе нет идентификатора запроса, по которому
+        // спрашивают цену. Значит и обещания уточнения в подписи нет — это счётчик вызовов.
+        rec.Label.Should().Be(ImageGenerationService.SpendLabel);
         cost.Calls.Should().Be(0, "опрашивать цену не по чему: request_id не приходил");
     }
 

@@ -31,10 +31,14 @@ public sealed class GlifImageGenerator : IImageGenerator
     private static readonly TimeSpan MinPoll = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan MaxPoll = TimeSpan.FromSeconds(15);
 
+    // Уровень по умолчанию: одно значение держит и пикер (помечен «по умолчанию»), и
+    // DefaultModel ниже — иначе они разъедутся.
+    private const string DefaultTier = "smart";
+
     private static readonly IReadOnlyList<ImageModelInfo> Tiers =
     [
         new("lite", "Lite", "Дешевле и быстрее · простые иконки"),
-        new("smart", "Smart", "Баланс качества и цены · по умолчанию"),
+        new(DefaultTier, "Smart", "Баланс качества и цены · по умолчанию"),
         new("genius", "Genius", "Самый сильный агент · сложные сюжеты"),
     ];
 
@@ -50,6 +54,11 @@ public sealed class GlifImageGenerator : IImageGenerator
     // У glif модель выбирает сам агент — пользователю доступен только уровень агента
     // (intelligence). Он и играет роль «модели» в пикере.
     public IReadOnlyList<ImageModelInfo> Models => Tiers;
+
+    // Контракт IImageGenerator: при model = null мы intelligence не шлём — уровень берёт
+    // агент. В учёте стоит тот уровень, который мы сами держим дефолтным (он же предвыбран
+    // в пикере), а не пустота: её аналитика прочитала бы как «дефолт подписки» claude.
+    string? IImageGenerator.DefaultModel => DefaultTier;
 
     public GlifImageGenerator(IHttpClientFactory http, IConfiguration config, ILogger<GlifImageGenerator> logger)
     {

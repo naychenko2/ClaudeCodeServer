@@ -93,8 +93,10 @@ public class ImageBackfillTests : IDisposable
         // трата догоняющей генерации — на владельца заявки
         var rec = Assert.Single(spend.Records);
         Assert.Equal(_owner.Id, rec.OwnerId);
+        // Запись опознаём по её роли в паре: число вариантов + источник. Текст подписи —
+        // продуктовый текст, он меняется вместе с продуктом и не может быть признаком.
         Assert.Equal(1, rec.Generations);
-        Assert.Equal(ImageGenerationService.SpendLabelPendingAmount, rec.Label);
+        Assert.Equal(SpendSources.Fal, rec.Source);
         // Инициатор — тот, кто поставил заявку: он сохранён в ней и доходит до фоновой
         // траты, роутер его не выдумывает (S-SPEND-8)
         Assert.Equal(SpendInitiators.Human, rec.Initiator);

@@ -119,10 +119,11 @@ public class AvatarSpendPathsTests : IClassFixture<AvatarSpendFactory>
 
     private PersonaManager Personas => _factory.Services.GetRequiredService<PersonaManager>();
 
-    // Первая запись каждого вызова генерации (число вариантов, суммы ещё нет) — по ней
-    // видно адресата и инициатора траты
+    // Записи генерации картинок — по ним видно адресата и инициатора траты. Опознаём по
+    // роли в паре: число вариантов + источник провайдера. Текст подписи для этого не
+    // признак: он меняется вместе с продуктовым текстом.
     private List<SpendRecord> ImageRecords() =>
-        _factory.Spend.Records.Where(r => r.Label == ImageGenerationService.SpendLabelPendingAmount).ToList();
+        _factory.Spend.Records.Where(r => r.Generations > 0 && r.Source == SpendSources.Glif).ToList();
 
     private Persona NewPersona() =>
         Personas.Create(OwnerId, "А" + Guid.NewGuid().ToString("N")[..5], null, null, null, null, null,

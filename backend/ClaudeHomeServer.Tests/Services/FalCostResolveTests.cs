@@ -122,6 +122,7 @@ public class FalCostResolveTests
         // Бэкофф сжимается при создании (internal-init): цикл без реальных 77с.
         var svc = new FalCostService(http.Object, config) { BackoffSeconds = backoff ?? [0] };
         svc.MinRequestIntervalMs = 0; // троттлинг сжимаем так же, как бэкофф; где он проверяется — поднимает свой
+        svc.CollectWindowMs = 0; // окно сбора пачки сжимаем; тесты батчинга поднимают своё
         return svc;
     }
 
@@ -616,13 +617,14 @@ public class FalCostResolveTests
     [Fact]
     public async Task БэкфиллОпросыИдутЧерезГейтСИнтервалом_АНеВолной()
     {
-        // Два параллельных Track (как всплеск бэкфилла при открытии старого чата):
-        // гейт выпускает их по одному, с интервалом между стартами — иначе волной в 429.
-        // Путь проверяется через Track: с разделением полос (хвосты R-S-SPEND-4, п.3)
-        // интервал — контракт бэкфилла; живая полоса — в тесте ниже.
+        // Две пачки (id разнесены по времени дальше окна 89 дней — в одну пачку не влезают),
+        // как всплеск бэкфилла при открытии старого чата: гейт выпускает запросы по одному,
+        // с интервалом между стартами — иначе волной в 429. Путь — через Track: интервал —
+        // контракт бэкфилла; живая полоса — в тесте ниже.
         var handler = new TimedHandler();
         var svc = MakeService(handler);
         svc.MinRequestIntervalMs = 200;
+        svc.CollectWindowMs = 100;
         var done = new TaskCompletionSource();
         var published = 0;
         svc.OnCostResolved = (sessionId, cost) =>
@@ -631,8 +633,8 @@ public class FalCostResolveTests
             return Task.CompletedTask;
         };
 
-        svc.Track("s-1", "req-a", null);
-        svc.Track("s-1", "req-b", null);
+        svc.Track("s-1", "req-a", new DateTimeOffset(2026, 11, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds());
+        svc.Track("s-1", "req-b", new DateTimeOffset(2026, 6, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds());
         (await Task.WhenAny(done.Task, Task.Delay(5000))).Should().Be(done.Task, "обе публикации состоялись");
 
         handler.Starts.Should().HaveCount(2);
@@ -649,10 +651,12 @@ public class FalCostResolveTests
         public TaskCompletionSource BfStarted { get; } = new();
         public TaskCompletionSource BfFinished { get; } = new();
         public HttpRequestMessage? LastRequest { get; private set; }
+        public System.Collections.Concurrent.ConcurrentQueue<string> Queries { get; } = new();
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             LastRequest = request;
+            Queries.Enqueue(request.RequestUri!.Query);
             var slow = request.RequestUri!.Query.Contains("req-bf");
             if (slow) BfStarted.TrySetResult();
             if (slow) await Task.Delay(slowMs, ct);
@@ -737,6 +741,8 @@ public class FalCostResolveTests
         (await Task.WhenAny(tailPublished.Task, Task.Delay(5000))).Should().Be(tailPublished.Task,
             "живой подъём не оставил занятый слот _gate: следующий бэкфилл по другому id проходит");
         (await tailPublished.Task).CostUsd.Should().Be(0.123, "бэкфилл прошёл полный цикл: цена опубликована");
+        handler.Queries.Count(q => q.Contains("request_id=req-x")).Should().Be(1,
+            "поднятый на живую полосу id пачка не берёт: на один request_id один сетевой цикл");
     }
 
     [Fact]

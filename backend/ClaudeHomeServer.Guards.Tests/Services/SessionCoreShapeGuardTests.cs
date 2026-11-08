@@ -239,20 +239,64 @@ public class SessionCoreShapeGuardTests
             .ToHashSet();
 
     /// <summary>Ключи индексаторных инициализаторов <c>Dictionary&lt;string, string&gt; Имя = new() { ["ключ"] = … }</c>
-    /// по тексту исходника: имя словаря → ключи в порядке объявления, с повторами. Индексатор при
+    /// по тексту исходника: имя словаря → ПОЛНЫЕ ключи в порядке объявления, с повторами. Индексатор при
     /// повторе ключа молча перезаписывает значение, поэтому рантайм-набор <c>Keys</c> дубля не видит.
-    /// Ключ — литерал, допускается префикс <c>Ns +</c> (SessionCoreFacadeContracts).</summary>
+    /// Ключ — литерал, возможно с префиксом-константой <c>Имя +</c>: она подставляется из <c>const string</c>
+    /// того же исходника, поэтому <c>[Ns + "X"]</c> и полное имя в кавычках дают один и тот же ключ.
+    /// Допускаются <c>new()</c> и <c>new Dictionary&lt;string, string&gt;(…)</c>, тело — на одной строке или на нескольких.</summary>
     internal static Dictionary<string, List<string>> InitializerKeys(string source)
     {
+        var consts = Regex.Matches(source, @"const\s+string\s+(\w+)\s*=\s*""([^""]*)""")
+            .ToDictionary(m => m.Groups[1].Value, m => m.Groups[2].Value);
         var result = new Dictionary<string, List<string>>();
         foreach (Match d in Regex.Matches(source,
-                     @"Dictionary<string,\s*string>\s+(\w+)\s*=\s*new\(\)\s*\{(.*?)\r?\n\s*\};", RegexOptions.Singleline))
+                     @"Dictionary<string,\s*string>\s+(\w+)\s*=\s*new\s*(?:Dictionary<string,\s*string>)?\s*\([^)]*\)\s*\{"))
         {
-            var keys = Regex.Matches(d.Groups[2].Value, @"^\s*\[\s*(?:\w+\s*\+\s*)?""([^""]+)""\s*\]\s*=", RegexOptions.Multiline)
-                .Select(m => m.Groups[1].Value).ToList();
+            var body = BraceBody(source, d.Index + d.Length);
+            var keys = Regex.Matches(body, @"(?:^|[{,])\s*\[\s*(?:(\w+)\s*\+\s*)?""([^""]+)""\s*\]\s*=")
+                .Select(m => m.Groups[1].Success
+                    ? (consts.TryGetValue(m.Groups[1].Value, out var prefix)
+                        ? prefix + m.Groups[2].Value
+                        : throw new InvalidOperationException($"Префикс ключа «{m.Groups[1].Value}» не const string в исходнике"))
+                    : m.Groups[2].Value)
+                .ToList();
             result[d.Groups[1].Value] = keys;
         }
         return result;
+    }
+
+    /// <summary>Тело инициализатора от позиции после «{» до парной «}» без комментариев; строковые
+    /// литералы (с экранированием) скобок не считают.</summary>
+    private static string BraceBody(string source, int start)
+    {
+        var sb = new System.Text.StringBuilder();
+        var depth = 1;
+        for (var i = start; i < source.Length; i++)
+        {
+            var c = source[i];
+            if (c == '"')
+            {
+                sb.Append(c);
+                for (i++; i < source.Length && source[i] != '"'; i++)
+                {
+                    sb.Append(source[i]);
+                    if (source[i] == '\\' && i + 1 < source.Length) sb.Append(source[++i]);
+                }
+                if (i < source.Length) sb.Append('"');
+            }
+            else if (c == '/' && i + 1 < source.Length && source[i + 1] == '/')
+            {
+                while (i < source.Length && source[i] != '\n') i++;
+                sb.Append('\n');
+            }
+            else
+            {
+                if (c == '{') depth++;
+                else if (c == '}' && --depth == 0) return sb.ToString();
+                sb.Append(c);
+            }
+        }
+        throw new InvalidOperationException("Не найдена парная «}» инициализатора словаря");
     }
 
     internal static List<string> DuplicateInitializerKeys(string source) =>
@@ -374,18 +418,47 @@ public class SessionCoreShapeGuardTests
     [Fact]
     public void Самопроверка_поиск_дублей_ключей_не_вакуумный_и_ловит_повтор()
     {
-        // Не вакуумно: на реальных файлах разобраны все словари с непустыми ключами.
-        var own = InitializerKeys(ReadGuardsSource("SessionCoreShapeGuardTests.cs"));
-        own.Keys.Should().Contain(["CoreCompositionRoots", "CoreDataReferrerAllowList", "CoreDataContracts", "ServiceProviderAllowList"]);
-        own["CoreDataReferrerAllowList"].Should().Contain("ClaudeHomeServer.Services.ChatHistoryService");
-        InitializerKeys(ReadGuardsSource("SessionCoreFacadeContracts.cs"))["All"].Should().Contain("QueuedMessage");
+        // Полнота разбора: у КАЖДОГО статического Dictionary<string, string> обоих типов есть разобранный
+        // словарь, а число разобранных ключей равно рантаймовому Count. Словарь в незнакомой форме
+        // (не разобран) или реальный дубль (ключей в тексте больше, чем в словаре) краснят самопроверку.
+        AssertParsedMatchesRuntime(typeof(SessionCoreShapeGuardTests), "SessionCoreShapeGuardTests.cs");
+        AssertParsedMatchesRuntime(typeof(SessionCoreFacadeContracts), "SessionCoreFacadeContracts.cs");
 
-        // Синтетический повтор, в том числе с префиксом Ns +, обязан найтись с указанием словаря и ключа.
-        const string synthetic = "static readonly Dictionary<string, string> Demo = new()\n    {\n"
-            + "        [\"A.B\"] = \"1\",\n        [Ns + \"C\"] = \"2\",\n        [\"A.B\"] = \"3\",\n        [Ns + \"C\"] = \"4\",\n    };\n";
-        DuplicateInitializerKeys(synthetic).Should().BeEquivalentTo(["Demo: A.B", "Demo: C"]);
-        DuplicateInitializerKeys(synthetic.Replace("[\"A.B\"] = \"3\",", "[\"X\"] = \"3\",").Replace("[Ns + \"C\"] = \"4\",", "[Ns + \"Y\"] = \"4\","))
+        var own = InitializerKeys(ReadGuardsSource("SessionCoreShapeGuardTests.cs"));
+        own["CoreDataReferrerAllowList"].Should().Contain("ClaudeHomeServer.Services.ChatHistoryService");
+        InitializerKeys(ReadGuardsSource("SessionCoreFacadeContracts.cs"))["All"]
+            .Should().Contain("ClaudeHomeServer.Services.Sessions.QueuedMessage");
+
+        // Синтетический повтор, в том числе с префиксом Ns + и полным именем в кавычках (один рантайм-ключ).
+        const string head = "const string Ns = \"P.\";\nstatic readonly Dictionary<string, string> Demo = new()\n    {\n";
+        const string synthetic = head
+            + "        [\"A.B\"] = \"1\",\n        [Ns + \"C\"] = \"2\",\n        [\"A.B\"] = \"3\",\n        [\"P.C\"] = \"4\",\n    };\n";
+        DuplicateInitializerKeys(synthetic).Should().BeEquivalentTo(["Demo: A.B", "Demo: P.C"]);
+        DuplicateInitializerKeys(synthetic.Replace("[\"A.B\"] = \"3\",", "[\"X\"] = \"3\",").Replace("[\"P.C\"] = \"4\",", "[Ns + \"Y\"] = \"4\","))
             .Should().BeEmpty();
+
+        // Однострочный словарь не сливается с соседним многострочным, а new Dictionary<…>(…) и StringComparer разбираются.
+        const string mixed = "Dictionary<string, string> A = new() { [\"k\"] = \"1\" };\n"
+            + "Dictionary<string, string> B = new(StringComparer.Ordinal)\n{\n    [\"k\"] = \"2\",\n    [\"m\"] = \"3\", // [\"z\"] = x\n};\n"
+            + "Dictionary<string, string> C = new Dictionary<string, string>() { [\"q\"] = \"1\", [\"q\"] = \"2\" };\n";
+        var parsed = InitializerKeys(mixed);
+        parsed["A"].Should().Equal("k");
+        parsed["B"].Should().Equal("k", "m");
+        DuplicateInitializerKeys(mixed).Should().Equal("C: q");
+    }
+
+    private static void AssertParsedMatchesRuntime(Type owner, string sourceFile)
+    {
+        var parsed = InitializerKeys(ReadGuardsSource(sourceFile));
+        var fields = owner.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+            .Where(f => f.FieldType == typeof(Dictionary<string, string>)).ToList();
+        fields.Should().NotBeEmpty(owner.Name + ": словарей не найдено — проверка вакуумна");
+        foreach (var f in fields)
+        {
+            parsed.Should().ContainKey(f.Name, owner.Name + "." + f.Name + ": словарь не разобран текстовым разбором");
+            parsed[f.Name].Count.Should().Be(((Dictionary<string, string>)f.GetValue(null)!).Count,
+                owner.Name + "." + f.Name + ": число ключей в тексте расходится с рантаймовым Count");
+        }
     }
 
     [Fact]

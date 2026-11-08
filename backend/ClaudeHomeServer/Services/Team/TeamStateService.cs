@@ -41,9 +41,12 @@ internal sealed class TeamStateService
     private readonly TeamPlanningService? _teamPlanning;
     private readonly IProjectManager _projects;
     private readonly IConfiguration? _config;
-    private readonly LlmProviderRegistry _llmProviders;
+    // Реестр приходит от фасада и может не быть: у выключенной вертикали llm его регистрации
+    // нет (LlmSubsystem.cs:296), фасад деградирует в null (его поле _llmProviders). Без реестра
+    // возможности модели — как у родного Claude (фолбэк CapabilitiesFor, LlmProviderRegistry.cs:443).
+    private readonly LlmProviderRegistry? _llmProviders;
     internal TeamStateService(SessionManager sessions, TeamPlanningService? teamPlanning,
-        IProjectManager projects, IConfiguration? config, LlmProviderRegistry llmProviders)
+        IProjectManager projects, IConfiguration? config, LlmProviderRegistry? llmProviders)
     {
         _sessions = sessions;
         _dir = sessions;
@@ -201,12 +204,18 @@ internal sealed class TeamStateService
     // → волна → снова интервью» обязан вернуть исходный выбор человека, а не Plan,
     // поставленный прошлым заходом), живой прогон CLI получает set_permission_mode
     // на лету через шов ITeamRunState.TrySetPermissionModeLive.
+    // Гейт план-фазы по модели. Реестра вертикали llm нет (она выключена) — возможности
+    // родного Claude: тот же фолбэк, что у LlmProviderRegistry.CapabilitiesFor для
+    // нерезолвленной модели (LlmProviderRegistry.cs:443) и у адаптера хода (ClaudeSession.cs:30).
+    private bool SupportsPlanMode(string? model) =>
+        (_llmProviders?.CapabilitiesFor(model) ?? LlmCapabilitiesCatalog.Claude).SupportsPlanMode;
+
     public void EnterPlanPhaseMode(string sessionId)
     {
         var session = _sessions.GetById(sessionId);
         if (session?.TeamImplement is null) return;
         if (session.Mode == ClaudeMode.Plan) return;
-        if (!_llmProviders.CapabilitiesFor(session.Model).SupportsPlanMode) return;
+        if (!SupportsPlanMode(session.Model)) return;
         WithTeamState(sessionId, t => { t.SavedMode ??= session.Mode; return true; });
         session.Mode = ClaudeMode.Plan;
         _run.TrySetPermissionModeLive(sessionId, ClaudeMode.Plan);

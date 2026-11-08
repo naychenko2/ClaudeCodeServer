@@ -67,18 +67,20 @@ public class ResumeAfterRestartAsyncTests : IDisposable
             TurnRecovery recovery, ChatCreation chatCreation, ChatDeletion chatDeletion,
             TurnCompletion completion, TurnIntake intake,
             ProjectManager projects, ChatHistoryService history, IConfiguration config,
-            LlmProviderRegistry llmProviders, PersonaManager personas, ILogger<SessionManager> log,
+            PersonaManager personas, ILogger<SessionManager> log,
             ISessionBroadcaster broadcaster, ILoggerFactory loggerFactory, IServiceProvider services,
             ClaudeHomeServer.Services.Turn.ITurnEventBus turnEvents, AppSettingsService appSettings,
             ClaudeHomeServer.Services.Execution.SandboxManager sandbox,
+            // Необязательные — в хвосте, как у фасада: реестр вертикали llm может не быть.
+            LlmProviderRegistry? llmProviders,
             ClaudeHomeServer.Services.Team.TeamPlanningService? teamPlanning, TaskManager? tasks,
             ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog? subagentRuns)
             : base(store, historyRole, costs, pending, route, worktree, providerMigration, naming,
                 visibility, settings, mcpEndpoint, builtinContexts, personaLayer, externalContexts,
                 moduleContexts, turnPassports, processHost, recovery, chatCreation, chatDeletion,
-                completion, intake, projects, history, config, llmProviders, personas, log, broadcaster,
-                loggerFactory, services, turnEvents, appSettings, sandbox, teamPlanning, tasks,
-                subagentRuns)
+                completion, intake, projects, history, config, personas, log, broadcaster,
+                loggerFactory, services, turnEvents, appSettings, sandbox, llmProviders, teamPlanning,
+                tasks, subagentRuns)
         {
         }
 
@@ -134,7 +136,6 @@ public class ResumeAfterRestartAsyncTests : IDisposable
             sp.GetRequiredService<ProjectManager>(),
             sp.GetRequiredService<ChatHistoryService>(),
             sp.GetRequiredService<IConfiguration>(),
-            sp.GetRequiredService<LlmProviderRegistry>(),
             sp.GetRequiredService<PersonaManager>(),
             sp.GetRequiredService<ILogger<SessionManager>>(),
             sp.GetRequiredService<ISessionBroadcaster>(),
@@ -143,6 +144,9 @@ public class ResumeAfterRestartAsyncTests : IDisposable
             sp.GetRequiredService<ClaudeHomeServer.Services.Turn.ITurnEventBus>(),
             sp.GetRequiredService<AppSettingsService>(),
             sp.GetRequiredService<ClaudeHomeServer.Services.Execution.SandboxManager>(),
+            // Реестр хост просит обязательно: он нужен ролям ядра (SessionCoreRegistration),
+            // в тестовом контейнере вертикаль llm всегда включена.
+            sp.GetRequiredService<LlmProviderRegistry>(),
             sp.GetService<ClaudeHomeServer.Services.Team.TeamPlanningService>(),
             sp.GetService<TaskManager>(),
             sp.GetService<ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog>());

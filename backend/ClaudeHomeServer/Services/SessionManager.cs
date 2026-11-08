@@ -224,7 +224,12 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         Converters = { new JsonStringEnumConverter() },
     };
 
-    private readonly LlmProviderRegistry _llmProviders;
+    // Реестр провайдеров вертикали llm: нужен ровно двум гейтам возможностей модели — compact
+    // здесь и план-фазе в TeamStateService. Опционален: у выключенной вертикали регистрации нет
+    // (она одна его ставит, LlmSubsystem.cs:296), и без реестра возможности модели — как у
+    // родного Claude: тот же фолбэк, что у CapabilitiesFor для нерезолвленной модели
+    // (LlmProviderRegistry.cs:443) и у адаптера хода (ClaudeSession.cs:30).
+    private readonly LlmProviderRegistry? _llmProviders;
     // FalCostService, UsageService, ModelAssignmentResolver, UserHomeResolver и
     // ArchivedTranscriptStore здесь больше не поля и не параметры: их читают роли
     // (TurnCostLedger, CliRoute, ChatSettings, ChatCreation), собранные в AddSessionCore (S3-8c).
@@ -338,7 +343,7 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // Живые зависимости фасада и штаба: конфигурация и резолверы, читаемые телом фасада,
         // и зависимости, нужные создаваемым здесь сервисам штаба.
         ProjectManager projects, ChatHistoryService history, IConfiguration config,
-        LlmProviderRegistry llmProviders, PersonaManager personas, ILogger<SessionManager> log,
+        PersonaManager personas, ILogger<SessionManager> log,
         // Шов Ф4 (Этап 5): ISessionBroadcaster нужен TeamCoordinator и стору; сам фасад на нём
         // не сидит (рассылки — через роли).
         Composition.ISessionBroadcaster broadcaster,
@@ -347,12 +352,17 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // синглтон, что читают роли; учёт лимитов тира — резолвер моделей агентных мест.
         ILoggerFactory loggerFactory, IServiceProvider services, Turn.ITurnEventBus turnEvents,
         AppSettingsService appSettings, Execution.SandboxManager sandbox,
-        // Опциональны ровно там, где сервиса может не быть в контейнере: без план-механики штаба
-        // режим включается, но план не строится; без реестра задач связи сессии не резолвятся;
-        // без журнала прогонов нudge сабагентов молчит. Дефолт = null обязателен:
+        // Опциональны ровно там, где сервиса может не быть в контейнере: без реестра провайдеров
+        // (вертикаль llm выключена — она единственная его регистрирует, LlmSubsystem.cs:296)
+        // гейты возможностей модели считаются по каталогу родного Claude; без план-механики
+        // штаба режим включается, но план не строится; без реестра задач связи сессии не
+        // резолвятся; без журнала прогонов нudge сабагентов молчит. Дефолт = null обязателен:
         // nullable-аннотация для контейнера ничего не значит — параметр опционален только с
         // значением по умолчанию (CLAUDE.md:291, прецедент NotesSubsystemGateTests.cs:90);
-        // без него активация фасада падает вместо деградации в null.
+        // без него активация фасада падает вместо деградации в null. Реестр переехал в хвост
+        // именно из-за дефолта: опциональные параметры обязаны идти после обязательных, поэтому
+        // держать его на прежнем месте (среди обязательных) нельзя.
+        LlmProviderRegistry? llmProviders = null,
         TeamPlanningService? teamPlanning = null, TaskManager? tasks = null,
         Llm.Claude.SubagentRunLog? subagentRuns = null)
     {
@@ -1496,6 +1506,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Снимок для replay при JoinSession (без служебных)
     public IReadOnlyList<PendingMessageDto> GetVisiblePending(string sessionId) => _pending.GetVisiblePending(sessionId);
 
+    // Возможности модели: через реестр вертикали llm. Реестра нет (вертикаль выключена) —
+    // возможности родного Claude: тот же фолбэк, что у LlmProviderRegistry.CapabilitiesFor для
+    // нерезолвленной модели (LlmProviderRegistry.cs:443) и у адаптера хода (ClaudeSession.cs:30).
+    private LlmCapabilities CapabilitiesFor(string? model) =>
+        _llmProviders?.CapabilitiesFor(model) ?? LlmCapabilitiesCatalog.Claude;
+
     // Ручное сворачивание контекста: /compact в CLI, минуя счётчики и историю user-сообщений.
     // Тело — в TurnProcessHost (S3-5). Гейт «провайдер умеет compact» остаётся здесь:
     // LlmProviderRegistry в хост процесса не входит (ни одному другому телу этой роли он не
@@ -1505,7 +1521,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
         if (entry.Info.ClaudeSessionId is null) return; // ходов ещё не было — сворачивать нечего
-        if (!_llmProviders.CapabilitiesFor(entry.Info.Model).SupportsCompact)
+        if (!CapabilitiesFor(entry.Info.Model).SupportsCompact)
             return; // провайдер не умеет compact — защита от рассинхрона UI
 
         await _process.CompactAsync(sessionId, entry);

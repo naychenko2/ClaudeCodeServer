@@ -8,13 +8,13 @@ import { useGitChip } from '../../hooks/useGitChip';
 import { registerGitActions } from '../../lib/chatContext/gitActions';
 import { execMenuTitle, selectRowAction } from '../../lib/chatContext/rowExec';
 import { getKindApi, getKindRegistry } from '../../lib/chatContext/registry';
-import { disabledKindReason, disabledKindText } from '../../lib/chatContext/disabledKind';
+import { dimmedKindItem } from '../../lib/chatContext/disabledKind';
 import { getRunVersion, subscribeRun } from '../../lib/chatContext/actionRun';
 import { withThumb } from '../../lib/chatContext/thumbs';
 import {
   clearContext, detachRef, ensureChatContext, releasePrimary, undoReleasePrimary, useChatContext, useReleaseOffer,
 } from '../../lib/chatContext/store';
-import type { ChatContextPrimary, ChatContextRef, ContextAction } from '../../lib/chatContext/types';
+import type { ContextAction } from '../../lib/chatContext/types';
 import type { TurnTree } from '../../lib/turnWorktree';
 import { useActionMemoryVersion } from '../../lib/chatContext/actionMemory';
 import { revealContextPanel } from '../../lib/subsystems/registryCore';
@@ -116,21 +116,13 @@ function RowCore({ session, project, isMobile, notice, onOpenPrimary: onOpenPrim
 
   const kindCtx = { projectId: project?.id ?? null, sessionId, isMobile };
   // Прикреплённый объект неактивной вертикали: её вида нет в реестре слота — ни иконки, ни
-  // действий, ни «Формата». Чтобы строка не выглядела файлом, ставим неактивную плашку с
-  // текстом-пояснением: вью гасит чип по missing и строит по label и текст, и title
-  // (ContextRowView.tsx:203, 258); версию гасим: на плашке с текстом-пояснением она только шум.
-  // Текст выбирает причина неактивности (disabledKind.ts): «выключен администратором» — ключ
-  // выключен; «не загрузился» — ключ включён, но фронтовый MF-remote вертикали не доехал.
-  // Признак причины — поле missing самого объекта, его читаем ДО подстановки плашки.
-  // Вид файла («project-file») — не выключенный: кита у него нет by design (disabledKind.ts)
+  // действий, ни «Формата». Подстановку плашки (текст причины вместо label, гашение версии,
+  // missing для гашения чипа вью) считает dimmedKindItem (lib/chatContext/disabledKind.ts):
+  // там и различение «выключен администратором» / «не загрузился» по полю missing объекта.
   const kindRegistry = getKindRegistry();
-  const dimmedItem = <T extends ChatContextPrimary | ChatContextRef>(item: T): T => {
-    const reason = disabledKindReason(item.kind, kindRegistry, item.missing);
-    return reason ? { ...item, label: disabledKindText(reason), version: null, missing: true } : item;
-  };
   // Миниатюры сервер не присылает: адрес собираем здесь (вид объекта или путь файла проекта)
-  const primary = ctx.primary ? dimmedItem(withThumb(kindCtx, ctx.primary)) : null;
-  const refs = ctx.refs.map(r => dimmedItem(withThumb(kindCtx, r)));
+  const primary = ctx.primary ? dimmedKindItem(withThumb(kindCtx, ctx.primary), kindRegistry) : null;
+  const refs = ctx.refs.map(r => dimmedKindItem(withThumb(kindCtx, r), kindRegistry));
 
   // Выбранное действие объекта: предвыбор → память → умолчание (Р1). «Чем» есть только у run-действия
   // executors() вида зовётся на каждый рендер намеренно: выбранный исполнитель живёт в сторе вертикали,

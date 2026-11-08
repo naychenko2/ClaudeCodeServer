@@ -23,7 +23,7 @@
 // ProjectFileContextKind, фронт рисует его файлом-заглушкой), это не «выключенный раздел».
 
 import { SUBSYSTEM_DISABLED_REASON } from '../subsystems';
-import type { ContextKindApi } from './types';
+import type { ChatContextPrimary, ChatContextRef, ContextKindApi } from './types';
 
 // Причина неактивности вида: 'admin' — ключ выключен администратором; 'notLoaded' — ключ
 // включён, но фронтовый MF-remote вертикали не загрузился.
@@ -50,3 +50,14 @@ export const disabledKindReason = (
 // ничего не выключал, модуль не доехал сам.
 export const disabledKindText = (reason: DisabledKindReason): string =>
   reason === 'notLoaded' ? 'Раздел не загрузился' : `Раздел ${SUBSYSTEM_DISABLED_REASON}`;
+
+// Проводка объекта строки контекста (S2b-3a): неактивный вид получает вместо label текст причины,
+// версию (на плашке с текстом-пояснением она только шум) и missing=true — по нему вью гасит чип
+// (ContextRowView → RowChip: opacity). Активный вид и файл «project-file» — как есть.
+export const dimmedKindItem = <T extends ChatContextPrimary | ChatContextRef>(
+  item: T,
+  registry: ReadonlyMap<string, ContextKindApi>,
+): T => {
+  const reason = disabledKindReason(item.kind, registry, item.missing);
+  return reason ? { ...item, label: disabledKindText(reason), version: null, missing: true } : item;
+};

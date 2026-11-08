@@ -6,7 +6,8 @@ import { describe, expect, it } from 'vitest';
 
 import type { FormatModel } from '../../../lib/chatContext/formatTypes';
 import { ContextRowView, rowFacts, showsRow, type ContextRowViewProps, type RowExec, type RowGit } from '../ContextRowView';
-import type { ChatContextPrimary, ChatContextRef } from '../../../lib/chatContext/types';
+import { dimmedKindItem } from '../../../lib/chatContext/disabledKind';
+import type { ChatContextPrimary, ChatContextRef, ContextKindApi } from '../../../lib/chatContext/types';
 
 const base = { id: 'x', ref: {}, addedAt: '', thumb: null, missing: false };
 const primary = (over: Partial<ChatContextPrimary> = {}): ChatContextPrimary =>
@@ -190,5 +191,56 @@ describe('ContextRowView', () => {
 
   it('факты лестницы собираются из модели', () => {
     expect(rowFacts(props({ refs: [ref('a')], exec }))).toEqual({ project: true, hasPrimary: true, hasExec: true, refs: 1, mobile: false });
+  });
+});
+
+// Проводка «неактивный вид → плашка» (хвост b39c753a, п. 2a): dimmedKindItem (проводка, та же,
+// что зовёт ContextRow) подставляет в объект текст причины вместо label, гасит версию и ставит
+// missing; вью по missing гасит чип (RowChip: opacity) и по label строит и текст, и title.
+// Держится вся связка, а не отдельные функции: проба «убрать missing: true (или label) в
+// dimmedKindItem» краснит эти кейсы. Чистые признаки (isKindDisabled/disabledKindReason/
+// disabledKindText) сторожит disabledKind.test.ts рядом с lib.
+describe('неактивный вид → плашка в строке (S2b-3a)', () => {
+  const kindApi = (): ContextKindApi => ({ kinds: ['image'], icon: () => null, actions: () => [], preview: () => null });
+  const emptyRegistry = new Map<string, ContextKindApi>();
+  const withImage = new Map<string, ContextKindApi>([['image', kindApi()]]);
+  // Объект звуковой вертикали: её вида нет в реестре при любом здесь наборе
+  const audioItem = (missing: boolean): ChatContextPrimary =>
+    primary({ kind: 'audio', label: 'озвучка.wav', version: 'v3', missing });
+
+  it('вид выключен администратором: вместо подписи и версии — текст причины, чип погашен', () => {
+    const dimmed = dimmedKindItem(audioItem(true), emptyRegistry);
+    expect(dimmed.label).toBe('Раздел выключен администратором');
+    expect(dimmed.version).toBeNull();
+    expect(dimmed.missing).toBe(true);
+    const h = html(props({ primary: dimmed }));
+    expect(h).toContain('Раздел выключен администратором');
+    expect(h).not.toContain('озвучка.wav');
+    expect(h).not.toContain('v3');
+    expect(h).toContain('opacity:0.55');
+  });
+
+  it('вертикаль не загрузилась: свой текст причины; чип гасит именно подстановка (вход — не missing)', () => {
+    const dimmed = dimmedKindItem(audioItem(false), emptyRegistry);
+    expect(dimmed.label).toBe('Раздел не загрузился');
+    expect(dimmed.version).toBeNull();
+    expect(dimmed.missing).toBe(true);
+    const h = html(props({ primary: dimmed }));
+    expect(h).toContain('Раздел не загрузился');
+    expect(h).not.toContain('озвучка.wav');
+    expect(h).not.toContain('v3');
+    // без missing=true от подстановки чип остался бы ярким: этот кейс и бьёт проба c2
+    expect(h).toContain('opacity:0.55');
+  });
+
+  it('активный вид: обычная строка — подпись и версия на месте, текста причины нет', () => {
+    const item = primary();
+    expect(dimmedKindItem(item, withImage)).toBe(item);
+    const h = html(props({ primary: item }));
+    expect(h).toContain('hero.png');
+    expect(h).toContain('· v2');
+    expect(h).not.toContain('Раздел выключен администратором');
+    expect(h).not.toContain('Раздел не загрузился');
+    expect(h).not.toContain('opacity:0.55');
   });
 });

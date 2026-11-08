@@ -68,21 +68,21 @@ public class FalImageService : IImageGenerator
     // Сгенерировать одно квадратное изображение (первый вариант).
     public async Task<GeneratedImage?> GenerateAsync(string prompt, CancellationToken ct = default)
     {
-        var many = await GenerateManyAsync(prompt, 1, ct);
+        var many = (await GenerateManyAsync(prompt, 1, ct)).Images;
         return many.Count > 0 ? many[0] : null;
     }
 
     // Сгенерировать несколько вариантов изображения по описанию (для выбора аватара).
-    // Возвращает пустой список, если fal выключен/ошибка.
-    public Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
+    // Возвращает пустой Images, если fal выключен/ошибка.
+    public Task<ImageGenerationResult> GenerateManyAsync(
         string prompt, int count, CancellationToken ct = default) =>
         GenerateManyAsync(prompt, count, null, ct);
 
     // Перегрузка с явной моделью (null — дефолт из конфига Fal:ImageModel).
-    public async Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
+    public async Task<ImageGenerationResult> GenerateManyAsync(
         string prompt, int count, string? model, CancellationToken ct = default)
     {
-        if (!Enabled || string.IsNullOrWhiteSpace(prompt)) return [];
+        if (!Enabled || string.IsNullOrWhiteSpace(prompt)) return ImageGenerationResult.Empty;
         count = Math.Clamp(count, 1, 4);
         var endpoint = string.IsNullOrWhiteSpace(model) ? _model : model.Trim().Trim('/');
         try
@@ -97,20 +97,20 @@ public class FalImageService : IImageGenerator
             req.Content = JsonContent.Create(BuildRequestBody(endpoint, prompt, count));
 
             using var resp = await client.SendAsync(req, ct);
+            // Идентификатор запроса берётся сразу после ответа, ДО проверки статуса и разбора
+            // тела: у синхронного fal.run его в теле нет, он в заголовке (см. ResponseRequestId),
+            // а запрос мог быть принят и оплачен даже при 4xx или без картинок.
+            var requestId = ResponseRequestId(resp);
             if (!resp.IsSuccessStatusCode)
             {
                 _logger.LogWarning("fal генерация вернула {Status}: {Body}",
                     resp.StatusCode, await resp.Content.ReadAsStringAsync(ct));
-                return [];
+                return new ImageGenerationResult([], requestId);
             }
-
-            // Идентикатор запроса для учёта расхода берётся ДО разбора тела: у синхронного
-            // fal.run его в теле нет, он в заголовке (см. ResponseRequestId).
-            var requestId = ResponseRequestId(resp);
 
             var json = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
             if (!json.TryGetProperty("images", out var images) || images.ValueKind != JsonValueKind.Array)
-                return [];
+                return new ImageGenerationResult([], requestId);
 
             var result = new List<GeneratedImage>();
             foreach (var img in images.EnumerateArray())
@@ -121,15 +121,14 @@ public class FalImageService : IImageGenerator
                 // (у векторного recraft это image/svg+xml, и молча считать его png нельзя)
                 var declared = img.TryGetProperty("content_type", out var c) ? c.GetString() : null;
                 var (bytes, contentType) = await DownloadAsync(url, declared, ct);
-                // id один на весь запрос — каждая полученная картинка несёт его
-                if (bytes is not null) result.Add(new GeneratedImage(bytes, contentType, requestId));
+                if (bytes is not null) result.Add(new GeneratedImage(bytes, contentType));
             }
-            return result;
+            return new ImageGenerationResult(result, requestId);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Ошибка генерации аватара через fal");
-            return [];
+            return ImageGenerationResult.Empty;
         }
     }
 

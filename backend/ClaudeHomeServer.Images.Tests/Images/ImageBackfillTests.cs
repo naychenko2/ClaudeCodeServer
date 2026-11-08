@@ -441,7 +441,7 @@ public class ImageBackfillTests : IDisposable
         public int MaxConcurrent => Volatile.Read(ref _maxConcurrent);
         public string? LastPrompt { get; private set; }
 
-        public async Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
+        public async Task<ImageGenerationResult> GenerateManyAsync(
             string prompt, int count, string? model, CancellationToken ct = default)
         {
             var call = Interlocked.Increment(ref _calls);
@@ -464,8 +464,8 @@ public class ImageBackfillTests : IDisposable
                     await pairUp.Task.WaitAsync(ct);
                 }
                 return answers?.Invoke(call) == false
-                    ? []
-                    : [new GeneratedImage([0x89, 0x50, 0x4E, 0x47], "image/png")];
+                    ? ImageGenerationResult.Empty
+                    : new ImageGenerationResult([new GeneratedImage([0x89, 0x50, 0x4E, 0x47], "image/png")], null);
             }
             finally
             {

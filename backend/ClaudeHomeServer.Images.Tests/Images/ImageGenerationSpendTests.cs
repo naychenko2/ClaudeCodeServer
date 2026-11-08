@@ -94,15 +94,15 @@ public class ImageGenerationSpendTests
         // вызова даёт второму его id — иначе «дубль догоняющей» неотличим от новой траты.
         public string? RequestId { get; set; } = requestId;
 
-        public Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
+        public Task<ImageGenerationResult> GenerateManyAsync(
             string prompt, int count, string? model, CancellationToken ct = default)
         {
             Calls++;
             LastModel = model;
             IReadOnlyList<GeneratedImage> result = returnsImages
-                ? Enumerable.Range(1, count).Select(_ => new GeneratedImage([1, 2, 3], "image/png", RequestId)).ToList()
+                ? Enumerable.Range(1, count).Select(_ => new GeneratedImage([1, 2, 3], "image/png")).ToList()
                 : [];
-            return Task.FromResult(result);
+            return Task.FromResult(new ImageGenerationResult(result, RequestId));
         }
     }
 

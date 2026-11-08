@@ -27,10 +27,10 @@ internal sealed class AlwaysImagesGenerator : IImageGenerator
     public bool Enabled { get; set; } = true;
     public IReadOnlyList<ImageModelInfo> Models => [];
 
-    public Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
+    public Task<ImageGenerationResult> GenerateManyAsync(
         string prompt, int count, string? model, CancellationToken ct = default) =>
-        Task.FromResult<IReadOnlyList<GeneratedImage>>(
-            Enumerable.Range(1, count).Select(_ => new GeneratedImage([1, 2, 3], "image/png")).ToList());
+        Task.FromResult(new ImageGenerationResult(
+            Enumerable.Range(1, count).Select(_ => new GeneratedImage([1, 2, 3], "image/png")).ToList(), null));
 }
 
 // Черновик персоны для страховки «Применить итоги разговора» — тот же контракт, что в

@@ -104,15 +104,13 @@ public sealed class ImageGenerationService
         {
             var generator = chain[i];
             var model = _settings.ModelFor(place, generator.Key);
-            var images = await generator.GenerateManyAsync(prompt, count, model, ct);
-            // Трата — только за того, кто отдал картинки. Запрос без результата мог и стоить
-            // (фал тарифицирует отработанный запрос), но этот факт не имеет носителя в контракте:
-            // id запроса несут картинки, без них он до роутера не доходит. Выдуманной траты не
-            // кладём (п.5 ревью R-S-SPEND-2: дыра названа; закрыть её — отдельное решение о
-            // контракте IImageGenerator, а не поправка здесь).
+            var generated = await generator.GenerateManyAsync(prompt, count, model, ct);
+            var images = generated.Images;
+            // Трата — только за того, кто реально отдал картинки: пустой провайдер не стоил ничего
             if (images.Count > 0)
             {
-                RecordSpend(place, generator, model, images, ownerId, initiator, actorUserId, projectId);
+                RecordSpend(place, generator, model, images, generated.RequestId, ownerId, initiator,
+                    actorUserId, projectId);
                 return images;
             }
             if (i + 1 < chain.Count)
@@ -208,7 +206,7 @@ public sealed class ImageGenerationService
 
     private void RecordSpend(
         string place, IImageGenerator generator, string? model,
-        IReadOnlyList<GeneratedImage> images, string ownerId, string initiator,
+        IReadOnlyList<GeneratedImage> images, string? requestId, string ownerId, string initiator,
         string? actorUserId, string? projectId)
     {
         if (_spend is null)
@@ -250,8 +248,8 @@ public sealed class ImageGenerationService
         // поля цены в ответе отсутствуют). Обещание уточнения ставят только там, где его
         // будут исполнять: трата glif остаётся счётчиком вызовов навсегда — как и в
         // пишущейся записи чата (SpendMapping.RecordGlifGeneration: CostUsd = null).
-        var requestId = RequestIdOf(images);
-        var pendingAmount = requestId is not null && _falCost is not null;
+        var pendingAmount = requestId is not null && _falCost is not null
+            && string.Equals(generator.Key, SpendSources.Fal, StringComparison.OrdinalIgnoreCase);
 
         WriteSpend(ownerId, generator.Key, actualModel, amount: null, generations: images.Count, named,
             pendingAmount, actorUserId, projectId);
@@ -334,8 +332,4 @@ public sealed class ImageGenerationService
             _log?.LogError(ex, "Генерация картинок: не удалось записать трату {Provider}", providerKey);
         }
     }
-
-    // id один на весь запрос — его несёт каждая картинка этого вызова
-    private static string? RequestIdOf(IReadOnlyList<GeneratedImage> images) =>
-        images.Select(i => i.RequestId).FirstOrDefault(r => !string.IsNullOrWhiteSpace(r));
 }

@@ -169,6 +169,86 @@ public class ImageBackfillTests : IDisposable
         Assert.Equal(SpendInitiators.Agent, Assert.Single(spend.Records).Initiator);
     }
 
+    // П.6 хвоста ревью R-S-SPEND-2: обратная совместимость формата заявки. Файл до появления
+    // полей ActorUserId/ProjectId читается штатно (аддитивные поля, FormatVersion не двигался):
+    // заявка не теряется, названный Initiator не теряется вместе с ними, а отсутствие атрибуции
+    // читается как «нет поля → владелец, проект не назван» — то есть null, а не выдуманное значение
+    [Fact]
+    public void СтараяЗаявкаБезАтрибуции_ЧитаетсяБезПотериИнициатора()
+    {
+        var persona = NewPersona();
+        // Формат очереди до п.1 хвоста R-S-SPEND-2: полей атрибуции в заявке нет вовсе
+        File.WriteAllText(Path.Combine(_tempDir, ImageBackfillStore.FileName),
+            $$"""
+            {"Version":1,"Requests":[{"Kind":"persona-avatar","EntityId":"{{persona.Id}}","OwnerId":"{{_owner.Id}}","Prompt":"аватар","Initiator":"agent","Attempts":0,"CreatedAt":"2026-11-01T00:00:00Z"}]}
+            """);
+        var old = NewStore();
+        var queued = Assert.Single(old.All);
+        Assert.Equal(SpendInitiators.Agent, queued.Initiator);
+        Assert.Null(queued.ActorUserId);
+        Assert.Null(queued.ProjectId);
+    }
+
+    // П.6 хвоста ревью R-S-SPEND-2: атрибуция относится к заявке, а не к конкретной попытке.
+    // Смена промпта (повторный Enqueue на существующую заявку) и неудачная попытка (MarkFailed)
+    // идут через Copy — поля переносятся с заявкой и не подменяются значениями нового вызова.
+    // Мутация (снять перенос ActorUserId/ProjectId в Copy) краснит этот тест
+    [Fact]
+    public void АтрибуцияЗаявкиПереживаетСменуПромптаИПовторПопытки()
+    {
+        var persona = NewPersona();
+        var store = NewStore();
+        Assert.True(store.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар",
+            SpendInitiators.Agent, "actor-x", "project-y"));
+
+        // Перепостановка той же заявки с другим промптом и другими значениями: меняется
+        // только промпт, атрибуция остаётся заявкой
+        Assert.False(store.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "новый промпт",
+            SpendInitiators.Human, "other-actor", "other-project"));
+        var afterPrompt = Assert.Single(NewStore().All);
+        Assert.Equal("новый промпт", afterPrompt.Prompt);
+        Assert.Equal("actor-x", afterPrompt.ActorUserId);
+        Assert.Equal("project-y", afterPrompt.ProjectId);
+        Assert.Equal(SpendInitiators.Agent, afterPrompt.Initiator);
+
+        // Неудачная попытка — то же: Attempts двигаются, атрибуция остаётся
+        Assert.Equal(1, NewStore().MarkFailed(ImageBackfillKinds.PersonaAvatar, persona.Id, "no-image"));
+        var afterFail = NewStore().Find(ImageBackfillKinds.PersonaAvatar, persona.Id)!;
+        Assert.Equal(1, afterFail.Attempts);
+        Assert.Equal("actor-x", afterFail.ActorUserId);
+        Assert.Equal("project-y", afterFail.ProjectId);
+    }
+
+    // П.6 хвоста ревью R-S-SPEND-2, сквозной (образец — ИнициаторЗаявкиПереживаетПовтор…):
+    // транзиентный отказ оставил заявку в очереди — следующий прогон обязан довести её
+    // с той же атрибуцией: фоновая трата несёт актора и проект заявки, а не «нет поля»
+    [Fact]
+    public async Task АтрибуцияЗаявкиПереживаетПовторВСледующемПрогоне()
+    {
+        var persona = NewPersona();
+        var store = NewStore();
+        // Первый прогон — провайдер молчит обе попытки, второй отвечает
+        var generator = new FakeGenerator(answers: call => call > 2);
+        var spend = new CapturingSpend();
+        var service = ServiceWithSpend(generator, spend, store);
+        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар",
+            SpendInitiators.Agent, "actor-x", "project-y");
+
+        Assert.Equal(new ImageBackfillSummary(0, 0, 1), await service.RunAsync(_owner.Id));
+        // Заявка осталась в очереди со своей атрибуцией
+        var queued = Assert.Single(store.All);
+        Assert.Equal("actor-x", queued.ActorUserId);
+        Assert.Equal("project-y", queued.ProjectId);
+
+        var summary = await service.RunAsync(_owner.Id);
+
+        Assert.Equal(1, summary.Generated);
+        var rec = Assert.Single(spend.Records);
+        Assert.Equal("actor-x", rec.ActorUserId);
+        Assert.Equal("project-y", rec.ProjectId);
+        Assert.Equal(SpendInitiators.Agent, rec.Initiator);
+    }
+
     [Fact]
     public async Task Прогон_догоняет_аватар_сПромптомЗаявки_и_снимает_заявку()
     {

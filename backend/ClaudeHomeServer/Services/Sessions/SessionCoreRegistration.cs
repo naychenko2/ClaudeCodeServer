@@ -32,12 +32,17 @@ public static class SessionCoreRegistration
         // там шов снимается (продолжение зовёт ядро через TrySubmitContinuation).
         services.AddSingleton(sp => new Lazy<IWorkLoopContinuation>(() => sp.GetRequiredService<SessionManager>()));
 
-        // Стор копий транскриптов архивных чатов — общий экземляр с ролями: без него
-        // CliRoute собрал бы свой. Рекордер лимитов подписок здесь НЕ регистрируем:
-        // единственная его регистрация — в слое Llm (LlmSubsystem), её же резолвят шлюз
-        // LLM и фасад; вторая (фабрика) поставила бы дескриптор рядом с первым — и это
-        // тот случай, которого не видит DuplicateSingletonRegistrationTests: у фабрики
-        // нет ImplementationType.
+        // Стор копий транскриптов архивных чатов — общий экземпляр с ролями: без него
+        // CliRoute собрал бы свой. Рекордер лимитов подписок (SubscriptionLimitRecorder)
+        // здесь НЕ регистрируем: единственная его регистрация — в слое Llm (LlmSubsystem),
+        // её же резолвят шлюз LLM и фасад. ТРЕБОВАНИЕ: TurnCostLedger ниже берёт его через
+        // GetRequiredService, поэтому контейнер, собранный одним AddSessionCore() БЕЗ слоя
+        // Llm, не поднимется — потребитель обязан подключить и LlmSubsystem (на этом упало
+        // слияние ветки тестов, 73b4a4184, починено 30017de49). Прежняя фабричная регистрация
+        // здесь была ПЕРВОЙ по порядку (Program.cs), type-based из LlmSubsystem — последней,
+        // и побеждал он («последний дескриптор побеждает»); пара дескрипторов и составляла
+        // дубль. Его ловит SingleRegistrationServices_ОдинДескрипторТипомБезФабрики
+        // (общий сторож дублей фабрик не видит — слепота названа в его файле).
         services.AddSingleton(sp => new ArchivedTranscriptStore(sp.GetRequiredService<IConfiguration>()));
 
         services.AddSingleton(sp => new SessionHistory(

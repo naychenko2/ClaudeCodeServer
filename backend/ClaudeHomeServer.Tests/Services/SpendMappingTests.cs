@@ -323,6 +323,30 @@ public class SpendMappingFalRequestIdTests
     public void TryExtractFalRequestIds_ПакетСНестроковымиЭлементами_ТолькоСтроковыеId(string content, string onlyId) =>
         SpendMapping.TryExtractFalRequestIds(content).Should().Equal(onlyId);
 
+    // Хвосты ревью R-S-SPEND-3 фиксируют намерение текстового пути (последней страховки).
+    // П.2: класс символов id широкий намеренно — не-UUID id (например, "job_42-A") берётся;
+    // чужой id безвреден: цена по нему не найдётся, в Spend ложной записи не будет.
+    [Fact]
+    public void TryExtractFalRequestIds_ТекстовыйПутьНеUuidId_Берётся() =>
+        SpendMapping.TryExtractFalRequestIds(
+            "fal.run ответ (не JSON): \"request_id\": \"job_42-A\" готово").Should().Equal("job_42-A");
+
+    // П.3: в тексте, не являющемся JSON, берётся только ПЕРВОЕ вхождение — остальные
+    // теряются осознанно (страховка, а не разбор пакета).
+    [Fact]
+    public void TryExtractFalRequestIds_ТекстовыйПутьНесколькоId_ТолькоПервое() =>
+        SpendMapping.TryExtractFalRequestIds(
+            $"fal.run: \"request_id\":\"{RidA}\" затем \"request_id\":\"{RidB}\"").Should().Equal(RidA);
+
+    // П.1: цельный JSON с НЕ-объектовым корнем (массив) уходит в текстовый путь, а не в
+    // структурный: берётся только первый id массива. Поведение зафиксировано как есть —
+    // ответы fal всегда объекты, массивом на практике не приходят.
+    [Fact]
+    public void TryExtractFalRequestIds_МассивВКорне_ТекстовыйПутьПервыйId() =>
+        SpendMapping.TryExtractFalRequestIds(
+            $$"""[{"request_id":"{{RidA}}","response_url":"https://queue.fal.run/x"},{"request_id":"{{RidB}}"}]""")
+            .Should().Equal(RidA);
+
     // Guard по fal-домену остался: чужой результат со своим request_id (без fal-домена) — пусто.
     [Theory]
     [InlineData("""{"request_id":"deadbeef-0000-0000-0000-000000000000","image_url":"https://cdn.example.com/x.webp"}""")]

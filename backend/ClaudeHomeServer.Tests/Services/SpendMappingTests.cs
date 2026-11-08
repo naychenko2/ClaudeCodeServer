@@ -81,20 +81,31 @@ public class SpendMappingTests
         RecordTurn(Chat("claude", "opus"), Result()).ActorUserId.Should().BeNull();
     }
 
-    // Чат настроен Claude, ход через шлюз ушёл в minimax: запись обязана брать маршрут —
-    // модель шлюза важнее отчёта CLI (сессия ротацию шлюза не видит).
-    // Признака «ход человека» в точке учёта нет (актор липкий и несёт id человека и у
-    // агентских подач), поэтому инициатор хода не назван: null, а не human и не agent.
-    // Решение за Александром; тест краснеет, если кто-то выдумает инициатора молча.
-    [Fact]
-    public void RecordTurnSpend_ИнициаторХодаНеНазван_ДаЖеПриАктореИСессии()
+    // Инициатор берётся из параметра, который считает ядро (защёлка хода); актор реестра на него
+    // не влияет. null («не назван») — только когда записи хода нет, и это не human и не agent.
+    [Theory]
+    [InlineData(SpendInitiators.Human, "u-2")]
+    [InlineData(SpendInitiators.Agent, "u-2")]
+    [InlineData(SpendInitiators.Agent, null)]
+    [InlineData(null, "u-2")]
+    public void RecordTurnSpend_ИнициаторИзПараметра_АкторНеВлияет(string? initiator, string? actor)
     {
-        var r = RecordTurnWithActor(Chat("claude", "opus"), Result(), actor: "u-2");
-        r.SessionId.Should().NotBeNullOrEmpty();
-        r.ActorUserId.Should().Be("u-2");
-        r.Initiator.Should().BeNull();
+        var spend = new RecordingSpend();
+        SpendMapping.RecordTurnSpend(spend, Providers(), _ => "owner-1", null, Chat("claude", "opus"), Result(),
+            new Actors(actor), initiator);
+        var r = Assert.Single(spend.Records);
+        r.Initiator.Should().Be(initiator);
+        r.ActorUserId.Should().Be(actor);
     }
 
+    [Fact]
+    public void RecordTurnSpend_ИнициаторНеПередан_НеНазван()
+    {
+        RecordTurnWithActor(Chat("claude", "opus"), Result(), actor: "u-2").Initiator.Should().BeNull();
+    }
+
+    // Чат настроен Claude, ход через шлюз ушёл в minimax: запись обязана брать маршрут —
+    // модель шлюза важнее отчёта CLI (сессия ротацию шлюза не видит).
     [Fact]
     public void RecordTurnSpend_МаршрутШлюза_ВажнееНастроекЧатаИОтчётаCLI()
     {

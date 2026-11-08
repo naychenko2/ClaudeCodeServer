@@ -106,6 +106,13 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         // хода помечаем при запуске (SendDirectAsync / SendMessageAndWaitAsync) — классификация
         // агентской вводной как работы публикует план неподтверждённым и ждёт человека.
         public bool TeamTurnFromHuman;
+        // Защёлка траты: текущий ход начал человек (1) или нет (0). Живёт один ход и в
+        // sessions.json не попадает. Выставляется подачей (SendDirectAsync — по предикату
+        // человеческого хода; chats_send — всегда 0), снимается на result (Interlocked.Exchange):
+        // пока живы фоновые агенты, CLI сам начинает новые ходы без подачи, и такой ход обязан
+        // уйти в учёт агентским. Не TeamTurnFromHuman: у того предикат шире (тихие подачи
+        // suppressTasksExecute) и своя семантика (M7), по result он не сбрасывается.
+        public int TurnFromHuman;
         // Сабагент этого хода оборвался на середине (паспорт прогона с Truncated) — по концу
         // хода уходит добивание. Пишет приёмник паспортов (поток ватчера сабагентов), читает
         // обработчик result — отсюда volatile. null — обрывов не было либо уже добили.
@@ -5928,7 +5935,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         if (!systemDirective)
             entry.Info.LastMessage = ChatPreview(text);
         NoteRunDelegation(entry, agentDepth, suppressTasksExecute, fromHuman: !auto && !systemDirective);
-        NoteTurnActor(entry, senderUserId, fromHuman: !auto && !systemDirective && agentDepth == 0 && !suppressTasksExecute);
+        var humanTurn = !auto && !systemDirective && agentDepth == 0 && !suppressTasksExecute;
+        NoteTurnActor(entry, senderUserId, humanTurn);
+        Volatile.Write(ref entry.TurnFromHuman, humanTurn ? 1 : 0);
         // Диспетчеризация: локальный голосовой ход идёт мимо CLI (fire-and-forget — как
         // CLI-ветка, где SendMessageAsync лишь ставит ход в процесс; ответ приходит
         // событиями через OnMessageAsync). Реплика уже в аккумуляторе (OnUserMessage выше).
@@ -6339,6 +6348,7 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         entry.Info.LastMessage = ChatPreview(text);
         NoteRunDelegation(entry, agentDepth, suppressTasksExecute: false, fromHuman: false);
         NoteTurnActor(entry, senderUserId, fromHuman: false);
+        Volatile.Write(ref entry.TurnFromHuman, 0); // chats_send — всегда агентский ход, даже с id человека
         await entry.Process!.SendMessageAsync(text, null, agentDepth);
 
         if (timeout <= TimeSpan.Zero) return new SendAndWaitResult.Running();
@@ -10994,7 +11004,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     // Актор читается здесь, пока ход жив: переход статуса по result и снятие
                     // актора идут ниже по методу (ApplyStatusQueuedAsync) — потребитель после
                     // конца хода получил бы null (урок R-S2a-6c).
-                    SpendMapping.RecordTurnSpend(_spend, _llmProviders, ResolveOwnerId, _log, entry?.Info, m, this);
+                    // Инициатор: защёлка снимается на каждом result (иначе автономный ход при живых
+                    // фоновых агентах приписался бы человеку); нет записи хода — «не назван» (null).
+                    var spendInitiator = entry is null ? null
+                        : Interlocked.Exchange(ref entry.TurnFromHuman, 0) == 1
+                            ? SpendInitiators.Human : SpendInitiators.Agent;
+                    SpendMapping.RecordTurnSpend(_spend, _llmProviders, ResolveOwnerId, _log, entry?.Info, m, this, spendInitiator);
                     break;
                 case ProviderSwitchedMessage m:
                     // Пометка автоподмены модели в историю — после F5/рестарта человек видит,

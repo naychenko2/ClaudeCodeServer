@@ -119,6 +119,10 @@ internal static class SpendMapping
     // Урок S2a-6c (журнал событий): потребитель, читающий реестр ПОСЛЕ конца хода,
     // получает null — здесь мы до конца хода. Без реестра (null) и для ходов без человека
     // запись остаётся без актора: срез чтения относится такие записи владельцу.
+    //
+    // initiator — признак «ход начал человек», его считает ядро (защёлка SessionEntry.TurnFromHuman):
+    // Human / Agent, null — запись хода неизвестна. Актор реестра на него не влияет: он «липкий»
+    // у внутренних ходов и несёт id человека и у агентских подач.
     public static void RecordTurnSpend(
         ISpendCollector? spend,
         LlmProviderRegistry llmProviders,
@@ -126,7 +130,8 @@ internal static class SpendMapping
         ILogger? log,
         Session? s,
         ResultMessage m,
-        ClaudeHomeServer.Services.Access.ITurnActorRegistry? actors = null)
+        ClaudeHomeServer.Services.Access.ITurnActorRegistry? actors = null,
+        string? initiator = null)
     {
         if (spend is null || s is null || m.Usage is null)
         {
@@ -157,12 +162,6 @@ internal static class SpendMapping
             string? actorUserId;
             try { actorUserId = actors?.Actor(s.Id, owner); }
             catch (Exception ex) { actorUserId = null; log?.LogWarning(ex, "spend: актор хода не прочитался"); }
-            // Initiator намеренно НЕ заполняется (null = «не назван», не human): однозначного
-            // признака «ход человека» в этой точке нет. Актор реестра не годится — он «липкий»
-            // у внутренних ходов (дренаж, WorkLoop, nudge) и несёт id человека и у агентских
-            // подач (chats_send), а признак fromHuman живёт в SessionManager.NoteTurnActor и
-            // до RecordTurnSpend не доезжает. Требует решения Александра (новый шов в реестр
-            // актора); до него не выдумываем — иначе агентский ход запишется как human.
             spend.Record(new SpendRecord
             {
                 OwnerId = owner,
@@ -171,6 +170,7 @@ internal static class SpendMapping
                 TaskId = s.TaskId,
                 PersonaId = s.PersonaId,
                 ActorUserId = string.IsNullOrEmpty(actorUserId) ? null : actorUserId,
+                Initiator = initiator,
                 Provider = provider,
                 Model = model,
                 Source = SpendSources.IsFree(provider, model, isLocal) ? SpendSources.Free : SpendSources.ChatTurn,

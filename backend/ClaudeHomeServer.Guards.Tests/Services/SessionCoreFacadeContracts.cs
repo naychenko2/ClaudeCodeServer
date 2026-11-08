@@ -126,14 +126,31 @@ internal static class SessionCoreFacadeContracts
         return seen;
     }
 
-    /// <summary>record class опознаётся по синтезированному <c>&lt;Clone&gt;$</c>; у record struct его нет —
-    /// там признак синтезированный компилятором <c>PrintMembers(StringBuilder)</c> (с <c>CompilerGeneratedAttribute</c>):
-    /// рукописный метод с тем же именем в обычной структуре записью не считается.</summary>
+    /// <summary>record class опознаётся по синтезированному <c>&lt;Clone&gt;$</c>. У record struct его нет,
+    /// а <c>PrintMembers(StringBuilder)</c> может быть объявлен самим автором: пользовательская декларация
+    /// заменяет синтезированный член (спека C# 10.0 «Record structs»), поэтому один <c>PrintMembers</c>
+    /// запись от обычной структуры не отличает. Признак структуры-записи — пара: метод
+    /// <c>PrintMembers(StringBuilder)</c> (синтезированный или объявленный автором) И хоть один
+    /// синтезированный компилятором член машинерии равенства — статические <c>op_Equality</c>/
+    /// <c>op_Inequality</c>, <c>Equals(этот_тип)</c> или <c>GetHashCode()</c> без параметров. Список имён
+    /// закрытый: «любой метод с <c>CompilerGeneratedAttribute</c>» подошёл бы и обычной структуре —
+    /// у неё синтезированные акцессоры авто-свойств помечены тем же атрибутом (держит фикстура
+    /// <c>PlainWithOwnPrint</c> в <see cref="SessionCoreShapeGuardTests"/>).</summary>
     internal static bool IsRecord(Type t) =>
         t.GetMethod("<Clone>$", BindingFlags.Public | BindingFlags.Instance) is not null
-        || t.IsValueType && t.GetMethod("PrintMembers", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance,
-            null, [typeof(System.Text.StringBuilder)], null)
-            ?.IsDefined(typeof(System.Runtime.CompilerServices.CompilerGeneratedAttribute), false) == true;
+        || t.IsValueType && HasPrintMembers(t) && HasSynthesizedEquality(t);
+
+    private static bool HasPrintMembers(Type t) =>
+        t.GetMethod("PrintMembers", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance,
+            null, [typeof(System.Text.StringBuilder)], null) is not null;
+
+    private static bool HasSynthesizedEquality(Type t) =>
+        t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+                | BindingFlags.Static | BindingFlags.DeclaredOnly)
+            .Any(m => m.IsDefined(typeof(System.Runtime.CompilerServices.CompilerGeneratedAttribute), false)
+                && (m.IsStatic && m.Name is "op_Equality" or "op_Inequality"
+                    || m.Name == "Equals" && m.GetParameters() is [var p] && p.ParameterType == t
+                    || m.Name == "GetHashCode" && m.GetParameters().Length == 0));
 
     /// <summary>Форма контракта фасада — данные: record/enum/исключение. Роль или шов контрактом не бывает.</summary>
     internal static bool IsContractShape(Type t) =>

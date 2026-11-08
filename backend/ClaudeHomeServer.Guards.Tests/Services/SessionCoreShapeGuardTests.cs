@@ -421,7 +421,8 @@ public class SessionCoreShapeGuardTests
     [Fact]
     public void Самопроверка_вложенный_record_struct_распознаётся_как_record_а_обычная_struct_нет()
     {
-        SessionCoreFacadeContracts.IsRecord(typeof(FakeRootWithStructs.RecStruct)).Should().BeTrue("у record struct нет <Clone>$, но есть PrintMembers");
+        SessionCoreFacadeContracts.IsRecord(typeof(FakeRootWithStructs.RecStruct)).Should().BeTrue(
+            "у record struct нет <Clone>$, признак — PrintMembers плюс синтезированное равенство");
         SessionCoreFacadeContracts.IsRecord(typeof(FakeRootWithStructs.PlainStruct)).Should().BeFalse();
         SessionCoreFacadeContracts.NestedShapeViolations([typeof(FakeRootWithStructs)]).Should().ContainSingle()
             .Which.Should().Contain("FakeRootWithStructs+PlainStruct");
@@ -434,6 +435,35 @@ public class SessionCoreShapeGuardTests
             "признак записи — синтезированный компилятором PrintMembers, а не метод с тем же именем");
         SessionCoreFacadeContracts.NestedShapeViolations([typeof(FakeRootWithHandwrittenPrint)]).Should().ContainSingle()
             .Which.Should().Contain("FakeRootWithHandwrittenPrint+HandStruct");
+    }
+
+    [Fact]
+    public void Самопроверка_record_struct_с_объявленным_автором_PrintMembers_остаётся_записью()
+    {
+        // Х9: своя декларация PrintMembers заменяет синтезированный член (спека C# 10.0 «Record structs»),
+        // поэтому признак структуры-записи держится на синтезированной машинерии равенства.
+        SessionCoreFacadeContracts.IsRecord(typeof(FakeRootWithOwnPrint.RecordWithOwnPrint)).Should().BeTrue(
+            "record struct с собственным PrintMembers остаётся записью: op_Equality/Equals/GetHashCode синтезированы");
+        SessionCoreFacadeContracts.IsRecord(typeof(FakeRootWithOwnPrint.PlainWithOwnPrint)).Should().BeFalse(
+            "рукописный PrintMembers без синтезированного равенства — обычная структура; её синтезированные "
+            + "акцессоры авто-свойств get_/set_ признаком не считаются");
+        SessionCoreFacadeContracts.NestedShapeViolations([typeof(FakeRootWithOwnPrint)]).Should().ContainSingle()
+            .Which.Should().Contain("FakeRootWithOwnPrint+PlainWithOwnPrint");
+    }
+
+    private sealed class FakeRootWithOwnPrint
+    {
+        public readonly record struct RecordWithOwnPrint(int X)
+        {
+            private bool PrintMembers(System.Text.StringBuilder sb) => sb.Append(X).Length > 0;
+        }
+
+        public struct PlainWithOwnPrint
+        {
+            public int X;
+            public int Y { get; set; }
+            private bool PrintMembers(System.Text.StringBuilder sb) => false;
+        }
     }
 
     private sealed class FakeRootWithStructs

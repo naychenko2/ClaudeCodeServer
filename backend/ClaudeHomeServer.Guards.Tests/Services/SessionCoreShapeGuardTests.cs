@@ -903,12 +903,20 @@ public class SessionCoreShapeGuardTests
     public void Самопроверка_диагностика_неопознанной_записи_называет_найденные_члены()
     {
         // Смена формы синтезированного равенства (новый компилятор) обязана красить сторож
-        // причиной, а не молча: описание нарушения называет, какие [CompilerGenerated]-члены в типе
+        // причиной, а не молча: описание нарушения называет, какие [CompilerGenerated]-методы в типе
         // есть на самом деле. Фикстура — обычная структура с рукописным PrintMembers и
         // авто-свойством: его акцессоры синтезированы, а машинерии равенства нет — по списку это видно.
         var plain = typeof(FakeRootWithOwnPrint.PlainWithOwnPrint);
+        // Состав списка — поэлементно, а не по подстроке: акцессоры авто-свойств есть, машинерии
+        // равенства нет, порядок — по имени (сортировка в GeneratedMethodNames). Фикстура объявляет
+        // свойства Y, затем A — обратному алфавитному порядку, поэтому без сортировки список был бы
+        // «get_Y, set_Y, get_A, set_A» и эта строка краснеет. Диагностика, которая называет лишнее
+        // или не называет акцессоров («врёт в другую сторону»), краснеет здесь же.
+        SessionCoreFacadeContracts.GeneratedMethodNames(plain).Should().Equal("get_A", "get_Y", "set_A", "set_Y");
         SessionCoreFacadeContracts.RecordShapeNote(plain).Should().Contain("get_Y")
-            .And.Contain("set_Y", "акцессоры авто-свойства должны быть в диагностике: их нет среди членов равенства");
+            .And.Contain("set_Y", "акцессоры авто-свойства должны быть в диагностике: их нет среди членов равенства")
+            .And.NotContain("op_Equality", "диагностика не придумывает машинерию равенства там, где её нет")
+            .And.NotContain("GetHashCode");
         SessionCoreFacadeContracts.NestedShapeViolations([typeof(FakeRootWithOwnPrint)]).Should().ContainSingle()
             .Which.Should().Contain("признак записи не найден");
         // У опознанной записи диагностики нет: она не шумит в passing-пути.
@@ -925,7 +933,12 @@ public class SessionCoreShapeGuardTests
         public struct PlainWithOwnPrint
         {
             public int X;
+            // Порядок объявления — обратный алфавитному (Y, затем A): GetMethods отдаёт акцессоры
+            // в порядке объявления, поэтому без сортировки в GeneratedMethodNames список и текст
+            // диагностики зависели бы от порядка метаданных — самопроверка диагностики краснеет
+            // на удалении сортировки.
             public int Y { get; set; }
+            public int A { get; set; }
             private bool PrintMembers(System.Text.StringBuilder sb) => false;
         }
     }
@@ -950,6 +963,24 @@ public class SessionCoreShapeGuardTests
         SessionCoreFacadeContracts.CriterionViolations(
                 ["ClaudeHomeServer.Services.Sessions.SessionStore"], Main, typeof(SessionManager), CoreNamespace)
             .Should().ContainSingle().Which.Should().Contain("не record/enum/исключение");
+
+    [Fact]
+    public void Самопроверка_прицепка_диагностики_в_описании_формы_контракта_краснеет_на_значении()
+    {
+        // Ветка «не record/enum/исключение» в CriterionViolations на реальных контрактах недостижима
+        // (все строки All — данные, а на классе вроде SessionStore прицепка пуста): она живёт
+        // «на будущее» и проверяется здесь напрямую. На значении без машинерии равенства описание
+        // обязано назвать найденные методы — снять прицепку в ContractShapeViolation, и первый
+        // случай краснеет. На классе прицепки нет: лишняя диагностика шумела бы в реальном
+        // нарушении формы.
+        SessionCoreFacadeContracts.ContractShapeViolation("PlainWithOwnPrint", typeof(FakeRootWithOwnPrint.PlainWithOwnPrint))
+            .Should().Contain("не record/enum/исключение")
+            .And.Contain("признак записи не найден")
+            .And.Contain("get_Y").And.Contain("set_Y", "на значении описание обязано назвать найденные методы");
+        SessionCoreFacadeContracts.ContractShapeViolation("Role", typeof(FakeRootWithNestedClass.Role))
+            .Should().Contain("не record/enum/исключение")
+            .And.NotContain("признак записи не найден", "у класса диагностики нет: она пуста по построению");
+    }
 
     private sealed class FakeRootWithNestedClass
     {

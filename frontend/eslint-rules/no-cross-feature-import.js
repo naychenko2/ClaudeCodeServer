@@ -25,7 +25,8 @@
  * глубокие относительные пути. Запрет только на «снаружи».
  *
  * Легальные исключения (текущие нарушения, которые ещё не вычищены) —
- * allow-list `CROSS_FEATURE_IMPORT_ALLOWED` в eslint.design.config.js. Разовое
+ * allow-list `CROSS_FEATURE_IMPORT_ALLOWED` и блок подключения
+ * `crossFeatureImportGuard` в eslint.config.js. Разовое
  * отклонение оформляется построчно с причиной:
  *   // eslint-disable-next-line module/no-cross-feature-import -- причина
  */

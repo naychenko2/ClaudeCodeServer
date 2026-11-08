@@ -418,6 +418,27 @@ public class SessionCoreShapeGuardTests
         SessionCoreFacadeContracts.NestedShapeViolations([typeof(FakeRootWithNestedClass)]).Should().ContainSingle()
             .Which.Should().Contain("FakeRootWithNestedClass+Role");
 
+    [Fact]
+    public void Самопроверка_вложенный_record_struct_распознаётся_как_record_а_обычная_struct_нет()
+    {
+        SessionCoreFacadeContracts.IsRecord(typeof(FakeRootWithStructs.RecStruct)).Should().BeTrue("у record struct нет <Clone>$, но есть PrintMembers");
+        SessionCoreFacadeContracts.IsRecord(typeof(FakeRootWithStructs.PlainStruct)).Should().BeFalse();
+        SessionCoreFacadeContracts.NestedShapeViolations([typeof(FakeRootWithStructs)]).Should().ContainSingle()
+            .Which.Should().Contain("FakeRootWithStructs+PlainStruct");
+    }
+
+    private sealed class FakeRootWithStructs
+    {
+        public readonly record struct RecStruct(int X);
+        public struct PlainStruct { public int X; }
+    }
+
+    [Fact]
+    public void Самопроверка_роль_в_перечне_контрактов_фасада_краснеет_по_форме() =>
+        SessionCoreFacadeContracts.CriterionViolations(
+                ["ClaudeHomeServer.Services.Sessions.SessionStore"], Main, typeof(SessionManager), CoreNamespace)
+            .Should().ContainSingle().Which.Should().Contain("не record/enum/исключение");
+
     private sealed class FakeRootWithNestedClass
     {
         public sealed class Role { public void Act() { } }

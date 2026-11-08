@@ -126,7 +126,16 @@ internal static class SessionCoreFacadeContracts
         return seen;
     }
 
-    private static bool IsRecord(Type t) => t.GetMethod("<Clone>$", BindingFlags.Public | BindingFlags.Instance) is not null;
+    /// <summary>record class опознаётся по синтезированному <c>&lt;Clone&gt;$</c>; у record struct его нет —
+    /// там признак синтезированный закрытый <c>PrintMembers(StringBuilder)</c> (у обычной структуры его не бывает).</summary>
+    internal static bool IsRecord(Type t) =>
+        t.GetMethod("<Clone>$", BindingFlags.Public | BindingFlags.Instance) is not null
+        || t.IsValueType && t.GetMethod("PrintMembers", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance,
+            null, [typeof(System.Text.StringBuilder)], null) is not null;
+
+    /// <summary>Форма контракта фасада — данные: record/enum/исключение. Роль или шов контрактом не бывает.</summary>
+    internal static bool IsContractShape(Type t) =>
+        t.IsEnum || IsRecord(t) || typeof(Exception).IsAssignableFrom(t);
 
     /// <summary>Вложенные типы корней контрактов допустимы только как record/enum/исключение: вложенный
     /// класс с поведением вместе с корнем стал бы допуском на роль.</summary>
@@ -134,7 +143,7 @@ internal static class SessionCoreFacadeContracts
         from root in roots
         from n in root.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic)
         where !n.IsDefined(typeof(System.Runtime.CompilerServices.CompilerGeneratedAttribute), false)
-        where !(n.IsEnum || IsRecord(n) || typeof(Exception).IsAssignableFrom(n))
+        where !IsContractShape(n)
         select $"{n.FullName}: вложенный тип контракта фасада — не record/enum/исключение";
 
     /// <summary>Механическая проверка критерия по каждой строке: тип существует в <paramref name="main"/>,
@@ -150,6 +159,7 @@ internal static class SessionCoreFacadeContracts
             var type = main.GetType(name);
             if (type is null) { yield return $"{name}: типа нет в сборке (устаревшая строка тихо откроет допуск)"; continue; }
             if (type.Namespace != coreNamespace) { yield return $"{name}: лежит не в {coreNamespace}"; continue; }
+            if (!IsContractShape(type)) { yield return $"{name}: не record/enum/исключение — контракт фасада это данные, роль или шов контрактом быть не может"; continue; }
             if (!typeof(Exception).IsAssignableFrom(type) && !signature.Contains(type))
                 yield return $"{name}: нет ни в сигнатуре public/internal члена {facade.Name} (включая публичную поверхность её типов), ни среди наследников Exception — "
                     + "это не контракт фасада (данные ядра идут в CoreDataContracts поимённо)";

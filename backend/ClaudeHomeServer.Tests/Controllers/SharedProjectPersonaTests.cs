@@ -6,6 +6,7 @@ using ClaudeHomeServer.Services;
 using Microsoft.Extensions.DependencyInjection;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -107,7 +108,7 @@ public class SharedProjectPersonaTests : IClassFixture<TestWebApplicationFactory
 
         r.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         var body = JsonSerializer.Deserialize<JsonElement>(await r.Content.ReadAsStringAsync());
-        body.GetProperty("code").GetString().Should().Be(SessionManager.GlobalPersonaInSharedException.Code,
+        body.GetProperty("code").GetString().Should().Be(GlobalPersonaInSharedException.Code,
             "фронт различает этот отказ кодом, а не разбором текста");
         // Отказ ничего не пишет: собеседник чата остаётся прежний.
         var after = (await ChatAsync(Owner(), chatId)).GetProperty("personaId").GetString();
@@ -124,7 +125,7 @@ public class SharedProjectPersonaTests : IClassFixture<TestWebApplicationFactory
         var r = await Owner().PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto", personaId });
 
         r.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await BodyAsync(r)).GetProperty("code").GetString().Should().Be(SessionManager.GlobalPersonaInSharedException.Code,
+        (await BodyAsync(r)).GetProperty("code").GetString().Should().Be(GlobalPersonaInSharedException.Code,
             "тот же машинный код, что при смене собеседника");
         (await ProjectChatIdsAsync(Owner(), projectId)).Should().BeEquivalentTo(before,
             "отказ не оставил в проекте нового чата");
@@ -140,7 +141,7 @@ public class SharedProjectPersonaTests : IClassFixture<TestWebApplicationFactory
         var r = await Owner().PostAsJsonAsync($"/api/personas/{personaId}/chats", new { projectId });
 
         r.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await BodyAsync(r)).GetProperty("code").GetString().Should().Be(SessionManager.GlobalPersonaInSharedException.Code);
+        (await BodyAsync(r)).GetProperty("code").GetString().Should().Be(GlobalPersonaInSharedException.Code);
         (await ProjectChatIdsAsync(Owner(), projectId)).Should().BeEquivalentTo(before,
             "отказ не оставил в проекте нового чата");
     }
@@ -169,7 +170,7 @@ public class SharedProjectPersonaTests : IClassFixture<TestWebApplicationFactory
         result.GetProperty("isError").GetBoolean().Should().BeTrue();
         var text = result.GetProperty("content")[0].GetProperty("text").GetString()!;
         JsonSerializer.Deserialize<JsonElement>(text).GetProperty("code").GetString()
-            .Should().Be(SessionManager.GlobalPersonaInSharedException.Code);
+            .Should().Be(GlobalPersonaInSharedException.Code);
         (await ProjectChatIdsAsync(Owner(), projectId)).Should().BeEquivalentTo(before,
             "отказ не оставил в проекте нового чата");
     }
@@ -200,7 +201,7 @@ public class SharedProjectPersonaTests : IClassFixture<TestWebApplicationFactory
         var r = await Owner().PostAsJsonAsync($"/api/chats/{legacy.Id}/continue", new { });
 
         r.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await BodyAsync(r)).GetProperty("code").GetString().Should().Be(SessionManager.GlobalPersonaInSharedException.Code);
+        (await BodyAsync(r)).GetProperty("code").GetString().Should().Be(GlobalPersonaInSharedException.Code);
         (await ProjectChatIdsAsync(Owner(), projectId)).Should().BeEquivalentTo(before,
             "отказ не оставил нового чата");
     }
@@ -216,7 +217,7 @@ public class SharedProjectPersonaTests : IClassFixture<TestWebApplicationFactory
         var r = await Owner().PostAsJsonAsync("/api/chats/group", new { personaIds = new[] { lead, global } });
 
         r.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await BodyAsync(r)).GetProperty("code").GetString().Should().Be(SessionManager.GlobalPersonaInSharedException.Code);
+        (await BodyAsync(r)).GetProperty("code").GetString().Should().Be(GlobalPersonaInSharedException.Code);
         (await ProjectChatIdsAsync(Owner(), projectId)).Should().BeEquivalentTo(before,
             "отказ не оставил в проекте нового чата");
     }
@@ -236,7 +237,7 @@ public class SharedProjectPersonaTests : IClassFixture<TestWebApplicationFactory
         var r = await Owner().PutAsJsonAsync($"/api/chats/{chatId}/participants", new { personaIds = new[] { p1, global } });
 
         r.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await BodyAsync(r)).GetProperty("code").GetString().Should().Be(SessionManager.GlobalPersonaInSharedException.Code);
+        (await BodyAsync(r)).GetProperty("code").GetString().Should().Be(GlobalPersonaInSharedException.Code);
         // Отказ не трогает состав чата.
         (await ChatAsync(Owner(), chatId)).GetProperty("participants").EnumerateArray()
             .Select(e => e.GetString()).Should().Equal(p1, p2);

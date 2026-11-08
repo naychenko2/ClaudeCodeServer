@@ -6,6 +6,7 @@ using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Llm.Claude;
 using ClaudeHomeServer.Services.Mcp;
+using ClaudeHomeServer.Services.Sessions;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -179,7 +180,10 @@ public class HiggsfieldMcpNodeTests : IDisposable
     /// Строит HiggsfieldOAuthService с живым токеном (EnsureFresh() ≠ null) и вешает её
     /// на bare-SessionManager. Общий хелпер для тестов RO-гейта.
     /// </summary>
-    private static (SessionManager Sm, HiggsfieldOAuthService HfOAuth) CreateHiggsfieldSetup(
+    // С3-4: решение по higgsfield живёт в роли BuiltinMcpContexts (на фасаде только тонкая
+    // обёртка), поэтому и подстановка полей — в роли. Приём тот же: uninitialized-объект +
+    // поля через рефлексию, чтобы изолировать один гейт от остальных веток.
+    private static (BuiltinMcpContexts Builtin, HiggsfieldOAuthService HfOAuth) CreateHiggsfieldSetup(
         string ownerId, string dataDir)
     {
         Directory.CreateDirectory(dataDir);
@@ -229,22 +233,24 @@ public class HiggsfieldMcpNodeTests : IDisposable
                 AuthVersion = 1,
             }));
 
-        var sm = (SessionManager)RuntimeHelpers.GetUninitializedObject(typeof(SessionManager));
         var bf = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
 
+        var endpoint = (McpEndpoint)RuntimeHelpers.GetUninitializedObject(typeof(McpEndpoint));
+        var builtin = (BuiltinMcpContexts)RuntimeHelpers.GetUninitializedObject(typeof(BuiltinMcpContexts));
+
         // _higgsfieldOAuth: нужен для BuildHiggsfieldContext
-        typeof(SessionManager).GetField("_higgsfieldOAuth", bf)!.SetValue(sm, hfOAuth);
+        typeof(BuiltinMcpContexts).GetField("_higgsfieldOAuth", bf)!.SetValue(builtin, hfOAuth);
+        typeof(BuiltinMcpContexts).GetField("_endpoint", bf)!.SetValue(builtin, endpoint);
 
         // _launchers + _config: нужны для ResolveTasksApiUrl (контрпример: Full-персона)
         var plMock = new Mock<IProcessLauncher>();
         plMock.Setup(l => l.McpApiUrlOverride).Returns(null as string);
         var launchers = new Mock<ILauncherFactory>();
         launchers.Setup(f => f.ForOwner(It.IsAny<string?>())).Returns(plMock.Object);
-        typeof(SessionManager).GetField("_launchers", bf)!.SetValue(sm, launchers.Object);
+        typeof(McpEndpoint).GetField("_launchers", bf)!.SetValue(endpoint, launchers.Object);
+        typeof(McpEndpoint).GetField("_config", bf)!.SetValue(endpoint, config);
 
-        typeof(SessionManager).GetField("_config", bf)!.SetValue(sm, config);
-
-        return (sm, hfOAuth);
+        return (builtin, hfOAuth);
     }
 
     [Fact]
@@ -256,7 +262,7 @@ public class HiggsfieldMcpNodeTests : IDisposable
         // и вернёт non-null контекст.
         var ownerId = "owner-1";
         var dataDir = Path.Combine(_root, "ro-gate-" + Guid.NewGuid().ToString("N")[..8]);
-        var (sm, hfOAuth) = CreateHiggsfieldSetup(ownerId, dataDir);
+        var (builtin, hfOAuth) = CreateHiggsfieldSetup(ownerId, dataDir);
 
         // Контроль: EnsureFresh() действительно жив (не null) — иначе тест тривиально
         // проходил бы и по ветке «нет токена».
@@ -264,14 +270,14 @@ public class HiggsfieldMcpNodeTests : IDisposable
             "препостановка: EnsureFresh() ≠ null (токен жив)");
 
         var roPersona = new Persona { Access = PersonaAccess.ReadOnly };
-        var result = sm.BuildHiggsfieldContext(ownerId, roPersona);
+        var result = builtin.BuildHiggsfieldContext(ownerId, roPersona);
 
         result.Should().BeNull(
             "RO-гейт: ReadOnly-персона → null, хотя EnsureFresh() вернул живой токен");
 
         // Контрпример: та же настройка, но персона не ReadOnly → контекст создаётся
         var rwPersona = new Persona { Access = PersonaAccess.Full };
-        var result2 = sm.BuildHiggsfieldContext(ownerId, rwPersona);
+        var result2 = builtin.BuildHiggsfieldContext(ownerId, rwPersona);
         result2.Should().NotBeNull(
             "контрпример: Full-персона + живой токен → BuildHiggsfieldContext вернул контекст");
     }

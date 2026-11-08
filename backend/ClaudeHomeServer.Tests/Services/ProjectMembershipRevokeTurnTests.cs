@@ -184,6 +184,65 @@ public class ProjectMembershipRevokeTurnTests : SessionManagerTestBase
     }
 
     /// <summary>
+    /// S3-7d: та же гонка, что в тесте выше, но в приватном чате активен цикл «до готово»:
+    /// при активном цикле drain взводит маркер LoopTurnInFlight вместе с изъятием. Отзыв
+    /// в окне между изятием и стартом идёт через StopChatsOfRevokedMember → InterruptCore,
+    /// который снимает и цикл, и маркер — поэтому внутренний гард DeliverPendingAsync
+    /// («при активном цикле гасим маркер») не срабатывает: до перепроверки доходит уже снятое
+    /// состояние. Фиксируем это здесь — состояние на момент перепроверки и отсутствие
+    /// хода-сироты; consistency-правка (снятие под PendingLock) поведение не меняет.
+    /// </summary>
+    [Fact]
+    public async Task ОтзывВОкнеДоставки_АктивныйЦиклИМаркерСнятыСтопом_ХодСиротаНеПоднят()
+    {
+        var (project, chat) = await SharedProjectWithPrivateChatOfMemberAsync("race-loop");
+        var entry = GetEntry(chat.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        chat.WorkLoop = new SessionWorkLoop { Iteration = 2 };
+        EnqueueUser(entry, "изъято из очереди до отзыва");
+
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _broadcaster.Gate = async msg =>
+        {
+            if (msg is PendingMessagesMessage)
+            {
+                entered.TrySetResult();
+                await release.Task;
+            }
+        };
+        try
+        {
+            var drain = (Task)InvokePrivate("DrainNextPendingAsync", chat.Id)!;
+
+            await WaitForConditionAsync(() => entered.Task.IsCompleted, TimeSpan.FromSeconds(5));
+            entered.Task.IsCompleted.Should().BeTrue("drain не дошёл до окна между изятием и стартом");
+            GetLoopTurnInFlight(entry).Should().BeTrue(
+                "санити: при активном цикле drain взводит маркер вместе с изъятием");
+
+            // Отзыв — ровно в этом окне. Он снимает и цикл, и маркер (TurnProcessHost.InterruptCore):
+            // к моменту перепроверки в DeliverPendingAsync гард «цикл активен» уже ложен —
+            // ветка снятия маркера не выполняется, доходит только общий отказ.
+            (await NewMembershipService().RemoveAsync(TestUserId, project.Id, MemberId)).Ok.Should().BeTrue();
+            ((Session)entry.GetType().GetField("Info")!.GetValue(entry)!).WorkLoop.Should().BeNull(
+                "отзыв снимает цикл синхронно, до продолжения доставки");
+            GetLoopTurnInFlight(entry).Should().BeFalse(
+                "отзыв гасит маркер через InterruptCore: гард при перепроверке не срабатывает");
+
+            release.SetResult(); // отпускаем окно: доставка доходит до перепроверки
+            await drain;
+
+            // Ход-сирота не поднят: в процесс отозванного не ушло ни одного нового сообщения.
+            adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+                It.IsAny<int>(), It.IsAny<bool>()), Times.Never(),
+                "после отзыва стартует ход-сирота в приватном чате отозванного");
+            _sut.GetPending(chat.Id).Should().BeEmpty();
+        }
+        finally { _broadcaster.Gate = null; }
+    }
+
+    /// <summary>
     /// Граница: отзыв одного участника не глушит доставку в приватный чат другого — он остаётся
     /// участником проекта, перепроверка его пропускает. Тот же ход событий, что в тесте гонки,
     /// но целевой чат принадлежит неотозванному: ход стартует, очередь разбирается.

@@ -219,6 +219,7 @@ public static class CoreRegistration
         // Хаб событий между редакторами (ADR-022 §3): «в Картинках/Звуке появилась версия» → «Видео». In-memory,
         // один на инстанс; сами редакторы друг о друге не знают
         services.AddSingleton<ClaudeHomeServer.Services.Media.IMediaEvents, ClaudeHomeServer.Services.Media.MediaEventHub>();
+        services.AddSessionCore();
         services.AddSingleton<SessionManager>();
         // Актор и рамка хода (S2a-1): читает только шов, пишет ядро сессий в двух точках подачи
         services.AddSingleton<ClaudeHomeServer.Services.Access.ITurnActorRegistry>(sp => sp.GetRequiredService<SessionManager>());

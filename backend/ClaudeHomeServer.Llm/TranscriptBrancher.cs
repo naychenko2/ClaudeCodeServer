@@ -50,7 +50,7 @@ public static class TranscriptBrancher
     private const long AnchorLagBackToleranceMs = 5_000;
     private const long AnchorLagForwardWindowMs = 5 * 60_000;
 
-    // Что входит в ветку (зеркало SessionManager.ChatBranchInclude — резак живёт в Llm и
+    // Что входит в ветку (зеркало Sessions.ChatBranchInclude — резак живёт в Llm и
     // ссылаться на Main не может): Turn — якорный ход целиком, BeforePrompt — всё ДО
     // якорного промпта, сам промпт в префикс не входит (его текст уходит черновиком
     // в композер). Без этого параметра резак всегда резал по концу хода, и у beforePrompt

@@ -155,9 +155,12 @@ public sealed class LiveTtsMainTests : IClassFixture<LiveTtsMainTests.Hosts>
         return (await session.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
     }
 
+    // Вызов «от лица чата» (тот же фикс, что у PersonasToolsetVoiceAndLeaderTests): без
+    // X-Caller-Session-Id рамка хода узкая (fail-closed), и personas_update отказывается
+    // NarrowManageText ещё до проверяемой валидации голоса
     private static async Task<JsonElement> RpcAsync(HttpClient client, string sessionId, string method, object? @params)
     {
-        var resp = await client.PostAsJsonAsync($"/mcp/personas/{sessionId}",
+        var resp = await client.AsCaller(sessionId).PostAsJsonAsync($"/mcp/personas/{sessionId}",
             new { jsonrpc = "2.0", id = 1, method, @params });
         resp.EnsureSuccessStatusCode();
         return (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("result");

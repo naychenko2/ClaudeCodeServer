@@ -1,9 +1,11 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Tasks;
@@ -232,7 +234,35 @@ public abstract class SessionManagerTestBase : IDisposable
         // минор 4): using var гасил его в конструкторе, а _sut держит ссылку дольше —
         // пригодность TaskManager после Dispose не документирована.
         _taskStore = new ClaudeHomeServer.Services.Tasks.TaskManager(config);
-        _sut = new SessionManager(_projectManager, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas, bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity, subagentRuns: _subagentRuns, broadcaster: _broadcaster, graphInspector: _graphInspector, tasks: _taskStore);
+        _sut = SessionCoreTestHost.Build(_tempDir, s =>
+        {
+            s.AddSingleton<global::ClaudeHomeServer.Services.ProjectManager>(_projectManager);
+            s.AddSingleton<global::ClaudeHomeServer.Services.ChatHistoryService>(_historyService);
+            s.AddSingleton<global::Microsoft.Extensions.Configuration.IConfiguration>(config);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(adapters);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FalCostService>(falCost);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.UsageService>(_usage);
+            s.AddSingleton<global::ClaudeHomeServer.Services.AppSettingsService>(appSettings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.UserStore>(userStore);
+            s.AddSingleton<global::ClaudeHomeServer.Services.JwtService>(jwt);
+            s.AddSingleton<global::Microsoft.AspNetCore.Hosting.Server.IServer>(server.Object);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.LlmProviderRegistry>(llmProviders);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FeatureFlagService>(flags);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaManager>(personas);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaBindingsService>(bindings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(subPool);
+            s.AddSingleton<global::Microsoft.Extensions.Logging.ILogger<ClaudeHomeServer.Services.SessionManager>>(NullLogger<SessionManager>.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.ILauncherFactory>(TestLauncherFactory.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.SandboxManager>(sandbox);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Git.GitService>(new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance));
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ModelAssignmentResolver>(assignments);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Team.TeamPlanningService>(_teamPlanning);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.SubscriptionActivityTracker>(_activity);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog>(_subagentRuns);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(_broadcaster);
+            s.AddSingleton<global::ClaudeHomeServer.Services.CodeGraph.ICodeGraphInspector>(_graphInspector);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Tasks.TaskManager>(_taskStore);
+        }).Manager;
     }
 
     public void Dispose()
@@ -318,10 +348,28 @@ public abstract class SessionManagerTestBase : IDisposable
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
 
-        return new SessionManager(projectManager, historyService, config, adapters, falCost,
-            usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
-            bindings, subPool, NullLogger<SessionManager>.Instance,
-            TestLauncherFactory.Instance, sandbox, broadcaster: new TestSessionBroadcaster());
+        return SessionCoreTestHost.Build(_tempDir, s =>
+        {
+            s.AddSingleton<global::ClaudeHomeServer.Services.ProjectManager>(projectManager);
+            s.AddSingleton<global::ClaudeHomeServer.Services.ChatHistoryService>(historyService);
+            s.AddSingleton<global::Microsoft.Extensions.Configuration.IConfiguration>(config);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(adapters);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FalCostService>(falCost);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.UsageService>(usage);
+            s.AddSingleton<global::ClaudeHomeServer.Services.AppSettingsService>(appSettings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.UserStore>(userStore);
+            s.AddSingleton<global::ClaudeHomeServer.Services.JwtService>(jwt);
+            s.AddSingleton<global::Microsoft.AspNetCore.Hosting.Server.IServer>(server.Object);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.LlmProviderRegistry>(llmProviders);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FeatureFlagService>(flags);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaManager>(personas);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaBindingsService>(bindings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(subPool);
+            s.AddSingleton<global::Microsoft.Extensions.Logging.ILogger<ClaudeHomeServer.Services.SessionManager>>(NullLogger<SessionManager>.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.ILauncherFactory>(TestLauncherFactory.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.SandboxManager>(sandbox);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(new TestSessionBroadcaster());
+        }).Manager;
     }
 
     // --- Смена провайдера в настройках чата: правило «есть ли что переносить» ---
@@ -394,10 +442,28 @@ public abstract class SessionManagerTestBase : IDisposable
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
 
-        return new SessionManager(projectManager, historyService, config, adapters, falCost,
-            usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
-            bindings, subPool, NullLogger<SessionManager>.Instance,
-            TestLauncherFactory.Instance, sandbox, broadcaster: new TestSessionBroadcaster());
+        return SessionCoreTestHost.Build(_tempDir, s =>
+        {
+            s.AddSingleton<global::ClaudeHomeServer.Services.ProjectManager>(projectManager);
+            s.AddSingleton<global::ClaudeHomeServer.Services.ChatHistoryService>(historyService);
+            s.AddSingleton<global::Microsoft.Extensions.Configuration.IConfiguration>(config);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(adapters);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FalCostService>(falCost);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.UsageService>(usage);
+            s.AddSingleton<global::ClaudeHomeServer.Services.AppSettingsService>(appSettings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.UserStore>(userStore);
+            s.AddSingleton<global::ClaudeHomeServer.Services.JwtService>(jwt);
+            s.AddSingleton<global::Microsoft.AspNetCore.Hosting.Server.IServer>(server.Object);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.LlmProviderRegistry>(llmProviders);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FeatureFlagService>(flags);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaManager>(personas);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaBindingsService>(bindings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(subPool);
+            s.AddSingleton<global::Microsoft.Extensions.Logging.ILogger<ClaudeHomeServer.Services.SessionManager>>(NullLogger<SessionManager>.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.ILauncherFactory>(TestLauncherFactory.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.SandboxManager>(sandbox);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(new TestSessionBroadcaster());
+        }).Manager;
     }
 
     // --- Очередь сообщений занятой сессии (chats_send в идущий ход) ---
@@ -530,8 +596,8 @@ public abstract class SessionManagerTestBase : IDisposable
     protected static void EnqueueUser(object entry, string text)
     {
         var pending = (System.Collections.IList)entry.GetType().GetField("Pending")!.GetValue(entry)!;
-        pending.Add(new SessionManager.QueuedMessage(Guid.NewGuid().ToString("N"), text, null, null,
-            0, DateTime.UtcNow, Kind: SessionManager.PendingKind.User));
+        pending.Add(new QueuedMessage(Guid.NewGuid().ToString("N"), text, null, null,
+            0, DateTime.UtcNow, Kind: PendingKind.User));
     }
 
     // Агентское сообщение напрямую в очередь — для сценариев drain (доклады персон ждут
@@ -539,8 +605,8 @@ public abstract class SessionManagerTestBase : IDisposable
     protected static void EnqueueAgent(object entry, string text)
     {
         var pending = (System.Collections.IList)entry.GetType().GetField("Pending")!.GetValue(entry)!;
-        pending.Add(new SessionManager.QueuedMessage(Guid.NewGuid().ToString("N"), text, null, null,
-            0, DateTime.UtcNow, Kind: SessionManager.PendingKind.Agent));
+        pending.Add(new QueuedMessage(Guid.NewGuid().ToString("N"), text, null, null,
+            0, DateTime.UtcNow, Kind: PendingKind.Agent));
     }
 
     // --- Цикл «до готово»: явная остановка в ленту (B3/B5/B6 — ContinueWorkLoopAsync
@@ -668,9 +734,10 @@ public abstract class SessionManagerTestBase : IDisposable
         return ok;
     }
 
-    // Опубликовать TurnCompleted через шину того же SessionManager. В тестах шина создаётся
-    // лениво в SessionManager (TurnEvents), подписчик HandleTeamTurnCompletedShim уже
-    // зарегистрирован в конструкторе — публикация сразу идёт в него.
+    // Опубликовать TurnCompleted через шину того же SessionManager. С S3-8c шина — синглтон
+    // тестового контейнера, тот же, что фасад получил параметром (поле-шов _turnEvents);
+    // подписчик HandleTeamTurnCompletedShim уже зарегистрирован в конструкторе — публикация
+    // сразу идёт в него.
     protected static async Task PublishTurnCompletedAsync(
         SessionManager sut, string sessionId, int turnSeq, string outcome, string? errorClass = null)
     {
@@ -929,7 +996,7 @@ public abstract class SessionManagerTestBase : IDisposable
     // не воспроизводит окно TOCTOU — все точки входа гейтят по статусу ДО EnqueuePendingAsync).
     protected object GetEntry(string sessionId)
     {
-        var field = typeof(SessionManager).GetField("_sessions",
+        var field = typeof(SessionManager).GetProperty("_sessions",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         var sessions = (System.Collections.IDictionary)field.GetValue(_sut)!;
         return sessions[sessionId]!;
@@ -975,7 +1042,7 @@ public abstract class SessionManagerTestBase : IDisposable
             sessionId, entry, text,
             /*senderPersonaId*/ null, /*senderOrigin*/ null, /*agentDepth*/ 0,
             /*silent*/ false, /*suppressTasksExecute*/ false, /*senderChatName*/ null,
-            SessionManager.PendingKind.Agent, /*attachedPaths*/ null, /*mode*/ null,
+            PendingKind.Agent, /*attachedPaths*/ null, /*mode*/ null,
             /*staffNote*/ null, /*senderUserId*/ null
         ])!;
         await task;
@@ -1199,7 +1266,7 @@ public abstract class SessionManagerTestBase : IDisposable
 
     protected static object GetEntryOf(SessionManager manager, string sessionId)
     {
-        var field = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var field = typeof(SessionManager).GetProperty("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
         return ((System.Collections.IDictionary)field.GetValue(manager)!)[sessionId]!;
     }
 
@@ -1297,11 +1364,34 @@ public abstract class SessionManagerTestBase : IDisposable
 
     // --- Per-persona рубильники MCP-серверов (Off-привязка type: tool, target: <ключ>) ---
 
+    // S3-3: часть приватных методов ядра живёт в ролях Services/Sessions (в фасаде остаются
+    // публичные обёртки). Белый тест зовёт метод и подменяет поле там, где оно объявлено, —
+    // поэтому владелец ищется среди фасада и его полей-ролей (тип из ClaudeHomeServer.Services.Sessions).
+    protected object OwnerOf(string name)
+    {
+        foreach (var target in CoreObjects())
+            if (target.GetType().GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance) is not null)
+                return target;
+        throw new MissingMethodException(typeof(SessionManager).FullName, name);
+    }
+
+    protected void SetPrivateField(object target, string name, object value) =>
+        target.GetType().GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(target, value);
+
+    private IEnumerable<object> CoreObjects()
+    {
+        yield return _sut;
+        foreach (var f in typeof(SessionManager).GetFields(BindingFlags.NonPublic | BindingFlags.Instance))
+        {
+            if (f.FieldType.Namespace != "ClaudeHomeServer.Services.Sessions") continue;
+            if (f.GetValue(_sut) is { } role) yield return role;
+        }
+    }
+
     protected object? InvokePrivate(string name, params object?[] args)
     {
-        var method = typeof(SessionManager).GetMethod(name,
-            BindingFlags.NonPublic | BindingFlags.Instance)!;
-        return method.Invoke(_sut, args);
+        var owner = OwnerOf(name);
+        return owner.GetType().GetMethod(name, BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(owner, args);
     }
 
     // Персона проекта + Off-привязки на перечисленные ключи (пусто — дефолтная персона)

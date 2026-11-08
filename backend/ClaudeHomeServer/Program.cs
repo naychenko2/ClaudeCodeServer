@@ -105,6 +105,14 @@ else
         $"{subsystemsPath} не подключён источником конфигурации: {subsystemsLoadError} " +
         "Тумблеры панелей на этот запуск не применены — состав подсистем по умолчанию.");
 
+// `llm` — неотключаемая подсистема: ядро сессий зависит от LlmProviderRegistry обязательно
+// (ADR-014, «Неотключаемые подсистемы»). Вызов остаётся здесь, до регистраций и до побочных
+// эффектов старта (чанка процессов-сирот, загрузка модулей): иначе старт падал бы глубже и
+// с чужим текстом — «No service for type 'LlmProviderRegistry' has been registered», по нему
+// причину приходится раскапывать заново. Тело проверки — в NonDisablableSubsystems.EnsureLlmEnabled:
+// туда оно вынесено ради юнит-теста, который может вызвать саму проверку (сюда — нет).
+NonDisablableSubsystems.EnsureLlmEnabled(builder.Configuration);
+
 // Таймстемп в консольном логе (I11): обёртка Console.Out/Error добавляет UTC-время в начало
 // каждой строки — и для ILogger, и для голых Console.WriteLine. Здесь, чтобы Local.json тоже
 // мог переопределить формат. Ключ Diagnostics:ConsoleTimestampFormat — НЕ под Logging:Console:
@@ -229,12 +237,12 @@ builder.Services.AddResponseCompression(o =>
     // `[assembly: ApplicationPart("...")]` — MSBuild дописывает его в сгенерированный
     // `obj/*/ClaudeHomeServer.MvcApplicationPartsAssemblyInfo.cs` ссылочного проекта
     // Main, и `ApplicationPartManager.PopulateDefaultParts` добавляет их к составу
-    // MVC. Из-за этого выключение вертикали гейтом `Subsystems:Notes:Enabled=false`
-    // не изолирует её контроллеры: роутер находит action и пытается активировать
-    // `NotesController` без зависимостей → ProblemDetails 500 на каждый запрос к
-    // `/api/notes/*` (задача 4defaacc, QA-прогон 2026-09-10).
+    // MVC. Из-за этого гейт сам по себе маршрутов не снимает: у обычной ProjectReference-
+    // вертикали часть остаётся подключённой, и отказ даёт сам контроллер — честный 503
+    // с причиной (например PluginsController). В пилоте (Notes, до fa922fe7c) контроллер
+    // гейт не проверял: активация падала на отсутствующих зависимостях → ProblemDetails
+    // 500 на каждый запрос к `/api/notes/*` (задача 4defaacc, QA-прогон 2026-09-10).
     //
-    // Убираем часть здесь, в композиции Main — единая точка для всех вертикалей.
     // Notes — теперь динамический модуль (сценарий Б): ApplicationPart добавляется
     // ModuleLoader'ом по пути из DynamicModules-конфига (см. ниже), а не автоматически
     // через ProjectReference. Старый gate по имени сборки ("ClaudeHomeServer.Notes") удалён.
@@ -311,8 +319,10 @@ using (var dynamicModuleLogFactory = LoggerFactory.Create(logging => logging
 
 // Статические вертикали: их `[assembly: ApplicationPart("...")]` MSBuild дописывает
 // автоматически (см. блок выше). Гейт `Subsystems:{key}:Enabled` снимает DI-регистрацию
-// (Register не вызывается), но ApplicationPart остаётся в MVC-частях → роутер находит
-// контроллер, пытается его активировать без зависимостей → 500 вместо 404.
+// (Register не вызывается), но ApplicationPart остаётся в MVC-частях: маршруты на месте,
+// и отказ даёт сам контроллер, держущий гейт, — честный 503 с причиной
+// (сейчас — PluginsController; 500 на активации без зависимостей был состоянием
+// до nullable-волны, см. блок выше). У вертикали без контроллера HTTP-маршрутов нет вовсе.
 // Notes и Spend — динамические модули (сценарий Б): ApplicationPart подключает
 // ModuleLoader (выше), а не MSBuild-атрибут — M1-костыль (ручное снятие части
 // ClaudeHomeServer.Spend) снят после перехода на ReferenceOutputAssembly="false".
@@ -1469,15 +1479,16 @@ app.MapHub<TerminalHub>("/hubs/terminal");
 // push команды в конкретное соединение. Схема авторизации — токен устройства, а не общий JWT
 app.MapHub<ClaudeHomeServer.Services.Devices.DeviceHub>("/hubs/devices");
 // Шлюз LLM локальных проектов (ADR-016): авторизация — токен хода, а не JWT; выключен
-// тумблером LlmGateway:Enabled (404). llm — строка ядра (CanDisable=false в LlmSubsystem):
-// панель её не трогает, но ручной гейт в конфиге по-прежнему не регистрирует вертикаль —
-// маппим только при её сервисах.
+// тумблером LlmGateway:Enabled (404). llm — неотключаемая строка ядра (CanDisable=false в
+// LlmSubsystem): панель её не трогает (PUT отдаёт 400 core_subsystem), а ручной
+// Subsystems:llm:Enabled=false в конфиге роняет старт явным отказом (EnsureLlmEnabled,
+// ADR-014 §5). Проверка наличия сервисов — страховка на случай нештатной сборки хоста.
 if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.UpstreamSelector>() is not null)
     ClaudeHomeServer.Services.Llm.Gateway.LlmGatewayEndpoints.MapLlmGateway(app);
 
 // Шлюз MCP для хода на устройстве (ADR-016): вход по токену хода, а не по JWT.
-// llm — строка ядра (CanDisable=false): без её сервисов нет и токенов хода; GetService —
-// на случай ручного Subsystems:llm:Enabled=false в конфиге (панель такой тумблер не пишет).
+// llm — неотключаемая строка ядра (CanDisable=false): конфиг её не выключает (старт падает
+// с явным отказом, ADR-014 §5), панель тумблер не пишет; GetService — лишь страховка.
 if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.TurnTokenService>() is not null)
 {
     ClaudeHomeServer.Services.Llm.Gateway.McpGatewayEndpoints.MapMcpGateway(app);
@@ -1500,8 +1511,8 @@ app.MapDeviceExecChannel();
 var shutdownSessions = app.Services.GetRequiredService<SessionManager>();
 // Токен хода (ADR-016): резолв здесь создаёт экземпляр, а с ним — подписку на
 // turn/completed; удаление чата отзывает его токены явно (ход мог и не начаться).
-// GetService: панель тумблер не пишет (llm — строка ядра, CanDisable=false), но ручной
-// Subsystems:llm:Enabled=false в конфиге её сервисов не регистрирует.
+// GetService — страховка: llm неотключаема (CanDisable=false, панель тумблер не пишет, а
+// ручной Subsystems:llm:Enabled=false в конфиге роняет старт явным отказом, ADR-014 §5).
 if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.TurnTokenService>() is { } turnTokens)
     shutdownSessions.OnSessionDeleted += s => turnTokens.RevokeSession(s.Id);
 var shutdownTerminals = app.Services.GetRequiredService<TerminalService>();

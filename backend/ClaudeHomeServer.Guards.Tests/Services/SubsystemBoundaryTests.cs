@@ -756,8 +756,8 @@ public class SubsystemBoundaryTests
                     // Точечные допуски к корню `Services.*` — «вертикаль → спинка» (по образцу Skills):
                     // PersonaManager/ProjectManager/TaskExecutionService/NotificationService —
                     // параметры конструкторов TeamWaveService; SessionManager — там же,
-                    // для получения session id и публикации событий штаба; nested ReportUpResult
-                    // (enum, объявленный внутри SessionManager) — сигнал пробуждения штаба,
+                    // для получения session id и публикации событий штаба; ReportUpResult
+                    // (enum контракта ядра сессий Services.Sessions, прежде вложенный в SessionManager) — сигнал пробуждения штаба,
                     // возвращается из SessionManager.ReportUpAsync, который TeamTurnCompletionService
                     // зовёт при пробуждении через ReportBlockerAsync.
                     "ClaudeHomeServer.Services.PersonaManager",
@@ -765,7 +765,7 @@ public class SubsystemBoundaryTests
                     "ClaudeHomeServer.Services.TaskExecutionService",
                     "ClaudeHomeServer.Services.NotificationService",
                     "ClaudeHomeServer.Services.SessionManager",
-                    "ClaudeHomeServer.Services.SessionManager+ReportUpResult",
+                    "ClaudeHomeServer.Services.Sessions.ReportUpResult",
                     // `TeamPlanningService.cs:146` материализует `SpecialtyCatalog`
                     // (статический класс из корня) в async-state. По прецеденту Llm
                     // (тоже `SpecialtyCatalog`) — фиксируем шов явно, иначе IL-скан

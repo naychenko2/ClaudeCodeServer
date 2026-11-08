@@ -160,20 +160,39 @@ public sealed class ChatVisibilityEndpointTests : IDisposable
             knowledge, new SkillsService(), userStore, _config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(_config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
-        return new SessionManager(_projects, _history, _config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas, bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, new TestSessionBroadcaster(),
-            services: AccessProvider());
+        return SessionCoreTestHost.Build(_tempDir, s =>
+        {
+            s.AddSingleton<global::ClaudeHomeServer.Services.ProjectManager>(_projects);
+            s.AddSingleton<global::ClaudeHomeServer.Services.ChatHistoryService>(_history);
+            s.AddSingleton<global::Microsoft.Extensions.Configuration.IConfiguration>(_config);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(adapters);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FalCostService>(falCost);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.UsageService>(usage);
+            s.AddSingleton<global::ClaudeHomeServer.Services.AppSettingsService>(appSettings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.UserStore>(userStore);
+            s.AddSingleton<global::ClaudeHomeServer.Services.JwtService>(jwt);
+            s.AddSingleton<global::Microsoft.AspNetCore.Hosting.Server.IServer>(server.Object);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.LlmProviderRegistry>(llmProviders);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FeatureFlagService>(flags);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaManager>(personas);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaBindingsService>(bindings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(subPool);
+            s.AddSingleton<global::Microsoft.Extensions.Logging.ILogger<ClaudeHomeServer.Services.SessionManager>>(NullLogger<SessionManager>.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.ILauncherFactory>(TestLauncherFactory.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.SandboxManager>(sandbox);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(new TestSessionBroadcaster());
+            AddAccess(s);
+        }).Manager;
     }
 
     // Корень DI с настоящей точкой доступа (тот же ленивый шов, что в проде: прямая зависимость
     // замкнула бы цикл ProjectAccessService → ISessionDirectory → SessionManager). Лямбда
     // читает _sessions позже — к первому GetService он уже собран.
-    private ServiceProvider AccessProvider()
+    private void AddAccess(IServiceCollection services)
     {
-        var services = new ServiceCollection();
         services.AddSingleton<IProjectAccess>(_ => new ProjectAccessService(
             _projects, _sessions, new SharedProjectsGate(_config, new FeatureFlagService(_users))));
         services.AddSingleton<IFeatureChatLinks, NoFeatureChatLinks>();
-        return services.BuildServiceProvider();
     }
 
     private ChatsController ChatsAs(string userId) =>

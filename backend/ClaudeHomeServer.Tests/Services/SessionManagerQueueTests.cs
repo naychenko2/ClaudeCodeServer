@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Tasks;
@@ -139,10 +140,15 @@ public class SessionManagerQueueTests : SessionManagerTestBase
     [Fact]
     public async Task InterruptTurn_Штабом_ОтметкуНеПишет()
     {
-        // Штаб снимает исполнителя той же механикой, но это не «Стоп» человека
+        // Штаб снимает исполнителя той же механикой, но это не «Стоп» человека.
+        // С S3-7 штабной шов держит ядро приёма (карта §3): тест зовёт его через поле
+        // фасада — тот же экземляр, что получают вертикальные сервисы.
         var (session, adapter) = await MkRunningTurnAsync("staff-stop");
 
-        ((ITeamTurnIntake)_sut).InterruptTurn(session.Id);
+        var intake = (ITeamTurnIntake)typeof(SessionManager)
+            .GetField("_intake", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(_sut)!;
+        intake.InterruptTurn(session.Id);
 
         adapter.Verify(a => a.Interrupt(), Times.Once());
         (await _sut.GetHistoryAsync(session.Id)).OfType<StoredInterruptedMessage>().Should().BeEmpty();
@@ -222,11 +228,11 @@ public class SessionManagerQueueTests : SessionManagerTestBase
         var (session, _) = await MkRunningTurnAsync("preempt-send-" + fromHub, SessionStatus.Waiting);
 
         var outcome = fromHub
-            ? await _sut.SendMessageAsync(session.Id, "не спрашивай, делай", [], cause: SessionManager.DeliveryCause.User)
+            ? await _sut.SendMessageAsync(session.Id, "не спрашивай, делай", [], cause: DeliveryCause.User)
             // Отправка не из хаба (cause не User) — живая лента чужого клиента отметки не ставит
             : await _sut.SendMessageAsync(session.Id, "директива", []);
 
-        outcome.Should().Be(SessionManager.SendUserOutcome.QueuedPreempted);
+        outcome.Should().Be(SendUserOutcome.QueuedPreempted);
         (await _sut.GetHistoryAsync(session.Id)).OfType<StoredInterruptedMessage>()
             .Should().HaveCount(fromHub ? 1 : 0);
     }
@@ -718,6 +724,37 @@ public class SessionManagerQueueTests : SessionManagerTestBase
     }
 
     [Fact]
+    public async Task SendOrEnqueue_ДваОдновременныхОднойСессии_ОдинХодИВторойВОчереди()
+    {
+        // Конкурентность приёма хода (S3-7): второй вызов в чат, где первый уже начал ход,
+        // обязан встать в очередь, а не запустить второй ход в тот же процесс. Порядок здесь
+        // не гонка: в тестовой сборке весь путь первого вызова до смены статуса идёт без
+        // реальных await (подставной процесс, тестовый broadcaster), поэтому Working стоит
+        // до старта второго вызова — и второй видит занятый чат.
+        var session = await MkBusySessionAsync("conc-two", SessionStatus.Active);
+        session.Name = "есть имя";
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        var first = _sut.SendOrEnqueueAsync(session.Id, "первый ход");
+        var second = _sut.SendOrEnqueueAsync(session.Id, "второй ход");
+        var results = await Task.WhenAll(first, second);
+
+        results[0].Should().BeFalse("свободный чат — первый ход идёт напрямую");
+        results[1].Should().BeTrue("чат занят — второй вызов встаёт в очередь, а не начинает ход");
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("первый ход")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("второй ход")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never()); // «второй ход» в процесс не идёт
+        var queued = _sut.GetPending(session.Id).Should().ContainSingle().Subject;
+        queued.Text.Should().Be("второй ход");
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Working);
+    }
+
+    [Fact]
     public async Task GetVisiblePending_ОбычноеСообщение_Видно()
     {
         var session = await MkBusySessionAsync("visible");
@@ -745,11 +782,11 @@ public class SessionManagerQueueTests : SessionManagerTestBase
         // Working — ход доживает сам (Queued); Waiting — он ждёт человека и не закончится
         // никогда, поэтому прерывается ради доставки (QueuedPreempted)
         outcome.Should().Be(status == SessionStatus.Waiting
-            ? SessionManager.SendUserOutcome.QueuedPreempted
-            : SessionManager.SendUserOutcome.Queued);
+            ? SendUserOutcome.QueuedPreempted
+            : SendUserOutcome.Queued);
         var queued = _sut.GetPending(session.Id).Should().ContainSingle().Subject;
         queued.Text.Should().Be("подожди меня");
-        queued.Kind.Should().Be(SessionManager.PendingKind.User);
+        queued.Kind.Should().Be(PendingKind.User);
         queued.AttachedPaths.Should().BeEquivalentTo(["a.txt", "b.txt"]);
         queued.Mode.Should().Be("plan");
         // В видимом снимке пользовательское тоже отражается (карточка-призрак)
@@ -911,7 +948,7 @@ public class SessionManagerQueueTests : SessionManagerTestBase
 
         var outcome = await _sut.SendMessageAsync(session.Id, "срочное", []);
 
-        outcome.Should().Be(SessionManager.SendUserOutcome.Queued);
+        outcome.Should().Be(SendUserOutcome.Queued);
         adapter.Verify(a => a.Interrupt(), Times.Never());
         _sut.GetPending(session.Id).Should().ContainSingle().Which.Text.Should().Be("срочное");
 
@@ -941,7 +978,7 @@ public class SessionManagerQueueTests : SessionManagerTestBase
         var outcome = await _sut.SendMessageAsync(session.Id, "не спрашивай, делай", []);
 
         // Клиенту важно отличить это от аварии: убитый ход пришлёт голый exited
-        outcome.Should().Be(SessionManager.SendUserOutcome.QueuedPreempted);
+        outcome.Should().Be(SendUserOutcome.QueuedPreempted);
         adapter.Verify(a => a.Interrupt(), Times.Once());
 
         await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
@@ -1166,13 +1203,13 @@ public class SessionManagerQueueTests : SessionManagerTestBase
 
         var outcome = await _sut.SendMessageAsync(session.Id, "вмешаться в цикл", []);
 
-        outcome.Should().Be(SessionManager.SendUserOutcome.QueuedPreempted);
+        outcome.Should().Be(SendUserOutcome.QueuedPreempted);
         _sut.GetById(session.Id)!.WorkLoop.Should().NotBeNull("сообщение пользователя не снимает цикл");
         Sent<WorkLoopMessage>().Should().NotContain(m => !m.Active,
             "выключение цикла не рассылается — цикл остаётся активным");
         adapter.Verify(a => a.Interrupt(), Times.Once());
         _sut.GetPending(session.Id).Should().ContainSingle()
-            .Which.Kind.Should().Be(SessionManager.PendingKind.User);
+            .Which.Kind.Should().Be(PendingKind.User);
     }
 
     [Fact]
@@ -1190,7 +1227,7 @@ public class SessionManagerQueueTests : SessionManagerTestBase
 
         var outcome = await _sut.SendMessageAsync(session.Id, "вмешаться между итерациями", []);
 
-        outcome.Should().Be(SessionManager.SendUserOutcome.Queued);
+        outcome.Should().Be(SendUserOutcome.Queued);
         _sut.GetById(session.Id)!.WorkLoop.Should().NotBeNull("цикл продолжается");
         adapter.Verify(a => a.Interrupt(), Times.Never());
         await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
@@ -1226,8 +1263,8 @@ public class SessionManagerQueueTests : SessionManagerTestBase
         SetProcess(entry, adapter.Object);
 
         // Агентское сообщение глубины 1 — как chats_send из другого чата
-        var next = new SessionManager.QueuedMessage(Guid.NewGuid().ToString("N"), "сообщение глубины 1",
-            null, null, 1, DateTime.UtcNow, Kind: SessionManager.PendingKind.Agent);
+        var next = new QueuedMessage(Guid.NewGuid().ToString("N"), "сообщение глубины 1",
+            null, null, 1, DateTime.UtcNow, Kind: PendingKind.Agent);
 
         var method = typeof(SessionManager).GetMethod("DeliverPendingAsync",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
@@ -1554,7 +1591,7 @@ public class SessionManagerQueueTests : SessionManagerTestBase
 
         await _sut.SendOrEnqueueAsync(session.Id, "доклад исполнителя", senderPersonaId: "exec-1",
             silent: true, suppressTasksExecute: true, staffNote: "служебная заметка",
-            kind: SessionManager.PendingKind.Report);
+            kind: PendingKind.Report);
         await _sut.SendMessageAsync(session.Id, "вопрос человека", []);
 
         File.Exists(PendingFilePath(session.Id)).Should().BeTrue("очередь записана на диск при постановке");
@@ -1563,19 +1600,19 @@ public class SessionManagerQueueTests : SessionManagerTestBase
         var restored = restarted.GetPending(session.Id);
 
         restored.Select(m => m.Text).Should().Equal("доклад исполнителя", "вопрос человека");
-        restored[0].Kind.Should().Be(SessionManager.PendingKind.Report);
+        restored[0].Kind.Should().Be(PendingKind.Report);
         restored[0].StaffNote.Should().Be("служебная заметка");
         restored[0].Silent.Should().BeTrue();
         restored[0].SuppressTasksExecute.Should().BeTrue();
         restored[0].SenderPersonaId.Should().Be("exec-1");
-        restored[1].Kind.Should().Be(SessionManager.PendingKind.User);
+        restored[1].Kind.Should().Be(PendingKind.User);
     }
 
     [Fact]
     public async Task Pending_ОчередьРазобрана_ФайлУдалён()
     {
         var session = await MkBusySessionAsync("persist-empty");
-        await _sut.SendOrEnqueueAsync(session.Id, "доклад", kind: SessionManager.PendingKind.Report);
+        await _sut.SendOrEnqueueAsync(session.Id, "доклад", kind: PendingKind.Report);
         File.Exists(PendingFilePath(session.Id)).Should().BeTrue();
 
         var entry = GetEntry(session.Id);
@@ -1590,7 +1627,7 @@ public class SessionManagerQueueTests : SessionManagerTestBase
     public async Task Pending_АвтодренажНаСтарте_ЧатБезХодаПолучаетСообщение()
     {
         var session = await MkBusySessionAsync("persist-drain");
-        await _sut.SendOrEnqueueAsync(session.Id, "доклад до рестарта", kind: SessionManager.PendingKind.Report);
+        await _sut.SendOrEnqueueAsync(session.Id, "доклад до рестарта", kind: PendingKind.Report);
 
         var restarted = BuildSecondManager();
         var entry = GetEntryOf(restarted, session.Id);
@@ -1612,7 +1649,7 @@ public class SessionManagerQueueTests : SessionManagerTestBase
         var session = await MkBusySessionAsync("persist-frozen");
         var entry = GetEntry(session.Id);
         SetProcess(entry, StubAdapter(entry).Object);
-        await _sut.SendOrEnqueueAsync(session.Id, "ждёт возобновления", kind: SessionManager.PendingKind.Report);
+        await _sut.SendOrEnqueueAsync(session.Id, "ждёт возобновления", kind: PendingKind.Report);
 
         _sut.Interrupt(session.Id); // «Стоп» замораживает очередь
         await WaitForComposerRestoresAsync(1);
@@ -1635,8 +1672,8 @@ public class SessionManagerQueueTests : SessionManagerTestBase
     public async Task Pending_СтаршеСуток_НеОживляетсяАВИсторииПлашкаНеДоставлено()
     {
         var session = await MkBusySessionAsync("persist-expired");
-        var old = new SessionManager.QueuedMessage(Guid.NewGuid().ToString("N"), "недельной давности", null, null,
-            0, DateTime.UtcNow - TimeSpan.FromDays(7), Kind: SessionManager.PendingKind.Report);
+        var old = new QueuedMessage(Guid.NewGuid().ToString("N"), "недельной давности", null, null,
+            0, DateTime.UtcNow - TimeSpan.FromDays(7), Kind: PendingKind.Report);
         _historyService.SavePending(session.Id, new PendingQueueFile(false, [old]));
 
         var restarted = BuildSecondManager();

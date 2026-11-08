@@ -10,12 +10,13 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // Obsidian-совместимая база заметок, per-owner (изоляция как у задач — по claim sub).
 //
 // Контроллер живёт в вынесенной вертикали `ClaudeHomeServer.Notes` (Этап 5,
-// волна 2). Сборка подключается к MVC атрибутом `[assembly: ApplicationPart("...")]`
-// (генерируется MSBuild благодаря Web SDK у Notes.csproj). Гейт вертикали
-// `Subsystems:Notes:Enabled` снимает эту часть в композиции Main
-// (`ConfigureApplicationPartManager` в Program.cs) — при `Enabled=false` MVC не
-// находит action и маршруты `/api/notes/*` отдают общий 404, никаких обращений
-// к сервисам вертикали не происходит.
+// волна 2). Это динамический модуль: Main не ссылается на сборку на компиляции
+// (`ReferenceOutputAssembly="false"` в Main.csproj), и её часть в MVC не добавляется
+// вовсе — ModuleLoader подключает ApplicationPart только загруженному модулю
+// (Program.cs, реестр DynamicModules). Гейт `Subsystems:Notes:Enabled` закрыт —
+// ModuleLoader не загружает dll и не регистрирует сервисы: MVC не находит action,
+// маршруты `/api/notes/*` отдают общий 404 (из неполучастия части), никаких
+// обращений к сервисам вертикали не происходит.
 //
 // Шов `INotesHubNotifier` (Core) заменил `IHubContext<SessionHub>` (Main):
 // реализация в Main (`NotesHubNotifier` поверх `ISessionBroadcaster`)

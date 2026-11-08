@@ -3,6 +3,7 @@ using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Services;
 

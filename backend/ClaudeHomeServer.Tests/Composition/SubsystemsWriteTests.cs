@@ -171,6 +171,7 @@ public class SubsystemsWriteTests(SubsystemsWriteTests.Hosts hosts) : IClassFixt
     [InlineData("core:sessions")]
     [InlineData("git")]
     [InlineData("tasks")]
+    [InlineData("llm")]
     public async Task Put_ЯдроИНеотключаемое_400CoreSubsystem(string key)
     {
         var client = _hosts.CreateAuthenticatedClient();

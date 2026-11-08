@@ -73,7 +73,7 @@ public class WorkspaceHttpChatArchiveTests : IClassFixture<TestWebApplicationFac
     // смотрит на живой прогон, а не на Status
     private void SetBusyAdapter(string sessionId)
     {
-        var field = typeof(SessionManager).GetField("_sessions",
+        var field = typeof(SessionManager).GetProperty("_sessions",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         var map = (System.Collections.IDictionary)field.GetValue(Sessions)!;
         var entry = map[sessionId]!;

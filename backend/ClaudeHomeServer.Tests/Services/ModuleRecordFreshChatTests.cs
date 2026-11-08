@@ -51,7 +51,7 @@ public class ModuleRecordFreshChatTests : IDisposable
     // Живой аккумулятор чата — приватное состояние ядра; рестарт сервера его обнуляет
     private object Entry(string sessionId)
     {
-        var field = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var field = typeof(SessionManager).GetProperty("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
         return ((IDictionary)field.GetValue(Sessions)!)[sessionId]!;
     }
 

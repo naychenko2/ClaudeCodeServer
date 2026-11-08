@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -232,7 +233,7 @@ public class HiggsfieldFailureClassRegressionTests : IDisposable
                 ["ClaudeUserProfileDir"] = Path.Combine(_dir, "claude-profile"),
             }).Build();
 
-        var sessionManager = BuildSessionManager(config, out var projectManager);
+        (var sessionManager, var projectManager) = BuildSessionManager(config);
         var projectDir = Directory.CreateDirectory(
             Path.Combine(_dir, "proj-" + Guid.NewGuid().ToString("N")[..8])).FullName;
         var project = projectManager.Create("higgsfield-failclass", projectDir,
@@ -277,11 +278,13 @@ public class HiggsfieldFailureClassRegressionTests : IDisposable
     private McpToolCallContext AnyValidContext() =>
         new(TestUserId, CallerSessionId: null, RouteTail: _realSession.Id);
 
-    private static SessionManager BuildSessionManager(IConfiguration config, out ProjectManager projectManager)
+    // Возврат кортежем, а не `out`-параметром: `out` нельзя захватить в лямбде сборки
+    // ниже (CS1628) — из-за этого здесь жил алиас `var projects = projectManager` (снят).
+    private static (SessionManager, ProjectManager) BuildSessionManager(IConfiguration config)
     {
         var userStore = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var appSettings = new AppSettingsService(config);
-        projectManager = new ProjectManager(config, userStore, appSettings);
+        var projectManager = new ProjectManager(config, userStore, appSettings);
         var history = new ChatHistoryService(config);
 
         var broadcaster = new TestSessionBroadcaster();
@@ -308,10 +311,29 @@ public class HiggsfieldFailureClassRegressionTests : IDisposable
             notes: notesSvc, notesKb: notesKb);
         var sandbox = new SandboxManager(config, NullLogger<SandboxManager>.Instance);
 
-        return new SessionManager(projectManager, history, config, adapters, falCost,
-            usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
-            bindings, subPool, NullLogger<SessionManager>.Instance,
-            TestLauncherFactory.Instance, sandbox, broadcaster);
+        var sessionManager = SessionCoreTestHost.Build(Path.GetDirectoryName(config["DataPath"])!, s =>
+        {
+            s.AddSingleton<global::ClaudeHomeServer.Services.ProjectManager>(projectManager);
+            s.AddSingleton<global::ClaudeHomeServer.Services.ChatHistoryService>(history);
+            s.AddSingleton<global::Microsoft.Extensions.Configuration.IConfiguration>(config);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(adapters);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FalCostService>(falCost);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.UsageService>(usage);
+            s.AddSingleton<global::ClaudeHomeServer.Services.AppSettingsService>(appSettings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.UserStore>(userStore);
+            s.AddSingleton<global::ClaudeHomeServer.Services.JwtService>(jwt);
+            s.AddSingleton<global::Microsoft.AspNetCore.Hosting.Server.IServer>(server.Object);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.LlmProviderRegistry>(llmProviders);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FeatureFlagService>(flags);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaManager>(personas);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaBindingsService>(bindings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(subPool);
+            s.AddSingleton<global::Microsoft.Extensions.Logging.ILogger<ClaudeHomeServer.Services.SessionManager>>(NullLogger<SessionManager>.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.ILauncherFactory>(TestLauncherFactory.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.SandboxManager>(sandbox);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(broadcaster);
+        }).Manager;
+        return (sessionManager, projectManager);
     }
 
     private static void SetPrivate(object target, string fieldName, object value)

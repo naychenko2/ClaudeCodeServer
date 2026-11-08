@@ -22,24 +22,27 @@ namespace ClaudeHomeServer.Controllers;
 // Roles="admin" не ослабил бы доступ.
 //
 // Зависимости — только через интерфейсы вертикали Llm (ILocalModelStatsReader, IGpuSampler).
-// Подсистема Llm может быть отключена (Subsystems:llm:Enabled=false) — тогда
-// зависимости необязательны (GetService → null) и ответ {configured:false, status:notConnected}
-// (200, а не 500). Внутренние типы Llm наружу не отдаём: DTO — отдельные записи ниже.
+// `?` на них — остаток эпохи отключаемой llm, а не контракт: подсистема llm неотключаема
+// (ADR-014 §5), её Register ставит все эти сервисы безусловно (LlmSubsystem.cs:296, 486-511),
+// поэтому GetService → null и ответ {configured:false, status:notConnected} на рантайме
+// не достижимы. Внутренние типы Llm наружу не отдаём: DTO — отдельные записи ниже.
 [ApiController]
 [Route("api/local-model")]
 public class LocalModelStatsController(IServiceProvider services, IOptions<LocalModelStatsMediaOptions> mediaOptions) : ControllerBase
 {
-    // Llm-зависимости необязательны: подсистема может быть выключена (GetService → null).
+    // Llm-зависимости: `?` — остаток эпохи отключаемой llm (ADR-014 §5), на текущем графе DI
+    // обе зарегистрированы безусловно.
     private readonly ILocalModelStatsReader? _reader = services.GetService<ILocalModelStatsReader>();
     private readonly IGpuSampler? _gpus = services.GetService<IGpuSampler>();
-    // Вкладка «Железо» (Б1): отчёт с уровнями на бэкенде. Необязателен (подсистема Llm отключаема).
+    // Вкладка «Железо» (Б1): отчёт с уровнями на бэкенде. `?` — тот же остаток (см. выше).
     private readonly IHardwareReportService? _hardware = services.GetService<IHardwareReportService>();
     // Счётчик хода: живые чаты на движке (chats) и прогоны, которые он не видит (othersCount).
     private readonly ILocalModelTurnMeter? _meter = services.GetService<ILocalModelTurnMeter>();
     // Стенд второй модели (Б3c): справочник дорожек статистики, словарь известных движков
     // (список engines и цепочка duty), клиент состояния арбитра и журнал вызовов мест («кто сейчас
-    // на модели»). Всё необязательно: подсистема Llm отключаема (GetService → null) — тогда
-    // engines отдаёт {main, configured:false}, а stats?engine= — {configured:false} (200, не 500).
+    // на модели»). `?` — тот же остаток эпохи отключаемой llm (ADR-014 §5): на текущем графе DI
+    // все четыре зарегистрированы. Пустой ответ {configured:false} даёт отсутствие ДОРОЖКИ
+    // (неизвестный движок, движок без MetricsUrl), а не отсутствие сервиса.
     private readonly ILocalEngineStatsDirectory? _tracks = services.GetService<ILocalEngineStatsDirectory>();
     private readonly NamedLocalEngines? _namedEngines = services.GetService<NamedLocalEngines>();
     private readonly IEngineArbiterStateReader? _arbiter = services.GetService<IEngineArbiterStateReader>();
@@ -78,7 +81,8 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
 
         var current = _reader?.Current;
 
-        // Подсистема Llm отключена (reader null) → notConnected, 200 (не 500).
+        // reader null — ветка эпохи отключаемой llm (на текущем графе DI не достижима,
+        // ADR-014 §5): notConnected, 200 (не 500).
         if (current is null)
             return Ok(new LocalModelStatsResponse
             {
@@ -221,7 +225,7 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     // GET /api/local-model/stats?engine=<имя> — стенд именованного движка (B3c): тот же
     // LocalModelStatsResponse плюс блок «Дежурство» (duty). Без engine или с engine=main —
     // основной стенд выше, его ответ побайтно не меняется.
-    // Нет дорожки (неизвестный движок, движок без MetricsUrl или выключенная Llm) →
+    // Нет дорожки (неизвестный движок или движок без MetricsUrl) →
     // {configured:false, status:notConnected} (200, не 500), без блока duty.
     // Отличия от основного стенда: gpus — карта Video, общая с ComfyUI, из Core-шва IComfyStats
     // (узел /ccs/stats), а не сэмплера хоста (разрез v2 §3); Llm ↛ Images — склейка здесь;
@@ -391,7 +395,7 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     // GET /api/local-model/hardware?window=1m|5m|15m|1h
     // Вкладка «Железо»: температуры карт (в т.ч. памяти GDDR6X), процессора, платы, дисков + ряды
     // истории за окно. ТОЛЬКО admin (роль на действии, как у /stats; не-админ → 403). Неизвестное window → 400.
-    // Подсистема Llm выключена → 200 пустой отчёт (не 500).
+    // hardware нет в контейнере (ветка эпохи отключаемой llm, ADR-014 §5) → 200 пустой отчёт (не 500).
     [Authorize(Roles = "admin")]
     [HttpGet("hardware")]
     public IActionResult Hardware([FromQuery] string? window)

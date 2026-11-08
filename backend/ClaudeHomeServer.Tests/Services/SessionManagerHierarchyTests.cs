@@ -5,6 +5,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Memory;
@@ -34,7 +35,7 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
 
         var r = await _sut.ReportUpAsync(lonely.Id, "нашёл блокер", TestUserId, withTurn: false);
 
-        r.Should().Be(SessionManager.ReportUpResult.NoParent);
+        r.Should().Be(ReportUpResult.NoParent);
     }
 
     [Fact]
@@ -45,7 +46,7 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
 
         var r = await _sut.ReportUpAsync(child.Id, "нашёл блокер: нет доступа к БД", TestUserId, withTurn: false);
 
-        r.Should().Be(SessionManager.ReportUpResult.Delivered);
+        r.Should().Be(ReportUpResult.Delivered);
         var history = await _sut.GetHistoryAsync(parent.Id);
         history.Should().ContainSingle(m => m is Protocol.StoredUserMessage)
             .Which.Should().BeOfType<Protocol.StoredUserMessage>()
@@ -65,7 +66,7 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
 
         var r = await _sut.ReportBlockerAsync(child.Id, "нет доступа к тестовой БД", TestUserId);
 
-        r.Should().BeOneOf(SessionManager.ReportUpResult.Delivered, SessionManager.ReportUpResult.Queued);
+        r.Should().BeOneOf(ReportUpResult.Delivered, ReportUpResult.Queued);
         var history = await _sut.GetHistoryAsync(stab.Id);
         history.OfType<Protocol.StoredUserMessage>().Should()
             .Contain(m => m.Text.Contains("нет доступа к тестовой БД") && m.Text.Contains("Блокер"),
@@ -111,7 +112,7 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
 
         var r = await _sut.ReportBlockerAsync(child.Id, "застрял", TestUserId);
 
-        r.Should().Be(SessionManager.ReportUpResult.TooDeep);
+        r.Should().Be(ReportUpResult.TooDeep);
         _sut.GetById(stab.Id)!.TeamImplement!.Budget.WakeupsUsed.Should().Be(0,
             "доклад не дошёл — координатор фактически не разбужен, платить не с чего");
     }
@@ -128,7 +129,7 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
 
         var r = await _sut.ReportBlockerAsync(child.Id, "снова застрял", TestUserId);
 
-        r.Should().Be(SessionManager.ReportUpResult.Delivered);
+        r.Should().Be(ReportUpResult.Delivered);
         (await _sut.GetHistoryAsync(stab.Id)).OfType<Protocol.StoredUserMessage>().Should()
             .Contain(m => m.Text.Contains("снова застрял"), "сам доклад терять нельзя");
         budget.WakeupsUsed.Should().Be(budget.MaxWakeups, "отказ ничего не расходует");
@@ -232,7 +233,7 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
 
         var r = await _sut.ReportBlockerAsync(child.Id, "застрял на конфликте", TestUserId);
 
-        r.Should().BeOneOf(SessionManager.ReportUpResult.Delivered, SessionManager.ReportUpResult.Queued);
+        r.Should().BeOneOf(ReportUpResult.Delivered, ReportUpResult.Queued);
         Sent<TeamEscalationMessage>().Should().BeEmpty(
             "карточка остановки — часть режима практики, обычному чату она не нужна");
     }
@@ -268,14 +269,14 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
 
         // chats[4] → chats[3] → … каждый следующий отчёт наращивает глубину цепочки
         (await _sut.ReportUpAsync(chats[4].Id, "уровень 1", TestUserId, false))
-            .Should().Be(SessionManager.ReportUpResult.Delivered);
+            .Should().Be(ReportUpResult.Delivered);
         (await _sut.ReportUpAsync(chats[3].Id, "уровень 2", TestUserId, false))
-            .Should().Be(SessionManager.ReportUpResult.Delivered);
+            .Should().Be(ReportUpResult.Delivered);
         (await _sut.ReportUpAsync(chats[2].Id, "уровень 3", TestUserId, false))
-            .Should().Be(SessionManager.ReportUpResult.Delivered);
+            .Should().Be(ReportUpResult.Delivered);
 
         (await _sut.ReportUpAsync(chats[1].Id, "уровень 4", TestUserId, false))
-            .Should().Be(SessionManager.ReportUpResult.TooDeep, "цепочка автоотчётов ограничена тремя звеньями");
+            .Should().Be(ReportUpResult.TooDeep, "цепочка автоотчётов ограничена тремя звеньями");
     }
 
     [Fact]
@@ -285,7 +286,7 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
 
         var r = await _sut.ReportUpAsync(child.Id, "текст", "another-user", withTurn: false);
 
-        r.Should().Be(SessionManager.ReportUpResult.NotFound);
+        r.Should().Be(ReportUpResult.NotFound);
     }
 
     // --- SetParent: ручная группировка чатов (drag-and-drop) ---
@@ -682,6 +683,51 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
         _sut.GetById(session.Id)!.WorktreePath.Should().BeNull();
     }
 
+    // --- IsProjectWorktreeAsync: «дерево есть» против «дерева нет» ---
+    // Потребитель — постановка задачи (TaskExecutionService), когда AttachWorktreeAsync отказал:
+    // по этому ответу исполнитель получает абзац «работай в дереве через tree» или «дерева нет».
+    // Тело живёт в ChatWorktree (линия ядра), фасад — тонкая обёртка; тест мерит боевой путь фасада.
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task IsProjectWorktree_ДеревоПроекта_Истина()
+    {
+        var (project, worktree) = await MkRepoWithWorktreeAsync("iswt-ok");
+
+        // owner не передан — метод берёт владельца проекта (ветка null в IsProjectWorktreeAsync)
+        (await _sut.IsProjectWorktreeAsync(project.Id, null, worktree)).Should().BeTrue();
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task IsProjectWorktree_ЧужаяПапкаНаДиске_Ложь()
+    {
+        var (project, _) = await MkRepoWithWorktreeAsync("iswt-alien");
+        // Папка есть на диске, но деревом проекта не является — «дерева нет вовсе»
+        var alien = Directory.CreateDirectory(Path.Combine(_tempDir, "iswt-alien-dir")).FullName;
+
+        (await _sut.IsProjectWorktreeAsync(project.Id, null, alien)).Should().BeFalse();
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task IsProjectWorktree_ПутиНетНаДиске_Ложь()
+    {
+        var (project, worktree) = await MkRepoWithWorktreeAsync("iswt-missing");
+
+        (await _sut.IsProjectWorktreeAsync(project.Id, null, worktree + "-нет")).Should().BeFalse();
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task IsProjectWorktree_ПустойПутьИлиНетТакогоПроекта_Ложь()
+    {
+        var (project, _) = await MkRepoWithWorktreeAsync("iswt-empty");
+
+        (await _sut.IsProjectWorktreeAsync(project.Id, null, " ")).Should().BeFalse();
+        (await _sut.IsProjectWorktreeAsync("нет-такого-проекта", null, _tempDir)).Should().BeFalse();
+    }
+
     // --- Удаление чата: чьё дерево сносим, чужое/общее/старое — нет ---
     // Дефект: временные чаты исполнителей (AttachWorktreeAsync, WorktreeOwned=false) истекали
     // через сутки и каждый уносил ОБЩЕЕ дерево фичи вместе с незакоммиченными правками.
@@ -959,8 +1005,12 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
         var user = _userStore.Add("arch-gate-owner", "password123", "user");
         var project = _projectManager.Create("GA", dir, user.Id, user.Username);
         var states = new SubsystemStateStore();
-        typeof(SessionManager).GetField("_subsystemStates", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .SetValue(_sut, states);
+        // С3-4: стор подсистем читает роль BuiltinMcpContexts (на фасаде осталась только
+        // обёртка BuildArchitectureContext) — поле ставится там, где живёт решение.
+        var builtin = typeof(SessionManager).GetField("_builtin", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(_sut)!;
+        typeof(BuiltinMcpContexts).GetField("_subsystemStates", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(builtin, states);
 
         InvokePrivate("BuildArchitectureContext", user.Id, project.Id, null)
             .Should().BeNull("модуль не загружен — записи architecture в сторе нет");
@@ -1162,8 +1212,10 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
         session.Name = "обрезка сообщения";
 
-        typeof(SessionManager).GetField("_cheap", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .SetValue(_sut, new StubTitleCheapRunner(usesLocal: false, () => """{"title":"Уточнённый заголовок"}"""));
+        // Раннер подменяется у владельца метода (с S3-3 именование — в ChatNaming), иначе
+        // подменённое поле осталось бы у фасада и до роли не дошло бы.
+        var owner = OwnerOf("RefineChatTitleAsync");
+        SetPrivateField(owner, "_cheap", new StubTitleCheapRunner(usesLocal: false, () => """{"title":"Уточнённый заголовок"}"""));
 
         await (Task)InvokePrivate("RefineChatTitleAsync", session.Id, "первое сообщение чата",
             "обрезка сообщения", TestUserId)!;
@@ -1180,9 +1232,9 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
         session.Name = "обрезка сообщения";
 
-        typeof(SessionManager).GetField("_cheap", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .SetValue(_sut, new StubTitleCheapRunner(usesLocal: false,
-                () => throw new InvalidOperationException("исполнитель недоступен")));
+        var owner = OwnerOf("RefineChatTitleAsync");
+        SetPrivateField(owner, "_cheap", new StubTitleCheapRunner(usesLocal: false,
+            () => throw new InvalidOperationException("исполнитель недоступен")));
 
         await (Task)InvokePrivate("RefineChatTitleAsync", session.Id, "первое сообщение чата",
             "обрезка сообщения", TestUserId)!;
@@ -1229,7 +1281,7 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
 
         // Форсируем чтение истории с диска (как после рестарта сервера) — accumulator=null
-        var sessionsDict = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!
+        var sessionsDict = typeof(SessionManager).GetProperty("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!
             .GetValue(_sut)!;
         var args = new object?[] { session.Id, null };
         ((bool)sessionsDict.GetType().GetMethod("TryGetValue")!.Invoke(sessionsDict, args)!).Should().BeTrue();
@@ -1726,7 +1778,7 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
 
         var act = () => _sut.RestartStuckTurnAsync(session.Id, startFresh: false);
 
-        await act.Should().ThrowAsync<SessionManager.TurnTranscriptDamagedException>()
+        await act.Should().ThrowAsync<TurnTranscriptDamagedException>()
             .WithMessage("*повреждён*");
         _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Working,
             "повреждённый транскрипт — не повод реанимировать чат молча: человек решает");

@@ -39,7 +39,7 @@ public class ChatsArchivedEndpointTests(TestWebApplicationFactory factory)
         bool hasLiveTurn, bool hasTrackedBg)
     {
         var sessions = SessionsOf(factory);
-        var field = typeof(SessionManager).GetField("_sessions",
+        var field = typeof(SessionManager).GetProperty("_sessions",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         var map = (System.Collections.IDictionary)field.GetValue(sessions)!;
         var entry = map[sessionId]!;

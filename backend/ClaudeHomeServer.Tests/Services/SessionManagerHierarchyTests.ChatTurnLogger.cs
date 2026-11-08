@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Sessions;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 
@@ -12,9 +13,14 @@ public partial class SessionManagerHierarchyTests
 {
     private async Task RaiseSessionMessageAsync(Session session, ServerMessage msg)
     {
-        var field = typeof(SessionManager).GetField("OnSessionMessage",
+        // S3-6: событие и его backing-поле живут в TurnCompletion — фасад держит только
+        // аксессоры-делегаты; поднимаем поле с экземпляра роли (_completion).
+        var completion = typeof(SessionManager).GetField("_completion",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetValue(_sut)!;
+        var field = typeof(TurnCompletion).GetField("OnSessionMessage",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
-        await ((Func<Session, ServerMessage, Task>)field.GetValue(_sut)!)(session, msg);
+        await ((Func<Session, ServerMessage, Task>)field.GetValue(completion)!)(session, msg);
     }
 
     [Fact]

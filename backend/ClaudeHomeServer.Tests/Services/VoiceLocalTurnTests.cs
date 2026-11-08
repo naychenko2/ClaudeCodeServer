@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Reflection;
 using System.Text.Json;
 using ClaudeHomeServer.Services.Composition;
@@ -26,6 +27,9 @@ namespace ClaudeHomeServer.Tests.Services;
 public class VoiceLocalTurnTests : IDisposable
 {
     private readonly string _tempDir;
+    // Тот же экземпляр UserStore, что передан SessionManager: добавление пользователя
+    // идёт напрямую, без чтения поля фасада через рефлексию (поле _users снято).
+    private readonly UserStore _userStore;
     private readonly ChatHistoryService _historyService;
     private readonly LocalActionOverridesStore _actionOverrides;
     private readonly AppSettingsService _appSettings;
@@ -82,6 +86,7 @@ public class VoiceLocalTurnTests : IDisposable
             .Build();
 
         var userStore = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        _userStore = userStore;
         _appSettings = new AppSettingsService(config);
         var appSettings = _appSettings;
         var projectManager = new ProjectManager(config, userStore, appSettings);
@@ -119,14 +124,30 @@ public class VoiceLocalTurnTests : IDisposable
         _routerWithTiers = new LocalActionRouter(ollama, _actionOverrides, config, NullLogger<LocalActionRouter>.Instance,
             userTiers: _tierResolver);
 
-        _sut = new SessionManager(projectManager, _historyService, config, adapters, falCost,
-            usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
-            bindings, subPool, NullLogger<SessionManager>.Instance,
-            TestLauncherFactory.Instance, sandbox,
-            _broadcaster,
-            router: router,
-            ollama: new TrackedLocalLlmClient(ollama, _engineTracker, EngineKey, () => EngineLimit,
-                NullLogger<TrackedLocalLlmClient>.Instance));
+        _sut = SessionCoreTestHost.Build(_tempDir, s =>
+        {
+            s.AddSingleton<global::ClaudeHomeServer.Services.ProjectManager>(projectManager);
+            s.AddSingleton<global::ClaudeHomeServer.Services.ChatHistoryService>(_historyService);
+            s.AddSingleton<global::Microsoft.Extensions.Configuration.IConfiguration>(config);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(adapters);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FalCostService>(falCost);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.UsageService>(usage);
+            s.AddSingleton<global::ClaudeHomeServer.Services.AppSettingsService>(appSettings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.UserStore>(userStore);
+            s.AddSingleton<global::ClaudeHomeServer.Services.JwtService>(jwt);
+            s.AddSingleton<global::Microsoft.AspNetCore.Hosting.Server.IServer>(server.Object);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.LlmProviderRegistry>(llmProviders);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FeatureFlagService>(flags);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaManager>(personas);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaBindingsService>(bindings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(subPool);
+            s.AddSingleton<global::Microsoft.Extensions.Logging.ILogger<ClaudeHomeServer.Services.SessionManager>>(NullLogger<SessionManager>.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.ILauncherFactory>(TestLauncherFactory.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.SandboxManager>(sandbox);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(_broadcaster);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.LocalActionRouter>(router);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ILocalLlmClient>(new TrackedLocalLlmClient(ollama, _engineTracker, EngineKey, () => EngineLimit, NullLogger<TrackedLocalLlmClient>.Instance));
+        }).Manager;
     }
 
     public void Dispose()
@@ -140,7 +161,7 @@ public class VoiceLocalTurnTests : IDisposable
 
     private async Task<Session> MakeVoiceChatAsync(bool local = true)
     {
-        var user = ((UserStore)GetInstanceField(_sut, "_users")!).Add("voice-user", "password123", "user");
+        var user = _userStore.Add("voice-user", "password123", "user");
         var session = await _sut.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits);
         _sut.SetVoiceMode(session.Id, true);
         if (local)
@@ -150,12 +171,9 @@ public class VoiceLocalTurnTests : IDisposable
         return session;
     }
 
-    private static object GetInstanceField(object obj, string name) =>
-        obj.GetType().GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(obj)!;
-
     private object GetEntry(string sessionId)
     {
-        var field = typeof(SessionManager).GetField("_sessions",
+        var field = typeof(SessionManager).GetProperty("_sessions",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         var sessions = (System.Collections.IDictionary)field.GetValue(_sut)!;
         return sessions[sessionId]!;

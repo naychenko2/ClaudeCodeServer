@@ -11,7 +11,10 @@ import { FROZEN_TYPES_INDEX_REEXPORTS, FROZEN_LIB_API_REEXPORTS } from './typesI
 // Александра d358bb59, раздел «Цель линии типов» карты
 // docs/research/frontend-api-split-2026-11.md). Удаление реэкспорта — зелёное:
 // список может только убывать; при удалении убери строку и из typesIndexExports.ts.
-const REEXPORT_RE = /^export type \* from ['"]([^'"]+)['"];/gm;
+// Форма захвата не каноническая: `;` опционален (в проекте нет semi в eslint/prettier,
+// реэкспорт без точки валиден через ASI), ловится и `export type * as ns from '…'`
+// (минор ревью R-S5-B). Инвариант тот же: фактический ⊆ замороженный.
+const REEXPORT_RE = /^export type \*(?: as \w+)? from ['"]([^'"]+)['"]\s*;?/gm;
 
 const reexports = (rel: string) =>
   [...readFileSync(resolve(__dirname, rel), 'utf-8').matchAll(REEXPORT_RE)].map((m) => m[1]);

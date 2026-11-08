@@ -216,9 +216,16 @@ public class SessionCoreShapeGuardTests
             .ToHashSet();
     }
 
+    /// <summary>Директивы условной компиляции в файле фасада. Текстовый разбор их не понимает: объявление
+    /// под `#if` выпало бы из набора молча, поэтому боевая проверка требует, чтобы их не было вовсе.</summary>
+    internal static IReadOnlyList<string> FacadeConditionalDirectives(string facadeSource) =>
+        Regex.Matches(facadeSource, @"^[ \t]*#[ \t]*(?:if|ifdef|elif|else|endif)\b.*$", RegexOptions.Multiline)
+            .Select(m => m.Value.Trim())
+            .ToList();
+
     internal static HashSet<string> FacadeTopLevelNames(string facadeSource) =>
         Regex.Matches(facadeSource,
-                @"^(?:public|internal)\s+(?:(?:sealed|static|abstract|partial|readonly)\s+)*(?:class|record(?:\s+(?:class|struct))?|struct|enum|interface)\s+(\w+)",
+                @"^(?:\[[^\]\r\n]*\]\s*)*(?:public|internal)\s+(?:(?:sealed|static|abstract|partial|readonly)\s+)*(?:class|record(?:\s+(?:class|struct))?|struct|enum|interface)\s+(\w+)",
                 RegexOptions.Multiline)
             .Select(m => m.Groups[1].Value)
             .ToHashSet();
@@ -322,7 +329,24 @@ public class SessionCoreShapeGuardTests
         // и сторож проходит вакуумно.
         var source = ReadFacadeSource();
         FacadeTopLevelNames(source).Should().Contain(nameof(SessionManager));
-        FacadeTopLevelTypes(source).Should().NotContain(t => t.Namespace == CoreNamespace);
+    }
+
+    [Fact]
+    public void Файл_фасада_без_директив_условной_компиляции() =>
+        FacadeConditionalDirectives(ReadFacadeSource()).Should().BeEmpty(
+            "текстовый разбор объявлений не понимает #if: объявление под ним выпало бы из набора top-level "
+            + "типов молча — сначала научи разбор, потом вводи директиву");
+
+    [Fact]
+    public void Самопроверка_разбор_фасада_не_берёт_тип_ядра_и_видит_атрибут_и_директивы()
+    {
+        // Имя типа ядра в тексте файла фасада не делает его top-level типом фасада: фильтр namespace держит.
+        FacadeTopLevelTypes("public record TurnResult(string Reply);").Should().BeEmpty(
+            "TurnResult живёт в Services.Sessions, а не в Services");
+        FacadeTopLevelNames("[Obsolete] public class WithAttr {}\n[A][B(1)] internal sealed record Two(int X);")
+            .Should().BeEquivalentTo("WithAttr", "Two");
+        FacadeConditionalDirectives("#if false\npublic class Hidden {}\n  #endif\n#region R").Should()
+            .BeEquivalentTo("#if false", "#endif");
     }
 
     [Fact]

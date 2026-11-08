@@ -1,26 +1,46 @@
 // Флаг «клавиатурного» режима голосового ввода.
 //
-// Ставится ватчдогом в Composer, когда Web Speech стартовал, но за 2.5с не пришёл
-// onaudiostart (движок распознавания мёртвый — например, устройство без Google-сервисов).
-// Пока флаг стоит, кнопка микрофона не пробует распознавание, а просто фокусирует поле,
-// чтобы пользователь надиктовал системной диктовкой клавиатуры.
+// Ставится ватчдогом useVoiceInput, когда Web Speech стартовал, но за отведённое время
+// не подал признаков жизни (движок распознавания мёртвый — например, устройство без
+// Google-сервисов). Пока флаг стоит, кнопка микрофона не пробует распознавание, а просто
+// фокусирует поле, чтобы пользователь надиктовал системной диктовкой клавиатуры.
 //
-// Флаг залипает до явного сброса — сбросить можно пунктом «Вернуть голосовой ввод»
-// в меню аватара (пункт виден только когда флаг стоит).
+// Флаг включается не с первого промаха, а после MIC_DEAD_STRIKES «мёртвых» стартов
+// подряд: на Android единичный медленный старт — норма (микрофон ещё держит диктовка
+// клавиатуры, сервис Google просыпается), и один такой промах раньше выключал
+// распознавание насовсем. Любой живой старт счётчик обнуляет. Сбросить вручную —
+// пункт «Вернуть голосовой ввод» в меню аватара (виден, только когда флаг стоит).
 
 const KEY = 'micKeyboardFallback';
 
-export function isMicKeyboardFallback(): boolean {
-  try { return localStorage.getItem(KEY) === '1'; } catch { return false; }
+// Сколько «мёртвых» стартов подряд переводят микрофон в клавиатурный режим
+export const MIC_DEAD_STRIKES = 2;
+
+function readStrikes(): number {
+  try {
+    const n = Number(localStorage.getItem(KEY));
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  } catch { return 0; }
 }
 
-export function setMicKeyboardFallback(): void {
-  try { localStorage.setItem(KEY, '1'); } catch { /* localStorage недоступен — не критично */ }
+export function isMicKeyboardFallback(): boolean {
+  return readStrikes() >= MIC_DEAD_STRIKES;
+}
+
+// Засчитать «мёртвый» старт; true — порог достигнут, микрофон ушёл в клавиатурный режим
+export function setMicKeyboardFallback(): boolean {
+  const next = readStrikes() + 1;
+  try { localStorage.setItem(KEY, String(next)); } catch { /* localStorage недоступен — не критично */ }
+  return next >= MIC_DEAD_STRIKES;
 }
 
 export function clearMicKeyboardFallback(): void {
   try { localStorage.removeItem(KEY); } catch { /* localStorage недоступен — не критично */ }
 }
+
+// Тост первого промаха: режим ещё не переключён, просим повторить
+export const MIC_SLOW_TEXT =
+  'Распознавание не ответило. Нажми микрофон ещё раз; если диктовка клавиатуры включена — закрой её.';
 
 // Текст фоллбэка на клавиатуру. Тост клампится тремя строками (NotificationToasts),
 // на планшетной ширине это ~120 символов — длиннее просто не увидят: прошлая версия

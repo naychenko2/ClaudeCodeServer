@@ -131,6 +131,12 @@ internal static class SpendMapping
             string? actorUserId;
             try { actorUserId = actors?.Actor(s.Id, owner); }
             catch (Exception ex) { actorUserId = null; log?.LogWarning(ex, "spend: актор хода не прочитался"); }
+            // Initiator намеренно НЕ заполняется (null = «не назван», не human): однозначного
+            // признака «ход человека» в этой точке нет. Актор реестра не годится — он «липкий»
+            // у внутренних ходов (дренаж, WorkLoop, nudge) и несёт id человека и у агентских
+            // подач (chats_send), а признак fromHuman живёт в SessionManager.NoteTurnActor и
+            // до RecordTurnSpend не доезжает. Требует решения Александра (новый шов в реестр
+            // актора); до него не выдумываем — иначе агентский ход запишется как human.
             spend.Record(new SpendRecord
             {
                 OwnerId = owner,

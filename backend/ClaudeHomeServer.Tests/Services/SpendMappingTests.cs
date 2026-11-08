@@ -83,6 +83,18 @@ public class SpendMappingTests
 
     // Чат настроен Claude, ход через шлюз ушёл в minimax: запись обязана брать маршрут —
     // модель шлюза важнее отчёта CLI (сессия ротацию шлюза не видит).
+    // Признака «ход человека» в точке учёта нет (актор липкий и несёт id человека и у
+    // агентских подач), поэтому инициатор хода не назван: null, а не human и не agent.
+    // Решение за Александром; тест краснеет, если кто-то выдумает инициатора молча.
+    [Fact]
+    public void RecordTurnSpend_ИнициаторХодаНеНазван_ДаЖеПриАктореИСессии()
+    {
+        var r = RecordTurnWithActor(Chat("claude", "opus"), Result(), actor: "u-2");
+        r.SessionId.Should().NotBeNullOrEmpty();
+        r.ActorUserId.Should().Be("u-2");
+        r.Initiator.Should().BeNull();
+    }
+
     [Fact]
     public void RecordTurnSpend_МаршрутШлюза_ВажнееНастроекЧатаИОтчётаCLI()
     {

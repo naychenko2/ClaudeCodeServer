@@ -403,6 +403,27 @@ public class SessionCoreShapeGuardTests
     }
 
     [Fact]
+    public void Вложенные_типы_корней_контрактов_фасада_только_record_enum_исключения()
+    {
+        var roots = SessionCoreFacadeContracts.All.Keys.Select(n => Main.GetType(n)!).ToList();
+        roots.SelectMany(r => r.GetNestedTypes(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic))
+            .Should().NotBeEmpty("SendAndWaitResult несёт вложенные Busy/Queued/…: иначе проверка вакуумная");
+        SessionCoreFacadeContracts.NestedShapeViolations(roots).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Самопроверка_вложенный_класс_с_поведением_краснеет_в_контракте() =>
+        SessionCoreFacadeContracts.NestedShapeViolations([typeof(FakeRootWithNestedClass)]).Should().ContainSingle()
+            .Which.Should().Contain("FakeRootWithNestedClass+Role");
+
+    private sealed class FakeRootWithNestedClass
+    {
+        public sealed class Role { public void Act() { } }
+        public enum Ok { A }
+        public sealed record Data(int X);
+    }
+
+    [Fact]
     public void Данные_ядра_существуют_и_лежат_в_Services_Sessions() =>
         CoreDataContracts.Keys.Where(n => Main.GetType(n)?.Namespace != CoreNamespace).Should().BeEmpty(
             "устаревшая строка данных тихо откроет поимённый допуск");

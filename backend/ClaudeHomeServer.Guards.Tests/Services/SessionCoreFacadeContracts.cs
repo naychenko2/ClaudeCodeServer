@@ -126,6 +126,17 @@ internal static class SessionCoreFacadeContracts
         return seen;
     }
 
+    private static bool IsRecord(Type t) => t.GetMethod("<Clone>$", BindingFlags.Public | BindingFlags.Instance) is not null;
+
+    /// <summary>Вложенные типы корней контрактов допустимы только как record/enum/исключение: вложенный
+    /// класс с поведением вместе с корнем стал бы допуском на роль.</summary>
+    internal static IEnumerable<string> NestedShapeViolations(IEnumerable<Type> roots) =>
+        from root in roots
+        from n in root.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic)
+        where !n.IsDefined(typeof(System.Runtime.CompilerServices.CompilerGeneratedAttribute), false)
+        where !(n.IsEnum || IsRecord(n) || typeof(Exception).IsAssignableFrom(n))
+        select $"{n.FullName}: вложенный тип контракта фасада — не record/enum/исключение";
+
     /// <summary>Механическая проверка критерия по каждой строке: тип существует в <paramref name="main"/>,
     /// лежит в <c>Services.Sessions</c> и либо достижим из сигнатуры <paramref name="facade"/>
     /// (<see cref="ReachableTypes"/>), либо наследует

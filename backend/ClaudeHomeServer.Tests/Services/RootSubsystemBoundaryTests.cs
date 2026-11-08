@@ -184,7 +184,10 @@ public class RootSubsystemBoundaryTests
     /// пропускал всё, что под префиксом. Точечный допуск закрывает эту щель:
     /// если завтра root начнёт ссылаться на ещё один тип из <c>Services.CodeGraph</c>
     /// (не <c>CodeGraphService</c>), сторож покраснеет, и повод обсудить, нужна
-    /// ли зависимость или пора выделить шов.</summary>
+    /// ли зависимость или пора выделить шов.
+    /// Состав списка зафиксирован pin-тестом <c>RootAllowedExactTypes_СоставЗафиксирован</c>:
+    /// добавить строку молча нельзя — это осознанное решение (открывает root-слою ещё один тип
+    /// подсистемной вертикали) и оно требует правки pin-теста в том же коммите.</summary>
     private static readonly HashSet<string> RootAllowedExactTypes = new(StringComparer.Ordinal)
     {
         // Граф кода: FileWatcherService инвалидирует граф при изменении файлов
@@ -473,8 +476,7 @@ public class RootSubsystemBoundaryTests
         // Контракты фасада допускает общий перечень SessionCoreFacadeContracts; свой список для
         // Services.Sessions здесь не заводим (решение лида 98d2368c).
         RootAllowedExactTypes
-            .Where(n => n.StartsWith("ClaudeHomeServer.Services.Sessions.", StringComparison.Ordinal)
-                        || SessionCoreFacadeContracts.All.ContainsKey(n.Split('+')[0]))
+            .Where(n => n.StartsWith("ClaudeHomeServer.Services.Sessions.", StringComparison.Ordinal))
             .Should().BeEmpty(
                 "типы Services.Sessions в root-сторож точечно не заносятся: контракты фасада — в " +
                 "SessionCoreFacadeContracts, остальное ядро для root-типов закрыто");

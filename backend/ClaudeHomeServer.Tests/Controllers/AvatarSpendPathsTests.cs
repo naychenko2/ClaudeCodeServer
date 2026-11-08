@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Images;
@@ -21,7 +22,9 @@ internal sealed class AlwaysImagesGenerator : IImageGenerator
 {
     public string Key => "glif";
     public string DisplayName => "Тестовый генератор";
-    public bool Enabled => true;
+    // Выключаемой: тесту догоняющей очереди нужен прогон «генератора нет» (заявка) и
+    // прогон «генератор появился» (сама догоняющая генерация) на одном хосте
+    public bool Enabled { get; set; } = true;
     public IReadOnlyList<ImageModelInfo> Models => [];
 
     public Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
@@ -190,7 +193,8 @@ public class AvatarSpendPathsTests : IClassFixture<AvatarSpendFactory>
     }
 
     // Тот же аватар из чата (personas_generate_avatar): трата того же владельца, но
-    // инициатор — агент
+    // инициатор — агент. Актор — актор хода: ход здесь самого владельца (GetTurnActor не
+    // называет другого) — права арендатора, он и есть актор (п.2 хвоста R-S-SPEND-2)
     [Fact]
     public async Task АватарИзЧата_ИнициаторАгента()
     {
@@ -205,6 +209,77 @@ public class AvatarSpendPathsTests : IClassFixture<AvatarSpendFactory>
         added[0].OwnerId.Should().Be(OwnerId);
         added[0].Initiator.Should().Be(SpendInitiators.Agent,
             "personas_generate_avatar из чата — агентский вызов");
+        added[0].ActorUserId.Should().Be(OwnerId,
+            "актор неизвестен (ход владельца) — права арендатора, а не чужое значение");
+    }
+
+    // П.2 хвоста R-S-SPEND-2: в MCP-пути актором обязан называться актор хода, а не владелец
+    // песочницы. Сегодня путь с чужим актором ненаблюдаем end-to-end: участник не доходит до
+    // аватара проектной персоны (ValidProject требует владельца проекта, узкая рамка закрывает
+    // personas_generate_avatar участнику). Поэтому проба — сам выбор значения: названный
+    // вызывающим актор доходит до записи, ключом хранилища остаётся арендатор
+    [Fact]
+    public async Task АватарИзЧата_АкторХодаДостигаетЗаписи()
+    {
+        var persona = NewPersona();
+        var before = ImageRecords().Count;
+
+        var crud = _factory.Services.GetRequiredService<PersonasCrudService>();
+        var result = await crud.GenerateAvatarAsync(OwnerId, persona.Id,
+            new GenerateAvatarRequest("рыжий кот", 1), SpendInitiators.Agent, "actor-participant");
+        result.Should().BeOfType<Microsoft.AspNetCore.Mvc.OkObjectResult>("генерация удалась");
+
+        var added = ImageRecords().Skip(before).ToList();
+        added.Should().ContainSingle();
+        added[0].OwnerId.Should().Be(OwnerId, "ключ записи — арендатор, а не исполнивший");
+        added[0].ActorUserId.Should().Be("actor-participant",
+            "актора называет вызывающий (актор хода), а не токен песочницы");
+        added[0].Initiator.Should().Be(SpendInitiators.Agent);
+    }
+
+    // П.1 хвоста R-S-SPEND-2: аватар проектной персоны догенерился фоном — догоняющая запись
+    // обязана нести ту же атрибуцию, что интерактивная: проект и актора (раньше — пусто, и та же
+    // персона при удачной генерации в разрез по проекту попадала, при догоняющей — нет)
+    [Fact]
+    public async Task ДогоняющаяГенерацияПроектнойПерсоны_НесётПроектИАктора()
+    {
+        var project = await _client.PostAsJsonAsync("/api/projects", new { name = $"asb-{Guid.NewGuid():N}" });
+        project.EnsureSuccessStatusCode();
+        var projectId = (await project.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        var generator = (AlwaysImagesGenerator)_factory.Services.GetRequiredService<IImageGenerator>();
+        var backfill = _factory.Services.GetRequiredService<ImageBackfillService>();
+        generator.Enabled = false;
+        string personaId;
+        try
+        {
+            // Генератора нет — аватар уходит в очередь; атрибуция считается при постановке
+            // заявки (PersonasCrudService), пока персона известна вызывающему
+            var created = await _client.PostAsJsonAsync("/api/personas",
+                new { name = "Догоняющая" + Guid.NewGuid().ToString("N")[..4], scope = "project", projectId, autoAvatar = true });
+            created.EnsureSuccessStatusCode();
+            personaId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        }
+        finally
+        {
+            generator.Enabled = true;
+        }
+
+        var before = ImageRecords().Count;
+        var summary = await backfill.RunAsync(OwnerId);
+        summary.Generated.Should().Be(1, "провайдер появился — заявка догнала аватар");
+
+        var saved = Personas.GetByIdInternal(personaId)!;
+        saved.Avatar.Kind.Should().Be(PersonaAvatarKind.Image, "заявка догнала аватар");
+
+        var added = ImageRecords().Skip(before).ToList();
+        added.Should().ContainSingle();
+        added[0].OwnerId.Should().Be(OwnerId, "ключ записи — владелец заявки");
+        added[0].ProjectId.Should().Be(projectId,
+            "догоняющая запись проектной персоны видна в разрезе по проекту, как интерактивная");
+        added[0].ActorUserId.Should().Be(OwnerId,
+            "актор сохранён вместе с заявкой — та же атрибуция, что у интерактивной генерации");
+        added[0].Initiator.Should().Be(SpendInitiators.Human, "инициатор заявки — человек из формы создания");
     }
 
     // Персона из чата (personas_create с AutoAvatar): аватар генерирует агент, и его

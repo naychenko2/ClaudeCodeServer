@@ -32,6 +32,14 @@ public sealed class ImageBackfillRequest
     // файл читается штатно, FormatVersion не двигается (ломающим было бы изменение
     // существующих полей).
     public string? Initiator { get; set; }
+    // Актор и проект траты (п.1 хвоста ревью R-S-SPEND-2): их знает вызывающий в момент
+    // постановки заявки — та же атрибуция, что у интерактивной генерации (AvatarSpendAttribution
+    // в PersonasCrudService); догоняющая генерация идёт позже и в другом потоке и сама её не
+    // вычислит. null — заявки, поставленные до этих полей, или путь, который её не назвал:
+    // актор читается как «нет поля → владелец», проект не называется. Аддитивные поля:
+    // старый файл читается штатно, FormatVersion не двигается.
+    public string? ActorUserId { get; set; }
+    public string? ProjectId { get; set; }
     // Сколько раз генерация уже проваливалась (пожизненно, а не в рамках прогона)
     public int Attempts { get; set; }
     public string? LastFailReason { get; set; }
@@ -91,8 +99,12 @@ public sealed class ImageBackfillStore
     /// дубля не создаёт (обновляет промпт, если прислали новый). false — заявка уже была.
     /// initiator — кто подал заявку (SpendInitiators.*): сохраняется в ней, чтобы догоняющая
     /// генерация в другом потоке могла назвать инициатора своей траты (S-SPEND-8).
+    /// actorUserId/projectId — атрибуция траты (п.1 хвоста R-S-SPEND-2): называет её тот, кто
+    /// знает сущность (PersonasCrudService); null — вызывающий её не знал, запись догоняющей
+    /// генерации прочитается как «нет поля → владелец», проект не будет назван.
     /// </summary>
-    public bool Enqueue(string kind, string entityId, string ownerId, string? prompt, string initiator)
+    public bool Enqueue(string kind, string entityId, string ownerId, string? prompt, string initiator,
+        string? actorUserId = null, string? projectId = null)
     {
         if (!ImageBackfillKinds.IsKnown(kind)
             || string.IsNullOrWhiteSpace(entityId) || string.IsNullOrWhiteSpace(ownerId))
@@ -117,8 +129,11 @@ public sealed class ImageBackfillStore
                 OwnerId = ownerId,
                 Prompt = string.IsNullOrWhiteSpace(prompt) ? null : prompt.Trim(),
                 // Пустой инициатор не пишем: «не назван» и отсутствие поля — одно и то же,
-                // читается одинаково (human)
+                // читается одинаково (human). Та же нормализация у атрибуции: у пустой строки
+                // нет отдельного значения (п.1 хвоста R-S-SPEND-2)
                 Initiator = string.IsNullOrWhiteSpace(initiator) ? null : initiator,
+                ActorUserId = string.IsNullOrWhiteSpace(actorUserId) ? null : actorUserId,
+                ProjectId = string.IsNullOrWhiteSpace(projectId) ? null : projectId,
             }]);
             return true;
         }
@@ -166,9 +181,11 @@ public sealed class ImageBackfillStore
             EntityId = r.EntityId,
             OwnerId = r.OwnerId,
             Prompt = prompt,
-            // Инициатор переживает и повторные попытки, и смену промпта: он про заявку,
-            // а не про конкретную попытку (S-SPEND-8)
+            // Инициатор и атрибуция переживают и повторные попытки, и смену промпта: они про
+            // заявку, а не про конкретную попытку (S-SPEND-8, п.1 хвоста R-S-SPEND-2)
             Initiator = r.Initiator,
+            ActorUserId = r.ActorUserId,
+            ProjectId = r.ProjectId,
             Attempts = attempts ?? r.Attempts,
             LastFailReason = failReason ?? r.LastFailReason,
             CreatedAt = r.CreatedAt,

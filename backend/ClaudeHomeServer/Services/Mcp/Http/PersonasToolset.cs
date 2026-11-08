@@ -474,9 +474,14 @@ public sealed partial class PersonasToolset(
             {
                 var id = StringArg(arguments, "id");
                 // Вызов из чата — агентский: трата аватара пишется с Initiator = Agent,
-                // каким её назвал вызывающий (S-SPEND-2c)
+                // каким её назвал вызывающий (S-SPEND-2c). Актором — актор хода, а не владелец
+                // песочницы: токен здесь арендатора, а ход может принадлежать участнику
+                // (п.2 хвоста R-S-SPEND-2, образец TasksToolset); актор неизвестен (фон,
+                // ход самого владельца) — права арендатора, он и есть актор
+                var actorId = sessions.GetTurnActor(session.Id, ownerId) ?? ownerId;
                 var generated = await crud.GenerateAvatarAsync(ownerId, id,
-                    new GenerateAvatarRequest(OptionalArg(arguments, "prompt"), 1), SpendInitiators.Agent);
+                    new GenerateAvatarRequest(OptionalArg(arguments, "prompt"), 1), SpendInitiators.Agent,
+                    actorId);
                 var unwrapped = Unwrap(generated);
                 if (unwrapped.IsError) return unwrapped;
                 // Кандидат сразу становится аватаром — как двухшаговый путь stdio-ветки

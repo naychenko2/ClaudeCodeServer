@@ -328,6 +328,27 @@ public class ImageGenerationSpendTests
         spend.Records.Single().Initiator.Should().BeNull("неизвестный инициатор не выдумываем");
     }
 
+    // Мелочь п.2 хвоста R-S-SPEND-2: в догоняющую запись идёт нормализованный инициатор, а не
+    // сырой: пустой дал бы второй записи «""» при первой с null — у одного факта два признака
+    [Fact]
+    public async Task ИнициаторНеНазван_ДогоняющаяЗаписьНесётТоЖеЧтоПервая()
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1");
+        var spend = new CapturingSpend();
+        var cost = new FakeCost(0.0123);
+        var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, cost);
+
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, "");
+        await spend.WaitForSecond(Settle);
+
+        var first = spend.Records.First();
+        var topUp = spend.Records.Last();
+        topUp.Should().NotBeSameAs(first, "цена пришла — догоняющая запись есть");
+        first.Initiator.Should().BeNull("неизвестный инициатор не выдумываем");
+        topUp.Initiator.Should().BeNull(
+            "у одного факта траты один признак инициатора: догоняющая не несёт \"\" против null первой");
+    }
+
     // П.3-4 ревью R-S-SPEND-2: вызывающий назвал арендатора, актора и проект — запись несёт их,
     // и догоняющая запись того же вызова несёт те же. Ключом хранилища остаётся арендатор:
     // актор — разрез, не владелец (SpendRecord.ActorUserId), и трата проектной персоны видна

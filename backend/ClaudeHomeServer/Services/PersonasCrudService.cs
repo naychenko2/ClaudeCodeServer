@@ -531,13 +531,18 @@ public sealed class PersonasCrudService(
     // исполнивший назван актором. Персона вне проекта: владелец и актор — один человек,
     // проект не называется. Осиротевший проект не называется: «Расход» не получает
     // несуществующий проект.
+    // actorUserId — актор, названный вызывающим (п.2 хвоста R-S-SPEND-2): в REST это сам
+    // обратившийся человек (userId), в MCP-тулсете — актор хода (GetTurnActor), а не владелец
+    // песочницы: токен арендатора, а ход принадлежит участнику. Не назван — актор равняется
+    // обратившемуся (как было).
     private (string OwnerId, string? ActorUserId, string? ProjectId) AvatarSpendAttribution(
-        Persona persona, string userId)
+        Persona persona, string userId, string? actorUserId = null)
     {
+        var actor = string.IsNullOrWhiteSpace(actorUserId) ? userId : actorUserId;
         var project = persona.ProjectId is { Length: > 0 } pid ? projects.GetById(pid) : null;
         return project is { } p && !string.IsNullOrEmpty(p.OwnerId)
-            ? (p.OwnerId, userId, p.Id)
-            : (userId, userId, null);
+            ? (p.OwnerId, actor, p.Id)
+            : (userId, actor, null);
     }
 
     // Сгенерировать НЕСКОЛЬКО вариантов аватар-фото по описанию (для выбора); провайдера
@@ -546,9 +551,12 @@ public sealed class PersonasCrudService(
     // prompt пуст → строим фото-промпт из имени/описания персоны.
     // initiator — кто подал операцию (SpendInitiators.*): REST из UI — человек, MCP-тулсет из
     // чата — агент; трату роутер пишет с тем же инициатором, что назвал вызывающий (S-SPEND-2c).
-    // Параметр обязательный: у метода ровно два входа, и каждый называет свой (S-SPEND-8)
+    // Параметр обязательный: у метода ровно два входа, и каждый называет свой (S-SPEND-8).
+    // actorUserId — актор операции (п.2 хвоста R-S-SPEND-2): называет его вызывающий —
+    // MCP-тулсет передаёт актора хода, а не владельца песочницы; не назван (REST) — актор
+    // равняется обратившемуся.
     public async Task<ActionResult> GenerateAvatarAsync(string userId, string id, GenerateAvatarRequest req,
-        string initiator)
+        string initiator, string? actorUserId = null)
     {
         var persona = personas.Get(id, userId);
         if (persona is null) return NotFound();
@@ -564,18 +572,23 @@ public sealed class PersonasCrudService(
         var canBackfill = persona.Avatar.Kind != PersonaAvatarKind.Image
             || string.IsNullOrEmpty(persona.Avatar.ImageFile);
 
+        // Атрибуция траты одна на оба пути этого вызова — и на генерацию, и на заявку, если
+        // генерации не будет: персона известна здесь, догоняющая генерация её не вычислит
+        // (п.1-4 ревью R-S-SPEND-2)
+        var (spendOwner, spendActor, spendProject) = AvatarSpendAttribution(persona, userId, actorUserId);
+
         // Провайдера нет — отвечаем отказом, но аватар не теряем: заявка догонит его,
         // как только генерацию настроят
         if (!images.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar))
         {
-            if (canBackfill) imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar, id, userId, prompt, initiator);
+            if (canBackfill) imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar, id, userId,
+                prompt, initiator, spendActor, spendProject);
             return BadRequest(new { error = ImageGenerationOffError, queued = canBackfill });
         }
 
         // Трату пишем на арендатора области персоны (проектная — на владельца проекта), актор
         // и проект называет атрибутция (п.3-4 ревью R-S-SPEND-2); инициатор — тот, который
         // назвал вызывающий (S-SPEND-2, S-SPEND-2c)
-        var (spendOwner, spendActor, spendProject) = AvatarSpendAttribution(persona, userId);
         var generated = await images.GenerateManyAsync(
             Services.Images.ImagePlaces.PersonaAvatar, prompt, count, spendOwner, initiator,
             spendActor, spendProject, CancellationToken.None);
@@ -584,7 +597,8 @@ public sealed class PersonasCrudService(
         // «появится сам», а не «генератор не ответил, аватар остался прежним».
         if (generated.Count == 0)
         {
-            if (canBackfill) imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar, id, userId, prompt, initiator);
+            if (canBackfill) imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar, id, userId,
+                prompt, initiator, spendActor, spendProject);
             return StatusCode(502, new { error = "Не удалось сгенерировать изображение", queued = canBackfill });
         }
 
@@ -674,12 +688,17 @@ public sealed class PersonasCrudService(
         }
     }
 
-    // Инициатор сохраняется вместе с заявкой: догоняющая генерация идёт в другом потоке и
-    // сама решить его не может (S-SPEND-8)
+    // Инициатор и атрибуция траты сохраняются вместе с заявкой: догоняющая генерация идёт в
+    // другом потоке и сама их решить не может (S-SPEND-8, п.1 хвоста R-S-SPEND-2). Атрибуция —
+    // та же AvatarSpendAttribution, что у интерактивной генерации: догоняющая запись проектной
+    // персоны попадает в тот же разрез по проекту и называет того же актора. Ключом заявки
+    // остаётся владелец сущности (по нему Resolve сверяет, что персона не ушла к другому)
     private Persona EnqueueAvatarBackfill(string userId, Persona persona, string prompt, string initiator)
     {
+        var (_, spendActor, spendProject) = AvatarSpendAttribution(persona, userId);
         imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar,
-            persona.Id, string.IsNullOrEmpty(persona.OwnerId) ? userId : persona.OwnerId, prompt, initiator);
+            persona.Id, string.IsNullOrEmpty(persona.OwnerId) ? userId : persona.OwnerId, prompt, initiator,
+            spendActor, spendProject);
         return persona;
     }
 

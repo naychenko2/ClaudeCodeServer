@@ -301,20 +301,12 @@ public class RootSubsystemBoundaryTests
         "ClaudeHomeServer.Services.Tts.TtsVoiceCatalog",
         "ClaudeHomeServer.Services.Tts.TtsVoiceCatalog+VoiceInfo",
         "ClaudeHomeServer.Services.Tts.TtsVoiceCatalog+Gender",
-        // === Хвост линии ядра S3 (карточки 007adf7b, 81d87ce8): контракт очереди и её хранители
-        // (QueuedMessage, PendingKind, PendingQueue, PendingQueueFile) живут в Services.Sessions
-        // (план §1, row «SessionEntry.cs (типы)»). Допуск на QueuedMessage снят: ни один
-        // проверяемый root-тип его больше не называет (ChatHistoryService, читающий pending.json,
-        // исключён как backbone). Осталась одна строка — реальный шов TaskExecutionService (root,
-        // не backbone) к константе PendingKind.Report в вызове SendOrEnqueueAsync. С задачей
-        // `fada2814` это живой допуск: IL-скан видит константу-аргумент по её позиции в сигнатуре
-        // вызова, и снятие строки красит сторож (проверено в копии мутации: «TaskExecutionService
-        // ссылается на ClaudeHomeServer.Services.Sessions.PendingKind»). До починки запись
-        // держалась как описание ребра в исходниках — скан его не видел. Тот же состав, что
-        // allow-list правила 4 в SessionCoreShapeGuardTests. Префикс
-        // `ClaudeHomeServer.Services.Sessions` НЕ открываем: ядро сессий — не «общая
-        // инфраструктура», а машина хода; вход к ней root-типов остаётся через фасад SessionManager.
-        "ClaudeHomeServer.Services.Sessions.PendingKind",
+        // Хвост линии ядра S3: типы Services.Sessions тут НЕ открываем ни префиксом, ни точечно. Контракты
+        // фасада (тип в сигнатуре члена SessionManager либо наследник Exception) разрешены веткой
+        // SessionCoreFacadeContracts в цикле ниже — один перечень с правилом 4 SessionCoreShapeGuardTests
+        // (решение лида 98d2368c), своего списка здесь нет. Роли ядра и данные ядра (QueuedMessage —
+        // контракт фасада, PendingQueueFile — данные) остаются запрещены: ядро сессий — не «общая
+        // инфраструктура», а машина хода; вход к ней root-типов — через фасад SessionManager.
     };
 
     /// <summary>Корневые инфраструктурные слоны, исключённые из проверки (и как
@@ -426,6 +418,10 @@ public class RootSubsystemBoundaryTests
                 // видит «root ссылается на ещё один тип из Services.CodeGraph» и
                 // требует явного расширения allow-list (повод выделить шов).
                 if (IsRootAllowedExactType(referenced)) continue;
+
+                // Контракт фасада (Services.Sessions): допуск на тип из того же перечня, что у
+                // правила 4 SessionCoreShapeGuardTests; вложенные типы сводятся к корню.
+                if (SessionCoreFacadeContracts.Contains(referenced)) continue;
 
                 // Backbone root-типы: defense-in-depth. Peer-root ссылки
                 // (`SessionManager`, `TaskManager` и т.п.) уже отсекаются правилом

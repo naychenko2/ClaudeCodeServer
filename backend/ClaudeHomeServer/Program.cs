@@ -203,10 +203,11 @@ builder.Services.AddResponseCompression(o =>
     // `[assembly: ApplicationPart("...")]` — MSBuild дописывает его в сгенерированный
     // `obj/*/ClaudeHomeServer.MvcApplicationPartsAssemblyInfo.cs` ссылочного проекта
     // Main, и `ApplicationPartManager.PopulateDefaultParts` добавляет их к составу
-    // MVC. Из-за этого выключение вертикали гейтом `Subsystems:Notes:Enabled=false`
-    // не изолирует её контроллеры: роутер находит action и пытается активировать
-    // `NotesController` без зависимостей → ProblemDetails 500 на каждый запрос к
-    // `/api/notes/*` (задача 4defaacc, QA-прогон 2026-09-10).
+    // MVC. Из-за этого гейт сам по себе маршрутов не снимает: у обычной ProjectReference-
+    // вертикали часть остаётся подключённой, и отказ даёт сам контроллер — честный 503
+    // с причиной (например PluginsController). В пилоте (Notes, до fa922fe7c) контроллер
+    // гейт не проверял: активация падала на отсутствующих зависимостях → ProblemDetails
+    // 500 на каждый запрос к `/api/notes/*` (задача 4defaacc, QA-прогон 2026-09-10).
     //
     // Notes — теперь динамический модуль (сценарий Б): ApplicationPart добавляется
     // ModuleLoader'ом по пути из DynamicModules-конфига (см. ниже), а не автоматически

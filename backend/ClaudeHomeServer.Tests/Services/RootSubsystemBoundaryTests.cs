@@ -301,16 +301,17 @@ public class RootSubsystemBoundaryTests
         "ClaudeHomeServer.Services.Tts.TtsVoiceCatalog",
         "ClaudeHomeServer.Services.Tts.TtsVoiceCatalog+VoiceInfo",
         "ClaudeHomeServer.Services.Tts.TtsVoiceCatalog+Gender",
-        // === Хвост линии ядра S3 (карточка 007adf7b): контракт очереди перенесён в
-        // Services.Sessions (план §1, row «SessionEntry.cs (типы)»), а его root-хранители
-        // остались в корне: PendingQueue — коллекция содержимого на SessionEntry.Pending,
-        // PendingQueueFile — формат pending.json (параметр ChatHistoryService.SavePending,
-        // сам исключён как backbone), TaskExecutionService передаёт фасаду константу
-        // PendingKind.Report. Префикс `ClaudeHomeServer.Services.Sessions` НЕ открываем:
-        // ядро сессий — не «общая инфраструктура», а машина хода; вход к ней root-типов
-        // остаётся через фасад SessionManager. Точечный допуск ровно на два типа данных.
-        // Перенос самих хранителей в ядро снял бы эти строки — отдельный шаг, не этот.
-        "ClaudeHomeServer.Services.Sessions.QueuedMessage",
+        // === Хвост линии ядра S3 (карточки 007adf7b, 81d87ce8): контракт очереди и её хранители
+        // (QueuedMessage, PendingKind, PendingQueue, PendingQueueFile) живут в Services.Sessions
+        // (план §1, row «SessionEntry.cs (типы)»). Допуск на QueuedMessage снят: ни один
+        // проверяемый root-тип его больше не называет (ChatHistoryService, читающий pending.json,
+        // исключён как backbone). Осталась одна строка — документация реальной ссылки
+        // TaskExecutionService (root, не backbone) на константу PendingKind.Report в вызове
+        // SendOrEnqueueAsync: IL-скан тел обращение к константе enum не видит (проверено снятием
+        // строки — прогон зелёный), поэтому запись держится как описание ребра в исходниках,
+        // в том же составе, что allow-list правила 4 в SessionCoreShapeGuardTests. Префикс
+        // `ClaudeHomeServer.Services.Sessions` НЕ открываем: ядро сессий — не «общая
+        // инфраструктура», а машина хода; вход к ней root-типов остаётся через фасад SessionManager.
         "ClaudeHomeServer.Services.Sessions.PendingKind",
     };
 

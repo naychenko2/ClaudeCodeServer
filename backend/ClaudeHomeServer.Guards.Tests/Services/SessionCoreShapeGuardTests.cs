@@ -89,20 +89,13 @@ public class SessionCoreShapeGuardTests
             "регистрация AddSessionCore в DI — единственная точка сборки ядра; "
             + "пространство имён Composition — по замыслу (комментарий у SessionCoreRegistration.cs:5)",
 
-        // Хранилище и вызывающие контракта очереди (S3-1, план §1): после переноса
-        // QueuedMessage/PendingKind в ядро эти типы Main называют его данные, оставаясь снаружи.
-        // Ни один из них не зовёт поведение ядра — вход к per-owner изоляции у них прежний,
-        // через фасад SessionManager. Перенос их самих в ядро — отдельный шаг (он снял бы эти
-        // строки), в эту карточку не входит.
-        ["ClaudeHomeServer.Services.PendingQueue"] =
-            "коллекция содержимого очереди (поле SessionEntry.Pending): её элемент — перенесённый "
-            + "контракт; поведения ядра не зовёт",
-        ["ClaudeHomeServer.Services.PendingQueueFile"] =
-            "формат pending.json: поле Items — список перенесённого контракта; данные, "
-            + "не путь входа в ядро",
+        // Вызывающие контракта очереди, оставшиеся снаружи ядра (S3-1, план §1). Ни один из них
+        // не зовёт поведение ядра — вход к per-owner изоляции у них прежний, через фасад
+        // SessionManager. Хранители данных очереди (PendingQueue, PendingQueueFile) здесь больше
+        // не перечислены: перенесены в Services.Sessions (хвост S3) и стали своими для ядра.
         ["ClaudeHomeServer.Services.ChatHistoryService"] =
-            "LoadPending/SavePending читают и пишут pending.json (в теле — List<QueuedMessage>): "
-            + "хранитель файла очереди, поведения ядра не зовёт",
+            "LoadPending/SavePending читают и пишут pending.json (параметр и generic-аргумент — "
+            + "Sessions.PendingQueueFile): хранитель файла очереди за ядром, поведения ядра не зовёт",
         ["ClaudeHomeServer.Services.TaskExecutionService"] =
             "зовёт фасад (SendOrEnqueueAsync) и передаёт ему константу PendingKind.Report: "
             + "к ядро обращается только значением enum",

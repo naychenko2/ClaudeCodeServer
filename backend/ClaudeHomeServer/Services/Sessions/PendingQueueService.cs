@@ -19,9 +19,9 @@ namespace ClaudeHomeServer.Services.Sessions;
 // и шов ITurnStarter. Класс public ТОЛЬКО потому, что он параметр публичного конструктора
 // SessionManager (CS0051) и DI нужен публичный конструктор; обход фасада закрывает сторож
 // формы ядра (правило 4).
-// Имя — PendingQueueService, а не PendingQueue из плана S3-0: в Services уже живёт коллекция
-// состояния очереди (Services.PendingQueue на SessionEntry.Pending), и два одноимённых типа
-// в одном дереве краснеют — SessionEntry видит ближайший namespace. Суть роли — §1 плана.
+// Имя — PendingQueueService, а не PendingQueue из плана S3-0: в этом же namespace живёт
+// коллекция состояния очереди (PendingQueue на SessionEntry.Pending) — роль и её данные
+// названы по-разному, чтобы вызывающий не путал хранение с обслуживанием. Суть роли — §1 плана.
 public sealed class PendingQueueService
 {
     private readonly SessionStore _store;
@@ -73,7 +73,7 @@ public sealed class PendingQueueService
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[SessionManager] Очередь чата {entry.Info.Id} не записана: {ex.Message}");
+            Console.Error.WriteLine($"[PendingQueueService] Очередь чата {entry.Info.Id} не записана: {ex.Message}");
         }
     }
 
@@ -100,7 +100,7 @@ public sealed class PendingQueueService
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[SessionManager] Очередь чата {entry.Info.Id} не прочитана: {ex.Message}");
+            Console.Error.WriteLine($"[PendingQueueService] Очередь чата {entry.Info.Id} не прочитана: {ex.Message}");
         }
         AttachPendingPersistence(entry);
         if (entry.ExpiredOnRestore is not null) PersistPending(entry);

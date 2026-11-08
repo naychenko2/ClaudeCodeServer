@@ -328,9 +328,13 @@ internal sealed class SessionEntry
 // фасада (SendOrEnqueueAsync, SessionManager.cs:1314; GetPending, SessionManager.cs:1381)
 // называют этот тип, поэтому он public — как был. Ссылки ядра
 // (PendingQueueService, TurnIntake, TurnProcessHost, TurnRecovery) идут к нему напрямую, без
-// alias через фасад; внешние потребители (Services.PendingQueue, Services.PendingQueueFile,
-// TaskExecutionService, SessionMessagesController) перечислены в allow-list правила 4 сторожа
-// формы ядра и в точечном допуске RootSubsystemBoundaryTests.
+// alias через фасад. Хранители данных очереди (коллекция PendingQueue и формат pending.json
+// PendingQueueFile) — тоже в ядре, Services/Sessions/PendingQueue.cs (хвост S3): пока они
+// стояли в корне, на них смотрели allow-list сторожа формы ядра и допуск root-сторожа.
+// Снаружи остались только вызывающие контракта: ChatHistoryService (читает и пишет
+// pending.json), TaskExecutionService (передаёт фасаду константу PendingKind.Report),
+// SessionMessagesController (читает Kind для ответа /pending) — они в allow-list правила 4
+// сторожа формы ядра, TaskExecutionService к тому же в точечном допуске RootSubsystemBoundaryTests.
 
 // Ожидающее доставки сообщение. Kind: User — сообщение человека из «честной очереди»
 // (доставляется со своими вложениями и режимом, как при обычной отправке); Agent —

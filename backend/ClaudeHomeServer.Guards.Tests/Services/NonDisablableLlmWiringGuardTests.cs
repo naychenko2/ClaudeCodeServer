@@ -20,8 +20,13 @@ public class NonDisablableLlmWiringGuardTests
 {
     private const string ProgramPath = "backend/ClaudeHomeServer/Program.cs";
 
-    private static readonly Regex EnsureCall = new(
-        @"^NonDisablableSubsystems\.EnsureLlmEnabled\(\s*builder\.Configuration\s*\)\s*;",
+    // «Есть ли вызов вообще» и «стоит ли он верхним оператором» разведены: переформатирование
+    // (отступ, перенос) не должно читаться как «вызова нет».
+    private static readonly Regex AnyEnsureCall = new(
+        @"\bNonDisablableSubsystems\s*\.\s*EnsureLlmEnabled\s*\(", RegexOptions.Compiled);
+
+    private static readonly Regex TopLevelEnsureCall = new(
+        @"^NonDisablableSubsystems\s*\.\s*EnsureLlmEnabled\(\s*builder\s*\.\s*Configuration\s*\)\s*;",
         RegexOptions.Compiled | RegexOptions.Multiline);
 
     private static readonly Regex AddSubsystemsCall = new(
@@ -30,57 +35,116 @@ public class NonDisablableLlmWiringGuardTests
     private static readonly Regex AddCoreCall = new(
         @"\bbuilder\.Services\.AddCore\s*\(", RegexOptions.Compiled);
 
+    // Подключение источника тумблеров подсистем (data/subsystems.json): вызов обязан стоять ПОСЛЕ него.
+    private static readonly Regex SubsystemsSourceCall = new(
+        @"\bAddJsonFile\s*\(\s*subsystemsPath\b", RegexOptions.Compiled);
+
     [Fact]
     public void ProgramCs_ВызываетEnsureLlmEnabled_ДоAddSubsystemsИAddCore()
     {
-        var text = StripComments(File.ReadAllText(Path.Combine(FindRepoRoot(), ProgramPath)));
-        AssertWiring(text);
+        AssertWiring(File.ReadAllText(Path.Combine(FindRepoRoot(), ProgramPath)));
     }
 
     // Самопроверки на синтетических нарушителях: сторож, который не краснеет, ничего не охраняет.
+    // Каждая фиксирует и КАКОЕ правило нарушено (по тексту отказа), а не только факт исключения.
+    private const string Source = "builder.Configuration.AddJsonFile(subsystemsPath, optional: true);\n";
+    private const string Call = "NonDisablableSubsystems.EnsureLlmEnabled(builder.Configuration);\n";
+    private const string Core = "builder.Services.AddCore(c);\n";
+    private const string Subsystems = "builder.Services.AddSubsystems(c);\n";
+
     [Fact]
     public void Правило_КраснеетБезВызова()
     {
-        var act = () => AssertWiring("builder.Services.AddCore(c);\nbuilder.Services.AddSubsystems(c);");
-        act.Should().Throw<Exception>();
+        var act = () => AssertWiring(Source + Core + Subsystems);
+        act.Should().Throw<Exception>().WithMessage("*нет (вне комментариев)*");
+    }
+
+    [Fact]
+    public void Правило_КраснеетЕслиВызовОставленВБлочномКомментарии()
+    {
+        var act = () => AssertWiring(Source + "/* " + Call + "*/\n" + Core + Subsystems);
+        act.Should().Throw<Exception>().WithMessage("*нет (вне комментариев)*");
+    }
+
+    [Fact]
+    public void Правило_КраснеетЕслиВызовОставленВСтрочномКомментарии()
+    {
+        var act = () => AssertWiring(Source + "// " + Call + Core + Subsystems);
+        act.Should().Throw<Exception>().WithMessage("*нет (вне комментариев)*");
+    }
+
+    [Fact]
+    public void Правило_КраснеетЕслиВызовНеВерхнимОператором()
+    {
+        var act = () => AssertWiring(Source + "if (x)\n    " + Call + Core + Subsystems);
+        act.Should().Throw<Exception>().WithMessage("*не верхним оператором*");
     }
 
     [Fact]
     public void Правило_КраснеетЕслиВызовПослеAddSubsystems()
     {
-        var act = () => AssertWiring(
-            "builder.Services.AddCore(c);\nbuilder.Services.AddSubsystems(c);\n" +
-            "NonDisablableSubsystems.EnsureLlmEnabled(builder.Configuration);");
-        act.Should().Throw<Exception>();
+        var act = () => AssertWiring(Source + Core + Subsystems + Call);
+        act.Should().Throw<Exception>().WithMessage("*до AddSubsystems*");
+    }
+
+    [Fact]
+    public void Правило_КраснеетЕслиВызовМеждуAddCoreИAddSubsystems()
+    {
+        var act = () => AssertWiring(Source + Core + Call + Subsystems);
+        act.Should().Throw<Exception>().WithMessage("*до сборки контейнера (AddCore)*");
+    }
+
+    [Fact]
+    public void Правило_КраснеетЕслиВызовДоПодключенияИсточникаПодсистем()
+    {
+        var act = () => AssertWiring(Call + Source + Core + Subsystems);
+        act.Should().Throw<Exception>().WithMessage("*после всех источников конфига*");
+    }
+
+    [Fact]
+    public void Правило_КраснеетЕслиИсточникПодсистемНеНайден()
+    {
+        var act = () => AssertWiring(Call + Core + Subsystems);
+        act.Should().Throw<Exception>().WithMessage("*источник тумблеров подсистем*");
     }
 
     [Fact]
     public void Правило_ЗеленоеПриВызовеДоСборкиКонтейнера()
     {
-        AssertWiring(
-            "NonDisablableSubsystems.EnsureLlmEnabled(builder.Configuration);\n" +
-            "builder.Services.AddCore(c);\nbuilder.Services.AddSubsystems(c);");
+        AssertWiring(Source + Call + Core + Subsystems);
     }
 
-    private static void AssertWiring(string text)
+    private static void AssertWiring(string raw)
     {
-        var calls = EnsureCall.Matches(text);
+        var text = StripComments(raw);
+
+        AnyEnsureCall.Matches(text).Count.Should().BeGreaterThan(0,
+            "в Program.cs вызова NonDisablableSubsystems.EnsureLlmEnabled нет (вне комментариев): " +
+            "без него Subsystems:llm:Enabled=false роняет старт чужим текстом DI");
+
+        var calls = TopLevelEnsureCall.Matches(text);
         calls.Count.Should().Be(1,
-            "Program.cs обязан ровно раз вызвать NonDisablableSubsystems.EnsureLlmEnabled(builder.Configuration) " +
-            "верхним оператором: без вызова Subsystems:llm:Enabled=false роняет старт чужим текстом DI");
+            "вызов NonDisablableSubsystems.EnsureLlmEnabled(builder.Configuration) есть, но он не верхним оператором " +
+            "(или не ровно один): ожидается одна строка с колонки 0, без вложенности в if/блок");
 
         var subsystems = AddSubsystemsCall.Match(text);
         var core = AddCoreCall.Match(text);
+        var source = SubsystemsSourceCall.Match(text);
         subsystems.Success.Should().BeTrue("сторож обязан видеть AddSubsystems, иначе порядок не проверить");
         core.Success.Should().BeTrue("сторож обязан видеть builder.Services.AddCore");
+        source.Success.Should().BeTrue(
+            "сторож обязан видеть источник тумблеров подсистем (AddJsonFile(subsystemsPath…)), иначе нижнюю границу не проверить");
 
         var at = calls[0].Index;
+        at.Should().BeGreaterThan(source.Index,
+            "отказ — после всех источников конфига: иначе Subsystems:llm:Enabled=false из subsystems.json не прочитан");
         at.Should().BeLessThan(subsystems.Index, "отказ — до AddSubsystems");
         at.Should().BeLessThan(core.Index, "отказ — до сборки контейнера (AddCore)");
     }
 
+    // Строчные и блочные комментарии одним проходом: побеждает тот, что начался раньше.
     private static string StripComments(string text) =>
-        Regex.Replace(text, @"//[^\r\n]*", "");
+        Regex.Replace(text, @"//[^\r\n]*|/\*[\s\S]*?\*/", " ");
 
     // .git бывает файлом (worktree), поэтому проверяем и каталог, и файл
     private static string FindRepoRoot()

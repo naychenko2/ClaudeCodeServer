@@ -23,9 +23,11 @@ internal readonly record struct SessionLoadResult(
 // Зависимостей четыре (config, projects, broadcaster, taskLookup): IServiceProvider и ленивых
 // швов здесь нет, а проверка прав через IProjectAccess остаётся в фасаде SessionManager (методы
 // чтения «с правом» и «с областью запроса» — композиция GetById и IProjectAccess).
-// Класс public ТОЛЬКО потому, что он параметр публичного конструктора SessionManager (CS0051) и
-// DI нужен публичный конструктор; обход фасада закрывает сторож формы ядра (правило 4:
-// на типы Services.Sessions ссылаются лишь SessionManager, сами Services.Sessions и тесты).
+// Класс public потому, что он параметр публичного конструктора фасада и публичных конструкторов
+// 11 ролей (CS0051), и DI нужен публичный конструктор (активация типа); решение и условия возврата
+// в internal — ADR-014, раздел «Решение: видимость ядра сессий». Обход фасада закрывает сторож
+// формы ядра (правило 4: на типы Services.Sessions ссылаются лишь SessionManager, сами
+// Services.Sessions и тесты).
 public sealed class SessionStore : ITeamRunState, Access.ITurnFrameSource, Access.ITurnActorRegistry, IDisposable
 {
     // Реестр сессий: одна точка правды на процесс (синглтон в DI). SessionManager держит ссылку

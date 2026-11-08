@@ -3,6 +3,7 @@ using ClaudeHomeServer.Services.Images;
 using ClaudeHomeServer.Services.Spend;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -489,6 +490,76 @@ public class ImageGenerationSpendTests
         spend.Records.Should().ContainSingle(r => r.Source == "next" && r.Generations == 1
             && r.Label == ImageGenerationService.SpendLabel,
             "у провайдера без id запроса цены не будет — «сумма уточняется» не обещаем");
+    }
+
+    // Боевой порядок auto — glif → fal (ProviderOrder): пустой glif идёт первым, пустой fal с id
+    // последним, трата fal пишется на последней итерации ровно один раз.
+    [Fact]
+    public async Task Auto_БоевойПорядок_ПустойGlif_ПустойFalСId_РовноОднаЗаписьFal()
+    {
+        var glif = new FakeGenerator("glif", enabled: true, returnsImages: false);
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1", returnsImages: false);
+        var spend = new CapturingSpend();
+        var cost = new FakeCost(0.04);
+        var service = new ImageGenerationService([fal, glif], Store(NewTempDir()), null, spend, cost);
+
+        Assert.Empty(await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None));
+
+        await spend.WaitForFirst(Settle);
+        await spend.WaitForSecond(TimeSpan.FromMilliseconds(300));
+        glif.Calls.Should().Be(1);
+        fal.Calls.Should().Be(1);
+        var rec = spend.Records.Should().ContainSingle().Subject;
+        rec.Source.Should().Be(SpendSources.Fal);
+        rec.Label.Should().Be(ImageGenerationService.SpendLabelNoImages);
+        rec.CostUsd.Should().Be(0.04);
+        rec.Generations.Should().Be(0);
+    }
+
+    private sealed class CapturingLog : ILogger<ImageGenerationService>
+    {
+        private readonly List<(LogLevel Level, string Text)> _items = [];
+        public IReadOnlyList<(LogLevel Level, string Text)> Items
+        {
+            get { lock (_items) return [.. _items]; }
+        }
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            lock (_items) _items.Add((logLevel, formatter(state, exception)));
+        }
+    }
+
+    [Fact]
+    public async Task ПустойFal_ЦенаНеПоявилась_ЛогНеОбещаетЗапись()
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1", returnsImages: false);
+        var log = new CapturingLog();
+        var cost = new FakeCost(null);
+        var service = new ImageGenerationService([fal], Store(NewTempDir()), log, new CapturingSpend(), cost);
+
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None);
+        await cost.AskedOrTimeout;
+        await Task.Delay(300);
+
+        var warn = log.Items.Should().ContainSingle(i => i.Level == LogLevel.Warning).Subject;
+        warn.Text.Should().Contain("записи нет").And.NotContain("трата остаётся без суммы");
+    }
+
+    [Fact]
+    public async Task ПустойFal_ПустойВладелец_РанийВыходПишетЛогБезОбещанияЗаписи()
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1", returnsImages: false);
+        var log = new CapturingLog();
+        var cost = new FakeCost(0.04);
+        var service = new ImageGenerationService([fal], Store(NewTempDir()), log, new CapturingSpend(), cost);
+
+        await service.GenerateManyAsync(Avatar, "кот", 1, "", SpendInitiators.Human, CancellationToken.None);
+
+        log.Items.Should().Contain(i => i.Level == LogLevel.Warning && i.Text.Contains("записи нет"));
+        cost.Calls.Should().Be(0);
     }
 
     // Регресс: с картинками — прежний путь (pending с Generations = N + догоняющая)

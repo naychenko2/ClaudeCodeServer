@@ -9,7 +9,9 @@ namespace ClaudeHomeServer.Tests.Services;
 
 /// <summary>
 /// Сторож формы ядра сессий (S3-0 §6, docs/research/session-manager-split-2026-11.md): пять правил
-/// для типов namespace <c>ClaudeHomeServer.Services.Sessions</c> (роли, вынесенные из SessionManager).
+/// для типов namespace <c>ClaudeHomeServer.Services.Sessions</c> (роли, вынесенные из SessionManager),
+/// плюс два трипвайра по фасадному ребру: снятый Llm-контракт и запрет самого фасада как типа ядра
+/// (R-ФИНАЛ c1, хвост ревью 3abaaab0).
 /// <list type="number">
 /// <item>ни один параметр конструктора не <see cref="SessionManager"/> (роль не знает фасад);</item>
 /// <item>параметров ≤ 10 без <c>ILogger&lt;T&gt;</c> (новая зависимость — сигнал резать класс);
@@ -31,7 +33,12 @@ namespace ClaudeHomeServer.Tests.Services;
 /// </list>
 /// Плюс трипвайр по самому фасаду (хвост 1f7152c9, не правило над типами пространства имён):
 /// <c>SessionManager</c> не упоминает снятый Llm-контракт <c>ICheapTextRunner</c> — ни в какой
-/// форме (поле, параметр, свойство), см. <see cref="FacadeForbiddenLlm"/>.
+/// форме (поле, параметр, свойство), см. <see cref="FacadeForbiddenLlm"/>. И обратное фасадное
+/// ребро (R-ФИНАЛ c1, хвост 3abaaab0): ни один тип ядра не упоминает сам <c>SessionManager</c> —
+/// прежний отказ («его ловит правило 1») держался только для параметров конструктора: статический
+/// вызов <c>SessionManager.X(…)</c> или параметр метода типа фасада проходил незамеченным.
+/// Точка сборки вне проверки по пространству имён (Composition), её ленивые резолвы
+/// <c>GetRequiredService&lt;SessionManager&gt;()</c> (SessionCoreRegistration.cs:36,112) допустимы.
 /// Область правил — пространство имён <c>ClaudeHomeServer.Services.Sessions</c>: это соглашение, а не
 /// механика. Роли ядра сейчас лежат в нём, поэтому все пять правил их видят; роль, вынесенная в другое
 /// пространство имён, уходит из-под правил целиком (правила её не увидят, и правило 4 не пометит ссылок
@@ -40,6 +47,9 @@ namespace ClaudeHomeServer.Tests.Services;
 /// (конструктор фасада больше 30 параметров — правило 2 краснеет на нём сразу), а исключения для них
 /// были бы большим именем-списком — тем самым слабым местом, из которого исправлено правило 4;
 /// сторож по списку имён ролей — тоже опознавание по имени плюс не проверяется полнота самого списка.
+/// Плановое правило §5 «класс зависит только от классов прежних шагов» здесь не охраняется и не
+/// является сторожем: причина и граница того, что всё же охраняется, записаны в карте §6
+/// (R-ФИНАЛ c2).
 /// Правила — чистые функции над набором типов, поэтому «мутация сторожа» доказывается самопроверками
 /// на синтетических нарушителях: сторож, который не краснеет, ничего не охраняет.
 /// Сборку Main форс-загружаем, иначе сторож проходит вакуумно.
@@ -195,24 +205,32 @@ public class SessionCoreShapeGuardTests
             + "уточнение заголовка живёт в ChatNaming, раннер он берёт из контейнера напрямую";
 
     /// <summary>Трипвайр обратного ребра (хвост линии ядра): типы ядра не ссылаются ни на один тип
-    /// фасада — ни на вложенный в <see cref="SessionManager"/>, ни на top-level, объявленный рядом с
-    /// ним (<paramref name="facadeTopLevel"/>, см. <see cref="FacadeTopLevelTypes"/>). Раньше alias
-    /// `using X = …SessionManager.X;` прятал такую ссылку, а первая версия сторожа смотрела только на
-    /// вложенные типы: top-level (`TurnResult`, `ChatVisibilityResult`) имеют DeclaringType == null и
-    /// проходили молча — ребро ядро → фасад оставалось живым при зелёных 68/68.</summary>
+    /// фасада — ни на сам <see cref="SessionManager"/>, ни на вложенный в него, ни на top-level,
+    /// объявленный рядом с ним (<paramref name="facadeTopLevel"/>, см. <see cref="FacadeTopLevelTypes"/>).
+    /// Раньше alias `using X = …SessionManager.X;` прятал такую ссылку, а первая версия сторожа смотрела
+    /// только на вложенные типы: top-level (`TurnResult`, `ChatVisibilityResult`) имеют DeclaringType == null
+    /// и проходили молча — ребро ядро → фасад оставалось живым при зелёных 68/68. Сам фасад был исключён
+    /// как «ловится правилом 1» — но правило 1 смотрит только параметры конструктора: статический вызов
+    /// <c>SessionManager.X(…)</c> или параметр метода типа фасада проходил незамеченным (R-ФИНАЛ c1,
+    /// хвост 3abaaab0). Проверка — точное равенство типа: сканер даёт declaring-тип вызванного метода
+    /// (IL-опкод call) и тип параметра из сигнатуры, обе формы в него попадают. Точка сборки вне
+    /// <see cref="CoreTypes"/> по пространству имён (Composition) и резолвит фасад ленивыми швами —
+    /// это допустимо, её охраняет правило 4.</summary>
     internal static IEnumerable<string> CoreNoFacadeRefs(IEnumerable<Type> coreTypes,
         IReadOnlySet<Type> facadeTopLevel) =>
         from t in coreTypes
         let hit = BoundaryIlScanner.CollectAllReferencedTypes(t)
-            .FirstOrDefault(r => r.DeclaringType == typeof(SessionManager) || facadeTopLevel.Contains(r))
+            .FirstOrDefault(r => r == typeof(SessionManager)
+                || r.DeclaringType == typeof(SessionManager) || facadeTopLevel.Contains(r))
         where hit is not null
-        select $"{t.FullName} ссылается на {hit.FullName}: контракт, который нужен ядру, живёт в "
-            + "Services.Sessions, а не типом фасада (ребро «ядро → фасад»)";
+        select $"{t.FullName} ссылается на {hit.FullName}: ребро «ядро → фасад» закрыто — контракты "
+            + "ядра живут в Services.Sessions, а сам фасад не является типом роли";
 
     /// <summary>Top-level типы, объявленные в файле фасада SessionManager.cs: по рефлексии они ничем не
     /// отличаются от прочих типов Services, поэтому набор берётся разбором объявлений в колонке 0
-    /// самого файла и разрешается в сборке Main. Сам <see cref="SessionManager"/> в набор не входит
-    /// (его ловят правило 1 и параметры конструкторов), вложенные — по DeclaringType.</summary>
+    /// самого файла и разрешается в сборке Main. Сам <see cref="SessionManager"/> в набор не входит:
+    /// он проверяется точным равенством типа в <see cref="CoreNoFacadeRefs"/> (R-ФИНАЛ c1),
+    /// вложенные — по DeclaringType.</summary>
     internal static HashSet<Type> FacadeTopLevelTypes(string facadeSource)
     {
         var names = FacadeTopLevelNames(facadeSource);
@@ -836,6 +854,16 @@ public class SessionCoreShapeGuardTests
 
     private sealed class FakeUsesFacadeNested { public SessionManager.TeamRunQuota Quota; }
 
+    // Формы ссылки на сам фасад (R-ФИНАЛ c1): параметр метода (правило 1 до него не дотягивается)
+    // и статический вызов (сканер даёт declaring-тип вызванного метода по IL-опкоду call;
+    // сам вызов в тесте ни разу не исполняется — достаточно тела).
+    private sealed class FakeMethodTakesManager { public void Go(SessionManager manager) { } }
+
+    private static class FakeCallsFacadeStatic
+    {
+        public static string ChatPreview(string text) => SessionManager.ChatPreview(text);
+    }
+
     private sealed class FakeReferrer { public SessionStore? Store; }
 
     private sealed class FakeReferrerTakesData { public PendingQueueFile? File; }
@@ -896,8 +924,22 @@ public class SessionCoreShapeGuardTests
     public void Самопроверка_трипвайр_ядра_краснеет_на_ссылке_на_вложенный_тип_фасада()
     {
         CoreNoFacadeRefs([typeof(FakeUsesFacadeNested)], new HashSet<Type>()).Should().ContainSingle();
-        CoreNoFacadeRefs([typeof(FakeTakesManager)], new HashSet<Type>()).Should().BeEmpty(
-            "сам фасад как параметр — не вложенный тип (его ловит правило 1)");
+    }
+
+    [Fact]
+    public void Самопроверка_трипвайр_ядра_краснеет_на_самом_фасаде_во_всех_формах()
+    {
+        // R-ФИНАЛ c1 (хвост 3abaaab0): раньше фасад исключался как «ловится правилом 1», и прежняя
+        // самопроверка утверждала BeEmpty на нём — это и есть подтверждённый слепотой случай.
+        // Каждая форма ссылки обязана краснеть: поле и параметр конструктора — FakeTakesManager,
+        // параметр метода — FakeMethodTakesManager (правило 1 его не видит вовсе),
+        // статический вызов — FakeCallsFacadeStatic.
+        CoreNoFacadeRefs([typeof(FakeTakesManager)], new HashSet<Type>()).Should().ContainSingle(
+            "поле и параметр конструктора типа фасада");
+        CoreNoFacadeRefs([typeof(FakeMethodTakesManager)], new HashSet<Type>()).Should().ContainSingle(
+            "параметр метода типа фасада — не конструктор, правило 1 до него не дотягивается");
+        CoreNoFacadeRefs([typeof(FakeCallsFacadeStatic)], new HashSet<Type>()).Should().ContainSingle(
+            "статический вызов SessionManager.ChatPreview: declaring-тип вызванного метода в IL");
     }
 
     [Fact]

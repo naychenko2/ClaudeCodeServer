@@ -2,6 +2,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Images;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
@@ -150,6 +151,128 @@ public class FalImageServiceTests
 
         result.Images.Should().BeEmpty();
         result.RequestId.Should().BeNull();
+    }
+
+    // ── Отмена вызывающего и таймаут тела (п.1–3 хвоста R-S-SPEND-9a) ────────────────
+
+    private static HttpResponseMessage FalResponse(HttpContent content, string requestId)
+    {
+        var resp = new HttpResponseMessage(System.Net.HttpStatusCode.OK) { Content = content };
+        resp.Headers.Add("x-fal-request-id", requestId);
+        return resp;
+    }
+
+    // Фабрика с логом: по нему видно, какой веткой прошёл случай — своей или catch про сбоя.
+    private static FalImageService ServiceWith(
+        Func<HttpRequestMessage, HttpResponseMessage> respond, ILogger<FalImageService> log)
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["Fal:ApiKey"] = "k" }).Build();
+        return new FalImageService(new StubFactory(respond), config, log);
+    }
+
+    private sealed class CapturingLog : ILogger<FalImageService>
+    {
+        private readonly List<(LogLevel Level, string Text)> _items = [];
+        public IReadOnlyList<(LogLevel Level, string Text)> Items
+        {
+            get { lock (_items) return [.. _items]; }
+        }
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            lock (_items) _items.Add((logLevel, formatter(state, exception)));
+        }
+    }
+
+    // Тело, обрываемое по отмене вызывающего: заголовки и id уже получены, обрывается само
+    // чтение — так это выглядит в транспорте, когда человек отменил свой ход.
+    private sealed class CancelledOnReadBody(CancellationTokenSource cts) : HttpContent
+    {
+        protected override Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context) => Cancel();
+        protected override Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context, CancellationToken ct) => Cancel();
+        private Task Cancel()
+        {
+            cts.Cancel();
+            return Task.FromException(new OperationCanceledException());
+        }
+        protected override bool TryComputeLength(out long length) { length = 0; return false; }
+    }
+
+    // Тело, обрываемое таймаутом транспорта: токен вызывающего жив, обрывается само чтение
+    // (так HttpClient ведёт себя на client.Timeout при чтении тела).
+    private sealed class TimedOutBody : HttpContent
+    {
+        private static readonly Task Failed = Task.FromException(
+            new TaskCanceledException("чтение тела оборвано таймаутом транспорта"));
+        protected override Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context) => Failed;
+        protected override Task SerializeToStreamAsync(Stream stream, System.Net.TransportContext? context, CancellationToken ct) => Failed;
+        protected override bool TryComputeLength(out long length) { length = 0; return false; }
+    }
+
+    [Fact]
+    public async Task ОтменаДоОтвет_ПробрасываетсяВызывающему()
+    {
+        using var cts = new CancellationTokenSource();
+        var svc = ServiceWith(_ =>
+        {
+            // Отмена пришла во время SendAsync: ответа нет, идентификатора неспросить
+            cts.Cancel();
+            throw new OperationCanceledException();
+        });
+
+        var call = () => svc.GenerateManyAsync("кот", 1, null, cts.Token);
+
+        await call.Should().ThrowAsync<OperationCanceledException>(
+            "отмена вызывающего до ответа не глотается: до неё нечего ни тарифицировать, ни терять");
+    }
+
+    [Fact]
+    public async Task ОтменаПослеПринятогоЗапроса_IdПереданПустымРезультатом()
+    {
+        using var cts = new CancellationTokenSource();
+        var svc = ServiceWith(_ => FalResponse(new CancelledOnReadBody(cts), "req-cancel"));
+
+        var result = await svc.GenerateManyAsync("кот", 1, null, cts.Token);
+
+        // Не пробросом: вместе с исключением потерялся бы id уже принятого запроса, а по этому id
+        // роутер спросит цену и запишет трату, после чего продолжит отмену сам (свой токен).
+        result.Images.Should().BeEmpty();
+        result.RequestId.Should().Be("req-cancel",
+            "отмена после принятого ответа не теряет id оплаченного запроса");
+    }
+
+    [Fact]
+    public async Task ТаймаутЧтенияТела_IdСохраняется()
+    {
+        var svc = ServiceWith(_ => FalResponse(new TimedOutBody(), "req-body-timeout"));
+
+        var result = await svc.GenerateManyAsync("кот", 1, null);
+
+        // Заголовки достаются раньше тела: id остаётся, даже если тело оборвано. До правки тело
+        // буферизовалось внутри SendAsync, и такой обрыв не оставлял ответа вовсе.
+        result.Images.Should().BeEmpty();
+        result.RequestId.Should().Be("req-body-timeout",
+            "id из заголовков не теряется из-за обрыва чтения тела");
+    }
+
+    [Fact]
+    public async Task ТелоНеОбъект_ИдётСвоейВеткой_AНеИсключением()
+    {
+        var log = new CapturingLog();
+        var svc = ServiceWith(
+            _ => FalResponse(new StringContent("[]", System.Text.Encoding.UTF8, "application/json"), "req-x"), log);
+
+        var result = await svc.GenerateManyAsync("кот", 1, null);
+
+        result.Images.Should().BeEmpty();
+        result.RequestId.Should().Be("req-x", "не-объектное тело id не теряет");
+        // До правки TryGetProperty на массиве бросал InvalidOperationException, и случай проходил
+        // через catch: в логе он выглядел как сбой связи. Поведение то же, ветка — своя.
+        log.Items.Should().NotContain(i => i.Text.Contains("Ошибка генерации"),
+            "не-объектное тело — штатная ветка, а не исключение в catch");
     }
 
     [Fact]

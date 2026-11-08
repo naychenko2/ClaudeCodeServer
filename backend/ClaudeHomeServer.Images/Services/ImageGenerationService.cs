@@ -120,6 +120,12 @@ public sealed class ImageGenerationService
             // GPU): цену спрашиваем ДО перехода к следующему провайдеру, чтобы фолбэк не съел трату
             RecordNoImagesSpend(place, generator, model, generated.RequestId, ownerId, initiator,
                 actorUserId, projectId);
+            // Отмена вызывающего доходит до роутера пустым результатом с id: так её отдаёт драйвер
+            // после принятого ответа (см. catch в FalImageService). Трату по принятому запросу мы
+            // уже оформили строкой выше — теперь цепочку фолбэка не продолжаем и отмену отдаём
+            // выше: проглотить её здесь значит после отмены человека вызвать следующего провайдера
+            // и вернуть [] как «генерация не удалась» (п.1 хвоста R-S-SPEND-9a).
+            ct.ThrowIfCancellationRequested();
             if (i + 1 < chain.Count)
                 _log?.LogWarning("Генератор {Provider} не вернул картинок для места {Place} — пробую {Next}",
                     generator.Key, place, chain[i + 1].Key);

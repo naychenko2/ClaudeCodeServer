@@ -185,6 +185,66 @@ public class IlBoundaryRegressionTests
                 "аргумент не назван в исходниках — это не ребро root→ядро");
     }
 
+    // === Закреплённые пределы сканера (хвосты R-IL-СКАН) ===
+    // Тесты ниже фиксируют ТЕКУЩЕЕ поведение: упадут, если правка сканера изменит
+    // видимость этих форм. Менять их — только осознанным решением, не «заодно».
+
+    private sealed class PureCastProbe
+    {
+        public bool Compare(int i) => (ProbeKind)i == ProbeKind.Report;    }
+
+    private sealed class ZeroLiteralProbe
+    {
+        private const int Zero = 0;
+        public void Literal(int x) => ProbeSink.Take(x, 0);
+        public void ConstInt(int x) => ProbeSink.Take(x, Zero);
+    }
+
+    private sealed class ExplicitDefaultProbe
+    {
+        public void SameAsDefault(int x) => ProbeSink.Opt(x, ProbeKind.Agent);
+    }
+
+    private sealed class DifferentFromDefaultProbe
+    {
+        public void Other(int x) => ProbeSink.Opt(x, ProbeKind.Report);
+    }
+
+    [Fact]
+    public void Scan_НеВидитЧистыйCastСоСравнением_ИзвестныйПредел()
+    {
+        // Значение приходит из int, локальной переменной ProbeKind нет, сигнатура тип не
+        // называет: в сборке нет ни одного следа типа. Дыра названа в доке WalkBody;
+        // красный тест = сканер стал видеть эту форму — это решение, а не побочный эффект.
+        BoundaryIlScanner.CollectAllReferencedTypes(typeof(PureCastProbe))
+            .Should().NotContain(typeof(ProbeKind),
+                "чистый cast enum не оставляет типа в IL — известный предел сканера");
+    }
+
+    [Fact]
+    public void Scan_НулевойЛитералВПозицииEnum_ЛожноеРебро_ИзвестныйПредел()
+    {
+        // ldc.i4 0 для литерала 0 и для Kind.Agent одинаков — отделить нельзя.
+        BoundaryIlScanner.CollectAllReferencedTypes(typeof(ZeroLiteralProbe))
+            .Should().Contain(typeof(ProbeKind),
+                "литерал 0 неотличим от названного enum — ложное ребро, закреплено как предел");
+    }
+
+    [Fact]
+    public void Scan_ЯвнаяКонстантаРавнаяDefault_НеВидна_СознательныйКомпромисс()
+    {
+        BoundaryIlScanner.CollectAllReferencedTypes(typeof(ExplicitDefaultProbe))
+            .Should().NotContain(typeof(ProbeKind),
+                "явный аргумент, равный default, печётся идентично подстановке default");
+    }
+
+    [Fact]
+    public void Scan_ЯвнаяКонстантаОтличнаяОтDefault_Видна()
+    {
+        BoundaryIlScanner.CollectAllReferencedTypes(typeof(DifferentFromDefaultProbe))
+            .Should().Contain(typeof(ProbeKind));
+    }
+
     [Fact]
     public void Scan_ВидитКонстантуEnumИзТелаМетода()
     {

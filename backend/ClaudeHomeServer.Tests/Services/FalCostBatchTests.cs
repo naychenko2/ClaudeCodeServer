@@ -519,4 +519,74 @@ public class FalCostBatchTests
         usd.Should().BeApproximately(0.06, 1e-9);
         handler.Calls.Should().Contain(c => c.Length == 1 && c[0] == "req-5");
     }
+
+    // Заглушка с «зависшей» первой пачкой: первый запрос входит в транспорт и стоит, пока тест не
+    // разрешит ему ответ; прочие отвечают сразу. Ответ — события ровно по запрошенным id (в отличие
+    // от заглушек одиночного id, чужой ответ в общей пачке отфильтровался бы и скрыл повторный запрос).
+    private sealed class FirstBatchHeldHandler : HttpMessageHandler
+    {
+        private int _calls;
+        public TaskCompletionSource FirstStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirst { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ConcurrentQueue<string[]> Calls { get; } = new();
+
+        public int CallsWith(string id) => Calls.Count(c => c.Contains(id));
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var ids = System.Web.HttpUtility.ParseQueryString(request.RequestUri!.Query).GetValues("request_id") ?? [];
+            Calls.Enqueue(ids);
+            if (Interlocked.Increment(ref _calls) == 1)
+            {
+                FirstStarted.TrySetResult();
+                await ReleaseFirst.Task.WaitAsync(TimeSpan.FromSeconds(8), ct);
+            }
+            return Ok(ids);
+        }
+    }
+
+    [Fact]
+    public async Task ПоднятыйНаЖивуюПолосуIdВОчереди_ПачкаЕгоНеБерёт_НаIdРовноОдинСетевойЗапрос()
+    {
+        // Инвариант «на один id один сетевой цикл»: id стоит в очереди (первая пачка в полёте), живой
+        // потребитель поднимает его на живую полосу и получает цену. Дальше разборщик обязан пропустить
+        // этот id, а не слать второй запрос. Счётчик читается по событию, а не по времени: после того
+        // как опубликована цена хвостового id — тот же проход разборщика, что взял бы поднятый id.
+        var handler = new FirstBatchHeldHandler();
+        var rig = MakeRig(handler);
+        rig.Svc.Track("s-1", "r-bf-0", null);
+        await handler.FirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+        rig.Svc.Track("s-1", "r-x-1", null); // встал в очередь за пачкой в полёте
+
+        var usd = await rig.Svc.ResolveUsdAsync("r-x-1", CancellationToken.None);
+        usd.Should().BeApproximately(0.02, 1e-9, "живая полоса нашла цену, не дожидаясь пачки");
+
+        handler.ReleaseFirst.TrySetResult();
+        rig.Svc.Track("s-1", "r-tail-2", null);
+        (await rig.WaitAsync(3)).Should().BeTrue("опубликованы цены bf, x и хвоста — разборщик прошёл очередь");
+        handler.CallsWith("r-x-1").Should().Be(1, "поднятый на живую полосу id пачка не берёт");
+        rig.Published["r-x-1"].Should().Be(1, "публикация в чат — ровно один раз");
+    }
+
+    [Fact]
+    public async Task ЖивойПотребительПоднимаетIdВПолётеПачки_ЛишнийЗапросДопустим_ЦенаИПубликацияОдни()
+    {
+        // Зафиксированная допустимая гонка (комментарий в ProcessBatchAsync): id уже ушёл в первой пачке,
+        // которая в полёте, и живой потребитель его поднимает — запросов на id два (пачка и живая полоса),
+        // отменить id внутри чужой пачки нельзя. Цена и публикация при этом одни.
+        var handler = new FirstBatchHeldHandler();
+        var rig = MakeRig(handler);
+        rig.Svc.Track("s-1", "r-bf-0", null);
+        rig.Svc.Track("s-1", "r-x-1", null); // в окне сбора: уходит в ту же первую пачку
+        await handler.FirstStarted.Task.WaitAsync(TimeSpan.FromSeconds(8));
+
+        var usd = await rig.Svc.ResolveUsdAsync("r-x-1", CancellationToken.None);
+        usd.Should().BeApproximately(0.02, 1e-9);
+
+        handler.ReleaseFirst.TrySetResult();
+        (await rig.WaitAsync(2)).Should().BeTrue("опубликованы цены bf и x");
+        handler.CallsWith("r-x-1").Should().Be(2, "один запрос в пачке в полёте и один на живой полосе");
+        rig.Published["r-x-1"].Should().Be(1, "двойной публикации нет: Published держит");
+        rig.Usd["r-x-1"].Should().BeApproximately(0.02, 1e-9);
+    }
 }

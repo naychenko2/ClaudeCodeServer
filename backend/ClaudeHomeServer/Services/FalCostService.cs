@@ -379,6 +379,12 @@ public class FalCostService : IFalRequestCost
         var (startParam, endParam) = timed.Count == 0
             ? ((string?)null, (string?)null)
             : BuildWindowParams(timed.Min(p => p.GenerationMs), timed.Max(p => p.GenerationMs));
+        // Допустимая гонка (не дефект): живой потребитель может поднять id (TryPromote) уже ПОСЛЕ того,
+        // как пачка с ним ушла в сеть. Тогда на этот id выйдет два запроса — пачки и живой полосы.
+        // Отменить один id внутри общей пачки нельзя (запрос один на ≤50 id), а отмена всей пачки
+        // ударила бы по чужим id. Цена от этого одна и публикация одна (Published + общий Tcs в
+        // CompletePolling); лишний запрос — стоимость API, а не двойной учёт. Инвариант «на id один
+        // сетевой цикл» держится для id, ещё стоящих в очереди (due.RemoveAll по Poll.Live выше).
         BatchFetch fetch;
         try
         {

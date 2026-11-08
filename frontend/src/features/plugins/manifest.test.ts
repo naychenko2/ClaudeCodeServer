@@ -7,7 +7,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
-import type { ChatItem } from '../../../types';
+import type { ChatItem } from '../../types';
 
 // Компонент, который «suspend»ит: бросает never-resolving проми. vi.hoisted — фабрика
 // vi.mock (hoisted) не видит обычные top-level константы.

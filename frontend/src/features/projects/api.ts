@@ -114,7 +114,7 @@ export const projectsApi = {
       // Опрос прогресса — живой: состояние из офлайн-кэша показало бы давно кончившийся проход
       runState: (id: string) => request<SubjectRunState>(`/projects/${encodeURIComponent(id)}/subjects/run`, { live: true }),
     },
-    delete: (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' }),
+    delete: (id: string) => request<void>(`/projects/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
     // --- Участники общего проекта (shared-projects, план §5 S1-F2) ---
     //

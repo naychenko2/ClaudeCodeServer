@@ -211,8 +211,12 @@ public class PersonasController(
     private (string Initiator, string? Actor) CallerSpendAttribution()
     {
         var sessionId = CallerSessionId();
+        // Нет своего чата-вызывателя — три случая: заголовка нет (вызов из формы), он чужой
+        // (GetOwned резолвит владельца) или такой сессии нет вовсе. Все три атрибуруются
+        // как вызов без чата: Human, актор не назван → равняется обратившемуся
+        // (PersonasCrudService.AvatarSpendAttribution).
         if (sessionId is not { Length: > 0 } || _sessions.GetOwned(sessionId, UserId) is null)
-            return (SpendInitiators.Human, null); // вызов без чата-вызывателя — из формы: актор он сам
+            return (SpendInitiators.Human, null);
         var actor = _sessions.GetTurnActor(sessionId, UserId) ?? UserId; // актор неизвестен — права арендатора
         return _sessions.IsTurnFromHuman(sessionId, UserId)
             ? (SpendInitiators.Human, actor)

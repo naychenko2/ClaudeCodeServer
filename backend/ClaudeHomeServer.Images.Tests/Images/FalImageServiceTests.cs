@@ -273,6 +273,35 @@ public class FalImageServiceTests
     }
 
     [Fact]
+    public async Task ТаймаутЧтенияТела_ЛогНазываетФазуТела()
+    {
+        var log = new CapturingLog();
+        var svc = ServiceWith(_ => FalResponse(new TimedOutBody(), "req-body-timeout"), log);
+
+        await svc.GenerateManyAsync("кот", 1, null);
+
+        log.Items.Should().Contain(i => i.Text.Contains("потолок фазы тела "),
+            "id из заголовков есть — не уложилось чтение тела");
+        log.Items.Should().NotContain(i => i.Text.Contains("потолок фазы заголовков"));
+    }
+
+    [Fact]
+    public async Task ТаймаутЗаголовков_ЛогНазываетФазуЗаголовков_IdПуст()
+    {
+        var log = new CapturingLog();
+        // Транспорт оборвал ожидание заголовков: ответа нет, id не пришёл, токен вызывающего жив
+        var svc = ServiceWith(_ => throw new TaskCanceledException("таймаут заголовков"), log);
+
+        var result = await svc.GenerateManyAsync("кот", 1, null);
+
+        result.Images.Should().BeEmpty();
+        result.RequestId.Should().BeNull();
+        log.Items.Should().Contain(i => i.Text.Contains("потолок фазы заголовков "),
+            "id нет — не уложились заголовки");
+        log.Items.Should().NotContain(i => i.Text.Contains("потолок фазы тела"));
+    }
+
+    [Fact]
     public async Task ТелоНеОбъект_ИдётСвоейВеткой_AНеИсключением()
     {
         var log = new CapturingLog();

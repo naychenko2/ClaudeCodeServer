@@ -1,17 +1,17 @@
 // «Проекты» и «Ссылки внешнего доступа» (вынесено из lib/api.ts, docs/research/frontend-api-split-2026-11.md):
-// тонкая обёртка над живым REST; типы проекта (Project и его спутники) — types/index.ts,
-// граф кода, превью/запуск, значки и «Архитектура» — ./types.ts.
+// тонкая обёртка над живым REST; все типы проекта (Project и его спутники, граф кода,
+// превью/запуск, значки и «Архитектура») — ./types.ts.
 import { readStoredToken, request } from '../../lib/offline';
 import { noteProject, noteProjects, projectRequest } from '../../lib/deviceAgent';
 import type {
-  BackgroundResult, BoardColumn, MapHygieneApplyResult, MapHygieneReport, PermissionRule, Project,
-  ProjectSubject, ProjectSubjectEdit, ProjectTag, Session, SubjectRunState,
+  BoardColumn, MapHygieneApplyResult, MapHygieneReport, Session,
   SystemPromptPart, TeamMemoryEntry, TeamMemoryType,
 } from '../../types';
 import type {
-  ArchitectureGenerateResult, ArchitectureModelDto, ArchitectureSaveResult, CodeGraph,
-  ExternalLinkIssued, ExternalPreviewLink, GlyphCandidate, LaunchConfigEntry,
-  ProjectMemberRole, ProjectMembersView, ProjectService,
+  ArchitectureGenerateResult, ArchitectureModelDto, ArchitectureSaveResult, BackgroundResult,
+  CodeGraph, ExternalLinkIssued, ExternalPreviewLink, GlyphCandidate, LaunchConfigEntry,
+  PermissionRule, Project, ProjectMemberRole, ProjectMembersView, ProjectService,
+  ProjectSubject, ProjectSubjectEdit, ProjectTag, SubjectRunState,
 } from './types';
 
 // Потолок ожидания preview/start. DevServerService.StartAsync (у сервера и у агента один) ждёт

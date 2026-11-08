@@ -99,6 +99,48 @@ public class FalImageServiceTests
         result.RequestId.Should().Be("req-422");
     }
 
+    [Theory]
+    [InlineData("not-json")]
+    [InlineData("[]")]
+    public async Task RequestId_ТелоНеРазбирается_ВсёРавноВозвращён(string body)
+    {
+        // 200 с заголовком, но тело не JSON (прокси-страница) или не объект: ответ уже получен,
+        // запрос принят и оплачен — id терять нельзя
+        var svc = ServiceWith(_ =>
+        {
+            var resp = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, System.Text.Encoding.UTF8, "application/json"),
+            };
+            resp.Headers.Add("x-fal-request-id", "req-x");
+            return resp;
+        });
+
+        var result = await svc.GenerateManyAsync("кот", 1, null);
+
+        result.Images.Should().BeEmpty();
+        result.RequestId.Should().Be("req-x");
+    }
+
+    [Fact]
+    public async Task RequestId_200БезImages_ВозвращённПриПустыхКартинках()
+    {
+        var svc = ServiceWith(_ =>
+        {
+            var resp = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("{\"detail\":\"x\"}", System.Text.Encoding.UTF8, "application/json"),
+            };
+            resp.Headers.Add("x-fal-request-id", "req-noimg");
+            return resp;
+        });
+
+        var result = await svc.GenerateManyAsync("кот", 1, null);
+
+        result.Images.Should().BeEmpty();
+        result.RequestId.Should().Be("req-noimg");
+    }
+
     [Fact]
     public async Task RequestId_ИсключениеДоОтвета_Null()
     {

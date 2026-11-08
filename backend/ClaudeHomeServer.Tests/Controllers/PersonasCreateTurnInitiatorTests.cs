@@ -176,6 +176,11 @@ public class PersonasCreateTurnInitiatorTests : IClassFixture<SharedChatAvatarSp
 
         var before = ImageRecords().Count;
         await CreatePersonaAsync("ИзХодаУчастника" + Tag(), sessionId);
+        // Инвариант «признак хода переживает чтение стороннего слоя»: читатель не снимает
+        // защёлку, её гасит только result ядра. Если IsTurnFromHuman станет «снял и посмотрел»,
+        // ядро на result прочтёт 0 и запись хода получит инициатора agent вместо human
+        Sessions.IsTurnFromHuman(sessionId, OwnerId).Should().BeTrue(
+            "чтение признака вызовом контроллера не должно снимать защёлку хода");
 
         var added = ImageRecords().Skip(before).ToList();
         added.Should().ContainSingle();

@@ -80,6 +80,9 @@ public class FalImageService : IImageGenerator
         if (!Enabled || string.IsNullOrWhiteSpace(prompt)) return ImageGenerationResult.Empty;
         count = Math.Clamp(count, 1, 4);
         var endpoint = string.IsNullOrWhiteSpace(model) ? _model : model.Trim().Trim('/');
+        // Поднят над try: исключение после ответа (разбор тела, скачивание) не должно терять id —
+        // до ответа он остаётся null (запрос не был принят).
+        string? requestId = null;
         try
         {
             // Именованный клиент, общий с FalAccountService/FalCostService: под ним висит
@@ -95,7 +98,7 @@ public class FalImageService : IImageGenerator
             // Идентификатор запроса берётся сразу после ответа, ДО проверки статуса и разбора
             // тела: у синхронного fal.run его в теле нет, он в заголовке (см. ResponseRequestId),
             // а запрос мог быть принят и оплачен даже при 4xx или без картинок.
-            var requestId = ResponseRequestId(resp);
+            requestId = ResponseRequestId(resp);
             if (!resp.IsSuccessStatusCode)
             {
                 _logger.LogWarning("fal генерация вернула {Status}: {Body}",
@@ -123,7 +126,7 @@ public class FalImageService : IImageGenerator
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Ошибка генерации аватара через fal");
-            return ImageGenerationResult.Empty;
+            return new ImageGenerationResult([], requestId);
         }
     }
 

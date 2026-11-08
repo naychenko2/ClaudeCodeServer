@@ -201,5 +201,5 @@ public class ChatHistoryService
 }
 
 // Содержимое pending.json: очередь по порядку и признак заморозки «Стоп»
-public sealed record PendingQueueFile(bool Frozen, List<SessionManager.QueuedMessage> Items);
+public sealed record PendingQueueFile(bool Frozen, List<Sessions.QueuedMessage> Items);
 

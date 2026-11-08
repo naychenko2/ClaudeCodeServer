@@ -2,12 +2,6 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using Microsoft.Extensions.Logging;
 
-// Типы сообщения очереди — часть контракта фасада (объявлены вложенными в SessionManager,
-// их читают контроллеры и тесты). Перенос их в Services.Sessions — шаг S3-4 (приём хода);
-// здесь обращение к ним через alias, чтобы тела очереди остались дословными.
-using QueuedMessage = ClaudeHomeServer.Services.SessionManager.QueuedMessage;
-using PendingKind = ClaudeHomeServer.Services.SessionManager.PendingKind;
-
 namespace ClaudeHomeServer.Services.Sessions;
 
 // Состояние очереди занятой сессии и его файл (pending.json): постановка с дедупом,

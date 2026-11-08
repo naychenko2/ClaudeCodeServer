@@ -41,7 +41,7 @@ public interface ITurnStarter
 
     Task<bool> SendOrEnqueueAsync(string sessionId, string text, string? senderPersonaId,
         string? senderOrigin, bool silent, bool suppressTasksExecute, string? staffNote,
-        SessionManager.PendingKind kind, string? senderUserId);
+        PendingKind kind, string? senderUserId);
 
     Task DrainNextPendingAsync(string sessionId);
 }

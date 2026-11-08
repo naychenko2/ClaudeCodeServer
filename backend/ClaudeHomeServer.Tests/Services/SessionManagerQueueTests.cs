@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Tasks;
@@ -785,7 +786,7 @@ public class SessionManagerQueueTests : SessionManagerTestBase
             : SessionManager.SendUserOutcome.Queued);
         var queued = _sut.GetPending(session.Id).Should().ContainSingle().Subject;
         queued.Text.Should().Be("подожди меня");
-        queued.Kind.Should().Be(SessionManager.PendingKind.User);
+        queued.Kind.Should().Be(PendingKind.User);
         queued.AttachedPaths.Should().BeEquivalentTo(["a.txt", "b.txt"]);
         queued.Mode.Should().Be("plan");
         // В видимом снимке пользовательское тоже отражается (карточка-призрак)
@@ -1208,7 +1209,7 @@ public class SessionManagerQueueTests : SessionManagerTestBase
             "выключение цикла не рассылается — цикл остаётся активным");
         adapter.Verify(a => a.Interrupt(), Times.Once());
         _sut.GetPending(session.Id).Should().ContainSingle()
-            .Which.Kind.Should().Be(SessionManager.PendingKind.User);
+            .Which.Kind.Should().Be(PendingKind.User);
     }
 
     [Fact]
@@ -1262,8 +1263,8 @@ public class SessionManagerQueueTests : SessionManagerTestBase
         SetProcess(entry, adapter.Object);
 
         // Агентское сообщение глубины 1 — как chats_send из другого чата
-        var next = new SessionManager.QueuedMessage(Guid.NewGuid().ToString("N"), "сообщение глубины 1",
-            null, null, 1, DateTime.UtcNow, Kind: SessionManager.PendingKind.Agent);
+        var next = new QueuedMessage(Guid.NewGuid().ToString("N"), "сообщение глубины 1",
+            null, null, 1, DateTime.UtcNow, Kind: PendingKind.Agent);
 
         var method = typeof(SessionManager).GetMethod("DeliverPendingAsync",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
@@ -1590,7 +1591,7 @@ public class SessionManagerQueueTests : SessionManagerTestBase
 
         await _sut.SendOrEnqueueAsync(session.Id, "доклад исполнителя", senderPersonaId: "exec-1",
             silent: true, suppressTasksExecute: true, staffNote: "служебная заметка",
-            kind: SessionManager.PendingKind.Report);
+            kind: PendingKind.Report);
         await _sut.SendMessageAsync(session.Id, "вопрос человека", []);
 
         File.Exists(PendingFilePath(session.Id)).Should().BeTrue("очередь записана на диск при постановке");
@@ -1599,19 +1600,19 @@ public class SessionManagerQueueTests : SessionManagerTestBase
         var restored = restarted.GetPending(session.Id);
 
         restored.Select(m => m.Text).Should().Equal("доклад исполнителя", "вопрос человека");
-        restored[0].Kind.Should().Be(SessionManager.PendingKind.Report);
+        restored[0].Kind.Should().Be(PendingKind.Report);
         restored[0].StaffNote.Should().Be("служебная заметка");
         restored[0].Silent.Should().BeTrue();
         restored[0].SuppressTasksExecute.Should().BeTrue();
         restored[0].SenderPersonaId.Should().Be("exec-1");
-        restored[1].Kind.Should().Be(SessionManager.PendingKind.User);
+        restored[1].Kind.Should().Be(PendingKind.User);
     }
 
     [Fact]
     public async Task Pending_ОчередьРазобрана_ФайлУдалён()
     {
         var session = await MkBusySessionAsync("persist-empty");
-        await _sut.SendOrEnqueueAsync(session.Id, "доклад", kind: SessionManager.PendingKind.Report);
+        await _sut.SendOrEnqueueAsync(session.Id, "доклад", kind: PendingKind.Report);
         File.Exists(PendingFilePath(session.Id)).Should().BeTrue();
 
         var entry = GetEntry(session.Id);
@@ -1626,7 +1627,7 @@ public class SessionManagerQueueTests : SessionManagerTestBase
     public async Task Pending_АвтодренажНаСтарте_ЧатБезХодаПолучаетСообщение()
     {
         var session = await MkBusySessionAsync("persist-drain");
-        await _sut.SendOrEnqueueAsync(session.Id, "доклад до рестарта", kind: SessionManager.PendingKind.Report);
+        await _sut.SendOrEnqueueAsync(session.Id, "доклад до рестарта", kind: PendingKind.Report);
 
         var restarted = BuildSecondManager();
         var entry = GetEntryOf(restarted, session.Id);
@@ -1648,7 +1649,7 @@ public class SessionManagerQueueTests : SessionManagerTestBase
         var session = await MkBusySessionAsync("persist-frozen");
         var entry = GetEntry(session.Id);
         SetProcess(entry, StubAdapter(entry).Object);
-        await _sut.SendOrEnqueueAsync(session.Id, "ждёт возобновления", kind: SessionManager.PendingKind.Report);
+        await _sut.SendOrEnqueueAsync(session.Id, "ждёт возобновления", kind: PendingKind.Report);
 
         _sut.Interrupt(session.Id); // «Стоп» замораживает очередь
         await WaitForComposerRestoresAsync(1);
@@ -1671,8 +1672,8 @@ public class SessionManagerQueueTests : SessionManagerTestBase
     public async Task Pending_СтаршеСуток_НеОживляетсяАВИсторииПлашкаНеДоставлено()
     {
         var session = await MkBusySessionAsync("persist-expired");
-        var old = new SessionManager.QueuedMessage(Guid.NewGuid().ToString("N"), "недельной давности", null, null,
-            0, DateTime.UtcNow - TimeSpan.FromDays(7), Kind: SessionManager.PendingKind.Report);
+        var old = new QueuedMessage(Guid.NewGuid().ToString("N"), "недельной давности", null, null,
+            0, DateTime.UtcNow - TimeSpan.FromDays(7), Kind: PendingKind.Report);
         _historyService.SavePending(session.Id, new PendingQueueFile(false, [old]));
 
         var restarted = BuildSecondManager();

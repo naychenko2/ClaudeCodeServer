@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Tasks;
@@ -595,8 +596,8 @@ public abstract class SessionManagerTestBase : IDisposable
     protected static void EnqueueUser(object entry, string text)
     {
         var pending = (System.Collections.IList)entry.GetType().GetField("Pending")!.GetValue(entry)!;
-        pending.Add(new SessionManager.QueuedMessage(Guid.NewGuid().ToString("N"), text, null, null,
-            0, DateTime.UtcNow, Kind: SessionManager.PendingKind.User));
+        pending.Add(new QueuedMessage(Guid.NewGuid().ToString("N"), text, null, null,
+            0, DateTime.UtcNow, Kind: PendingKind.User));
     }
 
     // Агентское сообщение напрямую в очередь — для сценариев drain (доклады персон ждут
@@ -604,8 +605,8 @@ public abstract class SessionManagerTestBase : IDisposable
     protected static void EnqueueAgent(object entry, string text)
     {
         var pending = (System.Collections.IList)entry.GetType().GetField("Pending")!.GetValue(entry)!;
-        pending.Add(new SessionManager.QueuedMessage(Guid.NewGuid().ToString("N"), text, null, null,
-            0, DateTime.UtcNow, Kind: SessionManager.PendingKind.Agent));
+        pending.Add(new QueuedMessage(Guid.NewGuid().ToString("N"), text, null, null,
+            0, DateTime.UtcNow, Kind: PendingKind.Agent));
     }
 
     // --- Цикл «до готово»: явная остановка в ленту (B3/B5/B6 — ContinueWorkLoopAsync
@@ -1041,7 +1042,7 @@ public abstract class SessionManagerTestBase : IDisposable
             sessionId, entry, text,
             /*senderPersonaId*/ null, /*senderOrigin*/ null, /*agentDepth*/ 0,
             /*silent*/ false, /*suppressTasksExecute*/ false, /*senderChatName*/ null,
-            SessionManager.PendingKind.Agent, /*attachedPaths*/ null, /*mode*/ null,
+            PendingKind.Agent, /*attachedPaths*/ null, /*mode*/ null,
             /*staffNote*/ null, /*senderUserId*/ null
         ])!;
         await task;

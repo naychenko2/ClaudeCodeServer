@@ -11,7 +11,9 @@ namespace ClaudeHomeServer.Tests.Services;
 /// для типов namespace <c>ClaudeHomeServer.Services.Sessions</c> (роли, вынесенные из SessionManager).
 /// <list type="number">
 /// <item>ни один параметр конструктора не <see cref="SessionManager"/> (роль не знает фасад);</item>
-/// <item>параметров ≤ 10 без <c>ILogger&lt;T&gt;</c> (новая зависимость — сигнал резать класс);</item>
+/// <item>параметров ≤ 10 без <c>ILogger&lt;T&gt;</c> (новая зависимость — сигнал резать класс);
+///   на типы-данные из <see cref="CoreDataContracts"/> не распространяется: позиционные параметры
+///   записи — поля контракта, а не зависимости роли;</item>
 /// <item><c>Lazy&lt;T&gt;</c> только для пяти именованных разрывов циклов;</item>
 /// <item>на типы Services.Sessions ссылаются только SessionManager, сами Services.Sessions и тесты
 ///   (default-deny: закрывает обход фасада — новые пути входа к per-owner изоляции); allow-list
@@ -48,6 +50,17 @@ public class SessionCoreShapeGuardTests
         "IWorkLoopContinuation",
     ];
 
+    // Типы-данные ядра: контракты, а не роли. Правило 2 на них не считается — позиционные
+    // параметры записи это поля данных (у QueuedMessage их четырнадцать: идентификатор, текст,
+    // отправитель, режим…), а лимит стоит про зависимостях роли. Новая строка здесь — такое же
+    // явное решение, как allow-list правила 5 (состав списка держит самопроверка ниже).
+    private static readonly Dictionary<string, string> CoreDataContracts = new()
+    {
+        ["ClaudeHomeServer.Services.Sessions.QueuedMessage"] =
+            "контракт содержимого очереди (S3-1, план §1, row «SessionEntry.cs (типы)»): "
+            + "перенесён из фасада дословно, поведения не держит",
+    };
+
     // Поимённый allow-list правила 5 (у каждой строки — причина). SessionStore, ChatVisibility и
     // ChatDeletion в список не входят: их ленивые резолвы описаны типом (Lazy<T>).
     private static readonly Dictionary<string, string> ServiceProviderAllowList = new()
@@ -63,6 +76,26 @@ public class SessionCoreShapeGuardTests
         ["ClaudeHomeServer.Services.Composition.SessionCoreRegistration"] =
             "регистрация AddSessionCore в DI — единственная точка сборки ядра; "
             + "пространство имён Composition — по замыслу (комментарий у SessionCoreRegistration.cs:5)",
+
+        // Хранилище и вызывающие контракта очереди (S3-1, план §1): после переноса
+        // QueuedMessage/PendingKind в ядро эти типы Main называют его данные, оставаясь снаружи.
+        // Ни один из них не зовёт поведение ядра — вход к per-owner изоляции у них прежний,
+        // через фасад SessionManager. Перенос их самих в ядро — отдельный шаг (он снял бы эти
+        // строки), в эту карточку не входит.
+        ["ClaudeHomeServer.Services.PendingQueue"] =
+            "коллекция содержимого очереди (поле SessionEntry.Pending): её элемент — перенесённый "
+            + "контракт; поведения ядра не зовёт",
+        ["ClaudeHomeServer.Services.PendingQueueFile"] =
+            "формат pending.json: поле Items — список перенесённого контракта; данные, "
+            + "не путь входа в ядро",
+        ["ClaudeHomeServer.Services.ChatHistoryService"] =
+            "LoadPending/SavePending читают и пишут pending.json (в теле — List<QueuedMessage>): "
+            + "хранитель файла очереди, поведения ядра не зовёт",
+        ["ClaudeHomeServer.Services.TaskExecutionService"] =
+            "зовёт фасад (SendOrEnqueueAsync) и передаёт ему константу PendingKind.Report: "
+            + "к ядро обращается только значением enum",
+        ["ClaudeHomeServer.Controllers.SessionMessagesController"] =
+            "зовёт фасад (GetPending) и читает Kind для ответа /pending: данные, не поведение ядра",
     };
 
     static SessionCoreShapeGuardTests()
@@ -100,6 +133,7 @@ public class SessionCoreShapeGuardTests
 
     internal static IEnumerable<string> Rule2MaxParams(IEnumerable<Type> types) =>
         from t in types
+        where !CoreDataContracts.ContainsKey(t.FullName ?? t.Name)
         from c in Ctors(t)
         let count = c.GetParameters().Count(p => !IsLogger(p.ParameterType))
         where count > MaxCtorParams
@@ -196,6 +230,17 @@ public class SessionCoreShapeGuardTests
     public void Allow_list_правила5_состоит_только_из_BuiltinMcpContexts() =>
         ServiceProviderAllowList.Keys.Should().BeEquivalentTo(["BuiltinMcpContexts"],
             "решение 05.11 (1dda7103): allow-list — одна роль; новая строка требует нового решения Александра");
+
+    [Fact]
+    public void Список_типов_данных_состоит_только_из_контракта_очереди() =>
+        CoreDataContracts.Keys.Should().BeEquivalentTo(["ClaudeHomeServer.Services.Sessions.QueuedMessage"],
+            "тип-данные в ядре — явное решение: на него не считается правило 2; новая строка требует его же");
+
+    [Fact]
+    public void Самопроверка_правило2_не_считает_поля_записи_данных() =>
+        Rule2MaxParams([typeof(QueuedMessage)]).Should().BeEmpty(
+            "позиционные параметры контракта очереди — поля данных, а не зависимости роли; "
+            + "без строки в CoreDataContracts эта проверка краснеет");
 
     // ---- самопроверки: каждое правило обязано краснеть на синтетическом нарушителе ----
 

@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 
-using QueuedMessage = ClaudeHomeServer.Services.SessionManager.QueuedMessage;
 using RestartResumeResult = ClaudeHomeServer.Services.SessionManager.RestartResumeResult;
 using SendUserOutcome = ClaudeHomeServer.Services.SessionManager.SendUserOutcome;
 using StuckTurnRestartResult = ClaudeHomeServer.Services.SessionManager.StuckTurnRestartResult;

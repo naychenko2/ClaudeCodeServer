@@ -8,8 +8,10 @@ namespace ClaudeHomeServer.Services.Sessions;
 // Запись реестра сессий: Session (персистентная часть) и живые рантайм-поля хода. Вынесена из
 // SessionManager целиком (S3-1): локи и поля НЕ дробим по ролям — на ней пять локов, и их
 // порядок сейчас верен (docs/research/session-manager-split-2026-11.md, «Чего не делать» п. 3).
-// QueuedMessage / UserTurnSnapshot остаются вложенными типами фасада SessionManager: это его
-// публичный контракт (хаб, контроллеры, тесты).
+// Здесь же контракт содержимого очереди (QueuedMessage / PendingKind, конец файла): на него
+// смотрят поле Pending и ExpiredOnRestore этой записи — тип сообщения держат рядом с его
+// хранителем (row «SessionEntry.cs (типы)» плана §1). UserTurnSnapshot остаётся вложенным
+// типом фасада: его шаг переноса ещё не пройден.
 internal sealed class SessionEntry
 {
     public required Session Info;
@@ -191,7 +193,7 @@ internal sealed class SessionEntry
     public volatile bool QueueFrozen;
     // Сообщения старше срока годности, не оживлённые при загрузке: карточку «не доставлено»
     // в историю пишет DrainRestoredPendingAsync (на загрузке брокера и истории ещё нет).
-    public List<SessionManager.QueuedMessage>? ExpiredOnRestore;
+    public List<QueuedMessage>? ExpiredOnRestore;
     // Очередь поднята с диска — чат кандидат на автодренаж после старта.
     public bool PendingRestored;
     // Делегированность ПРОГОНА: глубина и «ход доклада» подач, чьи фоновые агенты ещё
@@ -320,3 +322,42 @@ internal sealed class SessionEntry
         return false;
     }
 }
+
+// Контракт содержимого очереди занятого чата. Перенесён из вложенных типов фасада дословно,
+// вместе с комментариями (S3-1, план §1, row «SessionEntry.cs (типы)»): публичные сигнатуры
+// фасада (SendOrEnqueueAsync, SessionManager.cs:1314; GetPending, SessionManager.cs:1381)
+// называют этот тип, поэтому он public — как был. Ссылки ядра
+// (PendingQueueService, TurnIntake, TurnProcessHost, TurnRecovery) идут к нему напрямую, без
+// alias через фасад; внешние потребители (Services.PendingQueue, Services.PendingQueueFile,
+// TaskExecutionService, SessionMessagesController) перечислены в allow-list правила 4 сторожа
+// формы ядра и в точечном допуске RootSubsystemBoundaryTests.
+
+// Ожидающее доставки сообщение. Kind: User — сообщение человека из «честной очереди»
+// (доставляется со своими вложениями и режимом, как при обычной отправке); Agent —
+// chats_send/серверные отправки; Report — доклад о завершении делегированной задачи
+// (TaskExecutionService.ReportToDelegatorAsync): ход-реакция постановщика. Report ждёт
+// конца хода, как Agent, НО при активном цикле «до готово» гейт разбора очереди пропускает
+// его СРАЗУ (наравне с User) — иначе цикл жжёт итерации, не видя доклада. SenderOrigin
+// заполняется, только если отправитель из ДРУГОГО места (иной проект / вне проектов) —
+// получателю показываем чип-источник, чтобы было видно, откуда прилетело.
+//
+// Silent — ход-реакция, чей текст уже виден в ленте отдельной репликой (доклад
+// исполнителя): призрак дублировал бы её служебным промптом.
+// SuppressTasksExecute — обязателен для доклада: без него постановщик мог бы
+// самозапустить новую задачу и закольцевать A↔B.
+// SenderChatName — имя чата-отправителя: подпись карточки, когда персоны у него нет
+// («Входящее сообщение» ни о чём не говорит, а имя чата отвечает на вопрос «кто пишет»).
+// StaffNote — служебный ход механики штаба: в ленте рисуется плашкой-разделителем
+// с этой подписью, а не пузырём «Автоматически» (см. StoredUserMessage.StaffNote).
+public record QueuedMessage(
+    string Id, string Text, string? SenderPersonaId, string? SenderOrigin,
+    int AgentDepth, DateTime EnqueuedAt, bool Silent = false, bool SuppressTasksExecute = false,
+    string? SenderChatName = null, PendingKind Kind = PendingKind.Agent,
+    IReadOnlyList<string>? AttachedPaths = null, string? Mode = null, string? StaffNote = null,
+    string? SenderUserId = null);
+
+// Вид ожидающего сообщения. Report отделён от Agent: при активном цикле «до готово» Report
+// будит ждущий цикл (как User), а обычные Agent-сообщения посторонних агентов продолжают
+// ждать конца ВСЕГО цикла — иначе координатор сбивался бы посреди итерации. Решение
+// владельца 2026-09-01: посторонний агент не должен сбивать координатора.
+public enum PendingKind { Agent, User, Report }

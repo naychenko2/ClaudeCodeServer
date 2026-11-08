@@ -4,6 +4,7 @@ using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
@@ -145,8 +146,8 @@ public class SessionManagerBranchTests : IDisposable
     private static void EnqueueUser(object entry, string text)
     {
         var pending = (System.Collections.IList)entry.GetType().GetField("Pending")!.GetValue(entry)!;
-        pending.Add(new SessionManager.QueuedMessage(Guid.NewGuid().ToString("N"), text, null, null,
-            0, DateTime.UtcNow, Kind: SessionManager.PendingKind.User));
+        pending.Add(new QueuedMessage(Guid.NewGuid().ToString("N"), text, null, null,
+            0, DateTime.UtcNow, Kind: PendingKind.User));
     }
 
     private static string JsonStr(string s) => "\"" + s.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";

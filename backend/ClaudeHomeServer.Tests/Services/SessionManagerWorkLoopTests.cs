@@ -4,6 +4,7 @@ using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Tasks;
@@ -530,7 +531,7 @@ public class SessionManagerWorkLoopTests : SessionManagerTestBase
             ClearSent();
             await _sut.SendOrEnqueueAsync(session.Id, "[доклад] исполнитель закончил",
                 silent: true, suppressTasksExecute: true,
-                staffNote: "доклад", kind: SessionManager.PendingKind.Report);
+                staffNote: "доклад", kind: PendingKind.Report);
             // Доклад ушёл в ленту, реакция поставщика поднимает следующий ход-реакцию.
             // Ход-реакция идёт через SendMessageAsync(auto=true) — адаптер получит её.
             await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
@@ -576,7 +577,7 @@ public class SessionManagerWorkLoopTests : SessionManagerTestBase
         var deferred = await _sut.SendOrEnqueueAsync(session.Id, "реакция на доклад",
             silent: true, suppressTasksExecute: true,
             staffNote: "Доклад по задаче передан постановщику",
-            kind: SessionManager.PendingKind.Report);
+            kind: PendingKind.Report);
 
         deferred.Should().BeFalse("чат свободен — отправка прямая, не в очередь");
         await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
@@ -600,7 +601,7 @@ public class SessionManagerWorkLoopTests : SessionManagerTestBase
         ClearSent();
 
         var deferred = await _sut.SendOrEnqueueAsync(session.Id, "посторонний агент пишет",
-            silent: true, suppressTasksExecute: true, kind: SessionManager.PendingKind.Agent);
+            silent: true, suppressTasksExecute: true, kind: PendingKind.Agent);
 
         deferred.Should().BeFalse();
         await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
@@ -976,13 +977,13 @@ public class SessionManagerWorkLoopTests : SessionManagerTestBase
         var enq = (Task)method.Invoke(_sut, new object?[]
         {
             session.Id, entry, "реакция постановщика",
-            null, "task-report", 0, true, true, null, SessionManager.PendingKind.Report,
+            null, "task-report", 0, true, true, null, PendingKind.Report,
             null, null, null, null
         })!;
         await enq;
 
         _sut.GetPending(session.Id).Should().ContainSingle()
-            .Which.Kind.Should().Be(SessionManager.PendingKind.Report);
+            .Which.Kind.Should().Be(PendingKind.Report);
 
         // По result хода-итерации ContinueWorkLoopAsync триггерится; он УСТУПАЕТ, если
         // в очереди лежит Report (тот же гейт, что и для User) — иначе директива обгонит
@@ -1014,7 +1015,7 @@ public class SessionManagerWorkLoopTests : SessionManagerTestBase
         var enq = (Task)method.Invoke(_sut, new object?[]
         {
             session.Id, entry, "постороннее сообщение",
-            null, "external-agent", 0, true, false, null, SessionManager.PendingKind.Agent,
+            null, "external-agent", 0, true, false, null, PendingKind.Agent,
             null, null, null, null
         })!;
         await enq;
@@ -1025,7 +1026,7 @@ public class SessionManagerWorkLoopTests : SessionManagerTestBase
         // шлёт директиву, по result директивы — drain, а до этого момента обычное Agent висит)
         await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
         _sut.GetPending(session.Id).Should().ContainSingle("обычное агентское ждёт конца ВСЕГО цикла")
-            .Which.Kind.Should().Be(SessionManager.PendingKind.Agent);
+            .Which.Kind.Should().Be(PendingKind.Agent);
     }
 
     // --- Гард B4: автопилот и «Командная реализация» не сочетаются в одном чате ---

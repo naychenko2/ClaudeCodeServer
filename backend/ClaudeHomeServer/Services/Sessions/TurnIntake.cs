@@ -4,8 +4,6 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Prompts;
 using DeliveryCause = ClaudeHomeServer.Services.SessionManager.DeliveryCause;
-using PendingKind = ClaudeHomeServer.Services.SessionManager.PendingKind;
-using QueuedMessage = ClaudeHomeServer.Services.SessionManager.QueuedMessage;
 using SendAndWaitResult = ClaudeHomeServer.Services.SendAndWaitResult;
 using SendUserOutcome = ClaudeHomeServer.Services.SessionManager.SendUserOutcome;
 using UserTurnSnapshot = ClaudeHomeServer.Services.SessionManager.UserTurnSnapshot;

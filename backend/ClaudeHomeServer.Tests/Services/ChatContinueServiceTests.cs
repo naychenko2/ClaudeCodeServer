@@ -4,6 +4,7 @@ using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
@@ -147,8 +148,8 @@ public class ChatContinueServiceTests : IDisposable
     private static void EnqueueUser(object entry, string text)
     {
         var pending = (System.Collections.IList)entry.GetType().GetField("Pending")!.GetValue(entry)!;
-        pending.Add(new SessionManager.QueuedMessage(Guid.NewGuid().ToString("N"), text, null, null,
-            0, DateTime.UtcNow, Kind: SessionManager.PendingKind.User));
+        pending.Add(new QueuedMessage(Guid.NewGuid().ToString("N"), text, null, null,
+            0, DateTime.UtcNow, Kind: PendingKind.User));
     }
 
 
@@ -455,7 +456,7 @@ public class ChatContinueServiceTests : IDisposable
         await act.Should().ThrowAsync<InvalidOperationException>().WithMessage("*идёт ход*");
         var pending = (System.Collections.IList)GetEntry(source.Id).GetType().GetField("Pending")!
             .GetValue(GetEntry(source.Id))!;
-        pending.Cast<SessionManager.QueuedMessage>()
+        pending.Cast<QueuedMessage>()
             .Should().NotContain(p => p.Text == ChatContinueService.HandoffPrompt,
                 "промпт записки вычищен: не отработает отдельным ходом");
         source.ContinuedInSessionId.Should().BeNull();

@@ -301,6 +301,17 @@ public class RootSubsystemBoundaryTests
         "ClaudeHomeServer.Services.Tts.TtsVoiceCatalog",
         "ClaudeHomeServer.Services.Tts.TtsVoiceCatalog+VoiceInfo",
         "ClaudeHomeServer.Services.Tts.TtsVoiceCatalog+Gender",
+        // === Хвост линии ядра S3 (карточка 007adf7b): контракт очереди перенесён в
+        // Services.Sessions (план §1, row «SessionEntry.cs (типы)»), а его root-хранители
+        // остались в корне: PendingQueue — коллекция содержимого на SessionEntry.Pending,
+        // PendingQueueFile — формат pending.json (параметр ChatHistoryService.SavePending,
+        // сам исключён как backbone), TaskExecutionService передаёт фасаду константу
+        // PendingKind.Report. Префикс `ClaudeHomeServer.Services.Sessions` НЕ открываем:
+        // ядро сессий — не «общая инфраструктура», а машина хода; вход к ней root-типов
+        // остаётся через фасад SessionManager. Точечный допуск ровно на два типа данных.
+        // Перенос самих хранителей в ядро снял бы эти строки — отдельный шаг, не этот.
+        "ClaudeHomeServer.Services.Sessions.QueuedMessage",
+        "ClaudeHomeServer.Services.Sessions.PendingKind",
     };
 
     /// <summary>Корневые инфраструктурные слоны, исключённые из проверки (и как

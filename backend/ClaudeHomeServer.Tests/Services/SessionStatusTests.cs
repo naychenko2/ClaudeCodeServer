@@ -6,6 +6,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Knowledge;
@@ -510,7 +511,7 @@ public class SessionStatusTests : IDisposable
         // Приватный метод вызываем рефлексией (прецедент — ChatContinueServiceTests: _sessions/Pending).
         var entry = GetEntry(sut, s.Id);
         var pending = (System.Collections.IList)entry.GetType().GetField("Pending")!.GetValue(entry)!;
-        var head = (SessionManager.QueuedMessage)pending[0]!;
+        var head = (QueuedMessage)pending[0]!;
         var deliver = typeof(SessionManager).GetMethod("DeliverPendingAsync",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         await (Task)deliver.Invoke(sut, [s.Id, entry, head])!;

@@ -2,9 +2,6 @@ using System.Collections.Concurrent;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 
-using QueuedMessage = ClaudeHomeServer.Services.SessionManager.QueuedMessage;
-using PendingKind = ClaudeHomeServer.Services.SessionManager.PendingKind;
-
 namespace ClaudeHomeServer.Services.Sessions;
 
 // Хост процесса CLI (S3-5, docs/research/session-manager-split-2026-11.md §1 «процесс», §2):

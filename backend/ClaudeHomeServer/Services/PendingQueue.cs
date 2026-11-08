@@ -9,12 +9,12 @@ namespace ClaudeHomeServer.Services;
 /// правки полутора десятков мест, меняющих список: забытая ветка иначе молча теряла бы очередь
 /// при рестарте. Порядок — список, не множество. Синхронизацию держит вызывающий (PendingLock).
 /// </summary>
-public sealed class PendingQueue : Collection<SessionManager.QueuedMessage>
+public sealed class PendingQueue : Collection<Sessions.QueuedMessage>
 {
     /// <summary>Вызывается после каждой мутации; до подключения хранилища — null.</summary>
     public Action? Changed { get; set; }
 
-    protected override void InsertItem(int index, SessionManager.QueuedMessage item)
+    protected override void InsertItem(int index, Sessions.QueuedMessage item)
     {
         base.InsertItem(index, item);
         Changed?.Invoke();
@@ -26,7 +26,7 @@ public sealed class PendingQueue : Collection<SessionManager.QueuedMessage>
         Changed?.Invoke();
     }
 
-    protected override void SetItem(int index, SessionManager.QueuedMessage item)
+    protected override void SetItem(int index, Sessions.QueuedMessage item)
     {
         base.SetItem(index, item);
         Changed?.Invoke();
@@ -38,7 +38,7 @@ public sealed class PendingQueue : Collection<SessionManager.QueuedMessage>
         Changed?.Invoke();
     }
 
-    public int RemoveAll(Predicate<SessionManager.QueuedMessage> match)
+    public int RemoveAll(Predicate<Sessions.QueuedMessage> match)
     {
         var removed = 0;
         for (var i = Count - 1; i >= 0; i--)
@@ -46,21 +46,21 @@ public sealed class PendingQueue : Collection<SessionManager.QueuedMessage>
         return removed;
     }
 
-    public int FindIndex(Predicate<SessionManager.QueuedMessage> match)
+    public int FindIndex(Predicate<Sessions.QueuedMessage> match)
     {
         for (var i = 0; i < Count; i++)
             if (match(this[i])) return i;
         return -1;
     }
 
-    public void InsertRange(int index, IEnumerable<SessionManager.QueuedMessage> items)
+    public void InsertRange(int index, IEnumerable<Sessions.QueuedMessage> items)
     {
         foreach (var item in items.ToList())
             Insert(index++, item);
     }
 
     /// <summary>Заполнить без уведомления — восстановление с диска на старте.</summary>
-    internal void Restore(IEnumerable<SessionManager.QueuedMessage> items)
+    internal void Restore(IEnumerable<Sessions.QueuedMessage> items)
     {
         foreach (var item in items) Items.Add(item);
     }
@@ -72,7 +72,7 @@ public sealed class PendingQueue : Collection<SessionManager.QueuedMessage>
     /// SetItem, то есть дёргает Changed поштучно, как <see cref="RemoveAll"/>: pending.json
     /// обновляется на каждую переписанную запись. Синхронизацию держит вызывающий (PendingLock).
     /// </summary>
-    public int ReplaceWhere(Func<SessionManager.QueuedMessage, SessionManager.QueuedMessage?> transform)
+    public int ReplaceWhere(Func<Sessions.QueuedMessage, Sessions.QueuedMessage?> transform)
     {
         var changed = 0;
         for (var i = 0; i < Count; i++)

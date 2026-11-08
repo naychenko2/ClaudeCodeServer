@@ -87,4 +87,23 @@ describe('api.notes.update — If-Match и 409 (реальная цепочка)
     expect(etagOut.etag).toBe('"bbb222"');
     expect(r.etag).toBe('"bbb222"');
   });
+
+  it('без ifMatch: заголовка If-Match нет — поведение ровно как раньше', async () => {
+    request.mockResolvedValue(noteBody);
+    await api.notes.update('n1', { content: 'мой текст' });
+
+    const [, options] = request.mock.calls[0] as [string, ReqOpts];
+    expect(options.method).toBe('PUT');
+    expect(options.headers).toBeUndefined();
+  });
+
+  it('200 без ETag — etag в ответе и в etagOut не появляется', async () => {
+    request.mockResolvedValue(noteBody);
+
+    const etagOut: { etag?: string } = {};
+    const r = await api.notes.update('n1', { content: 'мой текст' }, '"aaa111"', etagOut);
+    expect(etagOut.etag).toBeUndefined();
+    expect(r.etag).toBeUndefined();
+    expect(r.content).toBe('текст заметки');
+  });
 });

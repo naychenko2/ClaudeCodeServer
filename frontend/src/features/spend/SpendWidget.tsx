@@ -3,7 +3,7 @@
 // Обновление — по завершению ходов (status_changed SignalR) + страховочный поллинг.
 import { useEffect, useState } from 'react';
 import { Coins } from 'lucide-react';
-import type { SpendWidgetResponse } from '../../types';
+import type { SpendWidgetResponse } from './types';
 import { api, C, FONT, R, onMessage, onReconnected, WidgetCard, WidgetAction, WidgetEmpty } from 'aihome_shell/kit';
 import { openSpend } from '../../lib/spendContract';
 import { fmtTok } from './spendModel';

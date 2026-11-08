@@ -40,7 +40,7 @@ import { writeStoredToken } from './offline';
 export type * from '../features/projects/types';
 // Типы «Локальных моделей» живут в features/localModel/types.ts, методы — в features/localModel/api.ts
 export type * from '../features/localModel/types';
-// Типы «Аккаунтов провайдеров» (Higgsfield) живут в features/providerAccounts/types.ts
+// Типы «Аккаунтов провайдеров» (Higgsfield, fal, glif, Яндекс) живут в features/providerAccounts/types.ts
 export type * from '../features/providerAccounts/types';
 // Типы «Аккаунта» (слоты моделей) живут в features/account/types.ts
 export type * from '../features/account/types';

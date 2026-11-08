@@ -18,7 +18,10 @@ namespace ClaudeHomeServer.Tests.Services;
 /// <item>на типы Services.Sessions ссылаются только SessionManager, сами Services.Sessions и тесты
 ///   (default-deny: закрывает обход фасада — новые пути входа к per-owner изоляции); allow-list
 ///   рефереров опознаётся по полному имени (с пространством имён), а не по имени типа: одноимённый
-///   тип из чужого пространства имён — не регистрация, он обязан быть пойман;</item>
+///   тип из чужого пространства имён — не регистрация, он обязан быть пойман; допуск гранулярный
+///   по роли корня (хвост ревью 447ec76b): точка сборки ядра называет роли и швы — это её назначение
+///   (DI-композиция, не вызов поведения), вызывающий за ядром — только типы-данные
+///   (<see cref="CoreDataContracts"/>); ссылка такого корня на роль или шов краснит правило;</item>
 /// <item><c>IServiceProvider</c> в конструкторе — только у поимённого allow-list (одна роль:
 ///   <c>BuiltinMcpContexts</c>; её ограничение на резолв — комментарий у поля и пункт ревью,
 ///   рефлексией оно не видно).</item>
@@ -55,13 +58,22 @@ public class SessionCoreShapeGuardTests
 
     // Типы-данные ядра: контракты, а не роли. Правило 2 на них не считается — позиционные
     // параметры записи это поля данных (у QueuedMessage их четырнадцать: идентификатор, текст,
-    // отправитель, режим…), а лимит стоит про зависимостях роли. Новая строка здесь — такое же
-    // явное решение, как allow-list правила 5 (состав списка держит самопроверка ниже).
+    // отправитель, режим…), а лимит стоит про зависимостях роли. Тот же список держит и грань
+    // правила 4: допуск data-реферера — ссылка ровно на эти типы, ничего больше (хвост 447ec76b).
+    // Новая строка здесь — такое же явное решение, как allow-list правила 5 (состав списка держит
+    // самопроверка ниже).
     private static readonly Dictionary<string, string> CoreDataContracts = new()
     {
         ["ClaudeHomeServer.Services.Sessions.QueuedMessage"] =
             "контракт содержимого очереди (S3-1, план §1, row «SessionEntry.cs (типы)»): "
             + "перенесён из фасада дословно, поведения не держит",
+        ["ClaudeHomeServer.Services.Sessions.PendingKind"] =
+            "enum режима записи очереди (SessionEntry.cs:367, перенесён тем же шагом S3-1): значение, "
+            + "не поведение; его называют TaskExecutionService (kind: …Report, строки 2093 и 2541) и "
+            + "SessionMessagesController (разбор kind для /pending, строки 273 и 275)",
+        ["ClaudeHomeServer.Services.Sessions.PendingQueueFile"] =
+            "контракт файла очереди pending.json (PendingQueue.cs:92, перенесён хвостом S3): формат "
+            + "данных, не поведение; его держит ChatHistoryService (LoadPending/SavePending, строки 187-193)",
     };
 
     // Поимённый allow-list правила 5 (у каждой строки — причина). SessionStore, ChatVisibility и
@@ -80,29 +92,41 @@ public class SessionCoreShapeGuardTests
     // плюс сигнатуры/поля (BoundaryIlScanner.CollectAllReferencedTypes).
     private static readonly Type[] FacadeForbiddenLlm = [typeof(ClaudeHomeServer.Services.Llm.ICheapTextRunner)];
 
-    // Кто, кроме SessionManager и самих Services.Sessions, может ссылаться на типы ядра.
+    // Кто, кроме SessionManager и самих Services.Sessions, может ссылаться на типы ядра, и какой
+    // гранью. Раньше одна строка снимала с корня запрет на ЛЮБУЮ ссылку в Services.Sessions: такой
+    // корень мог молча взять шов (ITurnStarter) или роль ядра (хвост ревью 447ec76b). Теперь грань
+    // у списка: точка сборки ядра называет роли и швы, вызывающий за ядром — только типы-данные.
     // Ключ — полное имя типа (с пространством имён), не имя: опознавание по имени пропускало бы
     // одноимённый тип из чужого пространства имён (самопроверка ниже краснеет на нём).
-    private static readonly Dictionary<string, string> CoreReferrerAllowList = new()
+    private static readonly Dictionary<string, string> CoreCompositionRoots = new()
     {
         ["ClaudeHomeServer.Services.Composition.SessionCoreRegistration"] =
-            "регистрация AddSessionCore в DI — единственная точка сборки ядра; "
-            + "пространство имён Composition — по замыслу (комментарий у SessionCoreRegistration.cs:5)",
+            "регистрация AddSessionCore в DI — единственная точка сборки ядра: она зовёт GetRequiredService"
+            + "<…> по всем ролям и швам (SessionCoreRegistration.cs:22-333) — это её назначение, а не обход "
+            + "фасада; поведение она не вызывает. Пространство имён Composition — по замыслу "
+            + "(комментарий у SessionCoreRegistration.cs:5)",
+    };
 
-        // Вызывающие контракта очереди, оставшиеся снаружи ядра (S3-1, план §1). Ни один из них
-        // не зовёт поведение ядра — вход к per-owner изоляции у них прежний, через фасад
-        // SessionManager. Хранители данных очереди (PendingQueue, PendingQueueFile) здесь больше
-        // не перечислены: перенесены в Services.Sessions (хвост S3) и стали своими для ядра.
+    // Вызывающие контракта очереди, оставшиеся снаружи ядра (S3-1, план §1). Ни один из них
+    // не зовёт поведение ядра — вход к per-owner изоляции у них прежний, через фасад
+    // SessionManager. Хранители данных очереди (PendingQueue, PendingQueueFile) здесь больше
+    // не перечислены: перенесены в Services.Sessions (хвост S3) и стали своими для ядра.
+    // Допуск каждого — только на типы из CoreDataContracts (грань правила 4 выше).
+    private static readonly Dictionary<string, string> CoreDataReferrerAllowList = new()
+    {
         ["ClaudeHomeServer.Services.ChatHistoryService"] =
-            "LoadPending/SavePending читают и пишут pending.json (параметр и generic-аргумент — "
-            + "Sessions.PendingQueueFile): хранитель файла очереди за ядром, поведения ядра не зовёт",
+            "LoadPending/SavePending читают и пишут pending.json: возвращаемый тип, generic-аргумент "
+            + "и параметр — Sessions.PendingQueueFile (ChatHistoryService.cs:187-193). После переноса "
+            + "хранителя в Services.Sessions (хвост S3) это живая ссылка на тип-данные ядра: строка "
+            + "нужна, снятие красит правило 4 (проверено в копии мутации)",
         ["ClaudeHomeServer.Services.TaskExecutionService"] =
             "зовёт фасад (SendOrEnqueueAsync) и передаёт ему константу PendingKind.Report: "
             + "к ядро обращается только значением enum. С задачей fada2814 скан видит такую "
             + "константу по позиции аргумента в сигнатуре вызова — допуск стал живым: снятие "
             + "этой строки красит правило 4 (проверено в копии мутации)",
         ["ClaudeHomeServer.Controllers.SessionMessagesController"] =
-            "зовёт фасад (GetPending) и читает Kind для ответа /pending: данные, не поведение ядра",
+            "зовёт фасад (GetPending) и читает Kind для ответа /pending: значение enum "
+            + "Sessions.PendingKind (SessionMessagesController.cs:273,275), не поведение ядра",
     };
 
     static SessionCoreShapeGuardTests()
@@ -177,27 +201,42 @@ public class SessionCoreShapeGuardTests
         select $"{t.Name} упоминает {hit.FullName}: зависимость снята на S3-8c, "
             + "уточнение заголовка живёт в ChatNaming, раннер он берёт из контейнера напрямую";
 
-    /// <summary>Правило 4: кто из <paramref name="referrers"/> ссылается на типы Services.Sessions.</summary>
+    /// <summary>Правило 4: кто из <paramref name="referrers"/> ссылается на типы Services.Sessions.
+    /// Допуск меряется гранью корня: фасад и сами Services.Sessions — целиком; точка сборки ядра —
+    /// целиком (роли и швы — её назначение); вызывающий из data-allow-list — только типы-данные.
+    /// Ссылка сверх своей грани — нарушение.</summary>
     internal static IEnumerable<string> Rule4OnlyFacadeReferences(IEnumerable<Type> referrers)
     {
         foreach (var t in referrers)
         {
-            if (IsAllowedReferrer(t)) continue;
+            var scope = ReferrerScope(t);
+            if (scope == RefScope.Full) continue;
             var hit = BoundaryIlScanner.CollectAllReferencedTypes(t)
-                .FirstOrDefault(r => r.Namespace == CoreNamespace);
+                .FirstOrDefault(r => r.Namespace == CoreNamespace
+                    && !(scope == RefScope.DataOnly && IsCoreData(r)));
             if (hit is not null)
-                yield return $"{t.FullName} ссылается на {hit.Name} из Services.Sessions в обход фасада SessionManager";
+                yield return $"{t.FullName} ссылается на {hit.Name} из Services.Sessions в обход фасада "
+                    + "SessionManager"
+                    + (scope == RefScope.DataOnly ? " (допуск этого корня — только типы-данные ядра)" : "");
         }
     }
 
-    private static bool IsAllowedReferrer(Type t)
+    /// <summary>Грань корня-реферера: вложенный тип относится к своему top-level корню (сканер
+    /// собирает его вместе с ним).</summary>
+    private static RefScope ReferrerScope(Type t)
     {
         var root = t;
         while (root.DeclaringType is not null) root = root.DeclaringType;
-        return root == typeof(SessionManager)
-            || root.Namespace == CoreNamespace
-            || (root.FullName is not null && CoreReferrerAllowList.ContainsKey(root.FullName));
+        if (root == typeof(SessionManager) || root.Namespace == CoreNamespace) return RefScope.Full;
+        var fullName = root.FullName ?? root.Name;
+        if (CoreCompositionRoots.ContainsKey(fullName)) return RefScope.Full;
+        if (CoreDataReferrerAllowList.ContainsKey(fullName)) return RefScope.DataOnly;
+        return RefScope.None;
     }
+
+    private static bool IsCoreData(Type t) => CoreDataContracts.ContainsKey(t.FullName ?? t.Name);
+
+    private enum RefScope { None, DataOnly, Full }
 
     // ---- боевые проверки ----
 
@@ -253,9 +292,15 @@ public class SessionCoreShapeGuardTests
             "решение 05.11 (1dda7103): allow-list — одна роль; новая строка требует нового решения Александра");
 
     [Fact]
-    public void Список_типов_данных_состоит_только_из_контракта_очереди() =>
-        CoreDataContracts.Keys.Should().BeEquivalentTo(["ClaudeHomeServer.Services.Sessions.QueuedMessage"],
-            "тип-данные в ядре — явное решение: на него не считается правило 2; новая строка требует его же");
+    public void Список_типов_данных_состоит_только_из_контрактов_очереди() =>
+        CoreDataContracts.Keys.Should().BeEquivalentTo(
+            [
+                "ClaudeHomeServer.Services.Sessions.QueuedMessage",
+                "ClaudeHomeServer.Services.Sessions.PendingKind",
+                "ClaudeHomeServer.Services.Sessions.PendingQueueFile",
+            ],
+            "тип-данные в ядре — явное решение: на них не считается правило 2, и только на них "
+            + "распространяется допуск data-реферера правила 4; новая строка требует его же");
 
     [Fact]
     public void Самопроверка_правило2_не_считает_поля_записи_данных() =>
@@ -307,6 +352,8 @@ public class SessionCoreShapeGuardTests
 
     private sealed class FakeReferrer { public SessionStore? Store; }
 
+    private sealed class FakeReferrerTakesData { public QueuedMessage? Item; }
+
     // Три формы «возврата» из пробы 1f7152c9: поле, параметр конструктора, публичный доступ.
     private sealed class FakeFacadeField
     {
@@ -353,6 +400,12 @@ public class SessionCoreShapeGuardTests
     [Fact]
     public void Самопроверка_правило4_краснеет_на_ссылке_постороннего_типа_на_стор() =>
         Rule4OnlyFacadeReferences([typeof(FakeReferrer)]).Should().ContainSingle();
+
+    [Fact]
+    public void Самопроверка_правило4_ловит_и_тип_данных_от_недопущенного_корня() =>
+        Rule4OnlyFacadeReferences([typeof(FakeReferrerTakesData)]).Should().ContainSingle(
+            "типы-данные не становятся свободными для всех: их допуск живёт со строкой data-allow-list, "
+            + "а не с тем, что цель ссылки — данные (default-deny правила 4 сохраняется)");
 
     [Fact]
     public void Самопроверка_правило4_ловится_одноимённый_тип_из_чужого_пространства_имён()

@@ -32,7 +32,7 @@ public class McpCatalogClientTests
         }
     }
 
-    private sealed class StubFactory(StubHandler handler) : IHttpClientFactory
+    private sealed class StubFactory(HttpMessageHandler handler) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => new(handler)
         {
@@ -155,6 +155,42 @@ public class McpCatalogClientTests
         for (var i = 0; i < 20; i++)
             await client.SearchAsync("q" + i, null);
         handler.Calls.Should().Be(20);
+    }
+
+    // --- отмена хоста vs отказ реестра (хвост линии траты) ---
+
+    // Что делает HttpClient при отменённом токене хоста: TaskCanceledException с этим
+    // токеном — тот же тип, что при client.Timeout (замерено, HttpClientCancellationContractTests).
+    private sealed class CancelOnTokenHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+            CancellationToken ct) =>
+            Task.FromException<HttpResponseMessage>(
+                new TaskCanceledException("запрос отменён хостом", null, ct));
+    }
+
+    [Fact]
+    public async Task Поиск_ОтменаХостаНеНазываетсяОтказомРеестра()
+    {
+        var client = new McpCatalogClient(new StubFactory(new CancelOnTokenHandler()),
+            new McpCatalogOptions { BaseUrl = "https://registry.example" });
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var act = () => client.SearchAsync("q", null, cts.Token);
+        await act.Should().ThrowAsync<OperationCanceledException>(
+            "«Стоп» пользователя — не «Реестр MCP не отвечает»: отмена уходит наверх нетранслированной");
+    }
+
+    [Fact]
+    public async Task Ревизия_ОтменаХостаНеСтановитсяCheckFailed()
+    {
+        var client = new McpCatalogClient(new StubFactory(new CancelOnTokenHandler()),
+            new McpCatalogOptions { BaseUrl = "https://registry.example" });
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var act = () => client.ReviseAsync([new McpCatalogRevisionQuery("io.github.o/x", "1.0.0")], cts.Token);
+        await act.Should().ThrowAsync<OperationCanceledException>(
+            "после «Стопа» вердикта о записи нет: проверка не выполнялась, CheckFailed был бы ложью");
     }
 
     // --- нормализация запроса ---

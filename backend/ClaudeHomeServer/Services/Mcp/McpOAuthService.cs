@@ -414,7 +414,11 @@ public class McpOAuthService(
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(DiscoveryOverallTimeout);
         var reach = new DiscoveryReach();
-        var result = await DiscoverAsync(serverUrl, oauth, reach, cts.Token);
+        // Вниз по цепочке идут оба токена: cts.Token — рабочий (сеть отменяется и бюджетом,
+        // и «Стопом»), ct — хостовый, по нему guard'ы отличают «Стоп» от внутреннего бюджета.
+        // Без этого разделения внутренний бюджет выглядел бы отменой хоста, а «Стоп» —
+        // молчанием сервера.
+        var result = await DiscoverAsync(serverUrl, oauth, reach, cts.Token, ct);
         if (!ct.IsCancellationRequested && cts.IsCancellationRequested)
             throw new McpOAuthException(
                 $"Сервер авторизации не отвечает (проверка адресов заняла больше {DiscoveryOverallTimeout.TotalSeconds:0} с)",
@@ -429,12 +433,13 @@ public class McpOAuthService(
     // Адрес authorization server и его эндпоинты. Уже найденный issuer не ищем заново:
     // повторный вход после отзыва доступа не должен зависеть от того, отвечает ли сервер 401
     private async Task<(Uri Issuer, McpOAuthEndpoints Endpoints)> DiscoverAsync(
-        Uri serverUrl, McpOAuthConfig oauth, DiscoveryReach reach, CancellationToken ct)
+        Uri serverUrl, McpOAuthConfig oauth, DiscoveryReach reach,
+        CancellationToken ct, CancellationToken hostCt)
     {
-        var issuer = await FindIssuerAsync(serverUrl, oauth, reach, ct);
+        var issuer = await FindIssuerAsync(serverUrl, oauth, reach, ct, hostCt);
         foreach (var candidate in McpOAuthDiscovery.AuthorizationServerCandidates(issuer))
         {
-            var metadata = await GetJsonAsync(candidate, reach, ct);
+            var metadata = await GetJsonAsync(candidate, reach, ct, hostCt);
             if (metadata is { } json) return (issuer, McpOAuthDiscovery.EndpointsFrom(json, issuer));
         }
         // Метаданных нет — по спеке остаются дефолтные пути
@@ -442,19 +447,19 @@ public class McpOAuthService(
     }
 
     private async Task<Uri> FindIssuerAsync(Uri serverUrl, McpOAuthConfig oauth, DiscoveryReach reach,
-        CancellationToken ct)
+        CancellationToken ct, CancellationToken hostCt)
     {
         if (oauth.AuthorizationServer is { Length: > 0 } known
             && Uri.TryCreate(known, UriKind.Absolute, out var knownUri)) return knownUri;
 
-        var metadataUrl = await ProbeResourceMetadataUrlAsync(serverUrl, reach, ct);
+        var metadataUrl = await ProbeResourceMetadataUrlAsync(serverUrl, reach, ct, hostCt);
         var candidates = metadataUrl is null
             ? McpOAuthDiscovery.ProtectedResourceCandidates(serverUrl)
             : [metadataUrl, .. McpOAuthDiscovery.ProtectedResourceCandidates(serverUrl)];
 
         foreach (var candidate in candidates)
         {
-            if (await GetJsonAsync(candidate, reach, ct) is not { } json) continue;
+            if (await GetJsonAsync(candidate, reach, ct, hostCt) is not { } json) continue;
             if (McpOAuthDiscovery.AuthorizationServerFrom(json) is not { } server) continue;
             if (Uri.TryCreate(server, UriKind.Absolute, out var uri)) return uri;
         }
@@ -464,7 +469,7 @@ public class McpOAuthService(
 
     // 401 от самого MCP-сервера: в WWW-Authenticate лежит адрес метаданных ресурса
     private async Task<string?> ProbeResourceMetadataUrlAsync(Uri serverUrl, DiscoveryReach reach,
-        CancellationToken ct)
+        CancellationToken ct, CancellationToken hostCt)
     {
         try
         {
@@ -479,13 +484,22 @@ public class McpOAuthService(
             return McpOAuthDiscovery.ResourceMetadataFrom(
                 response.Headers.WwwAuthenticate.Select(h => h.ToString()));
         }
+        // «Стоп» хоста — не молчание сервера: он не должен продолжаться в дисквери
+        // дальше, как и в любом другом месте входа (тот же guard, что в RegisterClientAsync).
+        // Проверяем хостовый токен, а не рабочий: срабатывание внутреннего бюджета discovery
+        // — не отмена хоста, оно называется ниже по факту «ни один адрес не ответил».
+        catch (OperationCanceledException) when (hostCt.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
         {
             return null; // молчащий сервер не отменяет вход — идём по дефолтным путям
         }
     }
 
-    private async Task<JsonElement?> GetJsonAsync(string url, DiscoveryReach reach, CancellationToken ct)
+    private async Task<JsonElement?> GetJsonAsync(string url, DiscoveryReach reach,
+        CancellationToken ct, CancellationToken hostCt)
     {
         try
         {
@@ -495,6 +509,12 @@ public class McpOAuthService(
             var body = await response.Content.ReadAsStringAsync(ct);
             using var document = JsonDocument.Parse(body);
             return document.RootElement.Clone();
+        }
+        // Тот же порядок, что у ProbeResourceMetadataUrlAsync: отмена хоста идёт наверх,
+        // тихий пропуск — только молчанию или битому ответу самого сервера.
+        catch (OperationCanceledException) when (hostCt.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
         {
@@ -601,7 +621,16 @@ public class McpOAuthService(
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
             response = await Client().SendAsync(request, ct);
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        // Тот же порядок, что у RegisterClientAsync выше: таймаут называется таймаутом
+        // (TaskCanceledException несёт бесполезное «A task was canceled»), недоступность —
+        // недоступностью, а «Стоп» хоста не прикинется отказом сервера токенов: он уходит
+        // наверх как отмена и не красит плитку «нужен вход».
+        catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new McpOAuthException("Сервер токенов не отвечает — токен не получен",
+                McpOAuthFailure.Unreachable);
+        }
+        catch (HttpRequestException ex)
         {
             throw new McpOAuthException("Сервер токенов недоступен: " + ex.Message);
         }

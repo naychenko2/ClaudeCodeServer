@@ -238,8 +238,20 @@ public sealed class ImageGenerationService
     private void RecordNoImagesSpend(
         string place, IImageGenerator generator, string? model, string? requestId, string ownerId, string initiator)
     {
-        if (requestId is null || _spend is null || _falCost is null || string.IsNullOrWhiteSpace(ownerId)
-            || !string.Equals(generator.Key, SpendSources.Fal, StringComparison.OrdinalIgnoreCase)) return;
+        // Ранние выходы пишут лог так же, как RecordSpend, но записи не обещают: её здесь нет
+        if (_spend is null || string.IsNullOrWhiteSpace(ownerId))
+        {
+            _log?.LogWarning("Генерация картинок: {Provider} не вернул картинок для места {Place}, учёт расхода недоступен (нет коллектора или владельца), записи нет",
+                generator.Key, place);
+            return;
+        }
+        if (requestId is null || _falCost is null
+            || !string.Equals(generator.Key, SpendSources.Fal, StringComparison.OrdinalIgnoreCase))
+        {
+            _log?.LogInformation("Генерация картинок: {Provider} не вернул картинок для места {Place}, цену спросить не по чему (нет id запроса, источника цены или это не fal), записи нет",
+                generator.Key, place);
+            return;
+        }
         _log?.LogInformation("Генерация картинок: {Provider} не вернул картинок для места {Place}, уточняю цену по {RequestId}",
             generator.Key, place, requestId);
         _ = TopUpAmountAsync(ownerId, model, requestId, string.IsNullOrWhiteSpace(initiator) ? null : initiator,
@@ -258,8 +270,12 @@ public sealed class ImageGenerationService
             var usd = await _falCost!.ResolveUsdAsync(requestId, CancellationToken.None);
             if (usd is null)
             {
-                _log?.LogWarning("Учёт расхода: цена fal по {RequestId} не появилась за окно опроса, трата остаётся без суммы",
-                    requestId);
+                if (noImages)
+                    _log?.LogWarning("Учёт расхода: цена fal по {RequestId} без картинок не появилась за окно опроса, цены нет — записи нет",
+                        requestId);
+                else
+                    _log?.LogWarning("Учёт расхода: цена fal по {RequestId} не появилась за окно опроса, трата остаётся без суммы",
+                        requestId);
                 return;
             }
             if (noImages && usd <= 0)

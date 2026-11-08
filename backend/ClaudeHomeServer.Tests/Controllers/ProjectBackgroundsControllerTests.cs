@@ -75,14 +75,16 @@ public class ProjectBackgroundsControllerTests(TestWebApplicationFactory factory
 /// ради единообразия не стали, существование проекта участнику и так известно, выигрыша нет.
 /// </summary>
 [Trait("Category", "Host")]
-public class ProjectBackgroundsEditorTests : IDisposable
+public class ProjectBackgroundsEditorTests(ProjectBackgroundsEditorTests.Hosts hosts)
+    : IClassFixture<ProjectBackgroundsEditorTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    private TestWebApplicationFactory _factory => hosts;
 
-    public ProjectBackgroundsEditorTests() =>
-        _factory.ExtraConfig[SharedProjectsGate.SwitchKey] = "true";
-
-    public void Dispose() => _factory.Dispose();
+    /// <summary>Хост на КЛАСС, а не на тест: общие проекты включаются конфигом при создании.</summary>
+    public sealed class Hosts : TestWebApplicationFactory
+    {
+        public Hosts() => ExtraConfig[SharedProjectsGate.SwitchKey] = "true";
+    }
 
     [Fact]
     public async Task Редактор_общего_проекта_видит_но_не_пишет_получает_404_на_запись()

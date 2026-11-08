@@ -1078,7 +1078,6 @@ export interface GeneratedSkill {
 
 export type * from '../features/changelog/types';
 
-// eslint-disable-next-line module/no-cross-feature-import -- types/index.ts ре-экспортирует доменные типы для совместимости внешних импортов (S5-P4); публичного index.ts у notes нет, баррел заведётся отдельно
 export type * from '../features/notes/types';
 
 export type * from '../features/knowledge/types';
@@ -1113,8 +1112,9 @@ export type * from '../features/tasks/types';
 
 // Директив module/no-cross-feature-import здесь нет: правило судит только фичи из
 // CROSS_FEATURE_IMPORT_ENABLED (eslint.config.js), а «account» и «projects» в него
-// ещё не включены. При их подключении эти ре-экспорты станут нарушениями; порядок
-// покрытия стартовых нарушений описан в комментарии к тому списку.
+// ещё не включены. С S5-B ровный `/types` — публичная грань типов фичи, поэтому эти
+// ре-экспорты не станут нарушениями и при их подключении; правила покрытия
+// стартовых нарушений — в комментарии к тому списку.
 export type * from '../features/account/types';
 
 // значение, а не тип: `export type *` его не везёт, внешний импорт displayNameOf из types должен работать без правки потребителей

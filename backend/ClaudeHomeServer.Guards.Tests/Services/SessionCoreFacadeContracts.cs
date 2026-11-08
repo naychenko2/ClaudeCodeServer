@@ -135,7 +135,10 @@ internal static class SessionCoreFacadeContracts
     /// <c>op_Inequality</c>, <c>Equals(этот_тип)</c> или <c>GetHashCode()</c> без параметров. Список имён
     /// закрытый: «любой метод с <c>CompilerGeneratedAttribute</c>» подошёл бы и обычной структуре —
     /// у неё синтезированные акцессоры авто-свойств помечены тем же атрибутом (держит фикстура
-    /// <c>PlainWithOwnPrint</c> в <see cref="SessionCoreShapeGuardTests"/>).</summary>
+    /// <c>PlainWithOwnPrint</c> в <see cref="SessionCoreShapeGuardTests"/>). Причина провала признака
+    /// — в <see cref="RecordShapeNote"/>: он называет, какие <c>CompilerGenerated</c>-члены реально
+    /// найдены, поэтому смена формы синтезированного равенства (новый компилятор) красит сторож
+    /// сообщением, а не молча.</summary>
     internal static bool IsRecord(Type t) =>
         t.GetMethod("<Clone>$", BindingFlags.Public | BindingFlags.Instance) is not null
         || t.IsValueType && HasPrintMembers(t) && HasSynthesizedEquality(t);
@@ -144,13 +147,38 @@ internal static class SessionCoreFacadeContracts
         t.GetMethod("PrintMembers", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance,
             null, [typeof(System.Text.StringBuilder)], null) is not null;
 
+    private const BindingFlags DeclaredMembers = BindingFlags.Public | BindingFlags.NonPublic
+        | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+
     private static bool HasSynthesizedEquality(Type t) =>
-        t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
-                | BindingFlags.Static | BindingFlags.DeclaredOnly)
-            .Any(m => m.IsDefined(typeof(System.Runtime.CompilerServices.CompilerGeneratedAttribute), false)
-                && (m.IsStatic && m.Name is "op_Equality" or "op_Inequality"
-                    || m.Name == "Equals" && m.GetParameters() is [var p] && p.ParameterType == t
-                    || m.Name == "GetHashCode" && m.GetParameters().Length == 0));
+        DeclaredMethods(t).Any(m => m.IsDefined(typeof(System.Runtime.CompilerServices.CompilerGeneratedAttribute), false)
+            // скобки явные: без них «or» держится синтаксисом pattern-комбинатора после «is», а не
+            // приоритетом && — семантика та же, но при правке приоритета операторов ветка молча
+            // потеряла бы op_Inequality
+            && (m.IsStatic && (m.Name is "op_Equality" or "op_Inequality")
+                || m.Name == "Equals" && m.GetParameters() is [var p] && p.ParameterType == t
+                || m.Name == "GetHashCode" && m.GetParameters().Length == 0));
+
+    private static IEnumerable<MethodInfo> DeclaredMethods(Type t) =>
+        t.GetMethods(DeclaredMembers);
+
+    /// <summary>Имена членов типа, помеченных <c>CompilerGeneratedAttribute</c> (методы, включая
+    /// акцессоры авто-свойств): по ним видно, какая машинерия в типе есть на самом деле.</summary>
+    private static List<string> GeneratedMemberNames(Type t) =>
+        DeclaredMethods(t)
+            .Where(m => m.IsDefined(typeof(System.Runtime.CompilerServices.CompilerGeneratedAttribute), false))
+            .Select(m => m.Name)
+            .ToList();
+
+    /// <summary>Диагностика провала признака записи для значения: пустой <see cref="RecordShapeNote"/>
+    /// у класса или enum (их признак и не ждали), у значения — список найденных
+    /// <c>CompilerGenerated</c>-членов: отсутствие op_Equality/Equals/GetHashCode в нём и есть
+    /// причина, по которой запись не опознана.</summary>
+    internal static string RecordShapeNote(Type t) =>
+        !t.IsValueType || IsRecord(t) ? ""
+        : GeneratedMemberNames(t).Count > 0
+            ? " (признак записи не найден; члены с [CompilerGenerated]: " + string.Join(", ", GeneratedMemberNames(t)) + ")"
+            : " (признак записи не найден; членов с [CompilerGenerated] нет)";
 
     /// <summary>Форма контракта фасада — данные: record/enum/исключение. Роль или шов контрактом не бывает.</summary>
     internal static bool IsContractShape(Type t) =>
@@ -163,7 +191,7 @@ internal static class SessionCoreFacadeContracts
         from n in root.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic)
         where !n.IsDefined(typeof(System.Runtime.CompilerServices.CompilerGeneratedAttribute), false)
         where !IsContractShape(n)
-        select $"{n.FullName}: вложенный тип контракта фасада — не record/enum/исключение";
+        select $"{n.FullName}: вложенный тип контракта фасада — не record/enum/исключение{RecordShapeNote(n)}";
 
     /// <summary>Механическая проверка критерия по каждой строке: тип существует в <paramref name="main"/>,
     /// лежит в <c>Services.Sessions</c> и либо достижим из сигнатуры <paramref name="facade"/>
@@ -178,7 +206,7 @@ internal static class SessionCoreFacadeContracts
             var type = main.GetType(name);
             if (type is null) { yield return $"{name}: типа нет в сборке (устаревшая строка тихо откроет допуск)"; continue; }
             if (type.Namespace != coreNamespace) { yield return $"{name}: лежит не в {coreNamespace}"; continue; }
-            if (!IsContractShape(type)) { yield return $"{name}: не record/enum/исключение — контракт фасада это данные, роль или шов контрактом быть не может"; continue; }
+            if (!IsContractShape(type)) { yield return $"{name}: не record/enum/исключение — контракт фасада это данные, роль или шов контрактом быть не может{RecordShapeNote(type)}"; continue; }
             if (!typeof(Exception).IsAssignableFrom(type) && !signature.Contains(type))
                 yield return $"{name}: нет ни в сигнатуре public/internal члена {facade.Name} (включая публичную поверхность её типов), ни среди наследников Exception — "
                     + "это не контракт фасада (данные ядра идут в CoreDataContracts поимённо)";

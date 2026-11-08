@@ -451,6 +451,22 @@ public class SessionCoreShapeGuardTests
             .Which.Should().Contain("FakeRootWithOwnPrint+PlainWithOwnPrint");
     }
 
+    [Fact]
+    public void Самопроверка_диагностика_неопознанной_записи_называет_найденные_члены()
+    {
+        // Смена формы синтезированного равенства (новый компилятор) обязана красить сторож
+        // причиной, а не молча: описание нарушения называет, какие [CompilerGenerated]-члены в типе
+        // есть на самом деле. Фикстура — обычная структура с рукописным PrintMembers и
+        // авто-свойством: его акцессоры синтезированы, а машинерии равенства нет — по списку это видно.
+        var plain = typeof(FakeRootWithOwnPrint.PlainWithOwnPrint);
+        SessionCoreFacadeContracts.RecordShapeNote(plain).Should().Contain("get_Y")
+            .And.Contain("set_Y", "акцессоры авто-свойства должны быть в диагностике: их нет среди членов равенства");
+        SessionCoreFacadeContracts.NestedShapeViolations([typeof(FakeRootWithOwnPrint)]).Should().ContainSingle()
+            .Which.Should().Contain("признак записи не найден");
+        // У опознанной записи диагностики нет: она не шумит в passing-пути.
+        SessionCoreFacadeContracts.RecordShapeNote(typeof(FakeRootWithOwnPrint.RecordWithOwnPrint)).Should().BeEmpty();
+    }
+
     private sealed class FakeRootWithOwnPrint
     {
         public readonly record struct RecordWithOwnPrint(int X)

@@ -104,6 +104,16 @@ public class SpendMappingTests
         RecordTurnWithActor(Chat("claude", "opus"), Result(), actor: "u-2").Initiator.Should().BeNull();
     }
 
+    // Инвариант разреза «ход»: запись расхода хода чата несёт SessionId — без него аналитика
+    // теряет привязку записи к чату (проверка выпала при замене прежнего теста, хвост ревью
+    // R-S-SPEND-ИНИЦ, п.1).
+    [Fact]
+    public void RecordTurnSpend_ЗаписьХода_НесётSessionId()
+    {
+        var r = RecordTurn(Chat("claude", "opus"), Result());
+        r.SessionId.Should().Be("s-1");
+    }
+
     // Чат настроен Claude, ход через шлюз ушёл в minimax: запись обязана брать маршрут —
     // модель шлюза важнее отчёта CLI (сессия ротацию шлюза не видит).
     [Fact]

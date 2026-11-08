@@ -108,9 +108,11 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
         public bool TeamTurnFromHuman;
         // Защёлка траты: текущий ход начал человек (1) или нет (0). Живёт один ход и в
         // sessions.json не попадает. Выставляется подачей (SendDirectAsync — по предикату
-        // человеческого хода; chats_send — всегда 0), снимается на result (Interlocked.Exchange):
-        // пока живы фоновые агенты, CLI сам начинает новые ходы без подачи, и такой ход обязан
-        // уйти в учёт агентским. Не TeamTurnFromHuman: у того предикат шире (тихие подачи
+        // человеческого хода; chats_send — всегда 0), снимается на result текущего прогона
+        // (Interlocked.Exchange): пока живы фоновые агенты, CLI сам начинает новые ходы без
+        // подачи, и такой ход обязан уйти в учёт агентским; хвост доживающего процесса
+        // (чужой runId) защёлку не снимает — иначе съел бы её у уже идущего хода человека
+        // (ревью R-S-SPEND-ИНИЦ, п.3). Не TeamTurnFromHuman: у того предикат шире (тихие подачи
         // suppressTasksExecute) и своя семантика (M7), по result он не сбрасывается.
         public int TurnFromHuman;
         // Сабагент этого хода оборвался на середине (паспорт прогона с Truncated) — по концу
@@ -11004,10 +11006,18 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
                     // Актор читается здесь, пока ход жив: переход статуса по result и снятие
                     // актора идут ниже по методу (ApplyStatusQueuedAsync) — потребитель после
                     // конца хода получил бы null (урок R-S2a-6c).
-                    // Инициатор: защёлка снимается на каждом result (иначе автономный ход при живых
-                    // фоновых агентах приписался бы человеку); нет записи хода — «не назван» (null).
+                    // Инициатор: защёлку снимает только result текущего прогона (иначе автономный
+                    // ход при живых фоновых агентах приписался бы человеку). Хвост доживающего
+                    // процесса — чужой runId, доезжает через ветку turn=null адаптера
+                    // (FallbackLlmSessionAdapter.cs:356): это терминал хода, который ядро этой
+                    // подачей не поднимало, — он не снимает защёлку уже идущего хода человека
+                    // (тот записался бы agent) и сам не человек (ревью R-S-SPEND-ИНИЦ, п.3;
+                    // та же привязка к прогону, что у страховки drainOnDeadRun ниже).
+                    // runId == 0 — привязки нет (вызовы без id прогона): прежнее поведение,
+                    // снять на каждом result. Нет записи хода — «не назван» (null).
+                    var currentRun = entry is not null && (runId == 0 || runId == entry.RunId);
                     var spendInitiator = entry is null ? null
-                        : Interlocked.Exchange(ref entry.TurnFromHuman, 0) == 1
+                        : currentRun && Interlocked.Exchange(ref entry.TurnFromHuman, 0) == 1
                             ? SpendInitiators.Human : SpendInitiators.Agent;
                     SpendMapping.RecordTurnSpend(_spend, _llmProviders, ResolveOwnerId, _log, entry?.Info, m, this, spendInitiator);
                     break;

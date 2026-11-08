@@ -7,7 +7,7 @@ using FluentAssertions;
 namespace ClaudeHomeServer.Tests.Services;
 
 // Блокер вердикта efa973f5: в бою ядро обязано передать реестр актора в учёт расхода хода
-// (SessionManager.cs:10473 → SpendMapping.RecordTurnSpend). Запись строится пока ход жив —
+// (SessionManager.cs:11022 → SpendMapping.RecordTurnSpend). Запись строится пока ход жив —
 // переход статуса по result идёт ниже по методу, ядро снимает актора вместе со статусом,
 // и потребитель после конца хода получил бы null (урок R-S2a-6c). Здесь — ровно боевой
 // порядок: живой ход участника → result → запись несёт его ActorUserId; серверный ход
@@ -68,10 +68,10 @@ public partial class SessionManagerHierarchyTests
     // Проба идёт боевым порядком: подача → result при живом ходе → запись. Значения: human —
     // защёлка взведена подачей человека; agent — запись хода есть, защёлка не взведена.
 
-    private async Task<string?> InitiatorOfNextResultAsync(string sessionId, RecordingSpend spend)
+    private async Task<string?> InitiatorOfNextResultAsync(string sessionId, RecordingSpend spend, long runId = TestRunId)
     {
         var before = spend.Records.Count;
-        await InvokeOnMessageAsync(sessionId, new TurnAccumulator(new List<StoredMessage>()), TurnResult(), TestRunId);
+        await InvokeOnMessageAsync(sessionId, new TurnAccumulator(new List<StoredMessage>()), TurnResult(), runId);
         spend.Records.Should().HaveCount(before + 1);
         return spend.Records[^1].Initiator;
     }
@@ -170,5 +170,23 @@ public partial class SessionManagerHierarchyTests
         (await InitiatorOfNextResultAsync(session.Id, spend)).Should().Be(SpendInitiators.Human);
         (await InitiatorOfNextResultAsync(session.Id, spend)).Should().Be(SpendInitiators.Agent,
             "второй result без новой подачи — автономный ход, человеку не приписывается");
+    }
+
+    // Хвост ревью R-S-SPEND-ИНИЦ, п.3: осиротевший result доживающего прогона доезжает до ядра
+    // через ветку turn=null адаптера (FallbackLlmSessionAdapter.cs:356 пропускает ResultMessage
+    // при снятой оркестрации — вниз уходит с id мёртвого прогона, замыкающим ход он не является).
+    // Между подачей человека и её result — лишний result чужого прогона: защёлку он не съедает,
+    // запись хода остаётся human.
+    [Fact]
+    public async Task Инициатор_ЛишнийResultЧужогоПрогона_НеСнимаетЗащёлку()
+    {
+        var (session, _) = await RunChatAsync("in-foreign-run");
+        var spend = AttachSpend();
+        await _sut.SendMessageAsync(session.Id, "от человека", [], senderUserId: Участник);
+
+        (await InitiatorOfNextResultAsync(session.Id, spend, runId: TestRunId + 1)).Should().NotBe(SpendInitiators.Human,
+            "лишний result чужого прогона не получает защёлку идущего хода");
+        (await InitiatorOfNextResultAsync(session.Id, spend)).Should().Be(SpendInitiators.Human,
+            "защёлку снимает только result, закрывающий ход");
     }
 }

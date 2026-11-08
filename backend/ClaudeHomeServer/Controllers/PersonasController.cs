@@ -201,11 +201,32 @@ public class PersonasController(
         return persona is null ? NotFound() : Ok(persona);
     }
 
-    // Путь формы — человеческий: инициатор траты аватара называет здесь, сам сервис его
-    // не вычисывает (S-SPEND-8)
+    // Атрибуция траты аватара по REST-входу (дефект stdio-пути, ревью 3c6055aa): человек из
+    // формы и агент через stdio-MCP приходят одним POST /api/personas — канал их не различает.
+    // Различает их чат-вызыватель (заголовок ставят MCP-серверы, браузер — никогда) и признак
+    // его живого хода (защёлка TurnFromHuman — тот же, по которой ядро метит учёт хода):
+    // ход начал человек → Human; ход начал агент, или живого хода нет (заголовок бывает только
+    // у агентского вызова) → Agent. Актор — подавший: актор хода, а не владелец токена: в
+    // stdio-песочнице токен арендатора, а ход может принадлежать участнику.
+    private (string Initiator, string? Actor) CallerSpendAttribution()
+    {
+        var sessionId = CallerSessionId();
+        if (sessionId is not { Length: > 0 } || _sessions.GetOwned(sessionId, UserId) is null)
+            return (SpendInitiators.Human, null); // вызов без чата-вызывателя — из формы: актор он сам
+        var actor = _sessions.GetTurnActor(sessionId, UserId) ?? UserId; // актор неизвестен — права арендатора
+        return _sessions.IsTurnFromHuman(sessionId, UserId)
+            ? (SpendInitiators.Human, actor)
+            : (SpendInitiators.Agent, actor);
+    }
+
+    // Инициатор и актор траты аватара называет здесь вызывающий, сам сервис их не вычисывает
+    // (S-SPEND-8); для REST-входа их выводит CallerSpendAttribution, а не канал доставки
     [HttpPost]
-    public Task<ActionResult<Persona>> Create([FromBody] CreatePersonaRequest req) =>
-        _crud.CreateAsync(UserId, req, CallerSessionId(), SpendInitiators.Human);
+    public Task<ActionResult<Persona>> Create([FromBody] CreatePersonaRequest req)
+    {
+        var (initiator, actor) = CallerSpendAttribution();
+        return _crud.CreateAsync(UserId, req, CallerSessionId(), initiator, actor);
+    }
 
     [HttpPut("{id}")]
     public Task<ActionResult<Persona>> Update(string id, [FromBody] UpdatePersonaRequest req) =>

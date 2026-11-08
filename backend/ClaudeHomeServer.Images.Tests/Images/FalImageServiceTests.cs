@@ -259,6 +259,20 @@ public class FalImageServiceTests
     }
 
     [Fact]
+    public async Task ТаймаутЧтенияТела_ЛогНазываетПотолок_НеСбойСвязи()
+    {
+        var log = new CapturingLog();
+        var svc = ServiceWith(_ => FalResponse(new TimedOutBody(), "req-body-timeout"), log);
+
+        await svc.GenerateManyAsync("кот", 1, null);
+
+        log.Items.Should().Contain(i => i.Text.Contains("не уложилась в потолок"),
+            "свой таймаут назван в логе своей причиной");
+        log.Items.Should().NotContain(i => i.Text.Contains("Ошибка генерации"),
+            "таймаут не выдаётся за сбой связи");
+    }
+
+    [Fact]
     public async Task ТелоНеОбъект_ИдётСвоейВеткой_AНеИсключением()
     {
         var log = new CapturingLog();

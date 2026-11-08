@@ -96,7 +96,7 @@ public class FalImageService : IImageGenerator
             // Дальше 180 с ждём только приход заголовков: с ResponseHeadersRead (ниже) клиент
             // отдаёт ответ сразу после них, и до тела этот таймаут не дотягивается —
             // потолок чтения тела делает своим токеном, ResponseBodyTimeout.
-            client.Timeout = TimeSpan.FromSeconds(180);
+            client.Timeout = HeadersTimeout;
 
             using var req = new HttpRequestMessage(HttpMethod.Post, $"https://fal.run/{endpoint}");
             req.Headers.Authorization = new AuthenticationHeaderValue("Key", _apiKey);
@@ -114,9 +114,10 @@ public class FalImageService : IImageGenerator
             // а запрос мог быть принят и оплачен даже при 4xx или без картинок.
             requestId = ResponseRequestId(resp);
 
-            // Явный потолок чтения тела: тот же 180 с, что были у SendAsync целиком. С headers-read
-            // клиент сам тело не ограничивает (docs HttpCompletionOption), и без этого токена
-            // зависшее тело висело бы до отмены вызывающего.
+            // Явный потолок чтения тела (свои 180 с, ResponseBodyTimeout). С headers-read клиент
+            // сам тело не ограничивает (docs HttpCompletionOption), и без этого токена зависшее
+            // тело висело бы до отмены вызывающего. Потолки пофазные: общий предел запроса —
+            // TotalTimeout (заголовки + тело, ≈360 с, как у glif), а не прежние 180 с целиком.
             using var body = CancellationTokenSource.CreateLinkedTokenSource(ct);
             body.CancelAfter(ResponseBodyTimeout);
 
@@ -171,21 +172,33 @@ public class FalImageService : IImageGenerator
                 requestId);
             return new ImageGenerationResult([], requestId);
         }
+        catch (TaskCanceledException)
+        {
+            // Свой потолок, а не сбой связи: ct вызывающего жив (его отмены разобраны выше), значит
+            // не уложились заголовки (client.Timeout) или тело (ResponseBodyTimeout). Поведение то
+            // же: пустой результат, id остаётся, если ответ был.
+            _logger.LogWarning(
+                "fal генерация не уложилась в потолок ({Headers}с на заголовки + {Body}с на тело, всего ≤{Total}с); id запроса: {RequestId}",
+                HeadersTimeout.TotalSeconds, ResponseBodyTimeout.TotalSeconds, TotalTimeout.TotalSeconds, requestId);
+            return new ImageGenerationResult([], requestId);
+        }
         catch (Exception ex)
         {
-            // Сбой связи или разбора тела — в том числе таймаут транспорта при неотменённом ct
-            // (TaskCanceledException): поведение как раньше, пустой результат; id остаётся, если
-            // ответ был. Отменённый вызывающим ход сюда не доходит: OCE с отменённым ct разобран
-            // фильтрами выше.
+            // Сбой связи или разбора тела: поведение как раньше, пустой результат; id остаётся,
+            // если ответ был. Отменённый вызывающим ход и свои таймауты сюда не доходят: они
+            // разобраны ветками выше.
             _logger.LogWarning(ex, "Ошибка генерации аватара через fal");
             return new ImageGenerationResult([], requestId);
         }
     }
 
-    // Потолок чтения тела ответа — явный: с ResponseHeadersRead client.Timeout до тела не
-    // дотягивается (docs: HttpCompletionOption), а прежнее ограничение в 180 с держало тело
-    // вместе с запросом — здесь оно же, только про своё чтение.
+    // Потолки пофазные: с ResponseHeadersRead client.Timeout до тела не дотягивается
+    // (docs: HttpCompletionOption), поэтому на приход заголовков и на чтение тела свои 180 с.
+    // Общий предел внешней генерации — сумма, названная одним числом (≈360 с, как TotalTimeout
+    // в GlifImageGenerator).
+    private static readonly TimeSpan HeadersTimeout = TimeSpan.FromSeconds(180);
     private static readonly TimeSpan ResponseBodyTimeout = TimeSpan.FromSeconds(180);
+    private static readonly TimeSpan TotalTimeout = HeadersTimeout + ResponseBodyTimeout;
 
     // Идентикатор запроса — из заголовка x-fal-request-id: синхронный fal.run его в тело
     // не кладёт (тело — вывод модели, форма зависит от схемы), а фал отдаёт его заголовком

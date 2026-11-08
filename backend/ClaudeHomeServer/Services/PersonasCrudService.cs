@@ -524,6 +524,22 @@ public sealed class PersonasCrudService(
 
     // --- Аватар ---
 
+    // Атрибуция траты аватара (п.3-4 ревью R-S-SPEND-2): ключ хранилища — владелец-арендатор,
+    // актор — разрез, проект называется, если персона проектная. Аватар персоны проекта —
+    // достояние проекта: трата адресуется арендатору (владелец проекта — тот же резолв, что у
+    // чатового пути, SessionManager.ResolveOwnerId), а не «совпавшему» владельцу персоны;
+    // исполнивший назван актором. Персона вне проекта: владелец и актор — один человек,
+    // проект не называется. Осиротевший проект не называется: «Расход» не получает
+    // несуществующий проект.
+    private (string OwnerId, string? ActorUserId, string? ProjectId) AvatarSpendAttribution(
+        Persona persona, string userId)
+    {
+        var project = persona.ProjectId is { Length: > 0 } pid ? projects.GetById(pid) : null;
+        return project is { } p && !string.IsNullOrEmpty(p.OwnerId)
+            ? (p.OwnerId, userId, p.Id)
+            : (userId, userId, null);
+    }
+
     // Сгенерировать НЕСКОЛЬКО вариантов аватар-фото по описанию (для выбора); провайдера
     // и модель выбирает роутер по настройке инстанса. Кандидаты сохраняются во временную
     // папку, аватар персоны НЕ меняется до выбора.
@@ -556,10 +572,13 @@ public sealed class PersonasCrudService(
             return BadRequest(new { error = ImageGenerationOffError, queued = canBackfill });
         }
 
-        // Трату генерации пишем на того, кто её попросил, и с тем инициатором, который назвал
-        // вызывающий (учёт расхода, S-SPEND-2, S-SPEND-2c)
+        // Трату пишем на арендатора области персоны (проектная — на владельца проекта), актор
+        // и проект называет атрибутция (п.3-4 ревью R-S-SPEND-2); инициатор — тот, который
+        // назвал вызывающий (S-SPEND-2, S-SPEND-2c)
+        var (spendOwner, spendActor, spendProject) = AvatarSpendAttribution(persona, userId);
         var generated = await images.GenerateManyAsync(
-            Services.Images.ImagePlaces.PersonaAvatar, prompt, count, userId, initiator, CancellationToken.None);
+            Services.Images.ImagePlaces.PersonaAvatar, prompt, count, spendOwner, initiator,
+            spendActor, spendProject, CancellationToken.None);
         // Провайдер не отдал картинок (таймаут, отказ) — аватар тоже не теряем: заявка
         // догонит персону фоном. queued в ответе — чтобы фронт сказал человеку честное
         // «появится сам», а не «генератор не ответил, аватар остался прежним».
@@ -638,8 +657,10 @@ public sealed class PersonasCrudService(
         if (!images.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar)) return EnqueueAvatarBackfill(userId, persona, prompt, initiator);
         try
         {
+            var (spendOwner, spendActor, spendProject) = AvatarSpendAttribution(persona, userId);
             var generated = await images.GenerateManyAsync(
-                Services.Images.ImagePlaces.PersonaAvatar, prompt, 1, userId, initiator, CancellationToken.None);
+                Services.Images.ImagePlaces.PersonaAvatar, prompt, 1, spendOwner, initiator,
+                spendActor, spendProject, CancellationToken.None);
             if (generated.Count == 0) return EnqueueAvatarBackfill(userId, persona, prompt, initiator);
             var dir = Path.Combine(personas.AssetsDir, persona.Id);
             Directory.CreateDirectory(dir);

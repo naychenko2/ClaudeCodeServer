@@ -7,9 +7,10 @@ using Microsoft.Extensions.Configuration;
 namespace ClaudeHomeServer.Tests.Services;
 
 // Учёт расхода серверной генерации картинок (дефект 22068e9d, шаг S-SPEND-2).
-// Проверяется конечное состояние после полного вызова: трата пишется на попросившего,
-// за ФАКТИЧЕСКИ отработавшего провайдера (после фолбэка), первой — всегда запись без
-// суммы, сумму догоняет отдельная запись без генераций (прецедент ImageEditJobService).
+// Проверяется конечное состояние после полного вызова: трата адресуется владельцу-арендатору
+// (для персоны проекта — владельцу проекта, п.3-4) за ФАКТИЧЕСКИ отработавшего провайдера
+// (после фолбэка), первой — всегда запись без суммы, сумму догоняет отдельная запись без
+// генераций (прецедент ImageEditJobService).
 public class ImageGenerationSpendTests
 {
     private const string Avatar = ImagePlaces.PersonaAvatar;
@@ -22,7 +23,7 @@ public class ImageGenerationSpendTests
     private sealed class CapturingSpend : ISpendCollector
     {
         private readonly List<SpendRecord> _records = [];
-        private readonly TaskCompletionSource _second = new();
+        private readonly Dictionary<int, TaskCompletionSource> _waiters = [];
 
         public IReadOnlyList<SpendRecord> Records
         {
@@ -34,13 +35,28 @@ public class ImageGenerationSpendTests
             lock (_records)
             {
                 _records.Add(record);
-                if (_records.Count >= 2) _second.TrySetResult();
+                foreach (var (n, tcs) in _waiters.Where(w => w.Key <= _records.Count).ToArray())
+                {
+                    _waiters.Remove(n);
+                    tcs.TrySetResult();
+                }
             }
         }
 
-        // Дожидаться второй записи: не дождался — значит её никто и не писал
-        public async Task WaitForSecond(TimeSpan timeout) =>
-            await Task.WhenAny(_second.Task, Task.Delay(timeout));
+        // Дожидаться N записей: не дождался — значит их никто и не писал. Ждать вторую — это
+        // догоняющая запись одного вызова, ждать четвёртую — полный цикл двух вызовов.
+        public async Task WaitForCount(int n, TimeSpan timeout)
+        {
+            TaskCompletionSource? tcs = null;
+            lock (_records)
+            {
+                if (_records.Count >= n) return;
+                if (!_waiters.TryGetValue(n, out tcs)) _waiters[n] = tcs = new();
+            }
+            await Task.WhenAny(tcs!.Task, Task.Delay(timeout));
+        }
+
+        public Task WaitForSecond(TimeSpan timeout) => WaitForCount(2, timeout);
     }
 
     // Цена по request_id: известная / её нет вовсе. Считает обращения к Core-шову.
@@ -74,13 +90,17 @@ public class ImageGenerationSpendTests
         public int Calls { get; private set; }
         public string? LastModel { get; private set; }
 
+        // Идентификатор запроса mutable: в реальности каждый вызов имеет свой, и тест повторного
+        // вызова даёт второму его id — иначе «дубль догоняющей» неотличим от новой траты.
+        public string? RequestId { get; set; } = requestId;
+
         public Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
             string prompt, int count, string? model, CancellationToken ct = default)
         {
             Calls++;
             LastModel = model;
             IReadOnlyList<GeneratedImage> result = returnsImages
-                ? Enumerable.Range(1, count).Select(_ => new GeneratedImage([1, 2, 3], "image/png", requestId)).ToList()
+                ? Enumerable.Range(1, count).Select(_ => new GeneratedImage([1, 2, 3], "image/png", RequestId)).ToList()
                 : [];
             return Task.FromResult(result);
         }
@@ -109,7 +129,7 @@ public class ImageGenerationSpendTests
         var service = new ImageGenerationService([fal], Store(NewTempDir(), ("Images:Models:fal", "fal-ai/flux/dev")),
             null, spend, cost);
 
-        var images = await service.GenerateManyAsync(Avatar, "кот", 2, Owner, SpendInitiators.Human, CancellationToken.None);
+        var images = await service.GenerateManyAsync(Avatar, "кот", 2, Owner, SpendInitiators.Human);
 
         images.Should().HaveCount(2);
         await spend.WaitForSecond(Settle);
@@ -123,10 +143,16 @@ public class ImageGenerationSpendTests
         first.CostUsd.Should().BeNull("суммы ещё нет");
         first.Label.Should().Be(ImageGenerationService.SpendLabelPendingAmount);
         first.Initiator.Should().Be(SpendInitiators.Human);
-        first.ProjectId.Should().BeNull("генерация аватара не относится к проекту");
+        // Вызывающий не назвал ни актора, ни проекта (персона вне проекта): поля остаются
+        // пустыми — для актора это штатное чтение стора «нет поля → владелец» (п.3-4)
+        first.ActorUserId.Should().BeNull();
+        first.ProjectId.Should().BeNull();
 
         var topUp = spend.Records.Last();
         topUp.Should().NotBeSameAs(first);
+        // П.6 ревью R-S-SPEND-2: догоняющая запись привязана к более позднему моменту и не
+        // может обогнать первую по времени — иначе срез «сегодня» и сортировка истории разъезжаются
+        topUp.Timestamp.Should().BeOnOrAfter(first.Timestamp);
         topUp.Generations.Should().Be(0, "догоняющая запись не повторяет генерации");
         topUp.CostUsd.Should().Be(0.0123);
         topUp.Label.Should().Be(ImageGenerationService.SpendLabel);
@@ -145,7 +171,7 @@ public class ImageGenerationSpendTests
         var cost = new FakeCost(0.0123);
         var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, cost);
 
-        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None);
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human);
         await spend.WaitForSecond(Settle);
 
         var first = spend.Records.First();
@@ -168,7 +194,7 @@ public class ImageGenerationSpendTests
         var cost = new FakeCost(0.01);
         var service = new ImageGenerationService([glif], Store(NewTempDir()), null, spend, cost);
 
-        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None);
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human);
         await spend.WaitForSecond(TimeSpan.FromMilliseconds(300));
 
         var rec = spend.Records.Single();
@@ -193,7 +219,7 @@ public class ImageGenerationSpendTests
         var cost = new FakeCost(0.01);
         var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, cost);
 
-        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None);
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human);
 
         var rec = spend.Records.Single();
         rec.Source.Should().Be(SpendSources.Fal);
@@ -211,7 +237,7 @@ public class ImageGenerationSpendTests
         var spend = new CapturingSpend();
         var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend);
 
-        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None);
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human);
 
         spend.Records.Single().Label.Should().Be(ImageGenerationService.SpendLabel,
             "спросить цену нечем — обещание «сумма уточняется» не ставят");
@@ -227,10 +253,10 @@ public class ImageGenerationSpendTests
         // Порядок auto-выбора: glif → fal; glif отдал пусто — пошёл fal
         var service = new ImageGenerationService([fal, glif], Store(NewTempDir()), null, spend, cost);
 
-        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None);
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human);
 
         spend.Records.Should().ContainSingle().Which.Source.Should().Be(SpendSources.Fal,
-            "пустой провайдер ничего не стоил — трата за того, кто отдал картинки");
+            "трата за того, кто отдал картинки: у пустого ответа нет носителя траты (п.5)");
         glif.Calls.Should().Be(1);
         fal.Calls.Should().Be(1);
     }
@@ -243,7 +269,7 @@ public class ImageGenerationSpendTests
         var cost = new FakeCost(null);
         var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, cost);
 
-        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None);
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human);
 
         // Отсутствие цены — штатный исход: опрос был, догоняющей записи нет
         await cost.AskedOrTimeout;
@@ -262,7 +288,7 @@ public class ImageGenerationSpendTests
 
         // Пустой владелец — осознанный выбор вызывающего (S-SPEND-8): параметр обязателен,
         // пустую строку компилятор пропустит, но это уже не забытый аргумент
-        var images = await service.GenerateManyAsync(Avatar, "кот", 1, "", SpendInitiators.Human, CancellationToken.None);
+        var images = await service.GenerateManyAsync(Avatar, "кот", 1, "", SpendInitiators.Human);
 
         images.Should().HaveCount(1, "генерация без владельца работает как раньше");
         spend.Records.Should().BeEmpty("трату не на кого повесить — в «системную» не кладём");
@@ -280,7 +306,7 @@ public class ImageGenerationSpendTests
         var cost = new FakeCost(null);
         var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, cost);
 
-        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Agent, CancellationToken.None);
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Agent);
 
         var rec = spend.Records.Single();
         rec.OwnerId.Should().Be(Owner);
@@ -302,17 +328,79 @@ public class ImageGenerationSpendTests
         spend.Records.Single().Initiator.Should().BeNull("неизвестный инициатор не выдумываем");
     }
 
+    // П.3-4 ревью R-S-SPEND-2: вызывающий назвал арендатора, актора и проект — запись несёт их,
+    // и догоняющая запись того же вызова несёт те же. Ключом хранилища остаётся арендатор:
+    // актор — разрез, не владелец (SpendRecord.ActorUserId), и трата проектной персоны видна
+    // проекту, а не только позвавшему её человеку.
+    [Fact]
+    public async Task АтрибуцияТратыПереходитВОбеЗаписи()
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1");
+        var spend = new CapturingSpend();
+        var cost = new FakeCost(0.0123);
+        var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, cost);
+
+        await service.GenerateManyAsync(Avatar, "кот", 1, "tenant-o", SpendInitiators.Agent,
+            "actor-u", "project-1");
+        await spend.WaitForSecond(Settle);
+
+        var first = spend.Records.First();
+        first.OwnerId.Should().Be("tenant-o", "ключ записи — арендатор, а не исполнивший");
+        first.ActorUserId.Should().Be("actor-u", "актор назван отдельно от владельца");
+        first.ProjectId.Should().Be("project-1", "трата проекта видна в разрезе по проекту");
+
+        var topUp = spend.Records.Last();
+        topUp.Should().NotBeSameAs(first);
+        topUp.OwnerId.Should().Be("tenant-o");
+        topUp.ActorUserId.Should().Be("actor-u", "догоняющая запись — про тот же вызов");
+        topUp.ProjectId.Should().Be("project-1", "догоняющая запись — про тот же вызов");
+    }
+
+    // П.6 ревью R-S-SPEND-2: догоняющая запись — одна на вызов. Второй вызов — новый запрос
+    // со своей тратой (в реальности — со своим id), и догоняющая первого не повторяется:
+    // два вызова дают ровно две первых записи и две догоняющие, ничего сверх.
+    [Fact]
+    public async Task ПовторныйВызов_ДогоняющихДублейНет()
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1");
+        var spend = new CapturingSpend();
+        var cost = new FakeCost(0.0123);
+        var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, cost);
+
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human);
+        await spend.WaitForSecond(Settle);
+        spend.Records.Should().HaveCount(2, "первый вызов: запись без суммы + догоняющая");
+
+        fal.RequestId = "req-2";   // каждый вызов имеет свой запрос
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human);
+        await spend.WaitForCount(4, Settle);
+
+        spend.Records.Should().HaveCount(4, "по одной догоняющей на вызов: второй не повторил первый");
+        spend.Records.Count(r => r.Generations == 0).Should().Be(2);
+        cost.Calls.Should().Be(2, "по одному опосу цены на вызов");
+    }
+
+    // Граница п.5 ревью R-S-SPEND-2: факт «фал тарифицировал отработанный без результата
+    // запрос» не имеет носителя в контракте — id запроса несут картинки, без них он до роутера
+    // не доходит. Поэтому траты нет ни у провайдера, ответившего идентификатором, но без
+    // картинки (случай «тело без images»), ни у вызова, оборванного без ответа (таймаут,
+    // обрыв транспорта): выдуманной траты не кладём. Закрыть дыру — отдельное решение о
+    // контракте IImageGenerator, а не поправка здесь.
     [Fact]
     public async Task ПровайдерНеОтдалКартинок_ТратыНет()
     {
-        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1", returnsImages: false);
         var spend = new CapturingSpend();
         var cost = new FakeCost(0.01);
-        var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, cost);
 
-        Assert.Empty(await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None));
+        var withId = new FakeGenerator("fal", enabled: true, requestId: "req-1", returnsImages: false);
+        var answered = new ImageGenerationService([withId], Store(NewTempDir()), null, spend, cost);
+        Assert.Empty(await answered.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human));
 
-        spend.Records.Should().BeEmpty();
+        var noId = new FakeGenerator("fal", enabled: true, returnsImages: false);
+        var broken = new ImageGenerationService([noId], Store(NewTempDir()), null, spend, cost);
+        Assert.Empty(await broken.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human));
+
+        spend.Records.Should().BeEmpty("нет картинок — нечего назвать тратой");
         cost.Calls.Should().Be(0);
     }
 }

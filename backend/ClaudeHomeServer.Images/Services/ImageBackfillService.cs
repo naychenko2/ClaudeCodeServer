@@ -235,9 +235,11 @@ public sealed class ImageBackfillService(
             // Трата догоняющей генерации — на владельца заявки (он в заявке с момента
             // постановки, а Resolve снимает заявку, если персона ушла к другому владельцу, —
             // чужому трата не уйдёт) и с инициатором той же заявки: он сохранён при её
-            // постановке (S-SPEND-8), роутер его не выдумывает
+            // постановке (S-SPEND-8), роутер его не выдумывает. Актор и проект заявка не
+            // несёт (п.3-4 ревью касаются путей, где персона известна вызывающему): такая
+            // запись читается стором как «нет поля → владелец»
             image = await images.GenerateAsync(request.Kind, prompt, request.OwnerId,
-                InitiatorOf(request), ct);
+                InitiatorOf(request), ct: ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

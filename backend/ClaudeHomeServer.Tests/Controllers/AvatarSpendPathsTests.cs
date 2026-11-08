@@ -224,6 +224,34 @@ public class AvatarSpendPathsTests : IClassFixture<AvatarSpendFactory>
         added[0].Initiator.Should().Be(SpendInitiators.Agent);
     }
 
+    // Аватар персоны проекта — достояние проекта (п.3-4 ревью R-S-SPEND-2): трата пишется на
+    // арендатора — владельца проекта — и видна в разрезе по проекту, а исполнивший назван
+    // актором, даже когда он совпадает с владельцем. Ключом хранилища остаётся арендатор:
+    // раньше ProjectId был null всегда, а ActorUserId не заполнялся вовсе.
+    [Fact]
+    public async Task ПроектнаяПерсона_ТратаАрендаторуИВиднаПроекту()
+    {
+        var project = await _client.PostAsJsonAsync("/api/projects", new { name = $"asp-{Guid.NewGuid():N}" });
+        project.EnsureSuccessStatusCode();
+        var projectId = (await project.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        var created = await _client.PostAsJsonAsync("/api/personas",
+            new { name = "Проектная" + Guid.NewGuid().ToString("N")[..4], scope = "project", projectId });
+        created.EnsureSuccessStatusCode();
+        var personaId = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        var before = ImageRecords().Count;
+        var response = await _client.PostAsJsonAsync($"/api/personas/{personaId}/avatar/generate",
+            new { prompt = "рыжий кот", count = 1 });
+        response.EnsureSuccessStatusCode();
+
+        var added = ImageRecords().Skip(before).ToList();
+        added.Should().ContainSingle();
+        added[0].OwnerId.Should().Be(OwnerId, "ключ записи — арендатор, владелец проекта");
+        added[0].ProjectId.Should().Be(projectId, "трата аватара проектной персоны видна в разрезе по проекту");
+        added[0].ActorUserId.Should().Be(OwnerId, "актора называет вызывающий, а не чтение «нет поля»");
+    }
+
     // Страховка «Применить итоги разговора»: аватар заготовки генерирует сервер по действию
     // человека — трата обязана быть в учёте этого владельца (раньше её не было вовсе)
     [Fact]

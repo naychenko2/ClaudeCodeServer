@@ -74,13 +74,22 @@ public sealed class ImageGenerationService
     // вызывающего («не знаю»), а не забытый аргумент: роутер пишет об этом в лог и
     // генерацию не роняет (из-за учёта расхода нельзя отказать в аватаре).
     // ownerId — тот, на кого пишется трата (RecordSpend): без владельца записи нет, чужому
-    // трата не приписывается.
+    // трата не приписывается. Для персоны проекта это арендатор — владелец проекта, как в
+    // чатовом пути (SessionManager.ResolveOwnerId), а не «владелец персоны по совпадению»
+    // (п.3 ревью R-S-SPEND-2).
     // initiator — кто подал операцию (SpendInitiators.*): точка входа (REST — человек,
     // MCP-тулсет — агент, фоновая заявка — сохранённый в ней), роутер его не вычисляет и
     // не подменяет (находка ревью R-S-SPEND-2); пустой — записи остаётся null (не размечено).
+    // actorUserId — кто исполнил операцию (п.3): ключ хранилища остаётся владелец, актор —
+    // разрез (SpendRecord.ActorUserId). В отличие от владельца его отсутствие запись не
+    // портит: «нет поля → владелец» — штатное чтение стора. Поэтому параметр необязательный:
+    // называет его тот, кто знает актора; фоновая заявка, которая её не несёт, не выдумывает.
+    // projectId — проект траты (п.4): аватар персоны проекта — достояние проекта, и его трата
+    // должна быть видна в разрезе по проекту. null — генерация вне проекта; осиротевший
+    // проект не называется: «Расход» не должен получить несуществующий проект.
     public async Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
         string place, string prompt, int count, string ownerId, string initiator,
-        CancellationToken ct = default)
+        string? actorUserId = null, string? projectId = null, CancellationToken ct = default)
     {
         var chain = Resolve(place);
         if (chain.Count == 0)
@@ -95,10 +104,14 @@ public sealed class ImageGenerationService
             var generator = chain[i];
             var model = _settings.ModelFor(place, generator.Key);
             var images = await generator.GenerateManyAsync(prompt, count, model, ct);
-            // Трата — только за того, кто реально отдал картинки: пустой провайдер не стоил ничего
+            // Трата — только за того, кто отдал картинки. Запрос без результата мог и стоить
+            // (фал тарифицирует отработанный запрос), но этот факт не имеет носителя в контракте:
+            // id запроса несут картинки, без них он до роутера не доходит. Выдуманной траты не
+            // кладём (п.5 ревью R-S-SPEND-2: дыра названа; закрыть её — отдельное решение о
+            // контракте IImageGenerator, а не поправка здесь).
             if (images.Count > 0)
             {
-                RecordSpend(place, generator, model, images, ownerId, initiator);
+                RecordSpend(place, generator, model, images, ownerId, initiator, actorUserId, projectId);
                 return images;
             }
             if (i + 1 < chain.Count)
@@ -110,9 +123,10 @@ public sealed class ImageGenerationService
 
     // Одна картинка (первый вариант) — для мест, где выбора не предлагается
     public async Task<GeneratedImage?> GenerateAsync(
-        string place, string prompt, string ownerId, string initiator, CancellationToken ct = default)
+        string place, string prompt, string ownerId, string initiator,
+        string? actorUserId = null, string? projectId = null, CancellationToken ct = default)
     {
-        var many = await GenerateManyAsync(place, prompt, 1, ownerId, initiator, ct);
+        var many = await GenerateManyAsync(place, prompt, 1, ownerId, initiator, actorUserId, projectId, ct);
         return many.Count > 0 ? many[0] : null;
     }
 
@@ -188,11 +202,13 @@ public sealed class ImageGenerationService
     // моделью провайдер пошёл (это знает только драйвер, у него и спрашиваем).
     //
     // Траты нет, когда: коллектора нет (учёт выключен), владельца нет (повесить не на
-    // кого), провайдер не отдал картинок (за них не платили).
+    // кого), провайдер не отдал картинок (факт тарификации отработанного без результата
+    // запроса не имеет носителя в контракте — выдуманной траты не кладём, п.5).
 
     private void RecordSpend(
         string place, IImageGenerator generator, string? model,
-        IReadOnlyList<GeneratedImage> images, string ownerId, string initiator)
+        IReadOnlyList<GeneratedImage> images, string ownerId, string initiator,
+        string? actorUserId, string? projectId)
     {
         if (_spend is null)
         {
@@ -237,17 +253,18 @@ public sealed class ImageGenerationService
         var pendingAmount = requestId is not null && _falCost is not null;
 
         WriteSpend(ownerId, generator.Key, actualModel, amount: null, generations: images.Count, named,
-            pendingAmount);
+            pendingAmount, actorUserId, projectId);
 
         if (!pendingAmount) return;
-        _ = TopUpAmountAsync(ownerId, actualModel, requestId!, initiator);
+        _ = TopUpAmountAsync(ownerId, actualModel, requestId!, initiator, actorUserId, projectId);
     }
 
     // Фактическая цена по request_id — через существующий Core-шов IFalRequestCost
     // (тот же экземпляр FalCostService, что и у чата). Свой токен: token вызывающего к этому
     // моменту уже снят вместе с его запросом, а окно опроса ограничено самим FalCostService.
     // Цены нет — штатный исход: остаётся первая запись без суммы.
-    private async Task TopUpAmountAsync(string ownerId, string? model, string requestId, string? initiator)
+    private async Task TopUpAmountAsync(string ownerId, string? model, string requestId, string? initiator,
+        string? actorUserId, string? projectId)
     {
         try
         {
@@ -258,9 +275,10 @@ public sealed class ImageGenerationService
                     requestId);
                 return;
             }
-            // Догоняющая запись — про тот же вызов: инициатор и модель у неё те же, что у первой
+            // Догоняющая запись — про тот же вызов: инициатор, актор, проект и модель у неё
+            // те же, что у первой
             WriteSpend(ownerId, SpendSources.Fal, model, amount: usd, generations: 0, initiator,
-                pendingAmount: false);
+                pendingAmount: false, actorUserId, projectId);
         }
         catch (Exception ex)
         {
@@ -271,7 +289,7 @@ public sealed class ImageGenerationService
     // pendingAmount — «сумму догонят»: право на подпись «сумма уточняется» даёт не отсутствие
     // суммы в этой записи, а то, что у провайдера есть по чему её спрашивать (см. RecordSpend).
     private void WriteSpend(string ownerId, string providerKey, string? model, double? amount, int generations,
-        string? initiator, bool pendingAmount)
+        string? initiator, bool pendingAmount, string? actorUserId, string? projectId)
     {
         try
         {
@@ -279,9 +297,14 @@ public sealed class ImageGenerationService
             {
                 Timestamp = DateTime.UtcNow,
                 OwnerId = ownerId,
-                // Серверная генерация не относится к проекту: «Расход» не должен получить
+                // Проект называет вызывающий: аватар персоны проекта — достояние проекта, и его
+                // трата должна быть видна в разрезе по проекту (п.4 ревью R-S-SPEND-2). null —
+                // генерация вне проекта или проект осиротел: «Расход» не должен получить
                 // несуществующий проект (тот же приём, что у личной области редактора).
-                ProjectId = null,
+                ProjectId = projectId,
+                // Актор — разрез, не ключ (SpendRecord.ActorUserId): кто исполнил операцию.
+                // Его называет вызывающий; null читается стором как «нет поля → владелец» (п.3).
+                ActorUserId = actorUserId,
                 Provider = providerKey,
                 // Фактическая модель вызова: названная настройкой места или дефолт самого
                 // драйвера (его спрашиваем у него, выдумывать за него не будем). Пустая здесь

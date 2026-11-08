@@ -35,7 +35,9 @@ public sealed class TestsToolset(
     DevServerService? devServer = null,
     ProjectServiceDiscovery? discovery = null,
     // Запуск предгейта шага (NC-P1b); нет — инструмент pregate отказывает
-    TaskPregateService? pregate = null) : IMcpParameterizedToolset
+    TaskPregateService? pregate = null,
+    // Список worktree проекта для параметра tree; нет — tree принимает только копию мутации
+    Git.GitService? git = null) : IMcpParameterizedToolset
 {
     public const string ServerName = McpEndpoints.TestsName;
     public const string ToolName = "run_tests";
@@ -76,9 +78,11 @@ public sealed class TestsToolset(
         if (!_caller.TryResolveProject(session, context.OwnerId, Refusals, out var project, out error)) return Deny(error);
 
         var root = ProjectRunCaller.RootOf(session, project);
-        // tree: прогон в копии мутации ЭТОГО дерева; корень запуска меняется, очередь и счётчик те же
-        if (!MutationCopyTree.TryResolve(StringArg(arguments, MutationCopyTree.ParamName), root, out root, out error))
-            return Deny(error);
+        // tree: прогон в worktree проекта или копии мутации; корень запуска меняется, очередь и счётчик те же
+        var tree = await MutationCopyTree.ResolveAsync(StringArg(arguments, MutationCopyTree.ParamName), root,
+            ProjectRunCaller.WorktreeLister(git, project, context.OwnerId), ct);
+        if (!tree.Ok) return Deny(tree.Error);
+        root = tree.Root;
         if (!TryParseKind(StringArg(arguments, "kind"), out var kind, out error)) return Deny(error);
         var filter = StringArg(arguments, "filter");
         if (TestRunService.LooksLikeOption(filter))

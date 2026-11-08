@@ -508,6 +508,9 @@ public class ClaudeRuntimeSettingsTests : IClassFixture<ClaudeRuntimeSettingsTes
             var (exit, err) = RunToolsHook(cmd);
             exit.Should().Be(2, $"команда должна блокироваться: {cmd}");
             err.Should().Contain("run_tests").And.Contain("tree");
+            // Свой worktree — подсказка про tree; скрипт копий не навязывается проектам без него
+            err.Should().Contain("своём worktree").And.Contain("git worktree list")
+                .And.Contain("если в проекте есть scripts/mutation-copy.sh");
         }
     }
 

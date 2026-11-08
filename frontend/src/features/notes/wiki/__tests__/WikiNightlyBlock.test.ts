@@ -36,6 +36,16 @@
 //     сохранить настройки» на сохранённые настройки);
 // (8) вернуть старый текст подписи («создастся при первом разборе») → тесты подписи
 //     краснеют.
+//
+// WN-6b (план 0ab580a7): «Запустить сейчас» рядом с заголовком итога — диалог подтверждения
+// с лимитом пакетов из снимка; «Запустить» → ровно один POST /wiki/settings/nightly/run,
+// «Отмена» → 0; после успеха — оптимистичное состояние стора («Идёт разбор…», WN-6a);
+// nightlyRunning / выключенный тумблер → кнопка disabled («Идёт разбор…» / «Ночной разбор
+// выключен»); rejected>0 → «отказано N» в строке чисел, 0 или отсутствие поля — слова нет;
+// 409 wiki_nightly_disabled → текст отказа у кнопки, кнопка снова активна, опрос не стартует.
+// (9) не ставить disabled при nightlyRunning → «nightlyRunning:…» и «клик…:…» краснеют
+//     (в «клике» — строка «кнопка выключена после успеха»);
+// (10) не добавлять ячейку rejected в итог → «rejected=2:…» краснеет.
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -74,13 +84,15 @@ const NIGHTLY = {
   inputTokenBudget: 700000,
 };
 
-function settings(over: { nightly?: Partial<typeof NIGHTLY>; lastNight?: unknown } = {}): Record<string, unknown> {
+function settings(over: { nightly?: Partial<typeof NIGHTLY>; lastNight?: unknown; nightlyRunning?: boolean } = {}): Record<string, unknown> {
   const s: Record<string, unknown> = {
     autoApplyEnabled: false,
     classes: [],
     nightly: { ...NIGHTLY, ...(over.nightly ?? {}) },
   };
   if ('lastNight' in over) s.lastNight = over.lastNight;
+  // WN-5: GET несёт состояние прохода всегда; здесь — только когда тест его задаёт
+  if (over.nightlyRunning !== undefined) s.nightlyRunning = over.nightlyRunning;
   return s;
 }
 
@@ -98,6 +110,8 @@ let server: Record<string, unknown> = settings();
 function serveSettings(): void {
   req.mockImplementation(async (url: string, init?: RequestInit) => {
     const method = (init?.method ?? 'GET').toUpperCase();
+    // run (WN-5): 202 {started:true} — проход начат, его читает опрос GET
+    if (url === '/wiki/settings/nightly/run') return { started: true };
     if (url !== '/wiki/settings') return null;
     if (method === 'PUT') {
       const body = JSON.parse((init?.body ?? '{}') as string);
@@ -492,5 +506,108 @@ describe('подпись «вики ещё не создана» (LI-3)', () => 
     const c = render();
     await settle();
     expect(has(c, 'Вики ещё не создана')).toBe(false);
+  });
+});
+
+// ─── WN-6b: «Запустить сейчас», состояния кнопки и «отказано» в итоге ───
+// Диалог — портал в document.body (тот же приём, что «Журнал»): его узлы ищутся от body.
+describe('«Запустить сейчас» (WN-6b)', () => {
+  function docBody(): AnyNode {
+    return (globalThis as { document: { body: AnyNode } }).document.body;
+  }
+  function allNodes(root: AnyNode, out: AnyNode[] = []): AnyNode[] {
+    out.push(root);
+    for (const c of root.childNodes) allNodes(c, out);
+    return out;
+  }
+  // Точное совпадение: «Запустить» в диалоге не должно схватить «Запустить сейчас» кнопки
+  function buttonByExactText(root: AnyNode, text: string): AnyNode | null {
+    return allNodes(root).find(n => n.nodeName === 'BUTTON' && textNodes(n).join('').trim() === text) ?? null;
+  }
+  const runBtn = (c: Cont) => findNodeByAttr(c, 'data-testid', 'wiki-nightly-run')!;
+  const isDisabled = (n: AnyNode): boolean => (reactProps(n) as { disabled?: boolean }).disabled === true;
+  const postCalls = (): unknown[][] => req.mock.calls.filter((c) => ((c[1] as RequestInit | undefined)?.method ?? 'GET') === 'POST');
+
+  it('клик «Запустить сейчас»: диалог с лимитом пакетов из снимка; «Запустить» → ровно один POST; «Отмена» → 0', async () => {
+    // 7, а не потолок 20: текст диалога берёт значение из снимка, не константу
+    server = settings({ nightly: { enabled: true, maxPackagesPerNight: 7 } });
+    const c = render();
+    await settle();
+    expect(isDisabled(runBtn(c))).toBe(false);
+
+    click(runBtn(c), 'Запустить сейчас');
+    expect(has(docBody(), 'Запустить ночной разбор сейчас?')).toBe(true);
+    expect(has(docBody(), 'Хранитель разберёт новые чаты — не больше 7 пакетов за проход — и при включённом автоприменении сразу запишет найденное в вики. Откатить можно из „Журнала“.')).toBe(true);
+    click(buttonByExactText(docBody(), 'Отмена')!, 'отмена');
+    expect(has(docBody(), 'Запустить ночной разбор сейчас?')).toBe(false);
+    expect(postCalls().length).toBe(0);
+
+    click(runBtn(c), 'Запустить сейчас');
+    click(buttonByExactText(docBody(), 'Запустить')!, 'запустить');
+    await settle();
+    const posts = postCalls();
+    expect(posts.length).toBe(1);
+    expect(String(posts[0][0])).toBe('/wiki/settings/nightly/run');
+    // успех: стор оптимистично ставит проход (WN-6a) — кнопка выключена и говорит «идёт»
+    // (здесь же краснеет мутация (9): без nightlyRunning в disabled кнопка осталась бы активной)
+    expect(getWikiSettingsSnapshot()!.nightlyRunning).toBe(true);
+    expect(isDisabled(runBtn(c))).toBe(true);
+    expect(has(c, 'Идёт разбор…')).toBe(true);
+  });
+
+  it('nightlyRunning: кнопка disabled с «Идёт разбор…», без «Запустить сейчас»', async () => {
+    server = settings({ nightly: { enabled: true }, nightlyRunning: true });
+    const c = render();
+    await settle();
+    // мутация (9): без snapshot.nightlyRunning в disabled здесь краснеют обе строки
+    expect(isDisabled(runBtn(c))).toBe(true);
+    expect(has(c, 'Идёт разбор…')).toBe(true);
+    expect(has(c, 'Запустить сейчас')).toBe(false);
+    expect(has(c, 'Ночной разбор выключен')).toBe(false);
+  });
+
+  it('тумблер выключен: кнопка disabled с подсказкой «Ночной разбор выключен»', async () => {
+    const c = render(); // умолчание NA-2: enabled=false
+    await settle();
+    expect(isDisabled(runBtn(c))).toBe(true);
+    expect(has(c, 'Ночной разбор выключен')).toBe(true);
+  });
+
+  it('rejected=2: «отказано 2» в строке чисел; rejected=0 или поля нет — слова «отказано» нет', async () => {
+    server = settings({ lastNight: LAST({ rejected: 2 }) });
+    const c = render();
+    await settle();
+    // мутация (10): без ячейки rejected в итоге этой строки нет — тест красный
+    expect(has(c, 'отказано 2')).toBe(true);
+
+    server = settings({ lastNight: LAST({ rejected: 0 }) });
+    const c0 = render();
+    await settle();
+    expect(has(c0, 'отказано')).toBe(false);
+
+    server = settings({ lastNight: LAST({}) }); // старый итог без поля (аддитивность WN-2)
+    const cN = render();
+    await settle();
+    expect(has(cN, 'отказано')).toBe(false);
+  });
+
+  it('409 wiki_nightly_disabled: текст отказа у кнопки, кнопка снова активна, прохода нет', async () => {
+    server = settings({ nightly: { enabled: true } });
+    const c = render();
+    await settle();
+    req.mockImplementation(async (url: string, init?: RequestInit) => {
+      if ((init?.method ?? 'GET').toUpperCase() === 'POST') {
+        throw httpError(409, { code: 'wiki_nightly_disabled', message: 'ночной разбор этого владельца выключен' });
+      }
+      return server;
+    });
+    click(runBtn(c), 'Запустить сейчас');
+    click(buttonByExactText(docBody(), 'Запустить')!, 'запустить');
+    await settle();
+    expect(postCalls().length).toBe(1);
+    expect(has(c, 'Ночной разбор выключен — запустить его нельзя')).toBe(true);
+    // отказ — не старт: стор не ставит проход, кнопка возвращается в активное состояние
+    expect(getWikiSettingsSnapshot()!.nightlyRunning).toBe(false);
+    expect(isDisabled(runBtn(c))).toBe(false);
   });
 });

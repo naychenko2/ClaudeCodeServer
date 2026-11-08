@@ -5,12 +5,21 @@ namespace ClaudeHomeServer.Services.Llm;
 // одним ключом: отдельного семафора на движке нет — два потолка в разных единицах делали бы
 // каждый из них неправдой.
 //
-// Слот берётся БЕЗ ожидания (TryEnter): занято — null, контракт ILocalLlmClient «null при беде»
-// сохраняется, вызывающий идёт по своей цепочке. Разговорный ход отдаёт ChatTurnResult.EngineBusy:
-// интерактивный путь отличает «движок занят» от «движок не ответил». Признак Busy слот не взводит: фоновый запрос
-// не должен уводить в облако остальные фоновые.
+// Слот берётся двумя способами — по тому, есть ли у вызывающего куда отступать:
+//   • обычный путь (TryEnter, без ожидания): занято — null / ChatTurnResult.EngineBusy,
+//     контракт ILocalLlmClient «null при беде» сохраняется, вызывающий идёт по своей цепочке
+//     к следующему шагу (для фоновых действий с облачным фолбэком это и есть план);
+//   • путь ожидания (*AwaitingSlotAsync, см. ILocalLlmClient): цепочка БЕЗ облачной страховки
+//     (ночной разбор вики, ступень 2 отбора) стоит в общей очереди этого же счётчика, пока
+//     слот не освободится. Ей некуда отступать, и отказ по занятости был потерей работы ночи
+//     (прод 06.11: 108 отказов за минуту, модель не звалась ни разу). Не дождались —
+//     LocalEngineSlotRefusalException с причиной, а не молчаливый ноль.
+// Оба пути — ОДИН счётчик, тот же ключ и тот же потолок: второго семафора на движке нет.
+// Признак Busy ни один из них не взводит: фоновый запрос не должен уводить в облако
+// остальные фоновые.
 public sealed class TrackedLocalLlmClient(ILocalLlmClient inner, LocalEngineBusyTracker tracker,
-    string engineKey, Func<int> limit, ILogger<TrackedLocalLlmClient> logger) : ILocalLlmClient
+    string engineKey, Func<int> limit, ILogger<TrackedLocalLlmClient> logger,
+    Func<LocalSlotWaitPolicy>? slotWait = null) : ILocalLlmClient
 {
     // Потолок, если у ключа нет провайдера с настройкой (совпадает с дефолтом MaxConcurrentTurns)
     public const int DefaultLimit = 3;
@@ -97,6 +106,25 @@ public sealed class TrackedLocalLlmClient(ILocalLlmClient inner, LocalEngineBusy
         Guard<(string? Text, Protocol.UsageInfo? Usage)>(() => inner.GenerateTextDetailedAsync(prompt, model,
             timeout, numPredict, numCtx, ownerId, label, ct), (null, null));
 
+    // Путь ожидания слота — для цепочек без облачной страховки (см. ILocalLlmClient).
+    // Внутренний клиент тот же: своей очереди у движка нет, ждёт обёртка в общем счётчике.
+    // Отказ — LocalEngineSlotRefusalException с причиной, а не (null, null): «движок занят»
+    // и «модель дала пустой ответ» должны различаться в итоге вызывающего (ночь 06.11).
+    public Task<(string? Text, Protocol.UsageInfo? Usage)> ChatJsonAwaitingSlotAsync(
+        string systemPrompt, string userPrompt, object jsonFormat, CancellationToken ct = default,
+        string? model = null, int? timeoutMs = null, int? numPredict = null, int? numCtx = null,
+        string? ownerId = null, string? label = null) =>
+        GuardAwaitingSlotAsync<(string? Text, Protocol.UsageInfo? Usage)>(
+            () => inner.ChatJsonDetailedAsync(systemPrompt, userPrompt, jsonFormat, ct, model,
+                timeoutMs, numPredict, numCtx, ownerId, label), ct);
+
+    public Task<(string? Text, Protocol.UsageInfo? Usage)> GenerateTextAwaitingSlotAsync(
+        string prompt, string? model, TimeSpan timeout, int numPredict, int numCtx,
+        string? ownerId = null, string? label = null, CancellationToken ct = default) =>
+        GuardAwaitingSlotAsync<(string? Text, Protocol.UsageInfo? Usage)>(
+            () => inner.GenerateTextDetailedAsync(prompt, model, timeout, numPredict, numCtx,
+                ownerId, label, ct), ct);
+
     public Task<ChatTurnResult> ChatTurnAsync(
         IReadOnlyList<ChatMsg> messages, string? model, TimeSpan timeout,
         int numPredict, int numCtx, string? ownerId,
@@ -119,4 +147,35 @@ public sealed class TrackedLocalLlmClient(ILocalLlmClient inner, LocalEngineBusy
         }
         return await call();
     }
+
+    // Ждущий путь: ТОТ ЖЕ счётчик, тот же ключ и тот же потолок — слот берётся в общей
+    // FIFO-очереди, и обгон стоящих в неё запрещён и для ночи (очередь одна на движке).
+    // Признак Busy не взводится: фоновая заявка не должна отправлять в облако остальные
+    // фоновые (тот же смысл, что у raiseBusy:false в TryEnter выше).
+    // Отмена ct (остановка ночи, закрытие окна, остановка службы) уходит наружу как отмена,
+    // а не как отказ «занято»: AcquireAsync сам снимает заявку с очереди и сам пробрасывает
+    // OperationCanceledException по ct вызывающего — потолок ожидания даёт отказ только сам.
+    private async Task<T> GuardAwaitingSlotAsync<T>(Func<Task<T>> call, CancellationToken ct)
+    {
+        var (maxQueued, timeout) = slotWait?.Invoke() ?? LocalSlotWaitPolicy.Default;
+        var max = limit();
+        var admission = await tracker.AcquireAsync(EngineKey, max, maxQueued, timeout, ct, raiseBusy: false);
+        if (admission.Slot is null)
+        {
+            logger.LogWarning(
+                "Локальный движок «{Engine}» занят: слота не дождались ({Run} из {Limit}) — вызов отклонён",
+                EngineKey, admission.Running, max);
+            throw new LocalEngineSlotRefusalException(EngineKey, admission.Refusal, admission.Running, max);
+        }
+        using (admission.Slot) return await call();
+    }
+}
+
+// Потолок ожидания слота для ждущего пути TrackedLocalLlmClient: сколько таких заявок может
+// стоять в очереди ключа и сколько на них ждём. Значения задаёт тот же провайдер, что и для
+// допуска ходов CLI (MaxQueuedTurns / TurnQueueTimeout): отдельного «своего» потолка для
+// ночи не заводим (WN-4). Не передан — дефолты LlmProviderConfig, те же числа.
+public sealed record LocalSlotWaitPolicy(int MaxQueued, TimeSpan Timeout)
+{
+    public static LocalSlotWaitPolicy Default { get; } = new(8, TimeSpan.FromMinutes(15));
 }

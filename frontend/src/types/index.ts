@@ -900,7 +900,8 @@ export interface AcceptanceEvidence { criterionId: string; how: string; result: 
 // Результат предгейта шага (бэк record PregateRecord): sha — коммит, по которому гнали проверки;
 // green — вердикт; summary — вывод красных проверок; at — момент (UTC);
 // redStreak — сколько красных подряд по одному redKey (зелёный обнуляет);
-// nothingApplicable — «нечего проверять» (green при этом false, «зелёным» не считается).
+// nothingApplicable — «нечего проверять» (green при этом false, «зелёным» не считается, но и не красный);
+// outcome — производный трёхзначный исход с бэка: green / red / neutral («нечего проверять»).
 export interface PregateRecord {
   sha: string;
   green: boolean;
@@ -909,6 +910,7 @@ export interface PregateRecord {
   redStreak: number;
   redKey?: string | null;
   nothingApplicable?: boolean;
+  outcome?: 'green' | 'red' | 'neutral';
 }
 
 // Подтверждение проверки: personaId == null означает проверку человеком (UI-форма

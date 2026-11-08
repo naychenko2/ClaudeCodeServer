@@ -314,4 +314,29 @@ public sealed class ChatWorktree
         _ = _graphInspector?.WarmIfNeeded(path);
         return true;
     }
+
+    // Существует ли путь на диске и числится ли он в `git worktree list` проекта. Нужен исполнителю
+    // задачи, когда AttachWorktreeAsync отказал: отличить «дерево есть, но чат в него не встал» от
+    // «дерева нет вовсе». Сбой git — false (fail-closed). owner не резолвится по чату (чата здесь
+    // нет): берётся переданный, при null — владелец проекта.
+    public async Task<bool> IsProjectWorktreeAsync(string projectId, string? ownerId, string worktreePath)
+    {
+        if (string.IsNullOrWhiteSpace(worktreePath) || _git is null) return false;
+        if (_projects.GetById(projectId) is not { } project) return false;
+        string path;
+        try { path = Path.GetFullPath(worktreePath.Trim()); }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { return false; }
+        if (!Directory.Exists(path)) return false;
+        var wanted = WorkspaceKnowledgeStore.NormalizePath(path);
+        try
+        {
+            return (await _git.WorktreeListAsync(ownerId ?? project.OwnerId, project.RootPath))
+                .Any(w => WorkspaceKnowledgeStore.NormalizePath(w.Path) == wanted);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Не удалось прочитать git worktree list проекта {Project}", project.Id);
+            return false;
+        }
+    }
 }

@@ -89,6 +89,15 @@ internal sealed class ProjectRunCaller(
 
     public static McpToolCallResult Deny(string text) => new(text, IsError: true);
 
+    // Пути `git worktree list` репозитория проекта (хостовые) — для параметра tree. Свежий список,
+    // не кэш: только что созданный исполнителем worktree обязан приниматься сразу
+    public static Func<CancellationToken, Task<IReadOnlyList<string>>>? WorktreeLister(
+        Git.GitService? git, Project project, string? callerOwnerId) =>
+        git is null
+            ? null
+            : async ct => (await git.WorktreeListAsync(project.OwnerId ?? callerOwnerId, project.RootPath, ct))
+                .Select(w => w.Path).ToList();
+
     public static string? StringArg(JsonObject arguments, string name) =>
         arguments[name] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
 

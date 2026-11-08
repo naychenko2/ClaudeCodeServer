@@ -394,6 +394,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         // её же слот. Единственный источник правды об аренде — пул; здесь держим лишь выданную
         // сейчас аренду ради абзаца в постановке
         ReviewTreeLease? reviewLease = null;
+        string? detachedTree = null;
         if (task.WorktreePath is not { } worktree || task.ProjectId is null)
             ReleaseReviewTree(task.Id);
         else
@@ -414,8 +415,13 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
                 }
             }
             if (!attached && !await _sessions.AttachWorktreeAsync(session.Id, worktree, task.WorktreeBranch))
+            {
                 _log.LogWarning("Дерево {Worktree} задачи {TaskId} не подошло (нет на диске либо не числится " +
                     "в git worktree list проекта) — исполнитель стартует в корне проекта", worktree, task.Id);
+                // Молча работать в корне нельзя: сборка и тесты встанут в общую блокировку корня
+                detachedTree = BuildDetachedTreeSection(worktree,
+                    await _sessions.IsProjectWorktreeAsync(task.ProjectId, task.OwnerId, worktree));
+            }
         }
 
         ApplyLauncher(task, launcher);
@@ -431,6 +437,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
             ResolveCategoryProfilesPath(task), ResolveRulesTemplate(session.Id, task.OwnerId));
         if (reviewLease is not null)
             prompt += BuildReviewTreeSection(reviewLease);
+        if (detachedTree is not null)
+            prompt += detachedTree;
         // Обогащение контекста семантически близкими заметками
         var notesBlock = await BuildNotesContextAsync(updated);
         prompt += notesBlock;
@@ -898,6 +906,26 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
     }
 
     private void ReleaseReviewTree(string taskId) => _reviewTrees?.Release(taskId);
+
+    // Абзац постановки, когда дерево задачи не подключилось к чату: исполнитель стоит в корне проекта.
+    // listed — путь есть на диске и числится в `git worktree list`: тогда работать в нём и собирать
+    // через tree; иначе дерева нет, и подсказывать путь в tree бессмысленно (инструмент откажет)
+    internal static string BuildDetachedTreeSection(string worktree, bool listed)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine();
+        sb.AppendLine("## ДЕРЕВО ЗАДАЧИ");
+        if (listed)
+            sb.AppendLine($"Дерево задачи `{worktree}` не подключилось, чат стоит в корне проекта. Свои правки делай " +
+                          $"в `{worktree}`, а для сборки и тестов (mcp__dev__build, mcp__tests__run_tests) передавай " +
+                          $"tree=`{worktree}`: иначе прогон пойдёт в корне и встанет в общую блокировку корня.");
+        else
+            sb.AppendLine($"Дерево задачи `{worktree}` не найдено: его нет на диске или оно не числится в " +
+                          "`git worktree list` проекта. Чат стоит в корне проекта. Не правь корень вслепую: " +
+                          "заведи своё дерево (git worktree add) и передавай его путь в tree у mcp__dev__build и " +
+                          "mcp__tests__run_tests, либо эскалируй постановщику через chats_report_up.");
+        return sb.ToString();
+    }
 
     internal static string BuildReviewTreeSection(ReviewTreeLease lease)
     {

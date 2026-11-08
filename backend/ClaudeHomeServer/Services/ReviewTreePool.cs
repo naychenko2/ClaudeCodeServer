@@ -44,10 +44,12 @@ public sealed class ReviewTreePool
     internal Func<Task>? AfterProjectSnapshot { get; set; }
     internal Func<Task>? BeforeSlotRemove { get; set; }
 
-    public ReviewTreePool(GitService git, SessionManager sessions, TaskManager tasks, IProjectManager projects,
-        ILogger<ReviewTreePool> log)
+    // TaskManager живёт в отключаемой вертикали Tasks: обязательным параметром он ронял резолв пула
+    // при Subsystems:tasks:Enabled=false (ADR-014). null — задач нет, слотов ревью не бывает
+    public ReviewTreePool(GitService git, SessionManager sessions, IProjectManager projects,
+        ILogger<ReviewTreePool> log, TaskManager? tasks = null)
         : this(git, sessions.WorktreesBase, sessions.CwdForOwner, log,
-            () => projects.GetAll().SelectMany(p => tasks.GetByProject(p.Id)), id => sessions.GetById(id)?.WorktreePath, projects.GetById) { }
+            tasks is null ? null : () => projects.GetAll().SelectMany(p => tasks.GetByProject(p.Id)), id => sessions.GetById(id)?.WorktreePath, projects.GetById) { }
 
     internal ReviewTreePool(GitService git, Func<string?, Project, string> worktreesBase,
         Func<string?, string, string> cwdForOwner, ILogger<ReviewTreePool> log,

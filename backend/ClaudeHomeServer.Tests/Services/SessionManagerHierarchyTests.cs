@@ -683,6 +683,51 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
         _sut.GetById(session.Id)!.WorktreePath.Should().BeNull();
     }
 
+    // --- IsProjectWorktreeAsync: «дерево есть» против «дерева нет» ---
+    // Потребитель — постановка задачи (TaskExecutionService), когда AttachWorktreeAsync отказал:
+    // по этому ответу исполнитель получает абзац «работай в дереве через tree» или «дерева нет».
+    // Тело живёт в ChatWorktree (линия ядра), фасад — тонкая обёртка; тест мерит боевой путь фасада.
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task IsProjectWorktree_ДеревоПроекта_Истина()
+    {
+        var (project, worktree) = await MkRepoWithWorktreeAsync("iswt-ok");
+
+        // owner не передан — метод берёт владельца проекта (ветка null в IsProjectWorktreeAsync)
+        (await _sut.IsProjectWorktreeAsync(project.Id, null, worktree)).Should().BeTrue();
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task IsProjectWorktree_ЧужаяПапкаНаДиске_Ложь()
+    {
+        var (project, _) = await MkRepoWithWorktreeAsync("iswt-alien");
+        // Папка есть на диске, но деревом проекта не является — «дерева нет вовсе»
+        var alien = Directory.CreateDirectory(Path.Combine(_tempDir, "iswt-alien-dir")).FullName;
+
+        (await _sut.IsProjectWorktreeAsync(project.Id, null, alien)).Should().BeFalse();
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task IsProjectWorktree_ПутиНетНаДиске_Ложь()
+    {
+        var (project, worktree) = await MkRepoWithWorktreeAsync("iswt-missing");
+
+        (await _sut.IsProjectWorktreeAsync(project.Id, null, worktree + "-нет")).Should().BeFalse();
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task IsProjectWorktree_ПустойПутьИлиНетТакогоПроекта_Ложь()
+    {
+        var (project, _) = await MkRepoWithWorktreeAsync("iswt-empty");
+
+        (await _sut.IsProjectWorktreeAsync(project.Id, null, " ")).Should().BeFalse();
+        (await _sut.IsProjectWorktreeAsync("нет-такого-проекта", null, _tempDir)).Should().BeFalse();
+    }
+
     // --- Удаление чата: чьё дерево сносим, чужое/общее/старое — нет ---
     // Дефект: временные чаты исполнителей (AttachWorktreeAsync, WorktreeOwned=false) истекали
     // через сутки и каждый уносил ОБЩЕЕ дерево фичи вместе с незакоммиченными правками.

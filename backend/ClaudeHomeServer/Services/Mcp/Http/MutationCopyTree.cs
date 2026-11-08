@@ -1,11 +1,14 @@
 namespace ClaudeHomeServer.Services.Mcp.Http;
 
 /// <summary>
-/// Параметр <c>tree</c> у run_tests/build: прогон в копии мутации, созданной
-/// <c>scripts/mutation-copy.sh create</c>. Произвольный путь = запуск чего угодно на хосте,
-/// поэтому принимается ТОЛЬКО законная копия: прямой потомок корня копий (без ссылок в пути),
-/// с метаданными <c>.meta/&lt;имя&gt;</c>, чей <c>source</c> — дерево этого же чата.
-/// Очередь и счётчик <c>BuildConcurrencyGate</c> остаются теми же: меняется лишь корень запуска.
+/// Параметр <c>tree</c> у run_tests/build: прогон не в дереве чата, а в другом дереве. Произвольный
+/// путь = запуск чего угодно на хосте, поэтому легальных форм ровно две:
+/// (а) копия мутации, созданная <c>scripts/mutation-copy.sh create</c>: прямой потомок корня копий
+/// (без ссылок в пути), с метаданными <c>.meta/&lt;имя&gt;</c>, чей <c>source</c> — дерево этого чата;
+/// (б) worktree проекта чата — путь, который числится в <c>git worktree list</c> репозитория
+/// проекта; сверка по канонической форме (ссылки разыменованы, «..» свёрнуты).
+/// Очередь и счётчик <c>BuildConcurrencyGate</c> остаются теми же: меняется лишь корень запуска,
+/// а с ним — ключ блокировки дерева и отпечатков (они ключуются по корню).
 /// </summary>
 internal static class MutationCopyTree
 {
@@ -15,9 +18,73 @@ internal static class MutationCopyTree
     private const int MaxMetaBytes = 4096;
 
     internal const string ParamDescription =
-        "Путь копии мутации, созданной `scripts/mutation-copy.sh create` из дерева этого чата (последняя строка "
-        + "его stdout). Прогон идёт в копии, в той же очереди сборок. Чужой или произвольный путь — отказ; "
-        + "target остаётся относительным корня копии.";
+        "Другое дерево для прогона вместо дерева чата: абсолютный путь worktree ЭТОГО проекта (из "
+        + "`git worktree list` его репозитория) ИЛИ копии мутации, созданной из дерева этого чата скриптом "
+        + "копий (если он есть в проекте; путь — последняя строка его stdout). Прогон идёт в той же очереди "
+        + "сборок, разные деревья друг друга не блокируют. Произвольный путь — отказ; target остаётся "
+        + "относительным корня tree.";
+
+    internal const string BothFormsHint =
+        "tree принимает только абсолютный путь worktree этого проекта (он должен числиться в "
+        + "`git worktree list` репозитория проекта) или копии мутации (scripts/mutation-copy.sh create, "
+        + "если этот скрипт есть в проекте).";
+
+    /// <summary>
+    /// Пусто — корнем остаётся дерево чата. Иначе — копия мутации или worktree проекта из
+    /// <paramref name="projectWorktrees"/> (пути `git worktree list`); всё прочее — отказ с обеими формами.
+    /// </summary>
+    internal static Task<(bool Ok, string Root, string Error)> ResolveAsync(string? raw, string chatTreeRoot,
+        Func<CancellationToken, Task<IReadOnlyList<string>>>? projectWorktrees, CancellationToken ct) =>
+        ResolveAsync(raw, chatTreeRoot, DefaultCopiesRoot(), projectWorktrees, ct);
+
+    internal static async Task<(bool Ok, string Root, string Error)> ResolveAsync(string? raw, string chatTreeRoot,
+        string copiesRoot, Func<CancellationToken, Task<IReadOnlyList<string>>>? projectWorktrees,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return (true, chatTreeRoot, "");
+        if (!Path.IsPathRooted(raw)) return (false, chatTreeRoot, "tree — абсолютный путь. " + BothFormsHint);
+
+        if (TryResolve(raw, chatTreeRoot, copiesRoot, out var copy, out var copyError)) return (true, copy, "");
+
+        // Путь под корнем копий — это попытка копии: её точная причина отказа полезнее общей
+        var copies = Normalize(SafePath.Canonical(copiesRoot));
+        var lexical = Normalize(SafeFullPath(raw));
+        var underCopies = copies is not null && lexical is not null
+            && lexical.StartsWith(copies + "/", Comparison);
+
+        // Ссылки и «..» сворачиваются до сверки: путь через ссылку на законный worktree — тот же worktree
+        // (и тот же ключ блокировки дерева), ссылка наружу списка не проходит. Список правит лишь тот, у кого
+        // и так есть Bash в этом репозитории, — права шире Bash'а tree не даёт
+        var canonical = Normalize(SafePath.Canonical(raw));
+        if (canonical is not null && Directory.Exists(canonical) && HasGit(canonical) && projectWorktrees is not null)
+        {
+            IReadOnlyList<string> list;
+            try { list = await projectWorktrees(ct); }
+            catch (Exception e) when (e is not OperationCanceledException) { list = []; }
+            foreach (var worktree in list)
+            {
+                if (string.IsNullOrWhiteSpace(worktree)) continue;
+                if (string.Equals(Normalize(SafePath.Canonical(worktree)), canonical, Comparison))
+                    return (true, Path.GetFullPath(canonical), "");
+            }
+        }
+
+        if (underCopies) return (false, chatTreeRoot, copyError);
+        return (false, chatTreeRoot, canonical is null || !Directory.Exists(canonical)
+            ? $"Каталог tree «{raw}» не найден. " + BothFormsHint
+            : $"«{raw}» не числится в `git worktree list` проекта и не копия мутации этого чата. " + BothFormsHint);
+    }
+
+    private static bool HasGit(string dir) =>
+        Directory.Exists(Path.Combine(dir, ".git")) || File.Exists(Path.Combine(dir, ".git"));
+
+    private static StringComparison Comparison => SafePath.ComparisonFor(OperatingSystem.IsWindows());
+
+    private static string? SafeFullPath(string path)
+    {
+        try { return Path.GetFullPath(path); }
+        catch (Exception e) when (e is ArgumentException or NotSupportedException or PathTooLongException) { return null; }
+    }
 
     // Корень копий — как в скрипте: $CCS_MUTATION_ROOT или ~/.cache/ccs-mutation
     internal static string DefaultCopiesRoot()

@@ -446,9 +446,25 @@ public class LocalActionRoutingTests
     [InlineData(LocalActionCatalog.CharacterSceneParse)]
     public async Task ЛокальЗанятаХодом_БезОблака(string actionKey)
     {
-        // Движок занят ходом исполнителя (LocalBlockedByTurn) → шаг локали пропускается,
-        // и на маршруте local облачного шага всё равно нет.
+        // Вариант А (06.11): движок занят ходом (LocalBlockedByTurn), но на локальном маршруте
+        // в режиме «без облака» облачного шага нет — пропуск шага локали был потерей вызова.
+        // Вызов идёт в движок: ответ локали, облака нет.
         var (result, claude) = await RunLocalOrChosenNoCloud(actionKey, localAnswer: "ответ", busy: true);
+
+        Assert.Equal("ответ", result);
+        Assert.Empty(claude.Calls);
+    }
+
+    [Theory]
+    [InlineData(LocalActionCatalog.ActionRank)]
+    [InlineData(LocalActionCatalog.CharacterSceneParse)]
+    public async Task ЛокальПустоПриЗанятомДвижке_БезОблака(string actionKey)
+    {
+        // Занятость не пропускает вызов (вариант А), но движок вернул null — в бою это полный
+        // счётчик слотов: TrackedLocalLlmClient берёт слот через TryEnter без ожидания и при
+        // полном отдаёт null. Цепочка отдаёт null без исключения, облачного шага нет —
+        // этот отказ ловит повтор ночи (WN-2), а не цепочка.
+        var (result, claude) = await RunLocalOrChosenNoCloud(actionKey, localAnswer: null, busy: true);
 
         Assert.Null(result);
         Assert.Empty(claude.Calls);
@@ -461,18 +477,27 @@ public class LocalActionRoutingTests
     // Фейк движка с метриками того же ответа — как реальные LlamaServerClient/OllamaClient.
     // throws — «движок бросает» (реальные клиенты своё исключение глушат; здесь проверяется,
     // что цепочка по нему в облако не уходит). usage = null — «метрик не было»: вызов успешен.
+    // busy — движок занят чужим ходом: слот в собственном трекере (тот же протягивается
+    // роутеру → LocalBlockedByTurn=true). Calls — сколько detailed-вызовов прошло через движок.
     private sealed class DetailedLocalEngine : ILocalLlmClient
     {
         private readonly string? _answer;
         private readonly Protocol.UsageInfo? _usage;
         private readonly bool _throws;
+        private readonly LocalEngineBusyTracker _tracker = new();
+        private readonly IDisposable? _slot;
 
-        public DetailedLocalEngine(string? answer, Protocol.UsageInfo? usage, bool throws = false)
+        public DetailedLocalEngine(string? answer, Protocol.UsageInfo? usage, bool throws = false,
+            bool busy = false)
         {
             _answer = answer;
             _usage = usage;
             _throws = throws;
+            _slot = busy ? _tracker.Enter() : null;
         }
+
+        public LocalEngineBusyTracker Tracker => _tracker;
+        public int Calls;
 
         public bool Enabled => true;
         public string BaseUrl => "http://localhost:11434";
@@ -491,11 +516,14 @@ public class LocalActionRoutingTests
             CancellationToken ct = default) => Task.FromResult(new ChatTurnResult(_answer, _usage));
         public Task WarmUpAsync(string? model, CancellationToken ct = default) => Task.CompletedTask;
 
-        private Task<(string? Text, Protocol.UsageInfo? Usage)> Result() =>
-            _throws
+        private Task<(string? Text, Protocol.UsageInfo? Usage)> Result()
+        {
+            Calls++;
+            return _throws
                 ? Task.FromException<(string?, Protocol.UsageInfo?)>(
                     new InvalidOperationException("движок недоступен"))
                 : Task.FromResult((_answer, _usage));
+        }
 
         public Task<(string? Text, Protocol.UsageInfo? Usage)> ChatJsonDetailedAsync(
             string systemPrompt, string userPrompt, object jsonFormat, CancellationToken ct = default,
@@ -507,21 +535,24 @@ public class LocalActionRoutingTests
             string? ownerId = null, string? label = null, CancellationToken ct = default) => Result();
     }
 
-    private static (CheapTextRunner Runner, FakeOneShot Claude) DetailedNoCloudRunner(
-        string? answer, Protocol.UsageInfo? usage, bool throws = false)
+    // busy — занятость движка ходом: его собственный трекер протягивается роутеру, как в DI
+    // (признак LocalBlockedByTurn). Движок возвращаем: тестам нужен счётчик его вызовов.
+    private static (CheapTextRunner Runner, FakeOneShot Claude, DetailedLocalEngine Engine) DetailedNoCloudRunner(
+        string? answer, Protocol.UsageInfo? usage, bool throws = false, bool busy = false)
     {
-        var engine = new DetailedLocalEngine(answer, usage, throws);
+        var engine = new DetailedLocalEngine(answer, usage, throws, busy);
         var config = ConfigWithTempData(new() { ["Ollama:Model"] = "qwen-test" });
-        var router = new LocalActionRouter(engine, Store(config), config, NullLogger<LocalActionRouter>.Instance);
+        var router = new LocalActionRouter(engine, Store(config), config, NullLogger<LocalActionRouter>.Instance,
+            busy: engine.Tracker);
         var claude = new FakeOneShot();
         return (new CheapTextRunner(router, engine, Cloud(config), claude, NullLogger<CheapTextRunner>.Instance),
-            claude);
+            claude, engine);
     }
 
     private static async Task<(OneShotResult? Result, FakeOneShot Claude)> RunLocalOrChosenDetailedNoCloud(
         string actionKey, string? answer, Protocol.UsageInfo? usage)
     {
-        var (runner, claude) = DetailedNoCloudRunner(answer, usage);
+        var (runner, claude, _) = DetailedNoCloudRunner(answer, usage);
         return (await runner.RunLocalOrChosenDetailedAsync(actionKey, "prompt-text", jsonFormat: "json"), claude);
     }
 
@@ -568,6 +599,28 @@ public class LocalActionRoutingTests
         Assert.Empty(claude.Calls);
     }
 
+    [Fact]
+    public async Task ЛокальЗанятаХодом_БезОблака_Detailed()
+    {
+        // Вариант А (06.11) на detailed-цепочке ночного разбора вики: движок занят ходом
+        // (LocalBlockedByTurn=true), вызов всё равно идёт в движок — пропуск шага был потерей
+        // работы ночи. Ответ и usage того же ответа локали доходят до вызывающего, облака нет.
+        var (runner, claude, engine) = DetailedNoCloudRunner(
+            "ответ-ночи", new Protocol.UsageInfo(2_000, 120, 0, 0), busy: true);
+
+        var result = await runner.RunLocalOrChosenDetailedAsync(
+            LocalActionCatalog.WikiNightly, "prompt-text", jsonFormat: "json");
+
+        engine.Calls.Should().Be(1, "занятость больше не пропускает вызов");
+        result.Should().NotBeNull();
+        result!.Text.Should().Be("ответ-ночи");
+        result.Usage.Should().NotBeNull("usage того же ответа — смысл detailed-цепочки");
+        result.Usage!.InputTokens.Should().Be(2_000);
+        result.Usage.OutputTokens.Should().Be(120);
+        result.Usage.CostUsd.Should().Be(0, "локальный вызов бесплатный");
+        Assert.Empty(claude.Calls);
+    }
+
     [Theory]
     [InlineData(LocalActionCatalog.ActionRank)]
     [InlineData(LocalActionCatalog.CharacterSceneParse)]
@@ -575,7 +628,7 @@ public class LocalActionRoutingTests
     {
         // Тот же контракт, что у строкового RunLocalOrChosenAsync: исключение движка
         // пробрасывается наружу (его ловит вызывающий своим отказом), облачного шага нет.
-        var (runner, claude) = DetailedNoCloudRunner(
+        var (runner, claude, _) = DetailedNoCloudRunner(
             answer: "не важно", usage: new Protocol.UsageInfo(1, 1, 0, 0), throws: true);
 
         var act = async () => await runner.RunLocalOrChosenDetailedAsync(
@@ -583,6 +636,135 @@ public class LocalActionRoutingTests
 
         await act.Should().ThrowAsync<InvalidOperationException>();
         claude.Calls.Should().BeEmpty("сбой локали не переводит вызов в облако");
+    }
+
+    // ─── WN-4: ночной вызов ждёт свободный слот общего счётчика, а не отказывается ───
+    // Тот же путь, что DetailedNoCloudRunner, но клиент обёрнут в TrackedLocalLlmClient и
+    // делит счётчик с чужим «ходом» (держателем слота): без обёртки очередь не проверяется,
+    // с ней проверяется и гонка с ходом, и порядок в очереди, и отмена.
+
+    private const string SlotKey = "test";
+
+    // Держатель единственного слота ключа: тесту уверенный слот нужен по смыслу (иначе
+    // «полный счётчик» в тесте не собран).
+    private static IDisposable TakeSlot(LocalEngineBusyTracker tracker, int limit = 1) =>
+        tracker.TryEnter(SlotKey, limit) ?? throw new InvalidOperationException("слот не выдан");
+
+    private static (CheapTextRunner Runner, DetailedLocalEngine Inner, LocalEngineBusyTracker Tracker)
+        TrackedNoCloudRunner(string answer, int limit = 1, TimeSpan? waitTimeout = null)
+    {
+        var inner = new DetailedLocalEngine(answer, new Protocol.UsageInfo(1_000, 50, 0, 0));
+        var tracker = new LocalEngineBusyTracker();
+        var local = new TrackedLocalLlmClient(inner, tracker, SlotKey, () => limit,
+            NullLogger<TrackedLocalLlmClient>.Instance,
+            // Та же форма политики ожидания, что у провайдера в бою, только короче потолок:
+            // тест про отказ по времени не должен ждать минуты.
+            waitTimeout is { } t ? () => new LocalSlotWaitPolicy(limit * 4, t) : null);
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "qwen-test" });
+        var router = new LocalActionRouter(local, Store(config), config,
+            NullLogger<LocalActionRouter>.Instance, busy: tracker);
+        return (new CheapTextRunner(router, local, Cloud(config), new FakeOneShot(),
+            NullLogger<CheapTextRunner>.Instance), inner, tracker);
+    }
+
+    [Fact]
+    public async Task НочнойВызовЖдётСлот_ИОтвечаетПослеОсвобождения()
+    {
+        // c1 (WN-4): при полном счётчике ночной вызов не отказывается — он стоит в очереди
+        // общего счётчика и даёт ответ, как только слот освободится. Мутация c5 (заменить
+        // ожидание на TryEnter без ожидания): вызов вернулся бы сразу с null, assertion
+        // «не завершился отказом» и inner.Calls — красные.
+        var (runner, inner, tracker) = TrackedNoCloudRunner("ответ-ночи");
+        var turn = TakeSlot(tracker); // ход держит единственный слот движка
+
+        var run = runner.RunLocalOrChosenDetailedAsync(LocalActionCatalog.WikiNightly, "prompt-text",
+            jsonFormat: "json");
+
+        var finished = await Task.WhenAny(run, Task.Delay(TimeSpan.FromMilliseconds(300)));
+        finished.Should().NotBeSameAs(run, "слот занят: ночной вызов ждёт, а не вернулся с отказом");
+        tracker.QueuedFor(SlotKey).Should().Be(1, "заявка стоит в очереди общего счётчика");
+        inner.Calls.Should().Be(0, "пока слота нет, модель не звалась");
+
+        turn.Dispose();
+
+        var result = await run.WaitAsync(TimeSpan.FromSeconds(10));
+        result.Should().NotBeNull("освободившийся слот достался очереди");
+        result!.Text.Should().Be("ответ-ночи");
+        result.Usage.Should().NotBeNull("usage того же ответа — смысл detailed-цепочки");
+        inner.Calls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task НочьНеОбгоняетОчередь_СлотСначалаРаньшеВставшему()
+    {
+        // c3 (WN-4): очередь одна на движок, и обгон запрещён и для ночи. Мутация: отдельный
+        // допуск для ночи (второй семафор или обход очереди) — ночь взяла бы слот первой,
+        // IsCompleted после первого освобождения стал бы true, тест красный.
+        var (runner, inner, tracker) = TrackedNoCloudRunner("ответ-ночи");
+        var turn = TakeSlot(tracker);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(1));
+        // «Ход CLI» встал в очередь раньше ночи — тот же AcquireAsync, что у FallbackLlmSessionAdapter.
+        var cli = tracker.AcquireAsync(SlotKey, 1, 8, TimeSpan.FromMinutes(1), cts.Token);
+        var run = runner.RunLocalOrChosenDetailedAsync(LocalActionCatalog.WikiNightly, "prompt-text",
+            jsonFormat: "json");
+        tracker.QueuedFor(SlotKey).Should().Be(2, "ночь встала в конец очереди, за уже ждущим ходом");
+
+        turn.Dispose(); // освободился единственный слот
+
+        var admission = await cli.WaitAsync(TimeSpan.FromSeconds(10));
+        admission.Slot.Should().NotBeNull("слот достался голове очереди");
+        run.IsCompleted.Should().BeFalse("ночь ждёт своей очереди, обгона нет");
+
+        admission.Slot!.Dispose();
+        var result = await run.WaitAsync(TimeSpan.FromSeconds(10));
+        result.Should().NotBeNull();
+        result!.Text.Should().Be("ответ-ночи");
+        inner.Calls.Should().Be(1, "модель звалась ровно один раз");
+    }
+
+    [Fact]
+    public async Task ОтменаПрерываетОжиданиеСлота_НеКакОтказЗанято()
+    {
+        // c4 (WN-4): остановка ночи/закрытие окна/остановка службы гасят и ожидание слота.
+        // Отмена — не отказ «движок занят»: она уходит наружу отменой (и снимает заявку с
+        // очереди), иначе остановленная ночь отказала бы каждый оставшийся чат по занятости.
+        // Мутация: обернуть AcquireAsync в LocalEngineSlotRefusalException — тест красный.
+        var (runner, inner, tracker) = TrackedNoCloudRunner("не важно");
+        var turn = TakeSlot(tracker);
+        using var cts = new CancellationTokenSource();
+        var run = runner.RunLocalOrChosenDetailedAsync(LocalActionCatalog.WikiNightly, "prompt-text",
+            jsonFormat: "json", ct: cts.Token);
+        tracker.QueuedFor(SlotKey).Should().Be(1);
+
+        cts.Cancel();
+
+        // ThrowsAnyAsync: WaitAsync отдаёт TaskCanceledException (наследник OCE) — важна не
+        // точная форма, а то, что это отмена, а не отказ по занятости.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+        inner.Calls.Should().Be(0, "модель не звалась");
+        tracker.QueuedFor(SlotKey).Should().Be(0, "отменённая заявка снята с очереди");
+        turn.Dispose();
+    }
+
+    [Fact]
+    public async Task НочьНеДождаласьСлота_ОтказНазываетЗанятостьADNePustoyOtvet()
+    {
+        // Требования 3 и 4 (WN-4): истечение потолка ожидания — отказ с причиной, а не
+        // молчаливый null: «модель дала пустой ответ» прятало бы сбой занятости за обычным
+        // исходом модели (прод 06.11: 108 таких отказов, ни одного вызова модели).
+        // Мутация: вернуть (null, null) вместо исключения — тест красный.
+        var (runner, inner, tracker) = TrackedNoCloudRunner("не важно",
+            waitTimeout: TimeSpan.FromMilliseconds(200));
+        var turn = TakeSlot(tracker);
+
+        var ex = await Assert.ThrowsAsync<LocalEngineSlotRefusalException>(
+            () => runner.RunLocalOrChosenDetailedAsync(LocalActionCatalog.WikiNightly, "prompt-text",
+                jsonFormat: "json"));
+
+        ex.Why.Should().Be(LocalTurnRefusal.Timeout);
+        ex.Message.Should().Contain("занят").And.Contain("вышло время ожидания");
+        inner.Calls.Should().Be(0, "модель не звалась ни разу");
+        turn.Dispose();
     }
 
     // Подменённый шов БЕЗ переопределения detailed-метода: работает реализация по умолчанию

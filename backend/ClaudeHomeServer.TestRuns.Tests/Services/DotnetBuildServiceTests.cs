@@ -168,6 +168,29 @@ public class DotnetBuildServiceTests : IDisposable
         }
     }
 
+    // Блокировка ключуется по корню дерева запуска (tree у build/run_tests): два worktree одного проекта
+    // друг друга не держат, а одно и то же дерево — держит. Очередь сборок при этом общая
+    [Fact]
+    public async Task РазныеWorktree_НеБлокируютДругДруга_ОдноДерево_Блокирует()
+    {
+        var other = Path.Combine(Path.GetTempPath(), "ccs-dotnetbuild-wt-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(other);
+        _cleanup.Add(other);
+        File.WriteAllText(Path.Combine(other, "App.csproj"), "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        var service = Service(new FakeLauncher(_processes, "dotnet-build-noop.txt"), new BuildConcurrencyGate(1));
+
+        using (service.Pipeline.TryLockTree(_root))
+        {
+            using (var second = service.Pipeline.TryLockTree(other))
+                second.Should().NotBeNull("другой worktree — другой ключ блокировки");
+            service.Pipeline.TryLockTree(_root + Path.DirectorySeparatorChar).Should().BeNull("то же дерево");
+
+            var result = await service.RunAsync(new DotnetBuildRequest(NewProject(), other, "sess-2", "App.csproj"),
+                null, CancellationToken.None).WaitAsync(Wait);
+            result.Refusal.Should().BeNull("сборка во втором worktree идёт, пока первый занят");
+        }
+    }
+
     // Ждать занятое дерево агенту надо сторожем: маркер виден снаружи ровно пока идёт прогон,
     // а отказ подсказывает, чего ждать
     [Fact]

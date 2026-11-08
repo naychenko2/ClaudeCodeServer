@@ -84,7 +84,7 @@ public sealed class TaskPregateService(TaskManager tasks, ProjectManager project
             return new(TaskPregateStatus.NotRun, "Предгейт не дал вердикта, результат не записан — " + unmeasured + ".");
 
         var red = verdict.Checks.Where(c => c.Status == PregateStatus.Red).ToList();
-        var summary = string.Join("\n", red.Select(c => $"✗ {c.Name}: {c.Detail}"));
+        var summary = PregateRules.Summary(verdict);
         var redKey = red.Count == 0 ? null : string.Join("|", red.Select(c => c.Name).Order(StringComparer.Ordinal));
         var nothing = verdict.NothingApplicable || verdict.Checks.Count == 0;
         if (nothing) summary = "NotRun: изменения не касаются ни одной проверки";
@@ -100,7 +100,12 @@ public sealed class TaskPregateService(TaskManager tasks, ProjectManager project
             .Append(sha.Length > 8 ? sha[..8] : sha).Append('\n');
         foreach (var c in verdict.Checks)
         {
-            var mark = c.Status switch { PregateStatus.Green => "✓", PregateStatus.Red => "✗", _ => "–" };
+            var mark = c.Status switch
+            {
+                PregateStatus.Green => c.Detail.Length > 0 ? "⚠" : "✓",
+                PregateStatus.Red => "✗",
+                _ => "–",
+            };
             text.Append(mark).Append(' ').Append(c.Name);
             if (c.Detail.Length > 0) text.Append(": ").Append(c.Detail);
             text.Append('\n');

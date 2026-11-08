@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.TestRuns;
@@ -487,5 +488,48 @@ public class PregateServiceTests : IDisposable
 
         service.StoppedRefusal().Should().Contain($"потолок предгейта — {expected} с",
             "видимый отказ обязан называть фактически применённый потолок");
+    }
+
+    // Флаки зелёного прогона (блок test-shards.py «Флаки (прошли со второго раза)») не прощаются молча:
+    // статус зелёный, деталь — заголовок и FQN (не больше DetailLines), в сводке записи — «⚠ … флаки N» и FQN;
+    // красная серия на зелёном не растёт
+    [Fact]
+    public async Task ЗелёныйСФлаками_ДетальИСводкаСFqn_СерияНеРастёт()
+    {
+        var fqns = Enumerable.Range(1, 12).Select(i => $"ClaudeHomeServer.Tests.Foo.Тест{i}").ToList();
+        var output = "Шард 1: зелёный\nПерезапуск упавших: 12 (по одному разу, последовательно)\n"
+            + "Перезапуск: стена 3.1 с, запусков 1; TRX и логи — /tmp/rerun\n"
+            + "Флаки (прошли со второго раза): 12\n" + string.Join("\n", fqns.Select(f => "  " + f))
+            + "\nВсего: 12 шардов, стена 40 с\n";
+        var launcher = Launcher(_ => (output, 0));
+
+        var verdict = await Service(launcher, Check("быстрые тесты")).RunAsync(Request(), CancellationToken.None);
+
+        verdict.IsGreen.Should().BeTrue();
+        var check = verdict.Checks.Single();
+        check.Status.Should().Be(PregateStatus.Green, "флаки не краснят и не делают NotRun");
+        var detail = check.Detail.Split('\n');
+        detail[0].Should().Be("Флаки (прошли со второго раза): 12");
+        detail[1..].Should().Equal(fqns.Take(10), "FQN — не больше DetailLines, строка «Всего» в блок не попадает");
+
+        var summary = PregateRules.Summary(verdict);
+        summary.Should().StartWith("⚠ быстрые тесты: флаки 12\n");
+        summary.Should().Contain(fqns[0]).And.Contain(fqns[9]).And.NotContain(fqns[10]);
+
+        var red = new PregateRecord("aaa", false, "✗ build: x", DateTime.UtcNow, 1, "build");
+        var next = PregateRules.Next(red, "bbb", verdict.IsGreen, summary, null, DateTime.UtcNow);
+        next.Green.Should().BeTrue();
+        next.RedStreak.Should().Be(0, "зелёный с флаками обнуляет серию, а не наращивает её");
+    }
+
+    [Fact]
+    public async Task ЗелёныйБезФлаков_ДетальИСводкаПустые()
+    {
+        var launcher = Launcher(_ => ("Шард 1: зелёный\nВсего: 1 шард\n", 0));
+
+        var verdict = await Service(launcher, Check("быстрые тесты")).RunAsync(Request(), CancellationToken.None);
+
+        verdict.Checks.Single().Should().Be(new PregateCheckResult("быстрые тесты", PregateStatus.Green));
+        PregateRules.Summary(verdict).Should().BeEmpty();
     }
 }

@@ -2715,6 +2715,12 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public Task<bool> AttachWorktreeAsync(string sessionId, string worktreePath, string? branch = null)
         => _worktree.AttachWorktreeAsync(sessionId, worktreePath, branch);
 
+    /// Существует ли путь на диске и числится ли он в `git worktree list` проекта (тело — в
+    /// ChatWorktree). Нужен исполнителю задачи, когда AttachWorktreeAsync отказал: отличить
+    /// «дерево есть, но чат в него не встал» от «дерева нет вовсе». Сбой git — false (fail-closed).
+    public Task<bool> IsProjectWorktreeAsync(string projectId, string? ownerId, string worktreePath)
+        => _worktree.IsProjectWorktreeAsync(projectId, ownerId, worktreePath);
+
     // --- Политика добивания и паспорта (S3-4) ---
     // Чистые функции ушли в Services/Sessions/SubagentNudgePolicy.cs, подписчики шины —
     // в Services/Sessions/TurnPassports.cs. Обёртки сохранены: на них сидят TaskExecutionService,

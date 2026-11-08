@@ -39,7 +39,16 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //    исхода отдельно (ревью S6b-3, M2).
 // 7. Исход «нечего добавить» — штатный (ADR-035 §12б): пакет не создаётся, исход
 //    nothing_new. Пустой план (операций нет) — тот же исход: модель сказала, что писать
-//    нечего, только маркер не поставила.
+//    нечего, только маркер не поставила. Дыра WC-2 (WN-3): в пустом разделе (нет ни
+//    одной страницы знаний) такой отказ — не решение «уже написано», а невидение цели:
+//    модель не видит ни одной страницы и не знает, что для этого знания — create.
+//    Тогда — ровно один повторный вызов прохода B с прямой причиной («в разделе нет
+//    страниц знаний, для этого знания — create»); второй отказ МОДЕЛИ — прежний
+//    nothing_new, цикла нет; упавший или пустой повтор — rejected с причиной сбоя
+//    (тот же инвариант WN-4: сбой вызова не маскируется решением модели, иначе окно
+//    чата уходит как «разобрано»). Ремонт по причине п.6 (отказ плана кодом) этого не
+//    ловит: там план
+//    есть и отвергнут, здесь плана нет и валидатор не звался.
 // 8. Пакет — в WikiPackageStore (usage разбора — в операции пакета: токены того разбора,
 //    который их породил). Содержание операции — подтверждённая валидатором цитата прохода A:
 //    применение рендерит строку утверждения и сноску по op.Text и требует его дословности
@@ -308,11 +317,58 @@ public sealed class WikiIngestService
             if (answerB.Reason is not null)
                 return RejectedUsed(answerB.Reason);
             var plan = ParsePlan(answerB.Text!, out var nothingB, out var modelReasonB, out var parseErrorB);
-            if (nothingB)
+            string? nothingReasonB = nothingB ? modelReasonB : "план без операций: писать нечего";
+
+            // Дыра WC-2 (WN-3): отказ «нечего добавить» / пустой план в разделе без страниц
+            // знаний — не решение «уже написано»: модель не видит ни одной цели и не знает,
+            // что для этого знания — create. Ровно один повторный вызов прохода B с прямой
+            // причиной; второй отказ модели — прежний nothing_new, цикла нет; упавший повтор —
+            // rejected с причиной сбоя (см. ниже). Условия держат
+            // истинность причины: «в разделе нет страниц знаний» — правда ровно когда в
+            // разделе назначения нет ни одной страницы знаний (тот же предикат, что у
+            // PickCandidatePages: не карточка, разбирается), а пустой раздел с кандидатами
+            // по цепочке вверх — отказ без повтора: там цель у модели была. Буквальное
+            // «PickCandidatePages пуст» не взяли: оно красит штатный nothing_new непустого
+            // раздела (страница есть, но заголовок не совпал с текстом утверждений) и врёт
+            // модели про пустой раздел (ревью этого шага).
+            // Folder() уже со слэшем на конце (WikiSections.cs:63-65).
+            var targetFolder = WikiSections.Folder(sectionKey)!;
+            var sectionHasKnowledgePages = sectionPages.Any(d =>
+                d.Path.StartsWith(targetFolder, StringComparison.Ordinal) &&
+                WikiPage.Parse(d.Content).Model is { } pm && pm.Frontmatter.Type != WikiFrontmatter.TypeSource);
+            if ((nothingB || plan is { Operations: { Count: 0 } }) && candidates.Count == 0
+                && !sectionHasKnowledgePages)
+            {
+                var emptySectionPrompt =
+                    "THE TARGET SECTION HAS NO KNOWLEDGE PAGES (в разделе нет страниц знаний). "
+                    + "For these claims the operation is create: a new page in the target section. "
+                    + "Produce a plan with a create operation, or answer the no-op outcome again.\n\n"
+                    + promptB;
+                var answerC = await CallModelAsync(emptySectionPrompt, ownerId, "пустой раздел", usage, ct, actionKey);
+                if (answerC.Reason is not null)
+                    // Сбой самого повторного вызова — не отказ модели: она могла не зваться ни
+                    // разу (тот же инвариант WN-4, catch в CallModelAsync). Причина сбоя
+                    // доезжает дословно, иначе «движок занят» читается вызывающим как решение
+                    // «нечего добавить»: ночный путь трактует это как nothing_new, двигает
+                    // lastOkTo и окно чата теряется при completed ночи (ревью WN-3, major).
+                    return RejectedUsed(answerC.Reason);
+                var planC = ParsePlan(answerC.Text!, out var nothingC, out var modelReasonC, out _);
+                if (nothingC)
+                    // Второй отказ молчит без своей причины — остаётся первая: модель
+                    // сказала это о тех же утверждениях, повтор её не опроверг.
+                    return new IngestResult(OutcomeNothingNew, modelReasonC ?? nothingReasonB, null, usage.InputTokens);
+                if (planC is not { Operations: { Count: > 0 } })
+                    return new IngestResult(OutcomeNothingNew, nothingReasonB, null, usage.InputTokens);
+                // Повтор дал план — он судится общим путём ниже (тот же валидатор и, при
+                // отказе кода, обычный ремонт п.6: это ремонт плана, а не повтор nothing_new
+                // — цикл дыры WC-2 всё равно один).
+                plan = planC;
+            }
+            else if (nothingB)
                 return new IngestResult(OutcomeNothingNew, modelReasonB, null, usage.InputTokens);
-            if (plan is null)
+            else if (plan is null)
                 return RejectedUsed(parseErrorB ?? "проход B: ответ модели не разобран");
-            if (plan.Operations is { Count: 0 })
+            else if (plan.Operations is { Count: 0 })
                 return new IngestResult(OutcomeNothingNew, "план без операций: писать нечего", null, usage.InputTokens);
 
             // 6. Проверки кода. Решение — по Rejected: это вина плана. Violations — состояние
@@ -599,6 +655,21 @@ public sealed class WikiIngestService
                 text = result.Text;
                 used = result.Usage;
             }
+        }
+        catch (LocalEngineSlotRefusalException e)
+        {
+            // Движок занят, слота не дождались: модель не звалась ни разу. Это НЕ «модель дала
+            // пустой ответ» — та формулировка прятала сбой занятости за обычным исходом модели
+            // (ночь 06.11: 108 отказов, ни одного вызова). Причина доезжает до журнала ночи
+            // дословно — в rejected и firstRejectReason (WN-4).
+            return new ModelAnswer(null, $"{passName}: {e.Message}");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Ожидание слота прервано остановкой ночи / закрытием окна / остановкой службы:
+            // это не отказ одного чата, это конец прохода — он уходит наружу отменой, как и
+            // остальные точки прохода (тот же приём, что у цикла WikiNightlyService).
+            throw;
         }
         catch (Exception e)
         {

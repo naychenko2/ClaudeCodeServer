@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
 using System.Globalization;
+using System.IO;
 using System.Net;
+using System.Net.Http;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services;
 using FluentAssertions;
@@ -11,6 +13,9 @@ namespace ClaudeHomeServer.Tests.Services;
 
 // Батчинг бэкфилла цен fal (шаг S-SPEND-5): Track ставит id в очередь, один разборщик шлёт
 // пачку до 50 request_id одним запросом; ответ раскладывается по request_id событий.
+// Коллекция ProcessGlobalState: часть тестов подменяет Console.Error на свой прогон
+// (сбойный лог, проверка журнальных строк) — сериализованы с прочими такими же тестами.
+[Collection(TestCollections.ProcessGlobalState)]
 public class FalCostBatchTests
 {
     // Заглушка пачек: помнит id и запрос каждого вызова, ответ — по делегату (id, номер вызова, курсор).
@@ -62,6 +67,29 @@ public class FalCostBatchTests
                 await Task.Delay(20);
             }
             return false;
+        }
+    }
+
+    // Ждать появления n записей в журнале вызовов (без ожидания публикаций).
+    private static async Task<bool> WaitCallsAsync(BatchHandler handler, int n)
+    {
+        var until = DateTime.UtcNow.AddSeconds(8);
+        while (DateTime.UtcNow < until)
+        {
+            if (handler.Calls.Count >= n) return true;
+            await Task.Delay(20);
+        }
+        return false;
+    }
+
+    // Писатель Console.Error, роняющий исключение на строках с маркером: моделирует сломанный
+    // лог — ту самую точку, где Reschedule бросает в реальности (хвост ревью R-S-SPEND-5, m1).
+    private sealed class ThrowingLog(TextWriter inner, params string[] markers) : StringWriter
+    {
+        public override void Write(string? value)
+        {
+            if (value is not null && markers.Any(m => value.Contains(m))) throw new IOException("сбой журнала");
+            inner.Write(value);
         }
     }
 
@@ -220,6 +248,128 @@ public class FalCostBatchTests
         handler.Calls.Should().HaveCount(2, "две попытки бэкоффа = два запроса пачки, а не 2×5");
         handler.Calls.Should().OnlyContain(c => c.Length == 5);
         rig.Published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Отказ429НаПачку_СледующаяПопытка_ЦенаКаждогоIdОпубликована()
+    {
+        // Хвост ревью R-S-SPEND-5, п. m4: отказ пачки не отменяет цену — id возвращаются в
+        // очередь и получают её со второй попытки.
+        var handler = new BatchHandler((ids, call, _) => call == 1
+            ? new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+            : Ok(ids));
+        var rig = MakeRig(handler, backoff: [0, 0]);
+        for (var i = 0; i < 5; i++) rig.Svc.Track("s-1", $"req-{i}", Nov1);
+
+        (await rig.WaitAsync(5)).Should().BeTrue("после отказа пачки цена публикуется со второй попытки");
+        handler.Calls.Should().HaveCount(2);
+        handler.Calls.Should().OnlyContain(c => c.Length == 5);
+        for (var i = 0; i < 5; i++)
+            rig.Usd[$"req-{i}"].Should().BeApproximately((i + 1) * 0.01, 1e-9);
+    }
+
+    [Fact]
+    public async Task СбойРазборщикаНаПачке_НесданныеВозвращены_НовыйTrackПолучаетЦену()
+    {
+        // Хвост ревью R-S-SPEND-5, п. m1: исключение из catch цикла пачек (сбойный лог
+        // Reschedule и самого catch) не должно оставить _processorRunning == true.
+        // Сломанный лог бьёт ровно в реальные точки: «Опрос … упал» — catch ProcessBatchAsync,
+        // «Сбой обработки пачки» — catch цикла пачек; всё остальное пишется обычно.
+        // backoff [0,0] — возвратка не исчерпывает попытки и не логирует: несданные пачки
+        // честно возвращаются в очередь и получают цену со второй попытки.
+        var inner = Console.Error;
+        var err = new ThrowingLog(inner, "Опрос billing-events (пачка", "Сбой обработки пачки");
+        Console.SetError(err);
+        try
+        {
+            var handler = new BatchHandler((ids, call, _) => call == 1
+                ? throw new HttpRequestException("транспорт")
+                : Ok(ids));
+            var rig = MakeRig(handler, backoff: [0, 0]);
+            rig.Svc.MaxBatchSize = 5; // 10 id = две пачки: в момент сбоя вторая ещё несдана
+            for (var i = 0; i < 10; i++) rig.Svc.Track("s-1", $"req-{i}", Nov1);
+
+            (await WaitCallsAsync(handler, 1)).Should().BeTrue();
+            await Task.Delay(300); // цепочка сбоя без задержек, но асинхронна: дать ей завершиться
+            rig.Svc.Track("s-1", "req-90", Nov1);
+
+            (await rig.WaitAsync(11)).Should().BeTrue(
+                "очередь не теряет id при сбое разборщика: несданные возвращены, новый Track получил цену");
+            handler.Calls.Should().HaveCount(4, "отказанная попытка + пачки с возвратом + новый id");
+            rig.Published.Values.Should().OnlyContain(n => n == 1, "каждый id опублирован ровно один раз");
+        }
+        finally
+        {
+            Console.SetError(inner);
+        }
+    }
+
+    [Fact]
+    public async Task ПагинацияДостигаетMaxPages_ОтказПачкиСВозвратом_AНеУспехСНеполнымНабором()
+    {
+        // Хвост ревью R-S-SPEND-5, п. m2: предел страниц — отказ пачки (Reschedule), а не
+        // «успех» с усечением: неполная сумма занижает цену, а id с непросмотренных страниц
+        // терялись бы после бэкоффа. 45 id одной пачкой: каждая страница говорит «has_more» с
+        // тем же курсором — конец списка недостижим, обе попытки упираются в предел.
+        var handler = new BatchHandler((ids, _, _) => Ok(ids, ",\"has_more\":true,\"next_cursor\":\"c1\""));
+        var rig = MakeRig(handler, backoff: [0, 0]);
+        var err = new StringWriter();
+        var prevErr = Console.Error;
+        Console.SetError(err);
+        try
+        {
+            for (var i = 0; i < 45; i++) rig.Svc.Track("s-1", $"req-{i}", Nov1); // 45 < MaxBatchSize — одна пачка
+            await Task.Delay(2500); // две попытки по MaxPages страниц + исчерпание бэкоффа
+        }
+        finally
+        {
+            Console.SetError(prevErr);
+        }
+        handler.Calls.Should().HaveCount(40, "20 страниц × 2 попытки: усечение — отказ, а не частичная публикация");
+        rig.Published.Should().BeEmpty("частичная сумма по id не публикуется");
+        err.ToString().Should().Contain("Стоимость не появилась за отведённое время: req-0");
+    }
+
+    [Fact]
+    public async Task HasMoreБезКурсора_РовноОдинЗапросНаСтраницу_НайденныеОпубликованы()
+    {
+        // Хвост ревью R-S-SPEND-5, п. m5: has_more=true с пустым next_cursor и повторяющийся
+        // курсор — разборщик останавливается на обрыве хвоста, а не крутится до MaxPages.
+        var handler = new BatchHandler((ids, call, _) => call switch
+        {
+            1 => Ok(ids.Take(1), ",\"has_more\":true,\"next_cursor\":\"c2\""),
+            2 => Ok(ids.Skip(1), ",\"has_more\":true,\"next_cursor\":\"c2\""), // курсор повторяется
+            _ => Ok([], ",\"has_more\":true,\"next_cursor\":\"\""), // has_more без курсора — стоп
+        });
+        var rig = MakeRig(handler);
+        rig.Svc.Track("s-1", "req-1", Nov1);
+        rig.Svc.Track("s-1", "req-2", Nov1);
+
+        (await rig.WaitAsync(2)).Should().BeTrue("обрыв хвоста пагинации не теряет найденное");
+        handler.Calls.Should().HaveCount(3, "стоп на обрыве хвоста, не цикл до MaxPages");
+        rig.Usd["req-1"].Should().BeApproximately(0.02, 1e-9);
+        rig.Usd["req-2"].Should().BeApproximately(0.03, 1e-9);
+    }
+
+    [Fact]
+    public async Task ПачкаСIdПоВремениВызывающего_УходитСОкномПоОбоимВременам()
+    {
+        // Хвост ревью R-S-SPEND-5, п. m3: окно строется явно по timed-части пачки. v4-id с
+        // finishedAtMs — id с известным временем (ResolveGenerationMs берёт время вызывающего),
+        // он в пачке с v7-id и обязан попадать в окно наравне с ним.
+        var handler = new BatchHandler((ids, _, _) => Ok(ids));
+        var rig = MakeRig(handler);
+        var gen2 = Nov1 + 3_600_000;
+        rig.Svc.Track("s-1", "req-1", Nov1);
+        rig.Svc.Track("s-1", "018f0000-0000-4000-8000-000000000000", gen2);
+
+        (await rig.WaitAsync(2)).Should().BeTrue();
+        handler.Calls.Should().HaveCount(1, "оба id с известным временем — одна пачка");
+        var (start, end) = WindowOf(handler.Queries[0]);
+        var gen1 = DateTimeOffset.FromUnixTimeMilliseconds(Nov1);
+        var g2 = DateTimeOffset.FromUnixTimeMilliseconds(gen2);
+        gen1.Should().BeOnOrAfter(start).And.BeBefore(end, "время v7-id в окне");
+        g2.Should().BeOnOrAfter(start).And.BeBefore(end, "время вызывающего v4-id в окне");
     }
 
     [Fact]

@@ -158,43 +158,78 @@ public class FalCostService : IFalRequestCost
 
     // Разборщик очереди бэкфилла: один на процесс, живёт, пока в очереди есть id. Выбирает
     // созревшие id, режет на пачки и отправляет по одной (гейт и интервал — в SendBillingAsync).
+    // Тело обёрнуто в try/finally (хвост ревью R-S-SPEND-5, п. m1): любое исключение вне
+    // собственного try пачки (сбойный возврат в очереди, невалидная нарезка) не должно оставить
+    // _processorRunning == true — иначе Track никогда не запустит разборщика, а id будут
+    // копиться в очереди навсегда. В finally флаг гасится при любом выходе; несданные пачки
+    // возвращаются в очередь, непустая очередь перезапускает разборщик.
     private async Task ProcessQueueAsync()
     {
-        if (CollectWindowMs > 0) await Task.Delay(CollectWindowMs);
-        while (true)
+        // Id, взятые из очереди и ещё не переданные в работу: при сбое возвращаются в неё (m1).
+        List<PendingCost>? taken = null;
+        List<List<PendingCost>>? pending = null;
+        try
         {
-            List<PendingCost> due;
-            long waitMs = 0;
+            if (CollectWindowMs > 0) await Task.Delay(CollectWindowMs);
+            while (true)
+            {
+                List<PendingCost> due;
+                long waitMs = 0;
+                lock (_queueLock)
+                {
+                    if (_queue.Count == 0) return; // штатный выход: флаг гасится в finally
+                    var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    due = _queue.Where(p => p.DueAtMs <= now).ToList();
+                    if (due.Count == 0) waitMs = _queue.Min(p => p.DueAtMs) - now;
+                    else _queue.RemoveAll(p => p.DueAtMs <= now);
+                }
+                if (due.Count == 0)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(waitMs, QueuePollSliceMs)));
+                    continue;
+                }
+                taken = due;
+                var batches = BuildBatches(due);
+                for (var k = 0; k < batches.Count; k++)
+                {
+                    // Пока пачка в работе, она и все за ней — «несданные»: их вернёт finally.
+                    pending = batches.Skip(k).ToList();
+                    try
+                    {
+                        await ProcessBatchAsync(batches[k]);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Сбой разбора не должен ронять разборщик и терять id очереди.
+                        Console.Error.WriteLine($"[FalCost] Сбой обработки пачки ({batches[k].Count} id): {ex.Message}");
+                        Reschedule(batches[k]);
+                    }
+                    // Пачка передана в работу (опубликована или возвращена внутри ProcessBatchAsync).
+                    pending = batches.Skip(k + 1).ToList();
+                }
+                taken = null;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[FalCost] Сбой разборщика очереди: {ex.Message}");
+        }
+        finally
+        {
+            // Возврат несданного в очередь (m1): попытка считается потраченной, следующий срок —
+            // по бэкоффу id, поэтому устойчивая причина сбоя не крутит перезапуск по горячему.
+            if (pending is not null) SafeReschedule(pending.SelectMany(b => b).ToList());
+            else if (taken is not null) SafeReschedule(taken);
+            // Флаг гасится при любом выходе; непустую очередь берёт на себя новый разборщик —
+            // тот же порядок, что в Track, чтобы не поднять двух одновременно.
+            bool restart;
             lock (_queueLock)
             {
-                if (_queue.Count == 0)
-                {
-                    _processorRunning = false;
-                    return;
-                }
-                var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                due = _queue.Where(p => p.DueAtMs <= now).ToList();
-                if (due.Count == 0) waitMs = _queue.Min(p => p.DueAtMs) - now;
-                else _queue.RemoveAll(p => p.DueAtMs <= now);
+                _processorRunning = false;
+                if (_queue.Count > 0) { _processorRunning = true; restart = true; }
+                else restart = false;
             }
-            if (due.Count == 0)
-            {
-                await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(waitMs, QueuePollSliceMs)));
-                continue;
-            }
-            foreach (var batch in BuildBatches(due))
-            {
-                try
-                {
-                    await ProcessBatchAsync(batch);
-                }
-                catch (Exception ex)
-                {
-                    // Сбой разбора не должен ронять разборщик и терять id очереди.
-                    Console.Error.WriteLine($"[FalCost] Сбой обработки пачки ({batch.Count} id): {ex.Message}");
-                    Reschedule(batch);
-                }
-            }
+            if (restart) _ = Task.Run(ProcessQueueAsync);
         }
     }
 
@@ -224,9 +259,15 @@ public class FalCostService : IFalRequestCost
 
     private async Task ProcessBatchAsync(List<PendingCost> batch)
     {
-        var minGen = batch.Min(p => p.GenerationMs);
-        var maxGen = batch.Max(p => p.GenerationMs);
-        var (startParam, endParam) = BuildWindowParams(minGen, maxGen);
+        // Окно строится явно по timed-части пачки (хвост ревью R-S-SPEND-5, п. m3): наличие окна
+        // должно определяться наличием времени в пачке, а не семантикой Min/Max по nullable над
+        // всей пачкой. Пачка без времени — без окна (прежнее поведение: дефолт API −24ч); пачка с
+        // временем — окно обязательно. Сейчас BuildBatches разносит timed и untimed, но связь
+        // держится здесь, а не в согласованности нарезки.
+        var timed = batch.Where(p => p.GenerationMs is not null).ToList();
+        var (startParam, endParam) = timed.Count == 0
+            ? ((string?)null, (string?)null)
+            : BuildWindowParams(timed.Min(p => p.GenerationMs), timed.Max(p => p.GenerationMs));
         BatchFetch fetch;
         try
         {
@@ -278,6 +319,20 @@ public class FalCostService : IFalRequestCost
             }
             p.DueAtMs = now + BackoffSeconds[p.Attempt] * 1000L;
             lock (_queueLock) _queue.Add(p);
+        }
+    }
+
+    // Возврат несданного в очереди из finally разборщика (m1): сам возврат не должен ронять
+    // завершение разборщика — флаг гасится следом, очередь не остаётся вставшей.
+    private void SafeReschedule(List<PendingCost> items)
+    {
+        try
+        {
+            Reschedule(items);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[FalCost] Возврат пачки в очередь упал: {ex.Message}");
         }
     }
 
@@ -369,7 +424,8 @@ public class FalCostService : IFalRequestCost
     {
         var acc = new Dictionary<string, CostAcc>();
         string? cursor = null;
-        for (var page = 0; page < MaxPages; page++)
+        var page = 0;
+        for (; page < MaxPages; page++)
         {
             var url = _billingEventsUrl + "?" + string.Join("&", ids.Select(i => "request_id=" + Uri.EscapeDataString(i)))
                 + (startParam is null ? "" : $"&start={startParam}")
@@ -390,6 +446,15 @@ public class FalCostService : IFalRequestCost
             else
                 break;
         }
+
+        // Достигнут предел страниц (хвост ревью R-S-SPEND-5, п. m2): молча вернуть неполный набор
+        // значило бы потерять цены с непросмотренных страниц — id ушли бы в missing, снова
+        // натыкались бы на те же MaxPages страниц и пропали после бэкоффа. Неполная страница —
+        // не только про недостающие id: события найденного id могут продолжаться дальше, а
+        // частичная сумма занижает цену. Отказ пачки — Reschedule, следующая попытка.
+        if (page == MaxPages)
+            throw new InvalidOperationException(
+                $"billing-events: ответ длиннее {MaxPages} страниц (id в запросе: {ids.Count}) — пачка возвращается в очередь");
 
         var found = new Dictionary<string, FalCostMessage>();
         foreach (var (id, a) in acc)

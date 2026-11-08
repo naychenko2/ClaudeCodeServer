@@ -6,7 +6,8 @@ namespace ClaudeHomeServer.Tests.Services;
 /// Перечень «контракт фасада» — единственный источник правды (решения лида 0b942ca6 и 98d2368c):
 /// типы <c>ClaudeHomeServer.Services.Sessions</c>, которые есть в сигнатуре public/internal члена
 /// <c>SessionManager</c> (включая generic-аргументы <c>Task&lt;…&gt;</c> и публичную поверхность таких
-/// записей-результатов — так достижим <c>TurnResult</c>) либо наследуют
+/// записей-результатов — так достижимы ровно <c>TurnResult</c> и <c>ChatVisibilityOutcome</c>, см.
+/// <see cref="ReachableTypes"/>) либо наследуют
 /// <see cref="Exception"/>. Ссылаться на такой тип может ЛЮБОЙ тип Main: допуск выдаётся на тип,
 /// а не на потребителя. Читают два сторожа — правило 4 (<c>SessionCoreShapeGuardTests</c>) и
 /// root-сторож (<c>RootSubsystemBoundaryTests</c>); второго списка не заводим.
@@ -89,15 +90,16 @@ internal static class SessionCoreFacadeContracts
         return result;
     }
 
-    /// <summary>Типы, достижимые из сигнатуры фасада через публичную поверхность (свойства, поля,
-    /// параметры конструкторов) типов <paramref name="coreNamespace"/> и их вложенных типов:
-    /// <c>TurnResult</c> не стоит в члене фасада, но это поле <c>SendAndWaitResult.Completed.Result</c>,
-    /// которое вызывающий обязан прочесть. Роли ядра сюда не попадают сами собой: они не торчат из
-    /// публичной поверхности записей-результатов; состав всё равно явный (<see cref="All"/>).</summary>
+    /// <summary>Сигнатура фасада плюс payload-типы его собственных контрактов: один шаг по публичным
+    /// свойствам и полям (не конструкторам) корней, которые одновременно стоят в сигнатуре фасада и в
+    /// <see cref="All"/>, и их вложенных не-компиляторных типов. Так достижимы ровно два типа:
+    /// <c>TurnResult</c> (<c>SendAndWaitResult.Completed.Result</c>) и <c>ChatVisibilityOutcome</c>
+    /// (<c>ChatVisibilityResult.Outcome</c>). Замыкания нет: роль, шов или тип-данные ядра через
+    /// публичную поверхность роли в контракт не попадают.</summary>
     internal static HashSet<Type> ReachableTypes(Type facade, string coreNamespace)
     {
         var seen = SignatureTypes(facade);
-        var queue = new Queue<Type>(seen.Where(t => t.Namespace == coreNamespace));
+        var roots = seen.Where(t => t.Namespace == coreNamespace && Contains(t)).ToList();
         const BindingFlags pub = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
 
         void Add(Type? t)
@@ -107,20 +109,18 @@ internal static class SessionCoreFacadeContracts
             if (t.IsGenericType) foreach (var a in t.GetGenericArguments()) Add(a);
             while (t.DeclaringType is not null) t = t.DeclaringType;
             if (t.IsGenericType && !t.IsGenericTypeDefinition) t = t.GetGenericTypeDefinition();
-            if (t.Namespace == coreNamespace && seen.Add(t)) queue.Enqueue(t);
+            if (t.Namespace == coreNamespace) seen.Add(t);
         }
 
-        while (queue.Count > 0)
+        foreach (var root in roots)
         {
-            var root = queue.Dequeue();
             var family = new List<Type> { root };
-            family.AddRange(root.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic));
+            family.AddRange(root.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic)
+                .Where(n => !n.IsDefined(typeof(System.Runtime.CompilerServices.CompilerGeneratedAttribute), false)));
             foreach (var t in family)
             {
                 foreach (var p in t.GetProperties(pub)) Add(p.PropertyType);
                 foreach (var f in t.GetFields(pub)) Add(f.FieldType);
-                foreach (var c in t.GetConstructors(pub))
-                    foreach (var p in c.GetParameters()) Add(p.ParameterType);
             }
         }
         return seen;

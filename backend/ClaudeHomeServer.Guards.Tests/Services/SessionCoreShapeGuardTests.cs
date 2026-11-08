@@ -405,7 +405,9 @@ public class SessionCoreShapeGuardTests
     [Fact]
     public void Вложенные_типы_корней_контрактов_фасада_только_record_enum_исключения()
     {
-        var roots = SessionCoreFacadeContracts.All.Keys.Select(n => Main.GetType(n)!).ToList();
+        var roots = SessionCoreFacadeContracts.All.Keys
+            .Select(n => Main.GetType(n) ?? throw new InvalidOperationException($"{n}: типа нет в сборке (устаревшая строка контрактов фасада)"))
+            .ToList();
         roots.SelectMany(r => r.GetNestedTypes(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic))
             .Should().NotBeEmpty("SendAndWaitResult несёт вложенные Busy/Queued/…: иначе проверка вакуумная");
         SessionCoreFacadeContracts.NestedShapeViolations(roots).Should().BeEmpty();

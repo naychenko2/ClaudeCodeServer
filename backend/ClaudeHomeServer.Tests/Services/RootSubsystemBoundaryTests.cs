@@ -302,11 +302,13 @@ public class RootSubsystemBoundaryTests
         "ClaudeHomeServer.Services.Tts.TtsVoiceCatalog+VoiceInfo",
         "ClaudeHomeServer.Services.Tts.TtsVoiceCatalog+Gender",
         // Хвост линии ядра S3: типы Services.Sessions тут НЕ открываем ни префиксом, ни точечно. Контракты
-        // фасада (тип в сигнатуре члена SessionManager либо наследник Exception) разрешены веткой
-        // SessionCoreFacadeContracts в цикле ниже — один перечень с правилом 4 SessionCoreShapeGuardTests
-        // (решение лида 98d2368c), своего списка здесь нет. Роли ядра и данные ядра (QueuedMessage —
-        // контракт фасада, PendingQueueFile — данные) остаются запрещены: ядро сессий — не «общая
-        // инфраструктура», а машина хода; вход к ней root-типов — через фасад SessionManager.
+        // фасада (тип в сигнатуре public/internal члена SessionManager, наследник Exception, либо ровно
+        // два payload-типа собственных контрактов — TurnResult в SendAndWaitResult.Completed.Result и
+        // ChatVisibilityOutcome в ChatVisibilityResult.Outcome, см. SessionCoreFacadeContracts.ReachableTypes)
+        // разрешены веткой SessionCoreFacadeContracts в цикле ниже — один перечень с правилом 4
+        // SessionCoreShapeGuardTests (решение лида 98d2368c), своего списка здесь нет. Роли ядра, швы и
+        // данные ядра (QueuedMessage — контракт фасада, PendingQueueFile — данные) остаются запрещены:
+        // ядро сессий — не «общая инфраструктура», а машина хода; вход к ней root-типов — через фасад SessionManager.
     };
 
     /// <summary>Корневые инфраструктурные слоны, исключённые из проверки (и как

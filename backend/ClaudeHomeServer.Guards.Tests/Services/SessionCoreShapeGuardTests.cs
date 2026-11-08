@@ -231,10 +231,11 @@ public class SessionCoreShapeGuardTests
 
     internal static HashSet<string> FacadeTopLevelNames(string facadeSource) =>
         // Raw-строки и комментарии вырезаются до разбора: «объявление» в колонке 0 внутри них — не объявление.
-        // Атрибут допускает строковые литералы с «]» и вложенные скобки в аргументе: [Obsolete("see Foo[0]")],
-        // [Foo(new[]{1})] — вложенность держит балансирующая группа d.
+        // Атрибут допускает строковые и char-литералы с «]» и вложенные скобки в аргументе: [Obsolete("see Foo[0]")],
+        // [Foo(']')], [Foo(new[]{1})] — вложенность держит балансирующая группа d, а «]» внутри литерала
+        // не закрывает атрибут: литерал разбирается своей альтернативой целиком.
         Regex.Matches(StripRawStringsAndComments(facadeSource),
-                @"^(?:\[(?:[^\[\]\r\n""]|""(?:[^""\\\r\n]|\\.)*""|(?<d>\[)|(?<-d>\]))*(?(d)(?!))\]\s*)*(?:public|internal)\s+(?:(?:sealed|static|abstract|partial|readonly)\s+)*(?:class|record(?:\s+(?:class|struct))?|struct|enum|interface)\s+(\w+)",
+                @"^(?:\[(?:[^\[\]\r\n""']|""(?:[^""\\\r\n]|\\.)*""|'(?:\\.|[^'\\\r\n])'|(?<d>\[)|(?<-d>\]))*(?(d)(?!))\]\s*)*(?:public|internal)\s+(?:(?:sealed|static|abstract|partial|readonly)\s+)*(?:class|record(?:\s+(?:class|struct))?|struct|enum|interface)\s+(\w+)",
                 RegexOptions.Multiline)
             .Select(m => m.Groups[1].Value)
             .ToHashSet();
@@ -658,6 +659,9 @@ public class SessionCoreShapeGuardTests
         // «]» в код-аргументе атрибута (массив, вложенный массив) не выбрасывает объявление.
         FacadeTopLevelNames("[Foo(new[]{1})] public class ArrAttr {}\n[Foo(new[]{new[]{1}}), Bar] internal class NestedArr {}")
             .Should().BeEquivalentTo("ArrAttr", "NestedArr");
+        // Тот же класс тихого пропуска в char-форме: «]» внутри char-литерала не «закрывает» атрибут.
+        FacadeTopLevelNames("[Foo(']')] public class CharAttr {}\n[Bar('\\'')] internal class QuoteChar {}")
+            .Should().BeEquivalentTo("CharAttr", "QuoteChar");
         FacadeConditionalDirectives("#if false\npublic class Hidden {}\n  #endif\n#region R").Should()
             .BeEquivalentTo("#if false", "#endif");
     }
@@ -877,7 +881,7 @@ public class SessionCoreShapeGuardTests
     public void Самопроверка_правило5_краснеет_на_IServiceProvider_в_сторе()
     {
         // Мутация из постановки: временный IServiceProvider в SessionStore должен покрасить правило 5.
-        // SessionStore не может быть изменён в тесте, поэтому нарушитель носит то же имя-роль без права на провайдер.
+        // SessionStore не может быть изменён в тесте, поэтому нарушитель — синтетическая роль вне allow-list с IServiceProvider.
         Rule5ServiceProviderOnlyAllowListed([typeof(FakeStoreWithProvider)]).Should().ContainSingle();
         Rule5ServiceProviderOnlyAllowListed([typeof(FakeProvider)]).Should().ContainSingle();
     }
@@ -962,6 +966,12 @@ public class SessionCoreShapeGuardTests
         Rule5ServiceProviderOnlyAllowListed([typeof(ForeignNames.BuiltinMcpContexts)]).Should().ContainSingle();
         Rule5ServiceProviderOnlyAllowListed([typeof(BuiltinMcpContexts)]).Should().BeEmpty(
             "настоящая роль из allow-list проходит");
+        // Живость строки allow-list: BeEmpty выше зелёна и когда роль перестала брать провайдер
+        // (нарушений просто нет) — поэтому отдельно: реальная роль обязана иметь параметр IServiceProvider.
+        Ctors(typeof(BuiltinMcpContexts)).SelectMany(c => c.GetParameters())
+            .Should().Contain(p => p.ParameterType == typeof(IServiceProvider),
+                "строка allow-list живая: BuiltinMcpContexts (BuiltinMcpContexts.cs:47) берёт IServiceProvider "
+                + "в конструкторе — иначе допуск правила 5 ничего не охраняет");
     }
 
     [Fact]

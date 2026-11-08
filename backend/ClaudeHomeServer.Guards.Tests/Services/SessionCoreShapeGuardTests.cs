@@ -230,6 +230,40 @@ public class SessionCoreShapeGuardTests
             .Select(m => m.Groups[1].Value)
             .ToHashSet();
 
+    /// <summary>Ключи индексаторных инициализаторов <c>Dictionary&lt;string, string&gt; Имя = new() { ["ключ"] = … }</c>
+    /// по тексту исходника: имя словаря → ключи в порядке объявления, с повторами. Индексатор при
+    /// повторе ключа молча перезаписывает значение, поэтому рантайм-набор <c>Keys</c> дубля не видит.
+    /// Ключ — литерал, допускается префикс <c>Ns +</c> (SessionCoreFacadeContracts).</summary>
+    internal static Dictionary<string, List<string>> InitializerKeys(string source)
+    {
+        var result = new Dictionary<string, List<string>>();
+        foreach (Match d in Regex.Matches(source,
+                     @"Dictionary<string,\s*string>\s+(\w+)\s*=\s*new\(\)\s*\{(.*?)\r?\n\s*\};", RegexOptions.Singleline))
+        {
+            var keys = Regex.Matches(d.Groups[2].Value, @"^\s*\[\s*(?:\w+\s*\+\s*)?""([^""]+)""\s*\]\s*=", RegexOptions.Multiline)
+                .Select(m => m.Groups[1].Value).ToList();
+            result[d.Groups[1].Value] = keys;
+        }
+        return result;
+    }
+
+    internal static List<string> DuplicateInitializerKeys(string source) =>
+        InitializerKeys(source)
+            .SelectMany(kv => kv.Value.GroupBy(k => k).Where(g => g.Count() > 1).Select(g => $"{kv.Key}: {g.Key}"))
+            .ToList();
+
+    private static string ReadGuardsSource(string fileName)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            var file = Path.Combine(dir.FullName, "backend", "ClaudeHomeServer.Guards.Tests", "Services", fileName);
+            if (File.Exists(file)) return File.ReadAllText(file);
+            dir = dir.Parent;
+        }
+        throw new InvalidOperationException("Не найден " + fileName + ": подъём от " + AppContext.BaseDirectory);
+    }
+
     private static string ReadFacadeSource()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
@@ -320,6 +354,31 @@ public class SessionCoreShapeGuardTests
     [Fact]
     public void Ядро_не_ссылается_на_типы_фасада_вложенные_и_top_level() =>
         CoreNoFacadeRefs(CoreTypes(), FacadeTopLevelTypes(ReadFacadeSource())).Should().BeEmpty();
+
+    [Fact]
+    public void Словари_allow_list_без_дублей_ключей()
+    {
+        var dups = DuplicateInitializerKeys(ReadGuardsSource("SessionCoreShapeGuardTests.cs"))
+            .Concat(DuplicateInitializerKeys(ReadGuardsSource("SessionCoreFacadeContracts.cs"))).ToList();
+        dups.Should().BeEmpty("индексатор при повторе ключа молча затирает причину прежней строки: " + string.Join("; ", dups));
+    }
+
+    [Fact]
+    public void Самопроверка_поиск_дублей_ключей_не_вакуумный_и_ловит_повтор()
+    {
+        // Не вакуумно: на реальных файлах разобраны все словари с непустыми ключами.
+        var own = InitializerKeys(ReadGuardsSource("SessionCoreShapeGuardTests.cs"));
+        own.Keys.Should().Contain(["CoreCompositionRoots", "CoreDataReferrerAllowList", "CoreDataContracts", "ServiceProviderAllowList"]);
+        own["CoreDataReferrerAllowList"].Should().Contain("ClaudeHomeServer.Services.ChatHistoryService");
+        InitializerKeys(ReadGuardsSource("SessionCoreFacadeContracts.cs"))["All"].Should().Contain("QueuedMessage");
+
+        // Синтетический повтор, в том числе с префиксом Ns +, обязан найтись с указанием словаря и ключа.
+        const string synthetic = "static readonly Dictionary<string, string> Demo = new()\n    {\n"
+            + "        [\"A.B\"] = \"1\",\n        [Ns + \"C\"] = \"2\",\n        [\"A.B\"] = \"3\",\n        [Ns + \"C\"] = \"4\",\n    };\n";
+        DuplicateInitializerKeys(synthetic).Should().BeEquivalentTo(["Demo: A.B", "Demo: C"]);
+        DuplicateInitializerKeys(synthetic.Replace("[\"A.B\"] = \"3\",", "[\"X\"] = \"3\",").Replace("[Ns + \"C\"] = \"4\",", "[Ns + \"Y\"] = \"4\","))
+            .Should().BeEmpty();
+    }
 
     [Fact]
     public void Разбор_файла_фасада_не_вакуумный_и_не_видит_типов_ядра()

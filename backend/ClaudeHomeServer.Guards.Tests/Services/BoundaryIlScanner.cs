@@ -13,7 +13,9 @@ namespace ClaudeHomeServer.Tests.Services;
 ///
 /// Сканирует IL-опкоды методов (call/callvirt/ldsfld/ldfld/ldtoken/newobj/castclass/
 /// isinst/box/newarr/initobj), generic-аргументы инстанцированных методов
-/// (включая <c>sp.GetRequiredService&lt;T&gt;()</c>) и типы локальных переменных.
+/// (включая <c>sp.GetRequiredService&lt;T&gt;()</c>), типы локальных переменных и
+/// enum-аргументы, переданные константой (<c>kind: PendingKind.Report</c> — по
+/// позиции аргумента в сигнатуре вызова, см. <see cref="WalkBody"/>).
 /// Из типов извлекаются declaring-типы вызванных методов/полей, операнды и
 /// generic-аргументы. Без зависимостей: <c>MethodBody.GetILAsByteArray()</c> +
 /// ручной обход опкодов + <c>Module.ResolveMember/ResolveType</c> — всё из BCL.
@@ -30,6 +32,13 @@ internal static class BoundaryIlScanner
     private static readonly OpCode[] SingleByte = new OpCode[256];
     private static readonly OpCode[] TwoByte = new OpCode[256];
 
+    // Опкоды, кладущие на стек КОНСТАНТУ: ldc.* и ldstr. Нужны для атрибуции
+    // enum-констант: обращение к константе enum компилируется в ldc.i4 без
+    // метадата-токена (проверено дампом IL, задача fada2814), и единственный её
+    // след в сборке — позиция аргумента в сигнатуре вызываемого метода.
+    private static readonly bool[] ConstPushSingle = new bool[256];
+    private static readonly bool[] ConstPushTwo = new bool[256];
+
     static BoundaryIlScanner()
     {
         // Files — отдельная сборка (ADR-016, задача 4.1): сканер зовут все сторожа границ,
@@ -40,15 +49,21 @@ internal static class BoundaryIlScanner
         {
             if (f.GetValue(null) is not OpCode op) continue;
             var v = unchecked((ushort)op.Value);
-            if (op.Size == 1) SingleByte[v & 0xFF] = op;
-            else TwoByte[v & 0xFF] = op;
+            // Имя именно op.Name (мнемоника IL: «ldc.i4.2»), а не f.Name: поля OpCodes
+            // названы Ldc_I4_2 / Ldstr — по имени поля таблица осталась бы пустой.
+            var name = op.Name;
+            var constPush = name is not null
+                && (name.StartsWith("ldc.", StringComparison.Ordinal) || name == "ldstr");
+            if (op.Size == 1) { SingleByte[v & 0xFF] = op; ConstPushSingle[v & 0xFF] = constPush; }
+            else { TwoByte[v & 0xFF] = op; ConstPushTwo[v & 0xFF] = constPush; }
         }
     }
 
     /// <summary>Все типы, «упомянутые» в теле метода: declaring-типы вызванных методов
     /// и полей, операнды ldtoken/newobj/castclass/isinst/box/newarr/initobj,
-    /// generic-аргументы (в т.ч. <c>GetRequiredService&lt;T&gt;</c>),
-    /// типы локальных переменных.</summary>
+    /// generic-аргументы (в т.ч. <c>GetRequiredService&lt;T&gt;</c>), типы локальных
+    /// переменных и enum-типы аргументов, переданных константой
+    /// (<c>kind: PendingKind.Report</c>) — см. <see cref="WalkBody"/>.</summary>
     public static IEnumerable<Type> TypesFromBody(MethodBase method)
     {
         MethodBody? body;
@@ -61,8 +76,8 @@ internal static class BoundaryIlScanner
 
         var module = method.Module;
         var (typeArgs, methodArgs) = GenericContext(method);
-        foreach (var token in MetadataTokens(body))
-            foreach (var t in ResolveToken(module, token, typeArgs, methodArgs))
+        foreach (var use in WalkBody(body, method, typeArgs, methodArgs))
+            foreach (var t in ResolveUse(module, use, typeArgs, methodArgs))
                 yield return t;
     }
 
@@ -75,14 +90,9 @@ internal static class BoundaryIlScanner
         catch { yield break; }
         if (body is null) yield break;
 
-        var module = method.Module;
         var (typeArgs, methodArgs) = GenericContext(method);
-        foreach (var token in MetadataTokens(body))
-        {
-            MethodBase? called = null;
-            try { called = module.ResolveMethod(token, typeArgs, methodArgs); } catch { }
-            if (called is not null) yield return called;
-        }
+        foreach (var use in WalkBody(body, method, typeArgs, methodArgs))
+            if (use.Member is MethodBase called) yield return called;
     }
 
     private static (Type[]? TypeArgs, Type[]? MethodArgs) GenericContext(MethodBase method)
@@ -93,13 +103,68 @@ internal static class BoundaryIlScanner
         return (typeArgs, methodArgs);
     }
 
-    // Метаданные-операнды (field/method/type/tok) тела метода по порядку опкодов
-    private static IEnumerable<int> MetadataTokens(MethodBody body)
+    /// <summary>Что дал один опкод тела метода: метадата-токен (0 — его нет), уже
+    /// разрешённый callee для method-опкодов (чтобы токен не разрешался второй раз)
+    /// и enum-типы тех параметров вызова, на которые положена константа.</summary>
+    private readonly struct IlUse
+    {
+        public readonly int Token;
+        public readonly MemberInfo? Member;
+        public readonly Type[] ConstArgs;
+        public IlUse(int token, MemberInfo? member, Type[]? constArgs)
+        {
+            Token = token;
+            Member = member;
+            ConstArgs = constArgs ?? Array.Empty<Type>();
+        }
+    }
+
+    // Что опкод кладёт на вершину стека значений: ничего / константу (ldc.*, ldstr) /
+    // значение из переменного источника / «модель не знает».
+    private const int PushNone = -1;
+    private const int PushUnknown = -2;
+    private const int PushConst = 1;
+    private const int PushValue = 2;
+
+    /// <summary>
+    /// Один обход IL тела метода: метаданные-операнды (field/method/type/tok) по порядку
+    /// опкодов — как раньше — плюс атрибуция enum-констант.
+    ///
+    /// Зачем вторая часть: обращение к константе enum не оставляет в IL метадата-токена
+    /// вовсе — оно компилируется в <c>ldc.i4 &lt;число&gt;</c> (проверено дампом тел,
+    /// задача <c>fada2814</c>), и ни <c>ResolveMember</c>, ни <c>ResolveType</c> его не
+    /// видят. Единственный след такого обращения — позиция аргумента: если значение для
+    /// параметра <c>enum</c>-типы положено <c>ldc.*</c>, это и есть константа этого enum.
+    /// Поэтому обход ведёт стек значений: длину и происхождение каждого значения
+    /// (константа/нет) по собственным метаданным опкодов (<c>StackBehaviourPop</c> /
+    /// <c>StackBehaviourPush</c>) и по сигнатуре разрешённого callee для
+    /// <c>call/callvirt/newobj</c> (там же «this» экземплярного вызова).
+    ///
+    /// Консервативность важнее полноты: после опкода, который модель не умеет
+    /// (<c>Varpop</c> вне разобранного вызова, опкод не найден в таблице), позиции
+    /// аргументов дальше по телу не считаются вовсе — чтобы не придумывать ребро,
+    /// которого нет. Значение, происхождение которого непонятно, считается НЕ
+    /// константой: лишний допуск сторожу дороже пропущенного раза. Так же отброшен
+    /// подставленный компилятором <c>default</c> optional-параметра: он выглядит в IL
+    /// идентично явной константе, но в исходниках обращения к типу нет (см.
+    /// <see cref="ConstEnumArgs"/>).
+    ///
+    /// Что остаётся невидимым для IL и закрыто другими обходами: сравнение и приведение
+    /// типа (<c>kind == PendingKind.Report</c>) не оставляют типа в сборке вообще —
+    /// такое обращение видно по сигнатуре метода или по типу локальной переменной
+    /// (<see cref="TypesFromSignatures"/>, <c>LocalVariables</c>).
+    /// </summary>
+    private static IEnumerable<IlUse> WalkBody(MethodBody body, MethodBase method, Type[]? typeArgs, Type[]? methodArgs)
     {
         byte[]? il;
         try { il = body.GetILAsByteArray(); }
         catch { yield break; }
         if (il is null) yield break;
+
+        var module = method.Module;
+        var returnsValue = method is not MethodInfo self || self.ReturnType != typeof(void);
+        var stack = new List<(int Kind, long Value)>();
+        var positionsUnknown = false;
 
         var pos = 0;
         while (pos < il.Length)
@@ -113,17 +178,25 @@ internal static class BoundaryIlScanner
             }
             else op = SingleByte[b];
 
+            int token = 0;
+            long operand = 0;
             switch (op.OperandType)
             {
                 case OperandType.InlineNone: break;
                 case OperandType.ShortInlineBrTarget:
-                case OperandType.ShortInlineI:
                 case OperandType.ShortInlineVar: pos += 1; break;
+                case OperandType.ShortInlineI:
+                    if (pos >= il.Length) { pos = il.Length; break; }
+                    operand = (sbyte)il[pos]; pos += 1; break;
                 case OperandType.InlineVar: pos += 2; break;
-                case OperandType.InlineBrTarget:
+                case OperandType.InlineBrTarget: pos += 4; break;
                 case OperandType.InlineI:
+                    if (pos + 4 > il.Length) { pos = il.Length; break; }
+                    operand = BitConverter.ToInt32(il, pos); pos += 4; break;
                 case OperandType.ShortInlineR: pos += 4; break;
                 case OperandType.InlineI8:
+                    if (pos + 8 > il.Length) { pos = il.Length; break; }
+                    operand = BitConverter.ToInt64(il, pos); pos += 8; break;
                 case OperandType.InlineR: pos += 8; break;
                 case OperandType.InlineSwitch:
                     {
@@ -140,23 +213,175 @@ internal static class BoundaryIlScanner
                 case OperandType.InlineTok:
                     {
                         if (pos + 4 > il.Length) { pos = il.Length; break; }
-                        var token = BitConverter.ToInt32(il, pos);
+                        token = BitConverter.ToInt32(il, pos);
                         pos += 4;
-                        yield return token;
                         break;
                     }
                 default: pos = il.Length; break;
             }
+
+            MemberInfo? member = null;
+            if (token != 0 && op.OperandType == OperandType.InlineMethod)
+            {
+                try { member = module.ResolveMethod(token, typeArgs, methodArgs); } catch { }
+            }
+
+            // Значение константы нужно, чтобы отличить явную константу от подставленного
+            // компилятором значения по умолчанию (см. ConstEnumArgs).
+            long constValue = 0;
+            if (IsConstPush(op))
+                constValue = op.OperandType switch
+                {
+                    OperandType.ShortInlineI or OperandType.InlineI or OperandType.InlineI8 => operand,
+                    // ldc.i4.m1 (0x15) … ldc.i4.8 (0x1E): значение зашито в самом опкоде
+                    // и идёт подряд от 0x15 → −1.
+                    OperandType.InlineNone => op.Value - 0x16,
+                    _ => 0,
+                };
+
+            Type[]? constArgs = null;
+            // Признак «опкода нет в таблице» — Size: у реального опкода он 1 или 2,
+            // у default(OpCode) — 0. По Value судить нельзя: nop — это op.Value == 0,
+            // а nop компилятор ставит в каждом теле.
+            if (op.Size == 0) positionsUnknown = true;
+            else if (!positionsUnknown)
+            {
+                var (pops, pushed, value) = StackEffect(op, member, stack, returnsValue, constValue);
+                if (pops < 0 || pushed == PushUnknown) positionsUnknown = true;
+                else
+                {
+                    if (member is MethodBase callee &&
+                        (op == OpCodes.Call || op == OpCodes.Callvirt || op == OpCodes.Newobj))
+                        constArgs = ConstEnumArgs(callee, stack);
+                    ApplyStack(stack, pops, pushed, value);
+                }
+            }
+
+            if (token != 0 || constArgs is { Length: > 0 })
+                yield return new IlUse(token, member, constArgs);
         }
     }
 
-    private static IEnumerable<Type> ResolveToken(Module module, int token, Type[]? typeArgs, Type[]? methodArgs)
+    /// <summary>Стек значений для вызова: если значение, положенное на параметр
+    /// <c>enum</c>-типы, — константа, это обращение к её типу. Позиции берутся сверху
+    /// стека по числу параметров (сигнатурный порядок аргументов — порядок кладки),
+    /// «this» экземпляра над параметрами не стоит. Если значений меньше, чем параметров,
+    /// позиции не считаются вовсе: какой аргумент опущен — из IL не видно.</summary>
+    private static Type[]? ConstEnumArgs(MethodBase callee, List<(int Kind, long Value)> stack)
     {
-        MemberInfo? member = null;
-        try { member = module.ResolveMember(token, typeArgs, methodArgs); }
-        catch
+        var ps = callee.GetParameters();
+        if (ps.Length == 0 || stack.Count < ps.Length) return null;
+
+        List<Type>? found = null;
+        var base_ = stack.Count - ps.Length;
+        for (var i = 0; i < ps.Length; i++)
         {
-            try { member = module.ResolveType(token, typeArgs, methodArgs); } catch { }
+            var slot = stack[base_ + i];
+            var pt = ps[i].ParameterType;
+            if (!pt.IsEnum || slot.Kind != PushConst) continue;
+            // Значение по умолчанию optional-параметра компилятор печёт той же константой
+            // на месте вызова (ldc.i4 0 для PendingKind.Agent): в исходниках такого
+            // обращения нет, и ребром оно не является. Отличаем по совпадению с
+            // объявленным default — иначе каждая ленивая запись о необязательном
+            // параметре стала бы допуском в allow-list.
+            if (IsInlinedDefault(ps[i], slot.Value)) continue;
+            (found ??= new List<Type>()).Add(pt);
+        }
+        return found?.ToArray();
+    }
+
+    private static bool IsInlinedDefault(ParameterInfo p, long constValue)
+    {
+        if (!p.IsOptional || !p.HasDefaultValue) return false;
+        try { return p.DefaultValue is { } d && Convert.ToInt64(d) == constValue; }
+        catch { return true; } // сравнить не смогли → не выдумываем ребро
+    }
+
+    private static (int Pops, int Pushed, long Value) StackEffect(
+        OpCode op, MemberInfo? member, List<(int Kind, long Value)> stack, bool returnsValue, long constValue)
+    {
+        // Явные случаи, где метаданных опкода мало или они трактуются двусмысленно.
+        if (op == OpCodes.Ret) return (returnsValue ? 1 : 0, PushNone, 0);
+        if (op == OpCodes.Switch) return (1, PushNone, 0); // switch снимает переключаемое значение
+        if (op.Name is "leave" or "leave.s") return (int.MaxValue, PushNone, 0);
+        if (op == OpCodes.Dup) return (0, stack.Count > 0 ? stack[^1].Kind : PushValue, stack.Count > 0 ? stack[^1].Value : 0);
+        if (IsConstPush(op)) return (0, PushConst, constValue);
+
+        // Вызов: арность и «this» — из сигнатуры разрешённого callee.
+        if (member is MethodBase callee && (op == OpCodes.Call || op == OpCodes.Callvirt || op == OpCodes.Newobj))
+        {
+            var args = callee.GetParameters().Length;
+            var thisSlot = op == OpCodes.Callvirt || (op == OpCodes.Call && !callee.IsStatic) ? 1 : 0;
+            var returns = op == OpCodes.Newobj
+                || (callee is MethodInfo rm && rm.ReturnType != typeof(void));
+            return (args + thisSlot, returns ? PushValue : PushNone, 0);
+        }
+
+        var pops = PopCount(op.StackBehaviourPop);
+        return pops < 0 ? (-1, PushUnknown, 0) : (pops, PushOf(op), 0);
+    }
+
+    private static int PushOf(OpCode op)
+    {
+        var b = op.StackBehaviourPush;
+        return b switch
+        {
+            StackBehaviour.Push0 => PushNone,
+            StackBehaviour.Push1 or StackBehaviour.Pushi or StackBehaviour.Pushi8
+                or StackBehaviour.Pushr4 or StackBehaviour.Pushr8 or StackBehaviour.Pushref => PushValue,
+            _ => PushUnknown, // Push1_push1 (кроме разобранного dup), Varpush (разобраны вызовы)
+        };
+    }
+
+    // Сколько значений снимает опкод — по его же метаданным. Имена StackBehaviour вида
+    // «Popi_pop1» описывают снятие по порядку (ближайшее к вершине первым), поэтому
+    // число = количество сегментов. Varpop — только у вызовов (разобраны выше по
+    // сигнатуре callee); всё прочее → -1, и обход перестаёт считать позиции.
+    private static int PopCount(StackBehaviour b) => b switch
+    {
+        StackBehaviour.Pop0 => 0,
+        StackBehaviour.Pop1 or StackBehaviour.Popi or StackBehaviour.Popref => 1,
+        StackBehaviour.Pop1_pop1 or StackBehaviour.Popi_pop1 or StackBehaviour.Popi_popi
+            or StackBehaviour.Popi_popi8 or StackBehaviour.Popi_popr4 or StackBehaviour.Popi_popr8
+            or StackBehaviour.Popref_pop1 or StackBehaviour.Popref_popi => 2,
+        StackBehaviour.Popref_popi_pop1 or StackBehaviour.Popref_popi_popi
+            or StackBehaviour.Popref_popi_popi8 or StackBehaviour.Popref_popi_popr4
+            or StackBehaviour.Popref_popi_popr8 or StackBehaviour.Popref_popi_popref
+            or StackBehaviour.Popi_popi_popi => 3,
+        _ => -1,
+    };
+
+    private static bool IsConstPush(OpCode op)
+    {
+        var v = unchecked((ushort)op.Value);
+        return op.Size == 1 ? ConstPushSingle[v & 0xFF] : ConstPushTwo[v & 0xFF];
+    }
+
+    private static void ApplyStack(List<(int Kind, long Value)> stack, int pops, int pushed, long value)
+    {
+        // «leave» сбрасывает стек до глубины входа в защищённый блок; глубину входа
+        // обход не трекет, поэтому сброс до пустого — консервативно: лишнего значения
+        // не останется, а нехватка приведёт к отказу от атрибуции, а не к ложному ребру.
+        if (pops >= stack.Count) stack.Clear();
+        else stack.RemoveRange(stack.Count - pops, pops);
+        if (pushed == PushConst || pushed == PushValue) stack.Add((pushed, value));
+    }
+
+    private static IEnumerable<Type> ResolveUse(Module module, IlUse use, Type[]? typeArgs, Type[]? methodArgs)
+    {
+        // Атрибутированные enum-типы — уже типы, разворачивать нечего (enum не generic).
+        foreach (var t in use.ConstArgs) yield return t;
+
+        if (use.Token == 0) yield break;
+
+        var member = use.Member;
+        if (member is null)
+        {
+            try { member = module.ResolveMember(use.Token, typeArgs, methodArgs); }
+            catch
+            {
+                try { member = module.ResolveType(use.Token, typeArgs, methodArgs); } catch { }
+            }
         }
         if (member is null) yield break;
 

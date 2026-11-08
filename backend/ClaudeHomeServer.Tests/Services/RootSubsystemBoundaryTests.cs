@@ -305,11 +305,13 @@ public class RootSubsystemBoundaryTests
         // (QueuedMessage, PendingKind, PendingQueue, PendingQueueFile) живут в Services.Sessions
         // (план §1, row «SessionEntry.cs (типы)»). Допуск на QueuedMessage снят: ни один
         // проверяемый root-тип его больше не называет (ChatHistoryService, читающий pending.json,
-        // исключён как backbone). Осталась одна строка — документация реальной ссылки
-        // TaskExecutionService (root, не backbone) на константу PendingKind.Report в вызове
-        // SendOrEnqueueAsync: IL-скан тел обращение к константе enum не видит (проверено снятием
-        // строки — прогон зелёный), поэтому запись держится как описание ребра в исходниках,
-        // в том же составе, что allow-list правила 4 в SessionCoreShapeGuardTests. Префикс
+        // исключён как backbone). Осталась одна строка — реальный шов TaskExecutionService (root,
+        // не backbone) к константе PendingKind.Report в вызове SendOrEnqueueAsync. С задачей
+        // `fada2814` это живой допуск: IL-скан видит константу-аргумент по её позиции в сигнатуре
+        // вызова, и снятие строки красит сторож (проверено в копии мутации: «TaskExecutionService
+        // ссылается на ClaudeHomeServer.Services.Sessions.PendingKind»). До починки запись
+        // держалась как описание ребра в исходниках — скан его не видел. Тот же состав, что
+        // allow-list правила 4 в SessionCoreShapeGuardTests. Префикс
         // `ClaudeHomeServer.Services.Sessions` НЕ открываем: ядро сессий — не «общая
         // инфраструктура», а машина хода; вход к ней root-типов остаётся через фасад SessionManager.
         "ClaudeHomeServer.Services.Sessions.PendingKind",

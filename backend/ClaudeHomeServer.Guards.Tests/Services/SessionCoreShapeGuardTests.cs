@@ -98,7 +98,9 @@ public class SessionCoreShapeGuardTests
             + "Sessions.PendingQueueFile): хранитель файла очереди за ядром, поведения ядра не зовёт",
         ["ClaudeHomeServer.Services.TaskExecutionService"] =
             "зовёт фасад (SendOrEnqueueAsync) и передаёт ему константу PendingKind.Report: "
-            + "к ядро обращается только значением enum",
+            + "к ядро обращается только значением enum. С задачей fada2814 скан видит такую "
+            + "константу по позиции аргумента в сигнатуре вызова — допуск стал живым: снятие "
+            + "этой строки красит правило 4 (проверено в копии мутации)",
         ["ClaudeHomeServer.Controllers.SessionMessagesController"] =
             "зовёт фасад (GetPending) и читает Kind для ответа /pending: данные, не поведение ядра",
     };

@@ -142,4 +142,80 @@ public class IlBoundaryRegressionTests
                 $"ссылка из {probe.Name} живёт только в метаданных (поле/параметр конструктора), " +
                 "и сторож границ обязан её видеть");
     }
+
+    // === Константа enum в теле метода (задача fada2814) ===
+    // Обращение к константе enum не оставляет в IL метадата-токена: оно компилируется
+    // в ldc.i4 <число> (проверено дампом тел), и прежний обход опкодов его не видел.
+    // Значит допуск на такой тип в allow-list сторожа не защищён ничем: снял строку —
+    // прогон зелёный. Это ровно та дыра, из-за которой запись
+    // «ClaudeHomeServer.Services.Sessions.PendingKind» держалась как описание ребра.
+    // Формы ниже — те, что дал дамп реальных тел (аргумент в конце списка, внутри
+    // try/catch, внутри лямбды — её тело живёт в nested-типе), плюс «аргумент перед
+    // вычисляемым»: её в дампе не было, она закрыта на модели стека.
+    private enum ProbeKind { Agent = 0, User = 1, Report = 2 }
+
+    private static class ProbeSink
+    {
+        public static void Take(int x, ProbeKind kind) { }
+        public static void TakeAfter(ProbeKind kind, string s) { }
+        public static void Opt(int x, ProbeKind kind = ProbeKind.Agent) { }
+    }
+
+    private sealed class EnumConstInBodyProbe
+    {
+        public void LastArg(int x) => ProbeSink.Take(x, ProbeKind.Report);
+        public void BeforeComputedArg(int x) => ProbeSink.TakeAfter(ProbeKind.Report, x.ToString());
+        public void InsideTry(int x) { try { ProbeSink.Take(x, ProbeKind.Report); } catch { } }
+        public void InLambda(int x) { Action a = () => ProbeSink.Take(x, ProbeKind.Report); a(); }
+    }
+
+    private sealed class EnumConstDefaultProbe
+    {
+        public void DefaultNotPassed(int x) => ProbeSink.Opt(x);
+    }
+
+    [Fact]
+    public void Scan_НеСчитаетРебромПодставленноеЗначениеПоУмолчанию()
+    {
+        // default optional-параметра компилятор печёт той же константой на месте вызова
+        // (ldc.i4 0 вместо PendingKind.Agent). В исходниках обращения к типу нет —
+        // иначе каждая ленивая запись о необязательном параметре стала бы допуском.
+        BoundaryIlScanner.CollectAllReferencedTypes(typeof(EnumConstDefaultProbe))
+            .Should().NotContain(typeof(ProbeKind),
+                "аргумент не назван в исходниках — это не ребро root→ядро");
+    }
+
+    [Fact]
+    public void Scan_ВидитКонстантуEnumИзТелаМетода()
+    {
+        // Ни сигнатура, ни поля, ни локальные переменные пробника ProbeKind не называют:
+        // тип появляется только как константа-аргумент в теле.
+        BoundaryIlScanner.CollectAllReferencedTypes(typeof(EnumConstInBodyProbe))
+            .Should().Contain(typeof(ProbeKind),
+                "обращение к константе enum в теле метода — реальное ребро; сканер границ " +
+                "обязан видеть его по позиции аргумента в сигнатуре вызова");
+    }
+
+    /// <summary>То же ребро в реальном коде: TaskExecutionService (root) зовёт фасад
+    /// SessionManager с kind: Sessions.PendingKind.Report (TaskExecutionService.cs:2093,
+    /// 2541). До починки сканера это ребро было невидимым для гейта.</summary>
+    [Fact]
+    public void IlScan_ВидитКонстантуEnumЯдраИзТелаRoot()
+    {
+        var asms = AppDomain.CurrentDomain.GetAssemblies()
+            .Where(a => a.GetName().Name is { } n
+                && (n == "ClaudeHomeServer" || n.StartsWith("ClaudeHomeServer.", StringComparison.Ordinal))
+                && !n.EndsWith(".Tests", StringComparison.Ordinal))
+            .ToList();
+
+        var root = Find(asms, "ClaudeHomeServer.Services.TaskExecutionService");
+        var kind = Find(asms, "ClaudeHomeServer.Services.Sessions.PendingKind");
+        Assert.True(root is not null && kind is not null,
+            "типа TaskExecutionService или Sessions.PendingKind нет в сборке — проба не о чём");
+
+        BoundaryIlScanner.CollectAllReferencedTypes(root!)
+            .Should().Contain(kind!,
+                "TaskExecutionService передаёт фасаду константу PendingKind.Report: " +
+                "ребро root→ядро должно быть видно гейту, а не описано комментарием в allow-list");
+    }
 }

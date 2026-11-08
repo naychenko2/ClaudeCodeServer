@@ -117,7 +117,7 @@ public class FalImageService : IImageGenerator
             // Явный потолок чтения тела (свои 180 с, ResponseBodyTimeout). С headers-read клиент
             // сам тело не ограничивает (docs HttpCompletionOption), и без этого токена зависшее
             // тело висело бы до отмены вызывающего. Потолки пофазные: общий предел запроса —
-            // TotalTimeout (заголовки + тело, ≈360 с, как у glif), а не прежние 180 с целиком.
+            // TotalTimeout (заголовки + тело, ровно 360 с), а не прежние 180 с целиком.
             using var body = CancellationTokenSource.CreateLinkedTokenSource(ct);
             body.CancelAfter(ResponseBodyTimeout);
 
@@ -172,13 +172,15 @@ public class FalImageService : IImageGenerator
                 requestId);
             return new ImageGenerationResult([], requestId);
         }
-        catch (TaskCanceledException)
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             // Свой потолок, а не сбой связи: ct вызывающего жив (его отмены разобраны выше), значит
-            // не уложились заголовки (client.Timeout) или тело (ResponseBodyTimeout). Поведение то
-            // же: пустой результат, id остаётся, если ответ был.
+            // не уложились заголовки (client.Timeout) или тело (ResponseBodyTimeout). Фазу выдаёт
+            // id: он берётся из заголовков, так что есть id — не уложилось тело, нет — заголовки.
+            // Поведение то же: пустой результат, id остаётся, если ответ был.
             _logger.LogWarning(
-                "fal генерация не уложилась в потолок ({Headers}с на заголовки + {Body}с на тело, всего ≤{Total}с); id запроса: {RequestId}",
+                "fal генерация не уложилась в потолок фазы {Phase} ({Headers}с на заголовки + {Body}с на тело, предел фаз HTTP-запроса {Total}с); id запроса: {RequestId}",
+                requestId is null ? "заголовков" : "тела",
                 HeadersTimeout.TotalSeconds, ResponseBodyTimeout.TotalSeconds, TotalTimeout.TotalSeconds, requestId);
             return new ImageGenerationResult([], requestId);
         }
@@ -194,8 +196,9 @@ public class FalImageService : IImageGenerator
 
     // Потолки пофазные: с ResponseHeadersRead client.Timeout до тела не дотягивается
     // (docs: HttpCompletionOption), поэтому на приход заголовков и на чтение тела свои 180 с.
-    // Общий предел внешней генерации — сумма, названная одним числом (≈360 с, как TotalTimeout
-    // в GlifImageGenerator).
+    // Предел фаз HTTP-запроса к fal — их сумма, ровно 360 с (180 + 180: CTS тела создаётся сразу
+    // после возврата заголовков, зазора нет). Скачивание картинок сюда не входит: у него свой
+    // потолок (SafeMediaDownloader.Timeout, 60 с).
     private static readonly TimeSpan HeadersTimeout = TimeSpan.FromSeconds(180);
     private static readonly TimeSpan ResponseBodyTimeout = TimeSpan.FromSeconds(180);
     private static readonly TimeSpan TotalTimeout = HeadersTimeout + ResponseBodyTimeout;

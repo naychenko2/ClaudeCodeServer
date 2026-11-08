@@ -1,24 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// К2b (хвост ревью b4e2b922): цепочка 409 → NoteConflictError на РЕАЛЬНОМ api.notes.update.
+// К2b (хвост ревью b4e2b922): цепочка 409 → NoteConflictError на РЕАЛЬНОМ notesApi.notes.update.
 // NoteViewSaveConflict.test.ts подменяет notesApi.update через vi.spyOn — разбор
 // conflictBodyOf(e, 'note_changed') внутри update в тестах не исполнялся ни разу.
 // Здесь наоборот: request() мокаем сервером (та же форма, что настоящий request() в
-// offline.ts — его механизм etagRef тестится там), api.notes.update настоящий,
+// offline.ts — его механизм etagRef тестится там), notesApi.notes.update настоящий,
 // его catch зовёт настоящий conflictBodyOf из lib/offline.
+// Тест доменного api живёт в каталоге домена (хвост ревью R-S5): notesApi и NoteConflictError
+// — локальный импорт ../api; рядом с NoteViewSaveConflict.test.ts, который этот же путь мокает.
 const { request, readStoredToken } = vi.hoisted(() => ({
   request: vi.fn(),
   readStoredToken: vi.fn(() => 'tok'),
 }));
 // request() и readStoredToken() мокаем: тест задаёт поведение сервера. Всё остальное — настоящее.
-vi.mock('../offline', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('../offline')>();
+vi.mock('../../../lib/offline', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../../lib/offline')>();
   return { ...orig, request, readStoredToken };
 });
 
-import { api } from '../api';
-// eslint-disable-next-line module/no-cross-feature-import -- тест проверяет настоящий NoteConflictError из api-модуля фичи (цепочка 409 в update); публичного index.ts у notes нет (баррел заведётся отдельно)
-import { NoteConflictError } from '../../features/notes/api';
+import { notesApi, NoteConflictError } from '../api';
 
 type ReqOpts = { method?: string; body?: string; headers?: Record<string, string>; etagRef?: { etag?: string } };
 
@@ -31,10 +31,10 @@ beforeEach(() => {
   request.mockReset();
 });
 
-describe('api.notes.update — If-Match и 409 (реальная цепочка)', () => {
+describe('notesApi.notes.update — If-Match и 409 (реальная цепочка)', () => {
   it('с ifMatch: If-Match уходит заголовком, URL и тело прежние', async () => {
     request.mockResolvedValue(noteBody);
-    await api.notes.update('n1', { content: 'мой текст' }, '"aaa111"');
+    await notesApi.notes.update('n1', { content: 'мой текст' }, '"aaa111"');
 
     const [url, options] = request.mock.calls[0] as [string, ReqOpts];
     expect(url).toBe('/notes/n1');
@@ -56,7 +56,7 @@ describe('api.notes.update — If-Match и 409 (реальная цепочка)
       },
     }));
 
-    const err = await api.notes.update('n1', { content: 'мой текст' }, '"старый"').catch(e => e);
+    const err = await notesApi.notes.update('n1', { content: 'мой текст' }, '"старый"').catch(e => e);
     expect(err).toBeInstanceOf(NoteConflictError);
     expect(err.status).toBe(409);
     expect(err.code).toBe('note_changed');
@@ -70,7 +70,7 @@ describe('api.notes.update — If-Match и 409 (реальная цепочка)
 
   it('409 с другим кодом — прежняя ошибка, не NoteConflictError', async () => {
     request.mockRejectedValue(Object.assign(new Error('diverged'), { status: 409, body: { code: 'diverged' } }));
-    const err = await api.notes.update('n1', { content: 'мой' }, '"старый"').catch(e => e);
+    const err = await notesApi.notes.update('n1', { content: 'мой' }, '"старый"').catch(e => e);
     expect(err).not.toBeInstanceOf(NoteConflictError);
     expect(err.message).toBe('diverged');
     expect(err.status).toBe(409);
@@ -83,14 +83,14 @@ describe('api.notes.update — If-Match и 409 (реальная цепочка)
     });
 
     const etagOut: { etag?: string } = {};
-    const r = await api.notes.update('n1', { content: 'мой текст' }, '"aaa111"', etagOut);
+    const r = await notesApi.notes.update('n1', { content: 'мой текст' }, '"aaa111"', etagOut);
     expect(etagOut.etag).toBe('"bbb222"');
     expect(r.etag).toBe('"bbb222"');
   });
 
   it('без ifMatch: заголовка If-Match нет — поведение ровно как раньше', async () => {
     request.mockResolvedValue(noteBody);
-    await api.notes.update('n1', { content: 'мой текст' });
+    await notesApi.notes.update('n1', { content: 'мой текст' });
 
     const [, options] = request.mock.calls[0] as [string, ReqOpts];
     expect(options.method).toBe('PUT');
@@ -101,7 +101,7 @@ describe('api.notes.update — If-Match и 409 (реальная цепочка)
     request.mockResolvedValue(noteBody);
 
     const etagOut: { etag?: string } = {};
-    const r = await api.notes.update('n1', { content: 'мой текст' }, '"aaa111"', etagOut);
+    const r = await notesApi.notes.update('n1', { content: 'мой текст' }, '"aaa111"', etagOut);
     expect(etagOut.etag).toBeUndefined();
     expect(r.etag).toBeUndefined();
     expect(r.content).toBe('текст заметки');

@@ -4,19 +4,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // версии, saveContent с ifMatch шлёт If-Match, 409 file_changed становится FileConflictError
 // с полями тела. request() мокаем сервером: заполняет etagRef и бросает ошибку с status/body
 // — той же формой, что настоящий request() в offline.ts (его механизм etagRef тестится там).
+// Тест доменного api живёт в каталоге домена (хвост ревью R-S5): filesApi и FileConflictError
+// — локальный импорт ../api; мокается настоящий lib/offline, через который домен и ходит.
 const { request, readStoredToken } = vi.hoisted(() => ({
   request: vi.fn(),
   readStoredToken: vi.fn(() => 'tok'),
 }));
 // request() и readStoredToken() мокаем: тест задаёт поведение сервера. Остальное — настоящее:
 // catch saveContent зовёт настоящий conflictBodyOf, цепочка 409 → FileConflictError проверяется по нему.
-vi.mock('../offline', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('../offline')>();
+vi.mock('../../../lib/offline', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../../lib/offline')>();
   return { ...orig, request, readStoredToken };
 });
 
-import { api } from '../api';
-import { FileConflictError } from '../../features/files/api';
+import { filesApi, FileConflictError } from '../api';
 
 type ReqOpts = { method?: string; body?: string; headers?: Record<string, string>; etagRef?: { etag?: string } };
 
@@ -26,14 +27,14 @@ beforeEach(() => {
   request.mockReset();
 });
 
-describe('api.files.getContent — etag прочитанной версии', () => {
+describe('filesApi.files.getContent — etag прочитанной версии', () => {
   it('текстовый файл: сервер отдал ETag — ответ несёт etag, поля прежние', async () => {
     request.mockImplementation((_url: string, options?: ReqOpts) => {
       if (options?.etagRef) options.etagRef.etag = '"aaa111"';
       return Promise.resolve(contentBody);
     });
 
-    const r = await api.files.getContent('p1', 'a.md');
+    const r = await filesApi.files.getContent('p1', 'a.md');
     expect(r.etag).toBe('"aaa111"');
     expect(r.content).toBe('текст файла');
     expect(r.isBinary).toBe(false);
@@ -41,21 +42,21 @@ describe('api.files.getContent — etag прочитанной версии', ()
 
   it('URL запроса не изменился (featureId и sessionId — как раньше)', async () => {
     request.mockResolvedValue(contentBody);
-    await api.files.getContent('p1', 'a.md', 'f1', { sessionId: 's1' });
+    await filesApi.files.getContent('p1', 'a.md', 'f1', { sessionId: 's1' });
     expect(request.mock.calls[0][0]).toBe('/projects/p1/files/content?path=a.md&featureId=f1&sessionId=s1');
   });
 
   it('без ETag (бинарник, документ, сверх 10 МиБ, агент/ретранслятор) — etag нет', async () => {
     request.mockResolvedValue({ content: null, isBinary: true, isImage: false });
-    const r = await api.files.getContent('p1', 'v.mp4');
+    const r = await filesApi.files.getContent('p1', 'v.mp4');
     expect(r.etag).toBeUndefined();
   });
 });
 
-describe('api.files.saveContent — If-Match и 409', () => {
+describe('filesApi.files.saveContent — If-Match и 409', () => {
   it('с ifMatch: If-Match уходит заголовком, тело прежнее', async () => {
     request.mockResolvedValue(undefined);
-    await api.files.saveContent('p1', 'a.md', 'мой текст', '"aaa111"');
+    await filesApi.files.saveContent('p1', 'a.md', 'мой текст', '"aaa111"');
 
     const [url, options] = request.mock.calls[0] as [string, ReqOpts];
     expect(url).toBe('/projects/p1/files/content?path=a.md');
@@ -66,7 +67,7 @@ describe('api.files.saveContent — If-Match и 409', () => {
 
   it('без ifMatch: заголовка If-Match нет — поведение ровно как раньше', async () => {
     request.mockResolvedValue(undefined);
-    await api.files.saveContent('p1', 'a.md', 'мой текст');
+    await filesApi.files.saveContent('p1', 'a.md', 'мой текст');
 
     const [, options] = request.mock.calls[0] as [string, ReqOpts];
     expect(options.headers).toBeUndefined();
@@ -85,7 +86,7 @@ describe('api.files.saveContent — If-Match и 409', () => {
       },
     }));
 
-    const err = await api.files.saveContent('p1', 'a.md', 'мой текст', '"старый"').catch(e => e);
+    const err = await filesApi.files.saveContent('p1', 'a.md', 'мой текст', '"старый"').catch(e => e);
     expect(err).toBeInstanceOf(FileConflictError);
     expect(err.status).toBe(409);
     expect(err.code).toBe('file_changed');
@@ -98,7 +99,7 @@ describe('api.files.saveContent — If-Match и 409', () => {
 
   it('409 с другим кодом — прежняя ошибка, не FileConflictError', async () => {
     request.mockRejectedValue(Object.assign(new Error('diverged'), { status: 409, body: { code: 'diverged' } }));
-    const err = await api.files.saveContent('p1', 'a.md', 'мой', '"старый"').catch(e => e);
+    const err = await filesApi.files.saveContent('p1', 'a.md', 'мой', '"старый"').catch(e => e);
     expect(err).not.toBeInstanceOf(FileConflictError);
     expect(err.status).toBe(409);
   });
@@ -110,14 +111,14 @@ describe('api.files.saveContent — If-Match и 409', () => {
     });
 
     const etagOut: { etag?: string } = {};
-    await api.files.saveContent('p1', 'a.md', 'мой текст', '"aaa111"', etagOut);
+    await filesApi.files.saveContent('p1', 'a.md', 'мой текст', '"aaa111"', etagOut);
     expect(etagOut.etag).toBe('"bbb222"');
   });
 
   it('200 без ETag (нынешний PUT файлов) — etagOut остаётся пустым', async () => {
     request.mockResolvedValue(undefined);
     const etagOut: { etag?: string } = {};
-    await api.files.saveContent('p1', 'a.md', 'мой текст', '"aaa111"', etagOut);
+    await filesApi.files.saveContent('p1', 'a.md', 'мой текст', '"aaa111"', etagOut);
     expect(etagOut.etag).toBeUndefined();
   });
 });

@@ -71,6 +71,15 @@ var inspectionOverrides = ClaudeHomeServer.Services.Backup.BackupCli.InspectionO
 if (inspectionOverrides is not null) builder.Configuration.AddInMemoryCollection(inspectionOverrides);
 var inspectionMode = builder.Configuration.GetValue<bool>("InspectionMode");
 
+// `llm` — неотключаемая подсистема: ядро сессий зависит от LlmProviderRegistry обязательно
+// (ADR-014, «Неотключаемые подсистемы»). Проверка стоит здесь, до регистраций и до побочных
+// эффектов старта (чанка процессов-сирот, загрузка модулей): иначе старт падал бы глубже и
+// с чужим текстом — «No service for type 'LlmProviderRegistry' has been registered», по нему
+// причину приходится раскапывать заново.
+if (!SubsystemGate.IsEnabled(builder.Configuration, "llm"))
+    throw new InvalidOperationException(
+        "Подсистема llm не отключается: ядро сессий зависит от неё (ADR-014, „Неотключаемые подсистемы“)");
+
 // Таймстемп в консольном логе (I11): обёртка Console.Out/Error добавляет UTC-время в начало
 // каждой строки — и для ILogger, и для голых Console.WriteLine. Здесь, чтобы Local.json тоже
 // мог переопределить формат. Ключ Diagnostics:ConsoleTimestampFormat — НЕ под Logging:Console:

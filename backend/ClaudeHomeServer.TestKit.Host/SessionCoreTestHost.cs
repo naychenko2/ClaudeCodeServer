@@ -68,6 +68,7 @@ public sealed class SessionCoreTestHost : IDisposable
             sp.GetRequiredService<ProjectManager>(),
             sp.GetRequiredService<ChatHistoryService>(),
             sp.GetRequiredService<IConfiguration>(),
+            sp.GetRequiredService<LlmProviderRegistry>(),
             sp.GetRequiredService<PersonaManager>(),
             sp.GetRequiredService<ILogger<SessionManager>>(),
             sp.GetRequiredService<ISessionBroadcaster>(),
@@ -76,10 +77,6 @@ public sealed class SessionCoreTestHost : IDisposable
             sp.GetRequiredService<ClaudeHomeServer.Services.Turn.ITurnEventBus>(),
             sp.GetRequiredService<AppSettingsService>(),
             sp.GetRequiredService<ClaudeHomeServer.Services.Execution.SandboxManager>(),
-            // Реестр — необязательный параметр фасада, но хост просит его обязательно: он
-            // регистрируется здесь сам (ниже) и его же требуют роли ядра (SessionCoreRegistration)
-            // — в тестовом контейнере вертикаль llm всегда включена.
-            sp.GetRequiredService<LlmProviderRegistry>(),
             sp.GetService<ClaudeHomeServer.Services.Team.TeamPlanningService>(),
             sp.GetService<TaskManager>(),
             sp.GetService<ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog>()));

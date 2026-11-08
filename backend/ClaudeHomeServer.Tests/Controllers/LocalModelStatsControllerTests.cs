@@ -64,9 +64,6 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
             ("LlmProviders:local-aaa-chat:AnthropicBaseUrl", "http://127.0.0.1:1"),
             ("LlmProviders:local-aaa-chat:IsLocal", "true"),
             ("LlmProviders:local-aaa-chat:Models:0:Id", "aaa-chat-model")]);
-        // Вертикаль Llm выключена: сервисов вертикали в контейнере нет, подмен тоже
-        public LlmOffHost LlmOff { get; } = new();
-
         public void Dispose()
         {
             Plain.Dispose();
@@ -77,7 +74,6 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
             LabelsBlank.Dispose();
             MediaOff.Dispose();
             TitlesSet.Dispose();
-            LlmOff.Dispose();
         }
 
         private static (string Key, string Value)[] EngineConfig(bool metrics)
@@ -92,11 +88,6 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
             if (metrics) config.Add(("LocalEngines:gemma:MetricsUrl", "http://127.0.0.1:18030/metrics"));
             return [.. config];
         }
-    }
-
-    public sealed class LlmOffHost : TestWebApplicationFactory
-    {
-        public LlmOffHost() => ExtraConfig["Subsystems:llm:Enabled"] = "false";
     }
 
     // Хост с переключаемыми заглушками: сервис в DI — прокси, цель которого тест подставляет
@@ -524,18 +515,6 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         body.GetProperty("othersCount").GetInt32().Should().Be(3);
     }
 
-    // Счётчик хода не в контейнере (вертикаль Llm выключена) → chats: [].
-    [Fact]
-    public async Task Chats_СчётчикВыключен_Пусто()
-    {
-        var factory = _hosts.LlmOff;
-        using var admin = factory.CreateAuthenticatedClient();
-        var resp = await admin.GetAsync("/api/local-model/stats");
-        resp.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("chats").GetArrayLength().Should().Be(0, "без счётчика хода чатов нет");
-    }
-
     // ─── unsupported из снимка ───────────────────────────────────────────────────
 
     // unsupported из снимка Current проходит в ответ без искажений.
@@ -691,22 +670,6 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         body.GetProperty("model").GetString().Should().Be("qwen3.8-27b");
         body.TryGetProperty("engineLabel", out _).Should().BeFalse();
         body.TryGetProperty("topology", out _).Should().BeFalse();
-    }
-
-    // ─── Выключенная вертикаль Llm → configured:false, status:notConnected, 200 ───
-
-    // Subsystems:llm:Enabled=false — ILocalModelStatsReader/IGpuSampler не в контейнере;
-    // контроллер через GetService видит null → {configured:false, status:notConnected} (200, не 500).
-    [Fact]
-    public async Task ВертикальВыключена_ConfiguredFalse()
-    {
-        var factory = _hosts.LlmOff;
-        using var admin = factory.CreateAuthenticatedClient();
-        var resp = await admin.GetAsync("/api/local-model/stats");
-        resp.StatusCode.Should().Be(HttpStatusCode.OK, "выключенная вертикаль — 200, а не 500");
-        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("configured").GetBoolean().Should().BeFalse();
-        body.GetProperty("status").GetString().Should().Be("notConnected");
     }
 
     // ─── Медиа: GET /api/local-model/stats/media ─────────────────────────────────
@@ -1274,22 +1237,6 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         list[0].GetProperty("configured").GetBoolean().Should().BeFalse();
     }
 
-    // Выключенная вертикаль Llm: engines отвечает без Llm-зависимостей — {main:false}, 200 (не 500).
-    [Fact]
-    public async Task Engines_LlmВыключена_НеПустойСписок()
-    {
-        var factory = _hosts.LlmOff;
-        using var admin = factory.CreateAuthenticatedClient();
-
-        var resp = await admin.GetAsync("/api/local-model/engines");
-        resp.StatusCode.Should().Be(HttpStatusCode.OK, "выключенная Llm — 200, не 500");
-        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
-        var list = body.EnumerateArray().ToList();
-        list.Count.Should().Be(1);
-        list[0].GetProperty("name").GetString().Should().Be("main");
-        list[0].GetProperty("configured").GetBoolean().Should().BeFalse();
-    }
-
     // ─── Второй стенд (Б3c): GET /api/local-model/stats?engine= ──────────────────────────
 
     // Роль на действии, как у /stats без engine: не-админ → 403.
@@ -1317,20 +1264,6 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         body.GetProperty("configured").GetBoolean().Should().BeFalse();
         body.GetProperty("status").GetString().Should().Be("notConnected");
         body.TryGetProperty("duty", out _).Should().BeFalse("нет дорожки — нет блока «Дежурство»");
-    }
-
-    // Выключенная Llm: тот же ответ, что для неизвестного движка (200, не 500).
-    [Fact]
-    public async Task StatsEngine_LlmВыключена_ConfiguredFalse()
-    {
-        var factory = _hosts.LlmOff;
-        using var admin = factory.CreateAuthenticatedClient();
-
-        var resp = await admin.GetAsync("/api/local-model/stats?engine=gemma");
-        resp.StatusCode.Should().Be(HttpStatusCode.OK, "выключенная Llm — 200, не 500");
-        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("configured").GetBoolean().Should().BeFalse();
-        body.GetProperty("status").GetString().Should().Be("notConnected");
     }
 
     // Стенд именованного движка целиком: снимок дорожки (engine — тип движка, не имя стенда),

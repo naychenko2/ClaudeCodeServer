@@ -92,7 +92,7 @@
     "sessionId": "…", "chatName": "…", "projectId": "…", "projectName": "…",
     "taskId": null, "taskTitle": null, "personaId": null, "personaName": null,
     "provider": "claude", "model": "opus", "source": "chat-turn",
-    "label": null,          // подпись one-shot действия (ключ каталога) или endpoint fal
+    "label": null,          // подпись one-shot действия (ключ каталога), endpoint fal или метка генерации: image-generation | image-generation: без картинок | image-generation: сумма уточняется
     "tokens": { }, "generations": 0, "durationMs": 42000,
     "own": true             // ход текущего пользователя → фронт показывает «Открыть чат»
   } ]

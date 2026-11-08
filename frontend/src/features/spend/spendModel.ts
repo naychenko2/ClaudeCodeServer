@@ -2,7 +2,7 @@
 // источники, форматирование. Контракт входа в раздел — lib/spendContract.ts;
 // данные — /api/spend/* (docs/architecture/spend-analytics-api.md).
 import { C } from 'aihome_shell/kit';
-import { addDaysUtc, todayUtc, type SpendDim } from '../../lib/spendContract';
+import { addDaysUtc, todayUtc, SPEND_LABEL_NO_IMAGES, type SpendDim } from '../../lib/spendContract';
 import { COST_TIERS, COST_TIER_KEYS, costTierColor, type CostTierKey } from '../../lib/costTiers';
 
 // Разрезы pivot-дерева и фильтров. 'turn' — терминальный псевдо-уровень (лист-ходы).
@@ -51,7 +51,7 @@ export const sourceLabel = (s: string) => SPEND_SOURCES[s]?.label ?? s;
 // Подпись генерационной записи в списке анализа: «без картинок» виден вместо модели,
 // иначе запись fal без картинок не отличить от догоняющей записи удачного запроса.
 export const genTurnTitle = (t: { source: string; model?: string | null; label?: string | null }): string => {
-  const noImages = !!t.label && t.label.endsWith('без картинок');
+  const noImages = t.label === SPEND_LABEL_NO_IMAGES;
   return `${sourceLabel(t.source)} · ${noImages ? t.label : (t.model ?? t.label ?? '')}`;
 };
 export const sourceColor = (s: string) => SPEND_SOURCES[s]?.color ?? C.textMuted;

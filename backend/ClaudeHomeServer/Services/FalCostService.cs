@@ -165,9 +165,9 @@ public class FalCostService : IFalRequestCost
     // возвращаются в очередь, непустая очередь перезапускает разборщик.
     private async Task ProcessQueueAsync()
     {
-        // Id, взятые из очереди и ещё не переданные в работу: при сбое возвращаются в неё (m1).
-        List<PendingCost>? taken = null;
-        List<List<PendingCost>>? pending = null;
+        // Единый список «несданных»: id, взятые из очереди и ещё не переданные в работу (опубликованные
+        // или возвращённые в очередь). Из него id убирает тот, кто их сдал; остаток возвращает finally (m1).
+        var unsent = new HashSet<PendingCost>(ReferenceEqualityComparer.Instance);
         try
         {
             if (CollectWindowMs > 0) await Task.Delay(CollectWindowMs);
@@ -188,26 +188,22 @@ public class FalCostService : IFalRequestCost
                     await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(waitMs, QueuePollSliceMs)));
                     continue;
                 }
-                taken = due;
+                unsent.UnionWith(due);
                 var batches = BuildBatches(due);
-                for (var k = 0; k < batches.Count; k++)
+                foreach (var batch in batches)
                 {
-                    // Пока пачка в работе, она и все за ней — «несданные»: их вернёт finally.
-                    pending = batches.Skip(k).ToList();
                     try
                     {
-                        await ProcessBatchAsync(batches[k]);
+                        await ProcessBatchAsync(batch, unsent);
                     }
                     catch (Exception ex)
                     {
-                        // Сбой разбора не должен ронять разборщик и терять id очереди.
-                        Console.Error.WriteLine($"[FalCost] Сбой обработки пачки ({batches[k].Count} id): {ex.Message}");
-                        Reschedule(batches[k]);
+                        // Сбой разбора не должен ронять разборщик и терять id очереди. Возвращаем только
+                        // ещё не сданные id пачки: уже опубликованные повторно не публикуются.
+                        Console.Error.WriteLine($"[FalCost] Сбой обработки пачки ({batch.Count} id): {ex.Message}");
+                        SafeReschedule(batch.Where(unsent.Contains).ToList(), unsent);
                     }
-                    // Пачка передана в работу (опубликована или возвращена внутри ProcessBatchAsync).
-                    pending = batches.Skip(k + 1).ToList();
                 }
-                taken = null;
             }
         }
         catch (Exception ex)
@@ -218,8 +214,7 @@ public class FalCostService : IFalRequestCost
         {
             // Возврат несданного в очередь (m1): попытка считается потраченной, следующий срок —
             // по бэкоффу id, поэтому устойчивая причина сбоя не крутит перезапуск по горячему.
-            if (pending is not null) SafeReschedule(pending.SelectMany(b => b).ToList());
-            else if (taken is not null) SafeReschedule(taken);
+            SafeReschedule(unsent.ToList(), unsent);
             // Флаг гасится при любом выходе; непустую очередь берёт на себя новый разборщик —
             // тот же порядок, что в Track, чтобы не поднять двух одновременно.
             bool restart;
@@ -257,7 +252,9 @@ public class FalCostService : IFalRequestCost
         return batches;
     }
 
-    private async Task ProcessBatchAsync(List<PendingCost> batch)
+    // Каждый id по сдаче (публикация или возврат в очередь) снимается с unsent: исключение посреди пачки
+    // не приведёт ни к повторной публикации, ни к повторному возврату уже сданных id.
+    private async Task ProcessBatchAsync(List<PendingCost> batch, HashSet<PendingCost> unsent)
     {
         // Окно строится явно по timed-части пачки (хвост ревью R-S-SPEND-5, п. m3): наличие окна
         // должно определяться наличием времени в пачке, а не семантикой Min/Max по nullable над
@@ -277,7 +274,7 @@ public class FalCostService : IFalRequestCost
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[FalCost] Опрос billing-events (пачка {batch.Count}) упал: {ex.Message}");
-            Reschedule(batch); // отказ пачки — одна попытка на всех, не по одной на id
+            Reschedule(batch, unsent); // отказ пачки — одна попытка на всех, не по одной на id
             return;
         }
 
@@ -285,13 +282,13 @@ public class FalCostService : IFalRequestCost
         if (fetch.FailedStatus == HttpStatusCode.BadRequest && batch.Count > 1)
         {
             var half = batch.Count / 2;
-            await ProcessBatchAsync(batch[..half]);
-            await ProcessBatchAsync(batch[half..]);
+            await ProcessBatchAsync(batch[..half], unsent);
+            await ProcessBatchAsync(batch[half..], unsent);
             return;
         }
         if (fetch.FailedStatus is not null)
         {
-            Reschedule(batch);
+            Reschedule(batch, unsent);
             return;
         }
 
@@ -299,14 +296,18 @@ public class FalCostService : IFalRequestCost
         var missing = new List<PendingCost>();
         foreach (var p in batch)
         {
-            if (fetch.Found.TryGetValue(p.RequestId, out var cost)) await PublishAsync(p, cost);
+            if (fetch.Found.TryGetValue(p.RequestId, out var cost))
+            {
+                await PublishAsync(p, cost);
+                unsent.Remove(p);
+            }
             else missing.Add(p);
         }
-        Reschedule(missing);
+        Reschedule(missing, unsent);
     }
 
     // Одна неудачная попытка для каждого id списка: следующий срок — по его бэкоффу, исчерпал — отброшен.
-    private void Reschedule(List<PendingCost> items)
+    private void Reschedule(List<PendingCost> items, HashSet<PendingCost> unsent)
     {
         var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         foreach (var p in items)
@@ -314,21 +315,23 @@ public class FalCostService : IFalRequestCost
             p.Attempt++;
             if (p.Attempt >= BackoffSeconds.Length)
             {
+                unsent.Remove(p); // отброшен: сдан до записи в журнал, чтобы сбой журнала не вернул его снова
                 Console.Error.WriteLine($"[FalCost] Стоимость не появилась за отведённое время: {p.RequestId}");
                 continue;
             }
             p.DueAtMs = now + BackoffSeconds[p.Attempt] * 1000L;
             lock (_queueLock) _queue.Add(p);
+            unsent.Remove(p); // сдан: частичный сбой не вернёт его второй раз
         }
     }
 
     // Возврат несданного в очереди из finally разборщика (m1): сам возврат не должен ронять
     // завершение разборщика — флаг гасится следом, очередь не остаётся вставшей.
-    private void SafeReschedule(List<PendingCost> items)
+    private void SafeReschedule(List<PendingCost> items, HashSet<PendingCost> unsent)
     {
         try
         {
-            Reschedule(items);
+            Reschedule(items, unsent);
         }
         catch (Exception ex)
         {

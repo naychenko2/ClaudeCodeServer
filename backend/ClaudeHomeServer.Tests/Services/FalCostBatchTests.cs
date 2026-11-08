@@ -52,34 +52,69 @@ public class FalCostBatchTests
         };
     }
 
+    // Счётчик событий с ожиданием порога без опроса и сна: тест ждёт события, а не времени.
+    private sealed class Signal
+    {
+        private readonly object _gate = new();
+        private readonly List<(int N, TaskCompletionSource Tcs)> _waiters = [];
+        private int _count;
+
+        public void Hit()
+        {
+            lock (_gate)
+            {
+                _count++;
+                foreach (var w in _waiters.Where(w => _count >= w.N).ToList())
+                {
+                    w.Tcs.TrySetResult();
+                    _waiters.Remove(w);
+                }
+            }
+        }
+
+        // true — событие наступило n раз; false — дедлайн вышел раньше.
+        public async Task<bool> WaitAsync(int n)
+        {
+            TaskCompletionSource tcs;
+            lock (_gate)
+            {
+                if (_count >= n) return true;
+                tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                _waiters.Add((n, tcs));
+            }
+            try
+            {
+                await tcs.Task.WaitAsync(TimeSpan.FromSeconds(8));
+                return true;
+            }
+            catch (TimeoutException)
+            {
+                return false;
+            }
+        }
+    }
+
     private sealed class Rig
     {
         public required FalCostService Svc { get; init; }
         public ConcurrentDictionary<string, int> Published { get; } = new();
         public ConcurrentDictionary<string, double> Usd { get; } = new();
+        public Signal Distinct { get; } = new();
 
-        public async Task<bool> WaitAsync(int distinct)
-        {
-            var until = DateTime.UtcNow.AddSeconds(8);
-            while (DateTime.UtcNow < until)
-            {
-                if (Published.Count >= distinct) return true;
-                await Task.Delay(20);
-            }
-            return false;
-        }
+        public Task<bool> WaitAsync(int distinct) => Distinct.WaitAsync(distinct);
     }
 
-    // Ждать появления n записей в журнале вызовов (без ожидания публикаций).
-    private static async Task<bool> WaitCallsAsync(BatchHandler handler, int n)
+    // Журнал-перехватчик Console.Error: пишет в буфер и сигналит на строках с маркером; с throwOnMarker
+    // ещё и роняет запись (сломанный лог бьёт ровно в реальные точки возврата, хвосты ревью R-S-SPEND-5).
+    private sealed class MarkedLog(Signal hits, string[] markers, string[]? throwOn = null) : StringWriter
     {
-        var until = DateTime.UtcNow.AddSeconds(8);
-        while (DateTime.UtcNow < until)
+        public override void Write(string? value)
         {
-            if (handler.Calls.Count >= n) return true;
-            await Task.Delay(20);
+            if (value is not null && markers.Any(m => value.Contains(m))) hits.Hit();
+            if (value is not null && throwOn is not null && throwOn.Any(m => value.Contains(m)))
+                throw new IOException("сбой журнала");
+            base.Write(value);
         }
-        return false;
     }
 
     // Писатель Console.Error, роняющий исключение на строках с маркером: моделирует сломанный
@@ -109,7 +144,8 @@ public class FalCostBatchTests
         var rig = new Rig { Svc = svc };
         svc.OnCostResolved = (sid, cost) =>
         {
-            rig.Published.AddOrUpdate(cost.RequestId, 1, (_, n) => n + 1);
+            if (rig.Published.TryAdd(cost.RequestId, 1)) rig.Distinct.Hit();
+            else rig.Published.AddOrUpdate(cost.RequestId, 1, (_, n) => n + 1);
             rig.Usd[cost.RequestId] = cost.CostUsd;
             if (throwOn?.Invoke(cost.RequestId) == true) throw new InvalidOperationException("сбой публикации");
             return Task.CompletedTask;
@@ -184,7 +220,8 @@ public class FalCostBatchTests
             ? Ok(ids.Where(i => i is "req-0" or "req-1" or "req-2"))
             : Ok(ids.Where(i => i != "req-never")));
         var rig = MakeRig(handler, backoff: [0, 0]);
-        var err = new StringWriter();
+        var dropped = new Signal();
+        var err = new MarkedLog(dropped, ["Стоимость не появилась за отведённое время: req-never"]);
         var prevErr = Console.Error;
         Console.SetError(err);
         try
@@ -194,7 +231,7 @@ public class FalCostBatchTests
             rig.Svc.Track("s-1", "req-never", Nov1);
 
             (await rig.WaitAsync(5)).Should().BeTrue("оставшиеся пять публикуются");
-            await Task.Delay(500); // дать исчерпать попытки ненайденному
+            (await dropped.WaitAsync(1)).Should().BeTrue("ненайденный исчерпывает попытки и попадает в журнал");
         }
         finally
         {
@@ -242,9 +279,19 @@ public class FalCostBatchTests
     {
         var handler = new BatchHandler((_, _, _) => new HttpResponseMessage(HttpStatusCode.TooManyRequests));
         var rig = MakeRig(handler, backoff: [0, 0]);
-        for (var i = 0; i < 5; i++) rig.Svc.Track("s-1", $"req-{i}", Nov1);
-
-        await Task.Delay(1500);
+        var dropped = new Signal();
+        var err = new MarkedLog(dropped, ["Стоимость не появилась"]);
+        var prevErr = Console.Error;
+        Console.SetError(err);
+        try
+        {
+            for (var i = 0; i < 5; i++) rig.Svc.Track("s-1", $"req-{i}", Nov1);
+            (await dropped.WaitAsync(5)).Should().BeTrue("обе попытки исчерпаны: все пять id отброшены");
+        }
+        finally
+        {
+            Console.SetError(prevErr);
+        }
         handler.Calls.Should().HaveCount(2, "две попытки бэкоффа = два запроса пачки, а не 2×5");
         handler.Calls.Should().OnlyContain(c => c.Length == 5);
         rig.Published.Should().BeEmpty();
@@ -289,8 +336,7 @@ public class FalCostBatchTests
             rig.Svc.MaxBatchSize = 5; // 10 id = две пачки: в момент сбоя вторая ещё несдана
             for (var i = 0; i < 10; i++) rig.Svc.Track("s-1", $"req-{i}", Nov1);
 
-            (await WaitCallsAsync(handler, 1)).Should().BeTrue();
-            await Task.Delay(300); // цепочка сбоя без задержек, но асинхронна: дать ей завершиться
+            (await rig.WaitAsync(10)).Should().BeTrue("несданные после сбоя разборщика возвращены и получили цену");
             rig.Svc.Track("s-1", "req-90", Nov1);
 
             (await rig.WaitAsync(11)).Should().BeTrue(
@@ -313,13 +359,15 @@ public class FalCostBatchTests
         // тем же курсором — конец списка недостижим, обе попытки упираются в предел.
         var handler = new BatchHandler((ids, _, _) => Ok(ids, ",\"has_more\":true,\"next_cursor\":\"c1\""));
         var rig = MakeRig(handler, backoff: [0, 0]);
-        var err = new StringWriter();
+        var dropped = new Signal();
+        var err = new MarkedLog(dropped, ["Стоимость не появилась за отведённое время: req-0"]);
         var prevErr = Console.Error;
         Console.SetError(err);
         try
         {
             for (var i = 0; i < 45; i++) rig.Svc.Track("s-1", $"req-{i}", Nov1); // 45 < MaxBatchSize — одна пачка
-            await Task.Delay(2500); // две попытки по MaxPages страниц + исчерпание бэкоффа
+            // две попытки по MaxPages страниц + исчерпание бэкоффа: журнал пишется после обоих опросов
+            (await dropped.WaitAsync(1)).Should().BeTrue();
         }
         finally
         {
@@ -384,7 +432,6 @@ public class FalCostBatchTests
         })));
 
         (await rig.WaitAsync(400)).Should().BeTrue("потерянных id нет");
-        await Task.Delay(300);
         rig.Published.Should().HaveCount(400);
         rig.Published.Values.Should().OnlyContain(n => n == 1, "ровно один раз");
         handler.Calls.SelectMany(c => c).Should().OnlyHaveUniqueItems("id не уходят в fal дважды");
@@ -399,10 +446,64 @@ public class FalCostBatchTests
 
         (await rig.WaitAsync(3)).Should().BeTrue("исключение на req-1 не мешает req-0 и req-2");
 
-        // Разборщик, отработав пачку, уснул; новый Track после сбоя получает цену.
-        await Task.Delay(300);
+        // Новый Track после сбоя получает цену (разборщик жив или поднят заново).
         rig.Svc.Track("s-1", "req-7", Nov1);
         (await rig.WaitAsync(4)).Should().BeTrue("разборщик жив: Track после сбоя получил цену");
+    }
+
+    [Fact]
+    public async Task ВозвратПачкиВCatchЦикла_СбойВозвратаНеПрерываетЦикл_СледующаяПачкаОбработана()
+    {
+        // Хвост R-S-SPEND-TAIL-BATCH, п. 2: возврат в catch цикла пачек идёт через SafeReschedule.
+        // Журнал роняет запись при отбрасывании id (Reschedule бросает) — без защиты исключение
+        // вылетает из цикла, и вторая пачка в этом проходе не опрашивается (4 вызова → 3).
+        var dropped = new Signal();
+        var err = new MarkedLog(dropped, ["Стоимость не появилась"], throwOn: ["Стоимость не появилась"]);
+        var inner = Console.Error;
+        Console.SetError(err);
+        try
+        {
+            var handler = new BatchHandler((_, _, _) => throw new HttpRequestException("транспорт"));
+            var rig = MakeRig(handler, backoff: [0, 0]);
+            rig.Svc.MaxBatchSize = 2; // 4 id = две пачки; обе попытки сбойные
+            for (var i = 0; i < 4; i++) rig.Svc.Track("s-1", $"req-{i}", Nov1);
+
+            (await dropped.WaitAsync(4)).Should().BeTrue("каждый из четырёх id отброшен ровно один раз");
+            handler.Calls.Should().HaveCount(4, "две попытки × две пачки: сбой возврата первой пачки не отнимает опрос второй");
+            rig.Published.Should().BeEmpty();
+        }
+        finally
+        {
+            Console.SetError(inner);
+        }
+    }
+
+    [Fact]
+    public async Task СбойВторойПоловиныПослеДеления400_УжеОпубликованныеНеПубликуютсяПовторно()
+    {
+        // Хвост R-S-SPEND-TAIL-BATCH, п. 3: пачка делится на 400; первая половина опубликована,
+        // вторая бросает наружу — возвращаются только несданные id, а не вся пачка.
+        var err = new MarkedLog(new Signal(), [], throwOn: ["Опрос billing-events (пачка"]);
+        var inner = Console.Error;
+        Console.SetError(err);
+        try
+        {
+            var handler = new BatchHandler((ids, call, _) => call switch
+            {
+                1 => new HttpResponseMessage(HttpStatusCode.BadRequest),
+                3 => throw new HttpRequestException("транспорт"),
+                _ => Ok(ids),
+            });
+            var rig = MakeRig(handler, backoff: [0, 0]);
+            for (var i = 0; i < 4; i++) rig.Svc.Track("s-1", $"req-{i}", Nov1);
+
+            (await rig.WaitAsync(4)).Should().BeTrue("вторая половина получила цену со второй попытки");
+            rig.Published.Values.Should().OnlyContain(n => n == 1, "цена публикуется ровно один раз на request_id");
+        }
+        finally
+        {
+            Console.SetError(inner);
+        }
     }
 
     [Fact]

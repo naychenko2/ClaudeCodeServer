@@ -208,7 +208,6 @@ builder.Services.AddResponseCompression(o =>
     // `NotesController` без зависимостей → ProblemDetails 500 на каждый запрос к
     // `/api/notes/*` (задача 4defaacc, QA-прогон 2026-09-10).
     //
-    // Убираем часть здесь, в композиции Main — единая точка для всех вертикалей.
     // Notes — теперь динамический модуль (сценарий Б): ApplicationPart добавляется
     // ModuleLoader'ом по пути из DynamicModules-конфига (см. ниже), а не автоматически
     // через ProjectReference. Старый gate по имени сборки ("ClaudeHomeServer.Notes") удалён.

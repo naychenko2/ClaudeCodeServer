@@ -11,8 +11,8 @@ namespace ClaudeHomeServer.Tests.Services;
 /// Текущий набор границ: (1) вызов есть вне комментариев; (2) он верхний оператор — ровно одна строка
 /// с колонки 0, без вложенности в if/блок; (3) нижняя граница — ПОСЛЕ подключения источника тумблеров
 /// подсистем (<c>AddJsonFile(subsystemsPath…)</c>), иначе <c>Subsystems:llm:Enabled=false</c> из
-/// <c>subsystems.json</c> ещё не прочитан; (4) между этим источником и вызовом нет других источников
-/// конфига (<c>AddJsonFile</c>/<c>AddInMemoryCollection</c>) — отказ идёт после прочитанного тумблера llm;
+/// <c>subsystems.json</c> ещё не прочитан; (4) между этим источником и вызовом, а также после вызова нет других источников
+/// конфига (Add*-провайдеры, <c>Configuration.Add</c>, <c>Sources</c>); строковые литералы источником не считаются;
 /// (5) верхняя граница — до <c>AddSubsystems</c> и до <c>AddCore</c>.
 ///
 /// Зачем текстовый сторож: тело проверки охраняет <c>NonDisablableSubsystemsTests</c>, а саму
@@ -46,9 +46,17 @@ public class NonDisablableLlmWiringGuardTests
     private static readonly Regex SubsystemsSourceCall = new(
         @"\bAddJsonFile\s*\(\s*subsystemsPath\b", RegexOptions.Compiled);
 
-    // Любой другой источник конфига, появившийся между источником подсистем и вызовом.
+    // Любой другой источник конфига: расширения Add* провайдеров, прямое builder.Configuration.Add<T>(…)
+    // и правка Sources. Ни один не должен стоять между источником подсистем и вызовом, ни после вызова.
     private static readonly Regex OtherConfigSourceCall = new(
-        @"\bAdd(JsonFile|InMemoryCollection)\s*\(", RegexOptions.Compiled);
+        @"\bAdd(JsonFile|JsonStream|XmlFile|XmlStream|IniFile|IniStream|InMemoryCollection|CommandLine|" +
+        @"EnvironmentVariables|UserSecrets|KeyPerFile)\s*(<[^>]*>\s*)?\(" +
+        @"|\bConfiguration\s*\.\s*Add\s*[<(]" +
+        @"|\bSources\s*\.\s*(Add|Insert)\s*\(", RegexOptions.Compiled);
+
+    // Строковые литералы разбираем вместе с комментариями (в них бывает «//»), чтобы токены не склеились.
+    private static readonly Regex Tokens = new(
+        @"@?""(?:\\.|""""|[^""\\])*""|/\*.*?\*/|//[^\r\n]*", RegexOptions.Compiled | RegexOptions.Singleline);
 
     [Fact]
     public void ProgramCs_ВызываетEnsureLlmEnabled_ДоAddSubsystemsИAddCore()
@@ -119,6 +127,33 @@ public class NonDisablableLlmWiringGuardTests
         act.Should().Throw<Exception>().WithMessage("*после всех источников конфига*");
     }
 
+    [Theory]
+    [InlineData("builder.Configuration.AddCommandLine(args);")]
+    [InlineData("builder.Configuration.AddEnvironmentVariables();")]
+    [InlineData("builder.Configuration.AddXmlFile(\"a.xml\");")]
+    [InlineData("builder.Configuration.AddIniFile(\"a.ini\");")]
+    [InlineData("builder.Configuration.AddUserSecrets<Program>();")]
+    [InlineData("builder.Configuration.AddJsonStream(s);")]
+    [InlineData("builder.Configuration.Sources.Add(src);")]
+    public void Правило_КраснеетНаДругихИсточникахКонфигаМеждуИсточникомИВызовом(string extra)
+    {
+        var act = () => AssertWiring(Source + extra + "\n" + Call + Core + Subsystems);
+        act.Should().Throw<Exception>().WithMessage("*после всех источников конфига*");
+    }
+
+    [Fact]
+    public void Правило_КраснеетЕслиИсточникКонфигаДобавленПослеВызова()
+    {
+        var act = () => AssertWiring(Source + Call + "builder.Configuration.AddJsonFile(\"appsettings.Extra.json\", optional: true);\n" + Core + Subsystems);
+        act.Should().Throw<Exception>().WithMessage("*ни одного источника конфига после вызова*");
+    }
+
+    [Fact]
+    public void Правило_ЗеленоеЕслиИмяИсточникаТолькоВСтроковомЛитерале()
+    {
+        AssertWiring(Source + "Console.Error.WriteLine(\"AddJsonFile не подключён\");\n" + Call + Core + Subsystems);
+    }
+
     [Fact]
     public void Правило_КраснеетЕслиИсточникПодсистемНеНайден()
     {
@@ -134,7 +169,7 @@ public class NonDisablableLlmWiringGuardTests
 
     private static void AssertWiring(string raw)
     {
-        var text = StripComments(raw);
+        var text = StripCommentsAndLiterals(raw);
 
         AnyEnsureCall.Matches(text).Count.Should().BeGreaterThan(0,
             "в Program.cs вызова NonDisablableSubsystems.EnsureLlmEnabled нет (вне комментариев): " +
@@ -160,13 +195,17 @@ public class NonDisablableLlmWiringGuardTests
         OtherConfigSourceCall.IsMatch(between).Should().BeFalse(
             "отказ — после всех источников конфига: между источником подсистем и вызовом появился " +
             "другой AddJsonFile/AddInMemoryCollection, и тумблер llm мог прийти из него уже после проверки");
+        var after = text.Substring(at + calls[0].Length);
+        OtherConfigSourceCall.IsMatch(after).Should().BeFalse(
+            "ни одного источника конфига после вызова: Subsystems:llm:Enabled=false из него прочитается позже " +
+            "(AddSubsystems читает тумблеры), а явного отказа на старте не будет");
         at.Should().BeLessThan(subsystems.Index, "отказ — до AddSubsystems");
         at.Should().BeLessThan(core.Index, "отказ — до сборки контейнера (AddCore)");
     }
 
-    // Строчные и блочные комментарии одним проходом: побеждает тот, что начался раньше.
-    private static string StripComments(string text) =>
-        Regex.Replace(text, @"//[^\r\n]*|/\*[\s\S]*?\*/", " ");
+    // Комментарии вырезаются, литералы опустошаются: имя вызова в тексте строки — не вызов.
+    private static string StripCommentsAndLiterals(string text) =>
+        Tokens.Replace(text, m => m.Value[0] == '"' || m.Value[0] == '@' ? "\"\"" : " ");
 
     // .git бывает файлом (worktree), поэтому проверяем и каталог, и файл
     private static string FindRepoRoot()

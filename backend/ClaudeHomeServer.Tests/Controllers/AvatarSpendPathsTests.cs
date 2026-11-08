@@ -283,7 +283,9 @@ public class AvatarSpendPathsTests : IClassFixture<AvatarSpendFactory>
     }
 
     // Персона из чата (personas_create с AutoAvatar): аватар генерирует агент, и его
-    // инициатор доходит до записи траты
+    // инициатор доходит до записи траты. Актор здесь — сам владелец: ход его собственный,
+    // GetTurnActor другого не называет → права арендатора (тот же фолбэк, что у
+    // personas_generate_avatar выше)
     [Fact]
     public async Task ПерсонаИзЧата_АвтоАватарСИнициаторомАгента()
     {
@@ -296,6 +298,35 @@ public class AvatarSpendPathsTests : IClassFixture<AvatarSpendFactory>
         var added = ImageRecords().Skip(before).ToList();
         added.Should().ContainSingle("AutoAvatar у персона из чата всегда true — генерация была");
         added[0].OwnerId.Should().Be(OwnerId);
+        added[0].Initiator.Should().Be(SpendInitiators.Agent);
+        added[0].ActorUserId.Should().Be(OwnerId,
+            "актор хода неизвестен (ход самого владельца) — актором становится арендатор");
+    }
+
+    // П.2 хвоста R-S-SPEND-2 (хвост-2): в MCP-пути создания персоны актором обязан называться
+    // актор хода, а не владелец песочницы. Путь с чужим актором сегодня ненаблюдаем end-to-end:
+    // узкая рамка закрывает personas_create участнику (PersonasToolset.cs:116). Поэтому проба —
+    // сам выбор значения: названный вызывающим актор доходит до записи через CreateAsync →
+    // TryAutoGenerateAvatarAsync → AvatarSpendAttribution; ключом хранилища остаётся арендатор
+    [Fact]
+    public async Task ПерсонаИзЧата_АвтоАватар_АкторХодаДостигаетЗаписи()
+    {
+        var before = ImageRecords().Count;
+
+        var crud = _factory.Services.GetRequiredService<PersonasCrudService>();
+        var result = await crud.CreateAsync(OwnerId,
+            new CreatePersonaRequest("АкторХода" + Guid.NewGuid().ToString("N")[..4], null, null, null, null,
+                null, PersonaScope.Global, null, null, null, null, AutoAvatar: true),
+            null, SpendInitiators.Agent, "actor-participant");
+        // Успех — по обёртке: хелпер Ok() сервиса даёт OkObjectResult (PersonasCrudService.cs:54),
+        // Value у ActionResult<Persona> при этом остаётся null
+        result.Result.Should().BeOfType<Microsoft.AspNetCore.Mvc.OkObjectResult>("создание персоны удалось");
+
+        var added = ImageRecords().Skip(before).ToList();
+        added.Should().ContainSingle("autoAvatar=true — генерация аватара была");
+        added[0].OwnerId.Should().Be(OwnerId, "ключ записи — арендатор, а не исполнивший");
+        added[0].ActorUserId.Should().Be("actor-participant",
+            "актора называет вызывающий (актор хода), а не токен песочницы");
         added[0].Initiator.Should().Be(SpendInitiators.Agent);
     }
 

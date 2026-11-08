@@ -436,6 +436,39 @@ public class ImageGenerationSpendTests
         rec.ProjectId.Should().Be("project-1", "запись без картинок несёт проект, как и обычная");
     }
 
+    // Запись без картинок несёт ту же модель, что и обычная запись того же вызова: место без
+    // настроенной модели — дефолт драйвера, а не null (иначе аналитика сливает её с LLM-тратами).
+    [Fact]
+    public async Task ПустойFal_МодельНеНастроена_ЗаписьБезКартинокНесётДефолтДрайвера()
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1", returnsImages: false,
+            defaultModel: "test/default-model");
+        var spend = new CapturingSpend();
+        var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, new FakeCost(0.04));
+
+        Assert.Empty(await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human));
+        await spend.WaitForFirst(Settle);
+
+        var rec = spend.Records.Should().ContainSingle().Subject;
+        rec.Label.Should().Be(ImageGenerationService.SpendLabelNoImages);
+        rec.Model.Should().Be("test/default-model");
+    }
+
+    // Право на «сумма уточняется» даёт ручка опроса (id + IFalRequestCost), а не имя провайдера:
+    // провайдер с id запроса и подключённым средством опроса получает обещание независимо от ключа,
+    // а без средства опроса — не получает.
+    [Fact]
+    public async Task ПровайдерСIdБезСредстваОпроса_ОбещанияУточненияНет()
+    {
+        var other = new FakeGenerator("other", enabled: true, requestId: "req-1");
+        var spend = new CapturingSpend();
+        var service = new ImageGenerationService([other], Store(NewTempDir()), null, spend, null);
+
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human);
+
+        spend.Records.Single().Label.Should().Be(ImageGenerationService.SpendLabel);
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData(0.0)]

@@ -594,7 +594,7 @@ public sealed class PersonasCrudService(
         // назвал вызывающий (S-SPEND-2, S-SPEND-2c)
         var generated = await images.GenerateManyAsync(
             Services.Images.ImagePlaces.PersonaAvatar, prompt, count, spendOwner, initiator,
-            spendActor, spendProject, CancellationToken.None);
+            spendActor, spendProject, ct: CancellationToken.None);
         // Провайдер не отдал картинок (таймаут, отказ) — аватар тоже не теряем: заявка
         // догонит персону фоном. queued в ответе — чтобы фронт сказал человеку честное
         // «появится сам», а не «генератор не ответил, аватар остался прежним».
@@ -680,7 +680,7 @@ public sealed class PersonasCrudService(
             var (spendOwner, spendActor, spendProject) = AvatarSpendAttribution(persona, userId, actorUserId);
             var generated = await images.GenerateManyAsync(
                 Services.Images.ImagePlaces.PersonaAvatar, prompt, 1, spendOwner, initiator,
-                spendActor, spendProject, CancellationToken.None);
+                spendActor, spendProject, ct: CancellationToken.None);
             if (generated.Count == 0) return EnqueueAvatarBackfill(userId, persona, prompt, initiator, actorUserId);
             var dir = Path.Combine(personas.AssetsDir, persona.Id);
             Directory.CreateDirectory(dir);

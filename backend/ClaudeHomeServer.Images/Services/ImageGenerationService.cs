@@ -262,8 +262,7 @@ public sealed class ImageGenerationService
         // поля цены в ответе отсутствуют). Обещание уточнения ставят только там, где его
         // будут исполнять: трата glif остаётся счётчиком вызовов навсегда — как и в
         // пишущейся записи чата (SpendMapping.RecordGlifGeneration: CostUsd = null).
-        var pendingAmount = requestId is not null && _falCost is not null
-            && string.Equals(generator.Key, SpendSources.Fal, StringComparison.OrdinalIgnoreCase);
+        var pendingAmount = requestId is not null && _falCost is not null;
 
         WriteSpend(ownerId, generator.Key, actualModel, amount: null, generations: images.Count, named,
             pendingAmount, actorUserId, projectId);
@@ -298,7 +297,7 @@ public sealed class ImageGenerationService
         }
         _log?.LogInformation("Генерация картинок: {Provider} не вернул картинок для места {Place}, уточняю цену по {RequestId}",
             generator.Key, place, requestId);
-        _ = TopUpAmountAsync(ownerId, model, requestId, string.IsNullOrWhiteSpace(initiator) ? null : initiator,
+        _ = TopUpAmountAsync(ownerId, string.IsNullOrWhiteSpace(model) ? generator.DefaultModel : model, requestId, string.IsNullOrWhiteSpace(initiator) ? null : initiator,
             actorUserId, projectId, noImages: true);
     }
 
@@ -328,7 +327,7 @@ public sealed class ImageGenerationService
                 return;
             }
             // Догоняющая запись — про тот же вызов: инициатор, актор, проект и модель у неё
-            // те же, что у первой
+            // те же, что были у самого вызова
             WriteSpend(ownerId, SpendSources.Fal, model, amount: usd, generations: 0, initiator,
                 pendingAmount: false, actorUserId, projectId, label: noImages ? SpendLabelNoImages : null);
         }

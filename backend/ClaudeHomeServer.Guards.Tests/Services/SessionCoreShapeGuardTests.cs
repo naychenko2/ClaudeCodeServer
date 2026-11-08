@@ -254,8 +254,12 @@ public class SessionCoreShapeGuardTests
         // не закрывает атрибут: литерал разбирается своей альтернативой целиком. Char-альтернатива держит
         // любое число юнитов — одиночный символ и многосимвольный escape-литерал ('\x41'), — та же форма,
         // что char-литерал в StripRawStringsAndComments.
+        // Модификатор доступа необязателен: top-level тип без модификатора (static class Foo — в C# internal
+        // по умолчанию) — тип файла, и его словари в сверке полноты; строгое требование public|internal
+        // молча снимало бы такой тип из списка имён. Префикс «namespace X;» в той же строке тоже в узоре:
+        // объявление после него — top-level.
         Regex.Matches(StripRawStringsAndComments(facadeSource),
-                @"^(?:\[(?:[^\[\]\r\n""']|""(?:[^""\\\r\n]|\\.)*""|'(?:\\.|[^'\\\r\n])+'|(?<d>\[)|(?<-d>\]))*(?(d)(?!))\]\s*)*(?:public|internal)\s+(?:(?:sealed|static|abstract|partial|readonly)\s+)*(?:class|record(?:\s+(?:class|struct))?|struct|enum|interface)\s+(\w+)",
+                @"^(?:\[(?:[^\[\]\r\n""']|""(?:[^""\\\r\n]|\\.)*""|'(?:\\.|[^'\\\r\n])+'|(?<d>\[)|(?<-d>\]))*(?(d)(?!))\]\s*)*(?:namespace\s+[\w.]+;\s*)?(?:(?:public|internal)\s+)?(?:(?:sealed|static|abstract|partial|readonly)\s+)*(?:class|record(?:\s+(?:class|struct))?|struct|enum|interface)\s+(\w+)",
                 RegexOptions.Multiline)
             .Select(m => m.Groups[1].Value)
             .ToHashSet();
@@ -346,6 +350,9 @@ public class SessionCoreShapeGuardTests
             var next = i + 1 < source.Length ? source[i + 1] : '\0';
             if (c == '@' && next == '"')
             {
+                // Verbatim-строка: «""» — содержание, закрывает только непарная кавычка, в том числе
+                // сразу после «\»: обычная строковая ветка съела бы «\"» как escape и проглотила
+                // конец строки вместе с последующей «}» инициализатора.
                 sb.Append("@\"");
                 for (i += 2; i < source.Length; i++)
                 {
@@ -545,20 +552,41 @@ public class SessionCoreShapeGuardTests
     }
 
     /// <summary>Статические <c>Dictionary&lt;string, string&gt;</c> ВСЕХ типов файла: top-level типы по тексту
-    /// (имя + пространство имён якоря) вместе со вложенными на любую глубину. Нестатические поля и локальные
-    /// переменные в сверку полноты не входят; файловый тип, не найденный в сборке, — громкий отказ.</summary>
+    /// (имя + пространство имён якоря) вместе со вложенными на любую глубину. Имена меряются без арности
+    /// («`1»): текст называет generic-тип как «Holder», Type.Name — «Holder`1». Нестатические поля и локальные
+    /// переменные в сверку полноты не входят. Generic-определения рантаймом не мерятся: статическое поле
+    /// открытого generic не имеет значения (FieldInfo.GetValue бросает), его Count неизмерим — граница
+    /// названа здесь и самопроверена (Самопроверка_полноты_generic_тип_исключён_рантайм_сверкой_явно).
+    /// Имя текста, не разрешённое в тип пространства имён якоря, — громкий отказ с перечнем имён
+    /// (Самопроверка_отказ_полноты_несфальшивированное_имя_громкий_и_называет_причину).</summary>
     internal static List<FieldInfo> FileStaticDictionaryFields(Type anchor, string source)
     {
         var names = FacadeTopLevelNames(source);
         var roots = anchor.Assembly.GetTypes()
-            .Where(t => !t.IsNested && t.Namespace == anchor.Namespace && names.Contains(t.Name)).ToList();
-        names.Except(roots.Select(t => t.Name)).Should().BeEmpty("top-level тип файла не найден в сборке: сверка полноты была бы неполной");
+            .Where(t => !t.IsNested && t.Namespace == anchor.Namespace && names.Contains(WithoutArity(t.Name))).ToList();
+        // Причина отказа — не «нет в сборке» вообще: тип может быть в сборке, но в другом пространстве имён
+        // (второй namespace-блок файла) или в другой сборке; либо имя вообще не объявление типа
+        // (ложное имя из строки-фикстуры). Формулировка обязана называть фактическую причину.
+        var unresolved = names.Except(roots.Select(t => WithoutArity(t.Name))).ToList();
+        if (unresolved.Count > 0)
+            throw new InvalidOperationException(
+                "Имена top-level типов текста не разрешены в типы пространства имён якоря: " + string.Join(", ", unresolved) +
+                " — такой тип не в этой сборке или вне пространства имён якоря (второй namespace-блок файла); "
+                + "или имя не объявление типа: сверка полноты была бы неполной");
         return roots.SelectMany(WithNested)
+            // Открытый generic вне рантайм-сверки намеренно: FieldInfo.GetValue(null) по статическому полю
+            // generic-определения бросает — Count неизмерим, сверить нельзя. Граница не тихая: текст-разбор
+            // словарь generic-типа видит (фикстура GenericHolder), а исключение поля названо тестом
+            // Самопроверка_полноты_generic_тип_исключён_рантайм_сверкой_явно.
             .Where(t => !t.IsGenericTypeDefinition)
             .SelectMany(t => t.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
             .Where(f => f.FieldType == typeof(Dictionary<string, string>))
             .ToList();
     }
+
+    /// <summary>Имя типа без арности: «Holder`1» → «Holder» — так текст (regex ловит \w+ до «&lt;»)
+    /// сопоставляется с generic-типом сборки. Для неgeneric-имён — без изменений.</summary>
+    private static string WithoutArity(string name) => name.Split('`')[0];
 
     private static IEnumerable<Type> WithNested(Type t) =>
         new[] { t }.Concat(t.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic).SelectMany(WithNested));
@@ -595,7 +623,12 @@ public class SessionCoreShapeGuardTests
         // Char-литералы со скобкой и кавычкой в значении.
         InitializerKeys(head + "    [\"a\"] = '}'.ToString(),\n    [\"b\"] = '\"'.ToString(),\n};\nDictionary<string, string> E = new() { [\"e\"] = \"1\" };")
             .Should().BeEquivalentTo(new Dictionary<string, List<string>> { ["D"] = ["a", "b"], ["E"] = ["e"] });
-        // Verbatim: удвоенная кавычка, обратная косая перед закрывающей, скобка и «//» внутри.
+        // Verbatim: первая строка держит «}» и «//» внутри себя (после экранированной кавычки «""»),
+        // вторая заканчивается обратной косой сразу перед закрывающей кавычкой. Первая: без verbatim-ветки
+        // удвоенные кавычки разбились бы на соседние обычные строки, и «//» оказался внутри «строки» лишь
+        // случайно. Вторая — решающая: без verbatim-ветки кавычка после обратной косой съедается как escape,
+        // закрывающая кавычка теряется, и следующие ключи вместе с закрывающей «}» проглатываются как текст
+        // строки — verbatim-ветка обязана доесть строку до настоящей (непарной) границы.
         InitializerKeys(head + "    [\"a\"] = @\"x\"\"}\"\" // y\",\n    [\"b\"] = @\"C:\\\",\n    [\"c\"] = \"3\",\n};\nDictionary<string, string> E = new() { [\"e\"] = \"1\" };")
             .Should().BeEquivalentTo(new Dictionary<string, List<string>> { ["D"] = ["a", "b", "c"], ["E"] = ["e"] });
         // Незакрытый блок-комментарий — громкий отказ.
@@ -610,8 +643,58 @@ public class SessionCoreShapeGuardTests
             .Select(f => f.Name).ToList();
         names.Should().Contain("CoreDataReferrerAllowList", "словарь самого класса");
         names.Should().Contain(nameof(FakeNestedDicts.Inner.NestedDict), "словарь вложенного типа");
-        names.Should().Contain(nameof(ForeignNames.ForeignDict), "словарь другого top-level класса файла");
+        names.Should().Contain(nameof(ForeignDictHolder.ForeignDict), "словарь другого top-level класса файла");
         names.Should().NotContain(nameof(FakeNestedDicts.InstanceDict), "нестатический словарь в сверку не входит");
+    }
+
+    [Fact]
+    public void Самопроверка_полноты_объявление_без_модификатора_или_после_namespace_состоит_в_сверке()
+    {
+        // Top-level тип без модификатора доступа (в C# internal по умолчанию) — тип файла: без опционального
+        // модификатора в узоре FacadeTopLevelNames его имя не попадало в names, и его словари выпадали
+        // из полноты молча. Фикстура BareNamedDicts обязана быть в перечне полей сверки.
+        var names = FileStaticDictionaryFields(typeof(SessionCoreShapeGuardTests), ReadGuardsSource("SessionCoreShapeGuardTests.cs"))
+            .Select(f => f.Name).ToList();
+        names.Should().Contain(nameof(BareNamedDicts.BareDict),
+            "тип без модификатора доступа — top-level тип файла: его словарь обязан в сверке полноты");
+
+        // Тот же случай на стороне текста: объявление после «namespace X;» в той же строке — без префиксной
+        // группы узора его имя не попадало в names, и весь тип выпадал из полноты молча.
+        FacadeTopLevelNames("namespace ClaudeHomeServer.Tests.Services; static class Prefixed {}")
+            .Should().Contain("Prefixed", "объявление после «namespace X;» в той же строке — top-level тип файла");
+    }
+
+    [Fact]
+    public void Самопроверка_полноты_generic_тип_исключён_рантайм_сверкой_явно()
+    {
+        var source = ReadGuardsSource("SessionCoreShapeGuardTests.cs");
+        // Текст-разбор словарь внутри generic-типа НЕ слеп: фикстура GenericHolder разбирается.
+        InitializerKeys(source).Should().ContainKey("GenericDict",
+            "generic-тип файла текстовым разбором видим: иначе его словарь исчезал бы и из текста");
+        // Рантайм-сверка для открытого generic невозможна: FieldInfo.GetValue по его статическому полю
+        // бросает, Count неизмерим — поле исключено, и это названная граница, а не тихое выпадение:
+        // без фильтра !IsGenericTypeDefinition в FileStaticDictionaryFields эта проверка краснеет,
+        // а боевая полнота падает с тем самым исключением GetValue.
+        var fields = FileStaticDictionaryFields(typeof(SessionCoreShapeGuardTests), source)
+            .Select(f => f.Name).ToList();
+        fields.Should().NotContain("GenericDict",
+            "открытый generic вне рантайм-сверки намеренно (Count неизмерим) — граница описана в FileStaticDictionaryFields");
+    }
+
+    [Fact]
+    public void Самопроверка_отказ_полноты_несфальшивированное_имя_громкий_и_называет_причину()
+    {
+        // «Громкий отказ» FileStaticDictionaryFields самопроверен здесь: обе фикстуры обязаны его вызвать,
+        // и отказ обязан назвать имя. Случай 1: имя вообще не тип в сборке. Случай 2: имя поймано узором
+        // через префиксную группу (объявление после «namespace X;»), но тип не в пространстве имён якоря
+        // (в реальной жизни — второй namespace-блок того же файла).
+        const string absent = "NamedInAnotherNamespace";
+        FluentActions.Invoking(() => FileStaticDictionaryFields(typeof(SessionCoreShapeGuardTests),
+                "internal static class " + absent + " {}\n"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*" + absent + "*");
+        FluentActions.Invoking(() => FileStaticDictionaryFields(typeof(SessionCoreShapeGuardTests),
+                "namespace ClaudeHomeServer.Tests.Other;\ninternal static class " + absent + " {}\n"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*" + absent + "*");
     }
 
     internal sealed class FakeNestedDicts
@@ -1039,10 +1122,10 @@ public class SessionCoreShapeGuardTests
 }
 
 // Одноимённики допустимых типов в чужом (вложенном) пространстве имён — нарушители самопроверок правил 3 и 5.
+// Фикстур полноты здесь нет: поддерживающий правила 3/5 не должен искать их под этим именем
+// (словарь другого top-level класса — в ForeignDictHolder).
 internal static class ForeignNames
 {
-    internal static readonly Dictionary<string, string> ForeignDict = new() { ["f"] = "1" };
-
     internal interface ITurnStarter { }
 
     internal sealed class FakeLazyForeignSeam
@@ -1056,6 +1139,29 @@ internal static class ForeignNames
         public BuiltinMcpContexts(IServiceProvider services) { S = services; }
         public IServiceProvider S { get; }
     }
+}
+
+// Фикстура полноты: отдельный top-level класс файла со своим словарём — его словари обязан
+// достать FileStaticDictionaryFields (Самопроверка_полнота_видит_статические_словари_...).
+internal static class ForeignDictHolder
+{
+    internal static readonly Dictionary<string, string> ForeignDict = new() { ["f"] = "1" };
+}
+
+// Фикстура полноты: top-level тип БЕЗ модификатора доступа (C# — internal по умолчанию).
+// Без опционального модификатора в узоре FacadeTopLevelNames его имя не попадало в names,
+// и его словари выпадали из сверки молча (Самопроверка_полноты_объявление_без_модификатора_или_после_namespace_...).
+static class BareNamedDicts
+{
+    internal static readonly Dictionary<string, string> BareDict = new() { ["b"] = "1" };
+}
+
+// Фикстура границы полноты: generic-тип файла. Его словарь видим текстовым разбором, но
+// рантаймовый Count открытого generic неизмерим (FieldInfo.GetValue по статическому полю бросает) —
+// поле исключено из сверки явной границей (Самопроверка_полноты_generic_тип_исключён_...).
+internal static class GenericHolder<T>
+{
+    internal static readonly Dictionary<string, string> GenericDict = new() { ["g"] = "1" };
 }
 
 // Подставляемый тип самопроверки правила 4: одноимённый допустимой регистрации

@@ -230,8 +230,10 @@ public class SessionCoreShapeGuardTests
             .ToList();
 
     internal static HashSet<string> FacadeTopLevelNames(string facadeSource) =>
-        Regex.Matches(facadeSource,
-                @"^(?:\[[^\]\r\n]*\]\s*)*(?:public|internal)\s+(?:(?:sealed|static|abstract|partial|readonly)\s+)*(?:class|record(?:\s+(?:class|struct))?|struct|enum|interface)\s+(\w+)",
+        // Raw-строки вырезаются до разбора: «объявление» в колонке 0 внутри них — не объявление.
+        // Атрибут допускает строковые литералы с «]» внутри аргумента: [Obsolete("see Foo[0]")].
+        Regex.Matches(Regex.Replace(facadeSource, "\"\"\"[\\s\\S]*?\"\"\"", ""),
+                @"^(?:\[(?:[^\]\r\n""]|""(?:[^""\\\r\n]|\\.)*"")*\]\s*)*(?:public|internal)\s+(?:(?:sealed|static|abstract|partial|readonly)\s+)*(?:class|record(?:\s+(?:class|struct))?|struct|enum|interface)\s+(\w+)",
                 RegexOptions.Multiline)
             .Select(m => m.Groups[1].Value)
             .ToHashSet();
@@ -387,13 +389,16 @@ public class SessionCoreShapeGuardTests
     }
 
     [Fact]
-    public void Разбор_файла_фасада_не_вакуумный_и_не_видит_типов_ядра()
+    public void Разбор_файла_фасада_не_вакуумный()
     {
         // Файл фасада держит ровно SessionManager; набор top-level пуст ТОЛЬКО потому, что все
         // контракты ушли в ядро. Имя фасада в разборе обязано находиться — иначе регэксп сломан
         // и сторож проходит вакуумно.
         var source = ReadFacadeSource();
         FacadeTopLevelNames(source).Should().Contain(nameof(SessionManager));
+        FacadeTopLevelTypes(source).Should().BeEmpty(
+            "файл фасада держит ровно SessionManager: новый top-level тип рядом с ним должен пройти "
+            + "через трипвайр «ядро → фасад», а не молча появиться");
     }
 
     [Fact]
@@ -410,6 +415,8 @@ public class SessionCoreShapeGuardTests
             "TurnResult живёт в Services.Sessions, а не в Services");
         FacadeTopLevelNames("[Obsolete] public class WithAttr {}\n[A][B(1)] internal sealed record Two(int X);")
             .Should().BeEquivalentTo("WithAttr", "Two");
+        FacadeTopLevelNames("[Obsolete(\"see Foo[0]\")] public class BracketAttr {}").Should().BeEquivalentTo("BracketAttr");
+        FacadeTopLevelNames("var s = \"\"\"\npublic class InRaw {}\n\"\"\";\npublic class Real {}").Should().BeEquivalentTo("Real");
         FacadeConditionalDirectives("#if false\npublic class Hidden {}\n  #endif\n#region R").Should()
             .BeEquivalentTo("#if false", "#endif");
     }

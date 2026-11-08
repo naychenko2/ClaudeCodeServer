@@ -301,7 +301,8 @@ public class RootSubsystemBoundaryTests
         "ClaudeHomeServer.Services.Tts.TtsVoiceCatalog",
         "ClaudeHomeServer.Services.Tts.TtsVoiceCatalog+VoiceInfo",
         "ClaudeHomeServer.Services.Tts.TtsVoiceCatalog+Gender",
-        // Хвост линии ядра S3: типы Services.Sessions тут НЕ открываем ни префиксом, ни точечно. Контракты
+        // Хвост линии ядра S3: типы Services.Sessions тут НЕ открываем ни префиксом, ни точечно (держит
+        // самопроверка RootAllowedExactTypes_НеСодержитТиповСессийИКонтрактовФасада). Контракты
         // фасада (тип в сигнатуре public/internal члена SessionManager, наследник Exception, либо ровно
         // два payload-типа собственных контрактов — TurnResult в SendAndWaitResult.Completed.Result и
         // ChatVisibilityOutcome в ChatVisibilityResult.Outcome, см. SessionCoreFacadeContracts.ReachableTypes)
@@ -464,6 +465,54 @@ public class RootSubsystemBoundaryTests
             "архитектурного правила (см. CLAUDE.md/ADR-014). " +
             "Найденные нарушения:\n" +
             string.Join("\n", violations));
+    }
+
+    [Fact]
+    public void RootAllowedExactTypes_НеСодержитТиповСессийИКонтрактовФасада()
+    {
+        // Контракты фасада допускает общий перечень SessionCoreFacadeContracts; свой список для
+        // Services.Sessions здесь не заводим (решение лида 98d2368c).
+        RootAllowedExactTypes
+            .Where(n => n.StartsWith("ClaudeHomeServer.Services.Sessions.", StringComparison.Ordinal)
+                        || SessionCoreFacadeContracts.All.ContainsKey(n.Split('+')[0]))
+            .Should().BeEmpty(
+                "типы Services.Sessions в root-сторож точечно не заносятся: контракты фасада — в " +
+                "SessionCoreFacadeContracts, остальное ядро для root-типов закрыто");
+    }
+
+    [Fact]
+    public void RootAllowedExactTypes_СоставЗафиксирован()
+    {
+        // Новая строка allow-list не должна появляться молча: она открывает root-слою ещё один
+        // тип подсистемной вертикали, то есть требует осознанного решения.
+        RootAllowedExactTypes.Should().BeEquivalentTo(
+            [
+                "ClaudeHomeServer.Services.CodeGraph.CodeGraphService",
+                "ClaudeHomeServer.Services.Docs.DocsIndexService",
+                "ClaudeHomeServer.Services.Modules.ModuleRegistry",
+                "ClaudeHomeServer.Services.Spend.TaskPromptMetricsStore",
+                "ClaudeHomeServer.Services.Spend.ISpendCollector",
+                "ClaudeHomeServer.Services.Tasks.TaskManager",
+                "ClaudeHomeServer.Services.Notes.NotesKnowledgeService",
+                "ClaudeHomeServer.Services.Skills.SkillsService",
+                "ClaudeHomeServer.Services.Prompts.OmcPersonaRouting",
+                "ClaudeHomeServer.Services.Prompts.SubagentPrompts",
+                "ClaudeHomeServer.Services.Tasks.TaskDueCalculator",
+                "ClaudeHomeServer.Services.Notes.NoteSemanticHit",
+                "ClaudeHomeServer.Services.Skills.SkillInfo",
+                "ClaudeHomeServer.Services.Personas.PersonaDraftService",
+                "ClaudeHomeServer.Services.Docs.DocsIndexService+ScopeFileResult",
+                "ClaudeHomeServer.Services.Docs.DocsIndexService+ScopeFileWriteStatus",
+                "ClaudeHomeServer.Services.Tasks.TaskSchedulerService",
+                "ClaudeHomeServer.Services.Spend.TaskPromptMetricsStore+Entry",
+                "ClaudeHomeServer.Telemetry.ServerMetrics",
+                "ClaudeHomeServer.Services.Git.GitService",
+                "ClaudeHomeServer.Services.Git.GitCredentials",
+                "ClaudeHomeServer.Services.Tts.TtsVoiceCatalog",
+                "ClaudeHomeServer.Services.Tts.TtsVoiceCatalog+VoiceInfo",
+                "ClaudeHomeServer.Services.Tts.TtsVoiceCatalog+Gender",
+            ],
+            "новая строка в RootAllowedExactTypes требует решения лида; строки Services.Sessions не допускаются вовсе");
     }
 
     private static bool IsSharedAllowed(Type type)

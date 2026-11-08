@@ -726,10 +726,12 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
 
         // Ветка «пустой путь» — своя ассерция, отдельно от «нет такого проекта».
         // Пробельный путь отсекает guard ChatWorktree.IsProjectWorktreeAsync (:324, IsNullOrWhiteSpace)
-        // и дальше не идёт. Снять guard — .Trim() даёт "", Path.GetFullPath("") бросает
-        // ArgumentException, ловcatch (:328) возвращает тот же false: снятие guard'а этот
-        // тест не краснит — здесь фиксируется поведение (пустой путь → false), а не сам guard.
+        // и дальше не идёт. Снятие guard'а этот тест не краснит (ревью 8b40dc2a, M1): пустой путь
+        // приводит к исключению, которое ловит catch (:328), и метод возвращает тот же false —
+        // здесь фиксируется поведение (пустой путь → false), а не сам guard.
         var blank = "   ";
+        // Фиксация намерения входа (пробельный путь), а не доказательство не-вакуумности:
+        // не-вакуумность доказана мутацией guard'а на return true (краснеет ровно этот тест).
         string.IsNullOrWhiteSpace(blank).Should().BeTrue("вход этой ветки — пробельный путь");
         (await _sut.IsProjectWorktreeAsync(project.Id, null, blank)).Should().BeFalse();
 

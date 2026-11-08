@@ -65,6 +65,7 @@ public class FalCostResolveTests
         var svc = new FalCostService(http.Object, config);
         svc.BackoffSeconds = [0];
         svc.MinRequestIntervalMs = 0; // троттлинг сжимаем так же, как бэкофф; где он проверяется — поднимает свой
+        svc.CollectWindowMs = 0; // окно сбора пачки сжимаем; тесты батчинга поднимают своё
         return svc;
     }
 
@@ -488,13 +489,14 @@ public class FalCostResolveTests
     [Fact]
     public async Task БэкфиллОпросыИдутЧерезГейтСИнтервалом_АНеВолной()
     {
-        // Два параллельных Track (как всплеск бэкфилла при открытии старого чата):
-        // гейт выпускает их по одному, с интервалом между стартами — иначе волной в 429.
-        // Путь проверяется через Track: с разделением полос (хвосты R-S-SPEND-4, п.3)
-        // интервал — контракт бэкфилла; живая полоса — в тесте ниже.
+        // Две пачки (id разнесены по времени дальше окна 89 дней — в одну пачку не влезают),
+        // как всплеск бэкфилла при открытии старого чата: гейт выпускает запросы по одному,
+        // с интервалом между стартами — иначе волной в 429. Путь — через Track: интервал —
+        // контракт бэкфилла; живая полоса — в тесте ниже.
         var handler = new TimedHandler();
         var svc = MakeService(handler);
         svc.MinRequestIntervalMs = 200;
+        svc.CollectWindowMs = 100;
         var done = new TaskCompletionSource();
         var published = 0;
         svc.OnCostResolved = (sessionId, cost) =>
@@ -503,8 +505,8 @@ public class FalCostResolveTests
             return Task.CompletedTask;
         };
 
-        svc.Track("s-1", "req-a", null);
-        svc.Track("s-1", "req-b", null);
+        svc.Track("s-1", "req-a", new DateTimeOffset(2026, 11, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds());
+        svc.Track("s-1", "req-b", new DateTimeOffset(2026, 6, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds());
         (await Task.WhenAny(done.Task, Task.Delay(5000))).Should().Be(done.Task, "обе публикации состоялись");
 
         handler.Starts.Should().HaveCount(2);
@@ -608,5 +610,204 @@ public class FalCostResolveTests
         (await Task.WhenAny(c, Task.Delay(3000))).Should().Be(c,
             "отмена в очереди не оставила занятый слот: следующий опрос не ждёт залипания");
         (await c).Should().Be(0.123);
+    }
+
+    // —— Батчинг бэкфилла (шаг S-SPEND-5): Track ставит id в очередь, один разборщик шлёт
+    // пачку до 50 request_id одним запросом; ответ раскладывается по request_id событий. ——
+
+    // Заглушка пачек: помнит id каждого запроса, ответ — по делегату (id, номер вызова, курсор).
+    private sealed class BatchHandler(Func<string[], int, string?, HttpResponseMessage> respond) : HttpMessageHandler
+    {
+        public List<string[]> Calls { get; } = [];
+        public List<string> Queries { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var q = System.Web.HttpUtility.ParseQueryString(request.RequestUri!.Query);
+            var ids = q.GetValues("request_id") ?? [];
+            int index;
+            lock (Calls)
+            {
+                Calls.Add(ids);
+                Queries.Add(Uri.UnescapeDataString(request.RequestUri.Query));
+                index = Calls.Count;
+            }
+            return Task.FromResult(respond(ids, index, q["cursor"]));
+        }
+    }
+
+    private static HttpResponseMessage Ok(IEnumerable<string> ids, string tail = "")
+    {
+        var events = string.Join(",", ids.Select(i => $$"""{"request_id":"{{i}}","cost_estimate_nano_usd":100000000}"""));
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent($$"""{"billing_events":[{{events}}]{{tail}}}"""),
+        };
+    }
+
+    // Сервис с публикациями в список и сигналом «опубликовано n».
+    private static (FalCostService Svc, List<string> Published, Func<int, Task<bool>> Wait) MakeBatchService(
+        HttpMessageHandler handler, int[]? backoff = null)
+    {
+        var svc = MakeService(handler);
+        svc.CollectWindowMs = 150;
+        if (backoff is not null) svc.BackoffSeconds = backoff;
+        var published = new List<string>();
+        svc.OnCostResolved = (sid, cost) => { lock (published) published.Add(cost.RequestId); return Task.CompletedTask; };
+        async Task<bool> Wait(int n)
+        {
+            var until = DateTime.UtcNow.AddSeconds(5);
+            while (DateTime.UtcNow < until)
+            {
+                lock (published) if (published.Count >= n) return true;
+                await Task.Delay(20);
+            }
+            return false;
+        }
+        return (svc, published, Wait);
+    }
+
+    private static readonly long Nov1 = new DateTimeOffset(2026, 11, 1, 12, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds();
+
+    [Fact]
+    public async Task Бэкфилл120Генераций_ТриЗапросаВместо120_ЦенаКаждойОпубликована()
+    {
+        var handler = new BatchHandler((ids, _, _) => Ok(ids));
+        var (svc, published, wait) = MakeBatchService(handler);
+
+        for (var i = 0; i < 120; i++) svc.Track("s-1", $"req-{i}", Nov1);
+
+        (await wait(120)).Should().BeTrue("цена каждой из 120 генераций публикуется поштучно");
+        handler.Calls.Select(c => c.Length).Should().BeEquivalentTo(new[] { 50, 50, 20 });
+        published.Distinct().Should().HaveCount(120);
+    }
+
+    [Fact]
+    public async Task ГенерацииРазнесеныДальшеОкна_РежутсяНаОтдельныеПачкиСОкномВЛимите()
+    {
+        var handler = new BatchHandler((ids, _, _) => Ok(ids));
+        var (svc, _, wait) = MakeBatchService(handler);
+        var old = new DateTimeOffset(2026, 6, 1, 12, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds();
+        var mid = old + 40L * 86_400_000; // в окне 89 дней от old
+        svc.Track("s-1", "req-old", old);
+        svc.Track("s-1", "req-mid", mid);
+        svc.Track("s-1", "req-new", Nov1); // > 89 дней от old
+
+        (await wait(3)).Should().BeTrue();
+        handler.Calls.Should().HaveCount(2, "old+mid в одной пачке, new — в другой");
+        handler.Calls.Should().Contain(c => c.Length == 2 && c.Contains("req-old") && c.Contains("req-mid"));
+        foreach (var q in handler.Queries)
+        {
+            var start = DateTimeOffset.Parse(Regex.Match(q, @"start=([^&]+)").Groups[1].Value, CultureInfo.InvariantCulture);
+            var end = DateTimeOffset.Parse(Regex.Match(q, @"end=([^&]+)").Groups[1].Value, CultureInfo.InvariantCulture);
+            (end - start).TotalDays.Should().BeLessThanOrEqualTo(89, "окно пачки не шире лимита fal");
+        }
+    }
+
+    [Fact]
+    public async Task ПачкаУровняГраницыОкна_ВремяКаждогоIdВнутриОкна()
+    {
+        var handler = new BatchHandler((ids, _, _) => Ok(ids));
+        var (svc, _, wait) = MakeBatchService(handler);
+        var a = new DateTimeOffset(2026, 8, 1, 0, 0, 0, TimeSpan.Zero).ToUnixTimeMilliseconds();
+        svc.Track("s-1", "req-a", a);
+        svc.Track("s-1", "req-b", a + 30L * 86_400_000);
+        (await wait(2)).Should().BeTrue();
+
+        var q = handler.Queries.Single();
+        var start = DateTimeOffset.Parse(Regex.Match(q, @"start=([^&]+)").Groups[1].Value, CultureInfo.InvariantCulture);
+        var end = DateTimeOffset.Parse(Regex.Match(q, @"end=([^&]+)").Groups[1].Value, CultureInfo.InvariantCulture);
+        start.Should().BeBefore(DateTimeOffset.FromUnixTimeMilliseconds(a));
+        end.Should().BeAfter(DateTimeOffset.FromUnixTimeMilliseconds(a + 30L * 86_400_000), "самая поздняя генерация внутри окна");
+    }
+
+    [Fact]
+    public async Task IdБезВремени_ИдутОтдельнойПачкойБезОкна()
+    {
+        var handler = new BatchHandler((ids, _, _) => Ok(ids));
+        var (svc, _, wait) = MakeBatchService(handler);
+        svc.Track("s-1", "req-t", Nov1);
+        svc.Track("s-1", "req-n1", null);
+        svc.Track("s-1", "req-n2", null);
+
+        (await wait(3)).Should().BeTrue();
+        handler.Calls.Should().HaveCount(2);
+        var untimed = handler.Queries.Single(q => q.Contains("req-n1"));
+        untimed.Should().Contain("req-n2").And.NotContain("start=").And.NotContain("end=");
+    }
+
+    [Fact]
+    public async Task ОтветИзНесколькихСтраниц_ПроходитсяКаждаяСтраница()
+    {
+        var handler = new BatchHandler((ids, call, cursor) => cursor is null
+            ? Ok(ids.Take(1), ",\"has_more\":true,\"next_cursor\":\"c2\"")
+            : Ok(ids.Skip(1), ",\"has_more\":false,\"next_cursor\":null"));
+        var (svc, published, wait) = MakeBatchService(handler);
+        svc.Track("s-1", "req-1", Nov1);
+        svc.Track("s-1", "req-2", Nov1);
+
+        (await wait(2)).Should().BeTrue("id со второй страницы тоже найден");
+        handler.Calls.Should().HaveCount(2, "две страницы одной пачки");
+        handler.Queries[1].Should().Contain("cursor=c2");
+        published.Should().BeEquivalentTo("req-1", "req-2");
+    }
+
+    [Fact]
+    public async Task НеполныйОтвет_НайденныеПубликуютсяСразу_НеНайденныеЖдутСледующейПопытки()
+    {
+        var handler = new BatchHandler((ids, call, _) => call == 1
+            ? Ok(ids.Where(i => i != "req-late"))
+            : Ok(ids));
+        var (svc, published, wait) = MakeBatchService(handler, backoff: [0, 0]);
+        svc.Track("s-1", "req-1", Nov1);
+        svc.Track("s-1", "req-late", Nov1);
+        svc.Track("s-1", "req-3", Nov1);
+
+        (await wait(3)).Should().BeTrue("ненайденный id найден со второй попытки");
+        handler.Calls[0].Should().HaveCount(3);
+        handler.Calls[1].Should().BeEquivalentTo(new[] { "req-late" }, "повторно опрашивается только ненайденный");
+        published.Take(2).Should().BeEquivalentTo("req-1", "req-3");
+    }
+
+    [Fact]
+    public async Task Ответ400НаПачку_ДелитПополам_НевалидныйIdНеХоронитОстальные()
+    {
+        var handler = new BatchHandler((ids, _, _) => ids.Contains("req-bad")
+            ? new HttpResponseMessage(HttpStatusCode.BadRequest)
+            : Ok(ids));
+        var (svc, published, wait) = MakeBatchService(handler, backoff: [0]);
+        foreach (var id in new[] { "req-1", "req-2", "req-bad", "req-4", "req-5" })
+            svc.Track("s-1", id, Nov1);
+
+        (await wait(4)).Should().BeTrue("четыре валидных id опубликованы");
+        published.Should().BeEquivalentTo("req-1", "req-2", "req-4", "req-5");
+        handler.Calls.Should().Contain(c => c.Length == 1 && c[0] == "req-bad", "невалидный id изолирован до одиночного запроса");
+    }
+
+    [Fact]
+    public async Task Отказ429НаПачку_ЭтоОднаПопыткаНаПачку_НеПоОднойНаId()
+    {
+        var handler = new BatchHandler((ids, _, _) => new HttpResponseMessage(HttpStatusCode.TooManyRequests));
+        var (svc, published, _) = MakeBatchService(handler, backoff: [0, 0]);
+        for (var i = 0; i < 5; i++) svc.Track("s-1", $"req-{i}", Nov1);
+
+        await Task.Delay(1500);
+        handler.Calls.Should().HaveCount(2, "две попытки бэкоффа = два запроса пачки, а не 2×5");
+        handler.Calls.Should().OnlyContain(c => c.Length == 5);
+        published.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ПачкаИОдиночныйОпрос_ДаютОдинаковуюЦенуОдногоId()
+    {
+        // Инвариант шага: цена находится и попадает в учёт независимо от того, была ли генерация в пачке.
+        var handler = new BatchHandler((ids, _, _) => Ok(ids));
+        var (svc, _, wait) = MakeBatchService(handler);
+        svc.Track("s-1", "req-1", Nov1);
+        svc.Track("s-1", "req-2", Nov1);
+        (await wait(2)).Should().BeTrue();
+
+        var solo = await svc.ResolveUsdAsync("req-live", CancellationToken.None);
+        solo.Should().Be(0.1);
     }
 }

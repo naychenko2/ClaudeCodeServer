@@ -62,6 +62,34 @@ public class FalCostService : IFalRequestCost
             Console.WriteLine("[FalCost] Учёт стоимости fal.ai включён");
     }
 
+    // Партия бэкфилла (шаг S-SPEND-5): Track ставит id в очередь, один разборщик отправляет в fal
+    // пачку до MaxBatchSize id одним запросом (billing-events принимает 1–50 request_id).
+    // Бэкфилл чата со 120 генерациями — 3 запроса вместо 120.
+    private sealed class PendingCost(string sessionId, string requestId, long? generationMs)
+    {
+        public string SessionId { get; } = sessionId;
+        public string RequestId { get; } = requestId;
+        public long? GenerationMs { get; } = generationMs;
+        public int Attempt; // индекс следующей попытки в BackoffSeconds
+        public long DueAtMs; // Unix ms: когда id снова пора опрашивать
+    }
+
+    private readonly object _queueLock = new();
+    private readonly List<PendingCost> _queue = [];
+    private bool _processorRunning;
+
+    // Размер пачки: лимит fal на параметр request_id — 50 значений.
+    internal int MaxBatchSize = 50;
+    // Окно сбора: разборщик, проснувшись на пустой очереди, ждёт, пока в неё упадёт весь
+    // всплеск (Track зовётся по очереди для каждой генерации чата). internal: тесты сжимают.
+    internal int CollectWindowMs = 250;
+    // Лимит fal на диапазон start..end — 90 дней; берём 89 с запасом.
+    internal const long MaxBatchSpanMs = 89L * 86_400_000;
+    // Предохранитель пагинации ответа (10 000 записей на страницу — на 50 id это недостижимо).
+    private const int MaxPages = 20;
+    // Шаг опроса очереди: новый id с ранним сроком не ждёт долгого сна по чужому сроку.
+    private const int QueuePollSliceMs = 500;
+
     // Запустить отслеживание стоимости по request_id. Идемпотентно, не блокирует вызывающего.
     // finishedAtMs — время генерации от вызывающего (Unix ms, ToolResultMessage.FinishedAt):
     // служит для окна запроса, когда время не читается из самого request_id (см. ResolveGenerationMs).
@@ -69,36 +97,47 @@ public class FalCostService : IFalRequestCost
     {
         if (!Enabled || string.IsNullOrWhiteSpace(requestId)) return;
         if (!_seen.TryAdd(requestId, 0)) return;
-        _ = PollAsync(sessionId, requestId, finishedAtMs);
+        var item = new PendingCost(sessionId, requestId, ResolveGenerationMs(finishedAtMs, requestId))
+        {
+            DueAtMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + BackoffSeconds[0] * 1000L,
+        };
+        bool start;
+        lock (_queueLock)
+        {
+            _queue.Add(item);
+            start = !_processorRunning;
+            _processorRunning = true;
+        }
+        if (start) _ = Task.Run(ProcessQueueAsync);
     }
 
     // Реализация шва IFalRequestCost: фактическая цена по request_id либо null — когда
     // биллинга ещё нет. Без исключений: отсутствие цены — штатный исход, не ошибка.
     // Дедуп _seen здесь не участвует: он про однократную публикацию в чат, а не про вопрос.
+    // Живой путь не батчится: ждущий потребитель получает свой запрос сразу, своей полосой.
     public async Task<double?> ResolveUsdAsync(string requestId, CancellationToken ct)
     {
         if (!Enabled || string.IsNullOrWhiteSpace(requestId)) return null;
-        var cost = await PollForCostAsync(requestId, null, ct, live: true);
+        var cost = await PollLiveAsync(requestId, ct);
         return cost?.CostUsd;
     }
 
-    // Единый цикл опроса billing-events (бэкофф → FetchCostAsync по request_id). Зовут его
-    // и ResolveUsdAsync (шов), и PollAsync (путь чата с публикацией) — цикл один.
-    // Сбои опроса глотаются, как прежде: «цены нет» → null после исчерпанного окна.
-    // live — живая полоса (по ней идёт только шов ResolveUsdAsync, у которого есть ждущий
-    // потребитель); бэкфилл (Track/PollAsync) — обычная очередь с интервалом. См. _liveGate.
-    private async Task<FalCostMessage?> PollForCostAsync(string requestId, long? finishedAtMs, CancellationToken ct, bool live)
+    // Цикл опроса живой полосы (бэкофф → запрос по одному request_id). Сбои опроса глотаются:
+    // «цены нет» → null после исчерпанного окна. См. _liveGate.
+    private async Task<FalCostMessage?> PollLiveAsync(string requestId, CancellationToken ct)
     {
         // Окно времени запроса: без start API отдаёт только последние 24 ч (доки fal: start по
         // умолчанию = −24ч) — генерации старше суток не находились никогда (дефект S-SPEND-4).
-        var (startParam, endParam) = BuildWindowParams(ResolveGenerationMs(finishedAtMs, requestId));
+        var generationMs = TryParseUuidV7Ms(requestId);
+        var (startParam, endParam) = BuildWindowParams(generationMs, generationMs);
         for (var attempt = 0; attempt < BackoffSeconds.Length; attempt++)
         {
-            FalCostMessage? cost;
+            FalCostMessage? cost = null;
             try
             {
                 await Task.Delay(TimeSpan.FromSeconds(BackoffSeconds[attempt]), ct);
-                cost = await FetchCostAsync(requestId, startParam, endParam, ct, live);
+                var fetch = await FetchBatchAsync([requestId], startParam, endParam, ct, live: true);
+                if (fetch.FailedStatus is null) fetch.Found.TryGetValue(requestId, out cost);
             }
             // Отмена вызывающего и таймаут транспорта — разные исходы (тот же приём, что в
             // McpProbeService/McpOAuthService): таймаут HttpClient бросает TaskCanceledException
@@ -117,22 +156,141 @@ public class FalCostService : IFalRequestCost
         return null; // окно опроса исчерпано — цены нет
     }
 
-    private async Task PollAsync(string sessionId, string requestId, long? finishedAtMs)
+    // Разборщик очереди бэкфилла: один на процесс, живёт, пока в очереди есть id. Выбирает
+    // созревшие id, режет на пачки и отправляет по одной (гейт и интервал — в SendBillingAsync).
+    private async Task ProcessQueueAsync()
     {
-        var cost = await PollForCostAsync(requestId, finishedAtMs, CancellationToken.None, live: false);
-        if (cost is null)
+        if (CollectWindowMs > 0) await Task.Delay(CollectWindowMs);
+        while (true)
         {
-            Console.Error.WriteLine($"[FalCost] Стоимость не появилась за отведённое время: {requestId}");
-            return;
+            List<PendingCost> due;
+            long waitMs = 0;
+            lock (_queueLock)
+            {
+                if (_queue.Count == 0)
+                {
+                    _processorRunning = false;
+                    return;
+                }
+                var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                due = _queue.Where(p => p.DueAtMs <= now).ToList();
+                if (due.Count == 0) waitMs = _queue.Min(p => p.DueAtMs) - now;
+                else _queue.RemoveAll(p => p.DueAtMs <= now);
+            }
+            if (due.Count == 0)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(waitMs, QueuePollSliceMs)));
+                continue;
+            }
+            foreach (var batch in BuildBatches(due))
+            {
+                try
+                {
+                    await ProcessBatchAsync(batch);
+                }
+                catch (Exception ex)
+                {
+                    // Сбой разбора не должен ронять разборщик и терять id очереди.
+                    Console.Error.WriteLine($"[FalCost] Сбой обработки пачки ({batch.Count} id): {ex.Message}");
+                    Reschedule(batch);
+                }
+            }
         }
+    }
+
+    // Нарезка созревших id на пачки: id с известным временем генерации сортируются по нему и
+    // режутся так, чтобы окно запроса (end − start) не превышало MaxBatchSpanMs, а время
+    // каждого id попадало в окно; id без времени идут отдельными пачками без окна.
+    private List<List<PendingCost>> BuildBatches(List<PendingCost> due)
+    {
+        var batches = new List<List<PendingCost>>();
+        var timed = due.Where(p => p.GenerationMs is not null).OrderBy(p => p.GenerationMs).ToList();
+        List<PendingCost>? cur = null;
+        foreach (var p in timed)
+        {
+            // Окно пачки = (последнее − первое время) + WindowSpanMs: добавляем, пока оно в лимите.
+            if (cur is null || cur.Count >= MaxBatchSize
+                || p.GenerationMs!.Value - cur[0].GenerationMs!.Value + WindowSpanMs > MaxBatchSpanMs)
+            {
+                cur = [];
+                batches.Add(cur);
+            }
+            cur.Add(p);
+        }
+        foreach (var chunk in due.Where(p => p.GenerationMs is null).Chunk(MaxBatchSize))
+            batches.Add(chunk.ToList());
+        return batches;
+    }
+
+    private async Task ProcessBatchAsync(List<PendingCost> batch)
+    {
+        var minGen = batch.Min(p => p.GenerationMs);
+        var maxGen = batch.Max(p => p.GenerationMs);
+        var (startParam, endParam) = BuildWindowParams(minGen, maxGen);
+        BatchFetch fetch;
         try
         {
-            if (OnCostResolved is not null)
-                await OnCostResolved(sessionId, cost);
+            fetch = await FetchBatchAsync(batch.Select(p => p.RequestId).ToList(), startParam, endParam,
+                CancellationToken.None, live: false);
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[FalCost] Публикация стоимости ({requestId}) упала: {ex.Message}");
+            Console.Error.WriteLine($"[FalCost] Опрос billing-events (пачка {batch.Count}) упал: {ex.Message}");
+            Reschedule(batch); // отказ пачки — одна попытка на всех, не по одной на id
+            return;
+        }
+
+        // 400 на пачку: один невалидный id хоронит остальные — делим пополам, попытки не тратим.
+        if (fetch.FailedStatus == HttpStatusCode.BadRequest && batch.Count > 1)
+        {
+            var half = batch.Count / 2;
+            await ProcessBatchAsync(batch[..half]);
+            await ProcessBatchAsync(batch[half..]);
+            return;
+        }
+        if (fetch.FailedStatus is not null)
+        {
+            Reschedule(batch);
+            return;
+        }
+
+        // Найденные публикуются сразу, ненайденные ждут следующей попытки по своему бэкоффу.
+        var missing = new List<PendingCost>();
+        foreach (var p in batch)
+        {
+            if (fetch.Found.TryGetValue(p.RequestId, out var cost)) await PublishAsync(p, cost);
+            else missing.Add(p);
+        }
+        Reschedule(missing);
+    }
+
+    // Одна неудачная попытка для каждого id списка: следующий срок — по его бэкоффу, исчерпал — отброшен.
+    private void Reschedule(List<PendingCost> items)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        foreach (var p in items)
+        {
+            p.Attempt++;
+            if (p.Attempt >= BackoffSeconds.Length)
+            {
+                Console.Error.WriteLine($"[FalCost] Стоимость не появилась за отведённое время: {p.RequestId}");
+                continue;
+            }
+            p.DueAtMs = now + BackoffSeconds[p.Attempt] * 1000L;
+            lock (_queueLock) _queue.Add(p);
+        }
+    }
+
+    private async Task PublishAsync(PendingCost p, FalCostMessage cost)
+    {
+        try
+        {
+            if (OnCostResolved is not null)
+                await OnCostResolved(p.SessionId, cost);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[FalCost] Публикация стоимости ({p.RequestId}) упала: {ex.Message}");
         }
     }
 
@@ -184,17 +342,63 @@ public class FalCostService : IFalRequestCost
     // Инвариант: для любой генерации с известным временем запрос к fal содержит
     // событие биллинга этой генерации, а диапазон ≤ 24ч ≪ лимита. Нет времени генерации — окна
     // нет (прежнее поведение: дефолт API −24ч достаточен для свежей генерации).
-    private static (string? Start, string? End) BuildWindowParams(long? generationMs)
+    private static (string? Start, string? End) BuildWindowParams(long? minGenerationMs, long? maxGenerationMs)
     {
-        if (generationMs is null) return (null, null);
-        var startMs = generationMs.Value - StartMarginMs;
-        return (FormatUtc(startMs), FormatUtc(startMs + WindowSpanMs));
+        if (minGenerationMs is null || maxGenerationMs is null) return (null, null);
+        var startMs = minGenerationMs.Value - StartMarginMs;
+        // Пачка: окно от самой ранней генерации до самой поздней + сутки (для одной — start + 24 ч).
+        return (FormatUtc(startMs), FormatUtc(maxGenerationMs.Value - StartMarginMs + WindowSpanMs));
     }
 
     private static string FormatUtc(long unixMs) => Uri.EscapeDataString(
         DateTimeOffset.FromUnixTimeMilliseconds(unixMs).ToString("yyyy-MM-ddTHH:mm:ss'Z'", CultureInfo.InvariantCulture));
 
-    private async Task<FalCostMessage?> FetchCostAsync(string requestId, string? startParam, string? endParam, CancellationToken ct, bool live)
+    // Итог запроса пачки: FailedStatus != null — запрос не удался целиком (Found пуст);
+    // иначе Found — цены найденных id (ненайденных в нём нет).
+    private sealed record BatchFetch(HttpStatusCode? FailedStatus, Dictionary<string, FalCostMessage> Found);
+
+    private sealed class CostAcc
+    {
+        public double Nano;
+        public string? EndpointId;
+        public double? OutputUnits;
+        public double? UnitPrice;
+    }
+
+    private async Task<BatchFetch> FetchBatchAsync(IReadOnlyList<string> ids, string? startParam, string? endParam, CancellationToken ct, bool live)
+    {
+        var acc = new Dictionary<string, CostAcc>();
+        string? cursor = null;
+        for (var page = 0; page < MaxPages; page++)
+        {
+            var url = _billingEventsUrl + "?" + string.Join("&", ids.Select(i => "request_id=" + Uri.EscapeDataString(i)))
+                + (startParam is null ? "" : $"&start={startParam}")
+                + (endParam is null ? "" : $"&end={endParam}")
+                + (cursor is null ? "" : $"&cursor={Uri.EscapeDataString(cursor)}");
+            var (status, json) = await SendBillingAsync(url, ids.Count, ct, live);
+            // 404 — события ещё нет (нормально на ранних попытках); прочее — отказ запроса.
+            // Страницы собираются целиком: частичная сумма по id дала бы заниженную цену.
+            if (status == HttpStatusCode.NotFound) return new BatchFetch(null, []);
+            if (json is null) return new BatchFetch(status, []);
+
+            using var doc = JsonDocument.Parse(json);
+            AccumulateEvents(ids, doc.RootElement, acc);
+            if (doc.RootElement.TryGetProperty("has_more", out var more) && more.ValueKind == JsonValueKind.True
+                && doc.RootElement.TryGetProperty("next_cursor", out var next) && next.ValueKind == JsonValueKind.String
+                && !string.IsNullOrEmpty(next.GetString()))
+                cursor = next.GetString();
+            else
+                break;
+        }
+
+        var found = new Dictionary<string, FalCostMessage>();
+        foreach (var (id, a) in acc)
+            found[id] = new FalCostMessage(id, a.EndpointId, a.Nano / 1_000_000_000d, a.OutputUnits, a.UnitPrice);
+        return new BatchFetch(null, found);
+    }
+
+    // Один HTTP-запрос под троттлингом. Json == null — запрос не вернул тело (Status — причина).
+    private async Task<(HttpStatusCode Status, string? Json)> SendBillingAsync(string url, int idCount, CancellationToken ct, bool live)
     {
         // Троттлинг (MinRequestIntervalMs): однослотовый гейт + минимальный интервал между
         // стартами запросов. Очередь живёт под ct: отмена вызывающего в очереди — штатный выход.
@@ -224,23 +428,17 @@ public class FalCostService : IFalRequestCost
             // запроса. На экземпляре здесь ничего не ставим: HttpClient.Timeout нельзя задать после
             // первого запроса на инстансе (а инстанс может быть переиспользован), и короткий
             // опрос биллинга уже закрыт регистрационным таймаутом.
-            var url = $"{_billingEventsUrl}?request_id={Uri.EscapeDataString(requestId)}"
-                + (startParam is null ? "" : $"&start={startParam}")
-                + (endParam is null ? "" : $"&end={endParam}");
             using var req = new HttpRequestMessage(HttpMethod.Get, url);
             req.Headers.Authorization = new AuthenticationHeaderValue("Key", _apiKey);
 
             using var resp = await client.SendAsync(req, ct);
             if (!resp.IsSuccessStatusCode)
             {
-                // 404 — события ещё нет (нормально на ранних попытках); прочее — логируем
                 if (resp.StatusCode != HttpStatusCode.NotFound)
-                    Console.Error.WriteLine($"[FalCost] billing-events {(int)resp.StatusCode} для {requestId}");
-                return null;
+                    Console.Error.WriteLine($"[FalCost] billing-events {(int)resp.StatusCode} (id в запросе: {idCount})");
+                return (resp.StatusCode, null);
             }
-
-            var json = await resp.Content.ReadAsStringAsync();
-            return ParseBillingEvents(requestId, json);
+            return (resp.StatusCode, await resp.Content.ReadAsStringAsync(ct));
         }
         finally
         {
@@ -248,33 +446,32 @@ public class FalCostService : IFalRequestCost
         }
     }
 
-    private static FalCostMessage? ParseBillingEvents(string requestId, string json)
+    // Раскладка событий ответа по request_id. Для запроса по ОДНОМУ id все события — его
+    // (fal фильтрует по request_id; прежнее поведение шва не требовало совпадения id в ответе).
+    private static void AccumulateEvents(IReadOnlyList<string> ids, JsonElement root, Dictionary<string, CostAcc> acc)
     {
-        using var doc = JsonDocument.Parse(json);
-        if (!doc.RootElement.TryGetProperty("billing_events", out var events)
-            || events.ValueKind != JsonValueKind.Array)
-            return null;
-
-        double nanoSum = 0;
-        bool any = false;
-        string? endpointId = null;
-        double? outputUnits = null;
-        double? unitPrice = null;
+        if (!root.TryGetProperty("billing_events", out var events) || events.ValueKind != JsonValueKind.Array)
+            return;
+        var wanted = ids.Count == 1 ? null : ids.ToHashSet();
         foreach (var e in events.EnumerateArray())
         {
+            string? id;
+            if (wanted is null) id = ids[0];
+            else
+            {
+                id = e.TryGetProperty("request_id", out var rid) && rid.ValueKind == JsonValueKind.String ? rid.GetString() : null;
+                if (id is null || !wanted.Contains(id)) continue;
+            }
             // cost_estimate_nano_usd ещё может быть null — тогда событие пропускаем (ждём)
             if (!e.TryGetProperty("cost_estimate_nano_usd", out var nano) || nano.ValueKind != JsonValueKind.Number)
                 continue;
-            nanoSum += nano.GetDouble();
-            any = true;
-            endpointId ??= e.TryGetProperty("endpoint_id", out var ep) ? ep.GetString() : null;
-            if (outputUnits is null && e.TryGetProperty("output_units", out var ou) && ou.ValueKind == JsonValueKind.Number)
-                outputUnits = ou.GetDouble();
-            if (unitPrice is null && e.TryGetProperty("unit_price", out var up) && up.ValueKind == JsonValueKind.Number)
-                unitPrice = up.GetDouble();
+            if (!acc.TryGetValue(id, out var a)) acc[id] = a = new CostAcc();
+            a.Nano += nano.GetDouble();
+            a.EndpointId ??= e.TryGetProperty("endpoint_id", out var ep) ? ep.GetString() : null;
+            if (a.OutputUnits is null && e.TryGetProperty("output_units", out var ou) && ou.ValueKind == JsonValueKind.Number)
+                a.OutputUnits = ou.GetDouble();
+            if (a.UnitPrice is null && e.TryGetProperty("unit_price", out var up) && up.ValueKind == JsonValueKind.Number)
+                a.UnitPrice = up.GetDouble();
         }
-        if (!any) return null;
-
-        return new FalCostMessage(requestId, endpointId, nanoSum / 1_000_000_000d, outputUnits, unitPrice);
     }
 }

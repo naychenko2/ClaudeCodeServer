@@ -183,9 +183,9 @@ public sealed class ImageGenerationService
     // вариантов, суммы нет. Фактическую сумму догоняет ОТДЕЛЬНАЯ запись с Generations = 0.
     // Валюты не смешиваем: у этого пути только CostUsd.
     //
-    // Два отличия от прецедента видны только здесь: несёт ли провайдер цену вообще (у glif
-    // её не будет никогда — подпись «уточняется» ему не ставят) и какой моделью он пошёл
-    // (это знает только драйвер, у него и спрашиваем).
+    // Два отличия от прецедента видны только здесь: есть ли ручка, по которой цену спросят
+    // вообще (у glif её нет ни в каком ответе — подпись «уточняется» ему не ставят) и какой
+    // моделью провайдер пошёл (это знает только драйвер, у него и спрашиваем).
     //
     // Траты нет, когда: коллектора нет (учёт выключен), владельца нет (повесить не на
     // кого), провайдер не отдал картинок (за них не платили).
@@ -225,20 +225,22 @@ public sealed class ImageGenerationService
         var actualModel = string.IsNullOrWhiteSpace(model) ? generator.DefaultModel : model;
 
         // «цена ещё не пришла» от «цена не придёт» отличается наличием ручки, по которой её
-        // догонят: у fal идентификатор запроса даёт сам ответ (заголовок x-fal-request-id,
-        // контракт fal.run — см. ResponseRequestId у FalImageService), у glif его нет вовсе
-        // (GlifJobParser берёт jobId, media и status, поля цены в ответе отсутствуют).
-        // Обещание уточнения ставят только там, где его будут исполнять: трата glif
-        // остаётся счётчиком вызовов навсегда — как и в пишущейся записи чата
-        // (SpendMapping.RecordGlifGeneration: CostUsd = null).
-        var amountIsResolvable = string.Equals(generator.Key, SpendSources.Fal, StringComparison.OrdinalIgnoreCase);
+        // спросят: идентификатора, который дал сам ответ (у fal — заголовок x-fal-request-id,
+        // контракт fal.run — см. ResponseRequestId у FalImageService), и средства спросить по
+        // нему (IFalRequestCost). Обещание выводится из этой ручки, а не из ключа провайдера:
+        // fal без идентификатора в ответе или без средства опроса не начнёт его так же, как
+        // glif, у которого такой ручки нет вовсе (GlifJobParser берёт jobId, media и status,
+        // поля цены в ответе отсутствуют). Обещание уточнения ставят только там, где его
+        // будут исполнять: трата glif остаётся счётчиком вызовов навсегда — как и в
+        // пишущейся записи чата (SpendMapping.RecordGlifGeneration: CostUsd = null).
+        var requestId = RequestIdOf(images);
+        var pendingAmount = requestId is not null && _falCost is not null;
 
         WriteSpend(ownerId, generator.Key, actualModel, amount: null, generations: images.Count, named,
-            pendingAmount: amountIsResolvable);
+            pendingAmount);
 
-        var requestId = RequestIdOf(images);
-        if (!amountIsResolvable || requestId is null || _falCost is null) return;
-        _ = TopUpAmountAsync(ownerId, actualModel, requestId, initiator);
+        if (!pendingAmount) return;
+        _ = TopUpAmountAsync(ownerId, actualModel, requestId!, initiator);
     }
 
     // Фактическая цена по request_id — через существующий Core-шов IFalRequestCost

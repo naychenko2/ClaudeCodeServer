@@ -156,6 +156,7 @@ public class ImageGenerationSpendTests
         fal.LastModel.Should().BeNull();
 
         var topUp = spend.Records.Last();
+        topUp.Should().NotBeSameAs(first, "догоняющая запись обязана существовать: без неё Last() — это первая запись");
         topUp.Model.Should().Be("test/default-model", "догоняющая запись — про тот же вызов");
     }
 
@@ -178,6 +179,42 @@ public class ImageGenerationSpendTests
         // спрашивают цену. Значит и обещания уточнения в подписи нет — это счётчик вызовов.
         rec.Label.Should().Be(ImageGenerationService.SpendLabel);
         cost.Calls.Should().Be(0, "опрашивать цену не по чему: request_id не приходил");
+    }
+
+    // Обещание уточнения ставят только там, где его будут исполнять (минор ревью R-S-SPEND-2):
+    // оно выводится из ручки опроса (id запроса в ответе + средство спросить), а не из ключа
+    // провайдера. fal без x-fal-request-id в ответе — опрос не начнётся никогда, подпись
+    // остаётся обычным счётчиком вызовов.
+    [Fact]
+    public async Task ФалБезИдентификатораЗапроса_ОбещанияУточненияНет()
+    {
+        var fal = new FakeGenerator("fal", enabled: true);   // ответ без заголовка x-fal-request-id
+        var spend = new CapturingSpend();
+        var cost = new FakeCost(0.01);
+        var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend, cost);
+
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None);
+
+        var rec = spend.Records.Single();
+        rec.Source.Should().Be(SpendSources.Fal);
+        rec.Label.Should().Be(ImageGenerationService.SpendLabel,
+            "по чему спрашивать цену нет — обещание «сумма уточняется» не ставят");
+        cost.Calls.Should().Be(0, "опрашивать цену не по чему: request_id не приходил");
+    }
+
+    // Та же граница со стороны средства опроса: id есть, но IFalRequestCost не подключён —
+    // опрос не начнётся, и обещания тоже нет
+    [Fact]
+    public async Task ФалБезСредстваОпроса_ОбещанияУточненияНет()
+    {
+        var fal = new FakeGenerator("fal", enabled: true, requestId: "req-1");
+        var spend = new CapturingSpend();
+        var service = new ImageGenerationService([fal], Store(NewTempDir()), null, spend);
+
+        await service.GenerateManyAsync(Avatar, "кот", 1, Owner, SpendInitiators.Human, CancellationToken.None);
+
+        spend.Records.Single().Label.Should().Be(ImageGenerationService.SpendLabel,
+            "спросить цену нечем — обещание «сумма уточняется» не ставят");
     }
 
     [Fact]

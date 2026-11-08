@@ -14,9 +14,9 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
-// Драйвер-заглушки хоста: генерация картинок всегда работает. Ключ glif и отсутствие
-// request_id — догоняющий опрос цены fal не начинается, в учёте остаётся ровно одна
-// запись на каждый вызов.
+// Драйвер-заглушки хоста: генерация картинок всегда работает. Ответа без request_id —
+// ручки опроса нет, догоняющий опрос цены не начинается и обещания уточнения нет:
+// в учёте остаётся ровно одна запись на каждый вызов.
 internal sealed class AlwaysImagesGenerator : IImageGenerator
 {
     public string Key => "glif";
@@ -120,10 +120,12 @@ public class AvatarSpendPathsTests : IClassFixture<AvatarSpendFactory>
     private PersonaManager Personas => _factory.Services.GetRequiredService<PersonaManager>();
 
     // Записи генерации картинок — по ним видно адресата и инициатора траты. Опознаём по
-    // роли в паре: число вариантов + источник провайдера. Текст подписи для этого не
-    // признак: он меняется вместе с продуктовым текстом.
+    // числу вариантов: у догоняющей записи и чатовых LLM-записей оно 0, а единственный
+    // генерирующий путь этого теста — аватарный. Источник провайдера — не признак: он
+    // равен ключу заглушки этого хоста и не относится к проверяемым путям. Текст подписи
+    // для этого тоже не признак: он меняется вместе с продуктовым текстом.
     private List<SpendRecord> ImageRecords() =>
-        _factory.Spend.Records.Where(r => r.Generations > 0 && r.Source == SpendSources.Glif).ToList();
+        _factory.Spend.Records.Where(r => r.Generations > 0).ToList();
 
     private Persona NewPersona() =>
         Personas.Create(OwnerId, "А" + Guid.NewGuid().ToString("N")[..5], null, null, null, null, null,

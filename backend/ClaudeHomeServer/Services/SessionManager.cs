@@ -4126,6 +4126,15 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         return string.IsNullOrEmpty(merged) ? null : merged;
     }
 
+    // Принадлежит ли живой ход чата человеку — тот же признак, по которому ядро метит учёт
+    // хода (защёлка TurnFromHuman), но БЕЗ снятия: ядро гасит её Interlocked.Exchange на
+    // ResultMessage, сторонний читатель обязан оставить её живой. Живого хода нет — false:
+    // признак вне хода не поднимается никогда. Нужен REST-точкам траты (PersonasController):
+    // канал (REST) не различает человека в UI и агента через stdio-MCP — их различает ход.
+    public bool IsTurnFromHuman(string sessionId, string ownerId) =>
+        GetOwned(sessionId, ownerId) is not null && _sessions.TryGetValue(sessionId, out var entry)
+        && Volatile.Read(ref entry.TurnFromHuman) == 1;
+
     // Вердикт рамки хода по чату. Нет чата / чужой / проект исчез — Narrow (fail-closed), чат вне
     // проекта — Wide (личное пространство и так его).
     public Access.TurnFrameKind GetTurnFrame(string? sessionId, string ownerId)

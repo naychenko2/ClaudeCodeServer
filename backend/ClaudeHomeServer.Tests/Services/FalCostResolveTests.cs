@@ -684,7 +684,9 @@ public class FalCostResolveTests
         var live = svc.ResolveUsdAsync("req-live", CancellationToken.None);
         (await Task.WhenAny(live, Task.Delay(800))).Should().Be(live,
             "живой запрос не ждёт слота и интервала бэкфилла");
-        (await live).Should().Be(0.123);
+        // Ожидание ограничено таймером (хвосты ревью R-S-SPEND-TAIL-1, п.2): при залипании
+        // живой полосы — явный TimeoutException, а не висение до xUnit-таймаута.
+        (await live.WaitAsync(TimeSpan.FromSeconds(5))).Should().Be(0.123);
         handler.BfFinished.Task.IsCompleted.Should().BeFalse(
             "бэкфилл ещё в транспорте — живой опрос его не ждал");
     }
@@ -719,6 +721,22 @@ public class FalCostResolveTests
         var query = handler.LastRequest!.RequestUri!.Query;
         query.Should().Contain("request_id=req-x", "последний сетевой запрос — по общему request_id");
         query.Should().NotContain("req-bf", "после живого опроса бэкфилл не вошёл в транспорт второй раз");
+
+        // Хвосты ревью R-S-SPEND-TAIL-1, п.1: освобождение занятого слота _gate. Оставленное
+        // ожидание бэкфилла (req-x ушёл на живую полосу) всё же получит слот, когда req-bf1 его
+        // освободит, — и не вернёт его никогда, если ReleaseIfAdmittedAsync его не отдаёт:
+        // гейт залипает, и следующий бэкфилл не проходит до конца процесса. Проверка: после
+        // живого подъёма следующий бэкфилл по другому id доходит до публикации цены.
+        var tailPublished = new TaskCompletionSource<FalCostMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        svc.OnCostResolved = (sessionId, msg) =>
+        {
+            if (msg.RequestId == "req-tail") tailPublished.TrySetResult(msg);
+            return Task.CompletedTask;
+        };
+        svc.Track("s-1", "req-tail", null);
+        (await Task.WhenAny(tailPublished.Task, Task.Delay(5000))).Should().Be(tailPublished.Task,
+            "живой подъём не оставил занятый слот _gate: следующий бэкфилл по другому id проходит");
+        (await tailPublished.Task).CostUsd.Should().Be(0.123, "бэкфилл прошёл полный цикл: цена опубликована");
     }
 
     [Fact]

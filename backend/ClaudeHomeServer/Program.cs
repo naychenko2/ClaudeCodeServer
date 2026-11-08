@@ -1453,12 +1453,15 @@ app.MapHub<TerminalHub>("/hubs/terminal");
 // push команды в конкретное соединение. Схема авторизации — токен устройства, а не общий JWT
 app.MapHub<ClaudeHomeServer.Services.Devices.DeviceHub>("/hubs/devices");
 // Шлюз LLM локальных проектов (ADR-016): авторизация — токен хода, а не JWT; выключен
-// тумблером LlmGateway:Enabled (404). Подсистема llm отключаемая — маппим только при ней.
+// тумблером LlmGateway:Enabled (404). llm — строка ядра (CanDisable=false в LlmSubsystem):
+// панель её не трогает, но ручной гейт в конфиге по-прежнему не регистрирует вертикаль —
+// маппим только при её сервисах.
 if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.UpstreamSelector>() is not null)
     ClaudeHomeServer.Services.Llm.Gateway.LlmGatewayEndpoints.MapLlmGateway(app);
 
 // Шлюз MCP для хода на устройстве (ADR-016): вход по токену хода, а не по JWT.
-// Подсистема llm отключаемая — без неё нет и токенов хода.
+// llm — строка ядра (CanDisable=false): без её сервисов нет и токенов хода; GetService —
+// на случай ручного Subsystems:llm:Enabled=false в конфиге (панель такой тумблер не пишет).
 if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.TurnTokenService>() is not null)
 {
     ClaudeHomeServer.Services.Llm.Gateway.McpGatewayEndpoints.MapMcpGateway(app);
@@ -1481,7 +1484,8 @@ app.MapDeviceExecChannel();
 var shutdownSessions = app.Services.GetRequiredService<SessionManager>();
 // Токен хода (ADR-016): резолв здесь создаёт экземпляр, а с ним — подписку на
 // turn/completed; удаление чата отзывает его токены явно (ход мог и не начаться).
-// GetService: подсистема llm отключаемая.
+// GetService: панель тумблер не пишет (llm — строка ядра, CanDisable=false), но ручной
+// Subsystems:llm:Enabled=false в конфиге её сервисов не регистрирует.
 if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.TurnTokenService>() is { } turnTokens)
     shutdownSessions.OnSessionDeleted += s => turnTokens.RevokeSession(s.Id);
 var shutdownTerminals = app.Services.GetRequiredService<TerminalService>();

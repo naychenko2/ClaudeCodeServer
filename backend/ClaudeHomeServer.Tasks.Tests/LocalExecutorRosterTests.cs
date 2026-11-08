@@ -14,8 +14,8 @@ namespace ClaudeHomeServer.Tasks.Tests;
 // локальный», поэтому поломка боевой реализации — подмена ExecutorModel на PersonaModel, игнор
 // тира задачи, опускание персоны — в них не краснеет. Здесь проверяется сама реализация шва:
 // разворот модели — только ModelAssignmentResolver, проводкой как в бою: DI собирает его через
-// AddSingleton<ModelAssignmentResolver> (LlmSubsystem.cs:268) и подставляет все пять аргументов,
-// включая SpecialtySettingsStore (:351) и LlmProviderRegistry (:296); тест держит тот же набор
+// AddSingleton<ModelAssignmentResolver> (LlmSubsystem.cs:274) и подставляет все пять аргументов,
+// включая SpecialtySettingsStore (:357) и LlmProviderRegistry (:302); тест держит тот же набор
 // (инвариант «резолвер теста = боевой резолвер»). Локальность — IModelResolver.IsLocal
 // провайдера этой модели.
 //

@@ -76,8 +76,9 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 /// держит сторож <see cref="Сторож_согласованности_CanDisable_и_метки_ядро_сквозная"/>: метка
 /// «ядро/сквозная» в <see cref="KnownViolations"/> требует `CanDisable=false` в классе подсистемы,
 /// а `CanDisable=false` — задокументированной строки (или `core:`); строка KnownViolations без
-/// метки (`llm`) держится отключаемой — невыключаемость объявляется только явной меткой (п. 3
-/// хвоста R-S2b-1). Строки ядра входят в
+/// метки держится отключаемой — невыключаемость объявляется только явной меткой (п. 3
+/// хвоста R-S2b-1); для <c>llm</c> — обратное: метка обязательна (<see cref="CoreLabeledKeys"/>).
+/// Строки ядра входят в
 /// <see cref="MatrixKeys"/>: сторож полноты видит их состав, тест строки их пропускает.
 ///
 /// ═══ Почему именно старт с выключенным ключом, а не горячее выключение ═══
@@ -149,9 +150,11 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// ядром все такие строки: code-graph, dossiers, git, knowledge, memory, project-icons,
     /// project-services, skills, tasks — их выключение невозможно, пока ядро требует их сервисов
     /// обязательными параметрами (цепочки в самих строках); опционализация этих швов — отдельное
-    /// решение, не этого шага. Строка <c>llm</c> намеренно БЕЗ метки: по решению постановщика
-    /// вертикаль остаётся отключаемой, `CanDisable=false` — только по явному решению Александра/Андрея;
-    /// направление 3 сторожа держит это: `CanDisable=false` строки без метки красит его.
+    /// решение, не этого шага. Строку <c>llm</c> добавил финал фичи «Внутренняя оптимизация AI Home»
+    /// (блокер 1 ревью архитектора): ядро сессий берёт её сервисы обязательными параметрами
+    /// конструктора (SessionManager.cs:739-743) — без них оно не активируется, и тумблер на этой
+    /// вертикали не имеет смысла. Метка и `CanDisable=false` поставлены вместе: снять их можно
+    /// только вместе — по отдельности красит направление 2 или 3b (<see cref="CoreLabeledKeys"/>).
     /// Строка <c>images</c> закрыта и снята из перечня в сдаче 2 S2b-1 (привязка ручек + отказ 503).
     /// </summary>
     internal static readonly Dictionary<string, string> KnownViolations = new(StringComparer.OrdinalIgnoreCase)
@@ -172,13 +175,13 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             + "(backend/ClaudeHomeServer/Services/PersonaBindingsService.cs:138), который сам обязателен ядру "
             + "сессий (backend/ClaudeHomeServer/Services/SessionManager.cs:745). Первый запрос к хосту не отвечен. "
             + "CanDisable или опционализацию этого шва решает S2b-1.",
-        // Строка без метки «ядро/сквозная» намеренно: по решению постановщика (S2a-2, S2b-1)
-        // вертикаль остаётся отключаемой, CanDisable=false — только по явному решению Александра/Андрея.
-        ["llm"] = "ядро сессий (CanDisable не объявлен — вертикаль отключаемая): ядро сессий "
+        ["llm"] = "ядро/сквозная: ядро сессий "
             + "(backend/ClaudeHomeServer/Services/SessionManager.cs:739-743) требует "
             + "ILlmSessionAdapterFactory, UsageService и LlmProviderRegistry гейтнутой сборки ClaudeHomeServer.Llm "
-            + "(backend/ClaudeHomeServer.Llm/LlmSubsystem.cs:327 — фабрика адаптеров, :356 — UsageService, "
-            + ":296 — LlmProviderRegistry) обязательными параметрами — первый запрос к хосту не отвечен.",
+            + "(backend/ClaudeHomeServer.Llm/LlmSubsystem.cs:333 — фабрика адаптеров, :362 — UsageService, "
+            + ":302 — LlmProviderRegistry) обязательными параметрами — первый запрос к хосту не отвечен. "
+            + "Метку и CanDisable=false поставил финал фичи (блокер 1 ревью архитектора): без них "
+            + "тумблер панели выключил бы вертикаль, которую ядро держит обязательной.",
         ["memory"] = "ядро/сквозная: шов контекста хода PersonaRecallSourceAdapter "
             + "(backend/ClaudeHomeServer/Services/Composition/PromptSeamAdapters.cs:18, ADR-023) и ядро проектов "
             + "(backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) требуют PersonaMemoryService "
@@ -413,12 +416,19 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
         rows.Single(r => string.Equals(r.GetProperty("key").GetString(), key, StringComparison.OrdinalIgnoreCase));
 
     /// Метка «ядро/сквозная» в причине KnownViolations — объявление ядра. Её ровно этот префикс
-    /// и есть: строка без него (llm) — задокументированное нарушение НЕ-ядра, и сторож держит её
+    /// и есть: строка без него — задокументированное нарушение НЕ-ядра, и сторож держит её
     /// отключаемой (направление 3 ниже). Метка и `CanDisable=false` — две половины одного решения:
     /// метка без кода красит направление 2, код без метки — направление 3, и переформулировать
     /// причину, чтобы обойти сторож, больше нечем; менять формулировку может только
-    /// тот, кто меняет CanDisable в классе подсистемы.
+    /// тот, кто меняет CanDisable в классе подсистемы. Для <see cref="CoreLabeledKeys"/>
+    /// направление 3 обратное: там метка ядра обязательна (3b).
     private const string CoreReasonPrefix = "ядро/сквозная";
+
+    /// Ключи, для которых метка «ядро/сквозная» обязательна (решение финала фичи «Внутренняя
+    /// оптимизация AI Home», блокер 1 ревью архитектора): ядро сессий берёт сервисы `llm`
+    /// обязательными параметрами конструктора (Services/SessionManager.cs:739-743) — без них оно
+    /// не активируется. Снять метку — значит молча вернуть вертикали тумблер, которого нет по коду.
+    private static readonly string[] CoreLabeledKeys = ["llm"];
 
     /// <summary>
     /// Сторож согласованности CanDisable и метки «ядро/сквозная» (S2b-1), три направления:
@@ -428,10 +438,12 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     ///    в классе подсистемы — метка без кода была бы обещанием, которое никто не держит;
     /// 3. ключ KnownViolations БЕЗ метки ядра обязан иметь `CanDisable=true` в снапшоте —
     ///    сделать такую вертикаль невыключаемой можно только явным объявлением ядра (меткой),
-    ///    а не молча CanDisable=false (п. 3 хвоста R-S2b-1: строка `llm` без метки, вертикаль
-    ///    отключаема, пока решение Александра/Андрея не принято).
+    ///    а не молча CanDisable=false (п. 3 хвоста R-S2b-1).
+    /// 3b. для ключей <see cref="CoreLabeledKeys"/> (`llm`) направление обратное: метка ядра
+    ///    обязательна (решение финала фичи, блокер 1 ревью архитектора). Без метки вернулась бы
+    ///    отключаемость, которой нет по коду: ядро сессий не активируется без её сервисов.
     /// Мутация «убрать CanDisable=false у любого из этих ключей» краснит направление 2,
-    /// «поставить CanDisable=false строке без метки (llm)» — направление 3.
+    /// «поставить CanDisable=false строке без метки» — направление 3, «снять метку ядра у llm» — 3b.
     /// </summary>
     [Fact]
     public async Task Сторож_согласованности_CanDisable_и_метки_ядро_сквозная()
@@ -467,6 +479,17 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             "строка KnownViolations без метки «ядро/сквозная» остаётся отключаемой (CanDisable=true "
             + "в классе): объявить её ядром — решение Александра/Андрея, оно ставится меткой в "
             + "причине, а не молча CanDisable=false");
+
+        // 3b. Для CoreLabeledKeys направление обратное: метка ядра обязательна. Её отсутствие
+        //     (или строки вовсе) молча вернуло бы вертикали тумблер, которого нет по коду ядра.
+        var unlabeledCore = CoreLabeledKeys
+            .Where(k => !KnownViolations.TryGetValue(k, out var reason)
+                || !reason.StartsWith(CoreReasonPrefix, StringComparison.Ordinal))
+            .ToList();
+        unlabeledCore.Should().BeEmpty(
+            "строка «llm» обязана нести метку «ядро/сквозная»: ядро сессий требует её сервисов "
+            + "обязательными параметрами (Services/SessionManager.cs:739-743) — CanDisable=false и "
+            + "метка поставлены одним решением финала фичи, снять метку, оставив CanDisable=false, нельзя");
     }
 
     /// <summary>

@@ -9,7 +9,7 @@ namespace ClaudeHomeServer.Services.Memory;
 // Состав (ранее жил блоком в Program.cs):
 // - PersonaMemoryService — фасад персональной памяти: стор `data/persona-memory.json`
 //   + Dify-датасет per-persona, дебаунс 15 с, recall по relevance×recency×typeWeight;
-//   реализует `IKnowledgeSyncParticipant` (форвардер регистрации остаётся в Program.cs).
+//   реализует `IKnowledgeSyncParticipant` (форвардер регистрации — Services/Composition/CoreSeamsGlue.cs:36-37).
 // - PersonaMemoryConsolidationService (BackgroundService) — LLM-merge дублей/родственных
 //   (операции merge/drop) + вытеснение по retention-скорингу. Singleton + hosted через
 //   AddGatedHostedFrom (тот же инстанс, что и в DI: autolearn ставит заявки через
@@ -18,7 +18,7 @@ namespace ClaudeHomeServer.Services.Memory;
 //   завершённого хода персонной сессии. Singleton + hosted через AddGatedHostedFrom.
 // - TeamMemoryService — фасад общей памяти команды: стор `data/team-memory.json`
 //   + Dify-датасет `{username}:team:{projectName}`, та же дебаунс-семантика, recall
-//   из всех сессий проекта. Реализует `IKnowledgeSyncParticipant` (форвардер в Program.cs).
+//   из всех сессий проекта. Реализует `IKnowledgeSyncParticipant` (форвардер — Services/Composition/CoreSeamsGlue.cs:38-39).
 // - TeamMemoryConsolidationService (BackgroundService) — командный аналог
 //   Persona-консолидации: merge дублей по типу + вытеснение по TeamMemory:MaxEntries.
 //   Singleton + hosted через AddGatedHostedFrom.

@@ -295,7 +295,7 @@ public class SpendDisabledTests : IClassFixture<SpendDisabledTests.Hosts>
 
         // Запись обходит оба цикла в Program.cs (`RecordActive` через ModuleLoader,
         // `RecordDisabled` через `!m.Enabled`) — отдельный цикл по
-        // `m.Enabled && !SubsystemGate.IsEnabled` (ModuleRegistry.cs:55, цикл в Program.cs:315) обязан
+        // `m.Enabled && !SubsystemGate.IsEnabled` (Services/DynamicModules/ModuleRegistry.cs:55, цикл в Program.cs:315) обязан
         // дать запись, иначе `SpendController.GetAsync` отдаст 401/404 без следов
         // подсистемы.
         spend.GetProperty("key").GetString().Should().Be("spend",

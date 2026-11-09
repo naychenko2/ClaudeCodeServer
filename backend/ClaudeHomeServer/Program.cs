@@ -617,8 +617,9 @@ builder.Services.AddSubsystems(builder.Configuration,
     // (MemoryWriteResolver/MemoryDify) при этом независим.
     new ClaudeHomeServer.Services.Memory.MemorySubsystem(),
     // Knowledge — после Dossiers: вертикаль Dify RAG (Knowledge.md + ADR-013).
-    // Форвардеры `IKnowledgeSyncParticipant → {DossierStore, ...}` остаются в
-    // Program.cs (кросс-вертикальный клей), поэтому KnowledgeSubsystem не зависит
+    // Форвардеры `IKnowledgeSyncParticipant → {DossierStore, ...}` — в
+    // Services/Composition/CoreSeamsGlue.cs:36-51 (кросс-вертикальный клей), поэтому
+    // KnowledgeSubsystem не зависит
     // от Dossiers/Knowledge напрямую; миграция WorkspaceKnowledgeStore из Project —
     // отдельный пост-билд блок ниже, чтобы не словить construct до PostRestoreHook.
     new ClaudeHomeServer.Services.Knowledge.KnowledgeSubsystem(),
@@ -930,7 +931,7 @@ static bool IsOwnHostedServiceDescriptor(ServiceDescriptor d)
     return n == "ClaudeHomeServer" || n.StartsWith("ClaudeHomeServer.", StringComparison.Ordinal);
 }
 
-// Чтение `inspectionMode` здесь повторное — первое (строка 68) смотрит на конфиг ДО
+// Чтение `inspectionMode` здесь повторное — первое (Program.cs:74) смотрит на конфиг ДО
 // `ConfigureAppConfiguration` (TestWebApplicationFactory.ExtraConfig), второй раз —
 // уже после всех источников. Раннее чтение остаётся для ProcessRegistry/InstanceLock,
 // позднее — для гейта фоновых сервисов: без этого фильтр не снимал бы хосты

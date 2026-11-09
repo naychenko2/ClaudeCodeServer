@@ -71,7 +71,7 @@ public class KnowledgeSubsystemRegistrationTests
         services.Should().Contain(s => s.ServiceType == typeof(Microsoft.Extensions.Options.IConfigureOptions<ClaudeHomeServer.Models.DifyOptions>));
 
         // Сервисы из блока Program.cs до выноса в подсистему (без 5 форвардеров
-        // `IKnowledgeSyncParticipant → {DossierStore, ...}`, которые остаются в Program.cs).
+        // `IKnowledgeSyncParticipant → {DossierStore, ...}`, которые в Services/Composition/CoreSeamsGlue.cs:36-51).
         services.Should().Contain(s => s.ServiceType == typeof(ClaudeHomeServer.Services.Knowledge.KnowledgeService));
         services.Should().Contain(s => s.ServiceType == typeof(ClaudeHomeServer.Services.Knowledge.ProjectKnowledgeSyncService));
         services.Should().Contain(s => s.ServiceType == typeof(ClaudeHomeServer.Services.Knowledge.UserKnowledgeCascade));

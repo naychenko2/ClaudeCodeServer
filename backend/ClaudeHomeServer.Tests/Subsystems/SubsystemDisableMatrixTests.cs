@@ -49,7 +49,7 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 /// <c>images</c> починена (опциональная зависимость + 503; аватарные ручки PersonasController
 /// привязаны атрибутом на МЕТОДЕ — на классе его ставить нельзя: остальные эндпоинты персон
 /// — ядро). <c>project-icons</c> остаётся без ручки: единственный её потребитель — ядро
-/// ProjectsController (ProjectsController.cs:25), и вертикаль объявлена ядром (CanDisable=false):
+/// ProjectsController (ProjectsController.cs:26), и вертикаль объявлена ядром (CanDisable=false):
 /// мерять «отказ выключенной» нечего. Повторить вакуумную зелёность не даёт сторож полноты
 /// <see cref="Сторож_полноты_у_каждого_отключаемого_ключа_есть_привязанная_ручка"/>.
 ///
@@ -168,12 +168,12 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             + "SessionHub (backend/ClaudeHomeServer/Hubs/SessionHub.cs:26) требует FileWatcherService, "
             + "а он (backend/ClaudeHomeServer/Services/FileWatcherService.cs:103) — CodeGraphService. "
             + "Первый запрос к хосту не отвечен. CanDisable или опционализацию этого шва решает S2b-1.",
-        ["dossiers"] = "ядро/сквозная: ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) "
+        ["dossiers"] = "ядро/сквозная: ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:26) "
             + "требует DossierStore обязательным параметром; та же зависимость — у MemoryToolset "
             + "(backend/ClaudeHomeServer/Services/Mcp/Http/MemoryToolset.cs:45). Первый запрос к хосту не отвечен. "
             + "CanDisable или опционализацию этого шва решает S2b-1.",
         ["git"] = "ядро/сквозная: ReviewTreePool (backend/ClaudeHomeServer/Services/ReviewTreePool.cs:49) "
-            + "и ядро проектов (Controllers/ProjectsController.cs:25 — GitService, GitServerService) требуют "
+            + "и ядро проектов (Controllers/ProjectsController.cs:26 — GitService, GitServerService) требуют "
             + "GitService обязательным параметром; первый запрос к хосту не отвечен. Решает S2b-1 (CanDisable).",
         ["knowledge"] = "ядро/сквозная: ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:26) "
             + "требует WorkspaceKnowledgeStore и KnowledgeService; та же зависимость — у PersonaBindingsService "
@@ -196,11 +196,11 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             + "тумблер панели выключил бы вертикаль, которую ядро держит обязательной.",
         ["memory"] = "ядро/сквозная: шов контекста хода PersonaRecallSourceAdapter "
             + "(backend/ClaudeHomeServer/Services/Composition/PromptSeamAdapters.cs:18, ADR-023) и ядро проектов "
-            + "(backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) требуют PersonaMemoryService "
+            + "(backend/ClaudeHomeServer/Controllers/ProjectsController.cs:26) требуют PersonaMemoryService "
             + "обязательным параметром. Первый запрос к хосту не отвечен. CanDisable или опционализацию "
             + "этого шва решает S2b-1.",
         ["project-icons"] = "ядро/сквозная: хост стартует и ключ виден выключенным, но соседняя ручка мертва: "
-            + "ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) требует "
+            + "ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:26) требует "
             + "ProjectIconGlyphService обязательным параметром → GET /api/projects 500. Единственная строка, "
             + "где рвётся не старт, а сосед. Решает S2b-1 (CanDisable).",
         ["project-services"] = "ядро/сквозная: ядро чата (backend/ClaudeHomeServer/Hubs/SessionHub.cs:27) требует "
@@ -214,7 +214,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             + "ExternalMcpContexts (:197) — эти роли фасад держит обязательными параметрами конструктора "
             + "(backend/ClaudeHomeServer/Services/SessionManager.cs:275-276). Первый запрос к хосту не отвечен. "
             + "CanDisable или опционализацию этого шва решает S2b-1.",
-        ["tasks"] = "ядро/сквозная: ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) "
+        ["tasks"] = "ядро/сквозная: ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:26) "
             + "требует TaskManager обязательным параметром; та же зависимость — у TeamWaveService "
             + "(backend/ClaudeHomeServer/Services/Team/TeamWaveService.cs:89). Первый запрос к хосту не отвечен. "
             + "Решает S2b-1 (CanDisable).",

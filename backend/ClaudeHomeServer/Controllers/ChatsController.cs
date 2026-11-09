@@ -135,7 +135,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
     {
         // FIN3-2 (доработка по возврату ревью cea595f7): тот же гейт, что на POST /sessions
         // (SessionsController.cs:55). resume принимается только для транскрипта, видимого
-        // вызывающему: ClaudeSessionId = resumeSessionId (SessionManager.cs:4311) — ключ истории
+        // вызывающему: ClaudeSessionId = resumeSessionId (ChatCreation.cs:559) — ключ истории
         // (HistoryKeyOf) и транскрипта CLI; новый чат с csid чужого приватного получил бы его
         // разговор через эту дверь. Отказ неотличим от несуществующего. Неизвестный ключ не
         // трогается: ветвление подаёт свой новый csid до регистрации чата, внешний транскрипт —

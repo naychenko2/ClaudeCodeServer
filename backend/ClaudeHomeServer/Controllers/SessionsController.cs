@@ -52,7 +52,7 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         // через эту дверь. Отказ — тот же, что на неизвестный id в теле («Персона не найдена»
         // ниже): существование чужого приватного не выдаётся. Неизвестный ключ не трогается —
         // продолжение чата (ветвление) подаёт свой новый csid до регистрации чата
-        // (SessionManager.cs:3660), внешний транскрипт — законный случай.
+        // (ChatCreation.cs:160), внешний транскрипт — законный случай.
         if (req.ResumeSessionId is { Length: > 0 } resumeId && sessions.IsTranscriptReservedForOthers(resumeId, UserId))
             return NotFound(new { error = "Чат не найден" });
         string? personaId = req.PersonaId;

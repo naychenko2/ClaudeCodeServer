@@ -34,7 +34,7 @@ public sealed class GitAutoCommitService(
     }
 
     // Актор идущего хода по чату. К ResultMessage ядро уже сняло статус хода и обнулило
-    // актора (SessionManager.cs:3785-3786; свидетель — SessionManagerTests.TurnActor.cs:34),
+    // актора (SessionStore.cs:799-800; свидетель — SessionManagerHierarchyTests.TurnActor.cs:33-34),
     // поэтому запоминаем его на сообщениях ВНУТРИ хода — тот же образец, что
     // ChatTurnLoggerService.cs:41-53. Ключ — session.Id; запись снимается на ResultMessage.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _rememberedActors = new();
@@ -68,7 +68,7 @@ public sealed class GitAutoCommitService(
 
         // Автор автокоммита (S3-1b) — актор завершённого хода: берётся запомненным внутри
         // хода, СИНХРОННО, до Task.Run: к моменту фоновой задачи реестр хода пуст (ядро
-        // снимает актора при выходе статуса из Working — SessionManager.cs:3785-3786).
+        // снимает актора при выходе статуса из Working — SessionStore.cs:799-800).
         var author = AuthorOfTurn(project, session, rememberedActor);
         _ = Task.Run(() => AutoCommitSafeAsync(project, session, root, author));
         return Task.CompletedTask;

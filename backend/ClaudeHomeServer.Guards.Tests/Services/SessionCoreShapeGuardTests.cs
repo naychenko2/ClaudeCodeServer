@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Sessions;
@@ -301,7 +302,7 @@ public class SessionCoreShapeGuardTests
         // пропуска, что лечился модификатором вне списка). Теперь оно даёт громкий отказ с названием
         // формы и строки: сначала научи разбор формы, потом вводи объявление (тот же порядок, что у
         // директив условной компиляции в Файл_фасада_без_директив_условной_компиляции).
-        var stripped = StripRawStringsAndComments(facadeSource);
+        var (stripped, map) = StripRawStringsAndComments(facadeSource);
         var names = new HashSet<string>();
         foreach (Match m in Regex.Matches(stripped,
                      @"^(?:\[(?:[^\[\]\r\n""']|""(?:[^""\\\r\n]|\\.)*""|'(?:\\.|[^'\\\r\n])+'|(?<d>\[)|(?<-d>\]))*(?(d)(?!))\]\s*)*(?:namespace\s+[\w.]+;\s*)?(?<mods>(?:\w+\s+)*?)(?<kw>class|record(?:\s+(?:class|struct))?|struct|enum|interface|delegate)\s+(?<name>\w+)",
@@ -327,10 +328,16 @@ public class SessionCoreShapeGuardTests
                 // ошибка в другой форме: пустая строка внутри многострочного verbatim-аргумента атрибута
                 // ([Obsolete] с аргументом @"…", содержащим пустую строку) давала отсечение внутри
                 // литерала: хвост объявления терялся. Граница — ближайшая «;» или пустая строка вне
-                // литералов (FirstDeclarationBoundaryOutsideLiterals).
+                // литералов (FirstDeclarationBoundaryOutsideLiterals). Тот же класс у двух других
+                // форм литералов: «;» внутри интерполяционной дыры ([Obsolete($"{m["k;v"]}")]) и
+                // «;» внутри литерала с line-continuation ([Obsolete("a;b\<NL>c")]) — прежний узор
+                // их не съедал целиком и граница вставала на внутреннем «;». Отказ — текст
+                // объявления из исходника (OriginalSpan по карте индексов очистки): комментарий или
+                // raw-строка внутри объявления в отказ не теряются; границы span — те же, что у
+                // границы объявления, поэтому текст за объявлением в отказ не входит по-прежнему.
                 int kwAt = m.Groups["kw"].Index;
                 int cut = FirstDeclarationBoundaryOutsideLiterals(stripped, kwAt);
-                string line = stripped.Substring(m.Index, cut - m.Index).Trim();
+                string line = OriginalSpan(facadeSource, map, m.Index, cut).Trim();
                 throw new InvalidOperationException(
                     "Неизвестная форма объявления «delegate» top-level типа (строка \"" + line +
                     "\"): узор её не разбирает — тип молча выпал бы из полноты; сначала научи разбор формы, потом вводи объявление");
@@ -340,20 +347,41 @@ public class SessionCoreShapeGuardTests
         return names;
     }
 
+    /// <summary>Альтернативы строковых литералов — ОДНА форма на обе стороны разбора: её использует
+    /// и граница объявления (<see cref="FirstDeclarationBoundaryOutsideLiterals"/>), и очистка
+    /// исходника (<see cref="StripRawStringsAndComments"/>), чтобы стороны не расходились в том, что
+    /// считается литералом. Верbatim-строка; обычная строка — escape-пара <c>\\[\s\S]</c> держит и
+    /// обычный escape, и line-continuation (обратная косой перед переводом строки), поэтому литерал
+    /// с продолжением строки потребляется целиком и «;» внутри него границей не считается; char-строка
+    /// (escape-пара, та же форма, что в attribute-узоре <see cref="FacadeTopLevelNames"/>);
+    /// интерполированная строка — тело без кавычек и фигурных скобок, пары <c>{{</c>/<c>}}</c>, escapes
+    /// и интерполяционные дыры <c>{…}</c> с балансом скобок: внутри дыры — текст, escapes и вложенные
+    /// литералы (обычный, verbatim, char), поэтому «;» внутри <c>{m["k;v"]}</c> — не граница.
+    /// Границы формы: интерполированная строка с вложенной интерполированной внутри дыры целиком не
+    /// разбирается — тогда работает откат: обычная альтернатива съедает текст от первой кавычки до
+    /// следующей, как было до расширения (отказ остаётся громким). Префиксные формы <c>$@</c>/<c>$:</c>
+    /// разбираются с позиции <c>@</c> как verbatim, <c>$"</c> — как интерполированная.</summary>
+    private const string StringLiteralsPattern =
+        "@\"(?:[^\"]|\"\")*\"|\"(?:[^\"\\\\\\r\\n]|\\\\[\\s\\S])*\"|'(?:\\\\.|[^'\\\\\\r\\n])+'|" +
+        "\\$\"(?:\\{\\{|\\}\\}|[^\"\\\\{}\\r\\n]|\\\\[\\s\\S]|\\{(?:[^{}\"\\\\\\r\\n]|\\\\[\\s\\S]|" +
+        "\"(?:[^\"\\\\\\r\\n]|\\\\[\\s\\S])*\"|@\"(?:[^\"]|\"\")*\"|'(?:\\\\.|[^'\\\\\\r\\n])+'|" +
+        "(?<hole>\\{)|(?<-hole>\\}))*(?(hole)(?!))\\})*\"";
+
     /// <summary>Конец логического объявления delegate от позиции <c>from</c>: позиция после ближайшей
     /// границы — «;» вне строковых литералов или пустой строки вне литералов (для пустой строки — её
     /// начало, хвост пробелов снимает Trim вызывающего); границы нет — конец исходника. Литералы
-    /// разбираются теми же альтернативами, что сохраняет <see cref="StripRawStringsAndComments"/>
-    /// (обычная, verbatim- и char-строка — дословно та же форма, порядок тот же): в очищенном
+    /// разбираются тем же узором <see cref="StringLiteralsPattern"/>, что сохраняет и
+    /// <see cref="StripRawStringsAndComments"/> (дословно та же форма, порядок тот же): в очищенном
     /// исходнике raw-строк и комментариев нет, остальные литералы — как в оригинале, и «;» или пустая
-    /// строка внутри литерала (многострочный verbatim-аргумент атрибута) концом объявления не
-    /// считаются. Каждая конструкция потребляется целиком, поэтому граница после закрытой кавычки —
-    /// обычная граница; обход слева направо — первая найденная граница ближайшая. Пустой строковый
-    /// литерал матчится и ничего не сдвигает; граница после конца исходника — нет.</summary>
+    /// строка внутри литерала (многострочный verbatim-аргумент атрибута, аргумент с line-continuation,
+    /// «;» внутри интерполяционной дыры) концом объявления не считаются. Каждая конструкция
+    /// потребляется целиком, поэтому граница после закрытой кавычки — обычная граница; обход слева
+    /// направо — первая найденная граница ближайшая. Пустой строковый литерал матчится и ничего не
+    /// сдвигает; граница после конца исходника — нет.</summary>
     private static int FirstDeclarationBoundaryOutsideLiterals(string stripped, int from)
     {
         foreach (Match t in Regex.Matches(stripped.Substring(from),
-                     "@\"(?:[^\"]|\"\")*\"|\"(?:[^\"\\\\\\r\\n]|\\\\.)*\"|'(?:\\.|[^'\\\\\\r\\n])+'|(?<semi>;)|(?<blank>[ \t]*\r?\n[ \t]*\r?\n)"))
+                     StringLiteralsPattern + "|(?<semi>;)|(?<blank>[ \t]*\r?\n[ \t]*\r?\n)"))
         {
             if (t.Groups["semi"].Success) return from + t.Index + 1;
             if (t.Groups["blank"].Success) return from + t.Index;
@@ -363,13 +391,42 @@ public class SessionCoreShapeGuardTests
 
     /// <summary>Вырезает raw-строки и комментарии за ОДИН проход слева направо: каждая конструкция
     /// разбирается с её собственного начала, поэтому посторонняя <c>"""</c> внутри комментария или обычной
-    /// строки не сопрягается с настоящей raw-строкой и не вырезает объявления между ними. Обычные, verbatim-
-    /// и char-литералы проходят как есть (в них «//» и «"""» — просто текст).</summary>
-    private static string StripRawStringsAndComments(string src) =>
-        Regex.Replace(src,
-            "\"\"\"[\\s\\S]*?\"\"\"|//[^\\n]*|/\\*[\\s\\S]*?\\*/|@\"(?:[^\"]|\"\")*\"|\"(?:[^\"\\\\\\r\\n]|\\\\.)*\"|'(?:\\\\.|[^'\\\\\\r\\n])+'",
-            m => m.Value.StartsWith("\"\"\"", StringComparison.Ordinal) || m.Value.StartsWith("//", StringComparison.Ordinal)
-                || m.Value.StartsWith("/*", StringComparison.Ordinal) ? "" : m.Value);
+    /// строки не сопрягается с настоящей raw-строкой и не вырезает объявления между ними. Обычные, verbatim-,
+    /// char- и интерполированные литералы (узор <see cref="StringLiteralsPattern"/>) проходят как есть
+    /// (в них «//» и «"""» — просто текст). Вместе с очищенным текстом возвращает карту индексов:
+    /// <c>map[i]</c> — позиция в исходнике символа <c>stripped[i]</c>; по ней span очищенного
+    /// ставится обратно в исходный текст (<see cref="OriginalSpan"/>) — то, что вырезано, остаётся
+    /// в исходном тексте на своём месте.</summary>
+    private static (string Stripped, int[] Map) StripRawStringsAndComments(string src)
+    {
+        var sb = new StringBuilder(src.Length);
+        var map = new List<int>(src.Length);
+        int pos = 0;
+        foreach (Match m in Regex.Matches(src,
+                     "\"\"\"[\\s\\S]*?\"\"\"|//[^\\n]*|/\\*[\\s\\S]*?\\*/|" + StringLiteralsPattern))
+        {
+            bool removed = m.Value.StartsWith("\"\"\"", StringComparison.Ordinal)
+                || m.Value.StartsWith("//", StringComparison.Ordinal)
+                || m.Value.StartsWith("/*", StringComparison.Ordinal);
+            for (int i = pos; i < m.Index; i++) { sb.Append(src[i]); map.Add(i); }
+            if (!removed)
+            {
+                for (int i = m.Index; i < m.Index + m.Value.Length; i++) { sb.Append(src[i]); map.Add(i); }
+            }
+            pos = m.Index + m.Value.Length;
+        }
+        for (int i = pos; i < src.Length; i++) { sb.Append(src[i]); map.Add(i); }
+        return (sb.ToString(), map.ToArray());
+    }
+
+    /// <summary>Текст span <c>[from,to)</c> очищенного исходника в исходном тексте: начало — позиция
+    /// <c>from</c> в исходнике, конец — сразу за позицией <c>to-1</c>; <c>to</c> за последним символом
+    /// очищенного (границы нет) — конец исходника. Внутри span остаются вырезанные очисткой
+    /// комментарии и raw-строки — они часть исходного текста объявления.</summary>
+    private static string OriginalSpan(string src, int[] map, int from, int to) =>
+        to >= map.Length
+            ? src.Substring(map[from])
+            : src.Substring(map[from], map[to - 1] - map[from] + 1);
 
     /// <summary>Ключи индексаторных инициализаторов <c>Dictionary&lt;string, string&gt; Имя = new() { ["ключ"] = … }</c>
     /// по тексту исходника: имя словаря → ПОЛНЫЕ ключи в порядке объявления, с повторами. Индексатор при
@@ -853,6 +910,61 @@ public class SessionCoreShapeGuardTests
             .And.Message.Should().Contain("BlankInVerbatimHandler", "имя типа названо").And
             .Contain("instead\")] int x);", "граница — настоящий «;», а не пустая строка внутри литерала: текст объявления цел").And
             .NotContain("AfterTheBlankVerbatim", "за концом объявления — не часть объявления, в отказ не входит");
+    }
+
+    [Fact]
+    public void Самопроверка_полноты_delegate_точка_с_запятой_в_интерполированной_строке_не_граница_отказ_цел()
+    {
+        // «;» внутри интерполяционной дыры — не граница объявления: прежний узор литералов
+        // останавливался на первой кавычке «$"», литерал не матчился вовсе, и «;» внутри
+        // {m["k;v"]} принимался за конец объявления — отказ обрывался внутри литерала, хвост
+        // объявления терялся. Теперь интерполированная строка потребляется целиком (дыра с
+        // балансом скобок, внутри — вложенный литерал): имя названо, текст объявления до
+        // настоящего «;» цел — включая часть за внутренним «;»), а текст за настоящим «;»
+        // в отказ не входит.
+        FluentActions.Invoking(() => FacadeTopLevelNames(
+                "internal delegate void InterpSemiHandler([Obsolete($\"{m[\"k;v\"]}\")] int x); internal static class AfterTheInterp {}"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*")
+            .And.Message.Should().Contain("InterpSemiHandler", "имя типа названо").And
+            .Contain("v\"]}\")] int x);", "граница — настоящий «;», а не «;» внутри интерполяционной дыры: текст объявления цел").And
+            .NotContain("AfterTheInterp", "за концом объявления — не часть объявления, в отказ не входит");
+    }
+
+    [Fact]
+    public void Самопроверка_полноты_delegate_продолжение_строки_в_литерале_не_граница_отказ_цел()
+    {
+        // Line-continuation внутри обычного литерала — не граница объявления: в прежнем узоре
+        // escape-пара «\\.» не матчала перевод строки, литерал "a;b\<NL>c" не матчился вовсе,
+        // и «;» внутри него принимался за конец объявления — отказ обрывался на полуслове.
+        // Очистка StripRawStringsAndComments не видела такой литерал так же — стороны теперь
+        // одной формы (StringLiteralsPattern): escape-пара «\\[\s\S]» держит продолжение
+        // строки, литерал потребляется целиком: имя названо, текст объявления до настоящего
+        // «;» цел — включая часть за внутренним «;» и за продолжением строки), а текст за
+        // настоящим «;» в отказ не входит.
+        FluentActions.Invoking(() => FacadeTopLevelNames(
+                "internal delegate void ContinuationHandler([Obsolete(\"a;b\\\nc\")] int x); internal static class AfterTheContinuation {}"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*")
+            .And.Message.Should().Contain("ContinuationHandler", "имя типа названо").And
+            .Contain("b\\\nc\")] int x);", "граница — настоящий «;», а не «;» внутри литерала с продолжением строки: текст объявления цел").And
+            .NotContain("AfterTheContinuation", "за концом объявления — не часть объявления, в отказ не входит");
+    }
+
+    [Fact]
+    public void Самопроверка_полноты_delegate_комментарий_внутри_объявления_виден_в_отказе()
+    {
+        // Отказ печатает текст объявления из исходного файла, а не из очищенного: прежде
+        // span брался из очищенного текста (StripRawStringsAndComments), и комментарий или
+        // raw-строка внутри объявления в отказ не попадали — диагностика показывала объявление
+        // без части его текста. Теперь span ставится обратно в исходник по карте индексов
+        // очистки (OriginalSpan): комментарий внутри объявления виден в отказе дословно.
+        // Границы span — те же, что у границы объявления: текст за объявлением в отказ
+        // по-прежнему не входит.
+        FluentActions.Invoking(() => FacadeTopLevelNames(
+                "internal delegate void CommentedHandler([Obsolete(/* keep me */ see X)] int x); internal static class AfterTheComment {}"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*")
+            .And.Message.Should().Contain("CommentedHandler", "имя типа названо").And
+            .Contain("/* keep me */", "комментарий внутри объявления — часть исходного текста объявления, в отказ не теряется").And
+            .NotContain("AfterTheComment", "за концом объявления — не часть объявления, в отказ не входит");
     }
 
     [Fact]

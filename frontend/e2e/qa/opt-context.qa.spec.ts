@@ -63,13 +63,20 @@ test.afterAll(async () => {
   // следующей фазе (off открывает тот же чат), поэтому чистим после последней фазы.
   // Чат удаляем явно: автокаскада сессий при удалении проекта бэк не делает. Бэк сносит
   // только запись проекта, не его каталог на диске — каталог и файл засева: rmSync.
+  // Per-step уборка (как helpers.seed().cleanup(), helpers.ts:63-68): сбой одного шага не мешает
+  // остальным — 403 на удалении чата не должен молча оставлять проект и каталог.
   if (PHASE === 'off' && existsSync(SEED_FILE)) {
-    try {
-      const seed = JSON.parse(readFileSync(SEED_FILE, 'utf8')) as SeedData;
-      await client.del(`/api/projects/${seed.projectId}/sessions/${seed.sessionId}`);
-      await client.del(`/api/projects/${seed.projectId}`);
-      if (seed.rootPath) rmSync(seed.rootPath, { recursive: true, force: true });
-    } catch { /* уборка best-effort: сбой не должен прятать провал теста */ }
+    let seed: SeedData | null = null;
+    try { seed = JSON.parse(readFileSync(SEED_FILE, 'utf8')) as SeedData; } catch { /* файл засева повреждён: чего удалять — нет */ }
+    if (seed) {
+      try { await client.del(`/api/projects/${seed.projectId}/sessions/${seed.sessionId}`); } catch { /* уборка best-effort */ }
+      try { await client.del(`/api/projects/${seed.projectId}`); } catch { /* уборка best-effort */ }
+      // Префиксная защита (как в helpers.seed(), helpers.ts:45): каталог засева всегда под /tmp/<PREFIX>
+      // (spec:125) — повреждённое или правленное руками значение не должно унести другой каталог.
+      if (seed.rootPath && seed.rootPath.startsWith(join('/tmp', PREFIX))) {
+        rmSync(seed.rootPath, { recursive: true, force: true });
+      }
+    }
     rmSync(SEED_FILE, { force: true });
   }
   await request?.dispose();

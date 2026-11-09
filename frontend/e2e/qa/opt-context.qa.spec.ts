@@ -1,6 +1,6 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import { api, collectConsoleErrors, login, type Api } from './helpers';
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -19,7 +19,9 @@ import { fileURLToPath } from 'node:url';
 //
 // Засев (фаза on) кладёт проект, чат, нить картинки и основной объект контекста; его id
 // сохраняются в `.seed-opt-context.json` — фаза off открывает тот же чат (вертикаль выключена,
-// засевать её уже нечем: маршрутов редактора нет).
+// засевать её уже нечем: маршрутов редактора нет). После фазы off засев убирается: чат и
+// проект (удаляются явно — автокаскада сессий нет), каталог на диске и файл засева.
+// В фазе on засев нужен следующей фазе, поэтому уборка — только после последней.
 
 const PHASE_FILE = join(dirname(fileURLToPath(import.meta.url)), '.phase-opt-context');
 const SEED_FILE = join(dirname(fileURLToPath(import.meta.url)), '.seed-opt-context.json');
@@ -41,6 +43,7 @@ interface SeedData {
   sessionId: string;
   threadId: string;
   fileName: string;
+  rootPath: string; // каталог проекта на диске: бэк при удалении его не сносит, уборка — за спекой
 }
 
 test.describe.configure({ mode: 'serial' });
@@ -56,6 +59,19 @@ test.beforeAll(async ({ playwright, baseURL }) => {
 });
 
 test.afterAll(async () => {
+  // Уборка засева (docs/operations/qa-stand.md): в фазе on она не делается — засев нужен
+  // следующей фазе (off открывает тот же чат), поэтому чистим после последней фазы.
+  // Чат удаляем явно: автокаскада сессий при удалении проекта бэк не делает. Бэк сносит
+  // только запись проекта, не его каталог на диске — каталог и файл засева: rmSync.
+  if (PHASE === 'off' && existsSync(SEED_FILE)) {
+    try {
+      const seed = JSON.parse(readFileSync(SEED_FILE, 'utf8')) as SeedData;
+      await client.del(`/api/projects/${seed.projectId}/sessions/${seed.sessionId}`);
+      await client.del(`/api/projects/${seed.projectId}`);
+      if (seed.rootPath) rmSync(seed.rootPath, { recursive: true, force: true });
+    } catch { /* уборка best-effort: сбой не должен прятать провал теста */ }
+    rmSync(SEED_FILE, { force: true });
+  }
   await request?.dispose();
 });
 
@@ -93,6 +109,14 @@ async function openContextPanel(page: Page) {
 
 test('включённая вертикаль: у картинки обычный чип строки, текста причины нет', async ({ page }) => {
   test.skip(PHASE !== 'on', 'фаза on');
+  // Состояние вертикали до засева: фаза off меняет её вручную, вне спеки. Если прогоняющий
+  // оставил её выключенной, засев упал бы невнятным «404» на POST .../threads — проверяем
+  // здесь, внятным ассертом (в фазе off состояние проверяет последний тест спеки).
+  const state = await client.get<Array<{ key: string; enabled: boolean }>>('/api/admin/subsystems');
+  const row = state.find(s => s.key === TARGET);
+  expect(row, `вертикаль ${TARGET} есть в списке`).toBeTruthy();
+  expect(row!.enabled, `вертикаль ${TARGET} включена: засеву нужны маршруты редактора`).toBe(true);
+
   const errors = collectConsoleErrors(page);
   await loginViaUi(page);
 
@@ -122,7 +146,7 @@ test('включённая вертикаль: у картинки обычны�
     await client.put(`/api/chats/${session.id}/context/primary`, { kind: 'image', ref: { threadId }, revision: ctx.revision });
   }
 
-  const seed: SeedData = { projectId: project.id, sessionId: session.id, threadId: threadId!, fileName };
+  const seed: SeedData = { projectId: project.id, sessionId: session.id, threadId: threadId!, fileName, rootPath };
   writeFileSync(SEED_FILE, JSON.stringify(seed));
 
   await openChat(page, seed);

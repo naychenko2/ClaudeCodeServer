@@ -426,8 +426,14 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
 
     /// Ключи, для которых метка «ядро/сквозная» обязательна (решение финала фичи «Внутренняя
     /// оптимизация AI Home», блокер 1 ревью архитектора): ядро сессий берёт сервисы `llm`
-    /// обязательными параметрами конструктора (Services/SessionManager.cs:739-743) — без них оно
-    /// не активируется. Снять метку — значит молча вернуть вертикали тумблер, которого нет по коду.
+    /// обязательными зависимостями — без них оно не активируется. Фасад держит LlmProviderRegistry
+    /// параметром конструктора (Services/SessionManager.cs:282); роли ядра из регистрации
+    /// AddSessionCore (Services/Sessions/SessionCoreRegistration.cs) резолвят через GetRequiredService
+    /// LlmProviderRegistry, ClaudeSubscriptionPool, ModelAssignmentResolver, SubscriptionLimitRecorder
+    /// и ILlmSessionAdapterFactory: TurnCostLedger (:59-68), CliRoute (:75-86),
+    /// ProviderMigration (:113-119), ChatSettings (:147-158), ChatCreation (:318-327),
+    /// TurnProcessHost (:255-276). Снять метку — значит молча вернуть вертикали тумблер,
+    /// которого нет по коду.
     private static readonly string[] CoreLabeledKeys = ["llm"];
 
     /// <summary>

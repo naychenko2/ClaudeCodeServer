@@ -175,10 +175,13 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
         ["git"] = "ядро/сквозная: ReviewTreePool (backend/ClaudeHomeServer/Services/ReviewTreePool.cs:49) "
             + "и ядро проектов (Controllers/ProjectsController.cs:25 — GitService, GitServerService) требуют "
             + "GitService обязательным параметром; первый запрос к хосту не отвечен. Решает S2b-1 (CanDisable).",
-        ["knowledge"] = "ядро/сквозная: ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) "
+        ["knowledge"] = "ядро/сквозная: ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:26) "
             + "требует WorkspaceKnowledgeStore и KnowledgeService; та же зависимость — у PersonaBindingsService "
-            + "(backend/ClaudeHomeServer/Services/PersonaBindingsService.cs:138), который сам обязателен ядру "
-            + "сессий (backend/ClaudeHomeServer/Services/SessionManager.cs:745). Первый запрос к хосту не отвечен. "
+            + "(backend/ClaudeHomeServer/Services/PersonaBindingsService.cs:138-139), который сам обязателен ядру "
+            + "сессий: резолверы ролей AddSessionCore (backend/ClaudeHomeServer/Services/Sessions/SessionCoreRegistration.cs) "
+            + "резолвят его через GetRequiredService для BuiltinMcpContexts (:175), PersonaLayerBuilder (:187), "
+            + "ExternalMcpContexts (:197) — эти роли фасад держит обязательными параметрами конструктора "
+            + "(backend/ClaudeHomeServer/Services/SessionManager.cs:275-276). Первый запрос к хосту не отвечен. "
             + "CanDisable или опционализацию этого шва решает S2b-1.",
         ["llm"] = "ядро/сквозная: ядро сессий требует сервисов гейтнутой сборки ClaudeHomeServer.Llm "
             + "обязательными зависимостями: фасад держит LlmProviderRegistry параметром конструктора "
@@ -204,10 +207,13 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             + "DevServerService обязательным параметром — первый запрос к хосту не отвечен. Обязательный резолв "
             + "на пути остановки хоста починен в S2a-2 (Program.cs:2338 — GetService, как соседние строки того "
             + "же блока). Решает S2b-1 (CanDisable).",
-        ["skills"] = "ядро/сквозная: PersonaBindingsService (backend/ClaudeHomeServer/Services/PersonaBindingsService.cs:139), "
-            + "обязательный ядру сессий (backend/ClaudeHomeServer/Services/SessionManager.cs:745), требует SkillsService "
-            + "обязательным параметром. Первый запрос к хосту не отвечен. CanDisable или опционализацию этого шва "
-            + "решает S2b-1.",
+        ["skills"] = "ядро/сквозная: PersonaBindingsService (backend/ClaudeHomeServer/Services/PersonaBindingsService.cs:139) "
+            + "требует SkillsService обязательным параметром; сам он обязателен ядру сессий: резолверы ролей "
+            + "AddSessionCore (backend/ClaudeHomeServer/Services/Sessions/SessionCoreRegistration.cs) резолвят "
+            + "его через GetRequiredService для BuiltinMcpContexts (:175), PersonaLayerBuilder (:187), "
+            + "ExternalMcpContexts (:197) — эти роли фасад держит обязательными параметрами конструктора "
+            + "(backend/ClaudeHomeServer/Services/SessionManager.cs:275-276). Первый запрос к хосту не отвечен. "
+            + "CanDisable или опционализацию этого шва решает S2b-1.",
         ["tasks"] = "ядро/сквозная: ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:25) "
             + "требует TaskManager обязательным параметром; та же зависимость — у TeamWaveService "
             + "(backend/ClaudeHomeServer/Services/Team/TeamWaveService.cs:89). Первый запрос к хосту не отвечен. "

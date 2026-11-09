@@ -125,10 +125,17 @@ export function latestPerWindow(snapshots: UsageSnapshot[]): Array<RateWindow & 
 // Снимки аккаунта из уже сброшенного окна отбрасываются по тому же условию: старый «90%»
 // после сброса — неправда. Но окно при этом не пропадает: если свежих данных о нём нет
 // (опрос лимитов лёг), оно остаётся прочерком с пометкой stale — «данные устарели».
+// Снимок БЕЗ сброса сам протухнуть не может, поэтому живёт не дольше NO_RESET_MAX_AGE_MS и
+// после этого отбрасывается целиком, без прочерка: окна, о котором так давно нет вестей, может
+// уже не быть. Прод 08.11: Anthropic снял 5-часовой лимит с тарифа, five_hour из ответов
+// пропал, а снимок oauth «0% без сброса» от 31.10 неделю висел на пилюле строкой «5 часов 0%».
+const NO_RESET_MAX_AGE_MS = 6 * 3600_000;
+
 export function withAccountFallback(chat: RateLimitInfo[], accountSnapshots: UsageSnapshot[], now: string = new Date().toISOString()): RateWindow[] {
   const nowMs = new Date(now).getTime();
   const expired = (resetsAt?: string) => !!resetsAt && new Date(resetsAt).getTime() <= nowMs;
-  const account = accountSnapshots.filter(s => !expired(s.resetsAt));
+  const outdated = (s: UsageSnapshot) => !s.resetsAt && nowMs - new Date(s.timestamp).getTime() > NO_RESET_MAX_AGE_MS;
+  const account = accountSnapshots.filter(s => !expired(s.resetsAt) && !outdated(s));
   const accountTypes = new Set(account.map(s => s.limitType));
   const live = chat.filter(w =>
     !expired(w.resetsAt)

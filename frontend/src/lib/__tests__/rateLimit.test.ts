@@ -235,6 +235,21 @@ describe('пилюля лимитов в шапке чата', () => {
     expect(ratePillSegments(fresh)).toEqual([{ limitType: 'five_hour', label: '5ч', text: '5%', pct: 5, level: 'normal' }]);
   });
 
+  it('давний снимок без сброса (окно пропало из ответов) не висит вечным «0%»', () => {
+    const out = withAccountFallback(
+      [],
+      [snap('2026-09-20T12:00:00Z', 'five_hour', { utilization: 0, status: 'allowed' }),
+        snap('2026-09-27T11:50:00Z', 'seven_day', { utilization: 0.12, resetsAt: RW })],
+      NOW,
+    );
+    expect(ratePillSegments(out).map(s => `${s.label} ${s.text}`)).toEqual(['Нед 12%']);
+  });
+
+  it('свежий снимок без сброса (простой 5-часового окна) по-прежнему показывается', () => {
+    const out = withAccountFallback([], [snap('2026-09-27T11:50:00Z', 'five_hour', { utilization: 0, status: 'allowed' })], NOW);
+    expect(ratePillSegments(out).map(s => `${s.label} ${s.text}`)).toEqual(['5ч 0%']);
+  });
+
   it('сброшенное служебное окно не превращается в устаревшее', () => {
     const out = withAccountFallback(
       [],

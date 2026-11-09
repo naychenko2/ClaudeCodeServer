@@ -1,7 +1,7 @@
 import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
 import { api, collectConsoleErrors, login, type Api } from './helpers';
 import { readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Приёмка фичи «Внутренняя оптимизация AI Home»: неактивная вертикаль в строке контекста
@@ -72,9 +72,15 @@ test.afterAll(async () => {
       try { await client.del(`/api/projects/${seed.projectId}/sessions/${seed.sessionId}`); } catch { /* уборка best-effort */ }
       try { await client.del(`/api/projects/${seed.projectId}`); } catch { /* уборка best-effort */ }
       // Префиксная защита (как в helpers.seed(), helpers.ts:45): каталог засева всегда под /tmp/<PREFIX>
-      // (spec:125) — повреждённое или правленное руками значение не должно унести другой каталог.
-      if (seed.rootPath && seed.rootPath.startsWith(join('/tmp', PREFIX))) {
-        rmSync(seed.rootPath, { recursive: true, force: true });
+      // (генератор — в засеве фазы on) — повреждённое или правленное руками значение не должно унести
+      // другой каталог. Сравнение по РАЗРЕШЁННОМУ пути: '/tmp/qa-optctx-p-1/../../etc' проходит
+      // строковый startsWith, но разрешается в /etc — rmSync(recursive) снёс бы его содержимое.
+      const allowedRoot = resolve(join('/tmp', PREFIX));
+      const seedRoot = seed.rootPath ? resolve(seed.rootPath) : '';
+      if (seedRoot && seedRoot.startsWith(allowedRoot)) {
+        // Свой try: force: true глотает только ENOENT; EBUSY/EPERM (файл каталога держит процесс)
+        // не должен ронять afterAll — удаление файла засева и dispose идут дальше.
+        try { rmSync(seedRoot, { recursive: true, force: true }); } catch { /* уборка best-effort */ }
       }
     }
     rmSync(SEED_FILE, { force: true });

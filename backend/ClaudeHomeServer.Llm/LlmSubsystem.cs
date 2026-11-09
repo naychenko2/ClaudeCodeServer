@@ -102,7 +102,7 @@ namespace ClaudeHomeServer.Services.Llm;
 //
 // Шов `services.Memory` (`MemoryWriteResolver`) лежит ВНЕ `Services.Llm`,
 // поэтому НЕ переносится сюда — отдельная вертикаль Memory; его регистрация —
-// в самой вертикали (MemorySubsystem.cs:123, перенесена из Program.cs в S6-2).
+// в самой вертикали (MemorySubsystem.cs:124, перенесена из Program.cs в S6-2).
 //
 // Шов `Services.Hubs` не нужен: Llm-слой пишет события через SessionManager
 // (который держит IHubContext<SessionHub>), не напрямую.

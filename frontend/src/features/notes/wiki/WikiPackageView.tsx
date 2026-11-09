@@ -22,10 +22,10 @@ import {
   acceptAllWikiPackage, decideWikiPackage, useWikiTree, WikiError,
   type WikiApplyOutcomeDto, type WikiDecisionDto,
   type WikiPackageDto, type WikiPackageOperationDto,
+  TextArea,
 } from 'aihome_shell/kit';
 import { Badge, type BadgeTone } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
-import { TextArea } from '../../../components/ui/Field';
 import { Notice } from '../../../components/ui/Notice';
 import { DiffView } from '../../../components/DiffView';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';

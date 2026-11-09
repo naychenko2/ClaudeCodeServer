@@ -27,7 +27,13 @@ import { findViolation } from './guardLists.mjs';
 // легаси-исключения — LEGACY_ALLOWED там же. Импорт через 'aihome_shell/kit' не относительный
 // и не помечается: MF резолвит его в кит хоста, второй копии нет. Транзитивные импорты
 // (components/ui/* → lib/design) не помечаются: смотрим только прямые импорты файлов области —
-// как ESLint-страж.
+// как ESLint-страж. Следствие (ревью a59df930, 09.11): зелёная сборка НЕ доказывает отсутствие
+// транзитивной второй копии стора (так в remote попадал lib/offline через useSphereOf →
+// useAllProjects → lib/api и через ui/Field → VoiceMicButton → talkDiag). Решение: барьер не
+// расширяем (обход графа дал бы ложные срабатывания на листовых components/ui/*), а зависимость
+// убрана — useSphereOf, useAllProjects, codeMask, Field/TextField/TextArea и NoteConflictError
+// remote берёт из 'aihome_shell/kit'. Проверка при правках области — grep маркера
+// `offlinenotes:` в modules/notes/dist/assets (должен быть пуст).
 function toPosix(p: string) {
   return p.split(path.sep).join('/');
 }

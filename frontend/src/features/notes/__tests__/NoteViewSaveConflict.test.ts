@@ -8,7 +8,7 @@ import { act, createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NoteView } from '../NoteView';
 import { api } from '../../../lib/api';
-import { NoteConflictError } from '../api';
+import { NoteConflictError } from '../../../lib/offline';
 import { OfflineError, setOnline } from '../../../lib/offline';
 import { bumpNotes } from '../../../lib/notes';
 import { drainNotesOutbox } from '../../../lib/notesOffline';

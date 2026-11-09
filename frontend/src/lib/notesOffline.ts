@@ -9,8 +9,8 @@
 
 import { api } from './api';
 // eslint-disable-next-line module/no-cross-feature-import -- контракт конфликта заметки живёт в домене
-import { NoteConflictError, type NoteWithEtag } from '../features/notes/api';
-import { isOnline, OfflineError } from './offline';
+import type { NoteWithEtag } from '../features/notes/api';
+import { isOnline, OfflineError, NoteConflictError } from './offline';
 import {
   idbGet, idbSet,
   noteContentGet, noteContentPut, noteContentDelete, noteContentAll,

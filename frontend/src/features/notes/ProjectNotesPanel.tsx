@@ -2,10 +2,9 @@ import { useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { NotesList } from './NotesList';
 import { NewNoteDialog } from './NewNoteDialog';
-import { useAllProjects } from '../projects/useAllProjects';
 import { canWriteContent } from '../projects/members/contentRights';
 import {
-  useNotes, ensureNotesLoaded, bumpNotes, C, SP,
+  useNotes, useAllProjects, ensureNotesLoaded, bumpNotes, C, SP,
   Button, PanelHeaderSlot, useHasPanelHeader, ICON_SIZE, ICON_STROKE,
 } from 'aihome_shell/kit';
 

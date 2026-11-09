@@ -1614,6 +1614,35 @@ export function conflictBodyOf(e: unknown, code: string): ConflictBody | null {
   return err?.status === 409 && err.body?.code === code ? err.body : null;
 }
 
+// Конфликт сохранения заметки (S2c-F3, К8): 409 с телом {code:'note_changed', …} на
+// PUT /notes/{id} с If-Match. Поля — тело 409 как есть: актуальное состояние заметки на
+// момент отказа. Бросается ТОЛЬКО при ifMatch в notes.update: без If-Match сервер 409 по
+// конфликту не отдаёт, поэтому вызывающие без ifMatch её не видят.
+// Класс живёт здесь, а не в фиче «Заметки»: его бросает хост (lib/notesApi), а проверяет
+// `instanceof` remote «Заметки» — через границу Module Federation это работает только
+// с ЕДИНСТВЕННЫМ экземпляром, отданным китом (как OfflineError).
+export class NoteConflictError extends Error {
+  readonly status = 409;
+  readonly code = 'note_changed';
+  // Тег актуальной версии (без кавычек, как в теле 409) — по нему повторяют сохранение
+  readonly sha256: string | null;
+  // Актуальный текст чужой версии (заметка — всегда текст)
+  readonly content: string | null;
+  readonly author: FileConflictAuthor | null;
+  readonly changedAt: string | null;
+  readonly source: FileConflictSource | null;
+  constructor(body: ConflictBody) {
+    // Текст тот же, что заголовок диалога конфликта (SaveConflictDialog) — отдельной копии нет
+    super('Заметку изменили, пока вы правили');
+    this.name = 'NoteConflictError';
+    this.sha256 = body.sha256 ?? null;
+    this.content = body.content ?? null;
+    this.author = body.author ?? null;
+    this.changedAt = body.changedAt ?? null;
+    this.source = body.source ?? null;
+  }
+}
+
 // onBytes — необязательный колбэк веса ответа. Мера одна на обеих ветках: онлайн —
 // длина текста ответа (то же число, что пишется в bytes пассивной записи), офлайн-фолбэк —
 // bytes сохранённой записи (запись без этого поля — без веса, колбэк не зовётся).

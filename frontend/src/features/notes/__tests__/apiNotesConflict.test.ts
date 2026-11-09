@@ -6,8 +6,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Здесь наоборот: request() мокаем сервером (та же форма, что настоящий request() в
 // offline.ts — его механизм etagRef тестится там), notesApi.notes.update настоящий,
 // его catch зовёт настоящий conflictBodyOf из lib/offline.
-// Тест доменного api живёт в каталоге домена (хвост ревью R-S5): notesApi и NoteConflictError
-// — локальный импорт ../api; рядом с NoteViewSaveConflict.test.ts, который этот же путь мокает.
+// Тест доменного api живёт в каталоге домена (хвост ревью R-S5): notesApi — из lib/notesApi, NoteConflictError
+// — из lib/offline (отдаётся китом); рядом с NoteViewSaveConflict.test.ts, который этот же путь мокает.
 const { request, readStoredToken } = vi.hoisted(() => ({
   request: vi.fn(),
   readStoredToken: vi.fn(() => 'tok'),
@@ -19,7 +19,7 @@ vi.mock('../../../lib/offline', async (importOriginal) => {
 });
 
 import { notesApi } from '../../../lib/notesApi';
-import { NoteConflictError } from '../api';
+import { NoteConflictError } from '../../../lib/offline';
 
 type ReqOpts = { method?: string; body?: string; headers?: Record<string, string>; etagRef?: { etag?: string } };
 

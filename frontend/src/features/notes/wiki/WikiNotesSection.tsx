@@ -5,9 +5,8 @@
 
 import type { ReactNode } from 'react';
 import { PenLine } from 'lucide-react';
-import { C, FONT, FS, R, SP } from 'aihome_shell/kit';
+import { C, FONT, FS, R, SP, TextArea } from 'aihome_shell/kit';
 import { Button } from '../../../components/ui/Button';
-import { TextArea } from '../../../components/ui/Field';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { NOTES_TEXT } from './wikiLabels';
 

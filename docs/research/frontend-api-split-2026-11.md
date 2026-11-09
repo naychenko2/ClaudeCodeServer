@@ -58,7 +58,7 @@
 | `features/home/api.ts` | `home`, `briefing`, `search`, `onboarding`, `wall`, `quickPhrases`, `history` |
 | `features/spheres/api.ts` | `projectGroups`, `spheres` |
 | `features/tasks/api.ts` | `board`, `tasks` |
-| `features/notes/api.ts` | `notes` |
+| `lib/notesApi.ts` | `notes` (отступление от карты: клиент остаётся в `lib/`, потому что `features/notes/api.ts` входит в область сторожа графа remote «Заметок» и значения `lib/offline` ему импортировать нельзя; в `features/notes/api.ts` — только тип `NoteWithEtag`, класс `NoteConflictError` — в `lib/offline`, наружу через кит) |
 | `features/personas/api.ts` | `personas` |
 | `features/sessions/api.ts` | `sessions` |
 | `features/chat/api.ts` | `chats`, `watchdogs`, `workflow`, `tts` |

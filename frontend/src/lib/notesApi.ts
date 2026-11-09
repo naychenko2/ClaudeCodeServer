@@ -3,7 +3,7 @@
 // api.notes.* остаётся прежним для потребителей); типы — в features/notes/types.ts,
 // доступны через ../types. Файл вне features/notes/: прямой импорт lib/offline там
 // запрещён сторожем графа хранилища заметок. Класс конфликта — в features/notes/api.ts.
-import { conflictBodyOf, request } from './offline';
+import { conflictBodyOf, request, NoteConflictError } from './offline';
 import type { EtagRef } from './offline';
 import type {
   CreateNoteDto,
@@ -21,8 +21,6 @@ import type {
   UpdateNoteDto,
 } from '../types';
 import type { NoteDetail } from '../features/notes/types';
-// eslint-disable-next-line module/no-cross-feature-import -- контракт конфликта заметки живёт в домене
-import { NoteConflictError } from '../features/notes/api';
 // eslint-disable-next-line module/no-cross-feature-import -- контракт конфликта заметки живёт в домене
 import type { NoteWithEtag } from '../features/notes/api';
 

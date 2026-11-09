@@ -2,11 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, FileText, FolderPlus, MessageCircle, Timer, X } from 'lucide-react';
 import type { NoteSummary } from '../../types';
 import {
-  api, bumpNotes, isFavorite, toggleFavorite, useNoteFolders, C, FONT, FS, R, SHADOW,
+  api, bumpNotes, isFavorite, toggleFavorite, useNoteFolders, useAllProjects, C, FONT, FS, R, SHADOW,
   ICON_SIZE, ConfirmDialog, IconButton, NO_AUTOFILL,
 } from 'aihome_shell/kit';
 import { CollapseGroup, SourceDot, IconFolder, IconFolderMove, IconPencil, IconPlus, IconStar, IconTrash } from './shared';
-import { useAllProjects } from '../projects/useAllProjects';
 import { canWriteContent, type ContentDoor } from '../projects/members/contentRights';
 // Форматирует остаток времени от ISO-строки expiresAt
 const expiryTimeLeft = (expiresAt?: string): { label: string; urgent: boolean } | null => {

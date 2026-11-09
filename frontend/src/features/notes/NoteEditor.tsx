@@ -8,8 +8,7 @@ import { autocompletion, completionKeymap, closeBrackets, closeBracketsKeymap,
   type CompletionContext, type CompletionResult } from '@codemirror/autocomplete';
 import { markdown } from '@codemirror/lang-markdown';
 import { tags as t } from '@lezer/highlight';
-import { C, FONT, getEffectiveTheme, subscribeThemeMode, useNotes } from 'aihome_shell/kit';
-import { codeMask } from '../../components/MarkdownViewer';
+import { C, FONT, getEffectiveTheme, subscribeThemeMode, useNotes, codeMask } from 'aihome_shell/kit';
 
 // Редактор заметок на CodeMirror 6 с Obsidian-подобным Live Preview:
 // - маркеры **жирного**/*курсива*/`кода`/# заголовков скрываются, когда каретка

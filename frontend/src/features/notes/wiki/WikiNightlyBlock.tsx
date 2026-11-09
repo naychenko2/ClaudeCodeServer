@@ -35,10 +35,10 @@ import {
   WikiError,
   loadWikiSettings, loadWikiTree, putWikiNightly, runWikiNightlyNow, useWikiSettings, useWikiTree,
   type WikiLastNight, type WikiNightlyOutcome, type WikiNightlyPatch, type WikiSettingsSnapshot,
+  Field, TextField,
 } from 'aihome_shell/kit';
 import { Button } from '../../../components/ui/Button';
 import { ConfirmDialog } from '../../../components/ui/ConfirmDialog';
-import { Field, TextField } from '../../../components/ui/Field';
 import { Notice } from '../../../components/ui/Notice';
 import { ProgressBar } from '../../../components/ui/ProgressBar';
 import { Select } from '../../../components/ui/Select';

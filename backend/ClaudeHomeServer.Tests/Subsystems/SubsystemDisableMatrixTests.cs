@@ -135,6 +135,12 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// формы — строка <c>plugins</c>: её контроллеры держат те же зависимости опциональными и
     /// отвечают 503 (ClaudeHomeServer.Plugins/Controllers/PluginsController.cs:22-38).
     ///
+    /// Короткие ссылки без своего файла («TurnCostLedger (:59-68)», «BuiltinMcpContexts (:175)»)
+    /// — строки того файла, который назван в той же строке словаря перед ними: так записаны
+    /// роли ядра — «AddSessionCore (…cs) резолвят … TurnCostLedger (:59-68)». Сторож
+    /// <see cref="Известные_нарушения_полны_и_ссылаются_на_место"/> меряет их по последнему
+    /// названному перед ними файлу; ссылка без такого владельца — красная.
+    ///
     /// S2a-2 закрыл шесть ключей (tts, yandex, video, backgrounds, deploy, reader): их контроллеры в Main
     /// держат сервисы вертикалей опциональными (= null) и отвечают 503 с причиной
     /// (TtsController.cs:61, VideoController.cs:42, YandexController.cs:45,
@@ -165,7 +171,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     internal static readonly Dictionary<string, string> KnownViolations = new(StringComparer.OrdinalIgnoreCase)
     {
         ["code-graph"] = "ядро/сквозная: ядро чата держит цепочку обязательных зависимостей — "
-            + "SessionHub (backend/ClaudeHomeServer/Hubs/SessionHub.cs:26) требует FileWatcherService, "
+            + "SessionHub (backend/ClaudeHomeServer/Hubs/SessionHub.cs:31) требует FileWatcherService, "
             + "а он (backend/ClaudeHomeServer/Services/FileWatcherService.cs:103) — CodeGraphService. "
             + "Первый запрос к хосту не отвечен. CanDisable или опционализацию этого шва решает S2b-1.",
         ["dossiers"] = "ядро/сквозная: ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:26) "
@@ -203,7 +209,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             + "ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:26) требует "
             + "ProjectIconGlyphService обязательным параметром → GET /api/projects 500. Единственная строка, "
             + "где рвётся не старт, а сосед. Решает S2b-1 (CanDisable).",
-        ["project-services"] = "ядро/сквозная: ядро чата (backend/ClaudeHomeServer/Hubs/SessionHub.cs:27) требует "
+        ["project-services"] = "ядро/сквозная: ядро чата (backend/ClaudeHomeServer/Hubs/SessionHub.cs:31) требует "
             + "DevServerService обязательным параметром — первый запрос к хосту не отвечен. Обязательный резолв "
             + "на пути остановки хоста починен в S2a-2 (Program.cs:1528 — GetService, как соседние строки того "
             + "же блока). Решает S2b-1 (CanDisable).",
@@ -406,8 +412,13 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// Структура словаря нарушений: ключ — из перечня матрицы (не из воздуха), причина — с файлом
     /// и строкой того, что падает. Пустая или безадресная причина — красный здесь, а не тихий
     /// Skip в прогоне. Формат адреса мерился и раньше; теперь мерится и местоположение: файла
-    /// из адреса не быть в дереве — красный, строки за пределами файла («:999» в верном файле) —
-    /// красный. Иначе причина выглядела бы адресом, а адресом не была.
+    /// из адреса не быть в дереве — красный, строки вне диапазона файла («:0» и «:999» в верном
+    /// файле) — красный: «Файл.cs:0» проходил по одному «line > total» (п. 2 хвоста d3e0ddf8);
+    /// короткая ссылка «Имя (:NN-MM)» без своего файла меряется по последнему названному перед
+    /// ней файлу той же строки, а без такого владельца — красная (п. 3). В сообщение выводаются
+    /// счётчик и весь список битых адресов: с одним первым адресом в тексте «починенный» второй
+    /// читается как несработавшая правка (п. 1). Иначе причина выглядела бы адресом, а адресом
+    /// не была.
     /// </summary>
     [Fact]
     public void Известные_нарушения_полны_и_ссылаются_на_место()
@@ -418,28 +429,65 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
         KnownViolations.Where(kv => !withAddress.IsMatch(kv.Value)).Select(kv => kv.Key)
             .Should().BeEmpty("причина пропущенной строки обязана называть файл:строку того, что падает");
 
-        // Вторая половина — существование места. Адрес разбирается как путь:строка. Путь
-        // принимается в двух записанных в словаре формах: от корня репозитория (backend/…) и
-        // коротким путём Main-проекта (Controllers/…, Program.cs) — обе ведут к одному файлу.
-        var address = new Regex(@"(?<path>[\w.\-/]+\.cs):(?<line>\d+)", RegexOptions.Compiled);
+        // Вторая половина — существование места. Полный адрес — путь:строка. Путь принимается
+        // в двух записанных в словаре формах: от корня репозитория (backend/…) и коротким путём
+        // Main-проекта (Controllers/…, Program.cs) — обе ведут к одному файлу. Строка меряется
+        // диапазоном [1..total]: «:0» — не существующая строка (п. 2 хвоста d3e0ddf8). Короткая
+        // ссылка без своего файла относится к последнему названному перед ней файлу той же
+        // строки — ровно так она записана в словаре («AddSessionCore (…cs) резолвят …
+        // TurnCostLedger (:59-68)»); без названного владельца мерить её нечем, и она красная
+        // (п. 3). Верхняя граница диапазона «NN-MM» меряется только у короткой ссылки: у
+        // полного адреса вторая половина остаётся за скопом.
         var dead = new List<string>();
         foreach (var (key, reason) in KnownViolations)
-            foreach (Match m in address.Matches(reason))
+        {
+            string? owner = null; // последний названный в строке файл — владелец коротких ссылок
+            foreach (Match m in ReasonAddress.Matches(reason))
             {
-                var file = ResolveSourceFile(m.Groups["path"].Value);
+                if (m.Groups["short"].Success)
+                {
+                    if (owner is null)
+                    {
+                        dead.Add($"{key}: {m.Value} — короткая ссылка без названного файла-владельца");
+                        continue;
+                    }
+                    var total = File.ReadLines(owner).Count();
+                    var from = int.Parse(m.Groups["from"].Value);
+                    var to = m.Groups["to"].Success ? int.Parse(m.Groups["to"].Value) : from;
+                    if (from < 1 || to > total)
+                        dead.Add($"{key}: {m.Value} — в файле {total} строк");
+                    continue;
+                }
+                var file = ResolveSourceFile(m.Groups["path"].Success ? m.Groups["path"].Value : m.Groups["bare"].Value);
                 if (file is null)
                 {
                     dead.Add($"{key}: {m.Value} — файла нет в дереве");
+                    owner = null;
                     continue;
                 }
-                var total = File.ReadLines(file).Count();
-                if (int.Parse(m.Groups["line"].Value) > total)
-                    dead.Add($"{key}: {m.Value} — в файле {total} строк");
+                owner = file;
+                if (!m.Groups["line"].Success) continue; // голое имя файла задало владельца; адреса строки нет
+                var line = int.Parse(m.Groups["line"].Value);
+                var lines = File.ReadLines(file).Count();
+                if (line < 1 || line > lines)
+                    dead.Add($"{key}: {m.Value} — в файле {lines} строк");
             }
+        }
+        // Список и счётчик — в сообщение: FluentAssertions печатает из коллекции один элемент,
+        // и после починки первого «тот же» адрес читается как несработавшая правка (п. 1).
         dead.Should().BeEmpty(
-            "причина KnownViolations обязана вести в существующую строку существующего файла: "
-            + "формат адреса сторож мерил и раньше, местоположение — нет");
+            $"битых адресов в KnownViolations: {dead.Count}. Причина обязана вести в существующую "
+            + "строку существующего файла: формат адреса сторож мерил и раньше, местоположение — "
+            + "нет. Все битые адреса:\n" + string.Join("\n", dead));
     }
+
+    // Адрес причины в трёх формах; порядок альтернатив важен: полный адрес снимается целым до
+    // того, как его хвост разберётся короткой ссылкой. Голое имя файла — не адрес, а владелец:
+    // оно задаёт файл, к которому относятся идущие после него короткие ссылки «Имя (:NN)» и
+    // «Имя (:NN-MM)» (п. 3 хвоста d3e0ddf8).
+    private static readonly Regex ReasonAddress = new(
+        @"(?<path>[\w.\-/]+\.cs):(?<line>\d+)|(?<bare>[\w.\-/]+\.cs)|(?<short>[A-Za-z_]\w*)\s*\(:\s*(?<from>\d+)(?:-(?<to>\d+))?\)",
+        RegexOptions.Compiled);
 
     // Путь из адреса → файл дерева: как записан (от корня) или коротким путём Main-проекта.
     // Единственный найденный; ни одного — null, и адрес красный. Проба через общий хелпер:

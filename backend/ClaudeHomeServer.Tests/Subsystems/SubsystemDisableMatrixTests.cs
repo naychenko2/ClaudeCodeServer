@@ -142,7 +142,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// ReaderController.cs:36). Убраны и четыре обязательные зависимости вне ядра — без них хост
     /// не поднимался бы вовсе, даже после починки контроллеров: отказ текстом там, где у вызова нет
     /// HTTP-кода (WorkspaceToolset.cs:1757, WebSearchToolset.cs:120, PersonasCrudService.cs:549
-    /// и :638), и GetService на пути остановки хоста (Program.cs:2338).
+    /// и :638), и GetService на пути остановки хоста (Program.cs:1528).
     ///
     /// Метка «ядро/сквозная» — объявление ядра: строка с ней требует `CanDisable=false` в классе
     /// подсистемы, и согласованность метки с кодом держит сторож
@@ -205,7 +205,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             + "где рвётся не старт, а сосед. Решает S2b-1 (CanDisable).",
         ["project-services"] = "ядро/сквозная: ядро чата (backend/ClaudeHomeServer/Hubs/SessionHub.cs:27) требует "
             + "DevServerService обязательным параметром — первый запрос к хосту не отвечен. Обязательный резолв "
-            + "на пути остановки хоста починен в S2a-2 (Program.cs:2338 — GetService, как соседние строки того "
+            + "на пути остановки хоста починен в S2a-2 (Program.cs:1528 — GetService, как соседние строки того "
             + "же блока). Решает S2b-1 (CanDisable).",
         ["skills"] = "ядро/сквозная: PersonaBindingsService (backend/ClaudeHomeServer/Services/PersonaBindingsService.cs:139) "
             + "требует SkillsService обязательным параметром; сам он обязателен ядру сессий: резолверы ролей "
@@ -405,16 +405,56 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// <summary>
     /// Структура словаря нарушений: ключ — из перечня матрицы (не из воздуха), причина — с файлом
     /// и строкой того, что падает. Пустая или безадресная причина — красный здесь, а не тихий
-    /// Skip в прогоне.
+    /// Skip в прогоне. Формат адреса мерился и раньше; теперь мерится и местоположение: файла
+    /// из адреса не быть в дереве — красный, строки за пределами файла («:999» в верном файле) —
+    /// красный. Иначе причина выглядела бы адресом, а адресом не была.
     /// </summary>
     [Fact]
-    public void Известные_наруения_полны_и_ссылаются_на_место()
+    public void Известные_нарушения_полны_и_ссылаются_на_место()
     {
         KnownViolations.Keys.Should().BeSubsetOf(MatrixKeys,
             "нарушение может быть документировано только для ключа матрицы");
         var withAddress = new Regex(@"[\w.\-/]+\.cs:\d+");
         KnownViolations.Where(kv => !withAddress.IsMatch(kv.Value)).Select(kv => kv.Key)
             .Should().BeEmpty("причина пропущенной строки обязана называть файл:строку того, что падает");
+
+        // Вторая половина — существование места. Адрес разбирается как путь:строка. Путь
+        // принимается в двух записанных в словаре формах: от корня репозитория (backend/…) и
+        // коротким путём Main-проекта (Controllers/…, Program.cs) — обе ведут к одному файлу.
+        var address = new Regex(@"(?<path>[\w.\-/]+\.cs):(?<line>\d+)", RegexOptions.Compiled);
+        var dead = new List<string>();
+        foreach (var (key, reason) in KnownViolations)
+            foreach (Match m in address.Matches(reason))
+            {
+                var file = ResolveSourceFile(m.Groups["path"].Value);
+                if (file is null)
+                {
+                    dead.Add($"{key}: {m.Value} — файла нет в дереве");
+                    continue;
+                }
+                var total = File.ReadLines(file).Count();
+                if (int.Parse(m.Groups["line"].Value) > total)
+                    dead.Add($"{key}: {m.Value} — в файле {total} строк");
+            }
+        dead.Should().BeEmpty(
+            "причина KnownViolations обязана вести в существующую строку существующего файла: "
+            + "формат адреса сторож мерил и раньше, местоположение — нет");
+    }
+
+    // Путь из адреса → файл дерева: как записан (от корня) или коротким путём Main-проекта.
+    // Единственный найденный; ни одного — null, и адрес красный. Проба через общий хелпер:
+    // он бросает на отсутствующем файле — здесь это ответ «нет», а не падение стора.
+    private static string? ResolveSourceFile(string path)
+    {
+        var parts = path.Split('/');
+        string?[] candidates = [TryRepoFile(parts), TryRepoFile(["backend", "ClaudeHomeServer", ..parts])];
+        return candidates.FirstOrDefault(c => c is not null);
+    }
+
+    private static string? TryRepoFile(string[] parts)
+    {
+        try { return TestRepoFiles.RepoFile(parts); }
+        catch (InvalidOperationException) { return null; }
     }
 
     private static async Task<List<string>> LiveKeysAsync(TestWebApplicationFactory factory) =>

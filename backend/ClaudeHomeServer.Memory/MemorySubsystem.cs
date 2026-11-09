@@ -75,7 +75,7 @@ public sealed class MemorySubsystem : IAppSubsystem
 
     // Ядро (CanDisable=false, S2b-1): шов контекста хода PersonaRecallSourceAdapter
     // (Services/Composition/PromptSeamAdapters.cs:18, ADR-023) и ядро проектов
-    // (Controllers/ProjectsController.cs:25) требуют PersonaMemoryService обязательным параметром.
+    // (Controllers/ProjectsController.cs:26) требуют PersonaMemoryService обязательным параметром.
     public bool CanDisable => false;
 
     public void Register(IServiceCollection services, IConfiguration config)

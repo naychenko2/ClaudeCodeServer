@@ -51,7 +51,7 @@ public sealed class TasksSubsystem : IAppSubsystem
 
     public string Title => "Задачи";
 
-    // Ядро (CanDisable=false, S2b-1): ядро проектов (Controllers/ProjectsController.cs:25) и
+    // Ядро (CanDisable=false, S2b-1): ядро проектов (Controllers/ProjectsController.cs:26) и
     // TeamWaveService (Services/Team/TeamWaveService.cs:89) требуют TaskManager обязательным параметром.
     public bool CanDisable => false;
 

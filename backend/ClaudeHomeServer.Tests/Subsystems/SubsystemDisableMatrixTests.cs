@@ -488,6 +488,20 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             + "нет. Все битые адреса:\n" + string.Join("\n", dead));
     }
 
+    /// Самопроверка DictionaryAddress (п. 2 хвоста fd92bb5f): короткая форма «Имя (:NN)»
+    /// меряется только закрытой скобкой — той, которой словарь её записывает. При вынесении
+    /// разбора в TestSourceAddresses закрывающая скобка была снята и форма перестала быть
+    /// дословно прежней ReasonAddress; самопроверка не даёт вернуть этот сдвиг при будущих
+    /// правках словаря.
+    [Fact]
+    public void Короткая_форма_словаря_меряется_только_закрытой()
+    {
+        TestSourceAddresses.DictionaryAddress.Matches("TurnCostLedger (:59-68)").Count
+            .Should().Be(1, "закрытая форма — ровно то, как словарь записывает короткую ссылку");
+        TestSourceAddresses.DictionaryAddress.Matches("TurnCostLedger (:59-68 без скобки").Count
+            .Should().Be(0, "незакрытая «Имя (:NN» — не адрес");
+    }
+
     /// Обе границы диапазона адреса: разбор, диапазон, порядок. Число длиннее int — не номер
     /// строки, а запись в списке битых, а не OverflowException (п. 3 хвоста 49e7b2e6). Диапазон
     /// проверяется раньше порядка: главное в паре «(:9999-50)» — граница вне файла, переворот

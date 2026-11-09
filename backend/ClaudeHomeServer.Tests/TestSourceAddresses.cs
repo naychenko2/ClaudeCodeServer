@@ -30,9 +30,13 @@ internal static class TestSourceAddresses
     /// диапазоном «:NN-MM», обе границы которого меряются так же, как у короткой ссылки
     /// (п. 2 хвоста eaf0be70). Голое имя файла — не адрес, а владелец: оно задаёт файл,
     /// к которому относятся идущие после него короткие ссылки «Имя (:NN)» и «Имя (:NN-MM)»
-    /// (п. 3 хвоста d3e0ddf8).
+    /// (п. 3 хвоста d3e0ddf8). Короткая форма — закрытая, той скобкой, которой словарь её
+    /// записывает: при вынесении из SubsystemDisableMatrixTests закрывающая скобка была снята,
+    /// и форма перестала быть дословно прежней ReasonAddress (п. 2 хвоста fd92bb5f); на сегодня
+    /// это не влияло — все короткие записи словаря закрыты, — но незакрытая форма мерит
+    /// подстроки, которые записью словаря не являются.
     public static readonly Regex DictionaryAddress = new(
-        FullAddressPattern + @"|(?<bare>[\w.\-/]+\.cs)|(?<short>[A-Za-z_]\w*)\s*\(:\s*(?<from>\d+)(?:-(?<to>\d+))?",
+        FullAddressPattern + @"|(?<bare>[\w.\-/]+\.cs)|(?<short>[A-Za-z_]\w*)\s*\(:\s*(?<from>\d+)(?:-(?<to>\d+))?\)",
         RegexOptions.Compiled);
 
     /// Путь из адреса → файл дерева. Порядок: как записан (от корня репозитория), затем
@@ -42,6 +46,13 @@ internal static class TestSourceAddresses
     /// вертикали коротким именем (TurnEventBus.cs, PromptSectionContributor.cs); для
     /// KnownViolations он ничего не меняет — его адреса резолвятся первыми двумя формами.
     /// Имя, по которому в дереве больше одного файла, не резолвится: мерить нечем, адрес красный.
+    ///
+    /// Известное ограничение (п. 3 хвоста fd92bb5f): форма Main-проекта (вторая) проверяется до
+    /// проверки неоднозначности — короткое имя, живущее и в Main, и в другой вертикали, указывает
+    /// на файл Main даже когда комментарий стоит в той вертикали. Проверкой текущего дерева это
+    /// латентно: из имён, которые резолвит вторая форма, одно живёт в нескольких проектах —
+    /// Program.cs, остальные имена второй формы в дереве единственны. Для новых проектов —
+    /// реальный риск.
     public static string? Resolve(string path)
     {
         var parts = path.Split('/');
@@ -67,9 +78,12 @@ internal static class TestSourceAddresses
     // Индекс .cs-файлов дерева: по любому суффиксу пути и по имени файла. obj/ и bin/ —
     // порождение сборки (GlobalUsings.g.cs, AssemblyInfo.cs), в индекс не входят: именем из
     // порождения нельзя измерить ссылку комментария. Lazy — построение один раз на процесс,
-    // паралельные тесты не строят индекс дважды.
-    private static readonly Lazy<Dictionary<string, List<string>>> TreeByPath = new(() => SuffixIndex(BuildTree()));
-    private static readonly Lazy<Dictionary<string, List<string>>> TreeByName = new(() => NameIndex(BuildTree()));
+    // паралельные тесты не строят индекс дважды; оба индекса строятся из одного снимка дерева
+    // (п. 6 хвоста fd92bb5f: BuildTree звался в каждом Lazy, и индексы могли строиться по двум
+    // разным снимкам).
+    private static readonly Lazy<List<string>> Tree = new(BuildTree);
+    private static readonly Lazy<Dictionary<string, List<string>>> TreeByPath = new(() => SuffixIndex(Tree.Value));
+    private static readonly Lazy<Dictionary<string, List<string>>> TreeByName = new(() => NameIndex(Tree.Value));
 
     private static readonly Lazy<ConcurrentDictionary<string, int>> LineCounts = new();
 

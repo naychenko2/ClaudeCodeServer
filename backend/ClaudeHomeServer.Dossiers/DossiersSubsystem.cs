@@ -23,8 +23,9 @@ namespace ClaudeHomeServer.Services.Dossiers;
 //   в StartAsync встали на ТОТ ЖЕ экземпляр, что и в DI;
 // - DossierAutoImporter (hosted) — наблюдение за tip ветки, тик 60 с.
 //
-// ⚠ Форвардер `IKnowledgeSyncParticipant → DossierStore` живёт в блоке Knowledge
-// (Program.cs:~688-689) — участник реконсайлера error-документов Dify. После
+// ⚠ Форвардер `IKnowledgeSyncParticipant → DossierStore` живёт в композиционном клее
+// (Services/Composition/CoreSeamsGlue.cs:40-41) — участник реконсайлера error-документов
+// Dify. После
 // выделения `KnowledgeSubsystem` (волна 3, шаг 3) он ОСТАЁТСЯ в композиционном
 // корне сознательно: это кросс-вертикальный клей пяти владельцев стора
 // «запись → {DocId, Hash}», и перенос в Knowledge дал бы ей прямую ссылку на

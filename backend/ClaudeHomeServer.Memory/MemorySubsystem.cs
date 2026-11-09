@@ -28,7 +28,8 @@ namespace ClaudeHomeServer.Services.Memory;
 //   consolidation/autolearn сервисами).
 //
 // ⚠ Два форвардера `IKnowledgeSyncParticipant → {PersonaMemoryService, TeamMemoryService}`
-// (Program.cs:~688-691) остаются в композиционном корне сознательно — кросс-вертикальный
+// (Services/Composition/CoreSeamsGlue.cs:36-39) остаются в композиционном корне
+// сознательно — кросс-вертикальный
 // клей реконсайлера error-документов Dify (KnowledgeIndexReconciler). Перенос в
 // подсистему дал бы Memory прямые ссылки на чужую Knowledge-вертикаль; см. шапку
 // `KnowledgeSubsystem.cs` — те же форвардеры для DossierStore/NotesKnowledgeService/

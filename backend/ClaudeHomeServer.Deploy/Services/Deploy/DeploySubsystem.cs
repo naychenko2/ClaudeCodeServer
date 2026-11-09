@@ -36,7 +36,7 @@ namespace ClaudeHomeServer.Services.Deploy;
 //   Контроллер — внешняя зависимость подсистемы, шов через DI, отдельного шва не требует.
 // - MCP-тулы `deploy_*` остаются в `WorkspaceToolset` (входящая зависимость,
 //   переезд в подсистему — отдельное решение).
-// - `AdminByStoreRequirement` (Program.cs ~743-752) — auth-инфраструктура, не переезжает
+// - `AdminByStoreRequirement` (Program.cs:800-809) — auth-инфраструктура, не переезжает
 //   (политика для deploy_* MCP-тулов живёт на уровне авторизации, а не фичи).
 //
 // Сторы вне `data/`:

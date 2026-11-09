@@ -231,11 +231,21 @@ public class SessionCoreShapeGuardTests
     /// самого файла и разрешается в сборке Main. Сам <see cref="SessionManager"/> в набор не входит:
     /// он проверяется точным равенством типа в <see cref="CoreNoFacadeRefs"/> (R-ФИНАЛ c1),
     /// вложенные — по DeclaringType.</summary>
-    internal static HashSet<Type> FacadeTopLevelTypes(string facadeSource)
+    internal static HashSet<Type> FacadeTopLevelTypes(string facadeSource) =>
+        FacadeTopLevelTypes(facadeSource, Main, FacadeNamespace);
+
+    /// <summary>Тот же разбор над произвольной сборкой и пространством имён: боевой вызов — Main и
+    /// пространство имён фасада; самопроверка резолвит по тестовой сборке — Main generic-типов не
+    /// содержит (проверено поиском по его исходникам), и generic top-level тип фасада моделируем только
+    /// на тестовой стороне (фикстура GenericHolder, Самопроверка_разбор_фасада_видит_generic_top_level_тип).</summary>
+    internal static HashSet<Type> FacadeTopLevelTypes(string facadeSource, Assembly assembly, string ns)
     {
         var names = FacadeTopLevelNames(facadeSource);
-        return Main.GetTypes()
-            .Where(t => t.DeclaringType is null && t.Namespace == FacadeNamespace && names.Contains(t.Name)
+        // Мерка — по имени без арности, как в FileStaticDictionaryFields: узор берёт имя до «&lt;»
+        // («GenericHolder»), Type.Name — «GenericHolder`1»; мерка по t.Name молча выкинула бы generic
+        // top-level тип фасада из трипвайра «ядро → фасад» (Самопроверка_разбор_фасада_видит_generic_top_level_тип).
+        return assembly.GetTypes()
+            .Where(t => t.DeclaringType is null && t.Namespace == ns && names.Contains(WithoutArity(t.Name))
                 && t != typeof(SessionManager))
             .ToHashSet();
     }
@@ -247,7 +257,16 @@ public class SessionCoreShapeGuardTests
             .Select(m => m.Value.Trim())
             .ToList();
 
-    internal static HashSet<string> FacadeTopLevelNames(string facadeSource) =>
+    // Модификаторы объявления top-level типа — не перечень «во что упирался»: доступ (public/internal,
+    // отсутствие — internal по умолчанию), область файла (file, C# 14), вид объявления
+    // (static/abstract/partial/sealed/readonly/ref/unsafe). Токен перед ключевым словом вне этого
+    // набора — не тихий пропуск: неизвестный модификатор даёт громкий отказ с его названием
+    // (Самопроверка_полноты_модификатор_вне_списка_громкий_и_файл_с_модификатором_file_в_полном_отказе).
+    private static readonly HashSet<string> KnownTypeModifiers =
+        ["public", "internal", "file", "sealed", "static", "abstract", "partial", "readonly", "unsafe", "ref"];
+
+    internal static HashSet<string> FacadeTopLevelNames(string facadeSource)
+    {
         // Raw-строки и комментарии вырезаются до разбора: «объявление» в колонке 0 внутри них — не объявление.
         // Атрибут допускает строковые и char-литералы с «]» и вложенные скобки в аргументе: [Obsolete("see Foo[0]")],
         // [Foo(']')], [Foo(new[]{1})] — вложенность держит балансирующая группа d, а «]» внутри литерала
@@ -258,11 +277,28 @@ public class SessionCoreShapeGuardTests
         // по умолчанию) — тип файла, и его словари в сверке полноты; строгое требование public|internal
         // молча снимало бы такой тип из списка имён. Префикс «namespace X;» в той же строке тоже в узоре:
         // объявление после него — top-level.
-        Regex.Matches(StripRawStringsAndComments(facadeSource),
-                @"^(?:\[(?:[^\[\]\r\n""']|""(?:[^""\\\r\n]|\\.)*""|'(?:\\.|[^'\\\r\n])+'|(?<d>\[)|(?<-d>\]))*(?(d)(?!))\]\s*)*(?:namespace\s+[\w.]+;\s*)?(?:(?:public|internal)\s+)?(?:(?:sealed|static|abstract|partial|readonly)\s+)*(?:class|record(?:\s+(?:class|struct))?|struct|enum|interface)\s+(\w+)",
-                RegexOptions.Multiline)
-            .Select(m => m.Groups[1].Value)
-            .ToHashSet();
+        // Модификаторы — общий ряд слов перед ключевым словом (ленивая группа mods), а не фиксированное
+        // перечисление: прежнее перечисление молча выкидало объявление с модификатором вне списка
+        // (file/unsafe/ref struct) — имя не попадало в names, unresolved пуст, громкого отказа нет.
+        // Теперь каждый токен ряда проверяется по KnownTypeModifiers, и неизвестный токен — громкий
+        // отказ с его названием. Ленивость обязательна: жадный ряд съел бы «record» из «record class Foo»
+        // в модификаторы и краснул бы на законном объявлении.
+        var names = new HashSet<string>();
+        foreach (Match m in Regex.Matches(StripRawStringsAndComments(facadeSource),
+                     @"^(?:\[(?:[^\[\]\r\n""']|""(?:[^""\\\r\n]|\\.)*""|'(?:\\.|[^'\\\r\n])+'|(?<d>\[)|(?<-d>\]))*(?(d)(?!))\]\s*)*(?:namespace\s+[\w.]+;\s*)?(?<mods>(?:\w+\s+)*?)(?:class|record(?:\s+(?:class|struct))?|struct|enum|interface)\s+(?<name>\w+)",
+                     RegexOptions.Multiline))
+        {
+            foreach (var token in m.Groups["mods"].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (!KnownTypeModifiers.Contains(token))
+                    throw new InvalidOperationException(
+                        "Неизвестный модификатор «" + token + "» перед объявлением top-level типа «" + m.Groups["name"].Value +
+                        "» (строка \"" + m.Value.Trim() + "\"): узор его не знает — тип молча выпал бы из полноты");
+            }
+            names.Add(m.Groups["name"].Value);
+        }
+        return names;
+    }
 
     /// <summary>Вырезает raw-строки и комментарии за ОДИН проход слева направо: каждая конструкция
     /// разбирается с её собственного начала, поэтому посторонняя <c>"""</c> внутри комментария или обычной
@@ -665,6 +701,34 @@ public class SessionCoreShapeGuardTests
     }
 
     [Fact]
+    public void Самопроверка_полноты_модификатор_вне_списка_громкий_и_файл_с_модификатором_file_в_полном_отказе()
+    {
+        // Модификатор «file» (C# 14) теперь в узоре: прежде его не было в перечислении, объявление не
+        // попадало в names, unresolved пуст — тип и его словари выпадали из полноты молча.
+        FacadeTopLevelNames("file static class FileNamedDicts { }").Should().Contain("FileNamedDicts",
+            "объявление с модификатором «file» — top-level тип файла: его имя обязано в names");
+
+        // Названная граница: в метаданных сборки имя file-типа манглено ("<…>HEX__SimpleName"), мерка по
+        // имени до «<» его не достанет — поэтому file-тип в файле-страже даёт полный отказ с названием
+        // типа, а не тихое выпадение из полноты (проба мутацией: живой file-тип с словарём краснит
+        // боевые полноты именно этим отказом). Живой file-фикстуры в этом файле нет: она была бы
+        // постоянным красным.
+        FluentActions.Invoking(() => FileStaticDictionaryFields(typeof(SessionCoreShapeGuardTests),
+                "file static class FileNamedDicts { }\n"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*FileNamedDicts*");
+
+        // Неизвестная конструкция в файле даёт громкий отказ с названием причины, а не тихое выпадение
+        // типа из полноты: токен перед ключевым словом вне KnownTypeModifiers — отказ с его именем.
+        FluentActions.Invoking(() => FacadeTopLevelNames("volatile class UnknownModifierThing {}"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*volatile*");
+
+        // «record class» — целое ключевое слово, не модификатор + класс: ленивость ряда mods обязательна
+        // (жадный ряд взял бы «record» в модификаторы и дал бы громкий отказ на законном объявлении).
+        FacadeTopLevelNames("record class RecordClassThing(int X);").Should().Contain("RecordClassThing",
+            "«record class» — ключевое слово записи: модификатором оно не считается");
+    }
+
+    [Fact]
     public void Самопроверка_полноты_generic_тип_исключён_рантайм_сверкой_явно()
     {
         var source = ReadGuardsSource("SessionCoreShapeGuardTests.cs");
@@ -684,17 +748,27 @@ public class SessionCoreShapeGuardTests
     [Fact]
     public void Самопроверка_отказ_полноты_несфальшивированное_имя_громкий_и_называет_причину()
     {
-        // «Громкий отказ» FileStaticDictionaryFields самопроверен здесь: обе фикстуры обязаны его вызвать,
-        // и отказ обязан назвать имя. Случай 1: имя вообще не тип в сборке. Случай 2: имя поймано узором
-        // через префиксную группу (объявление после «namespace X;»), но тип не в пространстве имён якоря
-        // (в реальной жизни — второй namespace-блок того же файла).
-        const string absent = "NamedInAnotherNamespace";
+        // «Громкий отказ» FileStaticDictionaryFields самопроверен здесь: оба случая обязаны его вызвать,
+        // и отказ обязан назвать имя. Случай 1: имя вообще не тип в сборке.
+        const string absent = "NotATypeInAssembly";
         FluentActions.Invoking(() => FileStaticDictionaryFields(typeof(SessionCoreShapeGuardTests),
                 "internal static class " + absent + " {}\n"))
             .Should().Throw<InvalidOperationException>().WithMessage("*" + absent + "*");
+        // Случай 2: имя поймано узором через префиксную группу (объявление после «namespace X;»), тип ЕСТЬ
+        // в сборке, но вне пространства имён якоря — фикстура живёт во втором namespace-блоке тестового
+        // проекта (OtherNamespaceShapeFixture.cs). Прежде этот случай не отличался от первого: тип не
+        // существовал ни в одном namespace, и оба вызова падали на один путь «нет в сборке», а различие
+        // причин жило только в тексте сообщения. Строка про тип в сборке и есть различение: перенести
+        // фикстуру в пространство имён якоря — и второй Invoking перестанет бросать (краснеет);
+        // убрать её из сборки — краснеет эта строка.
+        const string foreign = "NamedInAnotherNamespace";
+        typeof(SessionCoreShapeGuardTests).Assembly
+            .GetType("ClaudeHomeServer.Tests.OtherNamespace." + foreign).Should().NotBeNull(
+                "тип второго случая обязан существовать в сборке вне пространства имён якоря: "
+                + "иначе случай сводится к первому (имя вообще не тип)");
         FluentActions.Invoking(() => FileStaticDictionaryFields(typeof(SessionCoreShapeGuardTests),
-                "namespace ClaudeHomeServer.Tests.Other;\ninternal static class " + absent + " {}\n"))
-            .Should().Throw<InvalidOperationException>().WithMessage("*" + absent + "*");
+                "namespace ClaudeHomeServer.Tests.OtherNamespace;\ninternal static class " + foreign + " {}\n"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*" + foreign + "*");
     }
 
     internal sealed class FakeNestedDicts
@@ -771,6 +845,24 @@ public class SessionCoreShapeGuardTests
             .Should().BeEquivalentTo("PlainChar", "HexChar");
         FacadeConditionalDirectives("#if false\npublic class Hidden {}\n  #endif\n#region R").Should()
             .BeEquivalentTo("#if false", "#endif");
+    }
+
+    [Fact]
+    public void Самопроверка_разбор_фасада_видит_generic_top_level_тип_без_арности()
+    {
+        // Generic top-level тип файла фасада: узор берёт имя до «<» («GenericHolder»), Type.Name —
+        // «GenericHolder`1». Мерка по t.Name молча выкидала бы такой тип из трипвайра «ядро → фасад»:
+        // ссылка ядра на него проходила бы незамеченной. Main generic-типов не содержит (проверено
+        // поиском по его исходникам), поэтому граница моделируется на тестовой сборке и
+        // тестовом пространстве имён (фикстура GenericHolder): без WithoutArity в мерке
+        // FacadeTopLevelTypes вторая проверка краснеет.
+        const string decl = "internal static class GenericHolder<T> { }";
+        FacadeTopLevelNames(decl).Should().Contain("GenericHolder",
+            "текстовый разбор generic-объявление видит: имя берётся до «<»");
+        FacadeTopLevelTypes(decl, typeof(SessionCoreShapeGuardTests).Assembly, "ClaudeHomeServer.Tests.Services")
+            .Should().Contain(typeof(GenericHolder<>),
+                "мерка — по имени без арности, как в FileStaticDictionaryFields: generic top-level тип "
+                + "фасада обязан в наборе, а не молча выпадать из трипвайра");
     }
 
     [Fact]

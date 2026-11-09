@@ -415,7 +415,7 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
         log.Lines.Should().Contain(l => l.Contains("Сбой атрибуции"));
     }
 
-    // M1: одна нога вызова через шлюз = один счёт. Внешняя /gw/t/{turnId}/mcp/{name} — не обращение
+    // Одна нога вызова через шлюз = один счёт. Внешняя /gw/t/{turnId}/mcp/{name} — не обращение
     // к тулсету: до него доходит внутренний запрос шлюза /mcp/{name}/{хвост}, он и есть +1.
     // Эндпоинт шлюза — минимальный (app.Map), без ControllerActionDescriptor, поэтому внешняя нога
     // не даёт счёта ни по сегменту, ни по действию. Прямая ручка — прежний ключ, в том числе
@@ -451,7 +451,7 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
         HitsOf(store, "notes").Should().Be(2);
     }
 
-    // M1 на боевом маршруте: внешний /gw/t/{turnId}/mcp/notes/{chat} → шлюз → внутренний
+    // На боевом маршруте: внешний /gw/t/{turnId}/mcp/notes/{chat} → шлюз → внутренний
     // /mcp/notes/{chat} в свой же TestServer (тот же мидлвар, Program.cs:1116) = ровно +1.
     // До правки здесь было 2: внешний приписывался по сегменту mcp, внутренний — по своему пути.
     // Мутация «считать обе ноги» = прежний код, краснит ровно на этом тесте.
@@ -548,7 +548,7 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
 
     // Тот же признак на живом хосте: 404 от самого контроллера вертикали («нет такой заметки»)
     // — состоявшееся обращение; раньше оно не попадало в счёт нигде, т.е. счёт занижался ровно
-    // на самых частых запросах (m1).
+    // на самых частых запросах.
     [Fact]
     public async Task КонтроллерВертикалиОтветил404_СчитаетсяОбращением()
     {

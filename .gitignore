@@ -183,3 +183,6 @@ backend/ClaudeHomeServer.FastRest.slnx
 
 # Файл фазы прогона QA-спека «Компоненты» (подставляется прогонщиком вручную)
 frontend/e2e/qa/.phase-components
+# Файлы фазы и засева QA-спека приёмки «неактивная вертикаль» (пишет сама спека)
+frontend/e2e/qa/.phase-opt-context
+frontend/e2e/qa/.seed-opt-context.json

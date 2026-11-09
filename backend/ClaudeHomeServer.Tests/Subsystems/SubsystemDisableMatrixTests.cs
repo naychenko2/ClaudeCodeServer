@@ -16,7 +16,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ClaudeHomeServer.Tests.Subsystems;
 
 /// <summary>
-/// Сквозной сторож «каждую подсистему можно выключить» (S2a-1, ADR-014). Для КАЖДОГО ключа
+/// Сквозной сторож «каждую подсистему можно выключить» (ADR-014). Для КАЖДОГО ключа
 /// подсистемы поднимается хост с <c>Subsystems:{Key}:Enabled=false</c> и проверяется:
 /// 1. хост стартует без исключения (первый запрос <c>GET /api/auth/me</c> под админом — 200);
 /// 2. <c>GET /api/admin/subsystems</c> показывает этот ключ <c>active=false</c>;
@@ -36,12 +36,12 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 /// ImageEditorController.cs:77; таблица ниже покрывает и остальные стандартные конверсии, чтобы
 /// не разъехаться с первым <c>:guid</c>), и тем же способом подставляются обязательные
 /// <c>[FromQuery]</c>-параметры метода: без них запрос падает в 400 привязкой модели ДО любого
-/// гейта вертикали, и строка меряла бы форму запроса, а не отказ выключенной вертикали (первый
-/// прогон S2a-2 дал ровно это на api/video/channels и api/video/feed).
+/// гейта вертикали, и строка меряла бы форму запроса, а не отказ выключенной вертикали (на
+/// выключенном хосте api/video/channels и api/video/feed это и давало 400).
 ///
 /// Граница, которую надо знать, читая красный/зелёный: обработчик без атрибута и не из сборки
-/// своей вертикали — ядро, и строка матрицы его не мерит. Finding S2a-1 («строка вакуумно
-/// зелёная»: у отключаемого ключа нет ни одной меряемой ручки) закрыт S2b-1 (сдача 2):
+/// своей вертикали — ядро, и строка матрицы его не мерит. «Строка вакуумно зелёная» (у
+/// отключаемого ключа нет ни одной меряемой ручки) закрыта привязкой ручек:
 /// <c>llm</c> привязан своими Main-ручками ([SubsystemUsage("llm")]: UsageController,
 /// ProvidersController, ModelsController), <c>changelog</c> — своей ручкой HistoryController
 /// (с гейтом 503: при выключенном changelog эти эндпоинты раньше давали 500),
@@ -53,7 +53,7 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 /// мерять «отказ выключенной» нечего. Повторить вакуумную зелёность не даёт сторож полноты
 /// <see cref="Сторож_полноты_у_каждого_отключаемого_ключа_есть_привязанная_ручка"/>.
 ///
-/// ═══ Фронтовый реестр (хвост R-S2b-2a) ═══
+/// ═══ Фронтовый реестр ═══
 ///
 /// Не-ядровые ключи стора — ключи, которые фронтовый реестр <c>SUBSYSTEMS</c>
 /// (frontend/src/lib/subsystems.ts) умеет гейтить (исключения — в доке кейса). Фронтовый тест
@@ -68,7 +68,7 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 /// «ключ: 'значение'»; тестовые заглушки — точный список <see cref="TestStubKeys"/>, а не
 /// префикс <c>__</c>.
 ///
-/// ═══ Строки ядра и CanDisable (S2b-1) ═══
+/// ═══ Строки ядра и CanDisable ═══
 ///
 /// Ключ с `CanDisable=false` (вертикали, которых ядро требует обязательными параметрами) и строка
 /// `core:` (`RecordCore` — сессии/чат, проекты, вход, файлы: не `IAppSubsystem`, гейта нет) в строке
@@ -99,7 +99,7 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 ///
 /// Нарушение документируется строкой <see cref="KnownViolations"/> (ключ → что падает, с
 /// файл:строка) и выносится из прогона пропущенным тестом с той же причиной. Матрица
-/// остаётся зелёной и полной, а перечень нарушений — входом S2a-2 и S2b-1.
+/// остаётся зелёной и полной, а их починка — вне этого теста.
 /// </summary>
 [Trait("Category", "Host")]
 public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixTests.Hosts>
@@ -141,7 +141,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// <see cref="Известные_нарушения_полны_и_ссылаются_на_место"/> меряет их по последнему
     /// названному перед ними файлу; ссылка без такого владельца — красная.
     ///
-    /// S2a-2 закрыл шесть ключей (tts, yandex, video, backgrounds, deploy, reader): их контроллеры в Main
+    /// Шесть ключей (tts, yandex, video, backgrounds, deploy, reader) починены: их контроллеры в Main
     /// держат сервисы вертикалей опциональными (= null) и отвечают 503 с причиной
     /// (TtsController.cs:61, VideoController.cs:42, YandexController.cs:45,
     /// ProjectBackgroundsController.cs:40, DeployController.cs:37, TrayDeployController.cs:37,
@@ -152,8 +152,8 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     ///
     /// Метка «ядро/сквозная» — объявление ядра: строка с ней требует `CanDisable=false` в классе
     /// подсистемы, и согласованность метки с кодом держит сторож
-    /// <see cref="Сторож_согласованности_CanDisable_и_метки_ядро_сквозная"/>. S2b-1 (сдача 1) объявил
-    /// ядром все такие строки: code-graph, dossiers, git, knowledge, memory, project-icons,
+    /// <see cref="Сторож_согласованности_CanDisable_и_метки_ядро_сквозная"/>. Ядром объявлены все
+    /// такие строки: code-graph, dossiers, git, knowledge, memory, project-icons,
     /// project-services, skills, tasks — их выключение невозможно, пока ядро требует их сервисов
     /// обязательными параметрами (цепочки в самих строках); опционализация этих швов — отдельное
     /// решение, не этого шага. Строку <c>llm</c> добавил финал фичи «Внутренняя оптимизация AI Home»
@@ -166,29 +166,27 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// ProviderMigration (:113-119), ChatSettings (:147-158), ChatCreation (:318-327),
     /// TurnProcessHost (:255-276). Метка и `CanDisable=false` поставлены вместе: снять их можно
     /// только вместе — по отдельности красит направление 2 или 3b (<see cref="CoreLabeledKeys"/>).
-    /// Строка <c>images</c> закрыта и снята из перечня в сдаче 2 S2b-1 (привязка ручек + отказ 503).
+    /// Строка <c>images</c> закрыта и снята из перечня (привязка ручек + отказ 503).
     /// </summary>
     internal static readonly Dictionary<string, string> KnownViolations = new(StringComparer.OrdinalIgnoreCase)
     {
         ["code-graph"] = "ядро/сквозная: ядро чата держит цепочку обязательных зависимостей — "
             + "SessionHub (backend/ClaudeHomeServer/Hubs/SessionHub.cs:31) требует FileWatcherService, "
             + "а он (backend/ClaudeHomeServer/Services/FileWatcherService.cs:103) — CodeGraphService. "
-            + "Первый запрос к хосту не отвечен. CanDisable или опционализацию этого шва решает S2b-1.",
+            + "Первый запрос к хосту не отвечен.",
         ["dossiers"] = "ядро/сквозная: ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:26) "
             + "требует DossierStore обязательным параметром; та же зависимость — у MemoryToolset "
-            + "(backend/ClaudeHomeServer/Services/Mcp/Http/MemoryToolset.cs:45). Первый запрос к хосту не отвечен. "
-            + "CanDisable или опционализацию этого шва решает S2b-1.",
+            + "(backend/ClaudeHomeServer/Services/Mcp/Http/MemoryToolset.cs:45). Первый запрос к хосту не отвечен.",
         ["git"] = "ядро/сквозная: ReviewTreePool (backend/ClaudeHomeServer/Services/ReviewTreePool.cs:49) "
             + "и ядро проектов (Controllers/ProjectsController.cs:26 — GitService, GitServerService) требуют "
-            + "GitService обязательным параметром; первый запрос к хосту не отвечен. Решает S2b-1 (CanDisable).",
+            + "GitService обязательным параметром; первый запрос к хосту не отвечен.",
         ["knowledge"] = "ядро/сквозная: ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:26) "
             + "требует WorkspaceKnowledgeStore и KnowledgeService; та же зависимость — у PersonaBindingsService "
             + "(backend/ClaudeHomeServer/Services/PersonaBindingsService.cs:138-139), который сам обязателен ядру "
             + "сессий: резолверы ролей AddSessionCore (backend/ClaudeHomeServer/Services/Sessions/SessionCoreRegistration.cs) "
             + "резолвят его через GetRequiredService для BuiltinMcpContexts (:175), PersonaLayerBuilder (:187), "
             + "ExternalMcpContexts (:197) — эти роли фасад держит обязательными параметрами конструктора "
-            + "(backend/ClaudeHomeServer/Services/SessionManager.cs:275-276). Первый запрос к хосту не отвечен. "
-            + "CanDisable или опционализацию этого шва решает S2b-1.",
+            + "(backend/ClaudeHomeServer/Services/SessionManager.cs:275-276). Первый запрос к хосту не отвечен.",
         ["llm"] = "ядро/сквозная: ядро сессий требует сервисов гейтнутой сборки ClaudeHomeServer.Llm "
             + "обязательными зависимостями: фасад держит LlmProviderRegistry параметром конструктора "
             + "(backend/ClaudeHomeServer/Services/SessionManager.cs:282); роли ядра из регистрации "
@@ -203,27 +201,24 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
         ["memory"] = "ядро/сквозная: шов контекста хода PersonaRecallSourceAdapter "
             + "(backend/ClaudeHomeServer/Services/Composition/PromptSeamAdapters.cs:18, ADR-023) и ядро проектов "
             + "(backend/ClaudeHomeServer/Controllers/ProjectsController.cs:26) требуют PersonaMemoryService "
-            + "обязательным параметром. Первый запрос к хосту не отвечен. CanDisable или опционализацию "
-            + "этого шва решает S2b-1.",
+            + "обязательным параметром. Первый запрос к хосту не отвечен.",
         ["project-icons"] = "ядро/сквозная: хост стартует и ключ виден выключенным, но соседняя ручка мертва: "
             + "ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:26) требует "
             + "ProjectIconGlyphService обязательным параметром → GET /api/projects 500. Единственная строка, "
-            + "где рвётся не старт, а сосед. Решает S2b-1 (CanDisable).",
+            + "где рвётся не старт, а сосед.",
         ["project-services"] = "ядро/сквозная: ядро чата (backend/ClaudeHomeServer/Hubs/SessionHub.cs:31) требует "
             + "DevServerService обязательным параметром — первый запрос к хосту не отвечен. Обязательный резолв "
-            + "на пути остановки хоста починен в S2a-2 (Program.cs:1528 — GetService, как соседние строки того "
-            + "же блока). Решает S2b-1 (CanDisable).",
+            + "на пути остановки хоста починен (Program.cs:1528 — GetService, как соседние строки того "
+            + "же блока).",
         ["skills"] = "ядро/сквозная: PersonaBindingsService (backend/ClaudeHomeServer/Services/PersonaBindingsService.cs:139) "
             + "требует SkillsService обязательным параметром; сам он обязателен ядру сессий: резолверы ролей "
             + "AddSessionCore (backend/ClaudeHomeServer/Services/Sessions/SessionCoreRegistration.cs) резолвят "
             + "его через GetRequiredService для BuiltinMcpContexts (:175), PersonaLayerBuilder (:187), "
             + "ExternalMcpContexts (:197) — эти роли фасад держит обязательными параметрами конструктора "
-            + "(backend/ClaudeHomeServer/Services/SessionManager.cs:275-276). Первый запрос к хосту не отвечен. "
-            + "CanDisable или опционализацию этого шва решает S2b-1.",
+            + "(backend/ClaudeHomeServer/Services/SessionManager.cs:275-276). Первый запрос к хосту не отвечен.",
         ["tasks"] = "ядро/сквозная: ядро проектов (backend/ClaudeHomeServer/Controllers/ProjectsController.cs:26) "
             + "требует TaskManager обязательным параметром; та же зависимость — у TeamWaveService "
-            + "(backend/ClaudeHomeServer/Services/Team/TeamWaveService.cs:89). Первый запрос к хосту не отвечен. "
-            + "Решает S2b-1 (CanDisable).",
+            + "(backend/ClaudeHomeServer/Services/Team/TeamWaveService.cs:89). Первый запрос к хосту не отвечен.",
     };
 
     // Соседи, которые обязаны остаться живыми при любом выключенном ключе (пункт 4).
@@ -285,7 +280,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             + "хоста: новая подсистема без строки в матрице — красный здесь, а не тихая дыра в гейте");
     }
 
-    // ─── Фронтовый реестр: ключи стора ↔ SUBSYSTEMS, обе половины (хвост R-S2b-2a) ─────
+    // ─── Фронтовый реестр: ключи стора ↔ SUBSYSTEMS, обе половины ─────
 
     /// <summary>
     /// Фронтовый реестр <c>SUBSYSTEMS</c> (frontend/src/lib/subsystems.ts) обязан содержать каждый
@@ -528,7 +523,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     private static readonly string[] CoreLabeledKeys = ["llm"];
 
     /// <summary>
-    /// Сторож согласованности CanDisable и метки «ядро/сквозная» (S2b-1), три направления:
+    /// Сторож согласованности CanDisable и метки «ядро/сквозная», три направления:
     /// 1. ключ с `CanDisable=false` в снапшоте обязан быть строкой ядра (`core:`) или строкой
     ///    KnownViolations — иначе его тестовая строка мерит его как «выключаемый», а он не;
     /// 2. ключ KnownViolations с причиной «ядро/сквозная» обязан иметь `CanDisable=false`
@@ -592,8 +587,8 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     }
 
     /// <summary>
-    /// Ручка состава отдаёт `canDisable` у каждой записи, и строки ядра в составе есть
-    /// (критерий c1 S2b-1): core:sessions, core:projects, core:auth, core:files —
+    /// Ручка состава отдаёт `canDisable` у каждой записи, и строки ядра в составе есть:
+    /// core:sessions, core:projects, core:auth, core:files —
     /// active=true, canDisable=false.
     /// </summary>
     [Fact]
@@ -616,11 +611,11 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     }
 
     /// <summary>
-    /// Сторож полноты (S2b-1): у каждого ОТКЛЮЧАЕМОГО ключа (canDisable=true) строка обязана
+    /// Сторож полноты: у каждого ОТКЛЮЧАЕМОГО ключа (canDisable=true) строка обязана
     /// мерять хотя бы одну привязанную ручку — маршрут (явный <c>[SubsystemUsage]</c>, на классе
     /// или на методе, либо карта «сборка → ключ») или MCP-тулсет. Строка без меряемой ручки
     /// «вакуумно зелёна»: тест строки проверяет старт, снапшот и соседей, но не саму
-    /// вертикаль — ровно так в S2a-1 нашли llm/changelog/project-services. Строки ядра
+    /// вертикаль — ровно так было с llm/changelog/project-services. Строки ядра
     /// (canDisable=false) не проверяются: они пропускаются тестом строки намеренно.
     /// </summary>
     [Fact]
@@ -655,8 +650,8 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
         Skip.If(SubsystemStateStore.IsCoreKey(key),
             "core: строка — RecordCore, гейта нет, как «выключаемая» не меряется");
 
-        // Документированное нарушение S2a-1 вынесено из прогона Skip-ом с причиной: матрица
-        // остаётся зелёной и полной, а перечень нарушений — входом S2a-2/S2b-1.
+        // Документированное нарушение вынесено из прогона Skip-ом с причиной: матрица
+        // остаётся зелёной и полной, а их починка — вне этого теста.
         Skip.If(KnownViolations.TryGetValue(key, out var known), known);
 
         var disabled = _hosts.DisabledFor(key);
@@ -758,12 +753,12 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     // ─── Тело 503: отказ называет причину (по образцу тестов плагинов) ──────────────
 
     /// <summary>
-    /// Ключи, починенные отказом 503 с причиной (S2a-2: tts, yandex, video, backgrounds, deploy,
-    /// reader; S2b-1: images, changelog): их контроллеры держат сервисы вертикалей опциональными
+    /// Ключи, починенные отказом 503 с причиной (tts, yandex, video, backgrounds, deploy, reader,
+    /// images, changelog): их контроллеры держат сервисы вертикалей опциональными
     /// и на выключенном хосте отвечают 503, тело которого называет рубильник, вызвавший отказ.
     /// Строки вне списка (ядро, KnownViolations) здесь не меряются: их 503 — не «отказ починенной
     /// вертикали». KnownViolations — перечень ещё НЕ починенных нарушений: images была в нём
-    /// и снята после починки (сдача 2 S2b-1, см. его шапку), changelog в нём не была.
+    /// и снята после починки, changelog в нём не была.
     /// </summary>
     internal static readonly string[] ReasonBearingKeys =
         ["tts", "yandex", "video", "backgrounds", "deploy", "reader", "images", "changelog"];
@@ -773,7 +768,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// вертикали обязан нести «Subsystems:{key}:Enabled=false» — ту же форму тела, что у отказа
     /// плагинов (PluginsController.cs:53); сами тесты плагинов при этом меряют только фразу
     /// «Подсистема плагинов выключена» (PluginsControllerTests.cs:226, PluginsToolsetTests.cs:162),
-    /// а метку в теле держит этот тест. Инвариант S2a-2
+    /// а метку в теле держит этот тест. Инвариант
     /// «отказ с настоящей причиной, а не голым кодом» держится сейчас только текстом контроллера
     /// (TtsController.cs:67, YandexController.cs:49, VideoController.cs:45,
     /// ProjectBackgroundsController.cs:43, DeployController.cs:40, ReaderController.cs:39,
@@ -846,8 +841,8 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// <summary>
     /// Обязательные query-параметры экшена подставляются теми же фиктивными значениями, что и
     /// параметры маршрута. Без них запрос падает в 400 модельной привязкой ДО любого гейта
-    /// вертикали, и строка меряла бы форму запроса, а не отказ выключенной вертикали (первый
-    /// прогон S2a-2: на выключенном хосте api/video/channels и api/video/feed дали 400).
+    /// вертикали, и строка меряла бы форму запроса, а не отказ выключенной вертикали (на
+    /// выключенном хосте api/video/channels и api/video/feed это давало 400).
     /// </summary>
     private static string WithQueryParams(string url, ControllerActionDescriptor action)
     {
@@ -878,8 +873,8 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// <summary>
     /// Тело пробы строится по типу [FromBody]-параметра экшена: «{}» для эндпоинта с
     /// обязательными полями — это 400 модельной валидацией ДО экшена, и строка меряла бы форму
-    /// запроса, а не отказ выключенной вертикали (первый прогон S2a-2: api/reader/read и
-    /// api/reader/embed-check дали ровно это).
+    /// запроса, а не отказ выключенной вертикали (api/reader/read и api/reader/embed-check
+    /// давали ровно это).
     /// </summary>
     private static string BodyFor(ControllerActionDescriptor action)
     {

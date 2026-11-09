@@ -321,9 +321,12 @@ public class SessionCoreShapeGuardTests
                 // а если «;» нет — пустая строка или конец исходника; берётся ближайшая граница. Не по «\n»:
                 // в многострочном объявлении имя живёт за типом возвращаемого на следующей строке, и отказ
                 // обязан называть тип (Самопроверка_полноты_delegate...). Граница ищется от ключевого слова:
-                // «;» префикса «namespace X;» в той же строке — не конец объявления.
+                // «;» префикса «namespace X;» в той же строке — не конец объявления. Первый «;» подряд —
+                // и «;» внутри строкового литерала ([Obsolete("use X; instead")]): отказ обрывался на
+                // полуслове и с незакрытой кавычкой. Граница — первая «;» вне литералов
+                // (FirstSemicolonOutsideLiterals).
                 int kwAt = m.Groups["kw"].Index;
-                int semi = stripped.IndexOf(';', kwAt);
+                int semi = FirstSemicolonOutsideLiterals(stripped, kwAt);
                 int cut = stripped.Length;
                 Match blank = Regex.Match(stripped.Substring(kwAt), "[ \t]*\r?\n[ \t]*\r?\n");
                 if (blank.Success) cut = kwAt + blank.Index;
@@ -336,6 +339,23 @@ public class SessionCoreShapeGuardTests
             names.Add(m.Groups["name"].Value);
         }
         return names;
+    }
+
+    /// <summary>Первый «;» вне строковых литералов, начиная с <c>from</c>; -1 — «;» нет. Литералы
+    /// разбираются теми же альтернативами, что сохраняет <see cref="StripRawStringsAndComments"/>
+    /// (обычная, verbatim- и char-строка — дословно та же форма, порядок тот же): в очищенном
+    /// исходнике raw-строк и комментариев нет, остальные литералы — как в оригинале, и «;» внутри
+    /// литерала концом объявления не считается. Каждая конструкция потребляется целиком, поэтому
+    /// «;» после закрытой кавычки — обычная граница. Пустой строковый литерал матчится и ничего
+    /// не сдвигает; «;» после конца исходника — нет.</summary>
+    private static int FirstSemicolonOutsideLiterals(string stripped, int from)
+    {
+        foreach (Match t in Regex.Matches(stripped.Substring(from),
+                     "@\"(?:[^\"]|\"\")*\"|\"(?:[^\"\\\\\\r\\n]|\\\\.)*\"|'(?:\\.|[^'\\\\\\r\\n])+'|;"))
+        {
+            if (t.Value == ";") return from + t.Index;
+        }
+        return -1;
     }
 
     /// <summary>Вырезает raw-строки и комментарии за ОДИН проход слева направо: каждая конструкция
@@ -803,6 +823,16 @@ public class SessionCoreShapeGuardTests
             .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*")
             .And.Message.Should().Contain("NoSemiBoundary", "без «;» граница — пустая строка: имя до неё названо").And
             .NotContain("AfterTheBlank", "за пустой строкой — не часть объявления, в отказ не входит");
+        // «;» внутри строкового литерала — не конец объявления: без разбора литералов граница вставала
+        // на «;» внутри «"use X; instead"» и отказ обрывался на полуслове с незакрытой кавычкой
+        // («…([Obsolete("use X»). Теперь: имя названо, текст объявления до настоящего «;» цел —
+        // включая часть за внутренним «;»), а текст за настоящим «;» в отказ не входит.
+        FluentActions.Invoking(() => FacadeTopLevelNames(
+                "internal delegate void SemiInStringHandler([Obsolete(\"use X; instead\")] int x); internal static class AfterTheSemi {}"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*")
+            .And.Message.Should().Contain("SemiInStringHandler", "имя типа названо").And
+            .Contain("instead\")] int x);", "граница — настоящий «;», а не «;» внутри литерала: текст объявления цел").And
+            .NotContain("AfterTheSemi", "за концом объявления — не часть объявления, в отказ не входит");
     }
 
     [Fact]

@@ -25,8 +25,7 @@ import { imageGenerationApi } from '../features/imageGeneration/api';
 import { mcpApi } from '../features/mcp/api';
 import { readerApi } from '../features/reader/api';
 import { pluginsApi } from '../features/plugins/api';
-// eslint-disable-next-line module/no-cross-feature-import -- lib/api собирает объект api из api-модулей фич spread'ом; публичного index.ts у notes нет (баррел заведётся отдельно)
-import { notesApi } from '../features/notes/api';
+import { notesApi } from './notesApi';
 import { docsApi } from '../features/docs/api';
 import { tasksApi } from '../features/tasks/api';
 import { personasApi } from '../features/personas/api';

@@ -18,7 +18,8 @@ vi.mock('../../../lib/offline', async (importOriginal) => {
   return { ...orig, request, readStoredToken };
 });
 
-import { notesApi, NoteConflictError } from '../api';
+import { notesApi } from '../../../lib/notesApi';
+import { NoteConflictError } from '../api';
 
 type ReqOpts = { method?: string; body?: string; headers?: Record<string, string>; etagRef?: { etag?: string } };
 

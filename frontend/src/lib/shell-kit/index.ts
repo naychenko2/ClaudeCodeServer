@@ -109,6 +109,8 @@ export { followPeeked } from '../genPanelOpen';
 // request и readStoredToken — низкоуровневый HTTP редактора картинок: его api.ts
 // ходит по своим маршрутам в обход фасада api
 export { OfflineError, RequestTimeoutError, request, readStoredToken } from '../offline';
+// типы тела 409 (контракт К8) — класс NoteConflictError «Заметок»; значения тут не нужны
+export type { ConflictBody, FileConflictAuthor, FileConflictSource } from '../offline';
 
 // ─── featureFlags ────────────────────────────────────────────────────────────
 export { FLAGS, useFeature, getFlag } from '../featureFlags';

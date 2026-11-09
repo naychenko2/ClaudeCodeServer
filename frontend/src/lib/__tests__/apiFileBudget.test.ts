@@ -17,7 +17,7 @@ import { FROZEN_TYPES_INDEX_DECLARATIONS } from './typesIndexExports';
 // объявлениям файла.
 // Если список краснеет после мержа master: порядок сверки и то, кто добавляет
 // новые имена, — в шапке typesIndexExports.ts; расхождение не правится руками.
-const MAX_API_LINES = 175;
+const MAX_API_LINES = 174;
 
 const lines = (rel: string) => readFileSync(resolve(__dirname, rel), 'utf-8').split('\n').length - 1;
 

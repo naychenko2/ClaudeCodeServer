@@ -24,7 +24,8 @@
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FileViewer, __test } from '../FileViewer';
-import { api, FileConflictError } from '../../lib/api';
+import { api } from '../../lib/api';
+import { FileConflictError } from '../../features/files/api';
 import type { Project, ProjectRoleView } from '../../types';
 import { installFakeDom, uninstallFakeDom, mount, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 

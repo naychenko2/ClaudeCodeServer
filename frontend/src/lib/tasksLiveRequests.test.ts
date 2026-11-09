@@ -21,6 +21,26 @@ vi.mock('./signalr', () => ({
 }));
 vi.mock('./themeMode', () => ({ getEffectiveTheme: () => 'light' }));
 
+// Среда с владельцем: без cc_user_id readStoredUserId() пуст, и passiveWrite
+// выходит молча (offline.ts:1135) — тест не покраснел бы даже без live у запроса.
+const authEnv = (): void => {
+  const mem = new Map<string, string>();
+  const storage = {
+    getItem: (k: string) => mem.get(k) ?? null,
+    setItem: (k: string, v: string) => { mem.set(k, v); },
+    removeItem: (k: string) => { mem.delete(k); },
+  };
+  vi.stubGlobal('localStorage', storage);
+  vi.stubGlobal('sessionStorage', storage);
+  mem.set('cc_token', 't');
+  mem.set('cc_user_id', 'u1');
+};
+
+// Фактический формат ключа пассивного кэша — `offline:<owner>:/…` (offline.ts:413-420).
+const passiveWrites = (): string[] => mocks.idbSet.mock.calls
+  .map(c => String((c as unknown[])[0]))
+  .filter(k => k.startsWith('offline:u1:/'));
+
 const task = (id: string): Task => ({
   id, title: id, description: '', status: 'todo', priority: 'medium',
   linkedFiles: [], subtasks: [], labels: [], order: 1000,
@@ -40,25 +60,31 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('списки задач и фич — live-запросы', () => {
-  it('listAll и getFeatures не пишут URL-ключ в IndexedDB', async () => {
+  it('listAll и getFeatures не пишут ключ в пассивный кэш', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('[]', { status: 200 })));
+    authEnv();
     const { api } = await import('./api');
+    const { flushPassiveWrites } = await import('./offline');
     await api.tasks.listAll();
     await api.tasks.getFeatures('s1');
-    const urlKeys = mocks.idbSet.mock.calls.filter(c => String((c as unknown[])[0]).startsWith('/'));
-    expect(urlKeys).toEqual([]);
+    // Запись в общий класс отложена (очередь, offline.ts:1184-1192) — без ожидания
+    // сброса тест остался бы зелёным даже без live у запроса
+    await flushPassiveWrites();
+    expect(passiveWrites()).toEqual([]);
   });
 
-  it('search, listByPersona, listByProject и getFeature не пишут URL-ключ в IndexedDB', async () => {
+  it('search, listByPersona, listByProject и getFeature не пишут ключ в пассивный кэш', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('[]', { status: 200 })));
+    authEnv();
     const { api } = await import('./api');
+    const { flushPassiveWrites } = await import('./offline');
     await api.tasks.search('abc');
     await api.tasks.listByPersona('p1');
     await api.tasks.listByProject('pr1');
     await api.tasks.getFeature('f1', '50');
     await api.tasks.getFeature('f1', undefined, new AbortController().signal);
-    const urlKeys = mocks.idbSet.mock.calls.filter(c => String((c as unknown[])[0]).startsWith('/'));
-    expect(urlKeys).toEqual([]);
+    await flushPassiveWrites();
+    expect(passiveWrites()).toEqual([]);
   });
 
   it('featuresIndex остаётся пассивным: ответ пишется в кэш под ключом с владельцем', async () => {
@@ -84,17 +110,19 @@ describe('списки задач и фич — live-запросы', () => {
     expect(urlKeys).toEqual(['offline:u1:/tasks/features/index']);
   });
 
-  it('открытие N задач подряд не оставляет в IndexedDB записей /tasks/{id}', async () => {
+  it('открытие N задач подряд не оставляет записей /tasks/{id} в пассивном кэше', async () => {
     const full = (id: string) => ({ ...task(id), description: 'x'.repeat(1000), resultMarkdown: 'y'.repeat(1000) });
     vi.stubGlobal('fetch', vi.fn(async (u: unknown) => {
       const id = String(u).split('/').pop()!;
       return new Response(JSON.stringify(full(id)), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }));
+    authEnv();
     const { api } = await import('./api');
+    const { flushPassiveWrites } = await import('./offline');
     const N = 40;
     for (let i = 0; i < N; i++) await api.tasks.get(`t${i}`);
-    const taskKeys = mocks.idbSet.mock.calls.filter(c => /^\/(api\/)?tasks\/[^/?]+$/.test(String((c as unknown[])[0])));
-    expect(taskKeys).toEqual([]);
+    await flushPassiveWrites();
+    expect(passiveWrites()).toEqual([]);
   });
 
   it('офлайн api.tasks.get бросает OfflineError, а не отдаёт устаревшую копию', async () => {

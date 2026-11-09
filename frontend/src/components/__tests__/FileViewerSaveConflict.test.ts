@@ -6,7 +6,8 @@
 import { act, createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FileViewer, __test } from '../FileViewer';
-import { api, FileConflictError } from '../../lib/api';
+import { api } from '../../lib/api';
+import { FileConflictError } from '../../features/files/api';
 import type { Project } from '../../types';
 import { installFakeDom, uninstallFakeDom, mount, findNodeByAttr, reactProps, textNodes } from '../chat/__tests__/fakeDom';
 

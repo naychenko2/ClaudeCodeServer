@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Hourglass, History, Lock, Tag as TagIcon, ChevronDown } from 'lucide-react';
 import type { Session, Project, ProjectTag } from '../../types';
-import { api, chatFieldsErrorText } from '../../lib/api';
+import { api } from '../../lib/api';
+import { chatFieldsErrorText } from '../../features/chat/api';
 import { expiryOptionLabel } from '../../lib/expiry';
 import { updateChatFields, type ChatFieldsPatch } from '../../lib/chatUpdate';
 import { ownerSettingsDeniedReason } from '../../features/projects/members/participantGate';
@@ -59,7 +60,7 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
   const registry = registryOverride ?? project?.tagRegistry ?? [];
 
   // Частичное обновление полей и выбор эндпоинта по projectId — в updateChatFields.
-  // Отказ — тост с текстом из общей точки разбора (chatFieldsErrorText, api.ts:1064):
+  // Отказ — тост с текстом из общей точки разбора (chatFieldsErrorText, features/chat/api.ts:53):
   // 409 private_chat_dossiers — причина и действие (постановка S2d-6c-F), любая другая
   // ошибка — нейтральный текст, как у соседних контролов той же настройки
   // (DossierOptOutButton.tsx:35-39, ExpiryButton.tsx:37-38). Молчать это место больше

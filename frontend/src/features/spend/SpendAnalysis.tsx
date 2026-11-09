@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import type {
   SpendOverviewResponse, SpendPivotNode, SpendTaskPromptRun, SpendTurnDetailResponse,
   SpendTurnDto, SpendTurnsResponse,
-} from '../../types';
+} from './types';
 import { api, C, FONT, R, SHADOW, SP, Z } from 'aihome_shell/kit';
 import {
   ADMIN_ONLY_DIMS, DIM_LABELS, SPEND_PRESETS, fmtDate, fmtRub, fmtTok, fmtTime, genUnit,

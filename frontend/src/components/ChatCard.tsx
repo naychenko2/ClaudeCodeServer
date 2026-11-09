@@ -15,7 +15,7 @@ import { ExpiryBadge } from './ExpiryBadge';
 import { ExpiryPicker } from './chat/ExpiryPicker';
 import { expiresAt, expiryOptionLabel, formatExpiryDate } from '../lib/expiry';
 import { updateChatFields } from '../lib/chatUpdate';
-import { chatFieldsErrorText } from '../lib/api';
+import { chatFieldsErrorText } from '../features/chat/api';
 import { isNotifySupported, setChatNotifyEnabled, useChatNotifyOn } from '../lib/notify';
 import { showToast } from '../lib/toast';
 import { ChatOriginBadge } from './ChatOriginBadge';

@@ -1,27 +1,38 @@
 /**
- * Правило модульности фич: импорт снаружи — только через `index.ts` фичи.
+ * Правило модульности фич: импорт снаружи — только через публичную грань фичи:
+ * `index.ts` (вклады и рантайм) или `types.ts` (типы).
  *
  * Цель — подготовить фронт к выносу фич в отключаемые подсистемы (пилот —
  * «notes»). Фича X публикует свой API через `src/features/X/index.ts` (реестр
- * вкладов): снаружи импортируют оттуда, а не из внутренних модулей. Это даёт
- * стабильный публичный адрес: рефакторинг внутренних модулей не ломает
- * потребителей, а при отключении подсистемы фронт знает ровно одну точку,
- * через которую вкрапления появляются.
+ * вкладов), а свои типы — через `src/features/X/types.ts`: снаружи — только эти
+ * два адреса, не внутренние модули. Это даёт стабильный публичный адрес:
+ * рефакторинг внутренних модулей не ломает потребителей, а при отключении
+ * подсистемы фронт знает ровно те точки, через которые вкрапления появляются.
+ * Отдельного фасада для типов не заводим: `types.ts` и есть публичная грань
+ * домена, фасад поверх мелкого домена стал бы второй точкой правды (решение
+ * d358bb59, карта docs/research/frontend-api-split-2026-11.md).
  *
- * Правило действует только для фич, перечисленных в опции `features` (это
- * фичи, у которых уже есть `index.ts`). Для фич без `index.ts` нарушение не
- * фиксируется: они ещё не переведены на новую модель и стартовое состояние —
- * хаос, который не имеет смысла allow-list'ить. Когда у фичи заводится
- * `index.ts`, её добавляют в `features` и начинают следить.
+ * Правило действует только для фич, перечисленных в опции `features`, — тех,
+ * что выносятся в подсистемы. Фичу можно включить в список до того, как у неё
+ * заведётся `index.ts` (так включён пилот «notes»): стартовые нарушения
+ * оформляются построчными `eslint-disable` с причиной, а `CROSS_FEATURE_IMPORT_ALLOWED`
+ * остаётся точкой возврата для массовых стартовых нарушений.
+ *
+ * Относительные импорты между соседними фичами (`'../sessions/api'` из
+ * features/chat) — такие же границы фич, как и абсолютные: они резолвятся
+ * против директории текущего файла и судятся тем же правилом. В сырой строке у них
+ * может не быть сегмента `features/` — без резолвинга соседняя фича проходила
+ * мимо сторожа (замечание ревью R-S5-P6).
  *
  * Правило НЕ действует на файлы внутри самой фичи (`src/features/X/...`):
  * свои модули внутри X могут импортировать друг друга как угодно, включая
  * глубокие относительные пути. Запрет только на «снаружи».
  *
  * Легальные исключения (текущие нарушения, которые ещё не вычищены) —
- * allow-list `CROSS_FEATURE_IMPORT_ALLOWED` в eslint.design.config.js. Разовое
+ * allow-list `CROSS_FEATURE_IMPORT_ALLOWED` и блок подключения
+ * `crossFeatureImportGuard` в eslint.config.js. Разовое
  * отклонение оформляется построчно с причиной:
- *   // eslint-disable-next-line design/no-cross-feature-import -- причина
+ *   // eslint-disable-next-line module/no-cross-feature-import -- причина
  */
 
 // В пути импорта ловим «features/<X>» независимо от префикса (`./`, `../`,
@@ -29,15 +40,35 @@
 // разделителя.
 const FEATURE_RE = /(?:^|[./])features\/([^/'"\\]+)/;
 
-// То, что идёт после имени фичи в пути импорта. Пустая строка или `.js`,
-// `.ts`, `.tsx` без суффикса-пути — легальный импорт через `index.ts`
-// (`from '@/features/notes'` резолвится в `.../notes/index.ts`). Любой
-// дальнейший сегмент — прямое обращение к внутреннему модулю, нарушение.
-const DEEP_PATH_RE = /^(\/.*|\..+)$/;
+// Дальнейший путь после имени фичи — прямое обращение к внутреннему модулю,
+// нарушение. Ровный `/types` (и с расширением `/types.ts`) — публичная грань
+// типов домена, исключение наравне с пустым tailом: снаружи типы импортируют с
+// неё (S5-B). Путь глубже `types.ts` (`/types/…`) остаётся нарушением. Пустой
+// tail — импорт самого `features/<X>`: в TS-резолве это `features/<X>/index.ts`,
+// публичный фасад фичи, — легально.
+// Ветка `.` + что-либо (суффикс расширения сразу после имени) с текущим
+// FEATURE_RE недостижима: суффикс жадно уходит в имя фичи
+// (`'@/features/notes.ts'` → имя `notes.ts`), tail с `.` не возникает.
+const DEEP_PATH_RE = /^(\/(?!types(?:\.ts)?$).+|\..+)$/;
 
 // Где живут фичи на диске. Поддерживаем и абсолютный путь от корня линта
 // (на линукс-раннерах CI), и вариант с ведущим `src/`.
 const OWN_FEATURE_RE = /(?:\/|^)(?:src\/)?features\/([^/]+)\//;
+
+// Относительный путь импорта (`./`, `../`): в сырой строке у него может не быть
+// сегмента `features/` (`'../sessions/api'` из features/chat) — такие пути
+// резолвятся против директории текущего файла и проверяются тем же FEATURE_RE.
+const RELATIVE_RE = /^\.{1,2}\//;
+
+const resolveRelative = (dir, rel) => {
+  const out = [];
+  for (const seg of (dir + '/' + rel).split('/')) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') { out.pop(); continue; }
+    out.push(seg);
+  }
+  return out.join('/');
+};
 
 export default {
   meta: {
@@ -45,7 +76,8 @@ export default {
     docs: {
       description:
         'Запрещает прямой импорт из внутренних модулей features/* — ' +
-        'снаружи можно только через features/<X>/index.ts',
+        'снаружи можно только через features/<X>/index.ts (вклады и рантайм) ' +
+        'или features/<X>/types.ts (типы)',
     },
     schema: [
       {
@@ -64,10 +96,11 @@ export default {
     messages: {
       crossFeatureImport:
         'Прямой импорт из «features/{{feature}}/{{path}}»: снаружи фичи можно только ' +
-        '`import ... from \'@/features/{{feature}}\'` (через index.ts). Прямые импорты ' +
-        'из внутренних модулей делают невозможным отключение подсистемы без точечных ' +
-        'правок по всем потребителям. Осознанное исключение — ' +
-        'eslint-disable-next-line design/no-cross-feature-import с причиной.',
+        '`import ... from \'@/features/{{feature}}\'` (index.ts, вклады и рантайм) или ' +
+        '`import type ... from \'@/features/{{feature}}/types\'` (types.ts, типы). ' +
+        'Прямые импорты из внутренних модулей делают невозможным отключение ' +
+        'подсистемы без точечных правок по всем потребителям. Осознанное исключение — ' +
+        'eslint-disable-next-line module/no-cross-feature-import с причиной.',
     },
   },
 
@@ -80,30 +113,41 @@ export default {
       .replace(/\\/g, '/');
     const own = OWN_FEATURE_RE.exec(filename);
     const ownFeature = own ? own[1] : null;
+    // Директория текущего файла — основа резолвинга относительных импортов.
+    // Нужна только файлам на пути фичи: снаружи фичи относительный путь к фиче
+    // всегда содержит сегмент `features/` и ловится FEATURE_RE по сырой строке.
+    const ownDir = ownFeature ? filename.slice(0, filename.lastIndexOf('/')) : null;
 
     const checkSource = (sourceNode) => {
       if (!sourceNode || sourceNode.type !== 'Literal') return;
       const raw = sourceNode.value;
       if (typeof raw !== 'string') return;
-      const m = FEATURE_RE.exec(raw);
-      if (!m) return;
-      const feature = m[1];
-      if (!enabled.has(feature)) return;
-      // Свой файл внутри той же фичи — свои правила.
-      if (ownFeature === feature) return;
-      // Идёт ли после имени фичи что-то ещё, кроме коротких суффиксов
-      // расширения (`/notes.ts` — эквивалент `/notes/index.ts` в TS-резолве)?
-      const tail = raw.slice(m.index + m[0].length);
-      // Всё, что не «пусто или короткое расширение», — прямое обращение к
-      // внутреннему модулю. Здесь ловим и `/saveToNote`, и `/saveToNote.ts`,
-      // и глубже (`/graph/useThemeColors`).
-      if (!DEEP_PATH_RE.test(tail) && tail !== '') return;
-      const path = tail.startsWith('/') ? tail.slice(1) : tail;
-      context.report({
-        node: sourceNode,
-        messageId: 'crossFeatureImport',
-        data: { feature, path },
-      });
+      // Две формы одного пути: сырая строка (в ней есть сегмент `features/`)
+      // и резолвятая — для относительных импортов без этого сегмента.
+      const candidates = [raw];
+      if (ownDir && RELATIVE_RE.test(raw)) candidates.push(resolveRelative(ownDir, raw));
+      for (const src of candidates) {
+        const m = FEATURE_RE.exec(src);
+        if (!m) continue;
+        const feature = m[1];
+        if (!enabled.has(feature)) continue;
+        // Свой файл внутри той же фичи — свои правила.
+        if (ownFeature === feature) continue;
+        const tail = src.slice(m.index + m[0].length);
+        // Пустой tail — сам `features/<X>` (в TS-резолве `…/index.ts`): это
+        // публичный фасад фичи, а не обращение к её внутреннему модулю.
+        // Нарушение — только дальнейший сегмент пути: ловим и `/saveToNote`,
+        // и `/saveToNote.ts`, и глубже (`/graph/useThemeColors`); исключение —
+        // ровный `/types` (`/types.ts`), публичная грань типов домена (S5-B).
+        if (!DEEP_PATH_RE.test(tail)) continue;
+        const path = tail.startsWith('/') ? tail.slice(1) : tail;
+        context.report({
+          node: sourceNode,
+          messageId: 'crossFeatureImport',
+          data: { feature, path },
+        });
+        return; // одно нарушение на импорт: обе формы одного пути не двойят;
+      }
     };
 
     return {

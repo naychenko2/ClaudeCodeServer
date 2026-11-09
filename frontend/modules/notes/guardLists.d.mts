@@ -24,3 +24,5 @@ export declare const GUARD_AREAS: readonly NotesGuardArea[];
 export declare const LEGACY_ALLOWED: readonly string[];
 
 export declare function findViolation(importer: string, source: string): string | null;
+
+export declare function findBundledStore(moduleId: string): string | null;

@@ -4,7 +4,7 @@
 // (тот же сигнал SignalR, которым обновляется лента). Клик — поповер с разбивкой
 // и переходом в раздел «Аналитика токенов» с фильтром по этому чату.
 import { useEffect, useRef, useState } from 'react';
-import type { SpendBadgeResponse } from '../../types';
+import type { SpendBadgeResponse } from './types';
 import { api, C, FONT, R, SHADOW } from 'aihome_shell/kit';
 import { openSpend } from '../../lib/spendContract';
 import { fmtDate, fmtTime, fmtTok, sourceLabel } from './spendModel';

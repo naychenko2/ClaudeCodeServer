@@ -109,12 +109,22 @@ export { followPeeked } from '../genPanelOpen';
 // request и readStoredToken — низкоуровневый HTTP редактора картинок: его api.ts
 // ходит по своим маршрутам в обход фасада api
 export { OfflineError, RequestTimeoutError, request, readStoredToken } from '../offline';
+// NoteConflictError — единый экземпляр класса для хоста (бросает) и remote «Заметок» (instanceof)
+export { NoteConflictError } from '../offline';
+// типы тела 409 (контракт К8)
+export type { ConflictBody, FileConflictAuthor, FileConflictSource } from '../offline';
 
 // ─── featureFlags ────────────────────────────────────────────────────────────
 export { FLAGS, useFeature, getFlag } from '../featureFlags';
 
 // ─── defaultPersona ──────────────────────────────────────────────────────────
 export { useMe } from '../defaultPersona';
+
+// ─── useSphereOf ─────────────────────────────────────────────────────────────
+// Через кит, а не относительным импортом: lib/useSphereOf → useAllProjects → lib/api тянул
+// в remote вторую копию lib/offline (стор ядра)
+export { useSphereOf } from '../useSphereOf';
+export { useAllProjects } from '../../features/projects/useAllProjects';
 
 // ─── toast ───────────────────────────────────────────────────────────────────
 export { showToast } from '../toast';
@@ -191,7 +201,7 @@ export type { SelectOption } from '../../components/ui';
 export { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 
 // ─── components/MarkdownViewer ───────────────────────────────────────────────
-export { MarkdownViewer, stripFrontmatter } from '../../components/MarkdownViewer';
+export { MarkdownViewer, stripFrontmatter, codeMask } from '../../components/MarkdownViewer';
 export type { ResolvedNote } from '../../components/MarkdownViewer';
 
 // ─── components/midi/MidiEditor ──────────────────────────────────────────────

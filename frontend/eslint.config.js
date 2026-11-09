@@ -5,6 +5,7 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 import noRawColor from './eslint-rules/no-raw-color.js'
+import noCrossFeatureImport from './eslint-rules/no-cross-feature-import.js'
 import { LEGACY_ALLOWED, NOTES_MODULE_GUARD, NOTES_WIKI_GUARD } from './modules/notes/guardLists.mjs'
 
 // Файлы, которым сырой hex положен по природе (см. docs/design/guidelines.md,
@@ -173,6 +174,53 @@ export const contextHostImportGuard = {
   },
 }
 
+// Модульность фич: импорт снаружи — только через публичную грань фичи: `index.ts`
+// (вклады и рантайм) или `types.ts` (типы) (реализация —
+// eslint-rules/no-cross-feature-import.js). Правило действует только для фич из
+// CROSS_FEATURE_IMPORT_ENABLED — тех, что выносятся в подсистемы.
+// Файлы, в которых пока остаются прямые импорты из внутренних модулей
+// `features/notes/*`. После пилота извлекаемости каркасных потребителей не
+// осталось: каркас общается с фичей только через реестр подсистем
+// (`src/lib/subsystems/registry.ts`), и там единственный side-effect-импорт
+// оформлен построчным `eslint-disable` с причиной. Список оставлен пустым как
+// точка возврата, если у будущей фичи появятся стартовые нарушения.
+export const CROSS_FEATURE_IMPORT_ALLOWED = []
+
+// Фичи, которые выносятся в подсистемы и за которыми уже следит линт-сторож.
+// Подключение новой фичи = добавить её в этот список и покрыть стартовые
+// нарушения: построчным `eslint-disable` с причиной (единичные) или allow-list'ом
+// файлов (массовые). Публичный `index.ts` может ещё не существовать — тогда в
+// причине директивы прямо это и указывается («баррел заведётся отдельно»).
+// Сейчас: «notes» (пилот) и «sessions» (перенесена в S5-P6; её стартовые нарушения —
+// сборка api в lib/api и общий курсор истории в features/chat, покрыты директивами).
+export const CROSS_FEATURE_IMPORT_ENABLED = ['notes', 'sessions']
+
+// Подключается дважды: здесь (в общий линт — иначе уже расставленные в коде
+// `eslint-disable` на это правило падают с «Definition for rule was not found»)
+// и в eslint.design.config.js — под `npm run lint:design`, зелёный гейт, где правило
+// судит без легаси-шума. Регистрируем под отдельным ключом `module` — ESLint 10
+// запрещает переопределять уже зарегистрированный в `designSystem` плагин `design`,
+// а конфликтовать с чужим ключом нельзя.
+export const crossFeatureImportGuard = [
+  {
+    files: ['src/**/*.{ts,tsx}'],
+    plugins: { module: { rules: { 'no-cross-feature-import': noCrossFeatureImport } } },
+    rules: {
+      'module/no-cross-feature-import': ['error', {
+        features: CROSS_FEATURE_IMPORT_ENABLED,
+      }],
+    },
+  },
+  // Блок-исключение подключаем только при непустом allow-list: пустой `files`
+  // невалиден в flat-config. Сейчас список пуст — каркасных нарушений нет.
+  ...(CROSS_FEATURE_IMPORT_ALLOWED.length
+    ? [{
+        files: CROSS_FEATURE_IMPORT_ALLOWED,
+        rules: { 'module/no-cross-feature-import': 'off' },
+      }]
+    : []),
+]
+
 export default defineConfig([
   globalIgnores(['dist', 'dev-dist']),   // dev-dist — сгенерированный workbox PWA
   {
@@ -245,4 +293,5 @@ export default defineConfig([
   notesStoreImportGuard,
   notesWikiImportGuard,
   contextHostImportGuard,
+  ...crossFeatureImportGuard,
 ])

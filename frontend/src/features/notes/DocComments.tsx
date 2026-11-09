@@ -5,14 +5,12 @@ import {
   MarkdownViewer, stripFrontmatter, api, C, FONT, R, SHADOW, Z,
   useNotesVersion, useContainerWidth, ensurePersonasLoaded, usePersonas, personaLabel,
   PersonaAvatar, Badge, Button, ConfirmDialog, SidebarSection,
-  startChatFromPanel, docAnnotationsPrompt, ANNOTATIONS_TOOL_KEY, NO_AUTOFILL,
+  useSphereOf, useAllProjects, startChatFromPanel, docAnnotationsPrompt, ANNOTATIONS_TOOL_KEY, NO_AUTOFILL,
 } from 'aihome_shell/kit';
 import type { DocAnnotation, NoteReply, Persona } from '../../types';
 import type { ResolvedNote } from '../../components/MarkdownViewer';
 import { isGlobalPersona, visibleIn, type SphereOf } from '../../lib/personaZone';
-import { useSphereOf } from '../../lib/useSphereOf';
 import { canWriteContent, type ContentDoor } from '../projects/members/contentRights';
-import { useAllProjects } from '../projects/useAllProjects';
 
 // Комментарии к MD-документам (флаг doc-annotations): обёртка над MarkdownViewer
 // для просмотра .md проекта — выделение → попап «Комментировать», маркеры якорных

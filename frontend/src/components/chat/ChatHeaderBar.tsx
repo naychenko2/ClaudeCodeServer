@@ -2,7 +2,8 @@ import { useState, useEffect, useRef, useMemo, Fragment, type ReactNode } from '
 import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles, SlidersHorizontal, MessageSquareShare, BookOpen } from 'lucide-react';
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag, ChatItem } from '../../types';
-import { api, chatFieldsErrorText } from '../../lib/api';
+import { api } from '../../lib/api';
+import { chatFieldsErrorText } from '../../features/chat/api';
 import { openChatById } from '../../lib/openChat';
 import { isArchivedChat } from '../../lib/chatFilters';
 import { TagAssignMenu } from '../TagChip';

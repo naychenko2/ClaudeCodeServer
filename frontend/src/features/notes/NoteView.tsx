@@ -6,7 +6,7 @@ import {
   C, FONT, ISLAND, R, TB,
   MarkdownViewer, stripFrontmatter, BackButton, ConfirmDialog, IconButton, Modal, WaitingIndicator,
   useAiJob, runAiJob, patchAiJobResult, resetAiJob, ICON_SIZE, ICON_STROKE,
-  tbBtnPrimary, tbBtnGhost, useNotes, useOnline, OfflineError, useNow,
+  tbBtnPrimary, tbBtnGhost, useNotes, useOnline, OfflineError, NoteConflictError, useSphereOf, useAllProjects, useNow,
   getNoteForView, saveNoteOffline, deleteNoteOffline, offlineResolve,
   showToast, openChatById, beginAiBusy, endAiBusy,
   registerCopyDoc, copyMarkdown, copyRenderedHtml,
@@ -16,15 +16,12 @@ import {
 import type { NoteSource } from '../../types';
 // Конфликт сохранения (S2c-F3, п.28): типизированный 409 заметки и тот же диалог с тем же
 // диффом, что у файлов (S2c-F2b) — своих текстов и своей формы здесь нет
-import { NoteConflictError } from '../../lib/api';
 import { conflictCopyName } from '../../lib/conflictCopyName';
 import { lineDiff } from '../../lib/lineDiff';
 import { SaveConflictDialog } from '../../components/SaveConflictDialog';
-import { useAllProjects } from '../projects/useAllProjects';
 import { canWriteContent, type ContentDoor } from '../projects/members/contentRights';
 import { NoteConnections } from './NoteConnections';
 import { NoteTasksSection } from './NoteTasksSection';
-import { useSphereOf } from '../../lib/useSphereOf';
 import { requestNoteIngest } from './WikiChatActions';
 import { DocCommentedMarkdown, PersonaAssignMenu, filterAssignablePersonas } from './DocComments';
 import {

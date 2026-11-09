@@ -1,7 +1,8 @@
 // S2d-6c-F: opt-out «не сохранять решения» у приватного чата — бэк отказывает 409
 // private_chat_dossiers (SessionsController). Человек читает текст причины и действие,
-// а не нейтральное «Не удалось изменить настройку чата» (разбор кода — в api,
-// chatFieldsErrorText, рядом с CHAT_VISIBILITY_TEXTS). Отказ не меняет локальное
+// а не нейтральное «Не удалось изменить настройку чата» (разбор кода — в
+// features/chat/api.ts:53, рядом с CHAT_VISIBILITY_TEXTS там же, features/chat/api.ts:16).
+// Отказ не меняет локальное
 // состояние: тумблер остаётся в прежнем положении, onSessionUpdated не зовётся.
 // Прочие ошибки — тот же нейтральный текст, что был.
 // Мутация «не разбирать код» (chatFieldsErrorText всегда нейтральный) → первый кейс красный.
@@ -13,8 +14,8 @@ import { installFakeDom, mount, reactProps, findNodeByAttr } from './fakeDom';
 
 installFakeDom();
 
-// chatUpdate: подменён только updateChatFields (разбор кода — НАСТОЯЩИЙ api:
-// тексты отказов живут в api и проверяются как есть). Тип мока — реальная сигнатура
+// chatUpdate: подменён только updateChatFields (разбор кода — НАСТОЯЩИЙ features/chat/api:
+// тексты отказов живут там же и проверяются как есть). Тип мока — реальная сигнатура
 // (chatUpdate.ts:38)
 const updateMock = vi.hoisted(() => vi.fn<(s: Session, p: { excludeFromDossiers?: boolean | null }) => Promise<Session>>());
 const toastMock = vi.hoisted(() => vi.fn());

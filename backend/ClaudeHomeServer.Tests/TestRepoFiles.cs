@@ -9,9 +9,9 @@ namespace ClaudeHomeServer.Tests;
 /// CLAUDE.md). Работает одинаково в основном дереве, worktree задачи и копии мутации.
 ///
 /// Вынесено из двух дословных копий — MemoryToolsetParityTests.RepoFile и
-/// SubsystemDisableMatrixTests.RepoFile (п. 5 хвоста R-S2b-2a). Тот же подъём остаётся в
+/// SubsystemDisableMatrixTests.RepoFile. Тот же подъём остаётся в
 /// TasksControllerTests, PlansControllerTests, SsrfSafeHandlerTests, PromptBenchTests,
-/// WidgetsToolsetParityTests — они переезжают сюда при касании их строк, не этого шага.
+/// WidgetsToolsetParityTests — они переезжают сюда при касании их строк.
 /// </summary>
 internal static class TestRepoFiles
 {

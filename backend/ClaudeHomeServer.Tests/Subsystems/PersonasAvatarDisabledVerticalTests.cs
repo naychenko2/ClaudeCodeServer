@@ -8,13 +8,13 @@ using Microsoft.AspNetCore.Hosting;
 
 namespace ClaudeHomeServer.Tests.Subsystems;
 
-// Хвост R-S2b-1 пп.4–5: вертикаль images выключена гейтом Subsystems:images:Enabled=false
+// Вертикаль images выключена гейтом Subsystems:images:Enabled=false
 // (тот же DisabledFactory-приём, что в ImageEditorDisabledTests; ключ совпадает с ключом
-// строки матрицы). П.4: ручка генерации аватара отвечает 503 с причиной (ADR-014 форма 3),
+// строки матрицы). Ручка генерации аватара отвечает 503 с причиной (ADR-014 форма 3),
 // и гейт стоит ДО разбора персоны: на выключенной вертикали «персоны нет» — тоже 503,
 // потому что причина отказа — вертикаль, а не отсутствие пробы. На контрольном включённом
 // хосте «персоны нет» остаёт 404 — различение двух отказов сохранено.
-// П.5: готовая миниатюра на диске отдаётся и без растра — вызывающий не отдаёт оригинал.
+// Готовая миниатюра на диске отдаётся и без растра — вызывающий не отдаёт оригинал.
 [Trait("Category", "Host")]
 public class PersonasAvatarDisabledVerticalTests : IClassFixture<PersonasAvatarDisabledVerticalTests.Hosts>
 {
@@ -78,7 +78,7 @@ public class PersonasAvatarDisabledVerticalTests : IClassFixture<PersonasAvatarD
         return (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
     }
 
-    // П.4, c1: существующая персона на выключенной вертикали — 503 с причиной в теле
+    // Существующая персона на выключенной вертикали — 503 с причиной в теле
     [Fact]
     public async Task Generate_ВертикальВыключена_503СПричинойАНе400()
     {
@@ -96,7 +96,7 @@ public class PersonasAvatarDisabledVerticalTests : IClassFixture<PersonasAvatarD
         body.Should().Contain("Subsystems:images:Enabled=false");
     }
 
-    // П.4, c2: «персоны нет» на выключенной вертикали — тоже 503, не 404: гейт раньше
+    // «Персоны нет» на выключенной вертикали — тоже 503, не 404: гейт раньше
     // разбора персоны, и проба матрицы (несуществующий id) меряет отказ вертикали,
     // а не отсутствие пробы. Мутация «проверять персону раньше гейта» красит этот тест.
     [Fact]
@@ -112,7 +112,7 @@ public class PersonasAvatarDisabledVerticalTests : IClassFixture<PersonasAvatarD
         (await response.Content.ReadAsStringAsync()).Should().Contain("Subsystems:images:Enabled=false");
     }
 
-    // П.4, c2 обратная сторона: на включённой вертикали «персоны нет» остаёт 404 —
+    // Обратная сторона: на включённой вертикали «персоны нет» остаёт 404 —
     // перенос гейта не превратил все 404 в 503, различение двух отказов сохранено
     [Fact]
     public async Task Generate_ВертикальВключенаПерсоныНет_Остаётся404()
@@ -125,7 +125,7 @@ public class PersonasAvatarDisabledVerticalTests : IClassFixture<PersonasAvatarD
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
-    // П.5, c3: миниатюра записана на диске («пока вертикаль была включена»), растра нет —
+    // Миниатюра записана на диске («пока вертикаль была включена»), растра нет —
     // GET avatar?size отдаёт миниатюру, а не оригинал: кэшированный файл не требует генерации
     [Fact]
     public async Task Avatar_ВертикальВыключенаГотоваяМиниатюра_ОтдаётМиниатюруНеОригинал()

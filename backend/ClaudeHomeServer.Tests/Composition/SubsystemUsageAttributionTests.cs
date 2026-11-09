@@ -22,7 +22,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Composition;
 
-// Учёт обращений по ключу подсистемы (S1b): карта «сборка → ключ», мидлвар на живом хосте,
+// Учёт обращений по ключу подсистемы: карта «сборка → ключ», мидлвар на живом хосте,
 // REST-поля SubsystemInfo, сброс на диск и подъём после рестарта. Хост — один на класс;
 // сквозной сценарий со счётом «ровно» и рестартом поднимает два своих хоста (счёт должен
 // начинаться с нуля, а общий хост копит обращения соседних тестов).
@@ -166,7 +166,7 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
         HitsOf(StoreOf(_factory), "tasks").Should().Be(before + 1);
     }
 
-    // Ручки llm (Usage/Providers/Models) привязаны атрибутом в S2b-1: обращение к расходу —
+    // Ручки llm (Usage/Providers/Models) привязаны атрибутом: обращение к расходу —
     // использование вертикали (тот же путь KeyOf, что у tasks выше)
     [Fact]
     public async Task РучкаLlmСПривязкой_СчитаетсяКлючуLlm()
@@ -223,7 +223,7 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
         attribution.KeyOf(typeof(SubsystemUsageAttributionTests)).Should().BeNull("сборка тестов не подсистема");
     }
 
-    // ─── Хвост R-S2b-1: откат к классовой атрибуции и наблюдаемость ключей из сборок вертикалей ───
+    // ─── Классовая атрибуция и наблюдаемость ключей из сборок вертикалей ───
 
     // Контроллер смешанной ручки: классовой и методовый ключ названы одновременно.
     // Таких контроллеров в проде пока нет — сценарий латентный, проверяется синтетически.
@@ -261,7 +261,7 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
     private static ControllerActionDescriptor DescriptorOf(Type controller, string methodName) =>
         new() { ControllerTypeInfo = (System.Reflection.TypeInfo)controller, MethodInfo = controller.GetMethod(methodName)! };
 
-    // П.1: неактивный ключ метода не отменяет классовый — атрибуция откатывается к классовой
+    // Неактивный ключ метода не отменяет классовый — атрибуция откатывается к классовой
     [Fact]
     public void МетодовыйКлючНеАктивен_АтрибутацияОткатываетсяККлассовой()
     {
@@ -274,7 +274,7 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
             "методовой атрибут уточняет классовой, а не отменяет его");
     }
 
-    // П.1, обратная сторона: когда оба ключа активны, методовой по-прежнему приоритнее
+    // Обратная сторона: когда оба ключа активны, методовой по-прежнему приоритнее
     [Fact]
     public void МетодовыйКлючАктивен_ОнПриоритнееКлассового()
     {
@@ -287,7 +287,7 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
         attribution.KeyOfAction(descriptor).Should().Be("images", "оба ключа активны — методовой выигрывает");
     }
 
-    // П.2: ключ, который вернула атрибуция, обязан быть наблюдаемым — счётчик растёт
+    // Ключ, который вернула атрибуция, обязан быть наблюдаемым — счётчик растёт
     [Fact]
     public void МетодовыйАтрибутВСборкеВертикали_КлючНаблюдаем_СчётчикРастёт()
     {
@@ -324,7 +324,7 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
         public void Register(IServiceCollection services, IConfiguration config) { }
     }
 
-    // ─── Хвост R-S1b (п.3, п.6, п.7): гарантированный сброс, лог сбоя атрибуции, MCP через /gw ───
+    // ─── Гарантированный сброс, лог сбоя атрибуции, MCP через /gw ───
 
     private static Dictionary<string, string?> DataDirConfig(string dir) =>
         new() { ["DataPath"] = Path.Combine(dir, "projects.json") };
@@ -332,14 +332,14 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
     [Fact]
     public async Task ОтменённыйТокенОстановки_ФинальныйСбросВсёРавноПишетФайл()
     {
-        // п.3: остановка с отменённым токеном — файл обязан быть записан. Закреплено этим тестом:
+        // Остановка с отменённым токеном — файл обязан быть записан. Закреплено этим тестом:
         // именно путь отменённого токена, а НЕ finally. В net10 base.StopAsync отказа не даёт ни на
         // отменённом токене, ни на упавшем ExecuteAsync, ни без предшествующего StartAsync
         // (проверено прогоном на SDK 10.0.114: три случая — без исключения); в 9.0 тот же исход по
         // исходникам рантайма (Task.WhenAny). Поэтому без finally этот тест зелёный — и в этом
-        // дереве (проведено снятием finally: 1/1 зелёный), и в прогоне ревьюера (16/16).
+        // дереве: проведено снятием finally (1/1 зелёный).
         // Страховка «любой отказ base не снимает последний сброс» тестом не закреплена:
-        // достижимого отказа base в текущем рантайме нет (R-S1b, M2).
+        // достижимого отказа base в текущем рантайме нет.
         var dir = Path.Combine(Path.GetTempPath(), "subsys-flush-" + Guid.NewGuid().ToString("N"));
         var store = new SubsystemUsageStore(["notes"]);
         store.Hit("notes", DateTimeOffset.UtcNow);
@@ -386,7 +386,7 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
         public Endpoint? Endpoint { get; set; }
     }
 
-    // п.6: сбой атрибуции не ломает ответ (200 остаётся) и пишется в лог — раньше молча терялся.
+    // Сбой атрибуции не ломает ответ (200 остаётся) и пишется в лог — раньше молча терялся.
     // Сбой синтетический: дескриптор с null MethodInfo — KeyOfAction падает в NRE; предмет
     // проверки — поведение мидлвара, а не форма отказа.
     [Fact]
@@ -491,7 +491,7 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
             CancellationToken ct) => Task.FromResult(new McpToolCallResult(""));
     }
 
-    // ─── Хвост R-S1b (m1): 403/404 от живого контроллера — состоявшееся обращение ───
+    // ─── 403/404 от живого контроллера — состоявшееся обращение ───
 
     // Контроллер, который отвечает 404/403 по своему делу («заметка не найдена»). Живёт в
     // тест-сборке, а она для этой атрибуции — домашняя сборка вертикали «notes»
@@ -561,7 +561,7 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
         HitsOf(StoreOf(_factory), "notes").Should().Be(before + 1);
     }
 
-    // ─── Хвост R-S1b (m4): порядок «Load до первого Hit по ключу» ───
+    // ─── Порядок «Load до первого Hit по ключу» ───
 
     // Первый после рестарта запрос обязан идти к самой вертикале, а не к админской ручке ядра:
     // тогда первый Hit по ключу случается ПОСЛЕ загрузки её состояния с диска и накопляется

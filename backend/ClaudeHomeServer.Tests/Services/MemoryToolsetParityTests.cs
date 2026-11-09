@@ -18,7 +18,7 @@ namespace ClaudeHomeServer.Tests.Services;
 /// </summary>
 public class MemoryToolsetParityTests
 {
-    // Файлы репозитория — через общий хелпер TestRepoFiles (п. 5 хвоста R-S2b-2a): тот же
+    // Файлы репозитория — через общий хелпер TestRepoFiles: тот же
     // подъём от bin-каталога до .git был дословной копией в этом и матричном стороже.
     private static string JsPath => TestRepoFiles.RepoFile("mcp", "memory-server", "index.js");
 

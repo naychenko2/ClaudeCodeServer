@@ -151,9 +151,14 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// project-services, skills, tasks — их выключение невозможно, пока ядро требует их сервисов
     /// обязательными параметрами (цепочки в самих строках); опционализация этих швов — отдельное
     /// решение, не этого шага. Строку <c>llm</c> добавил финал фичи «Внутренняя оптимизация AI Home»
-    /// (блокер 1 ревью архитектора): ядро сессий берёт её сервисы обязательными параметрами
-    /// конструктора (SessionManager.cs:739-743) — без них оно не активируется, и тумблер на этой
-    /// вертикали не имеет смысла. Метка и `CanDisable=false` поставлены вместе: снять их можно
+    /// (блокер 1 ревью архитектора): ядро сессий берёт её сервисы обязательными зависимостями —
+    /// без них оно не активируется, и тумблер на этой вертикали не имеет смысла. Фасад держит
+    /// LlmProviderRegistry параметром конструктора (Services/SessionManager.cs:282); роли ядра
+    /// из регистрации AddSessionCore (Services/Sessions/SessionCoreRegistration.cs) резолвят
+    /// через GetRequiredService LlmProviderRegistry, ClaudeSubscriptionPool, ModelAssignmentResolver,
+    /// SubscriptionLimitRecorder и ILlmSessionAdapterFactory: TurnCostLedger (:59-68), CliRoute (:75-86),
+    /// ProviderMigration (:113-119), ChatSettings (:147-158), ChatCreation (:318-327),
+    /// TurnProcessHost (:255-276). Метка и `CanDisable=false` поставлены вместе: снять их можно
     /// только вместе — по отдельности красит направление 2 или 3b (<see cref="CoreLabeledKeys"/>).
     /// Строка <c>images</c> закрыта и снята из перечня в сдаче 2 S2b-1 (привязка ручек + отказ 503).
     /// </summary>
@@ -175,11 +180,15 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             + "(backend/ClaudeHomeServer/Services/PersonaBindingsService.cs:138), который сам обязателен ядру "
             + "сессий (backend/ClaudeHomeServer/Services/SessionManager.cs:745). Первый запрос к хосту не отвечен. "
             + "CanDisable или опционализацию этого шва решает S2b-1.",
-        ["llm"] = "ядро/сквозная: ядро сессий "
-            + "(backend/ClaudeHomeServer/Services/SessionManager.cs:739-743) требует "
-            + "ILlmSessionAdapterFactory, UsageService и LlmProviderRegistry гейтнутой сборки ClaudeHomeServer.Llm "
-            + "(backend/ClaudeHomeServer.Llm/LlmSubsystem.cs:333 — фабрика адаптеров, :362 — UsageService, "
-            + ":302 — LlmProviderRegistry) обязательными параметрами — первый запрос к хосту не отвечен. "
+        ["llm"] = "ядро/сквозная: ядро сессий требует сервисов гейтнутой сборки ClaudeHomeServer.Llm "
+            + "обязательными зависимостями: фасад держит LlmProviderRegistry параметром конструктора "
+            + "(backend/ClaudeHomeServer/Services/SessionManager.cs:282); роли ядра из регистрации "
+            + "AddSessionCore (backend/ClaudeHomeServer/Services/Sessions/SessionCoreRegistration.cs) "
+            + "резолвят через GetRequiredService LlmProviderRegistry, ClaudeSubscriptionPool, "
+            + "ModelAssignmentResolver, SubscriptionLimitRecorder и ILlmSessionAdapterFactory: "
+            + "TurnCostLedger (:59-68), CliRoute (:75-86), ProviderMigration (:113-119), "
+            + "ChatSettings (:147-158), ChatCreation (:318-327), TurnProcessHost (:255-276) — "
+            + "первый запрос к хосту не отвечен. "
             + "Метку и CanDisable=false поставил финал фичи (блокер 1 ревью архитектора): без них "
             + "тумблер панели выключил бы вертикаль, которую ядро держит обязательной.",
         ["memory"] = "ядро/сквозная: шов контекста хода PersonaRecallSourceAdapter "
@@ -494,8 +503,10 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             .ToList();
         unlabeledCore.Should().BeEmpty(
             "строка «llm» обязана нести метку «ядро/сквозная»: ядро сессий требует её сервисов "
-            + "обязательными параметрами (Services/SessionManager.cs:739-743) — CanDisable=false и "
-            + "метка поставлены одним решением финала фичи, снять метку, оставив CanDisable=false, нельзя");
+            + "обязательными зависимостями (параметр фасада LlmProviderRegistry — "
+            + "Services/SessionManager.cs:282, резолверы ролей — Services/Sessions/SessionCoreRegistration.cs) "
+            + "— CanDisable=false и метка поставлены одним решением финала фичи, снять метку, "
+            + "оставив CanDisable=false, нельзя");
     }
 
     /// <summary>

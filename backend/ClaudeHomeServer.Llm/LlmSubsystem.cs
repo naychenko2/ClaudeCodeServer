@@ -133,9 +133,14 @@ public sealed class LlmSubsystem : IAppSubsystem
     public string Title => "Модельный слой LLM";
 
     // Ядро (CanDisable=false, финал фичи «Внутренняя оптимизация AI Home», блокер 1 ревью):
-    // ядро сессий (Services/SessionManager.cs:739-743) берёт ILlmSessionAdapterFactory, UsageService
-    // и LlmProviderRegistry этой вертикали обязательными параметрами конструктора — без них
-    // SessionManager не активируется. Панель «Компоненты» показывает её группой ядра, без тумблера.
+    // ядро сессий берёт сервисы этой вертикали обязательными зависимостями: фасад держит
+    // LlmProviderRegistry параметром конструктора (Services/SessionManager.cs:282); роли ядра
+    // из регистрации AddSessionCore (Services/Sessions/SessionCoreRegistration.cs) резолвят
+    // через GetRequiredService LlmProviderRegistry, ClaudeSubscriptionPool, ModelAssignmentResolver,
+    // SubscriptionLimitRecorder и ILlmSessionAdapterFactory: TurnCostLedger (:59-68), CliRoute (:75-86),
+    // ProviderMigration (:113-119), ChatSettings (:147-158), ChatCreation (:318-327),
+    // TurnProcessHost (:255-276). Без них SessionManager не активируется. Панель «Компоненты»
+    // показывает её группой ядра, без тумблера.
     public bool CanDisable => false;
 
     public void Register(IServiceCollection services, IConfiguration config)

@@ -155,10 +155,10 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// <see cref="Сторож_согласованности_CanDisable_и_метки_ядро_сквозная"/>. Ядром объявлены все
     /// такие строки: code-graph, dossiers, git, knowledge, memory, project-icons,
     /// project-services, skills, tasks — их выключение невозможно, пока ядро требует их сервисов
-    /// обязательными параметрами (цепочки в самих строках); опционализация этих швов — отдельное
-    /// решение, не этого шага. Строку <c>llm</c> добавил финал фичи «Внутренняя оптимизация AI Home»
-    /// (блокер 1 ревью архитектора): ядро сессий берёт её сервисы обязательными зависимостями —
-    /// без них оно не активируется, и тумблер на этой вертикали не имеет смысла. Фасад держит
+    /// обязательными параметрами (цепочки в самих строках); опционализация этих швов — вне
+    /// этого теста. Строка <c>llm</c> здесь потому, что ядро сессий берёт её сервисы
+    /// обязательными зависимостями: без них оно не активируется, и тумблер на этой вертикали
+    /// не имеет смысла. Фасад держит
     /// LlmProviderRegistry параметром конструктора (Services/SessionManager.cs:282); роли ядра
     /// из регистрации AddSessionCore (Services/Sessions/SessionCoreRegistration.cs) резолвят
     /// через GetRequiredService LlmProviderRegistry, ClaudeSubscriptionPool, ModelAssignmentResolver,
@@ -196,8 +196,8 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             + "TurnCostLedger (:59-68), CliRoute (:75-86), ProviderMigration (:113-119), "
             + "ChatSettings (:147-158), ChatCreation (:318-327), TurnProcessHost (:255-276) — "
             + "первый запрос к хосту не отвечен. "
-            + "Метку и CanDisable=false поставил финал фичи (блокер 1 ревью архитектора): без них "
-            + "тумблер панели выключил бы вертикаль, которую ядро держит обязательной.",
+            + "Метка и CanDisable=false необходимы: без них тумблер панели выключил бы "
+            + "вертикаль, которую ядро держит обязательной.",
         ["memory"] = "ядро/сквозная: шов контекста хода PersonaRecallSourceAdapter "
             + "(backend/ClaudeHomeServer/Services/Composition/PromptSeamAdapters.cs:18, ADR-023) и ядро проектов "
             + "(backend/ClaudeHomeServer/Controllers/ProjectsController.cs:26) требуют PersonaMemoryService "
@@ -510,8 +510,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// направление 3 обратное: там метка ядра обязательна (3b).
     private const string CoreReasonPrefix = "ядро/сквозная";
 
-    /// Ключи, для которых метка «ядро/сквозная» обязательна (решение финала фичи «Внутренняя
-    /// оптимизация AI Home», блокер 1 ревью архитектора): ядро сессий берёт сервисы `llm`
+    /// Ключи, для которых метка «ядро/сквозная» обязательна: ядро сессий берёт сервисы `llm`
     /// обязательными зависимостями — без них оно не активируется. Фасад держит LlmProviderRegistry
     /// параметром конструктора (Services/SessionManager.cs:282); роли ядра из регистрации
     /// AddSessionCore (Services/Sessions/SessionCoreRegistration.cs) резолвят через GetRequiredService
@@ -532,7 +531,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     ///    сделать такую вертикаль невыключаемой можно только явным объявлением ядра (меткой),
     ///    а не молча CanDisable=false.
     /// 3b. для ключей <see cref="CoreLabeledKeys"/> (`llm`) направление обратное: метка ядра
-    ///    обязательна (решение финала фичи, блокер 1 ревью архитектора). Без метки вернулась бы
+    ///    обязательна. Без метки вернулась бы
     ///    отключаемость, которой нет по коду: ядро сессий не активируется без её сервисов.
     /// Мутация «убрать CanDisable=false у любого из этих ключей» краснит направление 2,
     /// «поставить CanDisable=false строке без метки» — направление 3, «снять метку ядра у llm» — 3b.

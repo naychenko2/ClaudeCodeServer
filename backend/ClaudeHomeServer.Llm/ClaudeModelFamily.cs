@@ -8,8 +8,9 @@ namespace ClaudeHomeServer.Services.Llm;
 // (ClaudeSubscriptionPool.LaunchModel). Номер версии или суффикс [1m] в сохранённом значении
 // прибивает чат к устаревшей модели — каталог CLI отдаёт часть пунктов версионными id.
 //
-// Supports1M — у семейства есть окно 1M (актуальные opus-5-5, fable-5-1, sonnet-5 объявлены
-// в реестре моделей CLI 2.1.283 с window 1e6; haiku-4-5 — 200k).
+// Supports1M — у семейства есть окно 1M (opus-5-5, fable-5-1, sonnet-5 объявлены в реестре
+// моделей CLI 2.1.283 с window 1e6; вышедшая 2026-11-09 fable-5-2 — тоже 1M по докам
+// Anthropic; haiku-4-5 — 200k).
 public sealed record ClaudeModelFamily(string Alias, string DisplayName, bool Supports1M)
 {
     public const string WindowSuffix = "[1m]";
